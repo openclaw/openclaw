@@ -16,8 +16,6 @@ import { renderCatNoncePngBase64 } from "../../test/helpers/live-image-probe.js"
 import { installTestEnv } from "../../test/test-env.js";
 import { discoverAuthStorage, discoverModels } from "../agents/agent-model-discovery.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
-import { buildPortableAuthProfileStoreForAgentCopy } from "../agents/auth-profiles/portability.js";
-import { listProfilesForProvider } from "../agents/auth-profiles/profile-list.js";
 import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
@@ -129,8 +127,10 @@ import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visi
 import { findFinalTagMatches, stripFinalTags } from "../shared/text/final-tags.js";
 import { deleteTestEnvValue, setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
 import { getFreePort, isPortFree } from "../test-utils/ports.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
+import { enterIsolatedGatewayLiveDiscoveryState } from "./gateway-models.profiles.live.discovery.test-helpers.js";
 import {
   isolateLiveGatewayConfig,
   resolveGatewayLiveModelThinkingLevel,
@@ -3339,56 +3339,6 @@ function resolveGatewayLivePreparedProfileId(
     : undefined;
 }
 
-async function enterIsolatedGatewayLiveDiscoveryState(params: {
-  config: OpenClawConfig;
-  providers?: Iterable<string>;
-}): Promise<() => Promise<void>> {
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  const source = ensureAuthProfileStoreWithoutExternalProfiles(
-    resolveDefaultAgentDir(params.config),
-    {
-      allowKeychainPrompt: false,
-      readOnly: true,
-      syncExternalCli: false,
-    },
-  );
-  const selected = params.providers
-    ? new Set(
-        [...params.providers].flatMap((provider) => listProfilesForProvider(source, provider)),
-      )
-    : undefined;
-  const portable = buildPortableAuthProfileStoreForAgentCopy({
-    ...source,
-    profiles: Object.fromEntries(
-      Object.entries(source.profiles).filter(([id]) => !selected || selected.has(id)),
-    ),
-  });
-  if (portable.skippedProfileIds.length > 0) {
-    logProgress(
-      `[all-models] isolated discovery omitted ${portable.skippedProfileIds.length} non-portable auth profile(s)`,
-    );
-  }
-  const tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-discovery-state-"));
-  setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
-  const cleanup = async () => {
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
-  };
-  try {
-    // Discovery may materialize env credentials; copy selected portable profiles
-    // first so it never writes the ambient store or duplicates native OAuth owners.
-    saveAuthProfileStore(portable.store, resolveDefaultAgentDir({}), { syncExternalCli: false });
-  } catch (error) {
-    await cleanup();
-    throw error;
-  }
-  return cleanup;
-}
-
 function createGatewayLiveModelSession(params: {
   agentId: string;
   credentialAttempt: number;
@@ -3632,6 +3582,7 @@ describe("buildLiveGatewayAuthProfileStore", () => {
             const leaveDiscoveryState = await enterIsolatedGatewayLiveDiscoveryState({
               config: {},
               providers: ["openai"],
+              logProgress,
             });
             try {
               const discoveryAgentDir = resolveDefaultAgentDir({});
@@ -3648,6 +3599,11 @@ describe("buildLiveGatewayAuthProfileStore", () => {
                 store: ensureAuthProfileStore(discoveryAgentDir, { allowKeychainPrompt: false }),
               });
               saveAuthProfileStore(prepared, discoveryAgentDir);
+              await ensureOpenClawModelsJson(
+                { plugins: { enabled: false }, models: { mode: "replace", providers: {} } },
+                discoveryAgentDir,
+                { providerDiscoveryProviderIds: [] },
+              );
             } finally {
               await leaveDiscoveryState();
             }
@@ -3660,10 +3616,14 @@ describe("buildLiveGatewayAuthProfileStore", () => {
         ensureAuthProfileStore(ambientAgentDir, { allowKeychainPrompt: false }).profiles,
       ).toEqual(ambientStore.profiles);
     } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      try {
+        await cleanupSessionStateForTest({ stateDir: ambientStateDir });
+      } finally {
+        if (previousStateDir === undefined) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = previousStateDir;
+        }
       }
       await fs.rm(ambientStateDir, { recursive: true, force: true });
     }
@@ -6774,6 +6734,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     leaveDiscoveryState = await enterIsolatedGatewayLiveDiscoveryState({
       config: await readLiveTestConfig(),
       providers: PROVIDERS ?? undefined,
+      logProgress,
     });
   });
 

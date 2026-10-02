@@ -8,7 +8,7 @@ import type { AssistantMessage, Message, Tool } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
-import { deleteTestEnvValue, setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
+import { captureEnv, setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import {
   buildEmbeddedRunnerConfig,
@@ -77,13 +77,7 @@ const NOOP_TOOL: Tool = {
 let liveTestPngBase64 = "";
 let liveRunnerPaths: { rootDir: string; agentDir: string; storePath: string } | undefined;
 let liveCacheTraceFile: string | undefined;
-let previousCacheTraceEnv: {
-  enabled?: string;
-  file?: string;
-  messages?: string;
-  prompt?: string;
-  system?: string;
-} | null = null;
+let previousCacheTraceEnv: ReturnType<typeof captureEnv> | undefined;
 
 type UserContent = Extract<Message, { role: "user" }>["content"];
 
@@ -680,13 +674,15 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
     };
     liveCacheTraceFile = path.join(rootDir, "cache-trace.jsonl");
     liveTestPngBase64 = (await fs.readFile(LIVE_TEST_PNG_URL)).toString("base64");
-    previousCacheTraceEnv = {
-      enabled: process.env.OPENCLAW_CACHE_TRACE,
-      file: process.env.OPENCLAW_CACHE_TRACE_FILE,
-      messages: process.env.OPENCLAW_CACHE_TRACE_MESSAGES,
-      prompt: process.env.OPENCLAW_CACHE_TRACE_PROMPT,
-      system: process.env.OPENCLAW_CACHE_TRACE_SYSTEM,
-    };
+    previousCacheTraceEnv = captureEnv([
+      "OPENCLAW_CACHE_TRACE",
+      "OPENCLAW_PROMPT_CACHE_ASSERT",
+      "OPENCLAW_CACHE_TRACE_FILE",
+      "OPENCLAW_CACHE_TRACE_MESSAGES",
+      "OPENCLAW_CACHE_TRACE_PROMPT",
+      "OPENCLAW_CACHE_TRACE_SYSTEM",
+    ]);
+    setTestEnvValue("OPENCLAW_PROMPT_CACHE_ASSERT", "1");
     setTestEnvValue("OPENCLAW_CACHE_TRACE", "1");
     setTestEnvValue("OPENCLAW_CACHE_TRACE_FILE", liveCacheTraceFile);
     setTestEnvValue("OPENCLAW_CACHE_TRACE_MESSAGES", "0");
@@ -695,29 +691,8 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
   }, 120_000);
 
   afterAll(async () => {
-    if (previousCacheTraceEnv) {
-      const restore = (
-        key:
-          | "OPENCLAW_CACHE_TRACE"
-          | "OPENCLAW_CACHE_TRACE_FILE"
-          | "OPENCLAW_CACHE_TRACE_MESSAGES"
-          | "OPENCLAW_CACHE_TRACE_PROMPT"
-          | "OPENCLAW_CACHE_TRACE_SYSTEM",
-        value: string | undefined,
-      ) => {
-        if (value === undefined) {
-          deleteTestEnvValue(key);
-        } else {
-          setTestEnvValue(key, value);
-        }
-      };
-      restore("OPENCLAW_CACHE_TRACE", previousCacheTraceEnv.enabled);
-      restore("OPENCLAW_CACHE_TRACE_FILE", previousCacheTraceEnv.file);
-      restore("OPENCLAW_CACHE_TRACE_MESSAGES", previousCacheTraceEnv.messages);
-      restore("OPENCLAW_CACHE_TRACE_PROMPT", previousCacheTraceEnv.prompt);
-      restore("OPENCLAW_CACHE_TRACE_SYSTEM", previousCacheTraceEnv.system);
-    }
-    previousCacheTraceEnv = null;
+    previousCacheTraceEnv?.restore();
+    previousCacheTraceEnv = undefined;
     liveCacheTraceFile = undefined;
     if (liveRunnerPaths) {
       disposeOpenClawAgentDatabaseByPath(liveRunnerPaths.storePath);

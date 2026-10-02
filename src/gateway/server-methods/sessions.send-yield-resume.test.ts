@@ -48,6 +48,43 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+async function createInitialYieldFixture(label: string) {
+  const requesterSessionKey = "agent:main:main";
+  const requesterTurnRunId = `${label}-parent`;
+  const runId = `${label}-child`;
+  const childSessionKey = `agent:main:subagent:${runId}`;
+  await registerSubagentRun({
+    runId,
+    childSessionKey,
+    requesterSessionKey,
+    requesterAgentId: "main",
+    requesterTurnRunId,
+    requesterDisplayKey: requesterSessionKey,
+    task: "Finish the initial requester handoff",
+    cleanup: "keep",
+    expectsCompletionMessage: true,
+  });
+  const onYield = vi.fn();
+  const tool = createSessionsYieldTool({
+    sessionId: `${label}-session`,
+    claimYield: createRequesterYieldCallback({
+      requesterSessionKey,
+      requesterAgentId: "main",
+      requesterTurnRunId,
+    }),
+    onYield,
+  });
+  return {
+    requesterSessionKey,
+    requesterTurnRunId,
+    runId,
+    childSessionKey,
+    entry: expectDefined(subagentRuns.get(runId), "initial child"),
+    onYield,
+    tool,
+  };
+}
+
 it("resumes a yielded child through sessions.send and wakes its original parent after the same batch settles", async () => {
   vi.useFakeTimers();
   const { runSubagentAnnounceFlow } = await vi.importActual<
@@ -63,16 +100,7 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
   const requesterTurnRunId = "parent-turn";
   const expectCompletedRun = (runId: string, resultText: string) => {
     const entry = expectDefined(subagentRuns.get(runId), `completed run ${runId}`);
-    expect(
-      entry,
-      JSON.stringify({
-        runId,
-        cleanupHandled: entry.cleanupHandled,
-        delivery: entry.delivery,
-        requesterSettleWake: entry.requesterSettleWake,
-        requesterTurnRunId: entry.requesterTurnRunId,
-      }),
-    ).toMatchObject({
+    expect(entry).toMatchObject({
       execution: { status: "terminal", outcome: { status: "ok" } },
       completion: { resultText },
       cleanupCompletedAt: expect.any(Number),
@@ -336,28 +364,21 @@ it.each([
 ] as const)(
   "retains the committed outcome after $retirement replacement for a repeated $repetition claim",
   async ({ retirement, repetition }) => {
-    const requesterSessionKey = "agent:main:main";
-    const childSessionKey = "agent:main:subagent:initial-retirement";
-    const runId = "initial-retirement-child";
-    const requesterTurnRunId = "initial-retirement-parent";
     await writeSubagentSessionEntry({
       stateDir: fixture.stateDir,
       agentId: "main",
-      sessionKey: requesterSessionKey,
-      defaultSessionId: `${requesterSessionKey}-session`,
+      sessionKey: "agent:main:main",
+      defaultSessionId: "agent:main:main-session",
     });
-    await registerSubagentRun({
+    const {
+      requesterSessionKey,
+      requesterTurnRunId,
       runId,
       childSessionKey,
-      requesterSessionKey,
-      requesterAgentId: "main",
-      requesterTurnRunId,
-      requesterDisplayKey: requesterSessionKey,
-      task: "Keep the original requester owner",
-      cleanup: "keep",
-      expectsCompletionMessage: true,
-    });
-    const entry = expectDefined(subagentRuns.get(runId), "original initial child");
+      entry,
+      onYield,
+      tool,
+    } = await createInitialYieldFixture("initial-retirement");
     let retireRequester = () => {};
     const acknowledged = createDeferred();
     const releaseAcknowledgement = createDeferred();
@@ -394,16 +415,6 @@ it.each([
           options,
         ),
       );
-    const onYield = vi.fn();
-    const tool = createSessionsYieldTool({
-      sessionId: "initial-retirement-session",
-      claimYield: createRequesterYieldCallback({
-        requesterSessionKey,
-        requesterAgentId: "main",
-        requesterTurnRunId,
-      }),
-      onYield,
-    });
     const first = withRequesterTestAuthority(
       requesterTurnRunId,
       requesterSessionKey,
@@ -453,13 +464,11 @@ it.each([
         (result) => ({ result }),
         (error: unknown) => ({ error }),
       );
-      expect({ ...repeatedOutcome, writes, yields: onYield.mock.calls.length }).toMatchObject({
+      expect(repeatedOutcome).toMatchObject({
         error:
           retirement === "runtime owner"
             ? { outcome: "committed", publication: "published" }
             : { outcome: "committed", publication: "superseded" },
-        writes: 1,
-        yields: 0,
       });
       expect(writes).toBe(1);
       expect(onYield).not.toHaveBeenCalled();
@@ -481,21 +490,8 @@ it.each([
 );
 
 it("retains an unknown initial intent until canonical worker restore reconciles the row", async () => {
-  const requesterSessionKey = "agent:main:main";
-  const requesterTurnRunId = "unknown-initial-parent";
-  const runId = "unknown-initial-child";
-  await registerSubagentRun({
-    runId,
-    childSessionKey: "agent:main:subagent:unknown-initial-child",
-    requesterSessionKey,
-    requesterAgentId: "main",
-    requesterTurnRunId,
-    requesterDisplayKey: requesterSessionKey,
-    task: "Retain an unacknowledged initial intent",
-    cleanup: "keep",
-    expectsCompletionMessage: true,
-  });
-  const entry = expectDefined(subagentRuns.get(runId), "original uncertain child");
+  const { requesterTurnRunId, runId, entry, onYield, tool } =
+    await createInitialYieldFixture("unknown-initial");
   const nativePersistence = await vi.importActual<
     typeof import("../../agents/subagents/registry/subagent-registry-persistence.js")
   >("../../agents/subagents/registry/subagent-registry-persistence.js");
@@ -506,16 +502,6 @@ it("retains an unknown initial intent until canonical worker restore reconciles 
       writes += 1;
       throw new SqliteWorkerError("Initial write outcome unavailable", "outcome-unknown");
     });
-  const onYield = vi.fn();
-  const tool = createSessionsYieldTool({
-    sessionId: "unknown-initial-session",
-    claimYield: createRequesterYieldCallback({
-      requesterSessionKey,
-      requesterAgentId: "main",
-      requesterTurnRunId,
-    }),
-    onYield,
-  });
   try {
     await expect(tool.execute("yield-unknown", {})).rejects.toMatchObject({ outcome: "unknown" });
     expect(onYield).not.toHaveBeenCalled();
@@ -545,20 +531,8 @@ it.each([false, true])(
   "joins a concurrent yield claim until host handoff (joining caller retired: %s)",
   async (retired) => {
     vi.useFakeTimers();
-    const requesterSessionKey = "agent:main:main";
-    const requesterTurnRunId = "joined-initial-parent";
-    const runId = "joined-initial-child";
-    await registerSubagentRun({
-      runId,
-      childSessionKey: "agent:main:subagent:joined-initial-child",
-      requesterSessionKey,
-      requesterAgentId: "main",
-      requesterTurnRunId,
-      requesterDisplayKey: requesterSessionKey,
-      task: "Join the original initial handoff",
-      cleanup: "keep",
-      expectsCompletionMessage: true,
-    });
+    const { requesterSessionKey, requesterTurnRunId, runId, onYield, tool } =
+      await createInitialYieldFixture("joined-initial");
     const handoffFailed = createDeferred();
     const commit = vi
       .fn()
@@ -599,16 +573,6 @@ it.each([false, true])(
           options,
         ),
       );
-    const onYield = vi.fn();
-    const tool = createSessionsYieldTool({
-      sessionId: "joined-initial-session",
-      claimYield: createRequesterYieldCallback({
-        requesterSessionKey,
-        requesterAgentId: "main",
-        requesterTurnRunId,
-      }),
-      onYield,
-    });
     const first = tool.execute("yield-first", {});
     let second: ReturnType<typeof tool.execute> | undefined;
     try {

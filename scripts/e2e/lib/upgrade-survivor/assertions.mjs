@@ -1866,7 +1866,7 @@ if (command === "list-scenarios") {
 } else if (command === "seed-volume") {
   assert(getScenario() === "sqlite-volume", "seed-volume requires the sqlite-volume scenario");
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
-  seedUpgradeVolume(stateDir);
+  await seedUpgradeVolume(stateDir, process.argv[3]);
 } else if (command === "assert-config") {
   assertConfigSurvived();
 } else if (command === "assert-restart-serving-turn") {

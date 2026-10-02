@@ -325,7 +325,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     sandbox: params.setup.sandboxReport,
     systemPrompt: attemptSystemPrompt.systemPrompt,
     injectedWorkspaceFiles: params.bootstrap.bootstrapInjectionStats,
-    skillsPrompt: params.skillsPrompt,
+    skillsPrompt: attemptSystemPrompt.skillsPrompt,
     tools: params.effectiveTools,
   };
   const systemPromptReport = buildSystemPromptReport(reportInputs);
@@ -415,6 +415,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
               ...reportInputs,
               generatedAt: Date.now(),
               systemPrompt,
+              skillsPrompt: nextSystemPrompt.skillsPrompt,
               tools,
             }),
           );

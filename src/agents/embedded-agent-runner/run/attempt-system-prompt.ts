@@ -53,7 +53,14 @@ export function extractAttemptPermissionNotice(systemPrompt: string) {
  */
 export async function buildAttemptSystemPrompt(params: BuildAttemptSystemPromptParams) {
   const { buildEmbeddedSystemPrompt } = await import("../system-prompt.js");
-  const baseSystemPrompt = buildEmbeddedSystemPrompt(params.embeddedSystemPrompt);
+  let renderedSkillsPrompt = "";
+  const baseSystemPrompt = buildEmbeddedSystemPrompt({
+    ...params.embeddedSystemPrompt,
+    onRenderedSkillsPrompt: (skillsPrompt) => {
+      renderedSkillsPrompt = skillsPrompt;
+      params.embeddedSystemPrompt.onRenderedSkillsPrompt?.(skillsPrompt);
+    },
+  });
   const transformedSystemPrompt = params.isRawModelRun
     ? ""
     : params.transformProviderSystemPrompt({
@@ -84,6 +91,7 @@ export async function buildAttemptSystemPrompt(params: BuildAttemptSystemPromptP
   return {
     baseSystemPrompt,
     systemPrompt,
+    skillsPrompt: params.isRawModelRun ? "" : renderedSkillsPrompt,
     refreshSystemPrompt: (currentSystemPrompt: string, permissionNotice?: string) => {
       if (params.isRawModelRun) {
         return currentSystemPrompt;

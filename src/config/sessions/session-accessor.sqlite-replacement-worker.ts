@@ -14,11 +14,9 @@ import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db
 import type {
   AgentDatabaseOperations,
   AgentDatabaseRequestExecutionSource,
+  OpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution-contract.js";
-import {
-  captureOpenClawAgentDatabaseExecution,
-  type OpenClawAgentDatabaseExecution,
-} from "../../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import {
   retainSessionEntryWorkerPublication,

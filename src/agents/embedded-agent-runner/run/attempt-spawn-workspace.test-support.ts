@@ -28,6 +28,7 @@ import type { Agent, AgentMessage, StreamFn } from "../../runtime/index.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import { agentSessionSetPromptPreparation } from "../../sessions/agent-session-prompting.js";
 import type { AgentSession, CreateAgentSessionOptions } from "../../sessions/index.js";
+import { convertToLlm } from "../../sessions/messages.js";
 import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
@@ -814,7 +815,7 @@ type MutableSession = {
   isStreaming: boolean;
   subscribe: AgentSession["subscribe"];
   agent: {
-    convertToLlm?: (messages: AgentMessage[]) => AgentMessage[] | Promise<AgentMessage[]>;
+    convertToLlm: Agent["convertToLlm"];
     prompt?: (...args: unknown[]) => Promise<unknown>;
     streamFn?: (...args: Parameters<StreamFn>) => Promise<unknown>;
     transport?: string;
@@ -862,12 +863,7 @@ type SessionPromptOverride = (
   options?: { images?: unknown[]; preflightResult?: (submitted: boolean) => void },
 ) => Promise<void>;
 
-type TestAgentStream = {
-  result: () => Promise<unknown>;
-  [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
-};
-
-function createCompletedAssistantStream(): TestAgentStream {
+function createCompletedAssistantStream() {
   return {
     async result() {
       return { role: "assistant", content: "done" };
@@ -1013,6 +1009,7 @@ export function createDefaultEmbeddedSession(params?: {
     isStreaming: false,
     subscribe: () => () => {},
     agent: {
+      convertToLlm,
       prompt: async (prompt, options) => {
         pendingPrompt = {
           prompt: String(prompt),

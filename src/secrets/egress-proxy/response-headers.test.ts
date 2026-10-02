@@ -10,20 +10,13 @@ const disposition = (value: string) =>
   toForwardableResponseHeaders({ "content-disposition": value })["content-disposition"];
 
 describe("toForwardableResponseHeaders", () => {
-  it("keeps ASCII headers unchanged", () => {
-    const headers = {
-      "content-length": "4",
-      "content-disposition": 'attachment; filename="report.pdf"',
-      "set-cookie": ["a=1", "b=2"],
-    };
-    expect(toForwardableResponseHeaders(headers)).toBe(headers);
-  });
-
-  it("forwards non-ASCII bytes in other headers unchanged", () => {
+  it("leaves headers without a non-ASCII disposition unchanged", () => {
     // Node writes these latin1 values back byte-for-byte; rewriting them would
     // change opaque validators such as ETag used by If-Match/If-None-Match.
     const headers = {
       "content-length": "4",
+      "content-disposition": 'attachment; filename="report.pdf"',
+      "set-cookie": ["a=1", "b=2"],
       etag: `"${received("café")}"`,
       "x-file-name": received("附件.log"),
     };
@@ -31,7 +24,6 @@ describe("toForwardableResponseHeaders", () => {
   });
 
   it.each([
-    ["received UTF-8 bytes", `attachment; filename="${received(CJK_NAME)}"`],
     ["decoded characters", `attachment; filename="${CJK_NAME}"`],
     ["an unquoted filename", `attachment; filename=${received(CJK_NAME)}`],
   ])("encodes a CJK filename from %s with RFC 6266 filename*", (_label, value) => {

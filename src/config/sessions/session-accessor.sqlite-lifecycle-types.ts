@@ -3,6 +3,7 @@ import type {
   SubagentRunsDurableBasis,
 } from "../../agents/subagents/registry/subagent-registry-read.types.js";
 import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal.js";
+import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -24,6 +25,7 @@ import type {
   DeleteSessionEntryLifecycleResult,
   SessionEntryLifecycleRemoval,
   SessionEntryLifecycleUpsert,
+  SqliteSessionArtifactPreparationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
 import type { SessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite-maintenance-age.js";
@@ -31,6 +33,7 @@ import type {
   SessionEntryCommitContext,
   SessionEntryCreateWithTranscriptOptions,
 } from "./session-accessor.types.js";
+import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
@@ -332,6 +335,30 @@ export type SessionEntryMaintenanceResult = SessionEntryMaintenanceCounts & {
 export type LifecycleArtifactCleanupPlan = {
   deletePlans: SessionStateDeletePlan[];
   entries: SessionEntryRemovalPlan[];
+};
+export type LifecycleArtifactCleanupInput = {
+  continuation?: CanonicalSessionReaderContinuation;
+  agentId?: string;
+  archiveRemovedEntryTranscripts: boolean;
+  archiveDirectory: string;
+  pluginOwnerId?: string;
+  sessionKeySegmentPrefix: string;
+  transcriptContentMarker: string;
+  orphanTranscriptMinAgeMs: number;
+  nowMs: number;
+  diagnostics?: SqliteSessionArtifactPreparationDiagnostics;
+};
+export type LifecycleArtifactCleanupRequest = {
+  kind: "lifecycle-artifact-plan";
+  database: { agentId: string; path: string };
+  env: NodeJS.ProcessEnv;
+  input: LifecycleArtifactCleanupInput;
+  expectedSource: DatabaseFileIdentity;
+};
+export type LifecycleArtifactCleanupWorkerResult = {
+  kind: "lifecycle-artifact-plan";
+  plan: LifecycleArtifactCleanupPlan;
+  diagnostics: LifecycleArtifactCleanupInput["diagnostics"];
 };
 export type ProjectedLifecycleMutation = {
   archiveRecovery?: { pending: boolean; databaseIdentity: string };
