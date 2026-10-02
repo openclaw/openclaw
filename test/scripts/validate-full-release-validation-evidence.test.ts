@@ -158,6 +158,44 @@ function validate(
 }
 
 describe("full release validation evidence", () => {
+  it.each([3, 4])(
+    "rejects retained windows-node-ci advisory evidence under current strict tooling (v%s)",
+    (version) => {
+      expect(() =>
+        validate(
+          {},
+          {
+            version,
+            childRuns: { normalCi: "456" },
+            childEvidence: {
+              normalCi: {
+                runId: "456",
+                jobs: [
+                  {
+                    name: "checks-windows-node-test-2",
+                    status: "completed",
+                    conclusion: "failure",
+                    url: "https://example.invalid/windows",
+                  },
+                ],
+              },
+            },
+            advisoryJobs: [
+              {
+                class: "windows-node-ci",
+                child: "normalCi",
+                job: "checks-windows-node-test-2",
+                conclusion: "failure",
+                runId: "456",
+                url: "https://example.invalid/windows",
+              },
+            ],
+          },
+        ),
+      ).toThrow("advisory jobs differ from the release policy evidence");
+    },
+  );
+
   it.each([
     { validationInputs: { laneWaiver: "approved" } },
     { publishInputs: { stableSoakWaiver: "approved" } },

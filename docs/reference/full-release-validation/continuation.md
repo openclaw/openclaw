@@ -153,10 +153,14 @@ operations and never run as an automatic response to a test outcome.
 
 Published artifacts may contain empty `knownFlakyJobs` and `automaticRetries`
 fields. Readers retain their original plan digest and reject nonempty allowances
-or retry records. Current qualification requires successful selected results
-or validated `windows-node-ci` evidence. Retired waivers and
-pre-declared advisory failure allowances remain rejected and must
-be replaced with a fresh qualifying run; it cannot authorize publication.
+or retry records. Current qualification requires successful selected results. A
+campaign already dispatched with an
+older pinned Tooling SHA remains owned by that immutable tooling and must not be
+retargeted mid-run. Current strict tooling rejects retained `windows-node-ci`
+advisory evidence; start a fresh campaign on current tooling to qualify under the
+restored blocking gate. Retired waivers and pre-declared advisory failure
+allowances remain rejected and must be replaced with a fresh qualifying run; they
+cannot authorize publication.
 
 ### Read publication observations
 

@@ -11844,10 +11844,12 @@ describe("ci workflow guards", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32").each(["failure", "timed_out"])(
-    "ci-gate blocks FRV when the selected Windows Node aggregate ends with %s",
-    (result) => {
-      const outcome = runCiGateFixture(`preflight=success|true\nchecks-windows=${result}|true`);
+  it.skipIf(process.platform === "win32")(
+    "ci-gate ignores the retired FRV Windows advisory environment and blocks the failed aggregate",
+    () => {
+      const outcome = runCiGateFixture("preflight=success|true\nchecks-windows=failure|true", {
+        FRV_WINDOWS_NODE_ADVISORY: "true",
+      });
       expect(outcome.status, `${outcome.stdout}\n${outcome.stderr}`).toBe(1);
       expect(outcome.stdout).toContain("::error title=CI job did not succeed");
       expect(outcome.stdout).not.toContain("::notice");
