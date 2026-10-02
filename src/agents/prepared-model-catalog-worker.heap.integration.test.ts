@@ -124,6 +124,7 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
         { timeoutMs: 30_000 },
       );
       expect(result.status).toBe("ok");
+      expect(result.heapUsedBytes).toBeGreaterThan(0);
       if (result.status !== "ok" || result.kind !== "catalog") {
         throw new Error(JSON.stringify(result));
       }

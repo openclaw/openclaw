@@ -310,6 +310,7 @@ async function runCatalogRequest(
         authStore,
         credentials,
         authModes: resolveUsableAgentCredentialModes(credentials),
+        heapUsedBytes: process.memoryUsage().heapUsed,
       };
     }
     const { prepareAgentCatalogSource } =
@@ -504,6 +505,7 @@ async function runCatalogRequest(
             ),
       authStore,
       authModes: resolveUsableAgentCredentialModes(catalogCredentials),
+      heapUsedBytes: process.memoryUsage().heapUsed,
     };
     work.beginClose();
     await work.runWhenIdle(() => undefined);
