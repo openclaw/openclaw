@@ -138,7 +138,23 @@ for the Voice Call plugin.
 | Encoding        | `...deepgram.encoding`                                                  | `mulaw`                                      |
 | Sample rate     | `...deepgram.sampleRate`                                                | `8000`                                       |
 | Endpointing     | `...deepgram.endpointingMs`                                             | `800`                                        |
+| Idle flush      | `...deepgram.idleFlushMs`                                               | `0` (disabled)                               |
 | Interim results | `...deepgram.interimResults`                                            | `true`                                       |
+
+`idleFlushMs` is disabled by default and only engages when you set it. It covers
+one specific failure: Deepgram keeps sending `is_final` results but never sends
+`speech_final`, so the turn never ends, nothing is handed to the agent, and the
+caller hears nothing while the call stays open. Set it when you actually see
+stalled turns. Once set, OpenClaw waits `endpointingMs + idleFlushMs` after the
+transcript stops growing and then asks Deepgram to `Finalize`; Deepgram still
+decides the boundary and answers with `from_finalize`.
+
+The tradeoff is that the timer keys on Results activity, not on caller silence.
+If Deepgram pauses Results mid-utterance for longer than that window, the
+`Finalize` request goes out while the caller is still speaking and can split one
+question into two turns. Pick a value comfortably longer than the longest Results
+gap you observe. If the request draws no answer, OpenClaw leaves the turn pending
+and reports a recoverable error rather than guessing a boundary of its own.
 
 ```json5
 {
