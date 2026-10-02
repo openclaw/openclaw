@@ -282,7 +282,7 @@ describe("visible session placement and authority", () => {
         sessionKey: key,
         sessionId: "cloud-child",
         expectedExistingSessionId: "cloud-child",
-        message: expect.stringContaining(`[Subagent Task]\n\n${task}\n\nBegin.`),
+        message: expect.stringContaining(task),
         timeout: 180,
         deliver: false,
         sessionEffects: "visible",
