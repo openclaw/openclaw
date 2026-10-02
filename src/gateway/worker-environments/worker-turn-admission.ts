@@ -66,7 +66,7 @@ export async function waitForPendingWorkerResult(params: {
   );
   // Restart clears local claims without discarding durable results. A claimless result cannot
   // make progress through this wait; keep its fence and let recovery retain control of the files.
-  const pendingResults = await params.placements.listPendingWorkspaceResults(params.sessionId);
+  const pendingResults = await params.placements.listPendingWorkspaceResultsAsync(params.sessionId);
   params.signal?.throwIfAborted();
   if (
     !params.placements.get(params.sessionId)?.turnClaim &&
@@ -356,7 +356,7 @@ export async function claimWorkerTurn(params: {
     if (!(error instanceof ActiveTurnClaimError)) {
       throw error;
     }
-    const pendingResults = await params.placements.listPendingWorkspaceResults(
+    const pendingResults = await params.placements.listPendingWorkspaceResultsAsync(
       params.identity.sessionId,
     );
     params.signal?.throwIfAborted();

@@ -100,7 +100,7 @@ function createHarness(
     environments?: unknown[];
     placements?: unknown[];
     pendingResults?: Awaited<
-      ReturnType<WorkerSessionPlacementStore["listPendingWorkspaceResults"]>
+      ReturnType<WorkerSessionPlacementStore["listPendingWorkspaceResultsAsync"]>
     >;
     assertPreparedResultCurrent?: () => void;
     results?: Array<{

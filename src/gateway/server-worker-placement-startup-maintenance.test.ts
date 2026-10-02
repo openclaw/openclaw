@@ -132,7 +132,7 @@ function createMaintenanceRuntime(params: {
         return [];
       },
       listWorkspaceReconciliationOwners: async () => [],
-      listPendingWorkspaceResults: async () => [],
+      listPendingWorkspaceResultsAsync: async () => [],
       prepareRuntimeRefresh: async (sessionId: string) => ({
         placement: params.placements.find((placement) => placement.sessionId === sessionId),
         move: undefined,

@@ -415,7 +415,7 @@ describe("offline device placement abandonment", () => {
       expect(harness.log.indexOf("teardown:destroy")).toBeLessThan(
         harness.log.indexOf("placement:local"),
       );
-      expect(await placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.validateTurnClaim(claim)).toBe(false);
       expect(placements.isWorkerTurnToolAuthorized(claim, "sessions_send")).toBe(false);
       expect(placements.validateWorkspaceResultClaim(claim)).toBe(false);
@@ -454,13 +454,13 @@ describe("offline device placement abandonment", () => {
       },
     });
     await placements.markWorkspaceResultPending(claim);
-    expect(await placements.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
 
     await expect(harness.service.move(requestFor(active, false))).rejects.toThrow(
       `Cannot drain session ${active.sessionId} with a pending cloud workspace result`,
     );
 
-    expect(await placements.listPendingWorkspaceResults()).toEqual([
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([
       expect.objectContaining({ claimId: claim.claimId, runId: claim.runId }),
     ]);
     expect(placements.validateTurnClaim(claim)).toBe(true);
@@ -504,7 +504,7 @@ describe("offline device placement abandonment", () => {
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
     expect(harness.log).not.toContain("workspace:reconcile");
     expect(placements.validateTurnClaim(claim)).toBe(false);
-    expect(await placements.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
     expect(() =>
       placements.startReconcile({

@@ -55,7 +55,7 @@ describe("worker placement dispatch", () => {
 
     await expect(harness.service.reclaim(REQUEST)).rejects.toThrow("destroy pending");
 
-    expect(await placementStore.listPendingWorkspaceResults()).toEqual([
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([
       expect.objectContaining({ workspaceAcceptedAtMs: expect.any(Number) }),
     ]);
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
@@ -68,7 +68,7 @@ describe("worker placement dispatch", () => {
       state: "failed",
       turnClaim: null,
     });
-    expect(await placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(harness.environments.destroy).toHaveBeenCalledTimes(2);
     expect(harness.log).not.toContain("workspace:resume");
 
@@ -154,7 +154,7 @@ describe("worker placement dispatch", () => {
     const publicationOrder: string[] = [];
     const prepareAcceptedWorkspacePublication = vi.fn(async (claim) => {
       expect(
-        (await placementStore.listPendingWorkspaceResults()).find(
+        (await placementStore.listPendingWorkspaceResultsAsync()).find(
           (pending) => pending.claimId === claim.claimId,
         )?.workspaceAcceptedAtMs,
       ).toBeNull();
@@ -232,7 +232,7 @@ describe("worker placement dispatch", () => {
       turnClaim: null,
       workspaceBaseManifestRef: harness.reconciledManifestRef,
     });
-    expect(await placementStore.listPendingWorkspaceResults()).toMatchObject([
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toMatchObject([
       { sessionId: otherRequest.sessionId, claimId: otherClaim.claimId },
     ]);
     expect(harness.environments.destroy).not.toHaveBeenCalled();
@@ -265,7 +265,7 @@ describe("worker placement dispatch", () => {
       state: "active",
       turnClaim: { claimId: claim.claimId },
     });
-    expect(await restartedStore.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(await restartedStore.listPendingWorkspaceResultsAsync()).toHaveLength(1);
     expect(restartedHarness.environments.destroy).not.toHaveBeenCalled();
   });
 
@@ -303,7 +303,7 @@ describe("worker placement dispatch", () => {
       turnClaim: null,
       workspaceBaseManifestRef: harness.reconciledManifestRef,
     });
-    expect(await placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(harness.log.indexOf("workspace:resume")).toBeLessThan(
       harness.log.indexOf("teardown:destroy"),
     );
@@ -336,7 +336,7 @@ describe("worker placement dispatch", () => {
       state: "active",
       turnClaim: { claimId: claim.claimId },
     });
-    expect(await placementStore.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toHaveLength(1);
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
 
@@ -368,7 +368,7 @@ describe("worker placement dispatch", () => {
       terminalReason: "cloud worker disappeared: environment state destroyed",
       terminalAtMs: expect.any(Number),
     });
-    expect(await placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
   });
 
   it("reclaims an accepted pending result after a post-destroy gateway restart", async () => {
@@ -405,7 +405,7 @@ describe("worker placement dispatch", () => {
       workspaceBaseManifestRef: harness.reconciledManifestRef,
     });
     expect(publishAcceptedWorkspace).toHaveBeenCalledWith(claim);
-    expect(await placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
   });
 
   it("coalesces overlapping reclaim requests and accepts completed retries", async () => {
@@ -468,7 +468,7 @@ describe("worker placement dispatch", () => {
       turnClaim: { owner: "worker" },
     });
     expect(harness.log).toContain("workspace:apply-prepared");
-    expect(await placementStore.listPendingWorkspaceResults()).toMatchObject([
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toMatchObject([
       { workspaceAcceptedAtMs: null },
     ]);
     expect(harness.environments.destroy).not.toHaveBeenCalled();

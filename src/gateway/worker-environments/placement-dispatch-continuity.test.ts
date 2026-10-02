@@ -47,7 +47,7 @@ describe("worker placement restart continuity", () => {
       const restarted = createTestHarness({}, restartedStore);
       restarted.markEnvironmentNodeDeviceId("surviving-node");
       vi.mocked(restarted.environments.stopTunnel).mockImplementation(async () => {
-        expect(await restartedStore.listPendingWorkspaceResults()).toHaveLength(1);
+        expect(await restartedStore.listPendingWorkspaceResultsAsync()).toHaveLength(1);
         expect(restarted.environments.startTunnel).not.toHaveBeenCalled();
         if (outcome === "stop failed") {
           throw new Error("worker has not confirmed stop");
@@ -72,14 +72,14 @@ describe("worker placement restart continuity", () => {
         turnClaim: outcome === "stopped" ? null : { claimId: claim.claimId },
       });
       if (outcome === "stopped") {
-        expect(await restartedStore.listPendingWorkspaceResults()).toEqual([]);
+        expect(await restartedStore.listPendingWorkspaceResultsAsync()).toEqual([]);
         expect(restarted.placements.current()?.workspaceBaseManifestRef).toBe(
           restarted.reconciledManifestRef,
         );
         expect(restarted.log).toContain("workspace:resume");
         expect(restartedStore.validateTurnClaim(claim)).toBe(false);
       } else {
-        expect(await restartedStore.listPendingWorkspaceResults()).toHaveLength(1);
+        expect(await restartedStore.listPendingWorkspaceResultsAsync()).toHaveLength(1);
         expect(restarted.environments.startTunnel).not.toHaveBeenCalled();
       }
     },

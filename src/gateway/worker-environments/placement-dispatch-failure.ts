@@ -62,7 +62,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "abortWorkspaceReconciliation"
   | "listWorkspaceReconciliationOwners"
   | "list"
-  | "listPendingWorkspaceResults"
+  | "listPendingWorkspaceResultsAsync"
   | "markWorkspaceResultPending"
   | "handoffWorkspaceResultRecovery"
   | "workspaceResultInstanceId"
@@ -397,7 +397,7 @@ export function createPlacementFailureActions(deps: {
       environment?.state === "failed" &&
       environment.error === STALE_WORKER_BUILD_REASON &&
       environment.leaseId === null &&
-      !(await placements.listPendingWorkspaceResults(placement.sessionId)).some(
+      !(await placements.listPendingWorkspaceResultsAsync(placement.sessionId)).some(
         (result) => result.sessionId === placement.sessionId,
       )
     ) {

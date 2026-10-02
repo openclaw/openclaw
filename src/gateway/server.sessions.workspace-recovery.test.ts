@@ -115,7 +115,7 @@ async function seedPendingWorkspace(scenario: RecoveryScenario) {
   const before = {
     entry: loadSessionEntry(sessionKey).entry,
     placement: placements.get(sessionId),
-    pending: await placements.listPendingWorkspaceResults(),
+    pending: await placements.listPendingWorkspaceResultsAsync(),
   };
   expect(before.entry?.sessionId).toBe(sessionId);
   expect(before.pending).toHaveLength(1);
@@ -131,7 +131,7 @@ async function seedPendingWorkspace(scenario: RecoveryScenario) {
     async expectPreserved() {
       expect(loadSessionEntry(sessionKey).entry).toEqual(before.entry);
       expect(placements.get(sessionId)).toEqual(before.placement);
-      expect(await placements.listPendingWorkspaceResults()).toEqual(before.pending);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual(before.pending);
     },
   };
 }

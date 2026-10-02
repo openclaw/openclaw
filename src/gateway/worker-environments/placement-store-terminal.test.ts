@@ -63,7 +63,7 @@ describe("worker placement terminal persistence", () => {
       runId: `run-${identity.sessionId}`,
     });
     await store.markWorkspaceResultPending(claim);
-    const pending = (await store.listPendingWorkspaceResults()).find(
+    const pending = (await store.listPendingWorkspaceResultsAsync()).find(
       (result) => result.sessionId === identity.sessionId,
     );
     if (!pending) {
@@ -95,7 +95,7 @@ describe("worker placement terminal persistence", () => {
       terminalReason: null,
       terminalAtMs: 1_000,
     });
-    expect(await store.listPendingWorkspaceResults()).toEqual([]);
+    expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
   });
 
   it("records a clean terminal timestamp for an idle destroyed-worker reclaim", async () => {
@@ -149,7 +149,7 @@ describe("worker placement terminal persistence", () => {
     expect(failed.terminalReason).toHaveLength(1_024);
     expect(failed.terminalReason).toMatch(/^cloud worker disappeared: provider-detail/u);
     expect(failed.recoveryError).toBe(failed.terminalReason);
-    expect(await store.listPendingWorkspaceResults()).toEqual([]);
+    expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(closedClaims).toEqual([claim]);
     unregister();
 
@@ -182,7 +182,7 @@ describe("worker placement terminal persistence", () => {
       turnClaim: null,
       terminalReason: null,
     });
-    expect(await store.listPendingWorkspaceResults()).toEqual([]);
+    expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(closedClaims).toEqual([claim]);
 
     const fresh = await store.claimTurn({
@@ -259,7 +259,7 @@ describe("worker placement terminal persistence", () => {
         generation: active.generation,
         turnClaim: { claimId: claim.claimId },
       });
-      expect(await store.listPendingWorkspaceResults()).toMatchObject([
+      expect(await store.listPendingWorkspaceResultsAsync()).toMatchObject([
         { sessionId: active.sessionId, claimId: claim.claimId },
       ]);
     },
@@ -286,7 +286,7 @@ describe("worker placement terminal persistence", () => {
       state: "active",
       turnClaim: { claimId: claim.claimId },
     });
-    expect(await store.listPendingWorkspaceResults()).toMatchObject([
+    expect(await store.listPendingWorkspaceResultsAsync()).toMatchObject([
       { sessionId: claim.sessionId, claimId: claim.claimId },
     ]);
 
@@ -302,7 +302,7 @@ describe("worker placement terminal persistence", () => {
     expect(
       store.failWorkspaceResultAndReleaseTurn(pending, new Error("worker disappeared")),
     ).toMatchObject({ state: "failed", turnClaim: null });
-    expect(await store.listPendingWorkspaceResults()).toEqual([]);
+    expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
   });
 
   it("does not leak terminal diagnostics between sessions sharing an environment", async () => {
@@ -354,7 +354,7 @@ describe("worker placement terminal persistence", () => {
       terminalReason: null,
       terminalAtMs: null,
     });
-    expect(await store.listPendingWorkspaceResults()).toMatchObject([
+    expect(await store.listPendingWorkspaceResultsAsync()).toMatchObject([
       { sessionId: active.sessionId, claimId: claim.claimId },
     ]);
   });

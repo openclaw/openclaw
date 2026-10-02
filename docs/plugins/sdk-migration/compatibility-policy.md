@@ -85,6 +85,27 @@ Idempotent retries and caller cancellation keep their existing behavior across
 host upgrades. Changing this contract requires an explicitly approved SDK
 migration.
 
+### Gateway placement and publication readers
+
+The Gateway context exposed by `GatewayRequestHandlerOptions` from `core` and
+`gateway-runtime`, and by `getPluginRuntimeGatewayRequestScope()` from
+`plugin-runtime`, retains these synchronous contracts shipped in OpenClaw
+2026.9.7:
+
+- `workerSessionPlacementService.listPendingWorkspaceResults(sessionId?)`
+  returns the pending result array.
+- `workerSessionPlacementService.getWorkspaceResultReconcilingSessionIds(sessionIds)`
+  returns a `ReadonlySet<string>`.
+- `githubPublicationService.deferOrphanedRequests()` returns `void` after
+  orphaned requests have been deferred.
+
+Migrate to the corresponding `Async`-suffixed methods and await their results.
+The placement readers use the SQLite worker. Internal callers use the awaited
+methods; the synchronous adapters remain solely for released plugin contracts.
+TypeScript marks those adapters deprecated. They retain their result shapes and
+completion timing until the next Plugin SDK major and an explicitly approved
+breaking release. No schema, retained data, or update migration changes.
+
 ### Harness attempt result migration
 
 In OpenClaw 2026.8.1, `EmbeddedRunAttemptResult` from

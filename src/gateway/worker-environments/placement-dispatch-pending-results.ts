@@ -680,7 +680,7 @@ export async function recoverPendingWorkspaceResults(
             });
           } catch (error) {
             try {
-              const pendingResults = await placements.listPendingWorkspaceResults(
+              const pendingResults = await placements.listPendingWorkspaceResultsAsync(
                 pending.sessionId,
               );
               const current = placements.get(pending.sessionId);

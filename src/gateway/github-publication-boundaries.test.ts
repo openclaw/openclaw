@@ -875,7 +875,12 @@ describe("Gateway GitHub publication boundaries", () => {
     });
     await placements.releaseTurn(claim);
 
-    await coordinator.deferOrphanedRequests();
+    expect(coordinator.deferOrphanedRequests()).toBeUndefined();
+    expect(
+      database.db
+        .prepare("SELECT claim_id FROM github_publication_requests WHERE request_id = ?")
+        .get(accepted.requestId)?.claim_id,
+    ).toBeNull();
 
     expect(coordinator.read(accepted.requestId)).toMatchObject({ status: "requested" });
     expect(coordinator.listUnreportedResults()).toEqual([]);

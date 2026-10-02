@@ -89,17 +89,17 @@ it("persists monotonic ACKs and their terminal fence through the gate without ho
     lastTranscriptAckCursor: 4,
     lastLiveEventAckCursor: 9,
   });
-  expect(await placements.listPendingWorkspaceResults(claim.sessionId)).toMatchObject([
+  expect(await placements.listPendingWorkspaceResultsAsync(claim.sessionId)).toMatchObject([
     { claimId: claim.claimId, gatewayInstanceId: placements.workspaceResultInstanceId() },
   ]);
   await placements.acceptWorkspaceResult(claim);
   await gate.updateAckCursors({ claim, liveSeq: 9 });
   expect(
-    (await placements.listPendingWorkspaceResults(claim.sessionId))[0]?.workspaceAcceptedAtMs,
+    (await placements.listPendingWorkspaceResultsAsync(claim.sessionId))[0]?.workspaceAcceptedAtMs,
   ).toBe(1_000);
   await placements.completeWorkspaceResultAndReleaseTurn(claim);
   await expect(gate.updateAckCursors({ claim, liveSeq: 10 })).rejects.toThrow("stale worker turn");
-  expect(await placements.listPendingWorkspaceResults(claim.sessionId)).toEqual([]);
+  expect(await placements.listPendingWorkspaceResultsAsync(claim.sessionId)).toEqual([]);
   expect(placements.get(claim.sessionId)?.lastLiveEventAckCursor).toBe(9);
 });
 
@@ -135,7 +135,7 @@ it.each(["placement", "caller"] as const)(
     ).rejects.toThrow(owner === "placement" ? "stale worker turn" : "ACK caller revoked");
     expect(revoked).toBe(true);
     expect(placements.get(claim.sessionId)?.lastLiveEventAckCursor).toBeNull();
-    expect(await placements.listPendingWorkspaceResults(claim.sessionId)).toEqual([]);
+    expect(await placements.listPendingWorkspaceResultsAsync(claim.sessionId)).toEqual([]);
     await placements.releaseTurn(claim);
   },
 );
@@ -185,7 +185,7 @@ it.each(["committed", "unknown"] as const)(
     }
     expect(corrupted).toBe(1);
     expect(placements.get(claim.sessionId)?.lastLiveEventAckCursor).toBe(1);
-    expect(await placements.listPendingWorkspaceResults(claim.sessionId)).toMatchObject([
+    expect(await placements.listPendingWorkspaceResultsAsync(claim.sessionId)).toMatchObject([
       { claimId: claim.claimId, gatewayInstanceId: placements.workspaceResultInstanceId() },
     ]);
     // Fixture recovery settles the retained fence; an unknown ACK cannot release it.
@@ -354,9 +354,9 @@ it.each(["claim", "staged result", "workspace manifest"] as const)(
         expect(placements.get(requested.sessionId)?.workspaceBaseManifestRef).toBe(manifestRef);
       } else {
         await placements.recordStagedWorkspaceResult(stagedClaim, ref);
-        expect(await placements.listPendingWorkspaceResults(requested.sessionId)).toMatchObject([
-          { claimId: stagedClaim.claimId, stagedResultRef: ref },
-        ]);
+        expect(
+          await placements.listPendingWorkspaceResultsAsync(requested.sessionId),
+        ).toMatchObject([{ claimId: stagedClaim.claimId, stagedResultRef: ref }]);
       }
       expect(corrupted).toBe(1);
       await placements.acceptWorkspaceResult(stagedClaim);
@@ -560,18 +560,18 @@ it.each(["reclaim", "mutation"] as const)(
       expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
       placements.recordWorkspaceResultConflict(claim, undefined);
       await placements.handoffWorkspaceResultRecovery(claim);
-      expect(await placements.listPendingWorkspaceResults(claim.sessionId)).toMatchObject([
+      expect(await placements.listPendingWorkspaceResultsAsync(claim.sessionId)).toMatchObject([
         { claimId, recoveryRequestedAtMs: 1_000, workspaceAcceptedAtMs: null },
       ]);
       await placements.acceptWorkspaceResult(claim);
       expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
       await placements.completeWorkspaceResultAndReleaseTurn(claim);
       expect(placements.validateWorkspaceResultClaim(claim)).toBe(false);
-      expect(await placements.listPendingWorkspaceResults(claim.sessionId)).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync(claim.sessionId)).toEqual([]);
       const cancelled = await placements.claimReclaimWorkspaceResult(requested);
       await placements.cancelWorkspaceResultAndReleaseTurn(cancelled);
       const abandoned = await placements.claimReclaimWorkspaceResult(requested);
-      const [pending] = await placements.listPendingWorkspaceResults(abandoned.sessionId);
+      const [pending] = await placements.listPendingWorkspaceResultsAsync(abandoned.sessionId);
       if (!pending) {
         throw new Error("Fixture lost its pending result");
       }
@@ -606,7 +606,7 @@ it("rejects result acceptance when the live caller is revoked before commit", as
     }),
   ).rejects.toThrow("result caller revoked");
   expect(
-    (await placements.listPendingWorkspaceResults(claim.sessionId))[0]?.workspaceAcceptedAtMs,
+    (await placements.listPendingWorkspaceResultsAsync(claim.sessionId))[0]?.workspaceAcceptedAtMs,
   ).toBeNull();
   expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
   await placements.acceptWorkspaceResult(claim);
@@ -635,7 +635,7 @@ it.each(["prepare", "release"] as const)(
       } else {
         await placements.releaseTurnIfOwned(previous);
       }
-      expect(await placements.listPendingWorkspaceResults(next.sessionId)).toMatchObject([
+      expect(await placements.listPendingWorkspaceResultsAsync(next.sessionId)).toMatchObject([
         { claimId: next.claimId, runId: next.runId },
       ]);
       expect(placements.validateWorkspaceResultClaim(next)).toBe(true);

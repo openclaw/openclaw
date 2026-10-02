@@ -353,7 +353,7 @@ describe("worker placement workspace journal", () => {
         ? { ...journal, appliedManifestRef: journal.currentManifestRef }
         : undefined,
     );
-    expect(await store.listPendingWorkspaceResults(claim.sessionId)).toMatchObject([
+    expect(await store.listPendingWorkspaceResultsAsync(claim.sessionId)).toMatchObject([
       {
         claimId: claim.claimId,
         runId: claim.runId,

@@ -95,7 +95,7 @@ describe("forced worker environment abandonment", () => {
       turnClaim: null,
       recoveryError: "Worker result abandoned by forced operator teardown",
     });
-    expect(await store.listPendingWorkspaceResults()).toEqual([]);
+    expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
   });
 
   it("releases a pending reclaim claim when its workspace is already gone", async () => {
@@ -127,7 +127,7 @@ describe("forced worker environment abandonment", () => {
       turnClaim: null,
       recoveryError: "Worker result abandoned by forced operator teardown",
     });
-    expect(await store.listPendingWorkspaceResults()).toEqual([]);
+    expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(resolveWorkspace).toHaveBeenCalledOnce();
   });
 

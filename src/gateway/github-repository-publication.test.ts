@@ -656,7 +656,7 @@ describe("repository checkpoint GitHub publication", () => {
           await blocked.placements.markWorkspaceResultPending(pendingClaim);
           expect(blocked.placements.clearLocalTurnClaimsAfterRestart()).toBe(1);
           expect(blocked.placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
-          expect(await blocked.placements.listPendingWorkspaceResults()).toHaveLength(1);
+          expect(await blocked.placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
         } else if (blocker === "reservation") {
           const entered = createDeferredCore();
           held = blocked.placements.withWorkspaceExclusion(REQUEST.sessionId, async () => {
@@ -902,7 +902,7 @@ describe("repository checkpoint GitHub publication", () => {
       expect(await f.coordinator.processClaim(claim)).toEqual([]);
       f.coordinator.deferClaimPreparation(claim);
       expect(readRepositoryGitHubPublication(accepted.requestId)?.claim_id).toBe(claim.claimId);
-      await f.coordinator.deferOrphanedRequests();
+      expect(f.coordinator.deferOrphanedRequests()).toBeUndefined();
       expect(readRepositoryGitHubPublication(accepted.requestId)?.claim_id).toBeNull();
       expect(f.runtime.effects).toEqual([]);
     },

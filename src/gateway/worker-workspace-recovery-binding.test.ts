@@ -346,7 +346,7 @@ describe("registered worker workspace recovery target binding", () => {
         ),
       ).toHaveLength(1);
       expect(await loadTranscriptEvents(b)).toEqual(beforeB);
-      expect(await placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
     });
   });
@@ -366,7 +366,7 @@ describe("registered worker workspace recovery target binding", () => {
         ),
       ).toHaveLength(1);
       expect(await loadTranscriptEvents(b)).toEqual(beforeB);
-      expect(await placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "active", turnClaim: null });
       expect(destroy).not.toHaveBeenCalled();
     });
@@ -428,7 +428,7 @@ describe("registered worker workspace recovery target binding", () => {
       expect(onReconcile).toHaveBeenCalledOnce();
       await expect(onReconcile.mock.results[0]?.value).resolves.toBeUndefined();
       expect(observed).toEqual({ stableReads: 0, returnedTextBytes: 0 });
-      expect(await placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
     });
   });
 
@@ -462,7 +462,7 @@ describe("registered worker workspace recovery target binding", () => {
                 isRecord(event) && event.customType === WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
             ),
           ).toHaveLength(1);
-          const pending = await placements.listPendingWorkspaceResults();
+          const pending = await placements.listPendingWorkspaceResultsAsync();
           if (changed === "guarded") {
             expect(pending).toHaveLength(1);
             expect(pending[0]?.workspaceAcceptedAtMs).not.toBeNull();
@@ -518,7 +518,7 @@ describe("registered worker workspace recovery target binding", () => {
             }),
           ]);
           boundary.onReportQueued = undefined;
-          const pending = await placements.listPendingWorkspaceResults();
+          const pending = await placements.listPendingWorkspaceResultsAsync();
           const journalOwners = await placements.listWorkspaceReconciliationOwners();
           expect(pending).toHaveLength(1);
           expect(journalOwners).toHaveLength(1);
@@ -543,7 +543,7 @@ describe("registered worker workspace recovery target binding", () => {
                 isRecord(event) && event.customType === WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE,
             ),
           ).toEqual([]);
-          expect(await placements.listPendingWorkspaceResults()).toEqual(pending);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toEqual(pending);
           expect(await placements.loadWorkspaceReconciliation(owner)).toEqual(journal);
           const ref = await runCommandWithTimeout(
             [
@@ -606,7 +606,7 @@ describe("registered worker workspace recovery target binding", () => {
             }),
           ]);
           boundary.onRefMutationRequested = undefined;
-          const pending = await placements.listPendingWorkspaceResults();
+          const pending = await placements.listPendingWorkspaceResultsAsync();
           expect(pending).toHaveLength(1);
           expect(pending[0]!.workspaceAcceptedAtMs).not.toBeNull();
           placements.clearLocalTurnClaimsAfterRestart();
@@ -624,7 +624,7 @@ describe("registered worker workspace recovery target binding", () => {
           expect(afterRef.code).toBe(0);
           expect(afterRef.stdout).toBe(beforeRef.stdout);
           expect(await loadTranscriptEvents(a)).toEqual(beforeTranscript);
-          expect(await placements.listPendingWorkspaceResults()).toEqual(pending);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toEqual(pending);
           expect(placements.get(REQUEST.sessionId)?.turnClaim?.claimId).toBe("replacement-claim");
           expect(destroy).not.toHaveBeenCalled();
         } finally {
@@ -666,7 +666,7 @@ describe("registered worker workspace recovery target binding", () => {
 
           expect(sourceMoved).toBe(true);
           expect(await loadTranscriptEvents(b)).toEqual(beforeB);
-          const pending = await placements.listPendingWorkspaceResults();
+          const pending = await placements.listPendingWorkspaceResultsAsync();
           expect(pending).toHaveLength(1);
           expect(pending[0]!.workspaceAcceptedAtMs).toBeNull();
           const owners = await placements.listWorkspaceReconciliationOwners();

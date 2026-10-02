@@ -257,7 +257,7 @@ describe("worker environment runtime refresh", () => {
       },
     });
     await placements.markWorkspaceResultPending(claim);
-    const pending = await placements.listPendingWorkspaceResults();
+    const pending = await placements.listPendingWorkspaceResultsAsync();
     const beforePlacement = placements.get(placement!.sessionId);
     const binding = {
       sessionId: REQUEST.sessionId,
@@ -279,7 +279,7 @@ describe("worker environment runtime refresh", () => {
       ...beforePlacement,
       workerBundleHash: replacement.bundleHash,
     });
-    expect(await placements.listPendingWorkspaceResults()).toEqual([
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([
       { ...pending[0], recoveryRequestedAtMs: nowMs },
     ]);
     await placements.prepareWorkspaceResultClaim(claim);

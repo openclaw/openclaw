@@ -368,7 +368,7 @@ describe("dispatch Stop before provider allocation", () => {
         expect(harness.environments.createWithRequest).toHaveBeenCalledTimes(
           outcome === "published" ? 1 : 0,
         );
-        expect(await placements.listPendingWorkspaceResults()).toEqual([]);
+        expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       } finally {
         release.resolve();
         await Promise.allSettled([moving, stopping]);

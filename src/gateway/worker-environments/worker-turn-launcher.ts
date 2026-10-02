@@ -206,7 +206,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         return await runLocalTurn();
       }
       const hasPendingWorkspaceResultToSettle = async (sessionId: string, runId: string) =>
-        (await options.placements.listPendingWorkspaceResults(sessionId)).some(
+        (await options.placements.listPendingWorkspaceResultsAsync(sessionId)).some(
           (pending) =>
             pending.sessionId === sessionId &&
             // A restarted run has no live claim, even when it reuses the retained run ID.
@@ -532,7 +532,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             error instanceof WorkerRuntimeRefreshPendingError ||
             disconnectedBeforeHandoff
           ) {
-            const pendingResults = await options.placements.listPendingWorkspaceResults(
+            const pendingResults = await options.placements.listPendingWorkspaceResultsAsync(
               placement.sessionId,
             );
             const canRecoverAdmission =

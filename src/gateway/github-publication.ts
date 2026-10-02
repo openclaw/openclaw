@@ -610,9 +610,14 @@ export function createGitHubPublicationCoordinator(params: {
         );
       }
     },
-    async deferOrphanedRequests() {
-      await methods.deferOrphanedRequests();
-      await repository.deferOrphanedRequests();
+    /** @deprecated Await deferOrphanedRequestsAsync; retained for released plugin contexts. */
+    deferOrphanedRequests(): void {
+      methods.deferOrphanedRequests();
+      repository.deferOrphanedRequests();
+    },
+    async deferOrphanedRequestsAsync(): Promise<void> {
+      await methods.deferOrphanedRequestsAsync();
+      await repository.deferOrphanedRequestsAsync();
     },
     listUnreportedResults() {
       return [...methods.listUnreportedResults(), ...repository.listUnreportedResults()];

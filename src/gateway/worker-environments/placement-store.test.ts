@@ -703,7 +703,7 @@ describe("worker session placement store", () => {
         liveEvent: 8,
       }),
     ).toMatchObject({ lastTranscriptAckCursor: 4, lastLiveEventAckCursor: 9 });
-    expect(await store.listPendingWorkspaceResults()).toMatchObject([
+    expect(await store.listPendingWorkspaceResultsAsync()).toMatchObject([
       { sessionId: SESSION.sessionId, claimId: currentClaim.claimId },
     ]);
   });
@@ -746,7 +746,18 @@ describe("worker session placement store", () => {
     });
     await store.markWorkspaceResultPending(claim);
 
-    expect(await store.listPendingWorkspaceResults()).toEqual([
+    expect(store.listPendingWorkspaceResults(SESSION.sessionId)).toMatchObject([
+      { sessionId: SESSION.sessionId, claimId: claim.claimId, workspaceAcceptedAtMs: null },
+    ]);
+    expect(store.listPendingWorkspaceResults("other-session")).toEqual([]);
+    expect(store.getWorkspaceResultReconcilingSessionIds([SESSION.sessionId])).toEqual(
+      new Set([SESSION.sessionId]),
+    );
+    expect(await store.getWorkspaceResultReconcilingSessionIdsAsync([SESSION.sessionId])).toEqual(
+      new Set([SESSION.sessionId]),
+    );
+
+    expect(await store.listPendingWorkspaceResultsAsync()).toEqual([
       {
         sessionId: active.sessionId,
         environmentId: active.environmentId,
@@ -777,15 +788,15 @@ describe("worker session placement store", () => {
       stagedResultRef,
       totalCount: 2,
     });
-    expect(await store.listPendingWorkspaceResults()).toMatchObject([
+    expect(await store.listPendingWorkspaceResultsAsync()).toMatchObject([
       { sessionId: active.sessionId, stagedResultRef },
     ]);
     await store.updateWorkspaceBaseManifest({ claim, manifestRef });
-    expect(await store.listPendingWorkspaceResults()).toMatchObject([
+    expect(await store.listPendingWorkspaceResultsAsync()).toMatchObject([
       { sessionId: active.sessionId, workspaceAcceptedAtMs: null },
     ]);
     await store.acceptWorkspaceResult(claim);
-    expect(await store.listPendingWorkspaceResults()).toMatchObject([
+    expect(await store.listPendingWorkspaceResultsAsync()).toMatchObject([
       { sessionId: active.sessionId, workspaceAcceptedAtMs: nowMs },
     ]);
     expect(await store.completeWorkspaceResultAndReleaseTurn(claim)).toMatchObject({
@@ -819,10 +830,15 @@ describe("worker session placement store", () => {
     expect(store.get(SESSION.sessionId)).not.toHaveProperty("workspaceResultConflict");
     await store.acceptWorkspaceResult(laterClaim);
     await store.completeWorkspaceResultAndReleaseTurn(laterClaim);
+    expect(store.listPendingWorkspaceResults(SESSION.sessionId)).toEqual([]);
+    expect(store.getWorkspaceResultReconcilingSessionIds([SESSION.sessionId])).toEqual(new Set());
+    expect(await store.getWorkspaceResultReconcilingSessionIdsAsync([SESSION.sessionId])).toEqual(
+      new Set(),
+    );
     expect(
       createWorkerSessionPlacementStore({ database, now: () => nowMs }).get(SESSION.sessionId),
     ).not.toHaveProperty("workspaceResultConflict");
-    expect(await store.listPendingWorkspaceResults()).toEqual([]);
+    expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
   });
 
   it("preserves an admitted worker result while its placement is draining", async () => {
@@ -888,7 +904,7 @@ describe("worker session placement store", () => {
       state: "draining",
       turnClaim: null,
     });
-    expect(await store.listPendingWorkspaceResults()).toEqual([]);
+    expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
   });
 
   it("does not begin draining after a completed result owns recovery", async () => {

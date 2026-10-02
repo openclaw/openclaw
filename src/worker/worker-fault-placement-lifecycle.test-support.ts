@@ -119,7 +119,7 @@ export class WorkerFaultPlacementLifecycle {
     if (!claim || claim.runId !== runId) {
       throw new Error(`fault run ${runId} does not own the active placement`);
     }
-    const pending = (await this.options.placementStore.listPendingWorkspaceResults()).some(
+    const pending = (await this.options.placementStore.listPendingWorkspaceResultsAsync()).some(
       (result) =>
         result.sessionId === claim.sessionId &&
         result.claimId === claim.claimId &&

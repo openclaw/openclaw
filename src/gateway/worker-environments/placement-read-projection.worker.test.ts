@@ -157,7 +157,7 @@ describe("worker placement read projection", () => {
     await store.recordStagedWorkspaceResult(claim, stagedResultRef);
     store.recordWorkspaceResultConflict(claim, { paths: ["changed.txt"], stagedResultRef });
     const draining = await store.startWorkspaceResultDrain(claim);
-    const pendingResult = (await store.listPendingWorkspaceResults("pending"))[0];
+    const pendingResult = (await store.listPendingWorkspaceResultsAsync("pending"))[0];
     const moving = await activePlacement(database, "moving");
     const move = moving.store.beginPlacementMove({
       sessionId: moving.placement.sessionId,
@@ -349,7 +349,7 @@ describe("worker placement read projection", () => {
           .map((owner) => owner.sessionId),
       );
       expect(blockingOwners).toEqual(new Set(["journal-current", "journal-draining"]));
-      expect(await store.listPendingWorkspaceResults()).toEqual(pendingResults);
+      expect(await store.listPendingWorkspaceResultsAsync()).toEqual(pendingResults);
       const orderedIds = [
         ...new Set([
           ...store.listForReconcile().map((placement) => placement.sessionId),

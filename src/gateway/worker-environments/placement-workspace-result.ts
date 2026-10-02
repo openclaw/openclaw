@@ -49,11 +49,11 @@ function pendingResultFromRow(
 
 export async function findPendingWorkerWorkspaceResult(
   placements: {
-    listPendingWorkspaceResults(sessionId?: string): Promise<WorkerWorkspacePendingResult[]>;
+    listPendingWorkspaceResultsAsync(sessionId?: string): Promise<WorkerWorkspacePendingResult[]>;
   },
   claim: WorkerSessionTurnClaim,
 ): Promise<WorkerWorkspacePendingResult | undefined> {
-  return (await placements.listPendingWorkspaceResults(claim.sessionId)).find(
+  return (await placements.listPendingWorkspaceResultsAsync(claim.sessionId)).find(
     (pending) =>
       pending.sessionId === claim.sessionId &&
       pending.claimId === claim.claimId &&

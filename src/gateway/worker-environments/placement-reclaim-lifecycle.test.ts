@@ -312,7 +312,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
           expect.soft(outcome).toBe(primaryError);
         }
         expect(placements.get(active.sessionId)?.state).toBe("draining");
-        expect(await placements.listPendingWorkspaceResults()).toEqual([
+        expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([
           expect.objectContaining({ workspaceAcceptedAtMs: expect.any(Number) }),
         ]);
         expect(destroy).toHaveBeenCalledOnce();
@@ -323,7 +323,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
           turnClaim: null,
           recoveryError: null,
         });
-        expect(await placements.listPendingWorkspaceResults()).toEqual([]);
+        expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
         expect(service.get(environmentId)?.state).toBe("destroyed");
         expect(destroy).toHaveBeenCalledTimes(2);
         expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
@@ -424,7 +424,7 @@ describe("SSH placement cleanup after worker credential expiry", () => {
         state: operation === "move" ? "local" : "reclaimed",
         turnClaim: null,
       });
-      expect(await placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
     },
   );
 });

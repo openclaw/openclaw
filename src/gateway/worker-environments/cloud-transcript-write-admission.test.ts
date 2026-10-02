@@ -282,7 +282,7 @@ describe("cloud transcript write admission", () => {
           expect(outcome).toBeInstanceOf(Error);
           expect(SessionManager.open(sessionTarget).getBranch()).toEqual([]);
           expect(publish).not.toHaveBeenCalled();
-          expect(await placements.listPendingWorkspaceResults()).toHaveLength(1);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
         }
       } finally {
         gate.release.resolve();

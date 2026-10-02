@@ -75,7 +75,7 @@ export async function forceAbandonWorkerEnvironment(
     refs: string[];
     repositoryWorkspaceId?: string;
   }> = [];
-  for (const pending of await placements.listPendingWorkspaceResults()) {
+  for (const pending of await placements.listPendingWorkspaceResultsAsync()) {
     if (pending.environmentId === environmentId) {
       const placement = placements.get(pending.sessionId);
       if (isCurrentWorkerWorkspacePendingResultOwner(placement, pending)) {

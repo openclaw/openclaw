@@ -242,7 +242,9 @@ describe("worker store session change publications", () => {
     }
     expect(refused).toBe(1);
     expect(observed).toEqual([]);
-    expect(await store.listPendingWorkspaceResults()).toMatchObject([{ stagedResultRef: null }]);
+    expect(await store.listPendingWorkspaceResultsAsync()).toMatchObject([
+      { stagedResultRef: null },
+    ]);
     expect(authority.isCurrent()).toBe(true);
     expect(() => observation.assertCurrent()).not.toThrow();
     let commitGrants = 0;

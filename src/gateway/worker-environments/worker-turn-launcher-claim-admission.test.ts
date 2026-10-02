@@ -224,7 +224,7 @@ describe("worker turn launcher claim admission", () => {
         "refs/openclaw/worker-results/missing",
       );
       placements.clearLocalTurnClaimsAfterRestart();
-      const pending = await placements.listPendingWorkspaceResults();
+      const pending = await placements.listPendingWorkspaceResultsAsync();
       expect(pending).toMatchObject([
         { stagedResultRef: "refs/openclaw/worker-results/missing", workspaceAcceptedAtMs: null },
       ]);
@@ -246,7 +246,7 @@ describe("worker turn launcher claim admission", () => {
         setImmediate(resolve);
       });
       expect(runLocal).not.toHaveBeenCalled();
-      expect(await placements.listPendingWorkspaceResults()).toEqual(pending);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual(pending);
       expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
     },
   );
@@ -270,7 +270,7 @@ describe("worker turn launcher claim admission", () => {
       },
     });
     const claimOps = createPlacementTurnClaimFixtureOps(database);
-    vi.spyOn(placements, "listPendingWorkspaceResults").mockImplementationOnce(async () => {
+    vi.spyOn(placements, "listPendingWorkspaceResultsAsync").mockImplementationOnce(async () => {
       claimOps.releaseTurn(priorClaim);
       return [];
     });
@@ -308,8 +308,11 @@ describe("worker turn launcher claim admission", () => {
       owner: placementTurnOwner(active),
     });
     await placements.markWorkspaceResultPending(priorClaim);
-    const listPendingWorkspaceResults = vi.spyOn(placements, "listPendingWorkspaceResults");
-    listPendingWorkspaceResults.mockResolvedValueOnce([]);
+    const listPendingWorkspaceResultsAsync = vi.spyOn(
+      placements,
+      "listPendingWorkspaceResultsAsync",
+    );
+    listPendingWorkspaceResultsAsync.mockResolvedValueOnce([]);
     const waitForRelease = vi.spyOn(placements, "waitForTurnClaimRelease");
     const provider = createWorkerSessionTurnPlacementProvider({
       environments: unusedEnvironments(),
@@ -755,7 +758,7 @@ describe("worker turn launcher claim admission", () => {
       ),
     ).rejects.toThrow("Cloud worker turn failed");
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
-    expect(await placements.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
 
     await expect(
       provider.executeTurn(

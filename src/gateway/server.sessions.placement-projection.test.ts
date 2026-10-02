@@ -636,7 +636,7 @@ test.each([
     expect(blocked.payload?.session?.placement).not.toHaveProperty("workspaceResultReconciling");
 
     if (recovery === "unstaged result") {
-      const pending = await placements.listPendingWorkspaceResults(identity.sessionId);
+      const pending = await placements.listPendingWorkspaceResultsAsync(identity.sessionId);
       expect(pending).toHaveLength(1);
       await placements.abandonWorkspaceResult(pending[0]!);
     } else {

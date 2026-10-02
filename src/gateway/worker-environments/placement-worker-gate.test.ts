@@ -87,7 +87,7 @@ describe("worker session placement gate", () => {
       }),
     ).rejects.toThrow("turn recovery owner");
     expect(store.validateTurnClaim(claim)).toBe(true);
-    expect(await store.listPendingWorkspaceResults()).toMatchObject([
+    expect(await store.listPendingWorkspaceResultsAsync()).toMatchObject([
       { claimId: claim.claimId, recoveryRequestedAtMs: expect.any(Number) },
     ]);
   });
@@ -178,7 +178,7 @@ describe("worker session placement gate", () => {
         if (change === "handoff") {
           await store.handoffWorkspaceResultRecovery(claim);
         } else {
-          await store.abandonWorkspaceResult((await store.listPendingWorkspaceResults())[0]!);
+          await store.abandonWorkspaceResult((await store.listPendingWorkspaceResultsAsync())[0]!);
         }
         expect(() => refresh.assertCurrent()).toThrow("placement authority changed");
       }
@@ -205,7 +205,7 @@ describe("worker session placement gate", () => {
     };
 
     expect(restartedStore.validateTurnClaim(claim)).toBe(true);
-    expect(await restartedStore.listPendingWorkspaceResults()).toMatchObject([
+    expect(await restartedStore.listPendingWorkspaceResultsAsync()).toMatchObject([
       { sessionId: claim.sessionId, claimId: claim.claimId },
     ]);
     expect(gate.validateWorkerTurn(claim)).toBe(false);
@@ -217,7 +217,7 @@ describe("worker session placement gate", () => {
     await expect(
       gate.prepareWorkspaceResultOwnerRevocation(binding, new Error("restart owner revoked")),
     ).resolves.toBeUndefined();
-    expect(await restartedStore.listPendingWorkspaceResults()).toMatchObject([
+    expect(await restartedStore.listPendingWorkspaceResultsAsync()).toMatchObject([
       { sessionId: claim.sessionId, recoveryRequestedAtMs: null },
     ]);
   });
@@ -278,7 +278,7 @@ describe("worker session placement gate", () => {
     const binding = bindingFor(claim);
 
     await gate.updateAckCursors({ claim: binding, transcriptSeq: 4 });
-    expect(await store.listPendingWorkspaceResults()).toEqual([]);
+    expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
     await gate.updateAckCursors({ claim: binding, liveSeq: 9 });
     expect(store.get(SESSION.sessionId)).toMatchObject({
       generation: claim.placementGeneration,
@@ -286,7 +286,7 @@ describe("worker session placement gate", () => {
       lastLiveEventAckCursor: 9,
     });
     expect(gate.readWorkerTurnLiveAckCursor(binding)).toBe(9);
-    expect(await store.listPendingWorkspaceResults()).toMatchObject([
+    expect(await store.listPendingWorkspaceResultsAsync()).toMatchObject([
       { sessionId: SESSION.sessionId, runId },
     ]);
     await store.acceptWorkspaceResult(claim);
@@ -305,7 +305,7 @@ describe("worker session placement gate", () => {
       new Error("worker owner revoked"),
     );
 
-    expect(await store.listPendingWorkspaceResults()).toMatchObject([
+    expect(await store.listPendingWorkspaceResultsAsync()).toMatchObject([
       { sessionId: claim.sessionId, recoveryRequestedAtMs: expect.any(Number) },
     ]);
     expect(store.get(claim.sessionId)).toMatchObject({
@@ -331,7 +331,7 @@ describe("worker session placement gate", () => {
       new Error("local owner revoked"),
     );
 
-    expect(await store.listPendingWorkspaceResults()).toEqual([]);
+    expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(store.get(claim.sessionId)).toMatchObject({
       state: "failed",
       recoveryError: "local owner revoked",
@@ -357,7 +357,7 @@ describe("worker session placement gate", () => {
       new Error("local owner revoked"),
     );
 
-    expect(await store.listPendingWorkspaceResults()).toMatchObject([
+    expect(await store.listPendingWorkspaceResultsAsync()).toMatchObject([
       {
         sessionId: claim.sessionId,
         recoveryRequestedAtMs: expect.any(Number),

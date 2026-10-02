@@ -139,7 +139,7 @@ describe("concurrent worker workspace results", () => {
         if (change === "draining") {
           await placements.startWorkspaceResultDrain(claim);
         } else if (change === "claim") {
-          const pending = (await placements.listPendingWorkspaceResults(SESSION_ID))[0];
+          const pending = (await placements.listPendingWorkspaceResultsAsync(SESSION_ID))[0];
           if (!pending) {
             throw new Error("expected retained result");
           }
@@ -155,7 +155,7 @@ describe("concurrent worker workspace results", () => {
         if (change === "current" || change === "draining") {
           expect(outcome).toMatchObject({ value: { paths: ["src/retained.ts"] } });
           expect(publish).toHaveBeenCalledOnce();
-          expect(await placements.listPendingWorkspaceResults()).toEqual([]);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
           const after = SessionManager.open(sessionTarget).getPersistedEntries();
           expect(after.slice(0, before.length)).toEqual(before);
           expect(readWorkerTurnTranscriptStorageRows().slice(0, beforeRows.length)).toEqual(
@@ -263,7 +263,7 @@ describe("concurrent worker workspace results", () => {
         runLocal: async () => ({ meta: { durationMs: 1 } }),
       }),
     ).rejects.toThrow("Skill resource cleanup failed");
-    expect(await placements.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
 
     const leftovers = await fs.readdir(remote);
@@ -512,7 +512,7 @@ describe("concurrent worker workspace results", () => {
         ),
       );
       expect(outcomes.find((outcome) => outcome.status === "rejected")).toBeUndefined();
-      expect(await placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       for (const job of jobs) {
         expect(await fs.readFile(path.join(job.workspace.path, "result.bin"))).toEqual(bytes);
         expect(placements.get(job.placement.sessionId)?.turnClaim).toBeNull();

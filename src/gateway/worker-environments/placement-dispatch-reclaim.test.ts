@@ -117,7 +117,7 @@ describe("worker placement dispatch reclaim", () => {
       expect(await outcome).toEqual(new Error("destroy pending"));
       await olderRecovery;
       expect(placementStore.get(REQUEST.sessionId)?.state).toBe("draining");
-      expect(await placementStore.listPendingWorkspaceResults()).toEqual([
+      expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([
         expect.objectContaining({ workspaceAcceptedAtMs: expect.any(Number) }),
       ]);
       expect(harness.log.filter((event) => event === "workspace:reconcile")).toHaveLength(1);
@@ -137,7 +137,7 @@ describe("worker placement dispatch reclaim", () => {
 
     await expect(harness.service.reclaim(REQUEST)).rejects.toThrow("destroy pending");
 
-    expect(await placementStore.listPendingWorkspaceResults()).toEqual([
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([
       expect.objectContaining({ workspaceAcceptedAtMs: expect.any(Number) }),
     ]);
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
@@ -148,7 +148,7 @@ describe("worker placement dispatch reclaim", () => {
       workspaceBaseManifestRef: harness.reconciledManifestRef,
       turnClaim: { owner: "worker" },
     });
-    expect(await placementStore.listPendingWorkspaceResults()).toMatchObject([
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toMatchObject([
       { workspaceAcceptedAtMs: expect.any(Number) },
     ]);
     expect(harness.environments.destroy).toHaveBeenCalledTimes(2);
@@ -208,7 +208,7 @@ describe("worker placement dispatch reclaim", () => {
       workspaceBaseManifestRef: MANIFEST_REF,
     });
 
-    expect(await placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(harness.log.slice(-14)).toEqual([
       "placement:draining",
       "workspace",
@@ -296,7 +296,7 @@ describe("worker placement dispatch reclaim", () => {
         turnClaim: null,
       });
       expect(harness.environments.destroy).toHaveBeenCalledOnce();
-      expect(await placementStore.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
     },
   );
 
@@ -563,7 +563,7 @@ describe("worker placement dispatch reclaim", () => {
       stagedResultRef: expect.stringMatching(/^refs\/openclaw\/worker-results\/reclaim-/u),
       totalCount: 1,
     });
-    expect(await placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 
@@ -592,7 +592,7 @@ describe("worker placement dispatch reclaim", () => {
 
     expect(harness.placements.current()).toMatchObject({ workspaceResultConflict: priorConflict });
     expect(harness.reportWorkspaceResultConflict).not.toHaveBeenCalled();
-    expect(await placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 
@@ -758,14 +758,14 @@ describe("worker placement dispatch reclaim", () => {
     expect(placementStore.get(active.sessionId)?.turnClaim).toMatchObject({
       claimId: claim.claimId,
     });
-    expect(await placementStore.listPendingWorkspaceResults()).toMatchObject([
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toMatchObject([
       { sessionId: active.sessionId, claimId: claim.claimId },
     ]);
 
     expect(await placementStore.cancelWorkspaceResultAndReleaseTurn(claim)).toMatchObject({
       turnClaim: null,
     });
-    expect(await placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
   });
 
   it("releases a failed stop claim so reclaim can be retried", async ({ command }) => {
@@ -787,7 +787,7 @@ describe("worker placement dispatch reclaim", () => {
 
     await expect(harness.service.reclaim(request)).rejects.toThrow("workspace conflict");
     expect(harness.placements.current()).toMatchObject({ state: "draining", turnClaim: null });
-    expect(await placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
 
     await expect(harness.service.reclaim(request)).resolves.toMatchObject({ state: "reclaimed" });
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
@@ -915,7 +915,7 @@ describe("worker placement dispatch reclaim", () => {
       state: "draining",
       turnClaim: null,
     });
-    expect(await placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
 
     await expect(harness.service.reclaim(request)).resolves.toMatchObject({ state: "reclaimed" });
     expect(harness.placements.current()).toMatchObject({
@@ -941,7 +941,7 @@ describe("worker placement dispatch reclaim", () => {
       state: "draining",
       turnClaim: { owner: "worker" },
     });
-    expect(await placementStore.listPendingWorkspaceResults()).toMatchObject([
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toMatchObject([
       { workspaceAcceptedAtMs: null, stagedResultRef: null },
     ]);
   });
@@ -969,7 +969,7 @@ describe("worker placement dispatch reclaim", () => {
         "workspace changed after reconciliation",
       );
       expect(harness.placements.current()).toMatchObject({ state: "draining", turnClaim: null });
-      expect(await placementStore.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
 
       await expect(harness.service.reclaim(request)).resolves.toMatchObject({ state: "reclaimed" });
       expect(harness.placements.current()).toMatchObject({
@@ -1005,7 +1005,7 @@ describe("worker placement dispatch reclaim", () => {
       workspaceBaseManifestRef: harness.reconciledManifestRef,
       turnClaim: { owner: "worker" },
     });
-    expect(await placementStore.listPendingWorkspaceResults()).toMatchObject([
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toMatchObject([
       { workspaceAcceptedAtMs: null, stagedResultRef: null },
     ]);
   });

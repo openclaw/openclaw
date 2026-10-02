@@ -41,14 +41,15 @@ describe("worker Gateway move recovery", () => {
     const restartedStore = createWorkerSessionPlacementStore({
       database: support.testState.stateDb,
     });
-    let acceptedPending: Awaited<ReturnType<typeof restartedStore.listPendingWorkspaceResults>> =
-      [];
+    let acceptedPending: Awaited<
+      ReturnType<typeof restartedStore.listPendingWorkspaceResultsAsync>
+    > = [];
     const prepareGatewayMove = vi.fn<
       NonNullable<Parameters<typeof createWorkerPlacementDispatchService>[0]["prepareGatewayMove"]>
     >(async ({ assertCurrent }) => {
       assertCurrent();
       await Promise.resolve();
-      acceptedPending = await restartedStore.listPendingWorkspaceResults();
+      acceptedPending = await restartedStore.listPendingWorkspaceResultsAsync();
       expect(acceptedPending).toMatchObject([
         { workspaceAcceptedAtMs: expect.any(Number), stagedResultRef: null },
       ]);
@@ -75,7 +76,7 @@ describe("worker Gateway move recovery", () => {
     expect(restarted.environments.destroy).not.toHaveBeenCalled();
     expect(restarted.environments.stopTunnel).not.toHaveBeenCalled();
     expect(restarted.environments.get(active.environmentId)?.state).toBe("attached");
-    expect(await restartedStore.listPendingWorkspaceResults()).toEqual(acceptedPending);
+    expect(await restartedStore.listPendingWorkspaceResultsAsync()).toEqual(acceptedPending);
     expect(restartedStore.get(active.sessionId)).toMatchObject({
       state: "draining",
       turnClaim: { claimId: "replacement-claim", runId: "replacement-run" },
