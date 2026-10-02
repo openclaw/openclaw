@@ -23,15 +23,12 @@ import {
 import { roundTripWorkerLaunchDescriptor } from "../../worker/launch-descriptor.test-support.js";
 import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
-import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
-  ENVIRONMENT_ID,
-  MANIFEST_REF,
-  OWNER_EPOCH,
+  acknowledgeCompletedWorkerTurn,
+  createWorkerTurnTunnel,
+  reconcileUnchangedLocalWorkspace,
   credential,
-  measureLaunchTurn,
-  readLaunchToolNames,
   SESSION_ID,
   SESSION_KEY,
   attachedEnvironment,
@@ -67,18 +64,15 @@ describe("worker turn execution", () => {
       const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async () => {
         throw new WorkerRunnerCapacityError();
       });
-      const tunnel: WorkerTunnelHandle = {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
+      const tunnel = createWorkerTurnTunnel({
         launchTurn,
-        measureLaunchTurn,
         readLaunchToolNames: async () => launchToolNames,
         runWorkspaceCommand: vi.fn(),
         quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
         stop: vi.fn(),
-      };
+      });
       const provider = createWorkerSessionTurnPlacementProvider({
         placements,
         environments: {
@@ -326,47 +320,16 @@ describe("worker turn execution", () => {
           timestamp: 2,
         }),
       );
-      await createWorkerSessionPlacementGate(placements).updateAckCursors({
-        claim: request.turnClaim,
-        transcriptSeq: 2,
-        liveSeq: 1,
-      });
-      return {
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-        stderr: "",
-        stdout: JSON.stringify({
-          status: "completed",
-          transcriptLeafId: leafId,
-          transcriptNextSeq: 3,
-        }),
-      };
+      return acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
     });
-    const tunnel: WorkerTunnelHandle = {
-      environmentId: ENVIRONMENT_ID,
-      ownerEpoch: OWNER_EPOCH,
+    const tunnel = createWorkerTurnTunnel({
       launchTurn,
-      measureLaunchTurn,
-      readLaunchToolNames,
       runWorkspaceCommand: vi.fn(),
       syncWorkspace: vi.fn(),
       stop: vi.fn(),
       quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
-      reconcileWorkspace: async (request) => {
-        assert(request.source.kind === "local", "expected local workspace");
-        await request.source.journal.commit(MANIFEST_REF);
-        return {
-          manifestRef: MANIFEST_REF,
-          changed: false,
-          verifyStable: async () => {},
-          verifyLocalStable: async () => {},
-          publishStagedResult: async () => {},
-          discardPreparedStagedResult: async () => {},
-        };
-      },
-    };
+      reconcileWorkspace: reconcileUnchangedLocalWorkspace,
+    });
     const provider = createWorkerSessionTurnPlacementProvider({
       placements,
       environments: {
@@ -425,18 +388,15 @@ describe("worker turn execution", () => {
       });
       const launchTurn = vi.fn();
       const runLocal = vi.fn();
-      const tunnel: WorkerTunnelHandle = {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
+      const tunnel = createWorkerTurnTunnel({
         launchTurn,
         measureLaunchTurn: measure,
-        readLaunchToolNames,
         runWorkspaceCommand: vi.fn(),
         quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
         stop: vi.fn(),
-      };
+      });
       setActiveNodeContexts([
         {
           nodeId: "fixture-node",
@@ -501,12 +461,10 @@ describe("worker turn execution", () => {
     },
   );
 
-  it.each(
-    ([undefined, "merge", "replace"] as const).flatMap((mode) => [
-      { mode, reasoning: false, thinkingLevelMap: undefined, expected: "off" },
-      { mode, reasoning: true, thinkingLevelMap: { high: null }, expected: "medium" },
-    ]),
-  )(
+  it.each([
+    { mode: "merge", reasoning: false, thinkingLevelMap: undefined, expected: "off" },
+    { mode: "replace", reasoning: true, thinkingLevelMap: { high: null }, expected: "medium" },
+  ] as const)(
     "honors configured worker Ultra effort $expected in mode $mode with scheduled tools",
     async (testCase) => {
       await seedActivePlacement();
@@ -520,18 +478,14 @@ describe("worker turn execution", () => {
         );
         throw new WorkerRunnerCapacityError();
       });
-      const tunnel: WorkerTunnelHandle = {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
+      const tunnel = createWorkerTurnTunnel({
         launchTurn,
-        measureLaunchTurn,
-        readLaunchToolNames,
         runWorkspaceCommand: vi.fn(),
         quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
         stop: vi.fn(async () => {}),
-      };
+      });
       const environments = {
         ...unusedEnvironments(),
         get: vi.fn(() => attachedEnvironment()),

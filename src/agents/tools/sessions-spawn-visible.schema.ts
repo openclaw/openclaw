@@ -6,7 +6,7 @@ export const SessionsSpawnPlacementSchema = Type.Union([
   SessionMoveProfileTargetSchema,
 ]);
 
-export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
+export const SESSIONS_SPAWN_SESSION_SCHEMA = {
   placement: Type.Optional({
     ...SessionsSpawnPlacementSchema,
     description:
@@ -21,13 +21,13 @@ export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
   group: Type.Optional(
     Type.String({
       description:
-        "Custom sidebar group for a visible session; a new name creates the group. Omit or pass an empty string to leave it ungrouped.",
+        "Custom sidebar group; requires visible=true when nonempty. A new name creates the group. Omit or pass an empty string to leave it ungrouped.",
     }),
   ),
   projectId: Type.Optional(
     Type.String({
       description:
-        "Registered project for a visible session; mutually exclusive with projectGitUrl and cwd.",
+        "Registered project for a native subagent; hidden children require worktree=true. Mutually exclusive with projectGitUrl and cwd.",
     }),
   ),
   projectGitUrl: Type.Optional(
@@ -37,7 +37,16 @@ export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
       maxLength: 2048,
     }),
   ),
-  worktree: Type.Optional(Type.Boolean({ description: "Visible session worktree" })),
-  worktreeName: Type.Optional(Type.String({ description: "Worktree name" })),
-  worktreeBaseRef: Type.Optional(Type.String({ description: "Worktree base ref" })),
+  worktree: Type.Optional(
+    Type.Boolean({
+      description:
+        'Managed checkout for hidden or visible runtime="subagent"; first turn waits for preparation. ACP unsupported.',
+    }),
+  ),
+  worktreeName: Type.Optional(
+    Type.String({ description: "Managed worktree name; requires worktree=true." }),
+  ),
+  worktreeBaseRef: Type.Optional(
+    Type.String({ description: "Managed worktree base ref; requires worktree=true." }),
+  ),
 };

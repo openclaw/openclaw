@@ -72,7 +72,7 @@ describe("bundled plugin assets", () => {
     );
   });
 
-  it("discovers the Discord Embedded App SDK build hook", async () => {
+  it("discovers the Discord SDK and Control UI build hook", async () => {
     const hooks = await readBundledPluginAssetHooks({
       phase: "build",
       plugins: ["discord"],
@@ -81,7 +81,8 @@ describe("bundled plugin assets", () => {
 
     expect(hooks).toMatchObject([
       {
-        command: "node --import tsx ../../scripts/build-discord-activity-sdk.mts",
+        command:
+          "node --import ../../scripts/tsx.mjs ../../scripts/build-discord-activity-sdk.mts && cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/discord",
         packageName: "@openclaw/discord",
         phase: "build",
         pluginId: "discord",

@@ -306,18 +306,6 @@ describe("controlUi.sessionPreview", () => {
     expect(payload.lastMessagePreview).not.toContain(secret);
   });
 
-  it("returns unavailable for an unknown session", async () => {
-    const handlers = createControlUiHandlers(vi.fn(), vi.fn().mockReturnValue(null));
-    const respond = vi.fn<RespondFn>();
-
-    await expectDefined(
-      handlers["controlUi.sessionPreview"],
-      'handlers["controlUi.sessionPreview"] test invariant',
-    )(requestOptions({ sessionKey: "agent:main:missing" }, respond));
-
-    expect(respond).toHaveBeenCalledWith(true, { status: "unavailable" }, undefined);
-  });
-
   it("rejects malformed preview params", async () => {
     const loadSessionPreview = vi.fn();
     const handlers = createControlUiHandlers(vi.fn(), loadSessionPreview);

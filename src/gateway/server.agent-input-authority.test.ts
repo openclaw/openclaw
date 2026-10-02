@@ -686,7 +686,10 @@ describe("accepted input Gateway instance retirement", () => {
       expect(context.chatAbortControllers.get(runId)).toBe(prepared.activeRunAbort.entry);
       expect(prepared.activeRunAbort.controller.signal.aborted).toBe(false);
       expect(() => guard()).not.toThrow();
-      const runtimeRelease = vi.spyOn(prepared.preparedModelRuntimeLease, Symbol.asyncDispose);
+      const runtimeRelease = vi.spyOn(
+        expectDefined(prepared.preparedModelRuntimeLease, "ready session runtime"),
+        Symbol.asyncDispose,
+      );
       restoreRuntimeRelease = () => runtimeRelease.mockRestore();
 
       // Retire only the instance owner: parent authority and the child controller

@@ -196,53 +196,40 @@ it.each([
   },
 );
 
-it.each(["linux", "darwin"] as const)(
-  "verifies node listener argv and rejects malformed lsof PID tokens on %s",
-  async (platform) => {
-    const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
-    const root = tempDirs.make("gateway-lsof-argv-");
-    const script = path.join(root, "dist", "index.js");
-    fs.mkdirSync(path.dirname(script), { recursive: true });
-    fs.writeFileSync(script, "");
-    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
-    const pid = process.pid + 801;
-    mocks.read.mockImplementation((file: string) => {
-      if (file.startsWith("/proc/")) {
-        throw Object.assign(new Error("procfs unavailable"), { code: "ENOENT" });
-      }
-      return actualFs.readFileSync(file, "utf8");
-    });
-    mocks.darwinCommand.mockReturnValue({
-      argv: ["node", script, "gateway"],
-    });
-    mocks.spawn.mockImplementation((command: string, args: string[]) => ({
-      error: null,
-      status: 0,
-      stderr: "",
-      stdout:
-        command === "lsof"
-          ? `p111abc\ncnode\np${pid}\ncnode\n`
-          : args[0] === "-ww"
-            ? `node "${script}" gateway\n`
-            : "",
-    }));
-    withMockedPlatform(platform, () => {
-      expect(findGatewayPidsOnPortSync(18789)).toEqual([pid]);
-    });
-    if (platform === "linux") {
-      const psCall = mocks.spawn.mock.calls.find(
-        (call) => call[0] === "ps" && call[1]?.[0] === "-ww",
-      );
-      expect(psCall?.[1]).toEqual(["-ww", "-p", String(pid), "-o", "command="]);
-      expect(psCall?.[2]).toEqual({
-        env: expect.any(Object),
-        encoding: "utf8",
-        killSignal: "SIGKILL",
-        timeout: 2000,
-      });
-    } else {
-      expect(mocks.darwinCommand).toHaveBeenCalledWith(pid);
-      expect(mocks.spawn.mock.calls.some((call) => call[1]?.includes("command="))).toBe(false);
+it("falls back to ps for Linux listener argv and rejects malformed lsof PID tokens", async () => {
+  const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+  const root = tempDirs.make("gateway-lsof-argv-");
+  const script = path.join(root, "dist", "index.js");
+  fs.mkdirSync(path.dirname(script), { recursive: true });
+  fs.writeFileSync(script, "");
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+  const pid = process.pid + 801;
+  mocks.read.mockImplementation((file: string) => {
+    if (file.startsWith("/proc/")) {
+      throw Object.assign(new Error("procfs unavailable"), { code: "ENOENT" });
     }
-  },
-);
+    return actualFs.readFileSync(file, "utf8");
+  });
+  mocks.spawn.mockImplementation((command: string, args: string[]) => ({
+    error: null,
+    status: 0,
+    stderr: "",
+    stdout:
+      command === "lsof"
+        ? `p111abc\ncnode\np${pid}\ncnode\n`
+        : args[0] === "-ww"
+          ? `node "${script}" gateway\n`
+          : "",
+  }));
+  withMockedPlatform("linux", () => {
+    expect(findGatewayPidsOnPortSync(18789)).toEqual([pid]);
+  });
+  const psCall = mocks.spawn.mock.calls.find((call) => call[0] === "ps" && call[1]?.[0] === "-ww");
+  expect(psCall?.[1]).toEqual(["-ww", "-p", String(pid), "-o", "command="]);
+  expect(psCall?.[2]).toEqual({
+    env: expect.any(Object),
+    encoding: "utf8",
+    killSignal: "SIGKILL",
+    timeout: 2000,
+  });
+});

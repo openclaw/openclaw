@@ -20,6 +20,7 @@ extension ChatSessionSidebar {
             preview: self.rowPreview(for: session, previewRequest: previewRequest),
             now: now)
         return ChatSidebarRow(
+            viewModel: self.viewModel,
             node: node,
             isChild: isChild,
             facts: facts,
@@ -94,6 +95,7 @@ extension ChatSessionSidebar {
 }
 
 private struct ChatSidebarRow: View {
+    let viewModel: OpenClawChatViewModel
     let node: ChatSessionSidebarModel.Node
     let isChild: Bool
     let facts: ChatSessionSidebarRowFacts
@@ -155,6 +157,14 @@ private struct ChatSidebarRow: View {
         .focusable()
         .focused(self.$focus, equals: .row)
         .focusEffectDisabled()
+        .modifier(ChatSessionSidebarHoverCard(
+            session: self.node.session,
+            error: self.facts.glyphTone == .danger ? self.facts.attentionLabel : nil,
+            hovered: self.hovered,
+            focused: self.focus == .row,
+            rowHasFocus: self.focus != nil,
+            viewModel: self.viewModel,
+            restoreFocus: { self.focus = .row }))
     }
 
     private var leading: some View {

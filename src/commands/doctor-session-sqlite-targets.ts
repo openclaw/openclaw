@@ -188,18 +188,7 @@ export function resolveDoctorSessionSqliteTargets(params: {
     const candidates = discoversHistory
       ? resolveAllAgentSessionStoreCandidateTargetsSync(params.cfg, { env: params.env })
       : resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env });
-    const legacyStorePath = path.join(resolveStateDir(params.env), "sessions", "sessions.json");
-    const legacyTargets =
-      discoversHistory && fs.existsSync(legacyStorePath)
-        ? resolveSessionStoreTargets(params.cfg, { allAgents: true }, { env: params.env }).map(
-            (target) => ({
-              agentId: target.agentId,
-              sqlitePath: resolveTargetSqlitePath(target, params.env),
-              storePath: legacyStorePath,
-            }),
-          )
-        : [];
-    const targets = [...legacyTargets, ...candidates].map((target) => ({
+    const targets = candidates.map((target) => ({
       target,
       sqlitePath: resolveTargetSqlitePath(target, params.env),
     }));

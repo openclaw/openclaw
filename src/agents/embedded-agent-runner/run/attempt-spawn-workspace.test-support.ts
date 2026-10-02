@@ -363,6 +363,22 @@ vi.mock("../../sessions/sdk.js", () => ({
     hoisted.createAgentSessionMock(options),
 }));
 
+vi.mock("../../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../config/sessions/session-entry-read-runtime.js")>();
+  const readSessionEntryInWorker: typeof actual.readSessionEntryInWorker = async (
+    _scope,
+    assertCurrent,
+  ) => {
+    // These attempt fixtures have no quota-recovery entry; retain the async admission boundary.
+    assertCurrent();
+    await Promise.resolve();
+    assertCurrent();
+    return undefined;
+  };
+  return { ...actual, readSessionEntryInWorker };
+});
+
 vi.mock("../../subagents/spawn/subagent-spawn.js", () => ({
   SUBAGENT_SPAWN_MODES: ["run", "session"],
   spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),

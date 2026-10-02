@@ -265,7 +265,6 @@ async function runDoctorConfigPreflightOperation(
               ...(pluginDoctorConfig ? { pluginDoctorConfig } : {}),
               configIncludedPaths: snapshot.includedPaths ?? [],
               env: process.env,
-              recoverCorruptTargetStore: options.recoverCorruptTargetStore,
               doctorOnlyStateMigrations: options.doctorOnlyStateMigrations,
               invocationPurpose: options.invocationPurpose,
               ...(options.agentDatabaseMigrationDiscovery

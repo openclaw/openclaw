@@ -136,7 +136,7 @@ private struct ChatSessionSidebarRowMenu: View {
                     agentID: self.session.agentId) }
             }
             self.copyMenu
-            self.openMenu
+            ChatSidebarPullRequestMenu(session: self.session, viewModel: self.viewModel) { self.openMenu }
             Divider()
             Button(role: .destructive, action: self.delete) { Label("Delete…", systemImage: "trash") }
                 .keyboardShortcut("d", modifiers: [])
