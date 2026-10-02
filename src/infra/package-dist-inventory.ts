@@ -53,6 +53,7 @@ const OMITTED_PLUGIN_SDK_TEST_FILES = new Set(
     "channel-contract-testing",
     "channel-target-testing",
     "channel-test-helpers",
+    "compiled-subprocess-testing",
     "plugin-test-api",
     "plugin-test-contracts",
     "plugin-test-runtime",

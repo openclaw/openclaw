@@ -450,7 +450,9 @@
     "!dist/plugin-sdk/text-grapheme.d.ts",
     "!dist/plugin-sdk/agent-harness-session-runtime.d.ts",
     "!dist/plugin-sdk/agent-harness-attempt-runtime.d.ts",
-    "!dist/plugin-sdk/secret-egress-runtime.d.ts"
+    "!dist/plugin-sdk/secret-egress-runtime.d.ts",
+    "!dist/plugin-sdk/compiled-subprocess-testing.d.ts",
+    "!dist/plugin-sdk/compiled-subprocess-testing.js"
   ],
   "type": "module",
   "main": "dist/index.js",
