@@ -8,6 +8,8 @@ read_when:
 
 Bun is an explicit opt-in runtime for OpenClaw's CLI, Gateway, and managed node host. Node remains the primary and recommended runtime for those installations. The macOS app uses the OpenClaw Bun fork for its bundled private runtime, described below. This reference covers Bun requirements and compatibility; see [Bun](/install/bun) for installation and opt-in steps, or [Node.js compatibility](/install/node-compatibility) for Node requirements.
 
+Plugin resolution stays with Bun's native/Jiti loader and `Bun.plugin` on Bun, even when `Module.registerHooks` is available; Node uses `Module.registerHooks`.
+
 ## Requirements
 
 OpenClaw requires **Bun 1.4.0+**, an available **`node:sqlite`** API, and the same [WAL-safe SQLite floor as Node](/install/node-compatibility#why-the-floors-exist).
