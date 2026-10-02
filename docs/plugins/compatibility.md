@@ -90,32 +90,35 @@ separately tracked so supported upgrade paths can still repair old config.
 
 The remaining dated compatibility areas are:
 
-- the renewed October 1 SDK subpath window listed in the migration guide
+- SDK public demotions with unmet migration conditions
 - the shipped agent-harness SDK aliases, whose removal is pending a new
   externally documented migration decision
-- the October 2026 SDK annotation families listed below
+- the October 1 SDK annotation families and media projection listed below
 
 Active, undated registry records cover supported behavior rather than removal
 debt, including activation hints, plugin capture, bundled plugin enablement,
 and the generated channel-config fallback.
 
-The annotation-only compatibility audit added these dated records. Their
-`removeAfter` date is an earliest review date, not permission to remove a
-surface while its stated reader or migration condition remains unmet.
+The October 2, 2026 review moved the ten October 1 annotation families and
+`media-legacy-projection` to `removal-pending` because their reader or migration
+conditions remain unmet. Their dates, warnings, public APIs, and migration
+behavior are unchanged. The November record retains its deprecation window.
+No date or local reference count authorizes removing a supported contract.
 
-| Compatibility code                            | Removal condition                                                                                       | `removeAfter` |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------- |
-| `plugin-sdk-channel-setup-input-fields`       | Repeat the published-plugin artifact sweep and remove only fields with no reader.                       | 2026-10-01    |
-| `plugin-sdk-broad-runtime-barrels`            | Move bundled and indexed external consumers to focused SDK subpaths.                                    | 2026-10-01    |
-| `plugin-sdk-provider-owned-helper-shims`      | Move each deprecated provider helper to its provider-local API and prove no published reader remains.   | 2026-10-01    |
-| `message-presentation-legacy-bridges`         | Move reply producers and official channel packages to `MessagePresentation`.                            | 2026-10-01    |
-| `plugin-sdk-focused-compat-aliases`           | Prove every enumerated alias has no bundled or published reader.                                        | 2026-10-01    |
-| `agent-harness-terminal-result-aliases`       | Move harnesses to `terminal` and `visibleReplies`, then prove the legacy result fields are unread.      | 2026-10-01    |
-| `official-plugin-export-aliases`              | Move users of Google Meet testing, channel presentation, and Discord timeout exports to canonical APIs. | 2026-10-01    |
-| `memory-host-compatibility-aliases`           | Use canonical memory tables and prepared runtime config everywhere.                                     | 2026-10-01    |
-| `plugin-runtime-api-compat-aliases`           | Move flat plugin registration/runtime calls to their namespaced or focused replacements.                | 2026-10-01    |
-| `plugin-provider-manifest-compat-aliases`     | Move kind/setup/catalog ownership to manifests and model-catalog registration.                          | 2026-10-01    |
-| `plugin-sdk-session-agent-resolution-aliases` | Move published plugins to strict session-agent resolution with an explicit or prepared owner.           | 2026-11-29    |
+| Compatibility code                            | Removal condition                                                                                                | `removeAfter` |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------- |
+| `plugin-sdk-channel-setup-input-fields`       | Repeat the published-plugin artifact sweep and remove only fields with no reader.                                | 2026-10-01    |
+| `plugin-sdk-broad-runtime-barrels`            | Move bundled and indexed external consumers to focused SDK subpaths.                                             | 2026-10-01    |
+| `plugin-sdk-provider-owned-helper-shims`      | Move each deprecated provider helper to its provider-local API and prove no published reader remains.            | 2026-10-01    |
+| `message-presentation-legacy-bridges`         | Move reply producers and official channel packages to `MessagePresentation`.                                     | 2026-10-01    |
+| `plugin-sdk-focused-compat-aliases`           | Prove every enumerated alias has no bundled or published reader.                                                 | 2026-10-01    |
+| `agent-harness-terminal-result-aliases`       | Move harnesses to `terminal` and `visibleReplies`, then prove the legacy result fields are unread.               | 2026-10-01    |
+| `official-plugin-export-aliases`              | Move channel presentation and Discord timeout consumers to canonical APIs and clear published readers.           | 2026-10-01    |
+| `memory-host-compatibility-aliases`           | Verify supported artifacts use canonical memory tables and preserve legacy table data before retiring overrides. | 2026-10-01    |
+| `plugin-runtime-api-compat-aliases`           | Move flat plugin registration/runtime calls to their namespaced or focused replacements.                         | 2026-10-01    |
+| `plugin-provider-manifest-compat-aliases`     | Move kind/setup/catalog ownership to manifests and model-catalog registration.                                   | 2026-10-01    |
+| `media-legacy-projection`                     | Migrate published builder readers, hook metadata and media templates while preserving stored-message import.     | 2026-10-01    |
+| `plugin-sdk-session-agent-resolution-aliases` | Move published plugins to strict session-agent resolution with an explicit or prepared owner.                    | 2026-11-29    |
 
 `pnpm plugins:boundary-report` reports `removal-pending` records separately
 from deprecated records. A due `removal-pending` record remains blocked until

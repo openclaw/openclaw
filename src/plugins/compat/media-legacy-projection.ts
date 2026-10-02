@@ -3,7 +3,7 @@ import type { PluginCompatRecord } from "./types.js";
 /** Named compatibility contract for the shipped parallel media projection. */
 export const MEDIA_LEGACY_PROJECTION_COMPAT_RECORD = {
   code: "media-legacy-projection",
-  status: "deprecated",
+  status: "removal-pending",
   owner: "sdk",
   introduced: "2026-07-24",
   deprecated: "2026-07-24",
@@ -13,7 +13,7 @@ export const MEDIA_LEGACY_PROJECTION_COMPAT_RECORD = {
   // published-plugin artifact sweep at removal time.
   removeAfter: "2026-10-01",
   replacement:
-    "ordered `MsgContext.media` / `InboundMediaFacts[]`; typed hook `media` and `originalMedia`; `Attachment*` template variables; and `openclaw/plugin-sdk/media-local-roots`",
+    "ordered `MsgContext.media` / `InboundMediaFacts[]`, typed hook media, Attachment templates and media-local-roots; retain projections while supported published plugins such as Mattermost read the builders and hook/template consumers need migration",
   docsPath: "/plugins/sdk-migration#media-legacy-projection",
   surfaces: [
     "MsgContext MediaPath/MediaUrl/MediaType and plural/staging fields",
