@@ -457,6 +457,8 @@ export async function prepareManagedLlamaServer(params: {
     embeddingModelIsDefault: params.embeddingModelIsDefault,
     embeddingModelPath: params.embeddingModelPath,
     defaultEmbeddingModelPath: params.defaultEmbeddingModelPath,
+    // Isolated candidates start with generated args, so only the configured service's settings apply.
+    serviceSettings: params.isolated ? undefined : params.localService,
     reconcileOrigin: params.isolated ? undefined : reconcileOrigin,
   });
   params.signal?.throwIfAborted();

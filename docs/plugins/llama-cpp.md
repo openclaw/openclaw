@@ -123,8 +123,9 @@ a fresh preset.
 The default EmbeddingGemma section runs one server slot (`parallel = 1`) so an
 indexing batch embeds one input at a time. llama.cpp's four default slots share
 one decode, and EmbeddingGemma's output buffer grows by about 1 MiB per token,
-so long inputs packed across four slots can take about 2.2 GB. Set `parallel` (or `np`) in
-that section or in `[*]` to choose a different slot count; OpenClaw keeps it.
+so long inputs packed across four slots can take about 2.2 GB. To choose a
+different slot count, set `parallel` (or `np`) in that section or in `[*]`, or
+`LLAMA_ARG_N_PARALLEL` or `--parallel` on the managed service; OpenClaw keeps it.
 
 ### Set up only local embeddings
 

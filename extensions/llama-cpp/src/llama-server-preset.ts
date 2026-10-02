@@ -20,6 +20,8 @@ export type LlamaServerPresetOptions = {
   embeddingModelIsDefault?: boolean;
   embeddingModelPath?: string;
   defaultEmbeddingModelPath?: string;
+  // Settings the router service already passes to every model through its args or env.
+  serviceSettings?: { args?: readonly string[]; env?: Readonly<Record<string, string>> };
 };
 
 const LLAMA_CPP_EMBEDDING_UBATCH_SIZE = 2048; // Fit one input in one physical batch.
@@ -95,13 +97,26 @@ function readSettingKeys(section: string | undefined): Set<string> {
   );
 }
 
+// Router children inherit the service env, so those keys count as configured too. A preset
+// key becomes a child CLI option, which llama.cpp applies over the inherited env value.
+function readServiceSettingKeys(service: LlamaServerPresetOptions["serviceSettings"]): Set<string> {
+  const keys = [
+    ...Object.keys(service?.env ?? {}),
+    ...(service?.args ?? [])
+      .filter((arg) => arg.startsWith("-"))
+      .map((arg) => arg.replace(/^-+/u, "").split("=")[0] ?? ""),
+  ];
+  return new Set(keys.map((key) => PRESET_KEY_ALIASES[key] ?? key));
+}
+
 function updateModelSection(
   sections: Map<string, string>,
   id: string,
   values: Record<string, string>,
   newline: string,
-  // Written only when neither this section nor `[*]` sets the key, so operator choices win.
+  // Written only when this section, `[*]` and the service leave the key unset.
   defaults: Record<string, string> = {},
+  serviceKeys: ReadonlySet<string> = new Set(),
 ): void {
   assertIniValue(id, "llama.cpp model id");
   if (id.includes("]")) {
@@ -117,6 +132,7 @@ function updateModelSection(
   const configured = new Set([
     ...readSettingKeys(sections.get(name)),
     ...readSettingKeys(sections.get("*")),
+    ...serviceKeys,
   ]);
   for (const key of Object.keys(defaults)) {
     if (!configured.has(key)) {
@@ -190,6 +206,7 @@ export function buildLlamaServerPreset(
       },
       newline,
       isDefault ? { parallel: String(LLAMA_CPP_EMBEDDING_PARALLEL_SLOTS) } : {},
+      readServiceSettingKeys(params.serviceSettings),
     );
   }
   const embeddingSection = sections.get(DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID);
