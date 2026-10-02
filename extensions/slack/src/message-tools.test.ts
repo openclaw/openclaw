@@ -206,6 +206,7 @@ describe("Slack message tools", () => {
       "send",
       "react",
       "reactions",
+      "channel-create",
       "conversation-open",
       "read",
       "edit",
@@ -221,6 +222,10 @@ describe("Slack message tools", () => {
     expect(discovery.capabilities).toEqual(["presentation"]);
     expect(Array.isArray(discovery.schema)).toBe(true);
     const schemas = Array.isArray(discovery.schema) ? discovery.schema : [];
+    expect(schemas.find((entry) => entry.actions?.includes("channel-create"))).toMatchObject({
+      actions: ["channel-create"],
+      visibility: "all-configured",
+    });
     expect(schemas.find((entry) => entry.actions?.includes("conversation-open"))).toMatchObject({
       actions: ["conversation-open"],
       visibility: "all-configured",
@@ -276,6 +281,7 @@ describe("Slack message tools", () => {
       "send",
       "react",
       "reactions",
+      "channel-create",
       "conversation-open",
       "read",
       "edit",
@@ -333,6 +339,7 @@ describe("Slack message tools", () => {
       "send",
       "react",
       "reactions",
+      "channel-create",
       "conversation-open",
       "read",
       "edit",

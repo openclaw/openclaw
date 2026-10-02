@@ -16,13 +16,12 @@ import {
   createLazyRuntimeMethodBinder,
   createLazyRuntimeModule,
 } from "openclaw/plugin-sdk/lazy-runtime";
-import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedSlackAccount } from "./accounts.js";
 import type { SlackActionContext } from "./action-context.js";
 import {
-  resolveSlackAutoThreadId,
+  resolveSlackThreadTsFromContext,
   SLACK_PRIVATE_ACTION_DELIVERY_RESULT,
 } from "./action-threading.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
@@ -44,6 +43,7 @@ type ConversationReadInvocationOrigin = NonNullable<
 >;
 
 const messagingActions = new Set([
+  "createChannel",
   "openConversation",
   "sendMessage",
   "uploadFile",
@@ -74,6 +74,7 @@ const loadSlackChannelTypeRuntime = createLazyRuntimeModule(() => import("./chan
 const bindSlackChannelType = createLazyRuntimeMethodBinder(loadSlackChannelTypeRuntime);
 
 export const slackActionRuntime = {
+  createSlackChannel: bindSlackAction((runtime) => runtime.createSlackChannel),
   deleteSlackMessage: bindSlackAction((runtime) => runtime.deleteSlackMessage),
   downloadSlackFile: bindSlackAction((runtime) => runtime.downloadSlackFile),
   editSlackMessage: bindSlackAction((runtime) => runtime.editSlackMessage),
@@ -96,26 +97,6 @@ export const slackActionRuntime = {
 };
 
 export type { SlackActionContext } from "./action-context.js";
-
-function resolveThreadTsFromContext(
-  explicitThreadTs: string | undefined,
-  targetChannel: string,
-  context: SlackActionContext | undefined,
-  opts?: { suppressImplicitThread?: boolean },
-): string | undefined {
-  if (explicitThreadTs) {
-    return explicitThreadTs;
-  }
-  if (opts?.suppressImplicitThread) {
-    return undefined;
-  }
-  const threadTs = resolveSlackAutoThreadId({ to: targetChannel, toolContext: context });
-  if (isSingleUseReplyToMode(context?.replyToMode ?? "off") && !context?.hasRepliedRef) {
-    return undefined;
-  }
-  // Planning stays pure so failed sends cannot consume a thread before delivery.
-  return threadTs;
-}
 
 function hasPotentialSlackNamedPolicy(params: {
   channels: ResolvedSlackAccount["config"]["channels"];
@@ -583,7 +564,7 @@ export async function handleSlackAction(
     }
     const sentResults: SlackSendResult[] = [];
     const buildSendOpts = (destination: string, forceDocument: boolean) => {
-      const threadTs = resolveThreadTsFromContext(
+      const threadTs = resolveSlackThreadTsFromContext(
         readStringParam(params, "threadTs"),
         destination,
         context,
@@ -625,6 +606,23 @@ export async function handleSlackAction(
       return result;
     };
     switch (action) {
+      case "createChannel": {
+        const teamId =
+          readStringParam(params, "teamId") ??
+          resolveTrustedCurrentSlackTeamId({ account, context });
+        const inviteUserId =
+          normalizeOptionalLowercaseString(context?.currentChannelProvider) === "slack" &&
+          context?.requesterAccountId &&
+          normalizeAccountId(context.requesterAccountId) === normalizeAccountId(account.accountId)
+            ? context?.requesterSenderId
+            : undefined;
+        assertSlackDetachedTargetAllowed(account.accountId, teamId);
+        const result = await slackActionRuntime.createSlackChannel(
+          readStringParam(params, "name", { required: true }),
+          { ...buildActionOpts("write", teamId), inviteUserId },
+        );
+        return jsonResult({ ok: true, ...result });
+      }
       case "openConversation": {
         const teamId =
           readStringParam(params, "teamId") ??

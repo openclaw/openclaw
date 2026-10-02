@@ -37,6 +37,7 @@ import {
 } from "./native-data-blocks.js";
 import { buildSlackNativeDataDeliveryPlan } from "./native-data-fallback.js";
 import { sendMessageSlack } from "./send.js";
+import { formatSlackTarget } from "./target-parsing.js";
 import { resolveSlackBotToken } from "./token.js";
 import { countSlackTextUtf8Bytes, truncateSlackTextByUtf8Bytes } from "./truncate.js";
 import type { SlackAttachment } from "./types.js";
@@ -233,6 +234,66 @@ async function resolveBotUserId(client: WebClient) {
     throw new Error("Failed to resolve Slack bot user id");
   }
   return auth.user_id;
+}
+
+export function parseSlackChannelCreateInput(
+  name: unknown,
+  teamId?: string,
+  inviteUserId?: string,
+) {
+  return {
+    name: z
+      .string()
+      .trim()
+      .regex(/^[a-z0-9][a-z0-9_-]{0,79}$/)
+      .parse(name),
+    teamId:
+      teamId === undefined
+        ? undefined
+        : z
+            .string()
+            .trim()
+            .regex(/^T[A-Z0-9]+$/i)
+            .parse(teamId),
+    inviteUserId:
+      inviteUserId === undefined
+        ? undefined
+        : z
+            .string()
+            .trim()
+            .regex(/^[UW][A-Z0-9]+$/i)
+            .parse(inviteUserId),
+  };
+}
+
+export async function createSlackChannel(name: unknown, opts: SlackActionClientOpts = {}) {
+  const input = parseSlackChannelCreateInput(name, opts.teamId, opts.inviteUserId);
+  const client = await getClient(opts, "write");
+  const result = await client.conversations.create({ name: input.name, team_id: input.teamId });
+  const channelId = result.channel?.id?.trim();
+  if (!channelId || !/^C[A-Z0-9]+$/i.test(channelId)) {
+    throw new Error("Slack conversations.create did not return a valid public channel ID.");
+  }
+  let inviteWarning: string | undefined;
+  if (input.inviteUserId) {
+    try {
+      await client.conversations.invite({ channel: channelId, users: input.inviteUserId });
+    } catch {
+      inviteWarning = "Channel was created, but Slack could not add the requesting user.";
+    }
+  }
+  return {
+    channelId,
+    name: result.channel?.name?.trim() || input.name,
+    target: formatSlackTarget({
+      teamId: input.teamId,
+      kind: "channel",
+      id: channelId,
+      explicitKind: true,
+    }),
+    ...(input.inviteUserId && !inviteWarning ? { invitedUserId: input.inviteUserId } : {}),
+    ...(inviteWarning ? { inviteWarning } : {}),
+  };
 }
 
 function createSlackReactionUpdater(method: "add" | "remove", unchangedError: string) {

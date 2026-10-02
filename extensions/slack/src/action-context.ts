@@ -11,6 +11,7 @@ export type SlackActionClientOpts = {
   accountId?: string;
   token?: string;
   teamId?: string;
+  inviteUserId?: string;
   client?: WebClient;
   assertDirectAdapterHandoff?: () => void;
 };

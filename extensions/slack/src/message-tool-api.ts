@@ -92,6 +92,18 @@ export function describeSlackMessageTool({
 >[0]): ChannelMessageToolDiscovery {
   const actions = listSlackMessageActions(cfg, accountId);
   const schema: ChannelMessageToolSchemaContribution[] = [];
+  if (actions.includes("channel-create")) {
+    schema.push({
+      actions: ["channel-create"],
+      visibility: "all-configured",
+      properties: {
+        name: Type.String({
+          pattern: "^[a-z0-9][a-z0-9_-]{0,79}$",
+          description: "Public Slack channel name. Calls Slack conversations.create.",
+        }),
+      },
+    });
+  }
   if (actions.includes("conversation-open")) {
     schema.push({
       actions: ["conversation-open"],
