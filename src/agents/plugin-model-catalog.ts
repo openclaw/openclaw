@@ -15,7 +15,6 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import {
@@ -31,11 +30,14 @@ import {
 import {
   PLUGIN_MODEL_CATALOG_CACHE_SCOPE,
   PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE,
+  readPluginModelCatalogEntries,
   replacePluginModelCatalogEntriesInDatabase,
+  type PersistedPluginModelCatalog,
 } from "./plugin-model-catalog.kernel.js";
 
 export { isGeneratedPluginModelCatalog };
 export { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "./plugin-model-catalog-repair.js";
+export type { PersistedPluginModelCatalog } from "./plugin-model-catalog.kernel.js";
 
 // The in-memory planning key retains the established owner encoding; generated
 // payloads themselves are persisted only in the agent SQLite cache.
@@ -51,11 +53,6 @@ function isPluginModelCatalogMigrationFile(filename: string): boolean {
 
 type PluginModelCatalogDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
 
-export type PersistedPluginModelCatalog = {
-  pluginId: string;
-  contents: string;
-};
-
 function pluginModelCatalogDatabaseOptions(agentDir: string) {
   return {
     agentId: resolveAuthProfileDatabaseOwnerId(agentDir),
@@ -63,34 +60,14 @@ function pluginModelCatalogDatabaseOptions(agentDir: string) {
   };
 }
 
-function readPersistedPluginModelCatalogEntries(
-  agentDir: string,
-  scope: string,
-): PersistedPluginModelCatalog[] {
-  const result = withOpenClawAgentDatabaseReadOnly((database) => {
-    const kysely = getNodeSqliteKysely<PluginModelCatalogDatabase>(database.db);
-    return executeSqliteQuerySync(
-      database.db,
-      kysely
-        .selectFrom("cache_entries")
-        .select(["key", "value_json"])
-        .where("scope", "=", scope)
-        .orderBy("key"),
-    ).rows.flatMap((row) =>
-      row.value_json === null ? [] : [{ pluginId: row.key, contents: row.value_json }],
-    );
-  }, pluginModelCatalogDatabaseOptions(agentDir));
-  return result.found ? result.value : [];
-}
-
 function readPersistedPluginModelCatalogs(agentDir: string): PersistedPluginModelCatalog[] {
-  return readPersistedPluginModelCatalogEntries(agentDir, PLUGIN_MODEL_CATALOG_CACHE_SCOPE);
+  return readPluginModelCatalogEntries(
+    pluginModelCatalogDatabaseOptions(agentDir),
+    PLUGIN_MODEL_CATALOG_CACHE_SCOPE,
+  );
 }
 
-/**
- * Reads an exact plugin-catalog generation without migration or repair writes.
- * Lifecycle preparation uses this for configured providers before atomic publication.
- */
+/** Native Doctor inspection and the public synchronous ModelRegistry SDK contract. */
 export function loadPersistedPluginModelCatalogsReadOnly(
   agentDir: string,
   pluginIds?: readonly string[],
@@ -98,12 +75,11 @@ export function loadPersistedPluginModelCatalogsReadOnly(
   if (pluginIds?.length === 0) {
     return [];
   }
-  const catalogs = readPersistedPluginModelCatalogs(agentDir);
-  if (!pluginIds) {
-    return catalogs;
-  }
-  const allowed = new Set(pluginIds);
-  return catalogs.filter(({ pluginId }) => allowed.has(pluginId));
+  return readPluginModelCatalogEntries(
+    pluginModelCatalogDatabaseOptions(agentDir),
+    PLUGIN_MODEL_CATALOG_CACHE_SCOPE,
+    pluginIds,
+  );
 }
 
 /** Applies Doctor's repair to unchanged persisted catalog bytes. */
@@ -182,9 +158,10 @@ function readPersistedPluginModelCatalogMigrationPayloads(
   agentDir: string,
 ): ReadonlyMap<string, string> {
   return new Map(
-    readPersistedPluginModelCatalogEntries(agentDir, PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE).map(
-      (catalog) => [catalog.pluginId, catalog.contents],
-    ),
+    readPluginModelCatalogEntries(
+      pluginModelCatalogDatabaseOptions(agentDir),
+      PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE,
+    ).map((catalog) => [catalog.pluginId, catalog.contents]),
   );
 }
 
