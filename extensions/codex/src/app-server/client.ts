@@ -53,6 +53,7 @@ import type { CodexRequestWaiterFinished } from "./request-observation.js";
 import { CODEX_APP_SERVER_OVERLOADED_ERROR_CODE, CodexAppServerRpcError } from "./rpc-error.js";
 import { CodexServerRequests, type CodexServerRequestHandler } from "./server-requests.js";
 import { createStdioTransport } from "./transport-stdio.js";
+import { getCodexAppServerRegisteredTransportIdentity } from "./transport-process-registration.js";
 import { createWebSocketTransport } from "./transport-websocket.js";
 import {
   closeCodexAppServerTransport,
@@ -400,6 +401,10 @@ export class CodexAppServerClient {
   /** Returns the local transport PID for scoped child-process cleanup, when available. */
   getTransportPid(): number | undefined {
     return this.child.pid;
+  }
+
+  getRegisteredTransportIdentity() {
+    return getCodexAppServerRegisteredTransportIdentity(this.child);
   }
 
   request<M extends CodexAppServerRequestMethod>(
