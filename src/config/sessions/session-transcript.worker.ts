@@ -428,6 +428,17 @@ serveOwnedWorkerTasks(
           ),
         };
       }
+      if (request.kind === "conversation-delivery") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { readConversationDeliveryInDatabase } =
+          await import("./conversation-delivery-store.kernel.js");
+        const result = withOpenClawAgentDatabaseReadOnly(
+          (database) => readConversationDeliveryInDatabase(database, request.lookup),
+          { ...request.database, env: cloneEnvWithPlatformSemantics(request.env) },
+        );
+        return { kind: "conversation-delivery", record: result.found ? result.value : undefined };
+      }
       if (request.kind === "goal-operation-receipt") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");

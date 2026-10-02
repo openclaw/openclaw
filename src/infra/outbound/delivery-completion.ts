@@ -10,7 +10,6 @@ import {
   type ConversationDeliveryRecord,
 } from "../../config/sessions/conversation-delivery-store.js";
 import {
-  runConversationDatabaseWrite,
   type ConversationRegistryScope,
   type PreparedConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
@@ -93,16 +92,15 @@ export function resolveConversationDeliveryScope(
 
 async function conversationResult(
   completion: Extract<DurableDeliveryCompletion, { kind: "conversation" }>,
-  update: (scope: PreparedConversationRegistryScope) => ConversationDeliveryRecord,
+  update: (scope: ConversationRegistryScope) => Promise<ConversationDeliveryRecord>,
   stateDir?: string,
   stateContext?: DeliveryQueueStateContext,
   target?: ConversationDeliveryTarget,
 ): Promise<DurableDeliveryCompletionResult> {
   let record: ConversationDeliveryRecord;
   try {
-    record = await runConversationDatabaseWrite(
+    record = await update(
       resolveConversationDeliveryScope(completion, stateDir, stateContext, target),
-      update,
     );
   } catch (error) {
     // Full session deletion can retire the owner before its shared queue settles.

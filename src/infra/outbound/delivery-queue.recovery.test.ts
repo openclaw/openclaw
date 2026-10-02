@@ -43,6 +43,7 @@ import {
   reserveDeliveryAttempt,
 } from "./delivery-queue-storage.js";
 import {
+  RECOVERY_SUMMARY,
   loadPendingDeliveries,
   asDeliverFn,
   createRecoveryLog,
@@ -55,12 +56,6 @@ const BOUNDED_COMPLETION_RETENTION = {
   idPrefix: "cron-direct-delivery:v1:",
   maxAgeMs: 24 * 60 * 60_000,
   maxEntries: 2_000,
-} as const;
-const RECOVERY_SUMMARY = {
-  empty: { recovered: 0, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 },
-  failed: { recovered: 0, failed: 1, skippedMaxRetries: 0, deferredBackoff: 0 },
-  recovered: { recovered: 1, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 },
-  recoveredWithDeferred: { recovered: 1, failed: 0, skippedMaxRetries: 0, deferredBackoff: 1 },
 } as const;
 const resolveOutboundChannelMessageAdapterMock = vi.hoisted(() => vi.fn());
 const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
@@ -325,7 +320,7 @@ describe("delivery-queue recovery", () => {
         }),
       },
     );
-    beginConversationDeliveryOperation(scope, {
+    await beginConversationDeliveryOperation(scope, {
       operationId,
       operationKind: "send",
       conversationRef,
@@ -430,7 +425,7 @@ describe("delivery-queue recovery", () => {
     try {
       const { result } = await runRecovery({ deliver });
       expect(result.recovered).toBe(1);
-      expect(getConversationDeliveryOperation(scope, "operation-recovery")).toMatchObject({
+      expect(await getConversationDeliveryOperation(scope, "operation-recovery")).toMatchObject({
         status: "sent",
         queueId: "operation-recovery",
         platformMessageId: "reef-platform",
@@ -464,7 +459,7 @@ describe("delivery-queue recovery", () => {
       const first = await runRecovery({ deliver });
 
       expect(first.result).toEqual(RECOVERY_SUMMARY.recovered);
-      expect(getConversationDeliveryOperation(scope, operationId)).toMatchObject({
+      expect(await getConversationDeliveryOperation(scope, operationId)).toMatchObject({
         status: "suppressed",
       });
       expect(await loadPendingDeliveries(tmpDir())).toEqual([]);
@@ -482,7 +477,9 @@ describe("delivery-queue recovery", () => {
       const second = await runRecovery({ deliver });
       expect(second.result).toEqual(RECOVERY_SUMMARY.empty);
       expect(deliver).toHaveBeenCalledOnce();
-      expect(getConversationDeliveryOperation(scope, operationId)?.status).toBe("suppressed");
+      expect((await getConversationDeliveryOperation(scope, operationId))?.status).toBe(
+        "suppressed",
+      );
       expect(auditEvents).toHaveLength(1);
     } finally {
       unsubscribe();
@@ -643,7 +640,7 @@ describe("delivery-queue recovery", () => {
         const { result } = await runRecovery({ deliver });
         expect(result).toMatchObject(rejected ? { failed: 1 } : { recovered: 1 });
         expect(deliver).not.toHaveBeenCalled();
-        expect(getConversationDeliveryOperation(scope, operationId)).toMatchObject(
+        expect(await getConversationDeliveryOperation(scope, operationId)).toMatchObject(
           rejected
             ? { status: "rejected", rejectionError: "atomic message limit" }
             : { status: state },
@@ -1143,7 +1140,7 @@ describe("delivery-queue recovery", () => {
       const first = await runRecovery({ deliver });
       expect(first.result).toEqual(RECOVERY_SUMMARY.failed);
       expect(deliver).toHaveBeenCalledOnce();
-      expect(getConversationDeliveryOperation(scope, operationId)).toMatchObject({
+      expect(await getConversationDeliveryOperation(scope, operationId)).toMatchObject({
         status: "rejected",
         rejectionError: "Slack chat.postMessage rejected: messages_tab_disabled",
       });
@@ -1155,7 +1152,7 @@ describe("delivery-queue recovery", () => {
       const second = await runRecovery({ deliver: replay });
       expect(second.result).toEqual(RECOVERY_SUMMARY.empty);
       expect(replay).not.toHaveBeenCalled();
-      expect(getConversationDeliveryOperation(scope, operationId)).toMatchObject({
+      expect(await getConversationDeliveryOperation(scope, operationId)).toMatchObject({
         status: "rejected",
         rejectionError: "Slack chat.postMessage rejected: messages_tab_disabled",
       });

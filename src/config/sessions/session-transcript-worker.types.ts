@@ -22,14 +22,12 @@ import type {
   SessionActivitySummaryBatchInput,
   SessionActivitySummaryBatchResult,
 } from "./activity-summary-source.types.js";
+import type { ConversationDeliveryRecord } from "./conversation-delivery-store.types.js";
 import type {
   ArchivedSessionEvictionBatch,
   ArchivedSessionEvictionQuery,
 } from "./disk-budget.types.js";
-import type {
-  SessionGoalOperationLookup,
-  SessionGoalOperationLookupResult,
-} from "./goals-operations.types.js";
+import type { SessionGoalOperationLookupResult } from "./goals-operations.types.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import type { SessionTranscriptBoundedActiveContext } from "./session-accessor.sqlite-active-context.js";
 import type { TranscriptArchivePresenceRead } from "./session-accessor.sqlite-archive-types.js";
@@ -92,6 +90,11 @@ import type {
   SessionTranscriptSearchResult,
 } from "./session-transcript-search.types.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
+import type {
+  ConversationDeliveryWorkerInput,
+  SessionGoalOperationReceiptWorkerInput,
+  SessionPendingInputReceiptsWorkerInput,
+} from "./session-transcript-worker-receipts.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
 type SessionTranscriptMatchWorkerInput = {
@@ -291,22 +294,6 @@ type SessionProgressCardWorkerInput = {
   kind: "session-progress-card";
   database: { agentId: string; path: string };
   sessionKey: string;
-  env: NodeJS.ProcessEnv;
-};
-
-type SessionPendingInputReceiptsWorkerInput = {
-  kind: "session-pending-input-receipts";
-  database: { agentId: string; path: string };
-  agentId: string;
-  sessionKey: string;
-  sessionId: string;
-  runIds: readonly string[];
-  env: NodeJS.ProcessEnv;
-};
-
-type SessionGoalOperationReceiptWorkerInput = SessionGoalOperationLookup & {
-  kind: "goal-operation-receipt";
-  database: { agentId: string; path: string };
   env: NodeJS.ProcessEnv;
 };
 
@@ -524,6 +511,7 @@ export type SessionHistoryWorkerInput =
   | SessionProgressCardWorkerInput
   | SessionPendingInputReceiptsWorkerInput
   | SessionGoalOperationReceiptWorkerInput
+  | ConversationDeliveryWorkerInput
   | SessionEntryListWorkerInput
   | SessionEntryReadWorkerInput
   | SessionEntryCurrentWorkerInput
@@ -553,6 +541,7 @@ export type SessionHistoryWorkerPreparedInput =
   PreparedHistoryInput<SessionHistoryDatabaseWorkerInput>;
 
 export type SessionTranscriptWorkerValues = {
+  "conversation-delivery": { kind: "conversation-delivery"; record?: ConversationDeliveryRecord };
   prewarm: { kind: "prewarm" };
   "session-pending-archives": { kind: "session-pending-archives"; pending: boolean };
   "session-archive-presence": { kind: "session-archive-presence"; registered: boolean };
@@ -746,6 +735,10 @@ export type SessionHistoryWorkerDatabase = {
   readMembers: SessionHistoryReader<SessionMembersWorkerInput>;
   readMembershipFacts: SessionHistoryReader<SessionMembershipFactsWorkerInput>;
   readProgressCard: SessionHistoryReader<SessionProgressCardWorkerInput, ProgressCard | null>;
+  readConversationDelivery: SessionHistoryReader<
+    ConversationDeliveryWorkerInput,
+    ConversationDeliveryRecord | undefined
+  >;
   readGoalOperationReceipt: SessionHistoryReader<
     SessionGoalOperationReceiptWorkerInput,
     SessionGoalOperationLookupResult

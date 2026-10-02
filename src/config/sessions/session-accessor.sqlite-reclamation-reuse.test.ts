@@ -202,13 +202,13 @@ test.each(["directory discovery", "Gateway send", "durable completion"] as const
       ]);
     }
     if (operation === "durable completion") {
-      beginConversationDeliveryOperation(scope, {
+      await beginConversationDeliveryOperation(scope, {
         operationId,
         operationKind: "send",
         conversationRef: conversation.conversationRef,
         message: "synthetic message",
       });
-      markConversationDeliveryQueued(scope, operationId, "queue-admission");
+      await markConversationDeliveryQueued(scope, operationId, "queue-admission");
     }
     const runForeground = (): Promise<unknown> => {
       if (operation === "directory discovery") {
@@ -336,7 +336,7 @@ test.each(["directory discovery", "Gateway send", "durable completion"] as const
           }),
         ]);
       } else {
-        expect(getConversationDeliveryOperation(scope, operationId)).toMatchObject({
+        expect(await getConversationDeliveryOperation(scope, operationId)).toMatchObject({
           status: "sent",
           platformMessageId: "outbound-admission",
         });
