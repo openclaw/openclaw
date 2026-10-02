@@ -303,7 +303,11 @@ describe("delivery-queue recovery", () => {
   }
   async function createConversationRecoveryFixture(operationId: string) {
     const storePath = path.join(tmpDir(), "agent-sessions.json");
-    const scope = { agentId: "main", storePath };
+    const scope = {
+      agentId: "main",
+      storePath,
+      env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() },
+    };
     const conversationRef = buildConversationRef({
       channel: "reef",
       accountId: "default",
@@ -428,8 +432,8 @@ describe("delivery-queue recovery", () => {
       await params.onDeliveryResult?.(deliveryResult);
       return [deliveryResult];
     });
-    const { result } = await runRecovery({ deliver });
-    expect(result.recovered).toBe(1);
+    const { result, log } = await runRecovery({ deliver });
+    expect(result.recovered, JSON.stringify(log.warn.mock.calls)).toBe(1);
     expect(await getConversationDeliveryOperation(scope, "operation-recovery")).toMatchObject({
       status: "sent",
       queueId: "operation-recovery",
