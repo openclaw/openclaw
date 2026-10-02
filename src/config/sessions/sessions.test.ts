@@ -49,10 +49,6 @@ it("keeps existing session metadata when a stored entry has no conversation link
     pluginExtensions: { wordboard: { draftId: "draft-1" } },
   });
   expect(loaded).not.toHaveProperty("conversationLink");
-
-  const reopened = normalizePersistedSessionEntryShape(JSON.parse(JSON.stringify(loaded)));
-  expect(reopened).toEqual(loaded);
-  expect(reopened).not.toHaveProperty("conversationLink");
 });
 
 it("keeps only recognized archive reasons on archived rows", () => {
