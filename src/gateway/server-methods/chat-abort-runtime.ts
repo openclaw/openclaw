@@ -267,30 +267,31 @@ export function abortQueuedCollectorSession(
         },
         {
           assertCurrent,
-          preparePublication: async (publish) => {
-            const publishPrepared = (read?: SessionRowReadView) => {
-              if (captured && !projection?.isCurrent(captured)) {
-                throw new Error(
-                  "Queued collector session changed before cancellation publication; retry Stop.",
+          preparePublication: (publish) =>
+            publish(async (publishResult) => {
+              const publishPrepared = (read?: SessionRowReadView) => {
+                if (captured && !projection?.isCurrent(captured)) {
+                  throw new Error(
+                    "Queued collector session changed before cancellation publication; retry Stop.",
+                  );
+                }
+                publicationRows = read;
+                try {
+                  return publishResult();
+                } finally {
+                  publicationRows = undefined;
+                }
+              };
+              if (projection && agentId) {
+                return await withReadySessionRows(
+                  projection,
+                  () => [{ agentId, key: params.sessionKey }],
+                  publishPrepared,
+                  { includeAncestors: true },
                 );
               }
-              publicationRows = read;
-              try {
-                return publish();
-              } finally {
-                publicationRows = undefined;
-              }
-            };
-            if (projection && agentId) {
-              return await withReadySessionRows(
-                projection,
-                () => [{ agentId, key: params.sessionKey }],
-                publishPrepared,
-                { includeAncestors: true },
-              );
-            }
-            return publishPrepared();
-          },
+              return publishPrepared();
+            }),
           beforeSessionKill: () => {
             // Resolve Gateway owners under the kill runtime's session fence.
             // Signal them only after this collector's FIFO reservation is held.

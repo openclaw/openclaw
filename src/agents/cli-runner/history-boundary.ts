@@ -155,6 +155,17 @@ export async function prepareCliHistoryBoundary(
     {
       preserveActivity: true,
       skipMaintenance: true,
+      onCommitted: (entry) => {
+        // Binding settlement retains this detached row; publish only our committed writer adoption.
+        const callerEntry: InternalSessionEntry | undefined = params.sessionEntry;
+        if (
+          callerEntry?.sessionId === snapshot.sessionId &&
+          callerEntry.lifecycleRevision === snapshot.lifecycleRevision &&
+          callerEntry.activeWriterRunId === snapshot.activeWriterRunId
+        ) {
+          callerEntry.activeWriterRunId = entry.activeWriterRunId;
+        }
+      },
       assertCommitAllowed: () => {
         assertCurrent();
         // Planning may yield. Recheck foreign liveness at commit, then adopt the

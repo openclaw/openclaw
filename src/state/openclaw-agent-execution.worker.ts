@@ -5,10 +5,8 @@ import type { Result } from "@openclaw/normalization-core/result";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import {
-  SQLITE_WORKER_CLOSE_RECEIPT,
   SQLITE_WORKER_OPERATION_CLEANUP,
   SQLITE_WORKER_PREPARE_ADMITTED,
-  type SqliteWorkerCloseReceipt,
   type SqliteWorkerCommand,
   type SqliteWorkerPreparedBackend,
 } from "../infra/sqlite-worker-contract.js";
@@ -41,7 +39,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "./openclaw-agent-db.js";
-import { closeAgentDatabaseExecution } from "./openclaw-agent-execution-close.js";
+import { createAgentDatabaseExecutionCloser } from "./openclaw-agent-execution-close.js";
 import type {
   AgentDatabaseExecutionIdentity,
   AgentDatabaseExecutionOpen,
@@ -86,7 +84,7 @@ export function createSqliteWorkerBackend(
     return backend;
   } catch (error) {
     try {
-      backend.close();
+      backend.closeAfterFailedOpen();
     } catch (cleanupError) {
       throw createSqliteLifecycleAggregateError(
         [error, cleanupError],
@@ -107,7 +105,7 @@ export const openExistingSqliteWorkerBackend: (
 function openAgentDatabaseBackend(
   input: AgentDatabaseExecutionOpen,
   opening: { databasePath: string; existingIdentity?: string },
-): Omit<SqliteWorkerPreparedBackend<AgentDatabaseOperations>, "close"> & { close(): void } {
+): SqliteWorkerPreparedBackend<AgentDatabaseOperations> & { closeAfterFailedOpen(): void } {
   if (opening.databasePath !== input.databasePath) {
     throw new Error("Agent database open does not match its captured execution owner");
   }
@@ -393,7 +391,6 @@ function openAgentDatabaseBackend(
     admit: (stage, requestAdmission) => admit(stage, undefined, requestAdmission),
   });
   let closed = false;
-  let closeReceipt: SqliteWorkerCloseReceipt | undefined;
   const assertOpen = () => {
     if (closed) {
       throw new Error("Agent database execution owner is closed");
@@ -422,6 +419,10 @@ function openAgentDatabaseBackend(
     return registry.execute(command, context);
   };
   return {
+    ...createAgentDatabaseExecutionCloser(() => {
+      closed = true;
+      return { database, identity, closeDomain: () => domain.close(), releaseBorrow, sharedBorrow };
+    }),
     prepare(command) {
       if (
         command.type === "database.domain.bind" ||
@@ -488,20 +489,6 @@ function openAgentDatabaseBackend(
       } finally {
         startupJournalRequested = false;
       }
-    },
-    [SQLITE_WORKER_CLOSE_RECEIPT]() {
-      return closeReceipt;
-    },
-    close() {
-      closed = true;
-      closeReceipt = undefined;
-      closeReceipt = closeAgentDatabaseExecution({
-        database,
-        identity,
-        closeDomain: () => domain.close(),
-        releaseBorrow,
-        releaseSharedBorrow: () => sharedBorrow?.release(),
-      });
     },
   };
 }

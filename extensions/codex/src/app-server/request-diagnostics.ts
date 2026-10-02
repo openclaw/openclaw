@@ -2,6 +2,7 @@ import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration
 import { areDiagnosticsEnabledForProcess } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { CODEX_CONTROL_METHODS } from "./capabilities.js";
 import type { CodexAppServerClient } from "./client.js";
+import type { CodexAppServerAcquireObservation } from "./shared-client.js";
 
 // This is a disclosure allowlist, not request validation. Unknown method strings
 // can contain caller data; never copy them into diagnostics.
@@ -30,6 +31,10 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
     ordinal: number;
     phase: "prepare" | "acquire-client" | "callback" | "release-client";
     clientInstanceId: string | undefined;
+    acquireLastObservedBoundary: CodexAppServerAcquireObservation["boundary"] | undefined;
+    acquireBoundaryBeforeCleanup: CodexAppServerAcquireObservation["boundary"] | undefined;
+    acquireStartup: CodexAppServerAcquireObservation["startup"];
+    lastStartedClientInstanceId: string | undefined;
     started: number;
     pending: number;
     methods: Map<string, number>;
@@ -38,6 +43,10 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
       ordinal,
       phase: "prepare",
       clientInstanceId: undefined,
+      acquireLastObservedBoundary: undefined,
+      acquireBoundaryBeforeCleanup: undefined,
+      acquireStartup: undefined,
+      lastStartedClientInstanceId: undefined,
       started: 0,
       pending: 0,
       methods: new Map<string, number>(),
@@ -48,6 +57,37 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
       // Late settlement from the previous callback must not change its replacement.
       attempt = createAttempt(ordinal);
       attempt.phase = "acquire-client";
+      const current = attempt;
+      return {
+        onAcquireObservation(observation: CodexAppServerAcquireObservation) {
+          if (attempt !== current || current.phase !== "acquire-client") {
+            return;
+          }
+          if (observation.boundary === "cleanup") {
+            if (current.acquireLastObservedBoundary !== "cleanup") {
+              current.acquireBoundaryBeforeCleanup = current.acquireLastObservedBoundary;
+            }
+          } else {
+            current.acquireBoundaryBeforeCleanup = undefined;
+          }
+          current.acquireLastObservedBoundary = observation.boundary;
+          if (observation.startup) {
+            current.acquireStartup = observation.startup;
+          }
+        },
+        onStartedClient(client: CodexAppServerClient) {
+          if (attempt !== current || current.phase !== "acquire-client") {
+            return;
+          }
+          // Fallback can replace this client; this identity is an observation, not a lease.
+          current.lastStartedClientInstanceId = undefined;
+          try {
+            current.lastStartedClientInstanceId = client.getInstanceId();
+          } catch {
+            // A diagnostic identity cannot invalidate startup.
+          }
+        },
+      };
     },
     acquired(client: CodexAppServerClient) {
       attempt.phase = "callback";
@@ -88,6 +128,16 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
           timeoutMs,
           elapsedMs: Math.round(performance.now() - startedAt),
           scopeAttemptOrdinal: attempt.ordinal,
+          ...(attempt.acquireLastObservedBoundary
+            ? { acquireLastObservedBoundary: attempt.acquireLastObservedBoundary }
+            : {}),
+          ...(attempt.acquireStartup ? { acquireStartup: attempt.acquireStartup } : {}),
+          ...(attempt.acquireBoundaryBeforeCleanup
+            ? { acquireBoundaryBeforeCleanup: attempt.acquireBoundaryBeforeCleanup }
+            : {}),
+          ...(attempt.lastStartedClientInstanceId
+            ? { lastStartedClientInstanceId: attempt.lastStartedClientInstanceId }
+            : {}),
           ...(attempt.clientInstanceId ? { clientInstanceId: attempt.clientInstanceId } : {}),
           requestStartedCount: attempt.started,
           currentRequestCount: attempt.pending,

@@ -4,18 +4,26 @@ import {
   buildSessionCreationStamp,
   inheritSessionGitContributorProfileIds,
 } from "../../../config/sessions/session-entry-provenance.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
+import type { InternalSessionEntry, SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { buildDashboardSessionTitleSource } from "../../../gateway/dashboard-session-title.js";
+import type { PreparedGatewaySessionLifecycle } from "../../../gateway/session-create-service.types.js";
 import type { GatewaySessionStoreTargetWithStore } from "../../../gateway/session-utils-store.types.js";
+import {
+  prepareSessionWorktreeCreation,
+  resolveSessionProjectRoot,
+} from "../../../gateway/session-worktree-preparation.js";
 import { waitForSessionParticipantRecording } from "../../../sessions/session-participant-recording.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
 import { resolveUserPath } from "../../../utils.js";
 import { inheritedToolAllowPatch, inheritedToolDenyPatch } from "../../inherited-tool-deny.js";
 import type { resolveSpawnAdmission } from "../../spawn-plan.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
+import type { SpawnSubagentParams } from "./subagent-spawn-contract.js";
 import { type resolveSubagentModelAndThinkingPlan, splitModelRef } from "./subagent-spawn-plan.js";
 import {
   loadSessionEntry,
+  emitSessionLifecycleEvent,
   resolveGatewaySessionStoreTargetInWorker,
   upsertSessionEntryCore,
   withSessionEntryReadOnlyInWorker,
@@ -33,6 +41,7 @@ export async function createInitialSubagentSession(params: {
   completionOwnerSessionKey: string;
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
+  worktree?: Pick<SpawnSubagentParams, "projectId" | "worktreeName" | "worktreeBaseRef" | "task">;
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
   admissionPatch?: Extract<
     ReturnType<typeof resolveSpawnAdmission>,
@@ -61,7 +70,7 @@ export async function createInitialSubagentSession(params: {
   const { provider, model } = splitModelRef(modelRef);
   const fallbackOriginProvider = normalizeOptionalString(modelOverrideFallbackOriginProvider);
   const fallbackOriginModel = normalizeOptionalString(modelOverrideFallbackOriginModel);
-  const initialChildSessionPatch: Partial<SessionEntry> = {
+  const initialChildSessionPatch: Partial<InternalSessionEntry> = {
     ...admissionPatch,
     ...(subagentRole ? { subagentRole } : {}),
     inheritedToolPolicyVersion: 1,
@@ -93,8 +102,8 @@ export async function createInitialSubagentSession(params: {
     ["spawnedBy", params.requesterInternalKey],
     ["completionOwnerSessionKey", params.completionOwnerSessionKey],
     ["parentSessionKey", params.requesterInternalKey],
-    ["spawnedWorkspaceDir", params.spawnedWorkspaceDir],
-    ["spawnedCwd", params.spawnedCwd],
+    ["spawnedWorkspaceDir", params.worktree ? undefined : params.spawnedWorkspaceDir],
+    ["spawnedCwd", params.worktree ? undefined : params.spawnedCwd],
     ["swarmGroupId", params.swarmGroupId],
   ] as const) {
     const value = normalizeOptionalString(raw);
@@ -149,64 +158,123 @@ export async function createInitialSubagentSession(params: {
           assertActive: params.assertActive,
         });
     params.assertActive?.();
-    const entry = await upsertSessionEntryCore(
-      {
-        storePath: target.readSource?.path ?? target.storePath,
-        sessionKey: target.canonicalKey,
-      },
-      {
-        ...initialChildSessionPatch,
-        // Native spawn keeps agent RPC label semantics, not sessions.patch's uniqueness policy.
-        ...(params.label ? { label: params.label } : {}),
-        ...(params.sessionPermissionPolicy
-          ? {
-              permissionMode: params.sessionPermissionPolicy.mode,
-              sessionRoot: resolveUserPath(
-                params.spawnedWorkspaceDir ?? params.sessionPermissionPolicy.root,
-              ),
-            }
-          : {}),
-        ...childSessionIdentity,
-        ...(parentEntry?.skillLibrarySelections
-          ? {
-              skillLibrarySelections: parentEntry.skillLibrarySelections.map((selection) => ({
-                ...selection,
-              })),
-            }
-          : {}),
-        ...buildSessionCreationStamp({
-          via: "spawn",
-          ...params.creationPolicy,
-          ...(!params.incognito
+    let preparedWorktree: PreparedGatewaySessionLifecycle | undefined;
+    if (params.worktree) {
+      const projectId = params.worktree.projectId;
+      if (projectId && params.spawnedCwd) {
+        throw new Error("projectId cannot be combined with cwd");
+      }
+      const project = projectId
+        ? await resolveSessionProjectRoot(params.cfg, projectId, true)
+        : undefined;
+      params.assertActive?.();
+      if (project && !project.ok) {
+        throw new Error(project.error.message);
+      }
+      const prepared = await prepareSessionWorktreeCreation({
+        cfg: params.cfg,
+        target: {
+          agentId: target.agentId,
+          key: target.canonicalKey,
+          storePath: target.readSource?.path ?? target.storePath,
+          projectId,
+          sandboxRequired: params.creationPolicy.sandbox === "required",
+        },
+        workspace: project?.value ?? params.spawnedCwd,
+        inheritParentKey:
+          !projectId && !params.spawnedCwd && parentTarget.agentId === params.targetAgentId
+            ? params.requesterInternalKey
+            : undefined,
+        name: params.worktree.worktreeName,
+        baseRef: params.worktree.worktreeBaseRef,
+        deferWorktree: true,
+        label: params.label,
+        titleSource: buildDashboardSessionTitleSource({ message: params.worktree.task }),
+        useRequestedTitleSelection: false,
+        runSetupScript: false,
+        commitGuard: () => params.assertActive?.(),
+        onTitleError: (error) => console.warn("subagent worktree title failed", error),
+        onTitlePersisted: () =>
+          emitSessionLifecycleEvent({
+            sessionKey: params.childSessionKey,
+            reason: "title",
+          }),
+      });
+      if (!prepared.ok) {
+        throw new Error(prepared.error.message);
+      }
+      preparedWorktree = prepared.value;
+      initialChildSessionPatch.projectId = projectId;
+      initialChildSessionPatch.pendingWorktree = preparedWorktree.pendingWorktree;
+    }
+    const commit = (assertSourceCurrent?: () => void) =>
+      upsertSessionEntryCore(
+        {
+          storePath: target.readSource?.path ?? target.storePath,
+          sessionKey: target.canonicalKey,
+        },
+        {
+          ...initialChildSessionPatch,
+          // Native spawn keeps agent RPC label semantics, not sessions.patch's uniqueness policy.
+          ...(params.label ? { label: params.label } : {}),
+          ...(params.sessionPermissionPolicy
             ? {
-                inheritedGitContributorProfileIds:
-                  inheritSessionGitContributorProfileIds(parentEntry),
+                permissionMode: params.sessionPermissionPolicy.mode,
+                ...(!params.worktree
+                  ? {
+                      sessionRoot: resolveUserPath(
+                        params.spawnedWorkspaceDir ?? params.sessionPermissionPolicy.root,
+                      ),
+                    }
+                  : {}),
               }
             : {}),
-        }),
-      },
-      {
-        assertCommitAllowed: () => {
-          params.assertActive?.();
-          if (parentEntry?.skillLibrarySelections) {
-            const latest = loadSessionEntry({
-              storePath: parentStorePath,
-              sessionKey: parentTarget.canonicalKey,
-            });
-            if (
-              latest?.sessionId !== parentEntry.sessionId ||
-              latest.lifecycleRevision !== parentEntry.lifecycleRevision ||
-              JSON.stringify(latest.skillLibrarySelections) !==
-                JSON.stringify(parentEntry.skillLibrarySelections)
-            ) {
-              throw new Error(
-                "Parent skill selection changed before spawn; retry from the current turn.",
-              );
-            }
-          }
+          ...childSessionIdentity,
+          ...(parentEntry?.skillLibrarySelections
+            ? {
+                skillLibrarySelections: parentEntry.skillLibrarySelections.map((selection) => ({
+                  ...selection,
+                })),
+              }
+            : {}),
+          ...buildSessionCreationStamp({
+            via: "spawn",
+            conversationLink: parentEntry?.conversationLink,
+            ...params.creationPolicy,
+            ...(!params.incognito
+              ? {
+                  inheritedGitContributorProfileIds:
+                    inheritSessionGitContributorProfileIds(parentEntry),
+                }
+              : {}),
+          }),
         },
-      },
-    );
+        {
+          assertCommitAllowed: () => {
+            params.assertActive?.();
+            assertSourceCurrent?.();
+            if (parentEntry?.skillLibrarySelections) {
+              const latest = loadSessionEntry({
+                storePath: parentStorePath,
+                sessionKey: parentTarget.canonicalKey,
+              });
+              if (
+                latest?.sessionId !== parentEntry.sessionId ||
+                latest.lifecycleRevision !== parentEntry.lifecycleRevision ||
+                JSON.stringify(latest.skillLibrarySelections) !==
+                  JSON.stringify(parentEntry.skillLibrarySelections)
+              ) {
+                throw new Error(
+                  "Parent skill selection changed before spawn; retry from the current turn.",
+                );
+              }
+            }
+          },
+        },
+      );
+    const entry = preparedWorktree?.withCommit
+      ? await preparedWorktree.withCommit(commit)
+      : await commit();
     return { status: "ok", entry: entry ?? undefined };
   } catch (err) {
     const message = err instanceof Error ? err.message : typeof err === "string" ? err : "error";

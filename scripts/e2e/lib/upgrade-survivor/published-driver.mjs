@@ -10,9 +10,17 @@ import { runCancelableCommand } from "../../../lib/cancelable-command.mts";
 import { toErrorObject } from "../../../lib/error-format.mts";
 import { hasUnjoinedWork, runManagedCommand } from "../../../lib/managed-child-process.mts";
 import { classifyReleaseTrain, parseReleaseVersion } from "../../../lib/release-version.mjs";
+import {
+  assertPublishedDriverReclaimed,
+  inspectPublishedDriverSqlite,
+  publishedDriverSqliteTargets,
+  seedPublishedDriverLegacySqlite,
+  seedPublishedDriverSessionSources,
+} from "./published-driver-sqlite.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const [candidateArg, artifactsArg, driverTag = "latest"] = process.argv.slice(2);
+const legacySqlite = process.env.OPENCLAW_PUBLISHED_DRIVER_LEGACY_SQLITE === "1";
 assert.equal(process.platform, "linux", "The managed-service fixture requires Linux");
 assert(fs.existsSync("/.dockerenv"), "Run through the bare Docker E2E runner");
 const accountHome = os.userInfo().homedir;
@@ -213,7 +221,19 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     assert.equal(readJson(path.join(packageRoot, "package.json")).version, driverVersion);
     await run("candidate-build", "tar", ["-xOf", candidate, "package/dist/build-info.json"]);
     const build = output("candidate-build");
-    writeJson("inputs", { driverVersion, candidate: build });
+    const driverBuild = legacySqlite
+      ? readJson(path.join(packageRoot, "dist/build-info.json"))
+      : undefined;
+    writeJson("inputs", {
+      driverVersion,
+      candidate: build,
+      ...(legacySqlite
+        ? {
+            driverBuild,
+            expectedSqliteStores: publishedDriverSqliteTargets(state),
+          }
+        : {}),
+    });
 
     const port = await freePort();
     const token = "published-driver-synthetic-token";
@@ -244,19 +264,58 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       "scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh",
     ]);
     fixtureInstalled = true;
+    if (legacySqlite) {
+      seedPublishedDriverSessionSources(state);
+    }
     // PRs start from the serving Gateway's state; main/release proofs also seed
     // Doctor's broader repair state before exercising the same managed update.
-    if (process.env.GITHUB_EVENT_NAME !== "pull_request") {
+    if (legacySqlite || process.env.GITHUB_EVENT_NAME !== "pull_request") {
       await run("seed-state", "openclaw", ["doctor", "--fix", "--non-interactive"]);
+    }
+    if (legacySqlite) {
+      writeJson("sqlite-seeded", seedPublishedDriverLegacySqlite(state));
     }
     await run("install-service", "openclaw", ["gateway", "install", "--force", "--json"]);
     await ready("before-ready", port);
+    if (legacySqlite) {
+      await run("running-before", "openclaw", [
+        "gateway",
+        "probe",
+        "--url",
+        `ws://127.0.0.1:${port}`,
+        "--token",
+        token,
+        "--json",
+      ]);
+      const serving = output("running-before").targets.find(
+        (entry) => entry.url === `ws://127.0.0.1:${port}`,
+      );
+      assert.equal(serving?.connect.ok, true);
+      assert.equal(serving.server.version, driverVersion);
+      const buildComparable =
+        typeof serving.server.buildId === "string" && typeof driverBuild.buildId === "string";
+      if (buildComparable) {
+        assert.equal(serving.server.buildId, driverBuild.buildId);
+      }
+      writeJson("baseline-serving-identity", {
+        installed: driverBuild,
+        serving: serving.server,
+        verification: buildComparable ? "version-and-build-id" : "version-only",
+        ...(!buildComparable
+          ? { limit: "Published driver did not expose both installed and serving build IDs" }
+          : {}),
+      });
+    }
     const beforePid = fs.readFileSync(
       env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE,
       "utf8",
     );
     let update;
     let updateFailure;
+    const sqliteBefore = legacySqlite ? inspectPublishedDriverSqlite(state, 0) : undefined;
+    if (sqliteBefore) {
+      writeJson("sqlite-before-update", sqliteBefore);
+    }
     try {
       update = await run(
         "update",
@@ -329,6 +388,36 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     );
     assert.equal(target?.connect.ok, true);
     assert.equal(target.server.version, build.version);
+    if (sqliteBefore) {
+      assert.equal(typeof build.buildId, "string", "Candidate build identity is missing");
+      assert.equal(target.server.buildId, build.buildId);
+      const sqliteAfter = inspectPublishedDriverSqlite(state, 2);
+      writeJson("sqlite-after-update", sqliteAfter);
+      await run("stop-before-repeat", path.join(bin, "systemctl"), [
+        "--user",
+        "stop",
+        "openclaw-gateway.service",
+      ]);
+      const settledSqlite = inspectPublishedDriverSqlite(state, 2);
+      writeJson("sqlite-after-stop", settledSqlite);
+      assertPublishedDriverReclaimed(
+        readJson(path.join(artifacts, "sqlite-seeded.json")),
+        settledSqlite,
+      );
+      env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+      try {
+        await run("repeat-maintenance", "openclaw", ["doctor", "--fix", "--non-interactive"]);
+      } finally {
+        delete env.OPENCLAW_UPDATE_IN_PROGRESS;
+      }
+      writeJson("sqlite-after-repeat", inspectPublishedDriverSqlite(state, 2));
+      assert(
+        !fs
+          .readFileSync(path.join(artifacts, "repeat-maintenance.stdout"), "utf8")
+          .includes("Enabling incremental SQLite reclamation once:"),
+        "Second maintenance repeated conversion",
+      );
+    }
     writeJson("summary", {
       driverVersion,
       candidate: build,

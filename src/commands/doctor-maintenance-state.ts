@@ -1,8 +1,9 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { resolveGatewayStateOwnerPath } from "../infra/gateway-state-owner.js";
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
+import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import {
   createUpdateDoctorDatabaseWriteCapture,
   DoctorMaintenanceRefusalError,
@@ -216,6 +217,57 @@ export function createDoctorMaintenanceState(options: {
         // Restoration and update receipts use a fresh scope for the new file identity.
         await enterResources(owner!);
       }
+    },
+    async enableSqliteReclamation(agents: readonly AgentDatabaseMigrationTarget[]) {
+      const { enableDoctorSqliteReclamation } = await import("./doctor-sqlite-reclamation.js");
+      const { closeOpenClawAgentDatabaseByPathAsync } =
+        await import("../state/openclaw-agent-db-lifecycle.js");
+      const databasePath = resolveOpenClawStateSqlitePath(selectedEnv);
+      options.signal.throwIfAborted();
+      options.assertCurrent?.();
+      owner!.assertCurrent();
+      await closeResources();
+      let operationError: Error | undefined;
+      let result: { warnings: string[] } | undefined;
+      try {
+        result = await owner!.run(async () => {
+          for (const agent of agents) {
+            await closeOpenClawAgentDatabaseByPathAsync(agent.path, agent.agentId);
+          }
+          await closeOpenClawStateDatabaseByPathAsync(databasePath);
+          await assertDoctorAgentLeaseAdmission(selectedEnv);
+          return enableDoctorSqliteReclamation({
+            env: selectedEnv,
+            agents,
+            signal: options.signal,
+            assertCurrent: () => {
+              options.assertCurrent?.();
+              owner!.assertCurrent();
+              owner!.assertDatabaseAccess(databasePath);
+            },
+            log: params.runtime.log,
+          });
+        });
+      } catch (error) {
+        operationError = toErrorObject(error, "SQLite reclamation failed.");
+      }
+      // Keep the original write-capture baseline until final maintenance release.
+      try {
+        await enterResources(owner!);
+      } catch (error) {
+        if (operationError !== undefined) {
+          throw new AggregateError(
+            [operationError, error],
+            "SQLite reclamation and maintenance scope restoration failed.",
+            { cause: error },
+          );
+        }
+        throw error;
+      }
+      if (operationError !== undefined) {
+        throw operationError;
+      }
+      return result!;
     },
     async cleanupRetainedRuntimes(inspectService: boolean) {
       const { captureRetainedNativeWorkerSource } =

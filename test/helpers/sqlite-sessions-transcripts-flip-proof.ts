@@ -436,7 +436,6 @@ function isBuiltCliEntrypoint(entrypoint: readonly string[]): boolean {
 function buildProofContext(stateDir: string, signal?: AbortSignal) {
   const agentDir = path.join(stateDir, "agents", AGENT_ID);
   const activeSessionsDir = path.join(agentDir, "sessions");
-  const legacySessionsDir = path.join(stateDir, "sessions");
   return {
     activeSessionsDir,
     cleanups: new Set<ProofCleanup>(),
@@ -449,7 +448,6 @@ function buildProofContext(stateDir: string, signal?: AbortSignal) {
     deleteSessionKey: DELETE_SESSION_KEY,
     fullTurnAssistantText: FULL_TURN_ASSISTANT_TEXT,
     fullTurnSessionKey: FULL_TURN_SESSION_KEY,
-    legacySessionsDir,
     legacySessionId: "sqlite-legacy-main",
     mockOpenAiRequestLog: path.join(stateDir, "mock-openai-requests.ndjson"),
     oldStateSessionKeys: [...OLD_STATE_SESSION_KEYS],
@@ -657,7 +655,6 @@ function ownProofChild(context: ProofContext, child: ProofChildProcess): () => P
 
 async function seedLegacySessionStore(context: ProofContext): Promise<void> {
   await fs.mkdir(context.activeSessionsDir, { recursive: true });
-  await fs.mkdir(context.legacySessionsDir, { recursive: true });
   await fs.mkdir(path.join(context.stateDir, "agent"), { recursive: true });
   const now = Date.now();
   const firstSharedSessionKey = expectDefined(
@@ -678,28 +675,24 @@ async function seedLegacySessionStore(context: ProofContext): Promise<void> {
     [secondSharedSessionKey]: legacyEntry("sqlite-shared-session", now - 3_000, {
       sessionFile: "sqlite-shared-b.jsonl",
     }),
-  };
-  const oldStateEntries = {
-    main: legacyEntry(context.legacySessionId, now - 4_000),
-    "+15551234567": legacyEntry("sqlite-old-direct", now - 5_000),
-    "group:legacy-room": legacyEntry("sqlite-old-group", now - 6_000, {
+    [context.resetSessionKey]: legacyEntry(context.legacySessionId, now - 4_000),
+    "agent:main:+15551234567": legacyEntry("sqlite-old-direct", now - 5_000),
+    "agent:main:unknown:group:legacy-room": legacyEntry("sqlite-old-group", now - 6_000, {
       groupChannel: "legacy-room",
     }),
-    "partial-direct": legacyEntry("sqlite-partial-import", now - 7_000),
+    "agent:main:partial-direct": legacyEntry("sqlite-partial-import", now - 7_000),
   };
   for (const [index, sessionKey] of SCALE_SESSION_KEYS.entries()) {
     entries[sessionKey] = legacyEntry(scaleSessionId(index), now - 20_000 - index);
   }
   await writeJsonFile(context.storePath, entries, 2);
-  await writeJsonFile(path.join(context.legacySessionsDir, "sessions.json"), oldStateEntries, 2);
   await writeJsonFile(path.join(context.stateDir, "agent", "old-settings.json"), {
     source: "old-agent-layout",
   });
-  const legacyDir = context.legacySessionsDir;
   const activeDir = context.activeSessionsDir;
-  await writeMessageTranscript(legacyDir, context.legacySessionId, "sqlite-user-1", "legacy hello");
-  await writeMessageTranscript(legacyDir, "sqlite-old-direct", "sqlite-old-direct-1", "old dm");
-  await writeMessageTranscript(legacyDir, "sqlite-old-group", "sqlite-old-group-1", "old group");
+  await writeMessageTranscript(activeDir, context.legacySessionId, "sqlite-user-1", "legacy hello");
+  await writeMessageTranscript(activeDir, "sqlite-old-direct", "sqlite-old-direct-1", "old dm");
+  await writeMessageTranscript(activeDir, "sqlite-old-group", "sqlite-old-group-1", "old group");
   await writeMessageTranscript(activeDir, "sqlite-delete-session", "sqlite-delete-1", "delete me");
   await writeMessageTranscript(
     activeDir,
@@ -741,10 +734,10 @@ async function seedLegacySessionStore(context: ProofContext): Promise<void> {
     ]);
   }
   await writeJsonFile(
-    path.join(context.legacySessionsDir, `${context.legacySessionId}.trajectory.jsonl`),
+    path.join(context.activeSessionsDir, `${context.legacySessionId}.trajectory.jsonl`),
     { type: "trajectory", sessionId: context.legacySessionId },
   );
-  await writeJsonFile(path.join(context.legacySessionsDir, "old-orphan.deleted.jsonl"), {
+  await writeJsonFile(path.join(context.activeSessionsDir, "old-orphan.deleted.jsonl"), {
     type: "event",
     id: "old-orphan",
   });
@@ -849,19 +842,17 @@ async function importProofSession(
 }
 
 async function requireLegacyStartupRefusal(inst: OpenClawTestInstance, context: ProofContext) {
-  const legacyStorePath = path.join(context.legacySessionsDir, "sessions.json");
+  const legacyStorePath = context.storePath;
   const validStore = await fs.readFile(legacyStorePath);
-  // Valid stores can migrate during startup. A refused source must remain visible
-  // to the next startup instead of being moved outside migration discovery.
+  // Startup must leave the refused per-agent index and every transcript intact
+  // so the same source remains available for the next attempt and Doctor repair.
   await fs.writeFile(legacyStorePath, `${validStore.toString("utf8")}\n<<<invalid legacy store>>>`);
   const sources = new Map<string, Buffer>();
-  for (const directory of [context.activeSessionsDir, context.legacySessionsDir]) {
-    await walkFiles(directory, async (filePath) => {
-      sources.set(filePath, await fs.readFile(filePath));
-    });
-    if (!sources.has(path.join(directory, "sessions.json"))) {
-      throw new Error(`missing seeded legacy session store in ${directory}`);
-    }
+  await walkFiles(context.activeSessionsDir, async (filePath) => {
+    sources.set(filePath, await fs.readFile(filePath));
+  });
+  if (!sources.has(legacyStorePath)) {
+    throw new Error(`missing seeded legacy session store at ${legacyStorePath}`);
   }
   let message = "";
   for (const attempt of [1, 2]) {
@@ -2014,7 +2005,6 @@ async function captureCheckpoint(
     ...(options.doctor ? { doctor: options.doctor } : {}),
     gatewayLogTail: tail(options.gatewayLogTail ?? ""),
     label,
-    legacyStateJsonl: await inventoryActiveJsonl(context.legacySessionsDir),
     sqlite: readSqliteEvidence(context.agentDbPath, context.trackedSessionKeys),
   };
 }
@@ -2256,19 +2246,16 @@ function validateCheckpointInvariants(
   checkpoint: ProofCheckpoint,
   failures: string[],
 ): void {
-  if (checkpoint.label !== "seeded-legacy-store" && checkpoint.label !== "after-startup-refusal") {
-    for (const [description, inventory] of [
-      ["active sessions directory", checkpoint.activeJsonl],
-      ["old sessions directory", checkpoint.legacyStateJsonl],
-    ] as const) {
-      if (inventory.length > 0) {
-        failures.push(
-          `${checkpoint.label}: ${description} still has JSONL files: ${inventory
-            .map((entry) => entry.path)
-            .join(", ")}`,
-        );
-      }
-    }
+  if (
+    checkpoint.label !== "seeded-legacy-store" &&
+    checkpoint.label !== "after-startup-refusal" &&
+    checkpoint.activeJsonl.length > 0
+  ) {
+    failures.push(
+      `${checkpoint.label}: active sessions directory still has JSONL files: ${checkpoint.activeJsonl
+        .map((entry) => entry.path)
+        .join(", ")}`,
+    );
   }
   const doctor = checkpoint.doctor;
   if (checkpoint.label.startsWith("after-doctor") && doctor?.code !== 0) {
@@ -2443,7 +2430,7 @@ function printCheckpoint(checkpoint: ProofCheckpoint): void {
     [
       `[sqlite-sessions-transcripts-flip-proof] ${checkpoint.label}`,
       `  sqlite sessions=${checkpoint.sqlite.sessions} entries=${checkpoint.sqlite.sessionEntries} transcriptEvents=${checkpoint.sqlite.transcriptEvents}`,
-      `  activeJsonl=${checkpoint.activeJsonl.length} legacyStateJsonl=${checkpoint.legacyStateJsonl.length} archiveArtifacts=${checkpoint.archiveArtifacts.length}`,
+      `  activeJsonl=${checkpoint.activeJsonl.length} archiveArtifacts=${checkpoint.archiveArtifacts.length}`,
       checkpoint.doctor
         ? `  doctor ${checkpoint.doctor.mode} code=${String(checkpoint.doctor.code)} totals=${JSON.stringify(
             checkpoint.doctor.totals ?? {},

@@ -19,7 +19,7 @@ struct ChatSessionSidebar: View {
     let previews: ChatSessionSidebarPreviews
     let menuActions: ChatSessionSidebarActions
     var additionalAttentionRequests: [OpenClawChatAttentionRequest] = []
-    @State var menuPresentation: ChatSessionIconPicker?
+    @State var menuPresentation: ChatSessionMenuPresentation?
     @State var presentedAttention: OpenClawChatAttentionPresentation?
     @State var sessionPendingDeletion: OpenClawChatSessionEntry?
     @State var sessionPendingRename: OpenClawChatSessionEntry?
@@ -155,7 +155,7 @@ struct ChatSessionSidebar: View {
                 self.viewModel.refreshSessions(limit: 200)
             }
         }
-        .sheet(item: self.$menuPresentation) { $0 }
+        .sheet(item: self.$menuPresentation) { self.menuSheet($0) }
         .sheet(item: self.$inspectedSession) { session in
             ChatSessionInspectorSheet(viewModel: self.viewModel, session: session)
         }

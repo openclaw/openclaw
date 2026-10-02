@@ -132,8 +132,6 @@ jobs:
 
       - name: Bound Testbox idle lifetime
         if: github.event_name == 'workflow_dispatch'
-        env:
-          TESTBOX_EXPIRES_AT: ${{ needs.admission.outputs.expires_at }}
         run: node scripts/ci-testbox-budget.mjs configure
 
       - name: Setup Node environment

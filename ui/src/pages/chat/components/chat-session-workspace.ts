@@ -1,4 +1,5 @@
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
+import { BROWSER_IMAGE_MIME_TYPES } from "../../../../../src/shared/browser-image-mime-types.js";
 import {
   formatFencedCodeBlock,
   formatInlineCodeSpan,
@@ -47,14 +48,6 @@ function languageForFile(name: string): string {
   }
   return extension;
 }
-
-const SESSION_FILE_IMAGE_MIME_TYPES = new Set([
-  "image/avif",
-  "image/gif",
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-]);
 
 function formatMarkdownCodeSpan(value: string): string {
   // Markdown finds block boundaries before inline spans, so filenames must
@@ -219,7 +212,7 @@ function openFile(
           file.contentEncoding !== "base64" ||
           typeof file.content !== "string" ||
           !file.mimeType ||
-          !SESSION_FILE_IMAGE_MIME_TYPES.has(file.mimeType)
+          !BROWSER_IMAGE_MIME_TYPES.has(file.mimeType)
         ) {
           return null;
         }

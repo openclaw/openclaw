@@ -1284,7 +1284,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
               case let .snapshot(hello) = delivery.push else { return }
         let lease = delivery.serverLease
         let base = hello.controluiurl.flatMap(URL.init(string:)) ?? lease.route.url
-        commands.setSessionMenuConnection(OpenClawSessionMenuConnection(
+        var menuConnection = OpenClawSessionMenuConnection(
             hello: hello,
             local: target == .local || (target == .primary && AppStateStore.shared.connectionMode == .local),
             selfProfileID: hello.snapshot.presence.first {
@@ -1304,7 +1304,9 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
                     newWindow: true,
                     route: WebChatRoute(sessionKey: session.key, agentID: session.agentId),
                     sourceIsCurrent: { connection.serverLeaseMatchesCurrentState(lease) })
-            }))
+            })
+        menuConnection.groupDefaultsBrowser = MacGatewayGroupDefaults.browser(connection: menuConnection)
+        commands.setSessionMenuConnection(menuConnection)
     }
 
     var acceptsNativeDraft: Bool {

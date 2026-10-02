@@ -12,13 +12,13 @@ import type {
 import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
 import type { ConversationRecord } from "./conversation-registry.js";
 import type {
-  SessionTranscriptBoundedMessageTailOptions,
-  SessionTranscriptBoundedMessageTailPage,
-} from "./session-accessor.sqlite-active-events.js";
-import type {
   SessionTranscriptDisplayDeltaResult,
   SessionTranscriptMessageByIdOptions,
 } from "./session-accessor.sqlite-history-query.js";
+import type {
+  SessionTranscriptBoundedMessageTailOptions,
+  SessionTranscriptBoundedMessageTailPage,
+} from "./session-accessor.sqlite-projection-read.js";
 import type {
   SessionTranscriptRawDeltaLimits,
   SessionTranscriptReadScope,

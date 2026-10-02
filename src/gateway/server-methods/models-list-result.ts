@@ -29,7 +29,6 @@ import {
 import type { ModelCatalogSnapshot, ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { createModelFastModeResolver } from "../../agents/model-fast-mode.js";
 import { modelKey } from "../../agents/model-ref-shared.js";
-import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
 import { dedupeModelCatalogEntries } from "../../agents/model-selection-shared.js";
 import {
   createModelVisibilityPolicy,
@@ -50,11 +49,9 @@ import {
 import { isPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import { preparedModelRuntimeConfigsMatch } from "../../agents/prepared-model-runtime.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
-import { resolveAutomaticUtilityModelRef } from "../../agents/utility-model.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { createThinkingCatalogResolver } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig, getRuntimeConfigSourceSnapshot } from "../../config/config.js";
-import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveProviderModelCatalogId } from "../../plugins/provider-model-routes.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -75,6 +72,7 @@ import {
   buildPublicModelProjection,
   projectProviderCatalogOutcomes,
 } from "./models-list-public-projection.js";
+import { resolveDefaultModelsPreview } from "./models-list-result.default-models.js";
 import { prepareModelPickerRuntimeChoices } from "./models-list-runtime-choices.js";
 
 type ApiKeyProviderCapabilities = ReturnType<typeof apiKeyProviderCapabilities>;
@@ -469,25 +467,26 @@ export async function prepareModelsListResult(
     manifestPlugins: metadataSnapshot,
   });
   draft?.assertCurrent();
-  const outcomeProjection = {
-    ...((params.params.includeDefaultModels ??
+  const defaultModels =
+    (params.params.includeDefaultModels ??
     (view === "configured" && !params.params.sessionKey && !params.params.authProfileId))
-      ? {
-          defaultModels: {
-            automaticUtilityModel:
-              resolveAutomaticUtilityModelRef({
-                cfg,
-                primaryProvider: resolveDefaultModelForAgent({
-                  cfg,
-                  manifestPlugins: metadataSnapshot,
-                  allowPluginNormalization: false,
-                }).provider,
-                primaryModelRef: resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
-                metadataSnapshot,
-              }) ?? null,
-          },
-        }
-      : {}),
+      ? await resolveDefaultModelsPreview({
+          cfg,
+          agentId,
+          agentDir: sourceOwner?.agentDir,
+          workspaceDir,
+          metadataSnapshot,
+          preparedAuthStore,
+          preparedRuntimeAuthModes: preparedProjectionOwner?.authModes,
+          preparedRuntimeAuthMaterializations: preparedProjectionOwner?.authMaterializations,
+          pluginRegistry: preparedPluginRegistry,
+          snapshot,
+          isCurrent,
+        })
+      : undefined;
+  draft?.assertCurrent();
+  const outcomeProjection = {
+    ...(defaultModels ? { defaultModels } : {}),
     ...(publicProviderOutcomes?.length ? { providerOutcomes: publicProviderOutcomes } : {}),
   };
   const accountSelection =

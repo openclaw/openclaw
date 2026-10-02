@@ -8,6 +8,7 @@ import OpenClawProtocol
 public struct OpenClawSessionMenuConnection {
     public let hello: HelloOk
     public let local: Bool
+    public var groupDefaultsBrowser: OpenClawGroupDefaultsBrowser?
     public let selfProfileID: String?
     public let isCurrent: () -> Bool
     private let sendRequest: (OpenClawChatGatewayRequest) async throws -> Data
@@ -49,7 +50,7 @@ public struct OpenClawSessionMenuConnection {
     }
 
     @discardableResult
-    func request(_ request: OpenClawChatGatewayRequest) async throws -> Data {
+    public func request(_ request: OpenClawChatGatewayRequest) async throws -> Data {
         guard self.isCurrent(), !Task.isCancelled else { throw CancellationError() }
         let data = try await self.sendRequest(request)
         guard self.isCurrent(), !Task.isCancelled else { throw CancellationError() }

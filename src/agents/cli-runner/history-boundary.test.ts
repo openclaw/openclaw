@@ -22,6 +22,7 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
+import { persistCliSessionBindingResult } from "../cli-session-store.js";
 import { claimAgentSessionWriter } from "../embedded-agent-runner/run/session-bootstrap.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../sessions/session-manager.js";
 import { persistCliAssistantTranscript } from "./cli-run-transcript.js";
@@ -121,6 +122,34 @@ async function history(allowed: boolean, params: PreparedCliRunContext["params"]
     ).reseedMessages,
     prompt: "current ask",
     maxHistoryChars: 8192,
+  });
+}
+
+async function settleNativeBinding(
+  params: PreparedCliRunContext["params"],
+  assertSettlementCurrent: () => void,
+) {
+  return await persistCliSessionBindingResult({
+    agentId: "main",
+    provider: params.provider,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    expectedSession: params.sessionEntry,
+    assertSettlementCurrent,
+    result: {
+      meta: {
+        durationMs: 1,
+        agentMeta: {
+          sessionId: "native-recovered",
+          provider: params.provider,
+          model: "test-model",
+          cliSessionBinding: {
+            sessionId: "native-recovered",
+            authProfileId: "test-cli:saved",
+          },
+        },
+      },
+    },
   });
 }
 
@@ -329,14 +358,23 @@ describe("CLI transcript account boundary", () => {
     await f.withRun("orchestrator-prior", async (params) => {
       await claimAgentSessionWriter(params);
       await f.withRun("direct-cli-blocked", async (direct) => {
+        direct.sessionEntry = loadSessionEntryReadOnly(f.target);
+        const before = structuredClone(direct.sessionEntry);
         await expect(prepareCliHistoryBoundary(direct, identity)).rejects.toThrow(
           "CLI history owner changed before preparation",
         );
+        expect(direct.sessionEntry).toEqual(before);
       });
     });
     await f.withRun("direct-cli-recovery", async (params) => {
+      params.sessionEntry = loadSessionEntryReadOnly(f.target);
+      const expectedSession = params.sessionEntry;
       const writer = await prepareCliHistoryBoundary(params, identity);
       expect(writer).toBeDefined();
+      if (!writer) {
+        throw new Error("Missing admitted history writer");
+      }
+      expect(params.sessionEntry).toBe(expectedSession);
       expect(loadSessionEntryReadOnly(f.target)?.activeWriterRunId).toBe(params.runId);
       await runWithCliHistoryWriter(writer, async () => {
         expect(getOwnedSessionTranscriptWriterFence({ sessionTarget: f.target })).toEqual({
@@ -361,6 +399,12 @@ describe("CLI transcript account boundary", () => {
           stopReason: "stop",
         });
         expect(result.terminalAnchor).toBeDefined();
+      });
+      const settled = await settleNativeBinding(params, writer.assertCurrent);
+      expect(settled.meta.error).toBeUndefined();
+      expect(loadSessionEntryReadOnly(f.target)?.cliSessionBindings?.["test-cli"]).toEqual({
+        sessionId: "native-recovered",
+        authProfileId: "test-cli:saved",
       });
     });
     expect(JSON.stringify(f.manager().getEntries())).toContain("recovered CLI answer");
@@ -415,11 +459,15 @@ describe("CLI transcript account boundary", () => {
         await claimAgentSessionWriter(params);
       });
       await f.withRun("direct-cli-recovery", async (params) => {
+        params.sessionEntry = loadSessionEntryReadOnly(f.target);
         const writer = await prepareCliHistoryBoundary(params, {
           credential: { type: "token", provider: "test-cli", token: "epoch-a" },
         });
         expect(writer).toBeDefined();
-        writer?.assertReadable();
+        if (!writer) {
+          throw new Error("Missing admitted history writer");
+        }
+        writer.assertReadable();
         await f.withRun(replacementRunId, async (replacement) => {
           await claimAgentSessionWriter(replacement);
           expect
@@ -440,6 +488,9 @@ describe("CLI transcript account boundary", () => {
             expect.soft(result.terminalAnchor).toBeUndefined();
           });
           expect(f.manager().getEntries()).toEqual(before);
+          const beforeBindingSettlement = loadSessionEntryReadOnly(f.target);
+          await settleNativeBinding(params, writer.assertCurrent);
+          expect(loadSessionEntryReadOnly(f.target)).toEqual(beforeBindingSettlement);
         });
       });
     },

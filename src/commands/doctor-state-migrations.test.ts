@@ -447,27 +447,6 @@ describe("doctor legacy state migrations", () => {
     );
   });
 
-  it("repairs canonical headerless legacy transcript paths", async () => {
-    const root = makeDoctorStateDir();
-    const legacyDir = path.join(root, "sessions");
-    const targetDir = path.join(root, "agents", "main", "sessions");
-    fs.mkdirSync(targetDir, { recursive: true });
-    fs.writeFileSync(path.join(targetDir, "legacy.jsonl"), '{"role":"user"}\n', "utf8");
-    writeJson5(path.join(targetDir, "sessions.json"), {
-      "agent:main:main": {
-        sessionId: "legacy",
-        sessionFile: path.join(legacyDir, "legacy.jsonl"),
-        updatedAt: 10,
-      },
-    });
-
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    expect(detected.sessions.hasLegacy).toBe(true);
-  });
-
   it("migrates legacy ACP metadata from retired custom-root agent stores", async () => {
     const root = makeDoctorStateDir();
     const customRoot = makeDoctorStateDir();

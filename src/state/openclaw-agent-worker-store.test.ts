@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
+import { observeSqliteWalPeriodicWork } from "../infra/sqlite-wal-scheduler.test-support.js";
 import * as sqliteWal from "../infra/sqlite-wal.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
 import {
@@ -726,8 +727,8 @@ describe.each(["borrowed", "captured"] as const)(
       }
     });
     it("queues a real periodic maintenance tick behind publication", async () => {
-      let tick: (() => void) | undefined;
       let capturing = false;
+      const scheduled = observeSqliteWalPeriodicWork(() => capturing);
       const configure = sqliteWal.configureSqliteConnectionPragmas;
       vi.spyOn(sqliteWal, "configureSqliteConnectionPragmas").mockImplementation((db, policy) => {
         capturing = policy?.databasePath === options.path;
@@ -737,17 +738,8 @@ describe.each(["borrowed", "captured"] as const)(
           capturing = false;
         }
       });
-      const interval = globalThis.setInterval;
-      vi.spyOn(globalThis, "setInterval").mockImplementation((handler, milliseconds, ...args) => {
-        if (capturing && typeof handler === "function") {
-          tick = () => handler(...args);
-        }
-        return interval(handler, milliseconds, ...args);
-      });
-      const { db, worker } = await setup();
-      if (!tick) {
-        throw new Error("Expected the canonical agent maintenance timer");
-      }
+      const { db, worker } = await setup().finally(scheduled.restore);
+      const tick = scheduled.periodic;
       db.exec(`INSERT INTO cache_entries(scope, key, blob, updated_at)
         VALUES ('maintenance-proof', 'pages', zeroblob(4194304), 1);
         DELETE FROM cache_entries WHERE scope = 'maintenance-proof';`);
@@ -767,11 +759,12 @@ describe.each(["borrowed", "captured"] as const)(
       );
       await waitForMarker(transactionMarker, work);
       const started = performance.now();
-      tick();
+      const maintenance = Promise.resolve(tick());
       expect(performance.now() - started).toBeLessThan(100);
       expect(exec.mock.calls.some(([sql]) => sql.includes("incremental_vacuum"))).toBe(false);
       expect(freePages()).toBe(before);
       await work;
+      await maintenance;
       await withOpenClawAgentDatabaseWrite(options, () => undefined, db);
       expect(exec.mock.calls.some(([sql]) => sql.includes("incremental_vacuum"))).toBe(false);
       expect(before - freePages()).toBeGreaterThan(0);

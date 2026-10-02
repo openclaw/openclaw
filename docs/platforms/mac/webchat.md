@@ -64,6 +64,13 @@ The full native chat window is a split view:
 - **Find in Conversation**: press Cmd-F to search user and assistant text in the loaded conversation. Return or Cmd-G moves to the next matching message; Shift-Cmd-G moves backward. The selected message is outlined and revealed without incoming replies pulling you away. Escape closes Find. Search does not fetch older history or search hidden reasoning and tool payloads.
 - **Voice controls**: the composer can start or stop the existing macOS Talk Mode without replacing its menu-bar overlay. While Talk Mode is active, the composer shows its listening/thinking/speaking state, live audio activity, and an expandable rolling transcript. Right-click the Talk button to choose **System Default** or a connected microphone; this is the same microphone selection used by Voice Wake and push-to-talk. If a selected microphone disconnects, the active Talk session falls back to the system default and tries the selection again the next time Talk Mode starts. A separate microphone action records a voice note when Talk Mode does not own audio capture.
 
+Right-click a custom-group header and choose **Group defaults…** to choose where
+new sessions in that group start. Use **Agent workspace** or browse folders on
+the connected Gateway. **Separate working copy** is available after the Gateway
+confirms that the folder supports Git worktrees. Changing folders clears that
+choice; unavailable folders offer **Retry** and keep Save disabled. Failed saves
+retain your choices so you can try again.
+
 The sidebar loads threads in pages; choose **Load more** to reach older threads.
 Typing filters loaded rows immediately, then searches session names, metadata,
 and messages on the Gateway. Results appear in relevance order. Notices explain
@@ -71,14 +78,20 @@ when message indexing is still in progress or archived transcripts are excluded.
 Choose **Retry** after a list or search failure. Loaded rows stay visible while
 the same Gateway reconnects.
 
+Hover over a thread or focus its row with the keyboard to see a detail card.
+When available, it shows the session's age, people, channel, workspace, pull
+request status, progress, and last-message preview or agent notepad. Move into
+the card to follow its links; press Escape to close it and return to the row.
+These cards are available in the full native macOS sidebar.
+
 The sidebar and New Thread picker show the agent roster immediately, using
 configured names or agent IDs. Resolved identities update each agent as they
 arrive, including the toolbar subtitle and composer, without delaying selection.
 Configured names keep precedence; the Gateway's default identity is **Assistant**.
 Text and emoji avatars refresh with the same catalog after reconnects or identity
 changes. Badges show at most two complete characters, preserving emoji sequences.
-Image avatars are not shown in the full native window; a text avatar or name
-initial appears instead.
+Agent rows show a text avatar or name initial. Session detail cards can show
+authenticated images for agents and participants.
 
 File attachments keep their original filename, MIME type, and bytes through the durable outbox. Admission uses the Gateway’s advertised image and file size limits. The file limit also caps the combined bytes of all attachments in one message, with images counted after resizing. Files that exceed the remaining budget stay out of the draft; send admission rechecks the total and keeps an oversized draft intact. For older Gateways that do not advertise limits, native chat caps non-image files and the combined attachment budget at 19,464,192 bytes (the decoded budget for a 25 MiB frame), and processed images at 5 MB after resizing. Image source reads have a separate 64 MiB cap to bound resize-input memory; a larger source photo within that cap can be sent when its resized JPEG fits the image and batch budgets. Empty or unreadable files show **Could not attach**; oversized files show **Too large to send**, with the affected filenames. Recorded voice notes keep their separate recording flow. Sent uploads remain visible after history refresh; downloading inbound uploads from native history is not supported yet. Assistant-generated managed files retain their **Download file** action.
 

@@ -568,6 +568,10 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var icon: String?
     public var channel: String?
     public var channelAvatarUrl: String?
+    public var origin: [String: AnyCodable]?
+    public var chatType: String?
+    public var groupChannel: String?
+    public var deliveryContext: [String: AnyCodable]?
     public var owner: Owner?
     public var participants: [Participant]?
     public var expandedParticipants: [Participant]?

@@ -786,6 +786,9 @@ function mergeSessionEntryWithPolicy(
   if (existing.createdAt !== undefined) {
     next.createdAt = existing.createdAt;
   }
+  if (existing.conversationLink !== undefined) {
+    next.conversationLink = existing.conversationLink;
+  }
   if (existing.projectId !== undefined) {
     next.projectId = existing.projectId;
   }

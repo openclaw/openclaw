@@ -2,8 +2,8 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
+import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 
 type ResumeRunRecord = Partial<
   Record<

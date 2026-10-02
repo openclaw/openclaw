@@ -1,5 +1,6 @@
-/** Admitted parent, worker, and registered spawn fixtures shared by recursive boundary proofs. */
 import { expectDefined } from "@openclaw/normalization-core";
+/** Admitted parent, worker, and registered spawn fixtures shared by recursive boundary proofs. */
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
@@ -31,13 +32,16 @@ import {
 } from "../../admitted-run-context.js";
 import { finalizeAgentTools } from "../../agent-tools.finalize.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
+import { getPreparedModelRuntimeMocks } from "../../prepared-model-runtime.test-harness.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../tools/gateway-caller-context.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
+import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { writeSubagentSessionEntry } from "../registry/subagent-registry.persistence.test-support.js";
+import { resolveSubagentSessionStatus } from "../registry/subagent-session-metrics.js";
 
 export function createSpawnOperatorSource(profileId = "spawn-operator") {
   const revocation = new AbortController();
@@ -214,7 +218,20 @@ export async function createBoundWorker(
 
 export function createBoundSpawnInvocation(
   bound: Awaited<ReturnType<typeof createSpawnBoundaryParent>>,
-  request?: { collect?: true; groupId?: string; context?: "isolated" | "fork"; user?: string },
+  request?: {
+    collect?: true;
+    groupId?: string;
+    context?: "isolated" | "fork";
+    user?: string;
+    visible?: boolean;
+    projectId?: string;
+    worktree?: boolean;
+    worktreeName?: string;
+    worktreeBaseRef?: string;
+    cleanup?: "keep" | "delete";
+    expectsCompletionMessage?: boolean;
+    completionTarget?: "parent";
+  },
   requesterModel?: { provider: string; model: string },
 ) {
   const { parentSessionKey, parentRunId } = bound;
@@ -292,7 +309,6 @@ export function registerYieldedRequesterBatchCase(options: {
 }) {
   it("continues a yielded nested parent once through its accepted child batch", async () => {
     const registry = await import("../registry/subagent-registry.js");
-    const { subagentRuns } = await import("../registry/subagent-registry-memory.js");
     const { loadSubagentRegistryFromSqlite } =
       await import("../registry/subagent-registry.store.sqlite.js");
     const { settleSubagentRegistryPersistenceWork } =
@@ -419,4 +435,49 @@ export function registerYieldedRequesterBatchCase(options: {
       options.throwBoundFailures(failures);
     }
   });
+}
+
+export function readBoundExecutionState(
+  bound: Awaited<ReturnType<typeof createSpawnBoundaryParent>>,
+  childRunId?: string,
+) {
+  const context = bound.context as unknown as GatewayRequestContext;
+  const receipt = childRunId ? context.dedupe.get(`agent:${childRunId}`) : undefined;
+  const payload = asOptionalRecord(receipt?.payload);
+  const cause = asOptionalRecord(asOptionalRecord(receipt?.error)?.cause);
+  const controller = childRunId ? context.chatAbortControllers.get(childRunId) : undefined;
+  const execution = childRunId ? subagentRuns.get(childRunId)?.execution : undefined;
+  const collector = childRunId ? subagentRuns.get(childRunId) : undefined;
+  const label = (value: unknown, allowed: readonly string[]) =>
+    typeof value === "string" && allowed.includes(value) ? value : "unknown";
+  // Read bounded lifecycle facts before finally settles the synthetic model run.
+  return {
+    executionPending: bound.execution.hasPendingWork,
+    receiptPresent: receipt !== undefined,
+    receiptOk: receipt?.ok,
+    receiptStatus: label(payload?.status, ["accepted", "in_flight", "ok", "error", "timeout"]),
+    receiptErrorCode: label(receipt?.error?.code, ["UNAVAILABLE", "INVALID_REQUEST", "FORBIDDEN"]),
+    causeName: label(cause?.name, [
+      "Error",
+      "TypeError",
+      "AbortError",
+      "TimeoutError",
+      "SqliteWorkerError",
+      "FailoverError",
+    ]),
+    controllerPresent: controller !== undefined,
+    controllerAborted: controller?.controller.signal.aborted,
+    executionStarted: controller?.executionStarted,
+    executionStatus: label(execution?.status, ["queued", "running", "interrupted", "terminal"]),
+    runStatus: label(
+      childRunId ? resolveSubagentSessionStatus(subagentRuns.get(childRunId)) : undefined,
+      ["queued", "running", "done", "failed", "killed", "timeout"],
+    ),
+    queuedLaunchPresent: collector?.queuedLaunch !== undefined,
+    collectorCleanupPending: collector?.collectorLaunchCleanupPending === true,
+    collectorKillPending: collector?.killIntent !== undefined,
+    outcomeStatus: label(execution?.outcome?.status, ["ok", "error", "timeout"]),
+    gatewayWarningCount: vi.mocked(context.logGateway.warn).mock.calls.length,
+    runtimeWarningCount: getPreparedModelRuntimeMocks().warn.mock.calls.length,
+  };
 }
