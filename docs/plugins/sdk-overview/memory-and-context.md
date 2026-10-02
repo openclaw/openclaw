@@ -42,6 +42,54 @@ engine unchanged, and tries that engine again on the next logical turn.
   artifacts still use `listActiveMemoryPublicArtifacts(...)` from the retained
   `openclaw/plugin-sdk/memory-host-core` facade until a focused public consumer
   API exists; they must not reach into another plugin's private layout.
+- `publicArtifacts` and `dreaming` may also come from a later
+  `registerMemoryCapability` call of the same plugin. Such a call layers over
+  the earlier runtime, prompt builder and flush plan instead of replacing them.
+- `registerMemoryCapability` may also expose `dreaming.getStatus({ cfg, agentId })`
+  so a slot owner that runs its own consolidation can report it on the Memory
+  page. This is a **reporting-only** contract: dreaming lifecycle, the managed
+  sweep cron, and the page's dream actions stay owned by `memory-core`, and
+  nothing here schedules or runs anything. The host overlays the report on its
+  own resolution field by field: every field the provider omits keeps the
+  host-resolved value, and without a provider the response is unchanged.
+  Any report at all arrives as `reportedByProvider: true`, which is what
+  locks the page's switch against turning the host sweep on, so a provider
+  may omit `enabled` and report only phases or counters without unlocking it.
+  Settings > Memory then schedules each phase by its own `enabled` and
+  `scheduled`, not by the host switch or the reported top-level `enabled`,
+  so a reported `enabled: false` does not hide a host phase that is still
+  scheduled, and unreported host phases are not marked running.
+  The Dreams scene lights while the provider reports `enabled: true` or while
+  a phase is enabled and scheduled, so a counters-only report reads as idle.
+  A reported `timezone` labels every phase row and is therefore taken only
+  from a report that carries all three phases; otherwise the host timezone
+  stays with the host schedule.
+  The host copies only the documented fields of a valid report; extra keys
+  never reach the Control UI.
+  Reported counters arrive as `reportedStats` beside `memory-core`'s own
+  figures, not in their place: the scene and Settings > Memory show the
+  reported counters (and nothing, or n/a, for any the provider leaves out —
+  all of them for a report without `stats`),
+  while the Advanced tab keeps `memory-core`'s figures with the entry lists
+  and actions that belong to its store.
+  A malformed report is dropped as a whole and logged, and the host keeps
+  `memory-core`'s resolution: anything that is not a plain object (arrays
+  included), a wrong field type, or a timestamp or counter that is not a
+  finite number (counters also non-negative).
+  Reported `enabled` arrives as `reportedEnabled` and lights the scene; the
+  page's toggle keeps showing the `memory-core` configuration it writes. While
+  a provider reports, the toggle cannot turn that sweep on, which would
+  dream twice, but can still turn an already running sweep off.
+  Phases may carry their own `cron`; `scheduled` sets the page's
+  managed-cron marker. A reported `cron` replaces the host schedule for that
+  phase, including the next run of `memory-core`'s sweep, so only a
+  `nextRunAtMs` the provider reports itself is shown. A phase that runs on an
+  event rather than a timer reports `cron: ""` so it inherits no expression or
+  next run it does not follow, and `lastRunAtMs` so the scene can show when it
+  last ran. The provider is
+  consulted whether or not the plugin registers a search runtime. It must not
+  throw to signal absence: return `null`, and the host treats a throw or a
+  malformed report the same way, with a warning.
 - A memory runtime that can return session-transcript hits should implement
   `runtime.authorizeSearchHits(...)`. The host calls this hook before raw search
   hits reach caller-visible surfaces and supplies the requesting agent, session

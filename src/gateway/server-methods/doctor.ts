@@ -22,13 +22,21 @@ import {
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspaces,
   resolveMemoryRemDreamingConfig,
-  type ShortTermDreamingStats,
   type ShortTermDreamingStatsEntry,
 } from "../../memory-host-sdk/dreaming.js";
 import * as defaultMemoryCoreRuntime from "../../plugin-sdk/memory-core-bundled-runtime.js";
 import { getActiveMemorySearchManagerCore } from "../../plugins/memory-runtime.js";
+import { resolveActiveMemoryDreamingStatus } from "../../plugins/memory-state.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { sortAndLimitBy } from "../../shared/sort-and-limit.js";
+import {
+  composeDreamingPayload,
+  EMPTY_DREAMING_STORE_STATS,
+  type DoctorMemoryDreamingConfigPayload,
+  type DoctorMemoryDreamingPayload,
+  type DreamingStoreStats,
+  type ManagedDreamingCronStatus,
+} from "./doctor-dreaming-status.js";
 import {
   listWorkspaceDailyFiles,
   readDreamDiary,
@@ -54,56 +62,6 @@ type DoctorMemoryCoreRuntime = Pick<
   | "writeBackfillDiaryEntries"
 >;
 
-type DoctorMemoryDreamingPhasePayload = {
-  enabled: boolean;
-  cron: string;
-  managedCronPresent: boolean;
-  nextRunAtMs?: number;
-};
-
-type DoctorMemoryLightDreamingPayload = DoctorMemoryDreamingPhasePayload & {
-  lookbackDays: number;
-  limit: number;
-};
-
-type DoctorMemoryDeepDreamingPayload = DoctorMemoryDreamingPhasePayload & {
-  minScore: number;
-  minRecallCount: number;
-  minUniqueQueries: number;
-  recencyHalfLifeDays: number;
-  maxAgeDays?: number;
-  limit: number;
-};
-
-type DoctorMemoryRemDreamingPayload = DoctorMemoryDreamingPhasePayload & {
-  lookbackDays: number;
-  limit: number;
-  minPatternStrength: number;
-};
-
-type DreamingStoreStats = Omit<ShortTermDreamingStats, "storePath" | "phaseSignalPath"> & {
-  storePath?: string;
-  phaseSignalPath?: string;
-  storeError?: string;
-};
-
-type DoctorMemoryDreamingConfigPayload = {
-  enabled: boolean;
-  timezone?: string;
-  verboseLogging: boolean;
-  storageMode: "inline" | "separate" | "both";
-  separateReports: boolean;
-  shortTermEntries: ShortTermDreamingStatsEntry[];
-  signalEntries: ShortTermDreamingStatsEntry[];
-  promotedEntries: ShortTermDreamingStatsEntry[];
-  phases: {
-    light: DoctorMemoryLightDreamingPayload;
-    deep: DoctorMemoryDeepDreamingPayload;
-    rem: DoctorMemoryRemDreamingPayload;
-  };
-};
-
-type DoctorMemoryDreamingPayload = DoctorMemoryDreamingConfigPayload & DreamingStoreStats;
 
 export type DoctorMemoryStatusPayload = {
   agentId: string;
@@ -379,11 +337,6 @@ function mergeDreamingStoreStats(stats: DreamingStoreStats[]): DreamingStoreStat
   };
 }
 
-type ManagedDreamingCronStatus = {
-  managedCronPresent: boolean;
-  nextRunAtMs?: number;
-};
-
 type ManagedCronJobLike = {
   name?: string;
   description?: string;
@@ -550,6 +503,10 @@ export const createDoctorHandlers = (
       purpose: "status",
     });
     if (!manager) {
+      // A slot owner may report dreaming without registering search. Its
+      // report is the only dreaming data on this path; without one the
+      // response stays exactly as it was.
+      const reportedDreaming = await resolveActiveMemoryDreamingStatus({ cfg, agentId });
       const payload: DoctorMemoryStatusPayload = {
         agentId,
         searchRuntimeRegistered,
@@ -557,6 +514,15 @@ export const createDoctorHandlers = (
           ok: false,
           error: error ?? "memory search unavailable",
         },
+        ...(reportedDreaming
+          ? {
+              dreaming: composeDreamingPayload(
+                { ...resolveDreamingConfig(cfg), ...EMPTY_DREAMING_STORE_STATS },
+                await resolveManagedDreamingCronStatus(context),
+                reportedDreaming,
+              ),
+            }
+          : {}),
       };
       respond(true, payload, undefined);
       return;
@@ -576,6 +542,7 @@ export const createDoctorHandlers = (
       }
       const nowMs = Date.now();
       const dreamingConfig = resolveDreamingConfig(cfg);
+      const reportedDreaming = await resolveActiveMemoryDreamingStatus({ cfg, agentId });
       const workspaceDir = normalizeOptionalString(
         (status as Record<string, unknown>).workspaceDir,
       );
@@ -612,24 +579,11 @@ export const createDoctorHandlers = (
             ? (runtime as DoctorMemoryEmbeddingRuntimePayload)
             : undefined;
         })(),
-        dreaming: {
-          ...dreamingConfig,
-          ...storeStats,
-          phases: {
-            light: {
-              ...dreamingConfig.phases.light,
-              ...cronStatus,
-            },
-            deep: {
-              ...dreamingConfig.phases.deep,
-              ...cronStatus,
-            },
-            rem: {
-              ...dreamingConfig.phases.rem,
-              ...cronStatus,
-            },
-          },
-        },
+        dreaming: composeDreamingPayload(
+          { ...dreamingConfig, ...storeStats },
+          cronStatus,
+          reportedDreaming,
+        ),
       };
       respond(true, payload, undefined);
     } catch (err) {
@@ -753,4 +707,3 @@ export const createDoctorHandlers = (
     },
   ),
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

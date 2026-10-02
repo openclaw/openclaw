@@ -14,6 +14,9 @@ const enDreaming = {
       on: "Dreaming On",
       off: "Dreaming Off",
       engineOff: "Memory engine is Off. Choose an engine in Settings to enable dreaming.",
+      ownerManaged: "{plugin} runs its own dreaming. Manage it in that plugin's settings.",
+      ownerManagedHostOn:
+        "{plugin} runs its own dreaming, and memory-core's sweep is on as well. Turning it off here unloads memory-core's dreaming, but a promotion job it already scheduled stays in the cron list and keeps running until it is removed by hand or by the orphan-cron cleanup.",
     },
     toggleConfirmation: {
       subtitle: "Dreaming is a global setting; it is not scoped to this agent.",
@@ -24,6 +27,8 @@ const enDreaming = {
       disableTitle: "Turn Off Dreaming for All Agents",
       disableDetail:
         "The nightly dreaming sweep will stop for every configured agent, not just this one. Memories already written stay; nothing new gets promoted. This applies right away.",
+      disableDetailOwner:
+        "{plugin} keeps running its own dreaming; this switch does not reach it. Turning it off unloads memory-core's dreaming for every configured agent, but a promotion job memory-core already scheduled stays in the cron list and keeps running until it is removed by hand or by the orphan-cron cleanup. Memories already written stay. This applies right away.",
       disableConfirm: "Turn Off Dreaming",
       saving: "Saving…",
       failed: "Could not apply change. Check your connection and try again.",
@@ -47,12 +52,15 @@ const enDreaming = {
       deep: "Deep",
       rem: "Rem",
       off: "off",
+      lastRun: "last {time}",
     },
     advanced: {
       eyebrow: "Review",
       title: "Daily Log Review",
       description:
         "Review what came from the daily log, what is waiting for promotion, and what was promoted recently.",
+      descriptionOwner:
+        "Review memory-core's short-term store: what came from the daily log, what is waiting for promotion, and what it promoted recently. The figures, lists and actions here belong to memory-core; {plugin} reports its own counters on the Dreams tab.",
       summaryFromDailyLog: "from daily log",
       summaryWaiting: "waiting",
       summaryPromotedToday: "promoted today",

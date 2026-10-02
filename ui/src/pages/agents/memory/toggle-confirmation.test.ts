@@ -45,6 +45,21 @@ describe("renderDreamingToggleConfirmation", () => {
     expect(renderToggle({ enabling: true }).querySelector("button.btn.danger")).toBeNull();
   });
 
+  it("describes the surviving promotion job when the slot owner runs its own dreaming", () => {
+    const generic = renderToggle({ enabling: false }).textContent ?? "";
+    expect(generic).toContain("sweep will stop");
+    expect(generic).not.toContain("stays in the cron list");
+
+    const owner =
+      renderToggle({ enabling: false, ownerPluginId: "memory-lancedb-namespaced" }).textContent ??
+      "";
+    expect(owner).toContain("memory-lancedb-namespaced keeps running its own dreaming");
+    expect(owner).toContain("stays in the cron list and keeps running");
+    expect(owner).toContain("global setting");
+    expect(owner).not.toContain("sweep will stop");
+    expect(owner).not.toContain("nothing new gets promoted");
+  });
+
   it("swaps the confirm label for a saving label while the write is in flight", () => {
     const host = renderToggle({ loading: true });
     const confirm = host.querySelector("button");

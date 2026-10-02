@@ -281,11 +281,65 @@ export type MemoryPluginPublicArtifactsProvider = {
   listArtifacts(params: { cfg: OpenClawConfig }): Promise<MemoryPluginPublicArtifact[]>;
 };
 
+/** One sleep phase as the owning memory plugin actually schedules it. */
+export type MemoryPluginDreamingPhaseStatus = {
+  enabled?: boolean;
+  /**
+   * Cron expression for this phase alone; phases need not share one schedule.
+   * Omitting it keeps the host-resolved expression, so a phase that runs on an
+   * event rather than a timer reports an empty string to show no schedule at
+   * all instead of inheriting one it does not follow.
+   */
+  cron?: string;
+  /** Whether the phase is actually scheduled to run. */
+  scheduled?: boolean;
+  lastRunAtMs?: number;
+  nextRunAtMs?: number;
+};
+
+/**
+ * Dreaming state reported by the memory slot owner. Every field is optional:
+ * whatever a provider omits keeps the host-resolved value, so a partial report
+ * never blanks out the page.
+ */
+export type MemoryPluginDreamingStatus = {
+  enabled?: boolean;
+  timezone?: string;
+  phases?: {
+    light?: MemoryPluginDreamingPhaseStatus;
+    deep?: MemoryPluginDreamingPhaseStatus;
+    rem?: MemoryPluginDreamingPhaseStatus;
+  };
+  /**
+   * Consolidation counters, returned as `reportedStats` beside memory-core's
+   * own figures rather than in their place, since those stay tied to the
+   * entry lists memory-core keeps.
+   */
+  stats?: {
+    shortTermCount?: number;
+    promotedTotal?: number;
+    promotedToday?: number;
+    lastPromotedAt?: string;
+  };
+};
+
+export type MemoryPluginDreamingProvider = {
+  getStatus(params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+  }): Promise<MemoryPluginDreamingStatus | null | undefined>;
+};
+
 export type MemoryPluginCapability = {
   promptBuilder?: MemoryPromptSectionBuilder;
   flushPlanResolver?: MemoryFlushPlanResolver;
   runtime?: MemoryPluginRuntime;
   publicArtifacts?: MemoryPluginPublicArtifactsProvider;
+  /**
+   * Lets a non-`memory-core` slot owner report its own dreaming schedule and
+   * consolidation counters. Absent providers keep memory-core's resolution.
+   */
+  dreaming?: MemoryPluginDreamingProvider;
   /** Local deterministic recall tool required by provider-owned direct lookup. */
   deterministicRecallToolName?: string;
   /** Whether recall may read protected same-agent private session transcripts. */

@@ -13,6 +13,7 @@ import { registerSettingsEnglish } from "../../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import "../../../styles/dreams.css";
+import { formatPhaseRun, type DreamingPhaseInfo } from "./dreaming-phase-run.ts";
 import type {
   DreamingEntry,
   WikiImportInsights,
@@ -83,12 +84,6 @@ function formatDiaryChipLabel(date: string): string {
   return `${value.getMonth() + 1}/${value.getDate()}`;
 }
 
-type DreamingPhaseInfo = {
-  enabled: boolean;
-  cron: string;
-  nextRunAtMs?: number;
-};
-
 type DreamingProps = {
   access: {
     canOpenConfig: boolean;
@@ -103,6 +98,13 @@ type DreamingProps = {
   selectedAgentId: string;
   shortTermCount: number;
   promotedCount: number;
+  // The scene's promoted count. It follows whoever the scene shows as
+  // dreaming: the slot owner's reported count while one reports (null when it
+  // reports none, and the line is left out), memory-core's otherwise. The
+  // Advanced tab keeps memory-core's figures, which belong to the entry lists
+  // and actions rendered there.
+  scenePromotedCount?: number | null;
+  ownerPluginId?: string;
   phases?: {
     light: DreamingPhaseInfo;
     deep: DreamingPhaseInfo;
@@ -331,15 +333,16 @@ function flattenDiaryBody(body: string): string[] {
   );
 }
 
-function formatPhaseNextRun(nextRunAtMs?: number): string {
-  if (!nextRunAtMs) {
-    return "—";
-  }
-  const d = new Date(nextRunAtMs);
-  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-}
-
 function renderScene(props: DreamingProps, idle: boolean, dreamText: string) {
+  const promotedCount =
+    props.scenePromotedCount === undefined ? props.promotedCount : props.scenePromotedCount;
+  const statusDetail = [
+    promotedCount === null ? null : `${promotedCount} ${t("dreaming.status.promotedSuffix")}`,
+    props.nextCycle ? `${t("dreaming.status.nextSweepPrefix")} ${props.nextCycle}` : null,
+    props.timezone,
+  ]
+    .filter((segment) => segment)
+    .join(" · ");
   return html`
     <section class="dreams ${idle ? "dreams--idle" : ""}">
       ${STARS.map(
@@ -390,15 +393,7 @@ function renderScene(props: DreamingProps, idle: boolean, dreamText: string) {
         >
         <div class="dreams__status-detail">
           <div class="dreams__status-dot"></div>
-          <span>
-            ${props.promotedCount} ${t("dreaming.status.promotedSuffix")}
-            ${
-              props.nextCycle
-                ? html`· ${t("dreaming.status.nextSweepPrefix")} ${props.nextCycle}`
-                : nothing
-            }
-            ${props.timezone ? html`· ${props.timezone}` : nothing}
-          </span>
+          <span>${statusDetail}</span>
         </div>
       </div>
 
@@ -408,7 +403,7 @@ function renderScene(props: DreamingProps, idle: boolean, dreamText: string) {
             const phase = props.phases?.[phaseId];
             const hasPhaseStatus = phase !== undefined;
             const enabled = phase?.enabled === true;
-            const nextRun = formatPhaseNextRun(phase?.nextRunAtMs);
+            const nextRun = formatPhaseRun(phase);
             const label = t(DREAM_PHASE_LABEL_KEYS[phaseId]);
             const status = !hasPhaseStatus ? "—" : enabled ? nextRun : t("dreaming.phase.off");
             return html`
@@ -741,7 +736,9 @@ function renderAdvancedSection(props: DreamingProps) {
       ? compareWaitingEntryBySignals
       : compareWaitingEntryByRecency,
   );
-  const description = t("dreaming.advanced.description");
+  const description = props.ownerPluginId
+    ? t("dreaming.advanced.descriptionOwner", { plugin: props.ownerPluginId })
+    : t("dreaming.advanced.description");
   const summary = [
     `${groundedEntries.length} ${t("dreaming.advanced.summaryFromDailyLog")}`,
     `${props.shortTermCount} ${t("dreaming.advanced.summaryWaiting")}`,
