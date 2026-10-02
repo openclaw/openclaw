@@ -1776,16 +1776,22 @@ class MainViewModel private constructor(
   suspend fun renameChatSessionGroup(
     from: String,
     to: String,
+    expectedGatewayStableId: String?,
   ) {
+    if (activeGatewayStableId.value != expectedGatewayStableId) return
     val stored = prefs.sessionCustomGroups.value
     // Web semantics: replace a stored name in place, otherwise remember the new name.
     prefs.setSessionCustomGroups(if (from in stored) stored.map { if (it == from) to else it } else stored + to)
-    ensureRuntime().chat.renameSessionGroup(from = from, to = to)
+    ensureRuntime().chat.renameSessionGroup(from = from, to = to, expectedGatewayId = expectedGatewayStableId)
   }
 
-  suspend fun deleteChatSessionGroup(group: String) {
+  suspend fun deleteChatSessionGroup(
+    group: String,
+    expectedGatewayStableId: String?,
+  ) {
+    if (activeGatewayStableId.value != expectedGatewayStableId) return
     prefs.setSessionCustomGroups(prefs.sessionCustomGroups.value.filterNot { it == group })
-    ensureRuntime().chat.dissolveSessionGroup(group)
+    ensureRuntime().chat.dissolveSessionGroup(group, expectedGatewayId = expectedGatewayStableId)
   }
 
   suspend fun forkChatSession(
