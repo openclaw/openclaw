@@ -34,7 +34,7 @@ const onWarn = vi.fn();
 
 function start(owner: "server" | "service", server: Server | null = null) {
   return withBrowserControlStart(() =>
-    ensureBrowserControlRuntime({ server, port: 18_791, resolved, owner, onWarn }),
+    ensureBrowserControlRuntime({ server, port: 18_791, resolved, owner }),
   );
 }
 
@@ -134,7 +134,6 @@ describe("browser control lifecycle", () => {
         port: 18_791,
         resolved,
         owner: "service",
-        onWarn,
       });
     });
     expect(getBrowserControlState()).toBeNull();

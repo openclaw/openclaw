@@ -14,6 +14,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
+import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { readSqliteSessionParticipantProjection } from "./session-accessor.sqlite-participant-projection.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
@@ -27,6 +28,12 @@ import type {
   MembershipPublication,
   SessionSharingWorkerOperations,
 } from "./session-sharing-store.types.js";
+import {
+  addSessionSuggestion,
+  claimSessionSuggestionDispatch,
+  finalizeSessionSuggestionClaim,
+  releaseSessionSuggestionDispatch,
+} from "./session-suggestion-store.js";
 export type { SessionSharingWorkerOperations } from "./session-sharing-store.types.js";
 
 /** The canonical agent executor retains the connection and both live admission checks. */
@@ -80,6 +87,7 @@ export function bindSqliteWorkerBackend(
       }
       let participantResult: SessionSharingWorkerOperations["participant"]["output"] | undefined;
       let membershipResult: MembershipPublication | undefined;
+      let ownerResult: SessionSharingWorkerOperations["owner.assign"]["output"] | undefined;
       const unsubscribe =
         command.type !== "category.apply"
           ? sessionChanges.subscribeFacts((change) => {
@@ -94,6 +102,9 @@ export function bindSqliteWorkerBackend(
                 if (membershipResult && change.facts?.kind === "member") {
                   membershipResult.facts = change.facts;
                 }
+                if (ownerResult && change.facts?.kind === "owner") {
+                  ownerResult.facts = change.facts;
+                }
               }
             })
           : undefined;
@@ -103,6 +114,22 @@ export function bindSqliteWorkerBackend(
             db,
             () => {
               context.admit("transaction");
+              if (command.type === "owner.assign") {
+                ownerResult = { value: assignSessionOwner(scope, command.input.params) };
+                return ownerResult;
+              }
+              if (command.type === "suggestion.add") {
+                return addSessionSuggestion(scope, command.input.params);
+              }
+              if (command.type === "suggestion.claim") {
+                return claimSessionSuggestionDispatch(scope, command.input.params);
+              }
+              if (command.type === "suggestion.release") {
+                return releaseSessionSuggestionDispatch(scope, command.input.params);
+              }
+              if (command.type === "suggestion.finalize") {
+                return finalizeSessionSuggestionClaim(scope, command.input.params);
+              }
               if (command.type === "category.apply") {
                 const database = categoryDatabase(scope);
                 if (

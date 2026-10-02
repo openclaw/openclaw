@@ -39,7 +39,6 @@ export async function readSelectedWorkspaceFiles(
     const read = await root.read(name, {
       hardlinks: "reject",
       maxBytes: MAX_MANAGED_FILE_BYTES,
-      nonBlockingRead: true,
       symlinks: "reject",
     });
     let text: string;

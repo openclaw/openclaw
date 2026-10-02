@@ -303,6 +303,7 @@ export function dedupeLatestChildCompletionRows<
 export function filterCurrentDirectChildCompletionRows<
   T extends ChildCompletionRow & {
     runId: string;
+    childAgentId?: string;
     requesterSessionKey: string;
     requesterAgentId?: string;
   },
@@ -315,7 +316,10 @@ export function filterCurrentDirectChildCompletionRows<
   },
 ): T[] {
   return children.filter((child) => {
-    const latest = params.getLatestSubagentRunByChildSessionKey(child.childSessionKey);
+    const latest = params.getLatestSubagentRunByChildSessionKey(
+      child.childSessionKey,
+      child.childAgentId,
+    );
     if (!latest) {
       return true;
     }
