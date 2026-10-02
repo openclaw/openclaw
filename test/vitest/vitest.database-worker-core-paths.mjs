@@ -753,6 +753,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/context.opencode-go.test.ts",
   "src/agents/simple-completion-runtime.selected-model.test.ts",
   "src/agents/tools/pdf-tool.resources.test.ts",
+  "src/talk/agent-consult-runtime.storage.test.ts",
   "src/tts/tts-summary.static-catalog.test.ts",
   "src/tts/tts-summary.selection.test.ts",
   "src/agents/prepared-model-catalog.resources.test.ts",

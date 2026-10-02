@@ -17,6 +17,7 @@ import {
   completeAgentDeletionJournalInDatabase,
 } from "../state/agent-deletion-journal.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
@@ -62,7 +63,7 @@ describe("plugin host cleanup session stores", () => {
         },
       );
     }
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync(fixtureStateDir);
     const retainedDatabase = path.join(
       fixtureStateDir,
       "agents",
@@ -288,7 +289,7 @@ describe("plugin host cleanup session stores", () => {
         pluginExtensions: { fixture: { active: true } },
       },
     );
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync(fixtureStateDir);
     const databasePath = path.join(
       fixtureStateDir,
       "agents",
