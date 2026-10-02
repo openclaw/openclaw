@@ -9,6 +9,7 @@ import { isAvatarDataUrl } from "../shared/avatar-policy.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { openExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { clawOwnedAgentConfig } from "./agent-config-ownership.js";
 import { digestClawValue } from "./digest.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { ClawMigrationError } from "./migrate-errors.js";
@@ -348,7 +349,10 @@ export async function buildClawMigrationPlan(params: {
       throw new ClawMigrationError(first.code, first.message, first.path);
     }
     const comparablePlanAgent = normalizeWorkspaceConfig(migrationAgent, workspace);
-    if (digestClawValue(comparablePlanAgent) !== digestClawValue(addPlan.agent.config)) {
+    if (
+      digestClawValue(clawOwnedAgentConfig(comparablePlanAgent)) !==
+      digestClawValue(addPlan.agent.config)
+    ) {
       throw new ClawMigrationError(
         "agent_settings_not_faithful",
         "The generated Claw v1 manifest would not reproduce the configured agent settings exactly. Review unsupported fields and defaults before migrating.",

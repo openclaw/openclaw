@@ -1,5 +1,6 @@
 import type { WorkspaceSetupState } from "../agents/workspace-state-store.js";
 import type { AgentCreatedVia } from "../state/agent-provenance.types.js";
+import type { ClawPackageLifecycleLeaseIdentity } from "../state/claw-package-lifecycle-lease.js";
 import type { PersistedClawCronRef } from "./cron.js";
 import type { PersistedClawMcpServerRef } from "./mcp.js";
 import type {
@@ -49,6 +50,7 @@ export type ClawAddStateWorkerOperations = {
     input: {
       plan: ClawAddPlan;
       pkg: ResolvedClawPackage;
+      packageLease: ClawPackageLifecycleLeaseIdentity;
       nowMs?: number;
       status?: ClawPackageRefStatus;
       relationship?: ClawPackageRelationship;
@@ -60,6 +62,7 @@ export type ClawAddStateWorkerOperations = {
   "claws.add.updatePackageRefStatus": {
     input: {
       ref: PersistedClawPackageRef;
+      packageLease: ClawPackageLifecycleLeaseIdentity;
       status: ClawPackageRefStatus;
       nowMs?: number;
     };

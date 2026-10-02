@@ -14,8 +14,11 @@ import {
 } from "../plugins/install-artifact-inspection.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { matchesClawAgentConfigDigest } from "./agent-config-ownership.js";
-import { readClawCronRefs, type PersistedClawCronRef } from "./cron.js";
-import { digestClawValue } from "./digest.js";
+import {
+  CLAW_CRON_REF_SCHEMA_VERSION,
+  readClawCronRefs,
+  type PersistedClawCronRef,
+} from "./cron.js";
 import type { ClawInventory } from "./inventory-read.kernel.js";
 import {
   ClawRemoveError,
@@ -305,12 +308,13 @@ export async function readClawStatus(
       agentState: !agent
         ? "missing"
         : install.agentOrigin === "adopted"
-          ? comparableAgent && digestClawValue(comparableAgent) === install.agentConfigDigest
+          ? comparableAgent &&
+            matchesClawAgentConfigDigest(comparableAgent, install.agentConfigDigest)
             ? "present"
             : "modified"
           : matchesClawAgentConfigDigest(agent, install.agentConfigDigest)
-          ? "present"
-          : "modified",
+            ? "present"
+            : "modified",
       bootstrapState: bootstrap.state,
       bootstrap,
       workspaceFiles: await Promise.all(workspaceFiles.map(inspectClawWorkspaceFile)),
@@ -372,7 +376,10 @@ export async function readClawStatus(
       ).length,
       cronRefs: cronJobs.length,
       unresolvedCronRefs: cronJobs.filter(
-        (cron) => cron.status !== "complete" || !cron.schedulerJobId,
+        (cron) =>
+          cron.schemaVersion !== CLAW_CRON_REF_SCHEMA_VERSION ||
+          cron.status !== "complete" ||
+          !cron.schedulerJobId,
       ).length,
     },
   };

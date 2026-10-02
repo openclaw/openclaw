@@ -432,9 +432,10 @@ with their existing content digests and are not rewritten. `BOOTSTRAP.md`,
 credentials, sessions, transcripts, databases, and every other workspace entry
 remain local and outside Claw ownership.
 
-Inherited model, subagent allowlist/delegation, heartbeat schedule, sandbox
-mode/scope/workspace access, and human-delay defaults are copied into the
-generated profile. Host ownership pointers such as `heartbeat.agentId` remain in
+Inherited heartbeat schedule, sandbox mode/scope/workspace access, and
+human-delay defaults are copied into the generated profile. Model/provider and
+subagent delegation settings remain in OpenClaw config and are not copied into
+the package. Host ownership pointers such as `heartbeat.agentId` also remain in
 OpenClaw config. Other inherited agent defaults that Claw v1 cannot carry,
 including provider params, skills, model policy/catalog, or unsupported
 heartbeat/sandbox fields and custom compaction settings, block migration with

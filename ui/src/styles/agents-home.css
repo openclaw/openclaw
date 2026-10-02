@@ -109,6 +109,57 @@
   text-align: center;
 }
 
+.agents-home__attention {
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+}
+
+.agents-home__attention-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.agents-home__attention-header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.agents-home__attention-list {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.agents-home__attention-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.agents-home__attention-identity {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  overflow-wrap: anywhere;
+}
+
+.agents-home__attention-identity span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.agents-home__claw-inspector {
+  margin-top: 24px;
+}
+
 .agents-home__explore {
   margin-top: 32px;
   padding-top: 24px;
@@ -270,6 +321,25 @@
   .agents-home__header .page-header-actions {
     justify-content: flex-start;
     flex-wrap: wrap;
+  }
+
+  .agents-home__attention-list li {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .agents-home__attention-list li .claw-lifecycle__state {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .agents-home__attention-list li button {
+    grid-column: 2;
+    grid-row: 2;
+    min-height: 44px;
+  }
+
+  .agents-home__attention-identity {
+    grid-row: 1 / span 2;
   }
 
   .agents-home__explore-toolbar {

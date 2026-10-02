@@ -574,11 +574,11 @@ export async function applyClawUpdatePlan(
       workspace = resolve(workspace);
     }
     try {
-      // Adopted ownership records effective settings, including inherited defaults
-      // and the canonical workspace, while rollback retains the authored entry.
-      return (
-        digest(normalizeWorkspaceConfig(resolveMigrationAgentSettings(config, agent), workspace)) ===
-        expectedDigest
+      // Compare the effective authored agent while leaving operator model and
+      // delegation settings outside Claw ownership.
+      return matchesClawAgentConfigDigest(
+        normalizeWorkspaceConfig(resolveMigrationAgentSettings(config, agent), workspace),
+        expectedDigest,
       );
     } catch {
       return false;

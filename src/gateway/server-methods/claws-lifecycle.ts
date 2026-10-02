@@ -18,6 +18,8 @@ import { ClawGatewayConsentError } from "../../claws/gateway-plugin-consent.js";
 import { applyClawRemoveForGateway } from "../../claws/gateway-remove-apply.js";
 import { ClawSkillConsentError } from "../../claws/gateway-skill-consent.js";
 import { applyClawUpdateForGateway } from "../../claws/gateway-update-apply.js";
+import { readCurrentConfigForPolicyCheck } from "../../config/io.js";
+import { resolveConfigPath } from "../../config/paths.js";
 import { normalizeCronJobCreate } from "../../cron/normalize.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginInstallBatchReload } from "../../plugins/install-runtime-batch.js";
@@ -92,6 +94,8 @@ export const clawsLifecycleHandlers: GatewayRequestHandlers = {
     };
     try {
       assertCurrent();
+      const configPath = resolveConfigPath();
+      const configEnv = process.env;
       const applyRuntime = context.applyPluginLifecycleChange;
       const reloadPlugins: PluginInstallBatchReload | undefined = applyRuntime
         ? async (plugins, options) => {
@@ -122,7 +126,7 @@ export const clawsLifecycleHandlers: GatewayRequestHandlers = {
         ...(params.acknowledgeSkillWarnings
           ? { acknowledgeSkillWarnings: params.acknowledgeSkillWarnings }
           : {}),
-        getRuntimeConfig: () => context.getRuntimeConfig(),
+        getRuntimeConfig: () => readCurrentConfigForPolicyCheck({ configPath, env: configEnv }),
         assertCurrent,
         ...(signal ? { signal } : {}),
         ...(reloadPlugins ? { reloadPlugins } : {}),

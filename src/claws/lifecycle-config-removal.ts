@@ -44,6 +44,7 @@ type ClawAgentConfigRemovalParams = {
   config?: OpenClawConfig;
   stateDatabase?: OpenClawStateDatabaseOptions;
   onModified: () => Error;
+  assertForwardCurrent?: () => void;
   quiesceMonitors?: (operationId: string) => Promise<void>;
   drainMonitors?: (operationId: string) => Promise<void>;
 };
@@ -157,6 +158,7 @@ export async function withClawAgentConfigRemoval<T>(
     assertCurrent: () => void,
   ) => Promise<T>,
 ): Promise<T> {
+  params.assertForwardCurrent?.();
   const expectedInstall = structuredClone(params.expectedInstall);
   const stateOptions = {
     ...params.stateDatabase,
@@ -181,6 +183,7 @@ export async function withClawAgentConfigRemoval<T>(
         );
       // Validate and claim together: a stale install snapshot must never fence a replacement.
       const { existingJournal, deletion } = runOpenClawStateWriteTransaction((database) => {
+        params.assertForwardCurrent?.();
         if (!matchesInstall(database)) {
           throw params.onModified();
         }
@@ -197,7 +200,7 @@ export async function withClawAgentConfigRemoval<T>(
       }, stateOptions);
       let committed = false;
       let monitorEffectsStarted = false;
-      const assertCurrent = (database?: OpenClawStateDatabase) => {
+      const assertOwned = (database?: OpenClawStateDatabase) => {
         const check = (current: OpenClawStateDatabase) => {
           deletion.assertCurrent(current);
           if (!matchesInstall(current)) {
@@ -209,6 +212,10 @@ export async function withClawAgentConfigRemoval<T>(
         } else {
           runOpenClawStateWriteTransaction(check, stateOptions);
         }
+      };
+      const assertCurrent = (database?: OpenClawStateDatabase) => {
+        assertOwned(database);
+        params.assertForwardCurrent?.();
       };
       try {
         // Fence new claims and drain existing owners before any external or local removal effect.
@@ -256,7 +263,7 @@ export async function withClawAgentConfigRemoval<T>(
           // Result construction is pure; only the live operation may publish retry status.
           runOpenClawStateWriteTransaction((database) => {
             try {
-              assertCurrent(database);
+              assertOwned(database);
             } catch {
               return;
             }

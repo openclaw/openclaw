@@ -76,7 +76,7 @@ describe("Gateway Claw plugin consent", () => {
     const assertCurrent = vi.fn();
     const consent = bindClawPluginInstallConsent([review], [acknowledgement], assertCurrent);
     expect(consent).toBeDefined();
-    expect(await consent?.confirmInstall?.()).toBe(true);
+    expect(await consent?.confirmInstall?.(review.pluginId, review.riskWarning)).toBe(true);
     expect(
       await consent?.onCapabilityConsent({
         pluginId: review.pluginId,
@@ -92,12 +92,35 @@ describe("Gateway Claw plugin consent", () => {
         grants: { ...grants, llm: { allowModelOverride: true } },
       } as Parameters<NonNullable<typeof consent>["onCapabilityConsent"]>[0]),
     ).rejects.toThrow("Plugin capabilities changed; review the Claw again.");
+    await expect(consent?.confirmInstall?.(review.pluginId, "New trust warning.")).rejects.toThrow(
+      "Plugin trust state changed; review the Claw again.",
+    );
+    await expect(consent?.confirmInstall?.("different", review.riskWarning)).rejects.toThrow(
+      "Plugin trust state changed; review the Claw again.",
+    );
+  });
+
+  it("accepts a clean final trust check only for the clean reviewed receipt", async () => {
+    const cleanReview = { ...review, riskWarning: undefined };
+    const cleanAcknowledgement: ClawPluginAcknowledgement = {
+      actionId: review.actionId,
+      pluginId: review.pluginId,
+      reviewToken: review.reviewToken,
+      capabilityGrants: grants,
+    };
+    const consent = bindClawPluginInstallConsent([cleanReview], [cleanAcknowledgement], () => {});
+    expect(await consent?.confirmInstall?.(review.pluginId, undefined)).toBe(true);
+    await expect(consent?.confirmInstall?.(review.pluginId, review.riskWarning)).rejects.toThrow(
+      "Plugin trust state changed; review the Claw again.",
+    );
   });
 
   it("rejects a stale request at the installer callback", async () => {
     const consent = bindClawPluginInstallConsent([review], [acknowledgement], () => {
       throw new Error("Labs disabled");
     });
-    await expect(consent?.confirmInstall?.()).rejects.toThrow("Labs disabled");
+    await expect(consent?.confirmInstall?.(review.pluginId, review.riskWarning)).rejects.toThrow(
+      "Labs disabled",
+    );
   });
 });

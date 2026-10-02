@@ -878,7 +878,8 @@ export async function installPluginFromClawHub(
       expectedPluginId?: string;
       expectedIntegrity?: string;
       env?: RuntimeVersionEnv;
-      confirmInstall?: () => boolean | Promise<boolean>;
+      confirmOnUpdate?: boolean;
+      confirmInstall?: (warning?: string) => boolean | Promise<boolean>;
     },
 ): Promise<
   | ({
@@ -989,7 +990,11 @@ export async function installPluginFromClawHub(
   if (trustResult && !trustResult.ok) {
     return trustResult;
   }
-  if (params.mode !== "update" && params.confirmInstall && !(await params.confirmInstall())) {
+  if (
+    (params.mode !== "update" || params.confirmOnUpdate) &&
+    params.confirmInstall &&
+    !(await params.confirmInstall(trustResult?.warning))
+  ) {
     return buildClawHubInstallFailure("Install cancelled.");
   }
   if (!versionState.verification && !expectedClawPackSha256) {

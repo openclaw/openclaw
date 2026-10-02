@@ -481,6 +481,41 @@ describe("installPluginFromClawHub", () => {
     expect(downloadClawHubPackageArchiveMock).not.toHaveBeenCalled();
   });
 
+  it("keeps ordinary plugin updates non-interactive even with an install callback", async () => {
+    mockCommunityClawHubPackageDetail();
+    mockClawHubSecurity({ scanStatus: "suspicious", reasons: ["payload_strings"] });
+    const confirmInstall = vi.fn(async () => false);
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      baseUrl: "https://clawhub.ai",
+      mode: "update",
+      confirmInstall,
+    });
+
+    expectInstallSuccess(result);
+    expect(confirmInstall).not.toHaveBeenCalled();
+    expect(downloadClawHubPackageArchiveMock).toHaveBeenCalled();
+  });
+
+  it("passes the final trust warning to a Claw-managed update before download", async () => {
+    mockCommunityClawHubPackageDetail();
+    mockClawHubSecurity({ scanStatus: "suspicious", reasons: ["payload_strings"] });
+    const confirmInstall = vi.fn(async () => false);
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      baseUrl: "https://clawhub.ai",
+      mode: "update",
+      confirmOnUpdate: true,
+      confirmInstall,
+    });
+
+    expect(expectInstallFailure(result).error).toBe("Install cancelled.");
+    expect(confirmInstall).toHaveBeenCalledWith(expect.stringContaining("Outcome: Review"));
+    expect(downloadClawHubPackageArchiveMock).not.toHaveBeenCalled();
+  });
+
   it("sanitizes ClawHub security identity mismatch labels before returning errors", async () => {
     mockCommunityClawHubPackageDetail();
     mockClawHubSecurity({}, "2026.3.21\nrewritten\u001b[2K");

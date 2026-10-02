@@ -76,7 +76,8 @@ export function buildClawAdoptedRemovePlan(
       action: "retain" as const,
       target: file.path,
       blocked: false,
-      reason: "The file predated migration; only its Claw ownership record is released.",
+      reason:
+        "The file remains in the adopted workspace; only its Claw ownership record is released.",
     })),
     {
       kind: "installRecord",

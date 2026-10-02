@@ -14,7 +14,11 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { persistClawInstallRecordForAdd, persistClawPackageRefForAdd } from "./add-state-write.js";
+import {
+  persistClawInstallRecordForAdd,
+  persistClawPackageRefForAdd,
+  updateClawPackageRefStatusForAdd,
+} from "./add-state-write.js";
 import { readClawInventory } from "./inventory-read.js";
 import { digestClawRemovalInstall } from "./package-remove-plan.js";
 import { makeProvenancePlan } from "./provenance.test-helpers.js";
@@ -68,6 +72,35 @@ async function withDeletionLease<T>(run: Parameters<typeof withOpenClawStateLeas
     },
     run,
   );
+}
+
+async function persistPackageRefWithLease(
+  plan: Parameters<typeof persistClawPackageRefForAdd>[0],
+  pkg: Parameters<typeof persistClawPackageRefForAdd>[1],
+) {
+  const artifact =
+    pkg.kind === "skill"
+      ? {
+          kind: "skill" as const,
+          source: pkg.source,
+          ref: pkg.ref,
+          workspace: plan.agent.workspace,
+        }
+      : { kind: "plugin" as const, source: pkg.source, ref: pkg.ref };
+  const lease = acquireClawPackageLifecycleLease(artifact, { env: state.env, required: true });
+  if (!lease?.identity) {
+    throw new Error("Package lifecycle lease identity is unavailable.");
+  }
+  try {
+    return await persistClawPackageRefForAdd(plan, pkg, {
+      env: state.env,
+      stateMode: "worker",
+      status: "complete",
+      packageLease: lease.identity,
+    });
+  } finally {
+    lease.release();
+  }
 }
 
 it.each(["add", "update"])(
@@ -185,17 +218,13 @@ it("claims a package ref only while the exact deletion journal and artifact snap
     env: state.env,
     stateMode: "worker",
   });
-  const ref = await persistClawPackageRefForAdd(
-    plan,
-    {
-      kind: "plugin",
-      source: "clawhub",
-      ref: "@openclaw/workflow-operator-plugin",
-      version: "1.0.0",
-      integrity: `sha256:${"a".repeat(64)}`,
-    },
-    { env: state.env, stateMode: "worker", status: "complete" },
-  );
+  const ref = await persistPackageRefWithLease(plan, {
+    kind: "plugin",
+    source: "clawhub",
+    ref: "@openclaw/workflow-operator-plugin",
+    version: "1.0.0",
+    integrity: `sha256:${"a".repeat(64)}`,
+  });
   await withDeletionLease(async (lease) => {
     const options = { env: state.env, stateMode: "worker" as const, lease };
     const claimed = await claimClawRemoveState(
@@ -305,16 +334,8 @@ it("settles a skill ref when an identical skill in another workspace changes", a
     version: "1.0.0",
     integrity: `sha256:${"b".repeat(64)}`,
   };
-  const ref = await persistClawPackageRefForAdd(plan, skill, {
-    env: state.env,
-    stateMode: "worker",
-    status: "complete",
-  });
-  const otherRef = await persistClawPackageRefForAdd(otherPlan, skill, {
-    env: state.env,
-    stateMode: "worker",
-    status: "complete",
-  });
+  const ref = await persistPackageRefWithLease(plan, skill);
+  const otherRef = await persistPackageRefWithLease(otherPlan, skill);
   expect(install.workspace).not.toBe(otherPlan.agent.workspace);
   await withDeletionLease(async (lease) => {
     const options = { env: state.env, stateMode: "worker" as const, lease };
@@ -349,13 +370,27 @@ it("settles a skill ref when an identical skill in another workspace changes", a
         { env: state.env },
         { type: "claws.remove.packageRefStatus", input },
       );
-      await executeClawMutationStateCommand(
-        { env: state.env },
+      const otherLease = acquireClawPackageLifecycleLease(
         {
-          type: "claws.add.updatePackageRefStatus",
-          input: { ref: otherRef, status: "pending" },
+          kind: "skill",
+          source: otherRef.source,
+          ref: otherRef.ref,
+          workspace: otherPlan.agent.workspace,
         },
+        { env: state.env, required: true },
       );
+      if (!otherLease?.identity) {
+        throw new Error("Other package lifecycle lease identity is unavailable.");
+      }
+      try {
+        await updateClawPackageRefStatusForAdd(otherRef, "pending", {
+          env: state.env,
+          stateMode: "worker",
+          packageLease: otherLease.identity,
+        });
+      } finally {
+        otherLease.release();
+      }
       await expect(
         executeClawMutationStateCommand(
           { env: state.env },

@@ -21,6 +21,11 @@ import {
 } from "./packages.js";
 import type { ClawPluginRuntimeOptions } from "./plugin-runtime.js";
 import {
+  assertOwnedClawPluginUpdateCurrent,
+  captureOwnedClawPluginUpdate,
+  type ClawPluginUpdateOwner,
+} from "./plugin-update-owner.js";
+import {
   CLAW_PACKAGE_REF_SCHEMA_VERSION,
   persistClawPackageRef,
   readClawPackageRefs,
@@ -276,11 +281,23 @@ export async function applyClawPackageUpdate(
       await replaceExpected(previous, claimed, forwardOptions);
       const restoreRef = async () => await replaceExpected(claimed, previous, options);
       const undoIndex = undo.push(restoreRef) - 1;
+      let pluginUpdateOwner: ClawPluginUpdateOwner | null = null;
       const refs = await installPackages(
         { ...targetAddPlan, actions: [targetAction] },
         {
           ...options,
           pluginInstallMode: action.action === "change" ? "update" : "install",
+          assertPluginOwnerCurrent: async () => {
+            if (!pluginUpdateOwner) {
+              return;
+            }
+            await assertOwnedClawPluginUpdateCurrent({
+              ref: target.ref,
+              expected: pluginUpdateOwner,
+              env: options.env,
+              resolveInstalled: options.packageDeps?.resolvePlugin,
+            });
+          },
           ...(skillUpgrade?.ok
             ? {
                 skillUpgrade: {
@@ -304,20 +321,31 @@ export async function applyClawPackageUpdate(
                   ref.ref === target.ref &&
                   ref.version !== target.version,
               );
-              return !preflight.ok &&
+              if (
+                !preflight.ok &&
                 preflight.code === "plugin_version_conflict" &&
                 !conflictingOwner &&
                 previous?.origin === "claw-introduced" &&
                 !previous.independentOwner &&
                 previous.version === preflight.installedVersion &&
                 target.version === preflight.expectedVersion
-                ? {
+              ) {
+                pluginUpdateOwner = await captureOwnedClawPluginUpdate({
+                  previous,
+                  env: options.env,
+                  resolveInstalled: options.packageDeps?.resolvePlugin,
+                });
+                if (pluginUpdateOwner) {
+                  return {
                     ok: true,
                     action: "install",
                     request: preflight.request,
                     ...(preflight.installedPath ? { installedPath: preflight.installedPath } : {}),
-                  }
-                : preflight;
+                  };
+                }
+              }
+              pluginUpdateOwner = null;
+              return preflight;
             },
             persistPackageRef: async (
               _plan: ClawAddPlan,

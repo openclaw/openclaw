@@ -38,11 +38,18 @@ registerAgentsHomeEnglish();
 
 const clawsLab = LAB_FEATURES.find((feature) => feature.id === "claws");
 
+type PendingRemove = { agentId: string; gatewayUrl: string; agentWasMissing: boolean };
+
 export class AgentClawPanel extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
   @property({ attribute: false }) agentId = "";
+  @property({ attribute: false }) onRemoved?: (agentId: string) => void;
+  @property({ attribute: false }) onRemovePendingChange?: (
+    agentId: string,
+    pending: boolean,
+  ) => void;
 
   @state() private record: ClawStatusRecord | null = null;
   @state() private statusLoading = false;
@@ -72,9 +79,10 @@ export class AgentClawPanel extends OpenClawLightDomElement {
   private planRevision = 0;
   private updateRevision = 0;
   private statusAgentId = "";
-  private pendingRemove: { agentId: string; gatewayUrl: string } | null = null;
+  private pendingRemove: PendingRemove | null = null;
   private pendingUpdate: {
     agentId: string;
+    packageName: string;
     version: string;
     gatewayUrl: string;
     readiness?: ClawUpdatePlan["readiness"];
@@ -100,7 +108,7 @@ export class AgentClawPanel extends OpenClawLightDomElement {
         !this.pendingRemove ||
         this.pendingRemove.gatewayUrl !== this.context.gateway.connection.gatewayUrl
       ) {
-        this.pendingRemove = null;
+        this.setPendingRemove(null);
         this.removeUnknown = false;
         this.removeResult = null;
         this.reviewOpen = false;
@@ -157,7 +165,7 @@ export class AgentClawPanel extends OpenClawLightDomElement {
       this.planError = null;
       this.removeResult = null;
       this.removeUnknown = false;
-      this.pendingRemove = null;
+      this.setPendingRemove(null);
       this.updateRevision += 1;
       this.updateReviewOpen = false;
       this.updateDetail = null;
@@ -193,7 +201,7 @@ export class AgentClawPanel extends OpenClawLightDomElement {
         this.agentId === agentId
       ) {
         this.record = record;
-        if (record && !this.reviewOpen && this.removeResult && !this.removeResult.agentRemoved) {
+        if (record && !this.reviewOpen && this.removeResult?.status === "partial") {
           this.removeResult = null;
         }
         if (
@@ -279,6 +287,19 @@ export class AgentClawPanel extends OpenClawLightDomElement {
     }
   }
 
+  private setPendingRemove(next: PendingRemove | null) {
+    const previous = this.pendingRemove;
+    this.pendingRemove = next;
+    if (previous?.agentId !== next?.agentId) {
+      if (previous) {
+        this.onRemovePendingChange?.(previous.agentId, false);
+      }
+      if (next) {
+        this.onRemovePendingChange?.(next.agentId, true);
+      }
+    }
+  }
+
   private async reconcileRemove() {
     const pending = this.pendingRemove;
     const scope = this.gateway.capture();
@@ -294,27 +315,40 @@ export class AgentClawPanel extends OpenClawLightDomElement {
     }
     this.statusChecking = true;
     try {
-      const [record, agents] = await Promise.all([
+      const [statusResult, agentsResult] = await Promise.allSettled([
         readClawStatus(scope.client, pending.agentId),
         context.agents.refreshList(),
       ]);
       if (!this.gateway.isCurrent(scope) || this.pendingRemove !== pending) {
         return;
       }
+      if (statusResult.status !== "fulfilled") {
+        return;
+      }
+      const record = statusResult.value;
       this.record = record;
-      if (!record && agents && !agents.agents.some((agent) => agent.id === pending.agentId)) {
-        this.pendingRemove = null;
+      if (!record) {
+        const agents = agentsResult.status === "fulfilled" ? agentsResult.value : null;
+        const agentRemoved = Boolean(
+          agents && !agents.agents.some((agent) => agent.id === pending.agentId),
+        );
+        if (!pending.agentWasMissing && !agentRemoved) {
+          return;
+        }
+        this.setPendingRemove(null);
         this.removeUnknown = false;
         this.removeResult = {
           agentId: pending.agentId,
           status: "complete",
-          agentRemoved: true,
+          agentRemoved: !pending.agentWasMissing && agentRemoved,
         };
         this.reviewOpen = false;
-        context.navigate("agents");
+        if (this.onRemoved) {
+          this.onRemoved(pending.agentId);
+        } else {
+          context.navigate("agents");
+        }
       }
-    } catch {
-      // Absence cannot be trusted after a failed status read; do not permit another Remove.
     } finally {
       if (this.gateway.isCurrent(scope)) {
         this.statusChecking = false;
@@ -345,7 +379,11 @@ export class AgentClawPanel extends OpenClawLightDomElement {
     }
     const revision = this.planRevision;
     const context = this.context;
-    this.pendingRemove = { agentId, gatewayUrl: context.gateway.connection.gatewayUrl };
+    this.setPendingRemove({
+      agentId,
+      gatewayUrl: context.gateway.connection.gatewayUrl,
+      agentWasMissing: this.record?.agentState === "missing",
+    });
     this.removing = true;
     this.planError = null;
     try {
@@ -357,9 +395,6 @@ export class AgentClawPanel extends OpenClawLightDomElement {
       ) {
         return;
       }
-      this.pendingRemove = null;
-      this.removeUnknown = false;
-      this.removeResult = result;
       try {
         await context.agents.refreshList();
       } catch {
@@ -372,16 +407,24 @@ export class AgentClawPanel extends OpenClawLightDomElement {
       ) {
         return;
       }
-      if (result.status === "complete" && result.agentRemoved) {
+      this.setPendingRemove(null);
+      this.removeUnknown = false;
+      this.removeResult = result;
+      if (result.status === "complete") {
+        this.record = null;
         this.reviewOpen = false;
-        context.navigate("agents");
+        if (this.onRemoved) {
+          this.onRemoved(agentId);
+        } else {
+          context.navigate("agents");
+        }
       } else {
         void this.loadStatus();
       }
     } catch (error) {
       if (this.gateway.isCurrent(scope) && revision === this.planRevision) {
         if (isRejectedClawMutation(error)) {
-          this.pendingRemove = null;
+          this.setPendingRemove(null);
           this.plan = null;
           this.planError = formatUiError(error);
         } else {
@@ -494,7 +537,11 @@ export class AgentClawPanel extends OpenClawLightDomElement {
         return;
       }
       this.record = record;
-      if (record?.version !== pending.version) {
+      if (
+        record?.name !== pending.packageName ||
+        record.sourceKind !== "package" ||
+        record.version !== pending.version
+      ) {
         return;
       }
       this.updateResult = {
@@ -552,6 +599,7 @@ export class AgentClawPanel extends OpenClawLightDomElement {
     };
     this.pendingUpdate = {
       agentId: record.agentId,
+      packageName: detail.packageName,
       version: detail.version,
       gatewayUrl: this.context.gateway.connection.gatewayUrl,
       readiness: plan.readiness,

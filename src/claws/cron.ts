@@ -25,7 +25,7 @@ import type { ClawAddPlan, ClawCronJob } from "./types.js";
 export const CLAW_CRON_REF_SCHEMA_VERSION = "openclaw.clawCronRef.v1" as const;
 
 export type PersistedClawCronRef = {
-  schemaVersion: typeof CLAW_CRON_REF_SCHEMA_VERSION;
+  schemaVersion: string;
   agentId: string;
   manifestId: string;
   declarationKey: string;
@@ -61,7 +61,7 @@ export class ClawCronInstallError extends Error {
 
 function rowToRef(row: CronRefRow): PersistedClawCronRef {
   return {
-    schemaVersion: CLAW_CRON_REF_SCHEMA_VERSION,
+    schemaVersion: row.schema_version,
     agentId: row.agent_id,
     manifestId: row.manifest_id,
     declarationKey: row.declaration_key,
@@ -111,6 +111,13 @@ export function persistClawCronPendingRef(
       .get(...(query.parameters as SQLInputValue[])) as CronRefRow | undefined;
   if (existing) {
     const ref = rowToRef(existing);
+    if (ref.schemaVersion !== CLAW_CRON_REF_SCHEMA_VERSION) {
+      throw new ClawCronInstallError(
+        "cron_provenance_conflict",
+        `Cron declaration ${JSON.stringify(job.id)} has an unsupported provenance version.`,
+        [ref],
+      );
+    }
     if (ref.declarationKey !== declarationKey || JSON.stringify(ref.job) !== JSON.stringify(job)) {
       throw new ClawCronInstallError(
         "cron_provenance_conflict",

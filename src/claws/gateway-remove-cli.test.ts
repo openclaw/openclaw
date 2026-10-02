@@ -58,6 +58,7 @@ describe("Claw Remove one-shot CLI", () => {
         cwd: "/app",
         env: { TSX_TSCONFIG_PATH: "/app/tsconfig.json" },
         timeoutMs: 600_000,
+        killGraceMs: 5_000,
         killProcessTree: true,
         maxOutputBytes: { stdout: 8 * 1024 * 1024, stderr: 64 * 1024 },
       }),

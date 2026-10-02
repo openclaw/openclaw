@@ -4,7 +4,7 @@ import type {
   ClawsStatusResult,
 } from "../../packages/gateway-protocol/src/schema/claws.js";
 import type { CronJob } from "../cron/types.js";
-import { clawCronGatewayJobMatchesRef } from "./cron.js";
+import { CLAW_CRON_REF_SCHEMA_VERSION, clawCronGatewayJobMatchesRef } from "./cron.js";
 import type { ClawStatusRecord } from "./lifecycle-status.js";
 
 function packageStatusReason(
@@ -44,6 +44,9 @@ function liveCronStatus(
   cron: ClawStatusRecord["cronJobs"][number],
   liveJobs: readonly CronJob[] | undefined,
 ): { state: string; reason?: string } {
+  if (cron.schemaVersion !== CLAW_CRON_REF_SCHEMA_VERSION) {
+    return { state: "unresolved", reason: "The scheduled job record has an unsupported version." };
+  }
   if (cron.status !== "complete") {
     return {
       state: cron.status,
@@ -70,22 +73,23 @@ function projectResourceStatus(
   record: ClawStatusRecord,
   liveJobs: readonly CronJob[] | undefined,
 ): ClawResourceStatus[] {
+  const adopted = record.install.agentOrigin === "adopted";
+  const agentOrigin: ClawResourceStatus["origin"] = adopted ? "pre-existing" : "claw-introduced";
   return [
     {
       kind: "agent",
       id: record.install.agentId,
       state: record.agentState,
       relationship: "managed",
-      origin: "claw-introduced",
-      independentOwner: false,
+      origin: agentOrigin,
+      independentOwner: adopted,
     },
     ...record.workspaceFiles.map((file) => ({
       kind: "workspace-file" as const,
       id: file.path,
       state: file.state,
       relationship: "managed" as const,
-      origin: "claw-introduced" as const,
-      independentOwner: false,
+      ...(adopted ? {} : { origin: "claw-introduced" as const, independentOwner: false }),
     })),
     ...record.packages.map((pkg) => ({
       kind: pkg.kind,

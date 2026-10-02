@@ -88,8 +88,95 @@ describe("Gateway Claw Remove Apply", () => {
     });
     expect(runClawRemoveCli.mock.calls).toEqual([
       [{ agentId: "worker", signal: undefined }],
-      [{ agentId: "worker", planIntegrity: canonical.planIntegrity }],
+      [
+        {
+          agentId: "worker",
+          planIntegrity: canonical.planIntegrity,
+          signal: expect.any(AbortSignal),
+        },
+      ],
     ]);
+  });
+
+  it("cancels an in-flight Remove when Gateway authority is revoked", async () => {
+    let authorized = true;
+    let applySignal: AbortSignal | undefined;
+    planClawRemoveForGateway.mockResolvedValue(preview);
+    runClawRemoveCli
+      .mockResolvedValueOnce({ code: 0, payload: canonical })
+      .mockImplementationOnce(async (args: { signal?: AbortSignal }) => {
+        applySignal = args.signal;
+        await new Promise<void>((resolve) => {
+          args.signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        throw new Error("removed after authority loss");
+      });
+
+    const pending = applyClawRemoveForGateway(
+      input({
+        assertCurrent: () => {
+          if (!authorized) {
+            throw new Error("revoked");
+          }
+        },
+      }),
+    );
+    await vi.waitFor(() => expect(applySignal).toBeDefined());
+    authorized = false;
+
+    expect(await pending).toMatchObject({
+      status: "partial",
+      error: { code: "remove_outcome_uncertain" },
+    });
+    expect(applySignal?.aborted).toBe(true);
+  });
+
+  it("does not report success when authority is revoked as Remove finishes", async () => {
+    let authorized = true;
+    planClawRemoveForGateway.mockResolvedValue(preview);
+    runClawRemoveCli
+      .mockResolvedValueOnce({ code: 0, payload: canonical })
+      .mockImplementationOnce(async () => {
+        authorized = false;
+        return { code: 0, payload: complete };
+      });
+
+    expect(
+      await applyClawRemoveForGateway(
+        input({
+          assertCurrent: () => {
+            if (!authorized) {
+              throw new Error("revoked");
+            }
+          },
+        }),
+      ),
+    ).toMatchObject({ status: "partial", error: { code: "remove_outcome_uncertain" } });
+  });
+
+  it("relays request cancellation to the mutating child", async () => {
+    const controller = new AbortController();
+    let applySignal: AbortSignal | undefined;
+    planClawRemoveForGateway.mockResolvedValue(preview);
+    runClawRemoveCli
+      .mockResolvedValueOnce({ code: 0, payload: canonical })
+      .mockImplementationOnce(async (args: { signal?: AbortSignal }) => {
+        applySignal = args.signal;
+        await new Promise<void>((resolve) => {
+          args.signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        throw new Error("canceled");
+      });
+
+    const pending = applyClawRemoveForGateway(input({ signal: controller.signal }));
+    await vi.waitFor(() => expect(applySignal).toBeDefined());
+    controller.abort();
+
+    expect(await pending).toMatchObject({
+      status: "partial",
+      error: { code: "remove_outcome_uncertain" },
+    });
+    expect(applySignal?.aborted).toBe(true);
   });
 
   it("rejects stale UI review and changed CLI facts before launching Apply", async () => {

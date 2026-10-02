@@ -79,15 +79,19 @@ function applyPreparedClawToolPolicyConsent(
     const current =
       adopted || schemaVersionRead.schemaVersion === CLAW_INSTALL_RECORD_SCHEMA_VERSION;
     try {
-      if (
-        current &&
-        schemaVersionRead.agentConfigDigest !==
-          (adopted
-            ? candidate.adoptedAgentConfigDigest(stateOptions.env)
-            : candidate.agentConfigDigest) &&
-        (adopted || schemaVersionRead.agentConfigDigest !== candidate.legacyAgentConfigDigest)
-      ) {
-        throw new Error("Claw agent configuration does not match its consent provenance.");
+      if (current) {
+        const accepted = adopted
+          ? candidate.adoptedAgentConfigDigests(stateOptions.env)
+          : {
+              owned: candidate.agentConfigDigest,
+              legacy: candidate.legacyAgentConfigDigest,
+            };
+        if (
+          schemaVersionRead.agentConfigDigest !== accepted.owned &&
+          schemaVersionRead.agentConfigDigest !== accepted.legacy
+        ) {
+          throw new Error("Claw agent configuration does not match its consent provenance.");
+        }
       }
     } catch (error) {
       preparedClawToolPolicies.set(candidate.tools, {

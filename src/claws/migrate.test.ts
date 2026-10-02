@@ -9,6 +9,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { readClawStatus } from "./lifecycle-status.js";
 import { applyClawMigrationPlan, buildClawMigrationPlan, ClawMigrationError } from "./migrate.js";
 import {
   persistClawMigrationOwnership,
@@ -231,7 +232,7 @@ describe("Claw migration planning", () => {
     ).rejects.toMatchObject({ code: "workspace_ownership_unclaimed" });
   });
 
-  it("captures a representable inherited default model in the generated package", async () => {
+  it("keeps inherited model and delegation out of the generated package", async () => {
     const { workspace, env } = await fixture();
     const config = {
       agents: {
@@ -257,21 +258,23 @@ describe("Claw migration planning", () => {
       options: { env },
     });
 
-    expect(migration.profile?.agent.model).toEqual({
-      primary: "provider/default",
-      fallbacks: ["provider/fallback"],
-    });
-    expect(migration.addPlan.agent.config.model).toEqual(migration.profile?.agent.model);
+    expect(migration.profile?.agent).not.toHaveProperty("model");
+    expect(migration.profile?.agent).not.toHaveProperty("subagents");
+    expect(migration.addPlan.agent.config).not.toHaveProperty("model");
+    expect(migration.addPlan.agent.config).not.toHaveProperty("subagents");
     expect(migration.profile?.agent).toMatchObject({
-      subagents: { allowAgents: ["researcher"], delegationMode: "prefer" },
       heartbeat: { every: "45m" },
       sandbox: { mode: "non-main", scope: "agent", workspaceAccess: "rw" },
       humanDelay: { mode: "custom", minMs: 100, maxMs: 300 },
     });
     expect(migration.profile?.agent.heartbeat).not.toHaveProperty("agentId");
+    await applyClawMigrationPlan({ migration, config, options: { env } });
+    await expect(
+      readClawStatus("worker", { config, env, sourceMcpServers: {} }),
+    ).resolves.toMatchObject({ records: [{ agentState: "present" }] });
   });
 
-  it("migrates a representable string model setting", async () => {
+  it("omits an explicit model from the generated package", async () => {
     const { env, config } = await fixture({ model: "provider/model" });
     const migration = await buildClawMigrationPlan({
       agentId: "worker",
@@ -279,7 +282,8 @@ describe("Claw migration planning", () => {
       options: { env },
     });
 
-    expect(migration.profile?.agent.model).toEqual({ primary: "provider/model" });
+    expect(migration.profile).toBeUndefined();
+    expect(migration.addPlan.agent.config).not.toHaveProperty("model");
   });
 
   it("fails closed for inherited agent defaults Claw v1 cannot represent", async () => {
@@ -314,7 +318,7 @@ describe("Claw migration planning", () => {
     });
   });
 
-  it("rejects non-default inherited subagent limits that Claw v1 cannot preserve", async () => {
+  it("keeps inherited subagent limits in host config without publishing them", async () => {
     const { workspace, env } = await fixture();
     const config = {
       agents: {
@@ -323,12 +327,13 @@ describe("Claw migration planning", () => {
       },
     } as unknown as OpenClawConfig;
 
+    const migration = await buildClawMigrationPlan({ agentId: "worker", config, options: { env } });
+    expect(migration.profile).toBeUndefined();
+    expect(migration.addPlan.agent.config).not.toHaveProperty("subagents");
+    await applyClawMigrationPlan({ migration, config, options: { env } });
     await expect(
-      buildClawMigrationPlan({ agentId: "worker", config, options: { env } }),
-    ).rejects.toMatchObject({
-      code: "agent_default_setting_unsupported",
-      message: expect.stringContaining("agents.defaults.subagents.archiveAfterMinutes"),
-    });
+      readClawStatus("worker", { config, env, sourceMcpServers: {} }),
+    ).resolves.toMatchObject({ records: [{ agentState: "present" }] });
   });
 
   it("rejects selected workspace changes after consent and cleans the generated package", async () => {

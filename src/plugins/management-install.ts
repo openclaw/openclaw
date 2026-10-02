@@ -248,7 +248,7 @@ export type ManagedPluginInstallOptions = Omit<
   clawManaged?: boolean;
   snapshot?: ConfigSnapshotForInstallPersist;
   signal?: AbortSignal;
-  confirmInstall?: () => Promise<boolean>;
+  confirmInstall?: (warning?: string) => Promise<boolean>;
 };
 
 /**
@@ -580,6 +580,7 @@ async function installResolvedManagedPluginSource(
         ...(request.expectedPluginId ? { expectedPluginId: request.expectedPluginId } : {}),
         ...(request.expectedIntegrity ? { expectedIntegrity: request.expectedIntegrity } : {}),
         ...(request.confirmInstall ? { confirmInstall: request.confirmInstall } : {}),
+        ...(params.requireCapabilityConsent ? { confirmOnUpdate: true } : {}),
       }),
       {
         expectedPluginId: request.expectedPluginId,

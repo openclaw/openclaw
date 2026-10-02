@@ -2,6 +2,8 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import type { installPluginFromClawHub } from "../plugins/clawhub.js";
+import { acquireClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
@@ -25,6 +27,8 @@ import {
 } from "./add-state-write.js";
 import { applyClawAddPlan } from "./add.js";
 import { installClawMcpServers } from "./mcp.js";
+import { installClawPackages } from "./packages.js";
+import { emptyPluginCapabilityEvidence, emptyPluginPlanEvidence } from "./packages.test-support.js";
 import { readClawInstallRecord } from "./provenance.js";
 import { makeProvenancePlan } from "./provenance.test-helpers.js";
 
@@ -97,16 +101,25 @@ it("persists and reads package ownership through the shared worker", async () =>
     version: "1.0.0",
     integrity: `sha256:${"a".repeat(64)}`,
   };
+  const lease = acquireClawPackageLifecycleLease(
+    { kind: "skill", source: "clawhub", ref: packageRef.ref, workspace: plan.agent.workspace },
+    { env: state.env, required: true },
+  );
+  if (!lease?.identity) {
+    throw new Error("Expected a package lifecycle lease.");
+  }
   const sql = observeMainThreadSql();
   try {
     const pending = await persistClawPackageRefForAdd(plan, packageRef, {
       env: state.env,
       stateMode: "worker",
       status: "pending",
+      packageLease: lease.identity,
     });
     const complete = await updateClawPackageRefStatusForAdd(pending, "complete", {
       env: state.env,
       stateMode: "worker",
+      packageLease: lease.identity,
     });
     expect(complete.status).toBe("complete");
     expect(
@@ -120,7 +133,177 @@ it("persists and reads package ownership through the shared worker", async () =>
     sql.expectIdle();
   } finally {
     sql.restore();
+    lease.release();
   }
+});
+
+it("refuses a package reference write after its lifecycle lease is replaced", async () => {
+  const { plan } = await makeProvenancePlan(state.root, {
+    schemaVersion: 1,
+    agent: { id: "worker" },
+  });
+  await persistClawInstallRecordForAdd(plan, { env: state.env, stateMode: "worker" });
+  const pkg = {
+    kind: "plugin" as const,
+    source: "clawhub" as const,
+    ref: "@openclaw/sample",
+    version: "1.0.0",
+    integrity: `sha256:${"a".repeat(64)}`,
+  };
+  const artifact = { kind: pkg.kind, source: pkg.source, ref: pkg.ref };
+  const original = acquireClawPackageLifecycleLease(artifact, {
+    env: state.env,
+    required: true,
+  });
+  if (!original?.identity) {
+    throw new Error("Expected an original package lifecycle lease.");
+  }
+  original.release();
+  const successor = acquireClawPackageLifecycleLease(artifact, {
+    env: state.env,
+    required: true,
+  });
+  try {
+    await expect(
+      persistClawPackageRefForAdd(plan, pkg, {
+        env: state.env,
+        stateMode: "worker",
+        status: "pending",
+        packageLease: original.identity,
+      }),
+    ).rejects.toThrow("no longer owns its package lifecycle lease");
+    expect(
+      await readClawPackageRefsForAdd({ env: state.env, agentId: plan.agent.finalId }),
+    ).toEqual([]);
+  } finally {
+    successor?.release();
+  }
+});
+
+it("installs a package through the worker while holding its lifecycle lease", async () => {
+  const { plan } = await makeProvenancePlan(state.root, {
+    schemaVersion: 1,
+    agent: { id: "worker" },
+  });
+  const pkg = {
+    kind: "skill" as const,
+    source: "clawhub" as const,
+    ref: "@openclaw/sample",
+    version: "1.0.0",
+    integrity: `sha256:${"a".repeat(64)}`,
+  };
+  const packagePlan = {
+    ...plan,
+    actions: [
+      {
+        kind: "package" as const,
+        id: `skill:${pkg.ref}`,
+        action: "install" as const,
+        target: `clawhub:${pkg.ref}@${pkg.version}`,
+        details: { ...pkg, ownerAction: "install" as const },
+        blocked: false,
+      },
+    ],
+  };
+  await persistClawInstallRecordForAdd(packagePlan, { env: state.env, stateMode: "worker" });
+
+  const installed = await installClawPackages(packagePlan, {
+    env: state.env,
+    stateMode: "worker",
+    deps: {
+      preflightSkill: vi.fn().mockResolvedValue({
+        ok: true,
+        action: "install",
+        integrity: pkg.integrity,
+      }),
+      installSkill: vi.fn().mockResolvedValue({
+        ok: true,
+        slug: "sample",
+        version: pkg.version,
+        targetDir: join(plan.agent.workspace, "skills", "sample"),
+      }),
+    },
+  });
+  expect(installed).toMatchObject([{ ref: pkg.ref, status: "complete" }]);
+  expect(
+    await readClawPackageRefsForAdd({ env: state.env, agentId: plan.agent.finalId }),
+  ).toMatchObject([{ ref: pkg.ref, status: "complete" }]);
+});
+
+it("installs a plugin through the worker while holding its lifecycle lease", async () => {
+  const { plan } = await makeProvenancePlan(state.root, {
+    schemaVersion: 1,
+    agent: { id: "worker" },
+  });
+  const pkg = {
+    kind: "plugin" as const,
+    source: "clawhub" as const,
+    ref: "@openclaw/lease-probe",
+    version: "0.1.2-local.2",
+    integrity: `sha256:${"a".repeat(64)}`,
+  };
+  const packagePlan = {
+    ...plan,
+    actions: [
+      {
+        kind: "package" as const,
+        id: `plugin:${pkg.ref}`,
+        action: "install" as const,
+        target: `clawhub:${pkg.ref}@${pkg.version}`,
+        details: {
+          ...pkg,
+          ownerAction: "install" as const,
+          installId: "lease-probe",
+          ...emptyPluginPlanEvidence,
+        },
+        blocked: false,
+      },
+    ],
+  };
+  await persistClawInstallRecordForAdd(packagePlan, { env: state.env, stateMode: "worker" });
+  const installPlugin = vi.fn().mockResolvedValue(undefined);
+  const probePlugin = vi.fn(async (request: Parameters<typeof installPluginFromClawHub>[0]) => {
+    await request.onPluginArtifactInspect?.({
+      pluginId: "lease-probe",
+      stagedArtifactDir: join(state.root, "staged-lease-probe"),
+      mode: "install",
+    });
+    return {
+      ok: true as const,
+      pluginId: "lease-probe",
+      packageName: pkg.ref,
+      targetDir: join(state.root, "extensions", "lease-probe"),
+      extensions: [],
+      clawhub: {
+        source: "clawhub" as const,
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: pkg.ref,
+        clawhubFamily: "code-plugin" as const,
+        integrity: pkg.integrity,
+      },
+    };
+  });
+  const installed = await installClawPackages(packagePlan, {
+    env: state.env,
+    stateMode: "worker",
+    pluginConsent: {
+      onCapabilityConsent: vi.fn(async (review: { reviewToken: string }) => ({
+        reviewToken: review.reviewToken,
+      })),
+      confirmInstall: vi.fn().mockResolvedValue(true),
+    },
+    deps: {
+      preflightPlugin: vi.fn().mockResolvedValue({ ok: true, action: "install" }),
+      probePlugin,
+      installPlugin,
+      inspectPluginCapabilities: vi.fn(() => emptyPluginCapabilityEvidence),
+    },
+  });
+  expect(installPlugin).toHaveBeenCalledOnce();
+  expect(installed).toMatchObject([{ ref: pkg.ref, status: "complete" }]);
+  expect(
+    await readClawPackageRefsForAdd({ env: state.env, agentId: plan.agent.finalId }),
+  ).toMatchObject([{ ref: pkg.ref, status: "complete" }]);
 });
 
 it("persists and reads workspace-file ownership through the shared worker", async () => {

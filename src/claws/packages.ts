@@ -28,6 +28,12 @@ import {
   type ClawAddStateOptions,
 } from "./add-state-write.js";
 import { packageFromAction, type PlannedClawPackage } from "./package-plan-action.js";
+import { bindClawPluginBeforeCommit } from "./package-plugin-before-commit.js";
+import {
+  acquireMaintainedClawPackageLease,
+  createClawPackageRefWriter,
+  withClawPackageRefWrite,
+} from "./package-ref-state-write.js";
 import {
   findResumableIntroducedPluginRequirement,
   ownerInstallIsNewerThanRefs,
@@ -117,7 +123,7 @@ export async function preflightClawPackage(
 
 export type ClawPluginInstallConsent = {
   onCapabilityConsent: PluginCapabilityConsentHandler;
-  confirmInstall?: () => Promise<boolean>;
+  confirmInstall?: (pluginId: string, warning?: string) => Promise<boolean>;
 };
 
 export type ClawSkillInstallConsent = {
@@ -133,6 +139,7 @@ type InstallClawPackagesOptions = ClawPluginRuntimeOptions &
     skillConsent?: ClawSkillInstallConsent;
     deps?: PackageInstallerDeps;
     pluginInstallMode?: "install" | "update";
+    assertPluginOwnerCurrent?: () => Promise<void>;
     nowMs?: number;
     onExternalMutation?: (pkg: ClawPackage) => void;
     skillUpgrade?: {
@@ -214,33 +221,23 @@ async function installClawPackagesUnlocked(
     let packageLease: MaintainedClawPackageLifecycleLease | null = null;
     try {
       const pkg = packageFromAction(action);
-      const leaseArtifact =
-        pkg.kind === "skill"
-          ? {
-              kind: pkg.kind,
-              source: pkg.source,
-              ref: pkg.ref,
-              workspace: plan.agent.workspace,
-            }
-          : { kind: pkg.kind, source: pkg.source, ref: pkg.ref };
-      const acquiredLease = acquirePackageLease(leaseArtifact, {
-        env: options.env,
-        path: options.path,
-        required: true,
-      });
-      if (!acquiredLease) {
-        throw new Error(`Could not acquire package lifecycle lease for ${pkg.ref}.`);
-      }
-      packageLease = maintainClawPackageLifecycleLease(acquiredLease);
-      const assertCurrent = () => {
-        packageLease?.assertCurrent();
-        options.assertCurrent?.();
-      };
-      const assertForwardCurrent = () => {
-        assertCurrent();
-        options.assertForwardCurrent?.();
-      };
-      const forwardOptions = { ...options, assertCurrent: assertForwardCurrent };
+      packageLease = acquireMaintainedClawPackageLease(
+        pkg,
+        plan.agent.workspace,
+        options,
+        acquirePackageLease,
+      );
+      const activePackageLease = packageLease;
+      const forwardWriter = createClawPackageRefWriter(
+        activePackageLease,
+        options,
+        (refOptions, stateOptions) =>
+          persistPackageRef(plan, pkg, { ...stateOptions, ...refOptions }),
+        (ref, status, stateOptions) => completePackageRef(ref, status, stateOptions),
+      );
+      const { assertCurrent, assertForwardCurrent } = forwardWriter;
+      const persistForwardPackageRef = forwardWriter.persist;
+      const completeForwardPackageRef = forwardWriter.complete;
       if (pkg.kind === "skill") {
         const upgrade = options.skillUpgrade?.ref === pkg.ref ? options.skillUpgrade : undefined;
         if (upgrade) {
@@ -283,8 +280,7 @@ async function installClawPackagesUnlocked(
         }
         if (preflight.action === "reuse") {
           installedPackages.push(
-            await persistPackageRef(plan, pkg, {
-              ...forwardOptions,
+            await persistForwardPackageRef({
               status: "complete",
               relationship: "managed",
               origin: "pre-existing",
@@ -308,8 +304,7 @@ async function installClawPackagesUnlocked(
             riskWarning: pkg.riskWarning,
           });
         }
-        let packageRef = await persistPackageRef(plan, pkg, {
-          ...forwardOptions,
+        let packageRef = await persistForwardPackageRef({
           status: "pending",
           relationship: "managed",
           origin: "claw-introduced",
@@ -357,7 +352,7 @@ async function installClawPackagesUnlocked(
         if (installed.version !== pkg.version) {
           throw new Error(`Skill ${pkg.ref}@${pkg.version} changed during installation.`);
         }
-        packageRef = await completePackageRef(packageRef, "complete", forwardOptions);
+        packageRef = await completeForwardPackageRef(packageRef, "complete");
         installedPackages[installedPackages.length - 1] = packageRef;
         continue;
       }
@@ -473,8 +468,7 @@ async function installClawPackagesUnlocked(
           assertForwardCurrent();
           options.runtimeBatch?.retain(probe.pluginId);
           installedPackages.push(
-            await persistPackageRef(plan, pkg, {
-              ...forwardOptions,
+            await persistForwardPackageRef({
               status: "complete",
               relationship: resumableRequirement.relationship,
               origin: resumableRequirement.origin,
@@ -497,8 +491,7 @@ async function installClawPackagesUnlocked(
           ) &&
           !ownerInstallIsNewerThanRefs(preflight.installedAt, existingRefs);
         installedPackages.push(
-          await persistPackageRef(plan, pkg, {
-            ...forwardOptions,
+          await persistForwardPackageRef({
             status: "complete",
             relationship: "referenced",
             origin: inheritsClawOrigin ? "claw-introduced" : "pre-existing",
@@ -517,8 +510,7 @@ async function installClawPackagesUnlocked(
         );
       }
 
-      let packageRef = await persistPackageRef(plan, pkg, {
-        ...forwardOptions,
+      let packageRef = await persistForwardPackageRef({
         status: "pending",
         relationship: "referenced",
         origin: "claw-introduced",
@@ -538,12 +530,19 @@ async function installClawPackagesUnlocked(
         },
         env: options.env,
         beforePersistentApply: assertForwardCurrent,
-        beforePersistentEffect: () => {
-          assertForwardCurrent();
-          options.onExternalMutation?.(pkg);
-        },
+        beforePersistentEffect: bindClawPluginBeforeCommit(options, pkg, assertForwardCurrent),
         logger: createPluginInstallLogger(runtime),
-        confirmInstall: pluginConsent.confirmInstall,
+        confirmInstall: async (warning) => {
+          assertCurrent();
+          if (warning !== pkg.riskWarning) {
+            throw new ClawPackageInstallError(
+              "package_owner_state_changed",
+              `Plugin ${pkg.ref}@${pkg.version} trust state changed after planning; review the Claw again.`,
+              installedPackages,
+            );
+          }
+          return (await pluginConsent.confirmInstall?.(probe.pluginId, warning)) ?? true;
+        },
         onCapabilityConsent: async (review) => {
           if (review.reviewToken !== capabilityReviewToken) {
             throw new Error(
@@ -569,26 +568,27 @@ async function installClawPackagesUnlocked(
         });
       }
       assertCurrent();
-      packageRef = await completePackageRef(packageRef, "complete", forwardOptions);
+      packageRef = await completeForwardPackageRef(packageRef, "complete");
       installedPackages[installedPackages.length - 1] = packageRef;
     } catch (error) {
+      const pending = installedPackages.at(-1);
+      if (pending?.status === "pending" && packageLease) {
+        try {
+          installedPackages[installedPackages.length - 1] = await withClawPackageRefWrite(
+            packageLease,
+            options,
+            () => options.assertCurrent?.(),
+            async (stateOptions) => await completePackageRef(pending, "failed", stateOptions),
+          );
+        } catch {
+          // Preserve the installer error; pending provenance still exposes uncertain ownership.
+        }
+      }
       try {
         packageLease?.release();
         packageLease = null;
       } catch {
         // The rollback path will report a busy lease instead of mutating without ownership.
-      }
-      const pending = installedPackages.at(-1);
-      if (pending?.status === "pending") {
-        try {
-          installedPackages[installedPackages.length - 1] = await completePackageRef(
-            pending,
-            "failed",
-            options,
-          );
-        } catch {
-          // Preserve the installer error; pending provenance still exposes uncertain ownership.
-        }
       }
       const rollbackErrors: string[] = [];
       for (const installedPlugin of installedPlugins.toReversed()) {
@@ -608,6 +608,7 @@ async function installClawPackagesUnlocked(
             });
           }
           rollbackLease = maintainClawPackageLifecycleLease(acquiredRollbackLease);
+          const activeRollbackLease = rollbackLease;
           const sharedRefs = (
             await readPackageRefs({
               ...options,
@@ -673,10 +674,16 @@ async function installClawPackagesUnlocked(
           });
           rollbackLease.assertCurrent();
           options.assertCurrent?.();
-          installedPackages[installedPlugin.packageIndex] = await completePackageRef(
-            installedPackages[installedPlugin.packageIndex] ?? packageRef,
-            "rolled_back",
+          installedPackages[installedPlugin.packageIndex] = await withClawPackageRefWrite(
+            activeRollbackLease,
             options,
+            () => options.assertCurrent?.(),
+            async (stateOptions) =>
+              await completePackageRef(
+                installedPackages[installedPlugin.packageIndex] ?? packageRef,
+                "rolled_back",
+                stateOptions,
+              ),
           );
         } catch (rollbackError) {
           rollbackErrors.push(

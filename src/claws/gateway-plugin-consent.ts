@@ -50,8 +50,12 @@ export function bindClawPluginInstallConsent(
     return undefined;
   }
   return {
-    confirmInstall: async () => {
+    confirmInstall: async (pluginId, warning) => {
       assertCurrent();
+      const planned = byPluginId.get(pluginId);
+      if (!planned || warning !== planned.riskWarning) {
+        throw new ClawGatewayConsentError("Plugin trust state changed; review the Claw again.");
+      }
       return true;
     },
     onCapabilityConsent: async (runtimeReview) => {

@@ -62,7 +62,12 @@ export class ClawsCatalogDialog extends OpenClawLightDomElement {
   private searchRevision = 0;
   private reviewRevision = 0;
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
-  private pendingApply: { agentId: string; version: string; gatewayUrl: string } | null = null;
+  private pendingApply: {
+    agentId: string;
+    packageName: string;
+    version: string;
+    gatewayUrl: string;
+  } | null = null;
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     onIdentityChange: () => {
@@ -242,7 +247,11 @@ export class ClawsCatalogDialog extends OpenClawLightDomElement {
       if (!this.gateway.isCurrent(scope) || this.pendingApply !== pending) {
         return;
       }
-      if (record?.version !== pending.version) {
+      if (
+        record?.name !== pending.packageName ||
+        record.sourceKind !== "package" ||
+        record.version !== pending.version
+      ) {
         return;
       }
       this.applyResult = {
@@ -294,6 +303,7 @@ export class ClawsCatalogDialog extends OpenClawLightDomElement {
     const context = this.context;
     this.pendingApply = {
       agentId: plan.target.agentId ?? "",
+      packageName: source.packageName,
       version: source.version,
       gatewayUrl: context.gateway.connection.gatewayUrl,
     };
@@ -328,8 +338,21 @@ export class ClawsCatalogDialog extends OpenClawLightDomElement {
         return;
       }
       this.onAdded?.();
-      if (result.status === "complete" && result.readiness.ready) {
+      if (result.status === "complete") {
         if (!roster?.agents.some((agent) => agent.id === result.agentId)) {
+          return;
+        }
+        const record = await readClawStatus(scope.client, result.agentId).catch(() => null);
+        if (
+          !this.gateway.isCurrent(scope) ||
+          revision !== this.reviewRevision ||
+          this.context !== context ||
+          record?.name !== source.packageName ||
+          record?.version !== source.version ||
+          record.sourceKind !== "package" ||
+          record.status !== "complete" ||
+          record.agentState !== "present"
+        ) {
           return;
         }
         const mainKey =

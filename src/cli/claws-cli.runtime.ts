@@ -583,8 +583,12 @@ export async function runClawsRemoveCommand(
     }
     return;
   }
+  const cancellation = new AbortController();
+  const onTerminate = () => cancellation.abort(new Error("Claw removal interrupted."));
+  process.once("SIGTERM", onTerminate);
   try {
     const result = await applyClawRemovePlan(plan, {
+      assertForwardCurrent: () => cancellation.signal.throwIfAborted(),
       monitorGateway: clawMonitorCleanupGateway,
       packageGateway: clawPackageRemovalGateway,
       consentPlanIntegrity: opts.planIntegrity,
@@ -631,6 +635,8 @@ export async function runClawsRemoveCommand(
       status: "failed",
       error: { code, message },
     });
+  } finally {
+    process.removeListener("SIGTERM", onTerminate);
   }
 }
 

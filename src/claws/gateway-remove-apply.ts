@@ -13,6 +13,7 @@ import type { ClawMonitorCleanupGateway } from "./monitor-cleanup-contract.js";
 import { CLAW_OUTPUT_STABILITY } from "./types.js";
 
 const log = createSubsystemLogger("claws/gateway-remove");
+const REMOVE_AUTHORITY_CHECK_INTERVAL_MS = 50;
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const removeActionSchema = z
   .object({
@@ -121,10 +122,40 @@ export async function applyClawRemoveForGateway(input: {
   input.assertCurrent();
 
   try {
-    const applied = await runClawRemoveCli({
-      agentId: input.agentId,
-      planIntegrity: canonicalPlan.planIntegrity,
-    });
+    const controller = new AbortController();
+    const onRequestAbort = () => controller.abort(input.signal?.reason);
+    if (input.signal?.aborted) {
+      onRequestAbort();
+    } else {
+      input.signal?.addEventListener("abort", onRequestAbort, { once: true });
+    }
+    const checkAuthority = () => {
+      if (controller.signal.aborted) {
+        return;
+      }
+      try {
+        input.assertCurrent();
+      } catch (error) {
+        controller.abort(error);
+      }
+    };
+    const authorityWatcher = setInterval(checkAuthority, REMOVE_AUTHORITY_CHECK_INTERVAL_MS);
+    authorityWatcher.unref?.();
+    let applied: Awaited<ReturnType<typeof runClawRemoveCli>>;
+    try {
+      checkAuthority();
+      controller.signal.throwIfAborted();
+      applied = await runClawRemoveCli({
+        agentId: input.agentId,
+        planIntegrity: canonicalPlan.planIntegrity,
+        signal: controller.signal,
+      });
+      input.assertCurrent();
+      controller.signal.throwIfAborted();
+    } finally {
+      clearInterval(authorityWatcher);
+      input.signal?.removeEventListener("abort", onRequestAbort);
+    }
     const result = removeResultSchema.safeParse(applied.payload);
     if (
       !result.success ||

@@ -382,7 +382,7 @@ it("binds reviewed plugin grants during a worker-backed package Update", async (
       options: Parameters<typeof installClawPackages>[1],
     ) => {
       expect(options?.pluginInstallMode).toBe("install");
-      expect(await options?.pluginConsent?.confirmInstall?.()).toBe(true);
+      expect(await options?.pluginConsent?.confirmInstall?.(review.pluginId, undefined)).toBe(true);
       const acknowledged = await options?.pluginConsent?.onCapabilityConsent({
         pluginId: review.pluginId,
         reviewToken: review.reviewToken,
@@ -431,7 +431,9 @@ it("binds reviewed plugin grants during a worker-backed package Update", async (
     sql.restore();
   }
   authorized = false;
-  await expect(pluginConsent?.confirmInstall?.()).rejects.toThrow("authority expired");
+  await expect(pluginConsent?.confirmInstall?.(review.pluginId, undefined)).rejects.toThrow(
+    "authority expired",
+  );
 });
 
 it.each(["transaction", "commit"] as const)(

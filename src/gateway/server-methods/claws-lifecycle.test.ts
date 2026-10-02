@@ -13,6 +13,7 @@ const planClawUpdateForGateway = vi.hoisted(() => vi.fn());
 const planClawRemoveForGateway = vi.hoisted(() => vi.fn());
 const applyClawUpdateForGateway = vi.hoisted(() => vi.fn());
 const applyClawRemoveForGateway = vi.hoisted(() => vi.fn());
+const readCurrentConfigForPolicyCheck = vi.hoisted(() => vi.fn());
 const reloadManagedPlugin = vi.hoisted(() => vi.fn());
 vi.mock("../../claws/gateway-lifecycle-plan.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../claws/gateway-lifecycle-plan.js")>()),
@@ -21,6 +22,10 @@ vi.mock("../../claws/gateway-lifecycle-plan.js", async (importOriginal) => ({
 }));
 vi.mock("../../claws/gateway-update-apply.js", () => ({ applyClawUpdateForGateway }));
 vi.mock("../../claws/gateway-remove-apply.js", () => ({ applyClawRemoveForGateway }));
+vi.mock("../../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/io.js")>()),
+  readCurrentConfigForPolicyCheck,
+}));
 vi.mock("../../plugins/management-mutations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/management-mutations.js")>()),
   reloadManagedPlugin,
@@ -28,6 +33,7 @@ vi.mock("../../plugins/management-mutations.js", async (importOriginal) => ({
 
 afterEach(() => {
   vi.clearAllMocks();
+  readCurrentConfigForPolicyCheck.mockReset();
 });
 
 function callPlan(
@@ -300,6 +306,7 @@ describe("claws.update.apply Gateway method", () => {
       status: "complete",
       readiness: { ready: true, requirements: [] },
     };
+    readCurrentConfigForPolicyCheck.mockReturnValue(enabled);
     applyClawUpdateForGateway.mockImplementation(async (input) => {
       input.assertCurrent();
       expect(input.getRuntimeConfig()).toBe(enabled);
@@ -311,6 +318,25 @@ describe("claws.update.apply Gateway method", () => {
       expect.objectContaining({ agentId: "worker", source, planIntegrity: params.planIntegrity }),
     );
     expect(request.replies).toEqual([[true, result]]);
+  });
+
+  it("reads persisted policy after the agent write before the Gateway cache refreshes", async () => {
+    const stale = { agents: { list: [] } };
+    const committed = { agents: { list: [{ id: "worker" }] } };
+    let persisted: typeof stale | typeof committed = stale;
+    readCurrentConfigForPolicyCheck.mockImplementation(() => persisted);
+    applyClawUpdateForGateway.mockImplementation(async (input) => {
+      expect(input.getRuntimeConfig()).toEqual(stale);
+      persisted = committed;
+      expect(input.getRuntimeConfig()).toEqual(committed);
+      return { agentId: "worker", status: "complete" };
+    });
+
+    const request = callUpdateApply(params, () => stale);
+    await request.run();
+
+    expect(readCurrentConfigForPolicyCheck).toHaveBeenCalledTimes(2);
+    expect(request.replies).toEqual([[true, { agentId: "worker", status: "complete" }]]);
   });
 
   it("passes the live guard through both cron add and remove commit boundaries", async () => {

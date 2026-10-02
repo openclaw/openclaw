@@ -1,4 +1,5 @@
 import { clawBootstrapStateBlocksRemove } from "./lifecycle-bootstrap-removal.js";
+import { clawCronRemovalIssue } from "./lifecycle-cron-removal.js";
 import type { ClawStatusRecord } from "./lifecycle-status.js";
 
 export function clawRemoveStateBlockers(record?: ClawStatusRecord) {
@@ -32,10 +33,11 @@ export function clawRemoveStateBlockers(record?: ClawStatusRecord) {
     }
   }
   for (const cron of record?.cronJobs ?? []) {
-    if (cron.status !== "removed" && (cron.status !== "complete" || !cron.schedulerJobId)) {
+    const issue = clawCronRemovalIssue(cron);
+    if (issue) {
       blockers.push({
         code: "cron_cleanup_uncertain",
-        message: `Cron declaration ${JSON.stringify(cron.manifestId)} has ${cron.status} ownership state and must be reconciled before removal.`,
+        message: `Cron declaration ${JSON.stringify(cron.manifestId)} cannot be removed: ${issue}`,
       });
     }
   }

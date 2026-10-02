@@ -3,6 +3,7 @@ import { runCommandBuffered } from "../process/exec.js";
 
 const MAX_STDOUT_BYTES = 8 * 1024 * 1024;
 const MAX_STDERR_BYTES = 64 * 1024;
+const REMOVE_APPLY_KILL_GRACE_MS = 5_000;
 
 export type ClawRemoveCliResponse = {
   code: number;
@@ -30,6 +31,7 @@ export async function runClawRemoveCli(input: {
     ...(invocation.env ? { env: invocation.env } : {}),
     ...(input.signal ? { signal: input.signal } : {}),
     timeoutMs: input.planIntegrity ? 600_000 : 90_000,
+    ...(input.planIntegrity ? { killGraceMs: REMOVE_APPLY_KILL_GRACE_MS } : {}),
     maxOutputBytes: { stdout: MAX_STDOUT_BYTES, stderr: MAX_STDERR_BYTES },
     maxCombinedOutputBytes: MAX_STDOUT_BYTES + MAX_STDERR_BYTES,
     killProcessTree: true,

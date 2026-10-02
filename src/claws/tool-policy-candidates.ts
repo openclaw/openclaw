@@ -8,7 +8,7 @@ import { normalizeWorkspaceConfig, resolveMigrationAgentSettings } from "./migra
 export type ClawToolPolicyCandidate = {
   agentId: string;
   agentConfigDigest: string;
-  adoptedAgentConfigDigest: (env?: NodeJS.ProcessEnv) => string;
+  adoptedAgentConfigDigests: (env?: NodeJS.ProcessEnv) => { owned: string; legacy: string };
   legacyAgentConfigDigest: string;
   tools: object;
 };
@@ -19,22 +19,28 @@ export function collectClawToolPolicyCandidates(config: OpenClawConfig): ClawToo
     if (!tools || (!tools.profile && !tools.allow?.length)) {
       return [];
     }
-    let adoptedDigest: string | undefined;
+    let adoptedDigests: { owned: string; legacy: string } | undefined;
     return [
       {
         agentId: agent.id,
         agentConfigDigest: digestClawOwnedAgentConfig(agent),
         legacyAgentConfigDigest: digestClawValue(agent),
-        // Adoption binds effective settings and the canonical workspace without
-        // rewriting the authored config. Resolve only for known adopted owners,
-        // once per prepared candidate, rather than on each tool-policy lookup.
-        adoptedAgentConfigDigest: (env) =>
-          (adoptedDigest ??= digestClawValue(
-            normalizeWorkspaceConfig(
-              resolveMigrationAgentSettings(config, agent),
-              realpathSync(resolveAgentWorkspaceDir(config, agent.id, env)),
-            ),
-          )),
+        // Adoption resolves effective settings and the canonical workspace
+        // without rewriting authored config. Keep the older full digest readable.
+        adoptedAgentConfigDigests: (env) => {
+          if (adoptedDigests) {
+            return adoptedDigests;
+          }
+          const effective = normalizeWorkspaceConfig(
+            resolveMigrationAgentSettings(config, agent),
+            realpathSync(resolveAgentWorkspaceDir(config, agent.id, env)),
+          );
+          adoptedDigests = {
+            owned: digestClawOwnedAgentConfig(effective),
+            legacy: digestClawValue(effective),
+          };
+          return adoptedDigests;
+        },
         tools,
       },
     ];

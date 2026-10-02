@@ -242,7 +242,7 @@ export async function applyClawAddPlan(
   };
 
   let workspaceCreated = false;
-  let configCommitted = false;
+  let configCommitted = statusAtLeast(installRecord.status, "config_committed");
   let workspaceFiles: PersistedClawWorkspaceFile[] = [];
   let packages: PersistedClawPackageRef[] = [];
   let mcpServers: PersistedClawMcpServerRef[] = [];
@@ -279,6 +279,26 @@ export async function applyClawAddPlan(
     installRecord,
     ...overrides,
   });
+  const recordFailureStatus = async (
+    status: ClawInstallStatus,
+    expectedStatuses: ClawInstallStatus[],
+  ): Promise<void> => {
+    try {
+      await markRecordedStatus(status, expectedStatuses);
+    } catch {
+      // Keep the primary failure and the last acknowledged persisted phase.
+    }
+  };
+  const clearUnownedOrReportPartial = async (
+    error: ClawAddMutationError,
+  ): Promise<ClawAddResult> => {
+    try {
+      await clearUnownedInstallRecord(plan.agent.finalId, ["pending", "partial"], options);
+    } catch {
+      return partialResult({ error: { code: error.code, message: error.message } });
+    }
+    throw error;
+  };
 
   const workspace = resolve(resolveUserPath(plan.agent.workspace));
   const removeEmptyWorkspaceIfAuthorized = async (): Promise<boolean> => {
@@ -306,18 +326,18 @@ export async function applyClawAddPlan(
       throw error;
     });
   } catch (error) {
-    await clearUnownedInstallRecord(plan.agent.finalId, ["pending", "partial"], options);
-    if (error instanceof ClawAddMutationError) {
-      throw error;
-    }
-    throw new ClawAddMutationError(
-      "workspace_parent_failed",
-      `Could not inspect workspace ${JSON.stringify(workspace)}: ${(error as Error).message}`,
+    return await clearUnownedOrReportPartial(
+      error instanceof ClawAddMutationError
+        ? error
+        : new ClawAddMutationError(
+            "workspace_parent_failed",
+            `Could not inspect workspace ${JSON.stringify(workspace)}: ${coerceErrorMessage(error)}`,
+          ),
     );
   }
 
   if (!workspacePhaseRecorded && workspaceState) {
-    await markRecordedStatus("partial", ["pending", "partial"]);
+    await recordFailureStatus("partial", ["pending", "partial"]);
     return partialResult({
       workspaceCreated: false,
       configCommitted: false,
@@ -336,13 +356,12 @@ export async function applyClawAddPlan(
   }
 
   workspaceCreated = workspaceState?.isDirectory() ?? false;
-  configCommitted = statusAtLeast(installRecord.status, "config_committed");
   const installPackages = options.installPackages ?? installClawPackages;
   const preserveRecordedPhaseOrMarkPartial = async (): Promise<void> => {
     if (workspacePhaseRecorded) {
       return;
     }
-    await markRecordedStatus("partial", ["pending", "partial"]);
+    await recordFailureStatus("partial", ["pending", "partial"]);
   };
 
   const hostRequirementPlan = planWithPackageActions(
@@ -388,13 +407,13 @@ export async function applyClawAddPlan(
         },
       });
     }
-    await clearUnownedInstallRecord(plan.agent.finalId, ["pending", "partial"], options);
-    if (error instanceof ClawAddMutationError) {
-      throw error;
-    }
-    throw new ClawAddMutationError(
-      "workspace_parent_failed",
-      `Could not create parent directory for workspace ${JSON.stringify(workspace)}: ${(error as Error).message}`,
+    return await clearUnownedOrReportPartial(
+      error instanceof ClawAddMutationError
+        ? error
+        : new ClawAddMutationError(
+            "workspace_parent_failed",
+            `Could not create parent directory for workspace ${JSON.stringify(workspace)}: ${coerceErrorMessage(error)}`,
+          ),
     );
   }
 
@@ -404,10 +423,9 @@ export async function applyClawAddPlan(
       await mkdir(workspace);
       workspaceCreated = true;
     } catch (error) {
-      await markRecordedStatus("partial", ["pending", "partial"]);
+      await recordFailureStatus("partial", ["pending", "partial"]);
       return partialResult({
         workspaceCreated: false,
-        configCommitted: false,
         error: {
           code: "workspace_collision",
           message: `Could not create new workspace ${JSON.stringify(workspace)}: ${(error as Error).message}`,
@@ -425,14 +443,12 @@ export async function applyClawAddPlan(
       }
     } catch (error) {
       const removedWorkspace = await removeEmptyWorkspaceIfAuthorized();
-      if (removedWorkspace) {
-        try {
-          await clearUnownedInstallRecord(plan.agent.finalId, ["pending", "partial"], options);
-        } catch {
-          // Preserve the phase-write failure if the unowned attempt cannot be reconciled.
-        }
+      workspaceCreated = !removedWorkspace;
+      const primaryError = new ClawAddMutationError("provenance_failed", coerceErrorMessage(error));
+      if (removedWorkspace && packages.length === 0) {
+        return await clearUnownedOrReportPartial(primaryError);
       }
-      throw new ClawAddMutationError("provenance_failed", (error as Error).message);
+      return partialResult({ error: { code: primaryError.code, message: primaryError.message } });
     }
   }
 
@@ -450,7 +466,7 @@ export async function applyClawAddPlan(
     const installStatus: ClawInstallStatus = configCommitted
       ? "config_committed"
       : "workspace_ready";
-    await markRecordedStatus(
+    await recordFailureStatus(
       installStatus,
       configCommitted ? ["config_committed"] : ["workspace_ready", "config_committed"],
     );
@@ -575,7 +591,7 @@ export async function applyClawAddPlan(
       const removedWorkspace = await removeEmptyWorkspaceIfAuthorized();
       if (removedWorkspace) {
         workspaceCreated = false;
-        await markRecordedStatus("partial", ["workspace_ready", "partial"]);
+        await recordFailureStatus("partial", ["workspace_ready", "partial"]);
       }
     }
     return partialResult({
@@ -606,7 +622,7 @@ export async function applyClawAddPlan(
             ],
             workspaceFiles,
           );
-    await markRecordedStatus("config_committed", ["config_committed"]);
+    await recordFailureStatus("config_committed", ["config_committed"]);
     return partialResult({
       workspaceFiles: workspaceError.createdFiles,
       error: {
@@ -652,7 +668,7 @@ export async function applyClawAddPlan(
     mcpServers = await installMcpServers(plan, stageOptions("after-agent-commit"));
   } catch (error) {
     const mcpError = error instanceof ClawMcpInstallError ? error : undefined;
-    await markRecordedStatus("config_committed", ["config_committed"]);
+    await recordFailureStatus("config_committed", ["config_committed"]);
     return partialResult({
       mcpServers: mcpError?.mcpServers ?? mcpServers,
       error: {
@@ -671,7 +687,7 @@ export async function applyClawAddPlan(
     });
   } catch (error) {
     const cronError = error instanceof ClawCronInstallError ? error : undefined;
-    await markRecordedStatus("config_committed", ["config_committed"]);
+    await recordFailureStatus("config_committed", ["config_committed"]);
     return partialResult({
       cronJobs: cronError?.cronJobs ?? cronJobs,
       error: {

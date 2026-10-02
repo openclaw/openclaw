@@ -617,9 +617,13 @@ describe("applyClawPackageUpdate", () => {
     expect(replaceExpected).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    "retains an owned upgrade through late provenance failure=%s",
-    async (lateFailure) => {
+  it.each([
+    { lateFailure: false, directReinstall: false },
+    { lateFailure: true, directReinstall: false },
+    { lateFailure: false, directReinstall: true },
+  ])(
+    "owned upgrade with late provenance failure=$lateFailure direct reinstall=$directReinstall",
+    async ({ lateFailure, directReinstall }) => {
       const root = dirs.make("claw-owned-upgrade-");
       const targetDir = path.join(root, "plugins", "audit");
       await fs.mkdir(targetDir, { recursive: true });
@@ -649,6 +653,7 @@ describe("applyClawPackageUpdate", () => {
           installPath: targetDir,
           version: "0.9.0",
           integrity,
+          installedAt: new Date(1).toISOString(),
         },
       };
       const currentRecords = { audit: { ...priorRecords.audit, version: "1.0.0" } };
@@ -668,6 +673,9 @@ describe("applyClawPackageUpdate", () => {
         });
         if (!result.ok) {
           throw new Error(result.error);
+        }
+        if (directReinstall) {
+          priorRecords.audit.installedAt = new Date(20).toISOString();
         }
         await params.beforePersistentEffect?.();
         const write = await commitPluginInstallRecordsWithConfig({
@@ -729,8 +737,8 @@ describe("applyClawPackageUpdate", () => {
               resolvePlugin: async () => ({
                 status: "found",
                 pluginId: "audit",
-                installedVersion: "1.0.0",
-                record: currentRecords.audit,
+                installedVersion: committed ? "1.0.0" : "0.9.0",
+                record: committed ? currentRecords.audit : priorRecords.audit,
               }),
               acquirePackageLease: () => ({ heartbeat: () => {}, release: () => {} }),
               preflightPlugin: (params) =>
@@ -777,7 +785,12 @@ describe("applyClawPackageUpdate", () => {
             },
           },
         );
-        if (lateFailure) {
+        if (directReinstall) {
+          await expect(pending).rejects.toMatchObject({ partial: false });
+          expect(committed).toBe(false);
+          expect(uninstallPlugin).not.toHaveBeenCalled();
+          expect(reloadPlugins).not.toHaveBeenCalled();
+        } else if (lateFailure) {
           const error = await pending.catch((reason: unknown) => reason);
           expect(uninstallPlugin).not.toHaveBeenCalled();
           expect(error).toMatchObject({ partial: true, cause: { cause: failure } });
@@ -786,7 +799,7 @@ describe("applyClawPackageUpdate", () => {
         }
         expect(installPlugin).toHaveBeenCalledOnce();
         expect(uninstallPlugin).not.toHaveBeenCalled();
-        expect(reloadPlugins).toHaveBeenCalledOnce();
+        expect(reloadPlugins).toHaveBeenCalledTimes(directReinstall ? 0 : 1);
       });
     },
   );

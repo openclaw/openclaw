@@ -167,6 +167,8 @@ function mount(
     record?: ClawStatusRecord | null;
     plan?: ClawLifecyclePlan;
     applyError?: boolean;
+    removeAppliedBeforeError?: boolean;
+    agentStillInRoster?: boolean;
     removeRejectedOnce?: boolean;
     applyResult?: { agentId: string; status: "complete" | "partial"; agentRemoved: boolean };
     latestVersion?: string;
@@ -174,6 +176,7 @@ function mount(
     updateApplyError?: boolean;
     updateRejectedOnce?: boolean;
     updateAppliedBeforeError?: boolean;
+    updateAppliedRecord?: Partial<ClawStatusRecord>;
     updateApplyResult?: { agentId: string; status: string; readiness: { ready: boolean } };
   } = {},
 ) {
@@ -235,7 +238,12 @@ function mount(
       }
       if (options.updateApplyError) {
         if (options.updateAppliedBeforeError && record) {
-          record = { ...record, version: latestVersion, updatedAtMs: 3_000 };
+          record = {
+            ...record,
+            version: latestVersion,
+            ...options.updateAppliedRecord,
+            updatedAtMs: 3_000,
+          };
         }
         throw new Error("Gateway reply timed out");
       }
@@ -262,6 +270,9 @@ function mount(
         });
       }
       if (options.applyError) {
+        if (options.removeAppliedBeforeError) {
+          record = null;
+        }
         throw new Error("Gateway reply timed out");
       }
       const result = options.applyResult ?? {
@@ -301,7 +312,7 @@ function mount(
   });
   const navigate = vi.fn<ApplicationContext["navigate"]>();
   const refreshList = vi.fn(async () => ({
-    agents: record ? [{ id: "workflow" }] : [],
+    agents: record || options.agentStillInRoster ? [{ id: "workflow" }] : [],
     defaultId: "main",
     mainKey: "main",
   }));
@@ -412,6 +423,10 @@ describe("Agent Claw lifecycle", () => {
     expect(panel.textContent).toContain("shared-search");
     expect(panel.textContent).toMatch(/Other Claws\s+2/u);
     expect(panel.textContent).toContain("sha256:current-private-task");
+    expect(panel.textContent).toContain(
+      "Some resources may stay installed even when no other Claw uses them.",
+    );
+    expect(panel.textContent).not.toContain("Release plugin reference");
     expect(request).not.toHaveBeenCalledWith("claws.remove.apply", expect.anything());
 
     panel.querySelector<HTMLButtonElement>("[data-claw-remove-confirm]")?.click();
@@ -422,6 +437,40 @@ describe("Agent Claw lifecycle", () => {
       }),
     );
     await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith("agents"));
+  });
+
+  it("explains that releasing a Claw-introduced plugin keeps it installed", async () => {
+    const { panel } = mount({
+      plan: {
+        ...removePlan,
+        actions: [
+          ...removePlan.actions,
+          {
+            kind: "packageRef",
+            id: "plugin:@openclaw/lobster@2026.9.7",
+            action: "release",
+            blocked: false,
+            effect: {
+              type: "ownership",
+              relationship: "referenced",
+              origin: "claw-introduced",
+              independentOwner: false,
+              affectedClawCount: 0,
+            },
+          },
+        ],
+      },
+    });
+    await vi.waitFor(() => expect(panel.textContent).toContain(installed.name));
+    panel.querySelector<HTMLButtonElement>(".settings-row .btn.danger")?.click();
+    await vi.waitFor(() =>
+      expect(panel.querySelector<HTMLButtonElement>("[data-claw-remove-confirm]")?.disabled).toBe(
+        false,
+      ),
+    );
+    expect(panel.textContent).toContain("Release plugin reference");
+    expect(panel.textContent).toContain("the plugin remains installed");
+    expect(panel.textContent).toContain("in Plugins or with the CLI");
   });
 
   it("does not call apply for a blocked removal plan", async () => {
@@ -479,6 +528,28 @@ describe("Agent Claw lifecycle", () => {
       1,
     );
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("keeps a timed-out removal unknown when status vanished but the agent remains", async () => {
+    const { panel, request, navigate } = mount({
+      applyError: true,
+      removeAppliedBeforeError: true,
+      agentStillInRoster: true,
+    });
+    await vi.waitFor(() => expect(panel.textContent).toContain(installed.name));
+    panel.querySelector<HTMLButtonElement>(".settings-row .btn.danger")?.click();
+    await vi.waitFor(() =>
+      expect(panel.querySelector<HTMLButtonElement>("[data-claw-remove-confirm]")?.disabled).toBe(
+        false,
+      ),
+    );
+    panel.querySelector<HTMLButtonElement>("[data-claw-remove-confirm]")?.click();
+
+    await vi.waitFor(() => expect(panel.textContent).toContain("Removal outcome unknown"));
+    expect(navigate).not.toHaveBeenCalled();
+    expect(request.mock.calls.filter(([method]) => method === "claws.remove.apply")).toHaveLength(
+      1,
+    );
   });
 
   it("replans after a definite Remove rejection without status reconciliation", async () => {
@@ -889,6 +960,30 @@ describe("Agent Claw lifecycle", () => {
     panel.querySelector<HTMLButtonElement>("[data-claw-update-confirm]")?.click();
     await vi.waitFor(() => expect(panel.textContent).toContain("Claw updated"));
     expect(panel.textContent).not.toContain("Update outcome unknown");
+    expect(request.mock.calls.filter(([method]) => method === "claws.update.apply")).toHaveLength(
+      1,
+    );
+  });
+
+  it("keeps an ambiguous Update unknown when status belongs to another Claw", async () => {
+    const { panel, request } = mount({
+      clawsEnabled: true,
+      updateApplyError: true,
+      updateAppliedBeforeError: true,
+      updateAppliedRecord: { name: "@openclaw/other-claw" },
+    });
+    await vi.waitFor(() =>
+      expect(panel.querySelector<HTMLButtonElement>("[data-claw-update]")?.disabled).toBe(false),
+    );
+    panel.querySelector<HTMLButtonElement>("[data-claw-update]")?.click();
+    await vi.waitFor(() =>
+      expect(panel.querySelector<HTMLButtonElement>("[data-claw-update-confirm]")?.disabled).toBe(
+        false,
+      ),
+    );
+    panel.querySelector<HTMLButtonElement>("[data-claw-update-confirm]")?.click();
+    await vi.waitFor(() => expect(panel.textContent).toContain("Update outcome unknown"));
+    expect(panel.textContent).not.toContain("Claw updated");
     expect(request.mock.calls.filter(([method]) => method === "claws.update.apply")).toHaveLength(
       1,
     );

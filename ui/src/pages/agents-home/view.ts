@@ -13,6 +13,8 @@ import type { agentRosterCards } from "../../lib/agents/roster-activity.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import type { ClawCatalogEntry } from "./claws-catalog-client.ts";
+import type { ClawStatusRecord } from "./claws-catalog-client.ts";
+import "../agents/claw-lifecycle-panel.ts";
 import "./claws-explore.ts";
 import "../../styles/agents-home.css";
 
@@ -33,7 +35,22 @@ type AgentsHomeProps = {
   onOpenCatalog: () => void;
   onSelectClaw: (entry: ClawCatalogEntry) => void;
   onRetry: () => void;
+  unrepresentedClaws: ClawStatusRecord[];
+  clawsStatusLoading: boolean;
+  clawsStatusError: string | null;
+  inspectedClawId: string | null;
+  removePendingAgentId: string | null;
+  removedClaw: boolean;
+  onRetryClawsStatus: () => void;
+  onInspectClaw: (agentId: string) => void;
+  onClawRemoved: (agentId: string) => void;
+  onClawRemovePendingChange: (agentId: string, pending: boolean) => void;
 };
+
+function labelClawStatus(status: string): string {
+  const label = status.replaceAll(/[_-]/g, " ");
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
 
 export function renderAgentsHome(props: AgentsHomeProps) {
   const { context } = props;
@@ -99,7 +116,13 @@ export function renderAgentsHome(props: AgentsHomeProps) {
           : nothing
       }
       ${
-        props.connected && !props.loading && !props.error && props.cards.length === 0
+        props.connected &&
+        !props.loading &&
+        !props.error &&
+        !props.clawsStatusLoading &&
+        props.cards.length === 0 &&
+        props.unrepresentedClaws.length === 0 &&
+        !props.removedClaw
           ? html` <div class="agents-home__empty">
               <p>${t("agentsHome.empty")}</p>
               ${manage}
@@ -144,6 +167,99 @@ export function renderAgentsHome(props: AgentsHomeProps) {
           </a>`,
         )}
       </div>
+      ${
+        props.clawsStatusLoading ||
+        props.clawsStatusError ||
+        props.unrepresentedClaws.length > 0 ||
+        props.inspectedClawId ||
+        props.removedClaw
+          ? html`<section
+              class="agents-home__attention"
+              data-claws-attention
+              aria-label=${t("agentsHome.clawsAttention")}
+            >
+              <div class="agents-home__attention-header">
+                <h2>${t("agentsHome.clawsAttention")}</h2>
+                <button
+                  type="button"
+                  class="btn btn--sm"
+                  ?disabled=${!props.connected || props.clawsStatusLoading}
+                  @click=${props.onRetryClawsStatus}
+                >
+                  ${t("clawsLifecycle.refresh")}
+                </button>
+              </div>
+              ${
+                props.removedClaw
+                  ? html`<div class="callout success" role="status">
+                      ${t("clawsLifecycle.removed")}
+                    </div>`
+                  : nothing
+              }
+              ${
+                props.clawsStatusError
+                  ? html`<div class="callout danger" role="alert">
+                      ${props.clawsStatusError}
+                      <button type="button" class="btn btn--sm" @click=${props.onRetryClawsStatus}>
+                        ${t("common.retry")}
+                      </button>
+                    </div>`
+                  : nothing
+              }
+              ${
+                props.clawsStatusLoading && props.unrepresentedClaws.length === 0
+                  ? html`<p role="status">${t("clawsLifecycle.loading")}</p>`
+                  : nothing
+              }
+              <ul class="agents-home__attention-list">
+                ${repeat(
+                  props.unrepresentedClaws,
+                  (record) => record.agentId,
+                  (record) => html`<li data-claw-unrepresented=${record.agentId}>
+                    <div class="agents-home__attention-identity">
+                      <strong>${record.name}</strong>
+                      <span
+                        >${record.agentId} ·
+                        ${t("clawsLifecycle.version", { version: record.version })} ·
+                        ${t("clawsLifecycle.healthDetail", { agent: record.agentState, bootstrap: record.bootstrapState })}</span
+                      >
+                    </div>
+                    <span class="claw-lifecycle__state" data-claw-status=${record.status}
+                      >${labelClawStatus(record.status)}</span
+                    >
+                    <button
+                      type="button"
+                      class="btn btn--sm"
+                      data-claw-inspect
+                      aria-controls="agents-home-claw-inspector"
+                      aria-expanded=${props.inspectedClawId === record.agentId}
+                      title=${props.removePendingAgentId ? t("clawsLifecycle.checkBeforeRetry") : ""}
+                      ?disabled=${!props.connected || Boolean(props.removePendingAgentId)}
+                      @click=${() => props.onInspectClaw(record.agentId)}
+                    >
+                      ${
+                        props.inspectedClawId === record.agentId
+                          ? t("clawsLifecycle.close")
+                          : t("agentsHome.inspectClaw")
+                      }
+                    </button>
+                  </li>`,
+                )}
+              </ul>
+              ${
+                props.inspectedClawId
+                  ? html`<div class="agents-home__claw-inspector" id="agents-home-claw-inspector">
+                      <openclaw-agent-claw-panel
+                        .agentId=${props.inspectedClawId}
+                        .onRemoved=${props.onClawRemoved}
+                        .onRemovePendingChange=${props.onClawRemovePendingChange}
+                      ></openclaw-agent-claw-panel>
+                    </div>`
+                  : nothing
+              }
+            </section>`
+          : nothing
+      }
       ${
         props.showExplore
           ? html`<openclaw-claws-explore .onSelect=${props.onSelectClaw}></openclaw-claws-explore>`

@@ -1,12 +1,15 @@
 // E2E coverage for experimental grouped Claw inspection and add planning.
 import { execFile } from "node:child_process";
-import { mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { stringify as stringifyYaml } from "yaml";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { parseClawMarkdown } from "./reader.js";
+import type { ClawManifest } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -115,7 +118,8 @@ describe("claws lifecycle cli e2e", () => {
       planIntegrity: string;
       packageRoot: string;
       workspaceFiles: Array<{ path: string }>;
-      openClawProfile?: { agent: { model?: { primary?: string; fallbacks?: string[] } } };
+      agent: ClawManifest["agent"];
+      openClawProfile?: unknown;
       retained: string[];
     };
     expect(plan).toMatchObject({
@@ -135,10 +139,10 @@ describe("claws lifecycle cli e2e", () => {
         "all other workspace files and directories",
       ]),
     });
-    expect(plan.openClawProfile?.agent.model).toEqual({
-      primary: "provider/default",
-      fallbacks: ["provider/fallback"],
-    });
+    expect(plan.agent).toMatchObject({ id: "main", name: "Existing agent" });
+    expect(plan.agent).not.toHaveProperty("model");
+    expect(plan.agent).not.toHaveProperty("subagents");
+    expect(plan.openClawProfile).toBeUndefined();
     expect(plan.packageRoot).toBe(join(stateDir, "claws", "local", "main"));
 
     const migrated = await runOpenClaw(
@@ -176,10 +180,27 @@ describe("claws lifecycle cli e2e", () => {
       source: { kind: "package" },
       manifest: { agent: { id: "main", name: "Existing agent" } },
     });
-    // Exercise updates after a package stops pinning an inherited value. The
-    // live agent still gets this model from agents.defaults, so its effective
-    // settings and adopted ownership digest remain stable.
-    await rm(join(plan.packageRoot, "profiles", "openclaw.yml"));
+    // Change a Claw-owned field; the host model and delegation settings remain outside the package.
+    const packageManifestPath = join(plan.packageRoot, "CLAW.md");
+    const parsedPackage = parseClawMarkdown(
+      await readFile(packageManifestPath),
+      packageManifestPath,
+    );
+    if (!parsedPackage.ok) {
+      throw new Error("Expected the generated Claw package to have valid frontmatter.");
+    }
+    const manifest = parsedPackage.value as ClawManifest;
+    const updatedManifest: ClawManifest = {
+      ...manifest,
+      agent: { ...manifest.agent, name: "Updated agent" },
+    };
+    await writeFile(
+      packageManifestPath,
+      Buffer.concat([
+        Buffer.from(`---\n${stringifyYaml(updatedManifest).trimEnd()}\n---\n`, "utf8"),
+        parsedPackage.body,
+      ]),
+    );
     const statusAfterPackageMutation = await runOpenClaw(["claws", "status", "main", "--json"], {
       stateDir,
     });
@@ -194,7 +215,7 @@ describe("claws lifecycle cli e2e", () => {
       schemaVersion: "openclaw.clawUpdatePlan.v1",
       blockers: [],
       actions: expect.arrayContaining([
-        expect.objectContaining({ kind: "agent", action: "unchanged" }),
+        expect.objectContaining({ kind: "agent", action: "change" }),
       ]),
     });
     const updated = await runOpenClaw(
@@ -212,6 +233,12 @@ describe("claws lifecycle cli e2e", () => {
     expect(parseJson(statusAfterUpdate.stdout)).toMatchObject({
       records: [{ install: { agentOrigin: "adopted" }, agentState: "present" }],
     });
+    const updatedConfig = JSON.parse(
+      (await readFile(configPath)).toString("utf8"),
+    ) as typeof config;
+    expect(updatedConfig.agents.defaults.model).toEqual(config.agents.defaults.model);
+    expect(updatedConfig.agents.defaults.heartbeat).toEqual(config.agents.defaults.heartbeat);
+    expect(updatedConfig.agents.entries.main.name).toBe("Updated agent");
 
     const configWithoutAgent = {
       ...config,

@@ -93,6 +93,32 @@ function listedCronJob(
 }
 
 describe("installClawCronJobs", () => {
+  it("refuses an unsupported existing cron ref before retrying the scheduler", async () => {
+    const current = await fixture();
+    await expect(
+      installClawCronJobs(current.plan, {
+        env: current.env,
+        gateway: {
+          add: async () => {
+            throw new Error("offline");
+          },
+        },
+      }),
+    ).rejects.toMatchObject({ code: "cron_install_failed" });
+    openOpenClawStateDatabase({ env: current.env })
+      .db.prepare("UPDATE claw_cron_refs SET schema_version = ? WHERE agent_id = ?")
+      .run("openclaw.clawCronRef.v2", current.plan.agent.finalId);
+    const add = vi.fn(async () => ({ id: "scheduler-123" }));
+
+    await expect(
+      installClawCronJobs(current.plan, { env: current.env, gateway: { add } }),
+    ).rejects.toMatchObject({ code: "cron_provenance_conflict" });
+    expect(add).not.toHaveBeenCalled();
+    expect(readClawCronRefs(current.plan.agent.finalId, { env: current.env })).toMatchObject([
+      { schemaVersion: "openclaw.clawCronRef.v2", status: "pending" },
+    ]);
+  });
+
   it("stops scheduler activation after access drifts during agent readiness", async () => {
     const current = await fixture();
     let reviewed = true;

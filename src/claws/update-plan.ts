@@ -18,6 +18,7 @@ import {
   isApplicationUpdateBlocker,
   recordingClawPackagePreflight,
 } from "./application-provenance.js";
+import { CLAW_CRON_REF_SCHEMA_VERSION } from "./cron.js";
 import { digestClawValue as digest } from "./digest.js";
 import type { ClawInventory } from "./inventory-read.kernel.js";
 import { readClawStatus } from "./lifecycle-state.js";
@@ -206,7 +207,7 @@ export async function buildClawUpdatePlan(params: {
     let adoptedSettingsUnsupported = false;
     if (record.install.agentOrigin === "adopted") {
       try {
-        desiredAgentDigest = digest(
+        desiredAgentDigest = digestClawOwnedAgentConfig(
           normalizeWorkspaceConfig(
             resolveMigrationAgentSettings(params.config, targetPlan.agent.config),
             record.install.workspace,
@@ -612,7 +613,9 @@ export async function buildClawUpdatePlan(params: {
     for (const target of params.targetManifest.cronJobs) {
       const current = currentCron.get(target.id);
       const desiredDigest = digest(target);
-      const unresolved = current && (current.status !== "complete" || !current.schedulerJobId);
+      const unsupported = current && current.schemaVersion !== CLAW_CRON_REF_SCHEMA_VERSION;
+      const unresolved =
+        current && (unsupported || current.status !== "complete" || !current.schedulerJobId);
       const action = !current
         ? "add"
         : unresolved
@@ -628,7 +631,9 @@ export async function buildClawUpdatePlan(params: {
         blocked: action === "manual",
         reason:
           action === "manual"
-            ? "Cron ownership is unresolved and must be reconciled with the gateway."
+            ? unsupported
+              ? "Cron provenance version is unsupported."
+              : "Cron ownership is unresolved and must be reconciled with the gateway."
             : action === "unchanged"
               ? "Recorded cron declaration already matches the target manifest."
               : `Target manifest ${action === "add" ? "adds" : "changes"} this cron declaration.`,
@@ -650,7 +655,10 @@ export async function buildClawUpdatePlan(params: {
       if (params.targetManifest.cronJobs.some((cron) => cron.id === current.manifestId)) {
         continue;
       }
-      const manual = current.status !== "complete" || !current.schedulerJobId;
+      const manual =
+        current.schemaVersion !== CLAW_CRON_REF_SCHEMA_VERSION ||
+        current.status !== "complete" ||
+        !current.schedulerJobId;
       const action = manual ? "manual" : "remove";
       actions.push({
         kind: "cronJob",
@@ -659,7 +667,9 @@ export async function buildClawUpdatePlan(params: {
         target: current.schedulerJobId ?? current.declarationKey,
         blocked: manual,
         reason: manual
-          ? "Target removes this cron declaration, but scheduler ownership is unresolved."
+          ? current.schemaVersion !== CLAW_CRON_REF_SCHEMA_VERSION
+            ? "Target removes this cron declaration, but its provenance version is unsupported."
+            : "Target removes this cron declaration, but scheduler ownership is unresolved."
           : "Target manifest removes this owned cron declaration.",
         currentDigest: digest(current.job),
       });

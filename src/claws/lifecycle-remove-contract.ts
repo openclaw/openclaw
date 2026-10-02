@@ -77,6 +77,7 @@ export type ClawRemovePlanOptions = OpenClawStateDatabaseOptions & {
 };
 
 export type ClawRemoveApplyOptions = ClawRemovePlanOptions & {
+  assertForwardCurrent?: () => void;
   packageGateway?: ClawPackageRemovalGateway;
   purgeSessions?: (
     ...args: Parameters<typeof purgeAgentSessionStoreEntries>

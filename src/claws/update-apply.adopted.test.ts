@@ -55,6 +55,32 @@ async function fixture() {
 }
 
 describe("updating an adopted agent", () => {
+  it("keeps operator-owned model and delegation changes outside Claw drift", async () => {
+    const current = await fixture();
+    const config: OpenClawConfig = {
+      ...current.config,
+      agents: {
+        ...current.config.agents,
+        defaults: {
+          model: "provider/operator-change",
+          subagents: { allowAgents: ["researcher"] },
+        },
+      },
+    };
+
+    await expect(
+      readClawStatus("worker", { config, env: current.env, sourceMcpServers: {} }),
+    ).resolves.toMatchObject({ records: [{ agentState: "present" }] });
+    const plan = await buildClawUpdatePlan({
+      agentId: "worker",
+      ...current.target,
+      config,
+      sourceMcpServers: {},
+      stateOptions: { env: current.env },
+    });
+    expect(plan.blockers).toEqual([]);
+  });
+
   it("updates a present agent with inherited settings and keeps status consistent", async () => {
     const current = await fixture();
     let config = current.config;
@@ -66,7 +92,7 @@ describe("updating an adopted agent", () => {
         sourceMcpServers: {},
         consentPlanIntegrity: current.plan.planIntegrity,
         commitConfig: async (transform) => {
-          config = transform(config);
+          config = transform(config, config);
         },
       }),
     ).resolves.toMatchObject({ status: "complete", installRecord: { agentOrigin: "adopted" } });
@@ -93,7 +119,7 @@ describe("updating an adopted agent", () => {
         sourceMcpServers: {},
         consentPlanIntegrity: current.plan.planIntegrity,
         commitConfig: async (transform) => {
-          config = transform(config);
+          config = transform(config, config);
         },
         applyCron: async () => {
           reachedCron = true;
@@ -111,7 +137,7 @@ describe("updating an adopted agent", () => {
     ).resolves.toMatchObject({ records: [{ agentState: "present" }] });
   });
 
-  it("preserves a change to inherited settings made before rollback", async () => {
+  it("preserves an operator model change while rolling back owned fields", async () => {
     const current = await fixture();
     let config = current.config;
 
@@ -122,7 +148,7 @@ describe("updating an adopted agent", () => {
         sourceMcpServers: {},
         consentPlanIntegrity: current.plan.planIntegrity,
         commitConfig: async (transform) => {
-          config = transform(config);
+          config = transform(config, config);
         },
         applyCron: async () => {
           config = {
@@ -132,10 +158,10 @@ describe("updating an adopted agent", () => {
           throw new Error("cron unavailable");
         },
       }),
-    ).rejects.toMatchObject({ code: "update_partial" });
+    ).rejects.toMatchObject({ code: "cron_update_failed" });
 
     expect(config.agents?.defaults?.model).toBe("provider/operator-change");
-    expect(config.agents?.entries?.worker?.name).toBe("Worker v2");
-    expect(readClawInstallRecord("worker", { env: current.env })?.status).toBe("partial");
+    expect(config.agents?.entries?.worker?.name).toBe("Worker");
+    expect(readClawInstallRecord("worker", { env: current.env })).toEqual(current.installed);
   });
 });

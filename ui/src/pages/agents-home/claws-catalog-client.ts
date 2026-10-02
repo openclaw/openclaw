@@ -44,6 +44,11 @@ export type ClawStatusRecord = {
   resources: ClawResourceStatus[];
 };
 
+export async function listClawStatus(client: GatewayBrowserClient): Promise<ClawStatusRecord[]> {
+  const result = await client.request<{ records: ClawStatusRecord[] }>("claws.status", {});
+  return result.records;
+}
+
 export async function readClawStatus(
   client: GatewayBrowserClient,
   agentId: string,

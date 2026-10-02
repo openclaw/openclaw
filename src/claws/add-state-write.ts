@@ -3,6 +3,7 @@ import {
   type WorkspaceSetupState,
 } from "../agents/workspace-state-store.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
+import type { ClawPackageLifecycleLeaseIdentity } from "../state/claw-package-lifecycle-lease.js";
 import type { PersistedClawCronRef } from "./cron.js";
 import { readClawInventory } from "./inventory-read.js";
 import type { PersistedClawMcpServerRef } from "./mcp.js";
@@ -22,6 +23,9 @@ import type { ClawAddPlan, ClawCronJob, ClawMcpServer } from "./types.js";
 import type { PersistedClawWorkspaceFile } from "./workspace.js";
 
 export type ClawAddStateOptions = ClawMutationStateOptions;
+export type ClawPackageRefStateOptions = ClawAddStateOptions & {
+  packageLease?: ClawPackageLifecycleLeaseIdentity;
+};
 
 export async function persistClawInstallRecordForAdd(
   plan: Parameters<typeof persistClawInstallRecord>[0],
@@ -92,17 +96,22 @@ export async function recordAgentProvenanceForAdd(
 export async function persistClawPackageRefForAdd(
   plan: Parameters<typeof persistClawPackageRef>[0],
   pkg: Parameters<typeof persistClawPackageRef>[1],
-  options: NonNullable<Parameters<typeof persistClawPackageRef>[2]> & ClawAddStateOptions = {},
+  options: NonNullable<Parameters<typeof persistClawPackageRef>[2]> &
+    ClawPackageRefStateOptions = {},
 ): Promise<ReturnType<typeof persistClawPackageRef>> {
   if (options.stateMode !== "worker") {
     options.assertCurrent?.();
     return persistClawPackageRef(plan, pkg, options);
+  }
+  if (!options.packageLease) {
+    throw new Error("Worker-backed package reference writes require a package lifecycle lease.");
   }
   return execute(options, {
     type: "claws.add.persistPackageRef",
     input: {
       plan,
       pkg,
+      packageLease: options.packageLease,
       nowMs: options.nowMs,
       status: options.status,
       relationship: options.relationship,
@@ -115,15 +124,19 @@ export async function persistClawPackageRefForAdd(
 export async function updateClawPackageRefStatusForAdd(
   ref: Parameters<typeof updateClawPackageRefStatus>[0],
   status: Parameters<typeof updateClawPackageRefStatus>[1],
-  options: NonNullable<Parameters<typeof updateClawPackageRefStatus>[2]> & ClawAddStateOptions = {},
+  options: NonNullable<Parameters<typeof updateClawPackageRefStatus>[2]> &
+    ClawPackageRefStateOptions = {},
 ): Promise<ReturnType<typeof updateClawPackageRefStatus>> {
   if (options.stateMode !== "worker") {
     options.assertCurrent?.();
     return updateClawPackageRefStatus(ref, status, options);
   }
+  if (!options.packageLease) {
+    throw new Error("Worker-backed package reference writes require a package lifecycle lease.");
+  }
   return execute(options, {
     type: "claws.add.updatePackageRefStatus",
-    input: { ref, status, nowMs: options.nowMs },
+    input: { ref, packageLease: options.packageLease, status, nowMs: options.nowMs },
   });
 }
 

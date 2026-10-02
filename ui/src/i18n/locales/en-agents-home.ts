@@ -23,6 +23,8 @@ const enAgentsHome = {
     disconnected: "Connect to the Gateway to see your agents.",
     loadFailed: "Could not load agents. Try again.",
     empty: "Your team starts here. Add an agent to get started.",
+    clawsAttention: "Claws needing attention",
+    inspectClaw: "Inspect",
   },
   clawsCatalog: {
     explore: "Explore Claws",
@@ -210,11 +212,14 @@ const enAgentsHome = {
     updateOutcomeUnknown: "Update outcome unknown",
     updateCheckBeforeRetry: "Check Claw status before trying another update.",
     removeTitle: "Remove Claw",
-    removeDescription: "Review what will be removed and which shared resources will be kept.",
+    removeDescription: "Review what will be removed and what will stay installed.",
     remove: "Remove Claw",
     reviewRemove: "Review removal",
     removeSummary:
-      "Resources used elsewhere remain in place. Review each action before removing this Claw.",
+      "Review each action before removing this Claw. Some resources may stay installed even when no other Claw uses them.",
+    releasePluginReference: "Release plugin reference",
+    releasedPluginNotice:
+      "Removing this Claw only releases its reference to the plugin. If installed, the plugin remains installed. Manage or uninstall it separately in Plugins or with the CLI.",
     changes: "Removal actions",
     kept: "Kept",
     blockers: "Cannot remove this Claw yet",
@@ -223,6 +228,7 @@ const enAgentsHome = {
     close: "Close",
     confirmRemove: "Remove Claw",
     removing: "Removing...",
+    removed: "Claw removed",
     outcomeUnknown: "Removal outcome unknown",
     checkBeforeRetry: "Check Claw status before trying another removal.",
     checkStatus: "Check status",

@@ -22,6 +22,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { clawCronGatewayInput, markClawCronRefRemoved, readClawCronRefs } from "./cron.js";
+import { readClawStatusForGateway } from "./gateway-status-worker.js";
 import { readClawInventory } from "./inventory-read.js";
 import { withClawAgentConfigRemoval } from "./lifecycle-config-removal.js";
 import { quiescentClawMonitorGateway } from "./lifecycle-remove.test-support.js";
@@ -442,6 +443,20 @@ describe("Claw status and remove", () => {
         ],
       },
     );
+    await expect(readClawStatusForGateway({ config: {} })).resolves.toMatchObject({
+      records: [
+        {
+          agentId: "worker",
+          status: "partial",
+          agentState: "missing",
+          orphaned: true,
+          resources: expect.arrayContaining([
+            expect.objectContaining({ kind: "plugin", id: "audit@2.0.0" }),
+          ]),
+        },
+      ],
+      summary: { claws: 1, attention: 1 },
+    });
 
     const remove = await buildClawRemovePlan("worker", { env: current.env, config: {} });
     const removed = await applyClawRemovePlan(remove, {
@@ -458,6 +473,10 @@ describe("Claw status and remove", () => {
         summary: { claws: 0 },
       },
     );
+    await expect(readClawStatusForGateway({ config: {} })).resolves.toMatchObject({
+      records: [],
+      summary: { claws: 0, attention: 0 },
+    });
   });
 
   it("previews all canonical agent config deletion effects", async () => {

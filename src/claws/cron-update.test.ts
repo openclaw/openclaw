@@ -81,6 +81,49 @@ function manifest(): ClawManifest {
 }
 
 describe("applyClawCronUpdate", () => {
+  it.each([
+    { action: "change" as const, job: oldDaily },
+    { action: "remove" as const, job: legacy },
+  ])(
+    "refuses to $action unsupported cron provenance before scheduler access",
+    async ({ action, job }) => {
+      const schedulerJobId = `scheduler-${job.id}`;
+      const previous = {
+        ...ref(job, schedulerJobId),
+        schemaVersion: "openclaw.clawCronRef.v2",
+      };
+      const get = vi.fn(async () => cronReadView("worker", previous));
+      const add = vi.fn(async () => ({ id: previous.schedulerJobId }));
+      const remove = vi.fn(async () => ({ removed: true }));
+      const upsertRef = vi.fn(async () => undefined);
+
+      await expect(
+        applyClawCronUpdate(
+          plan([
+            {
+              kind: "cronJob",
+              id: job.id,
+              action,
+              target: schedulerJobId,
+              blocked: false,
+              reason: "reviewed earlier",
+            },
+          ]),
+          manifest(),
+          {
+            readRefs: async () => [previous],
+            upsertRef,
+            cronGateway: { get, add, remove },
+          },
+        ),
+      ).rejects.toMatchObject({ partial: false, message: expect.stringContaining("unsupported") });
+      expect(get).not.toHaveBeenCalled();
+      expect(upsertRef).not.toHaveBeenCalled();
+      expect(add).not.toHaveBeenCalled();
+      expect(remove).not.toHaveBeenCalled();
+    },
+  );
+
   it("checks reviewed access at the pending cron-ref write", async () => {
     let accessCurrent = true;
     let persisted = false;

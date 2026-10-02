@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
 import type { CronJob } from "../cron/types.js";
-import { clawCronGatewayInput, type PersistedClawCronRef } from "./cron.js";
+import {
+  CLAW_CRON_REF_SCHEMA_VERSION,
+  clawCronGatewayInput,
+  type PersistedClawCronRef,
+} from "./cron.js";
 import { projectClawsStatus } from "./gateway-status-projection.js";
 import type { ClawPackageStatus, ClawStatusRecord } from "./lifecycle-status.js";
 import { CLAW_PACKAGE_REF_SCHEMA_VERSION } from "./package-extension-provenance.js";
+import { CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION } from "./workspace.js";
 
 function packageStatus(overrides: Partial<ClawPackageStatus> = {}): ClawPackageStatus {
   return {
@@ -47,6 +52,63 @@ function statusRecord(overrides: Partial<ClawStatusRecord> = {}): ClawStatusReco
 }
 
 describe("Gateway Claw status projection", () => {
+  it("reports adopted agent ownership without guessing workspace file origins", () => {
+    const created = statusRecord();
+    const result = projectClawsStatus([
+      statusRecord({
+        install: { ...created.install, agentOrigin: "adopted" },
+        workspaceFiles: [
+          {
+            schemaVersion: CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION,
+            agentId: "workflow-operator",
+            workspace: "/tmp/workflow-operator",
+            path: "SOUL.md",
+            sourcePath: "SOUL.md",
+            contentDigest: "sha256:existing",
+            status: "complete",
+            state: "unchanged",
+            createdAtMs: 1,
+            updatedAtMs: 2,
+          },
+          {
+            schemaVersion: CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION,
+            agentId: "workflow-operator",
+            workspace: "/tmp/workflow-operator",
+            path: "NEW.md",
+            sourcePath: "NEW.md",
+            contentDigest: "sha256:added-on-update",
+            status: "complete",
+            state: "unchanged",
+            createdAtMs: 3,
+            updatedAtMs: 3,
+          },
+        ],
+        packages: [packageStatus()],
+      }),
+    ]);
+
+    expect(result.records[0]?.resources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "agent",
+          origin: "pre-existing",
+          independentOwner: true,
+        }),
+        expect.objectContaining({
+          kind: "plugin",
+          origin: "claw-introduced",
+          independentOwner: false,
+        }),
+      ]),
+    );
+    expect(
+      result.records[0]?.resources.filter((resource) => resource.kind === "workspace-file"),
+    ).toEqual([
+      { kind: "workspace-file", id: "SOUL.md", state: "unchanged", relationship: "managed" },
+      { kind: "workspace-file", id: "NEW.md", state: "unchanged", relationship: "managed" },
+    ]);
+  });
+
   it("does not hide extension drift or unresolved scheduled jobs", () => {
     const result = projectClawsStatus([
       statusRecord({
@@ -58,7 +120,9 @@ describe("Gateway Claw status projection", () => {
             extensionCompatibility: { state: "drifted", mapped: [], unavailable: [] },
           }),
         ],
-        cronJobs: [{ manifestId: "daily", status: "complete" }] as ClawStatusRecord["cronJobs"],
+        cronJobs: [
+          { schemaVersion: CLAW_CRON_REF_SCHEMA_VERSION, manifestId: "daily", status: "complete" },
+        ] as ClawStatusRecord["cronJobs"],
       }),
     ]);
 
@@ -84,6 +148,7 @@ describe("Gateway Claw status projection", () => {
 
   it("checks complete cron refs against the live scheduler before marking them healthy", () => {
     const cron = {
+      schemaVersion: CLAW_CRON_REF_SCHEMA_VERSION,
       agentId: "workflow-operator",
       manifestId: "daily",
       declarationKey: "claw:workflow-operator:daily",
@@ -145,7 +210,12 @@ describe("Gateway Claw status projection", () => {
           }),
         ],
         cronJobs: [
-          { manifestId: "daily", status: "failed", error: "secret-token from scheduler" },
+          {
+            schemaVersion: CLAW_CRON_REF_SCHEMA_VERSION,
+            manifestId: "daily",
+            status: "failed",
+            error: "secret-token from scheduler",
+          },
         ] as ClawStatusRecord["cronJobs"],
       }),
     ]);

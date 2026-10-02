@@ -132,13 +132,22 @@ describe("Claw tool policy consent provenance", () => {
     expect(executeExec).not.toHaveBeenCalled();
     expect(existsSync(marker)).toBe(false);
 
-    const changedConfigs: OpenClawConfig[] = [
-      {
-        agents: {
-          ...config.agents,
-          defaults: { ...config.agents.defaults, model: "openai/gpt-4.1-mini" },
+    const operatorConfig: OpenClawConfig = {
+      agents: {
+        ...config.agents,
+        defaults: {
+          ...config.agents.defaults,
+          model: "openai/gpt-4.1-mini",
+          subagents: { allowAgents: ["researcher"] },
         },
       },
+    };
+    setRuntimeConfigSnapshot(operatorConfig);
+    const operatorDispatcher = prepareDispatcher(operatorConfig);
+    await expect(operatorDispatcher.call("read", { path: "AGENTS.md" })).resolves.toBeDefined();
+    await expect(operatorDispatcher.call("exec", execInput)).rejects.toThrow("Unknown tool");
+
+    const changedConfigs: OpenClawConfig[] = [
       {
         agents: {
           ...config.agents,
@@ -175,7 +184,7 @@ describe("Claw tool policy consent provenance", () => {
     await expect((async () => prepareDispatcher(config).call("exec", execInput))()).rejects.toThrow(
       "Cannot verify the installed tool authority",
     );
-    expect(executeRead).toHaveBeenCalledOnce();
+    expect(executeRead).toHaveBeenCalledTimes(2);
     expect(executeExec).not.toHaveBeenCalled();
     expect(existsSync(marker)).toBe(false);
   });

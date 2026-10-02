@@ -1,6 +1,6 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { applyClawPackageRemovals, planClawPackageRemovals } from "../claws/package-remove.js";
@@ -13,7 +13,10 @@ import type { ClawAddPlan } from "../claws/types.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createNodeEvalArgs, resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { markClawPackageIndependentlyOwned } from "./claw-package-adoption.js";
-import { acquireClawPackageLifecycleLease } from "./claw-package-lifecycle-lease.js";
+import {
+  acquireClawPackageLifecycleLease,
+  maintainClawPackageLifecycleLease,
+} from "./claw-package-lifecycle-lease.js";
 import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
@@ -277,6 +280,27 @@ describe("Claw package independent adoption", () => {
     replacement.heartbeat(302_001);
     replacement.release();
     acquire("next", 302_002).release();
+  });
+
+  it("pauses only interval heartbeats while a worker package write is pending", async () => {
+    vi.useFakeTimers();
+    const heartbeat = vi.fn();
+    const release = vi.fn();
+    const lease = maintainClawPackageLifecycleLease({ heartbeat, release });
+    try {
+      await lease.withHeartbeatPaused(async () => {
+        await vi.advanceTimersByTimeAsync(100_000);
+        expect(heartbeat).not.toHaveBeenCalled();
+      });
+      await vi.advanceTimersByTimeAsync(100_000);
+      expect(heartbeat).toHaveBeenCalledOnce();
+      lease.assertCurrent();
+      expect(heartbeat).toHaveBeenCalledTimes(2);
+    } finally {
+      lease.release();
+      vi.useRealTimers();
+    }
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("releases a package lease when process exit bypasses async cleanup", async () => {

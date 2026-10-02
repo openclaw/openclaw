@@ -1,9 +1,13 @@
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CLAW_CRON_REF_SCHEMA_VERSION } from "./cron.js";
+import { digestClawValue } from "./digest.js";
 import type { ClawInventory } from "./inventory-read.kernel.js";
 import { readClawStatus } from "./lifecycle-status.js";
 import { digestClawMcpServer, CLAW_MCP_REF_SCHEMA_VERSION } from "./mcp.js";
+import { normalizeWorkspaceConfig, resolveMigrationAgentSettings } from "./migrate-validation.js";
+import { CLAW_INSTALL_RECORD_ADOPTED_SCHEMA_VERSION } from "./provenance-agent-origin.js";
 import { CLAW_INSTALL_RECORD_SCHEMA_VERSION } from "./provenance-schema-version.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -29,6 +33,7 @@ it("compares inventory MCP refs against authored source values", async () => {
         manifestSchemaVersion: 1,
         planIntegrity: "sha256:plan",
         agentId: "docs",
+        agentOrigin: "created",
         workspace,
         agentConfigDigest: "sha256:config",
         agentOwnedPaths: [],
@@ -67,6 +72,70 @@ it("compares inventory MCP refs against authored source values", async () => {
 
   expect(sourceStatus.records[0]?.mcpServers[0]?.state).toBe("present");
   expect(runtimeStatus.records[0]?.mcpServers[0]?.state).toBe("modified");
+});
+
+it("reads an older adopted full digest while keeping its legacy drift behavior", async () => {
+  const workspace = tempDirs.make("claw-adopted-legacy-status-");
+  const config: OpenClawConfig = {
+    agents: {
+      defaults: { model: "provider/original" },
+      entries: { worker: { workspace } },
+    },
+  };
+  const effective = normalizeWorkspaceConfig(
+    resolveMigrationAgentSettings(config, { id: "worker", workspace }),
+    workspace,
+  );
+  const inventory: ClawInventory = {
+    installs: [
+      {
+        schemaVersion: CLAW_INSTALL_RECORD_ADOPTED_SCHEMA_VERSION,
+        claw: {
+          kind: "package",
+          name: "@openclaw/worker",
+          version: "1.0.0",
+          packageRoot: workspace,
+          manifestPath: `${workspace}/CLAW.md`,
+          integrityKind: "artifact",
+          integrity: "sha256:fixture",
+          byteLength: 1,
+        },
+        manifestSchemaVersion: 1,
+        planIntegrity: "sha256:plan",
+        agentId: "worker",
+        agentOrigin: "adopted",
+        workspace,
+        agentConfigDigest: digestClawValue(effective),
+        agentOwnedPaths: [],
+        status: "complete",
+        addedAtMs: 1,
+        updatedAtMs: 1,
+      },
+    ],
+    packages: [],
+    workspaceFiles: [],
+    mcpServers: [],
+    cronJobs: [],
+  };
+
+  const unchanged = await readClawStatus("worker", {
+    inventory,
+    config,
+    sourceMcpServers: {},
+    readOnly: true,
+  });
+  expect(unchanged.records[0]?.agentState).toBe("present");
+
+  const changed = await readClawStatus("worker", {
+    inventory,
+    config: {
+      ...config,
+      agents: { ...config.agents, defaults: { model: "provider/changed" } },
+    },
+    sourceMcpServers: {},
+    readOnly: true,
+  });
+  expect(changed.records[0]?.agentState).toBe("modified");
 });
 
 it("keeps orphaned MCP and cron refs visible when their install row is missing", async () => {

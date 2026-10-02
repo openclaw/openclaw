@@ -149,6 +149,11 @@ export async function applyClawCronUpdate(
     for (const action of actions) {
       assertForwardCurrent();
       const previous = currentRefs.get(action.id);
+      if (previous && previous.schemaVersion !== CLAW_CRON_REF_SCHEMA_VERSION) {
+        throw new ClawCronUpdateError(
+          `Cron declaration ${JSON.stringify(action.id)} has an unsupported provenance version.`,
+        );
+      }
       if (previous && action.currentDigest && digest(previous.job) !== action.currentDigest) {
         throw new ClawCronUpdateError(
           `Cron declaration ${JSON.stringify(action.id)} changed after planning.`,

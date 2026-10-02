@@ -167,8 +167,15 @@ function ownership(details: Record<string, unknown> | undefined): OwnershipEffec
 
 export function clawActionNeedsEffect(
   operation: "add" | "update" | "remove",
-  action: { kind: string; id: string },
+  action: { kind: string; id: string; action: string },
 ): boolean {
+  if (
+    operation === "remove" &&
+    action.action === "retain" &&
+    (action.kind === "workspaceFile" || action.kind === "bootstrap")
+  ) {
+    return false;
+  }
   return (
     action.kind === "workspaceFile" ||
     action.kind === "bootstrap" ||

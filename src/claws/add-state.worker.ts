@@ -2,8 +2,10 @@ import { mergeWorkspaceSetupStateInDatabase } from "../agents/workspace-state-st
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { readAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
+import { clawPackageLifecycleLeaseKey } from "../state/claw-package-lifecycle-lease.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { readOpenClawStateLeaseExpiry } from "../state/openclaw-state-lease-store.js";
 import type { ClawAddStateCommand } from "./add-state-worker-contract.js";
 import { persistClawCronPendingRef, updateClawCronRef } from "./cron.js";
 import { persistClawMcpPendingRef, updateClawMcpRef } from "./mcp.js";
@@ -11,10 +13,47 @@ import {
   deleteClawInstallRecord,
   persistClawInstallRecord,
   persistClawPackageRef,
+  readClawInstallRecordFromDatabase,
   updateClawInstallRecordStatus,
   updateClawPackageRefStatus,
 } from "./provenance.js";
 import { persistClawWorkspaceFile, updateClawWorkspaceFileStatus } from "./workspace.js";
+
+function assertPackageLease(command: ClawAddStateCommand, database: OpenClawStateDatabase): void {
+  if (
+    command.type !== "claws.add.persistPackageRef" &&
+    command.type !== "claws.add.updatePackageRefStatus"
+  ) {
+    return;
+  }
+  const agentId =
+    command.type === "claws.add.persistPackageRef"
+      ? command.input.plan.agent.finalId
+      : command.input.ref.agentId;
+  const install = readClawInstallRecordFromDatabase(database.db, agentId);
+  const pkg =
+    command.type === "claws.add.persistPackageRef" ? command.input.pkg : command.input.ref;
+  const packageLease = command.input.packageLease;
+  if (
+    !install ||
+    (command.type === "claws.add.persistPackageRef" &&
+      install.workspace !== command.input.plan.agent.workspace)
+  ) {
+    throw new Error("Claw package reference no longer has its planned install owner.");
+  }
+  const key = clawPackageLifecycleLeaseKey(
+    pkg.kind === "skill"
+      ? { kind: "skill", source: pkg.source, ref: pkg.ref, workspace: install.workspace }
+      : { kind: "plugin", source: pkg.source, ref: pkg.ref },
+  );
+  if (
+    packageLease.scope !== "claw-package-lifecycle" ||
+    packageLease.key !== key ||
+    readOpenClawStateLeaseExpiry(database.db, packageLease) === undefined
+  ) {
+    throw new Error("Claw package reference no longer owns its package lifecycle lease.");
+  }
+}
 
 /** One finite Claw Add state change runs entirely on the shared SQLite actor. */
 export function executeClawAddStateCommand(
@@ -24,6 +63,7 @@ export function executeClawAddStateCommand(
   return runOpenClawStateWriteTransaction(
     () => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      assertPackageLease(command, database);
       const result = (() => {
         switch (command.type) {
           case "claws.add.persistInstall": {
@@ -116,6 +156,7 @@ export function executeClawAddStateCommand(
         }
       })();
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      assertPackageLease(command, database);
       return result;
     },
     { database },
