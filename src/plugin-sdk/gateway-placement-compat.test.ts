@@ -4,10 +4,11 @@ import type { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/pl
 import { expectTypeOf, it } from "vitest";
 
 it("retains synchronous placement and publication contracts from the released Gateway context", () => {
-  type Context =
-    | CoreHandler["context"]
-    | RuntimeHandler["context"]
-    | NonNullable<ReturnType<typeof getPluginRuntimeGatewayRequestScope>>["context"];
+  type Context = CoreHandler["context"];
+  expectTypeOf<RuntimeHandler["context"]>().toEqualTypeOf<Context>();
+  expectTypeOf<
+    NonNullable<NonNullable<ReturnType<typeof getPluginRuntimeGatewayRequestScope>>["context"]>
+  >().toEqualTypeOf<Context>();
   type Placements = NonNullable<NonNullable<Context>["workerSessionPlacementService"]>;
   type Publications = NonNullable<NonNullable<Context>["githubPublicationService"]>;
   type PendingReader = NonNullable<Placements["listPendingWorkspaceResults"]>;
