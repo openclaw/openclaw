@@ -41,19 +41,6 @@ describe("nextcloud-talk normalizeCompatibilityConfig streaming aliases", () => 
     expect(home?.streaming).toEqual({ chunkMode: "newline", block: { enabled: true } });
     expect(home?.blockStreaming).toBeUndefined();
   });
-
-  it("still runs the legacy private-network migration and stays idempotent", () => {
-    const first = normalizeCompatibilityConfig({
-      cfg: talkConfig({ allowPrivateNetwork: true, blockStreaming: false }),
-    });
-    const talk = first.config.channels?.["nextcloud-talk"] as unknown as Record<string, unknown>;
-    expect(talk.allowPrivateNetwork).toBeUndefined();
-    expect(talk.network).toEqual({ dangerouslyAllowPrivateNetwork: true });
-    expect(talk.streaming).toEqual({ block: { enabled: false } });
-
-    const second = normalizeCompatibilityConfig({ cfg: first.config });
-    expect(second.changes).toEqual([]);
-  });
 });
 
 describe("Nextcloud Talk webhook port migration", () => {

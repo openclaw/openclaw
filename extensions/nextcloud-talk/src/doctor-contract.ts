@@ -1,7 +1,6 @@
 import type { ChannelDoctorConfigMutation } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  createLegacyPrivateNetworkDoctorContract,
   createLegacyWebhookListenerDoctorContract,
   defineChannelAliasMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
@@ -10,10 +9,6 @@ const webhookContract = createLegacyWebhookListenerDoctorContract({
   channelKey: "nextcloud-talk",
   defaultHost: "0.0.0.0",
   defaultPort: 8788,
-});
-
-const networkContract = createLegacyPrivateNetworkDoctorContract({
-  channelKey: "nextcloud-talk",
 });
 
 // Nextcloud Talk's nested streaming schema is delivery-only ({chunkMode,
@@ -29,7 +24,6 @@ const streamingAliasMigration = defineChannelAliasMigration({
 
 export const legacyConfigRules = [
   ...webhookContract.legacyConfigRules,
-  ...networkContract.legacyConfigRules,
   ...streamingAliasMigration.legacyConfigRules,
 ];
 
@@ -39,9 +33,8 @@ export function normalizeCompatibilityConfig({
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
   const webhook = webhookContract.normalizeCompatibilityConfig({ cfg });
-  const network = networkContract.normalizeCompatibilityConfig({ cfg: webhook.config });
   return streamingAliasMigration.normalizeChannelConfig({
-    cfg: network.config,
-    changes: [...webhook.changes, ...network.changes],
+    cfg: webhook.config,
+    changes: webhook.changes,
   });
 }
