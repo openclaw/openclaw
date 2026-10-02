@@ -15,7 +15,10 @@ import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { assertNoRetiredStateFiles } from "../infra/state-migrations.retired-files.js";
+import {
+  assertNoRetiredStateFiles,
+  createRetiredStateInspectionError,
+} from "../infra/state-migrations.retired-files.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -156,9 +159,16 @@ export function listLegacyOAuthSidecarPaths(
       .map((name) => path.join(directory, name));
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {
-      return [];
+      try {
+        fs.lstatSync(directory);
+      } catch (inspectionError) {
+        if (hasErrnoCode(inspectionError, "ENOENT")) {
+          return [];
+        }
+        throw createRetiredStateInspectionError(directory, inspectionError);
+      }
     }
-    throw error;
+    throw createRetiredStateInspectionError(directory, error);
   }
 }
 
