@@ -2,10 +2,12 @@ import { isDeepStrictEqual } from "node:util";
 import { resolveStateDir } from "../../config/paths.js";
 import { validateUpdateCandidateCanary } from "../../infra/update-candidate-canary.js";
 import { createUpdateDoctorConfigWarningStep } from "../../infra/update-doctor-config.js";
+import { UPDATE_RUN_TEXT_LIMIT } from "../../infra/update-run-limits.js";
 import { isFailedUpdateStep } from "../../infra/update-run-step.js";
 import { recordUpdateRunStepAsync } from "../../infra/update-run-write.async.js";
 import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { prepareOpenClawStateReadSource } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
@@ -14,6 +16,22 @@ import type { createUpdateCommandExecutionGuards } from "./update-command-execut
 import type { readUpdateCandidateSource } from "./update-command-managed-context.js";
 import { isUpdatedInstallGatewayExecutorSupported } from "./update-command-service-command.js";
 import { resolveUpdatedInstallCommandEnv } from "./update-command-service-env.js";
+
+/**
+ * The canary computes a step's duration and its owner-classified diagnostics for
+ * the display path only, so a failed run loses the per-phase breakdown that
+ * explains where validation time went. Carry the already-computed summary into
+ * the ledger. Values are truncated to the persisted text budget; nothing here
+ * performs additional measurement or I/O.
+ */
+function summarizeCandidateStep(step: UpdateStepResult): string | undefined {
+  const diagnostics = step.diagnostics?.filter((entry) => entry.trim());
+  const source = diagnostics?.length ? diagnostics.join(" | ") : step.stdoutTail?.trim();
+  if (!source) {
+    return undefined;
+  }
+  return source.length > UPDATE_RUN_TEXT_LIMIT ? source.slice(0, UPDATE_RUN_TEXT_LIMIT) : source;
+}
 
 export async function validateUpdateCandidateWithProgress(
   params: Pick<Parameters<typeof validateUpdateCandidateCanary>[0], "root" | "config"> & {
@@ -72,8 +90,31 @@ export async function validateUpdateCandidateWithProgress(
           `${step.step}: ${step.detail ?? step.status}`,
         );
       },
-      onStep: (step) =>
-        reportUpdateStepCompletion(execution.progress, { ...step, index: 0, total: 0 }),
+      onStep: async (step) => {
+        if (run) {
+          try {
+            const endedAtMs = Date.now();
+            const detail = summarizeCandidateStep(step);
+            await recordUpdateRunStepAsync(
+              run.runId,
+              {
+                step: step.name,
+                status: "completed",
+                startedAtMs: endedAtMs - Math.max(0, step.durationMs),
+                endedAtMs,
+                exitCode: step.exitCode,
+                ...(detail ? { detail } : {}),
+              },
+              { ...writeOptions, context: source?.workerContext() },
+            );
+          } catch {
+            // Attribution must never fail validation; the display path below
+            // remains the source of truth for this step.
+          }
+        }
+        assertCurrent();
+        await reportUpdateStepCompletion(execution.progress, { ...step, index: 0, total: 0 });
+      },
     });
   const validation =
     source && run

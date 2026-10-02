@@ -301,14 +301,21 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
         },
       },
       onProgress: ({ phase, path: database, snapshot }) => {
-        if (!snapshot) {
-          return;
-        }
-        const detail = redactSupportString(
-          `${phase} ${database}: ${snapshot.status}, attempt 1, ${snapshot.copiedPages}/${snapshot.totalPages} pages${snapshot.copiedBytes === undefined ? "" : `, ${snapshot.copiedBytes.toLocaleString("en-US")} bytes`}, ${(snapshot.elapsedMs / 1000).toFixed(3)} seconds.`,
-          { env: params.env, stateDir: params.stateDir },
-          { maxLength: UPDATE_RUN_TEXT_LIMIT },
-        );
+        // Phase-only progress (plugin inventory, plugin copy) carries no page
+        // counters, but it is the only signal that the worker is in that phase.
+        // Discarding it left a worker that died there with no recorded step, so
+        // the run could not name the phase it failed in.
+        const detail = snapshot
+          ? redactSupportString(
+              `${phase} ${database}: ${snapshot.status}, attempt 1, ${snapshot.copiedPages}/${snapshot.totalPages} pages${snapshot.copiedBytes === undefined ? "" : `, ${snapshot.copiedBytes.toLocaleString("en-US")} bytes`}, ${(snapshot.elapsedMs / 1000).toFixed(3)} seconds.`,
+              { env: params.env, stateDir: params.stateDir },
+              { maxLength: UPDATE_RUN_TEXT_LIMIT },
+            )
+          : redactSupportString(
+              `${phase}${database ? ` ${database}` : ""}: in progress`,
+              { env: params.env, stateDir: params.stateDir },
+              { maxLength: UPDATE_RUN_TEXT_LIMIT },
+            );
         try {
           // Invoke at emission so the writer captures this source before it yields.
           const recording = Promise.resolve(
@@ -324,7 +331,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
           failProgress(error);
         }
         if (
-          snapshot.status === "completed" &&
+          snapshot?.status === "completed" &&
           snapshotDiagnostics.length < UPDATE_RUN_DIAGNOSTIC_LIMIT
         ) {
           snapshotDiagnostics.push(detail);
