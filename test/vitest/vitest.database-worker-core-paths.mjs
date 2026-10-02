@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/state/openclaw-agent-execution-incognito.lifecycle.test.ts",
   "src/agents/bash-tools.visible-subagent-notify.test.ts",
   "src/system-agent/audit.test.ts",
   "src/system-agent/operations.test.ts",
