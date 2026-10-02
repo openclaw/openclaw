@@ -39,7 +39,7 @@ function buildRoutingSchema(options: { includeTeamId?: boolean }) {
   };
   if (options.includeTeamId) {
     props.teamId = optionalStringSchema(
-      "Team or workspace ID for channel-info, channel-list, or conversation-open.",
+      "Team or workspace ID for channel-create, channel-info, channel-list, or conversation-open.",
     );
   }
   return props;
