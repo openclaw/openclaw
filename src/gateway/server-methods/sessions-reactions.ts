@@ -26,6 +26,7 @@ import { resolveMessageActionOutcome } from "../../infra/outbound/message-action
 import { getRuntimeVisibleChannelPlugin } from "../../infra/outbound/runtime-visible-channels.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
 import { isAccountEnabled } from "../../shared/account-enabled.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
 import {
@@ -76,22 +77,7 @@ function reactionScope(target: ReactionTarget) {
 // Mirrors run in local commit order per message and channel reaction slot, so
 // an older add can never land after a newer remove and leave the channel out of
 // step with the store. Single-slot channels share the queue across all emoji.
-const mirrorQueues = new Map<string, Promise<SessionReactionMirror>>();
-
-function enqueueMirror(
-  key: string,
-  task: () => Promise<SessionReactionMirror>,
-): Promise<SessionReactionMirror> {
-  const run = (mirrorQueues.get(key) ?? Promise.resolve()).then(task, task);
-  mirrorQueues.set(key, run);
-  const release = () => {
-    if (mirrorQueues.get(key) === run) {
-      mirrorQueues.delete(key);
-    }
-  };
-  void run.then(release, release);
-  return run;
-}
+const mirrorQueues = new Map<string, Promise<void>>();
 
 type MirrorTransport = { channel: string; conversationRef: string; messageId: string };
 
@@ -153,8 +139,9 @@ async function mirrorReaction(params: {
       (conversation) => ({ ok: true as const, conversation }),
       (error: unknown) => ({ ok: false as const, error }),
     );
-    return await enqueueMirror(
-      [
+    return await enqueueKeyedTask({
+      tails: mirrorQueues,
+      key: [
         params.target.agentId,
         params.target.storeKey,
         params.target.entry.sessionId,
@@ -162,7 +149,7 @@ async function mirrorReaction(params: {
         transport.messageId,
         singleSlot ? "" : params.emoji,
       ].join("\0"),
-      async () => {
+      task: async () => {
         const resolved = await captured;
         if (!resolved.ok) {
           throw resolved.error;
@@ -269,7 +256,7 @@ async function mirrorReaction(params: {
         }
         return { status: "delivered" };
       },
-    );
+    });
   } catch (error) {
     const reason = formatErrorMessage(error);
     params.context.logGateway.warn(`Control UI reaction mirror failed: ${reason}`);

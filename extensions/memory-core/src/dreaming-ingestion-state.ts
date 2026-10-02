@@ -1,4 +1,3 @@
-// Canonical and legacy ingestion share checkpoint encoding and normalization.
 import {
   asNullableRecord,
   normalizeStringEntries,
@@ -86,7 +85,7 @@ export function normalizeMemoryDay(value: unknown): string | undefined {
   return MEMORY_DAY_RE.test(day) ? day : undefined;
 }
 
-export function normalizeDailyIngestionState(raw: unknown): DailyIngestionState {
+function normalizeDailyIngestionState(raw: unknown): DailyIngestionState {
   const record = asNullableRecord(raw);
   const filesRaw = asNullableRecord(record?.files);
   if (!filesRaw) {
@@ -113,7 +112,7 @@ export function normalizeDailyIngestionState(raw: unknown): DailyIngestionState 
   return { version: 1, files };
 }
 
-export function normalizeSessionIngestionState(raw: unknown): SessionIngestionState {
+function normalizeSessionIngestionState(raw: unknown): SessionIngestionState {
   const record = asNullableRecord(raw);
   const filesRaw = asNullableRecord(record?.files);
   const files: Record<string, SessionIngestionFileState> = {};

@@ -14,7 +14,6 @@ import { readObservationSnapshot } from "../../infra/fs-observation-snapshot.js"
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { normalizeWorkspaceSkillRoots } from "../loading/workspace-skill-roots.js";
 import {
   resolveWorkspaceSkillSourcePlan,
   splitSkillSourcePlan,
@@ -38,6 +37,7 @@ import {
 import { isIgnoredSkillsWatchPath, isSkillDiscoveryFileWatchPath } from "./refresh-watch-path.js";
 import {
   evictWorkspaceWatchStates,
+  resolveSkillsWatchScope,
   flushSkillsWatchChanges,
   hasUnreadySharedTargets,
   hasVerifiedCoverage,
@@ -526,6 +526,7 @@ function disposeWorkspaceWatchState(
 export function ensureSkillsWatcher(params: {
   workspaceDir: string;
   executionWorkspaceDir?: string;
+  executionWorkspaceFileHost?: "gateway";
   config?: OpenClawConfig;
   agentId?: string;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
@@ -535,16 +536,11 @@ export function ensureSkillsWatcher(params: {
   if (watchersClosing) {
     return;
   }
-  const workspaceDir = params.workspaceDir.trim();
+  const { workspaceDir, executionWorkspaceDir, watcherKey, sourceScope } =
+    resolveSkillsWatchScope(params);
   if (!workspaceDir) {
     return;
   }
-  const { executionWorkspaceDir } = normalizeWorkspaceSkillRoots({
-    agentWorkspaceDir: workspaceDir,
-    executionWorkspaceDir: params.executionWorkspaceDir,
-  });
-  const watcherKey = JSON.stringify([workspaceDir, executionWorkspaceDir, params.agentId]);
-  const sourceScope = { executionWorkspaceDir };
   const owner: SkillsWatchOwner = {
     workspaceDir,
     sourceScope,
@@ -575,14 +571,19 @@ export function ensureSkillsWatcher(params: {
   }
   const access = getAgentWorkspaceAccess(workspaceDir, "loadSkills");
   let localPlan = params.sourcePlan;
+  let localExecutionWorkspaceDir = executionWorkspaceDir;
   if (access?.loadSkills) {
-    const { gatewayPlan, workspacePlan } = splitSkillSourcePlan(
-      resolveWorkspaceSkillSourcePlan(workspaceDir, params),
-    );
+    const {
+      gatewayPlan,
+      workspacePlan,
+      gatewayExecutionWorkspaceDir,
+      workspaceExecutionWorkspaceDir,
+    } = splitSkillSourcePlan(resolveWorkspaceSkillSourcePlan(workspaceDir, params), sourceScope);
+    localExecutionWorkspaceDir = gatewayExecutionWorkspaceDir;
     ensureRemoteSkillsWatcher({
       watcherKey,
       workspaceDir,
-      executionWorkspaceDir,
+      executionWorkspaceDir: workspaceExecutionWorkspaceDir,
       access,
       sourcePlan: workspacePlan,
     });
@@ -615,7 +616,7 @@ export function ensureSkillsWatcher(params: {
       workspaceDir,
       params.config,
       params.agentId,
-      access?.loadSkills ? undefined : executionWorkspaceDir,
+      localExecutionWorkspaceDir,
       params.pluginMetadataSnapshot,
       localPlan,
       cachedTargets,
@@ -701,12 +702,7 @@ export function reconcileSkillsWatcherCoverage(
   params: Parameters<typeof ensureSkillsWatcher>[0],
 ): boolean {
   ensureSkillsWatcher(params);
-  const workspaceDir = params.workspaceDir.trim();
-  const { executionWorkspaceDir } = normalizeWorkspaceSkillRoots({
-    agentWorkspaceDir: workspaceDir,
-    executionWorkspaceDir: params.executionWorkspaceDir,
-  });
-  const watcherKey = JSON.stringify([workspaceDir, executionWorkspaceDir, params.agentId]);
+  const { watcherKey } = resolveSkillsWatchScope(params);
   const owner = workspaceWatchOwners.get(watcherKey);
   const covered = !watchersClosing && !nativeWatchCapacityFailed && hasVerifiedCoverage(watcherKey);
   if (owner && !covered) {

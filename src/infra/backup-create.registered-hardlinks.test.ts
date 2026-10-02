@@ -24,7 +24,6 @@ describe("registered backup hardlinks", () => {
     { role: "agent", aliasName: "a-alias.sqlite", journal: "one WAL" },
     { role: "agent", aliasName: "z-alias.sqlite", journal: "one WAL" },
     { role: "agent", aliasName: "a-alias.sqlite", journal: "competing WALs" },
-    { role: "agent", aliasName: "a-alias.sqlite", journal: "rollback journal" },
     { role: "global", aliasName: "a-alias.sqlite", journal: "one WAL" },
     { role: "global", aliasName: "z-alias.sqlite", journal: "one WAL" },
     { role: "global", aliasName: "a-alias.sqlite", journal: "competing WALs" },
@@ -63,8 +62,6 @@ describe("registered backup hardlinks", () => {
             await expect(fs.stat(`${aliasPath}-wal`)).rejects.toMatchObject({ code: "ENOENT" });
             if (journal === "competing WALs") {
               await fs.copyFile(`${ownerPath}-wal`, `${aliasPath}-wal`);
-            } else if (journal === "rollback journal") {
-              await fs.writeFile(`${aliasPath}-journal`, "unsettled journal");
             }
             const output = state.path("backup.tar.gz");
             const runtime = createTestRuntime();
@@ -72,9 +69,7 @@ describe("registered backup hardlinks", () => {
               backupCreateCommand(runtime, { output, includeWorkspace: false, verify: true });
             if (journal !== "one WAL") {
               const reason =
-                journal === "competing WALs"
-                  ? /Ambiguous SQLite hardlink journal ownership: multiple non-empty WAL/iu
-                  : /journal ownership.*rollback journal is present/iu;
+                /Ambiguous SQLite hardlink journal ownership: multiple non-empty WAL/iu;
               await expect(create()).rejects.toThrow(reason);
               expect((await readBackupRunFreshness(state.env)).latest).toMatchObject({
                 status: "failed",

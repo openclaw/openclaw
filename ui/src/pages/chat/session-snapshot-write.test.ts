@@ -11,7 +11,7 @@ import {
 } from "./session-snapshot-database.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
-const sessionKey = 'agent:main:escaped-"\\🦞';
+const sessionKey = 'scope:["wss://cache.example","account-a"]\u0000agent:main:escaped-"\\🦞';
 function snapshot(): ChatSessionSnapshot {
   return {
     messages: [{ role: "assistant", content: "nested transcript" }],

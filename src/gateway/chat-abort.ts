@@ -9,7 +9,6 @@ import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.j
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
-import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -99,10 +98,6 @@ type RegisteredChatAbortController = {
   | { registered: true; entry: ChatAbortControllerEntry }
   | { registered: false; entry?: undefined }
 );
-
-export function isChatStopCommandText(text: string): boolean {
-  return isAbortRequestText(text);
-}
 
 function createChatAbortSignalReason(stopReason: string | undefined): Error | undefined {
   if (stopReason === "restart") {

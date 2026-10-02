@@ -43,6 +43,13 @@ as `scripts/changed-lanes.mjs` and skips the shared helper implementation
 itself. `check:changed` runs this report for changed test paths as a
 warning-only CI signal (GitHub warning annotations, not failures).
 
+Copy fixture trees whose files a test later executes directly (stubs on `PATH`,
+shebang wrappers, native binaries) with `copyTreeCloseOnExec` from
+`test/helpers/close-on-exec-copy.ts`, not a recursive `fs.cpSync` without a
+`filter`. On Node 24 that copy path opens files without close-on-exec, so a
+child forked by another Vitest thread mid-copy keeps the file writable and a
+later `execve` fails with `ETXTBSY`.
+
 ## Agent reliability evals (skills)
 
 We already have a few CI-safe tests that behave like "agent reliability evals":

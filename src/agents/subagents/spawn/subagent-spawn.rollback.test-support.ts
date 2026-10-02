@@ -5,9 +5,11 @@ import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { withTimeout } from "../../../infra/fs-safe.js";
+import type { SqliteWorkerCommand } from "../../../infra/sqlite-worker-contract.js";
+import type { OpenClawStateWorkerOperations } from "../../../state/openclaw-state-worker-contract.js";
+import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import type { AdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { persistSubagentRunsToDiskOrThrow } from "../registry/subagent-registry-state.js";
 import {
   createBoundSpawnInvocation,
   createSpawnOperatorSource,
@@ -43,6 +45,7 @@ export function registerOperatorSpawnRollbackCases(options: {
       let embeddedSignal: AbortSignal | undefined;
       let embeddedSettled = false;
       const failures: unknown[] = [];
+      let restoreWriteFailure: (() => void) | undefined;
       if (phase === "preparation") {
         spawnTesting.setDepsForTest({
           forkSessionEntryFromParent: async (params) => {
@@ -69,23 +72,43 @@ export function registerOperatorSpawnRollbackCases(options: {
             embeddedSettled = true;
           }
         });
-        vi.mocked(persistSubagentRunsToDiskOrThrow).mockImplementation(() => {
-          const record = expectDefined(
-            [...subagentRuns.values()].find(
-              (entry) => entry.requesterSessionKey === bound.parentSessionKey,
+        const runWorkerOperation = stateWorker.runOpenClawStateWorkerOperation;
+        const writeFailure = vi
+          .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+          .mockImplementation((workerContext, operation, workerOptions) =>
+            runWorkerOperation(
+              workerContext,
+              (scope) =>
+                operation({
+                  execute: vi
+                    .fn()
+                    .mockImplementation(
+                      async (command: SqliteWorkerCommand<OpenClawStateWorkerOperations>) => {
+                        const record =
+                          command.type === "subagents.persistChanges"
+                            ? command.input.values.find(
+                                (row) => row.requester_session_key === bound.parentSessionKey,
+                              )
+                            : undefined;
+                        if (!record) {
+                          return scope.execute(command);
+                        }
+                        childSessionKey = record.child_session_key;
+                        childRunId = record.run_id;
+                        const acceptedRun = expectDefined(
+                          context.chatAbortControllers.get(record.run_id),
+                          "accepted child execution owner",
+                        );
+                        expect(acceptedRun.sessionKey).toBe(record.child_session_key);
+                        source.revoke();
+                        throw new Error("ordinary child registry write failed");
+                      },
+                    ),
+                }),
+              workerOptions,
             ),
-            "ordinary child registration",
           );
-          childSessionKey = record.childSessionKey;
-          childRunId = record.runId;
-          const acceptedRun = expectDefined(
-            context.chatAbortControllers.get(record.runId),
-            "accepted child execution owner",
-          );
-          expect(acceptedRun.sessionKey).toBe(record.childSessionKey);
-          source.revoke();
-          throw new Error("ordinary child registry write failed");
-        });
+        restoreWriteFailure = () => writeFailure.mockRestore();
       }
       try {
         const result = await withTimeout(
@@ -123,7 +146,7 @@ export function registerOperatorSpawnRollbackCases(options: {
         failures.push(error);
       } finally {
         spawnTesting.setDepsForTest();
-        vi.mocked(persistSubagentRunsToDiskOrThrow).mockReset();
+        restoreWriteFailure?.();
         for (const entry of context.chatAbortControllers.values()) {
           if (entry !== bound.parent.entry) {
             entry.controller.abort(new Error("spawn rollback fixture cleanup"));

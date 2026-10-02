@@ -548,8 +548,8 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     } else if (options?.triggerTurn) {
       await this.runAgentPrompt(appMessage);
     } else {
-      await withSessionManagerWrite(this.sessionManager, () => {
-        this.sessionManager.appendCustomMessageEntry(
+      await withSessionManagerWrite(this.sessionManager, async () => {
+        await this.sessionManager.appendCustomMessageEntryAsync(
           appMessage.customType,
           appMessage.content,
           appMessage.display,

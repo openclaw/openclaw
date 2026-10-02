@@ -26,8 +26,6 @@ import {
   type SessionTranscriptInitializationPublication,
 } from "./session-accessor.sqlite-entry-cache.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
-import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
-import type { SessionEntryReplacementCommitted } from "./session-accessor.sqlite-replacement-types.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 
 type ReplacementDatabaseOptions = OpenClawAgentDatabaseOptions & { path: string };
@@ -255,12 +253,14 @@ export async function commitSessionEntryReplacementsInWorker(
   },
   retainedExecution?: OpenClawAgentDatabaseExecution,
 ) {
+  const unknownMessage =
+    "Session replacement has no confirmed native completion and commit receipt";
   const publication = retainSessionEntryWorkerPublication({
-    agentId: options.agentId,
+    agentId: lifecycle.identityAgentId,
     storePath: options.path,
     databaseIdentity,
   });
-  let committed: SessionEntryReplacementCommitted | undefined;
+  let committed: AgentDatabaseOperations["session.entries.replace"]["output"] | undefined;
   let admitted:
     | { admission: SqliteWorkerOperationAdmission; retained: RetainedWorkerTransactionAdmission }
     | undefined;
@@ -275,20 +275,31 @@ export async function commitSessionEntryReplacementsInWorker(
       // SAFETY: This retained command's paired native kernel owns the tagged publication receipt.
       receipt = facts as SessionEntryReplacementPublication;
     } else if (committed) {
-      receipt = prepareSessionEntryReplacementPublication(committed);
-    }
-    if (receipt) {
-      lifecycle.onLifecycleCommitted?.(receipt.pendingArchiveRecovery);
+      receipt = committed.publication;
     }
     const unknown = admitted.admission.settlement?.kind !== "completed" || !receipt;
-    const published = publication.settle(receipt, unknown);
-    if (published) {
-      publishCommittedSessionIdentity(
-        lifecycle.identityAgentId,
-        databaseIdentity,
-        published.previous,
-        published.current,
-      );
+    try {
+      try {
+        if (receipt) {
+          lifecycle.onLifecycleCommitted?.(receipt.pendingArchiveRecovery);
+        }
+      } finally {
+        const published = publication.settle(receipt, unknown);
+        if (published) {
+          publishCommittedSessionIdentity(
+            lifecycle.identityAgentId,
+            databaseIdentity,
+            published.previous,
+            published.current,
+            published.prepared,
+          );
+        }
+      }
+    } catch (error) {
+      if (unknown) {
+        rejectUnknownSessionEntryOutcome(unknownMessage, error);
+      }
+      throw error;
     }
     return unknown;
   };
@@ -310,7 +321,7 @@ export async function commitSessionEntryReplacementsInWorker(
           // Close joins this callback; a delayed result cannot borrow a successor owner.
           if (await settle()) {
             rejectUnknownSessionEntryOutcome(
-              "Session replacement has no confirmed native completion and commit receipt",
+              unknownMessage,
               outcome.ok ? undefined : outcome.error,
             );
           }
@@ -336,12 +347,20 @@ export async function commitSessionEntryReplacementsInWorker(
         !Array.isArray(facts.publication.membershipInvalidatedKeys) ||
         !facts.publication.membershipInvalidatedKeys.every(
           (key): key is string => typeof key === "string",
+        ) ||
+        !Array.isArray(facts.publication.sharingUnchangedKeys) ||
+        !facts.publication.sharingUnchangedKeys.every(
+          (key): key is string => typeof key === "string",
         )
       ) {
         throw new Error("Session replacement commit omitted its publication keys");
       }
       admitted = { admission, retained };
-      publication.begin(facts.publication.changedKeys, facts.publication.membershipInvalidatedKeys);
+      publication.begin(
+        facts.publication.changedKeys,
+        facts.publication.membershipInvalidatedKeys,
+        facts.publication.sharingUnchangedKeys,
+      );
     },
     retainedExecution,
   );

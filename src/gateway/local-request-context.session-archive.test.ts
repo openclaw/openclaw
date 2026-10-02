@@ -9,7 +9,7 @@ import {
   type EmbeddedAgentQueueHandle,
 } from "../agents/embedded-agent-runner/runs.js";
 import {
-  addSubagentRunForTests,
+  seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
@@ -89,7 +89,7 @@ describe("scoped session archive tools", () => {
       }
       const client = roleClient("write");
       const runId = "collector-session-controls";
-      addSubagentRunForTests({ runId, childSessionKey: TARGET, collect: true });
+      seedSubagentRunForReadTest({ runId, childSessionKey: TARGET, collect: true });
       try {
         await withPluginRuntimeGatewayRequestScope({ ...request, client }, () =>
           withOperatorToolGatewayAuthority(
@@ -130,7 +130,7 @@ describe("scoped session archive tools", () => {
           ),
         );
       } finally {
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
       }
     });
   });

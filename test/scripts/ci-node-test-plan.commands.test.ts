@@ -504,6 +504,7 @@ describe("command CI ownership and parallel timing", () => {
       "src/commands/doctor-session-sqlite.discovery.test.ts",
       "src/commands/doctor-session-sqlite.held-recovery.test.ts",
       "src/commands/doctor-session-sqlite.indexless.test.ts",
+      "src/commands/doctor-session-sqlite.receipt-retirement.test.ts",
       "src/commands/doctor-session-sqlite.retained-source-verification.test.ts",
       "src/commands/doctor-session-sqlite.shared-orphan.test.ts",
       "src/commands/doctor-session-sqlite.shared-store.test.ts",

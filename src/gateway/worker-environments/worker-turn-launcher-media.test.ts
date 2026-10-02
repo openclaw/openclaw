@@ -74,7 +74,7 @@ function harness() {
         }),
       );
       const seq = request.plan.assignment.transcript.nextSeq;
-      createWorkerSessionPlacementGate(placements).updateAckCursors({
+      await createWorkerSessionPlacementGate(placements).updateAckCursors({
         claim: request.turnClaim,
         transcriptSeq: seq,
         liveSeq: request.plan.assignment.liveEvents.nextSeq,

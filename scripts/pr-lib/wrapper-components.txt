@@ -177,7 +177,7 @@ scripts/lib/vitest-worker-artifacts.mts
 scripts/lib/vitest-worker-cache-policy.mts
 scripts/lib/vitest-worker-declarations.mts
 scripts/lib/vitest-worker-run.mts
-scripts/lib/watch-pr-ci-dependencies.mjs
+scripts/lib/tooling-dependencies.mjs
 scripts/lib/watch-pr-ci-rollup.mts
 scripts/lib/windows-taskkill.mjs
 scripts/pnpm-runner.mts
@@ -216,6 +216,7 @@ src/agents/model-extra-params.ts
 src/agents/model-ref-profile.ts
 src/agents/model-ref-shared.ts
 src/agents/model-runtime-policy.ts
+src/agents/model-selection-alias-scope.ts
 src/agents/model-selection-config.ts
 src/agents/model-selection-normalize.ts
 src/agents/model-selection-shared.ts
@@ -305,6 +306,7 @@ src/channels/plugins/legacy-state-migration-preview.ts
 src/channels/plugins/merge-plugin-section.ts
 src/channels/plugins/meta-normalization.ts
 src/channels/plugins/module-loader.ts
+src/channels/plugins/optional-public-artifact.ts
 src/channels/plugins/package-state-probes.ts
 src/channels/plugins/persisted-auth-state.ts
 src/channels/plugins/registry-loaded.ts
@@ -332,8 +334,6 @@ src/commands/doctor/shared/legacy-config-migrations.audio.ts
 src/commands/doctor/shared/legacy-config-migrations.channels.ts
 src/commands/doctor/shared/legacy-config-migrations.qqbot-account.ts
 src/commands/doctor/shared/legacy-config-migrations.qqbot.ts
-src/commands/doctor/shared/legacy-config-migrations.queue.ts
-src/commands/doctor/shared/legacy-config-migrations.runtime.agent-policy.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.cli-backends.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.code-mode.ts
@@ -465,6 +465,7 @@ src/config/merge-patch.ts
 src/config/model-config-vocabulary.ts
 src/config/model-cost.ts
 src/config/model-input.ts
+src/config/model-input-normalization.ts
 src/config/model-policy-allowlist-migration.ts
 src/config/model-policy-ref.ts
 src/config/model-provider-config.ts
@@ -557,6 +558,7 @@ src/config/zod-schema.logging.ts
 src/config/zod-schema.mcp-server.ts
 src/config/zod-schema.memory-search.ts
 src/config/zod-schema.messages.ts
+src/config/zod-schema.model-compat.ts
 src/config/zod-schema.node-host.ts
 src/config/zod-schema.proxy.ts
 src/config/zod-schema.root-shape.ts
@@ -587,7 +589,7 @@ src/gateway/github-repository-publication-snapshot.ts
 src/gateway/operator-scopes.ts
 src/gateway/security-path.ts
 src/gateway/server-methods/workspace-fs.ts
-src/gateway/worker-environments/placement-workspace-journal.worker-contract.ts
+src/gateway/worker-environments/placement-workspace-journal.types.ts
 src/gateway/worker-environments/session-attachment.ts
 src/gateway/worker-environments/workspace-actual-manifest.ts
 src/gateway/worker-environments/workspace-git-input.ts
@@ -613,6 +615,7 @@ src/global-state.ts
 src/globals.ts
 src/infra/abort-signal.ts
 src/infra/acquire-with-wait.ts
+src/infra/agent-database-readers.ts
 src/infra/agent-event-execution-context.ts
 src/infra/agent-event-lifecycle.ts
 src/infra/agent-events.ts
@@ -700,6 +703,7 @@ src/infra/gateway-lock-payload.ts
 src/infra/gateway-state-owner-directory.ts
 src/infra/gateway-state-owner.ts
 src/infra/gateway-process-argv.ts
+src/infra/gateway-scheduler.ts
 src/infra/gateway-supervision.ts
 src/infra/git-commit.ts
 src/infra/git-exec.ts
@@ -754,6 +758,7 @@ src/infra/node-runner-inventory.ts
 src/infra/node-runtime-executable.ts
 src/infra/node-sqlite.ts
 src/infra/non-fatal-cleanup.ts
+src/infra/npm-error.ts
 src/infra/npm-registry-spec.ts
 src/infra/openclaw-exec-env.ts
 src/infra/openclaw-process-census.ts
@@ -876,6 +881,7 @@ src/infra/update-failure-public-codes.ts
 src/infra/update-failure-public-identifiers.ts
 src/infra/update-managed-service-handoff-boot.ts
 src/infra/update-managed-service-handoff-cancellation.ts
+src/infra/update-managed-service-handoff-children.ts
 src/infra/update-managed-service-handoff-cleanup.ts
 src/infra/update-managed-service-handoff-database.ts
 src/infra/update-managed-service-handoff-lease.ts
@@ -923,6 +929,7 @@ src/infra/worker-task-native-sections.ts
 src/infra/worker-task-pool-completion.ts
 src/infra/worker-task-pool-core.ts
 src/infra/worker-task-pool-owned.ts
+src/infra/worker-task-pool-registry.ts
 src/infra/worker-task-pool-resources.ts
 src/infra/worker-task-pool-retirement.ts
 src/infra/worker-task-pool-worker.ts
@@ -1060,7 +1067,6 @@ src/plugins/installed-plugin-index.ts
 src/plugins/installed-plugin-package-ownership.ts
 src/plugins/installed-plugin-record-match.ts
 src/plugins/jiti-factory.ts
-src/plugins/legacy-npm-declaration.ts
 src/plugins/loader-cache-state.ts
 src/plugins/managed-npm-retention-contract.ts
 src/plugins/managed-npm-retention.ts
@@ -1416,6 +1422,7 @@ src/state/openclaw-state-lease-worker.ts
 src/state/openclaw-state-lease.ts
 src/state/openclaw-state-maintenance-context.ts
 src/state/openclaw-state-ownership.ts
+src/state/openclaw-state-ownership-worker.ts
 src/state/openclaw-state-read-error.ts
 src/state/openclaw-state-read-operation.ts
 src/state/openclaw-state-read-request.ts
@@ -1491,6 +1498,7 @@ test/vitest/vitest.performance-config.ts
 test/vitest/vitest.plugin-sdk-paths.mjs
 test/vitest/vitest.startup-corpus-paths.mjs
 test/vitest/vitest.test-shards.mjs
+test/vitest/vitest.timeouts.ts
 test/vitest/vitest.tooling-isolated-paths.mjs
 test/vitest/vitest.ui-isolated-paths.mjs
 test/vitest/vitest.ui-paths.mjs

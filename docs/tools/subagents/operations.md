@@ -160,6 +160,8 @@ A typed `/stop` sent through `chat.send` honors `expectedLeafEntryId` and, when
 that branch check is present, `sessionId`. If the check fails during descendant
 cancellation, the Gateway refuses further cancellation and reports
 `active-leaf-changed`. Cancellation already accepted by a child still settles.
+The cancellation result waits for pending child-session metadata writes before
+checking that the original session still owns the outcome.
 
 Incomplete cancellation is reported as an error, not a clean success. `/stop`
 reports actual stopped and failed child counts. A committed child cancellation

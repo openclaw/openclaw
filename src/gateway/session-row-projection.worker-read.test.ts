@@ -11,7 +11,7 @@ import {
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
-import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
+import { persistRegistryFixture } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import {
   assignSessionOwner,
@@ -145,6 +145,12 @@ it.each([
             expect(projection.dirtyRowCount).toBe(rowCount);
             const published = publications;
             expect(published).toBe(rowCount);
+            // Each commit accepts its prepared entry before the worker refreshes database facts.
+            expect(accepting).toBe(rowCount);
+            expect(acceptance).toEqual([]);
+            expect(reads).toEqual([]);
+            expect(materializedKeys).toEqual([]);
+            accepting = 0;
 
             // Advance the clock only after real materialization; Worker replies remain real.
             // Avoid keyed reads until the drain settles so they cannot consume the suffix.
@@ -677,7 +683,7 @@ it.each([
           };
           subagentRuns.set(runId, collector);
           subagentRuns.commitOwnership(collector);
-          persistSubagentRunsToDiskOrThrow(subagentRuns, [runId]);
+          persistRegistryFixture(subagentRuns, [runId]);
         } else if (changesOwner) {
           const emit = sessionChanges.emit.bind(sessionChanges);
           let publicationObserved = false;
@@ -763,7 +769,7 @@ it.each([
         clearAgentRunContext(runId);
         if (collector && subagentRuns.get(runId) === collector) {
           subagentRuns.delete(runId);
-          persistSubagentRunsToDiskOrThrow(subagentRuns, [runId]);
+          persistRegistryFixture(subagentRuns, [runId]);
         }
       }
     } finally {

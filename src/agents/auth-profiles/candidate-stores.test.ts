@@ -3,11 +3,15 @@ import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readSqliteReaderDiagnosticsForPath } from "../../infra/sqlite-reader-lifecycle.js";
 import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db-registry.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   listCandidateAuthProfileStores,
@@ -58,19 +62,23 @@ describe("candidate auth profile stores", () => {
       const candidates = await listCandidateAuthProfileStores({
         cfg: {
           agents: {
-            list: [{ id: "configured", agentDir: configuredAgentDir }],
+            list: [
+              { id: "configured", agentDir: configuredAgentDir },
+              { id: "custom", agentDir: path.join(tempRoot, "active-custom-agent") },
+            ],
           },
         },
         env,
       });
-      expect(candidates).toHaveLength(3);
+      expect(candidates).toHaveLength(4);
       expect(candidates.map((candidate) => candidate.agentId)).toEqual([
+        "custom",
         "configured",
         "custom",
         "state-agent",
       ]);
 
-      const custom = candidates.find((candidate) => candidate.agentId === "custom");
+      const custom = candidates.find((candidate) => candidate.databasePath === customDatabasePath);
       expect(custom).toBeDefined();
       updateCandidateAuthProfileStore({
         candidate: custom!,
@@ -86,10 +94,12 @@ describe("candidate auth profile stores", () => {
           return true;
         },
       });
+      closeOpenClawAgentDatabaseByPath(customDatabasePath, "custom");
       expect(loadCandidateAuthProfileStore(custom!)?.profiles["openai:default"]).toMatchObject({
         access: "custom-access",
         refresh: "custom-refresh",
       });
+      expect(readSqliteReaderDiagnosticsForPath(customDatabasePath).connections).toEqual([]);
     } finally {
       closeAuthProfileReadPool({ kind: "root", rootPath: tempRoot });
       unregisterOpenClawAgentDatabase({

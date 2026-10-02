@@ -13,6 +13,7 @@ import {
   requireNonEmptyString,
   withFixedOwnerSessionStore,
 } from "./server.sessions.create.test-support.js";
+import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   getGatewayConfigModule,
@@ -50,6 +51,40 @@ test("creates a fresh selected-agent child outside fixed global ownership throug
       expect(
         loadSessionEntry({ agentId: "main", sessionKey: "global", storePath })?.sessionId,
       ).toBe("fixed-global-owner");
+    } finally {
+      await closeGatewayTestWebSocket(ws);
+    }
+  }));
+
+test("publishes an explicit non-main session before the next socket describe and list", () =>
+  withFixedOwnerSessionStore(createSessionStoreDir, "global", async () => {
+    const key = "agent:ops:dashboard:publication-owner";
+    const { ws } = await openClient();
+    try {
+      const warm = await rpcReq<SessionsListResult>(ws, "sessions.list", { agentId: "ops" });
+      expect(warm.ok, JSON.stringify(warm)).toBe(true);
+      const created = await rpcReq<CreatedSessionPayload>(ws, "sessions.create", {
+        agentId: "ops",
+        key,
+        label: "Publication owner",
+      });
+      expect(created.ok, JSON.stringify(created)).toBe(true);
+      const sessionId = requireNonEmptyString(created.payload?.sessionId, "created session id");
+      expect(created.payload?.key).toBe(key);
+      const expected = { key, sessionId, label: "Publication owner" };
+      const described = await rpcReq<{ session: GatewaySessionRow | null }>(
+        ws,
+        "sessions.describe",
+        { agentId: "ops", key },
+      );
+      expect(described.ok, JSON.stringify(described)).toBe(true);
+      expect(described.payload?.session).toMatchObject(expected);
+      const listed = await rpcReq<SessionsListResult>(ws, "sessions.list", {
+        agentId: "ops",
+        limit: 100,
+      });
+      expect(listed.ok, JSON.stringify(listed)).toBe(true);
+      expect(listed.payload?.sessions.find((row) => row.key === key)).toMatchObject(expected);
     } finally {
       await closeGatewayTestWebSocket(ws);
     }

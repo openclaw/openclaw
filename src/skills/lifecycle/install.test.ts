@@ -18,6 +18,7 @@ import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { buildWorkspaceSkillStatus } from "../discovery/status.js";
 import { hasBinary } from "../loading/config.js";
+import { recordSkillFileHost } from "../loading/skill-file-host.js";
 import {
   loadWorkspaceSkills,
   prepareWorkspaceSkills,
@@ -401,7 +402,7 @@ describe("installSkill before_install hooks", () => {
     await withWorkspaceCase(async ({ workspaceDir }) => {
       await writeInstallableSkill(workspaceDir, "gateway-owned");
       const entries = loadTestWorkspaceSkillEntries(workspaceDir);
-      entries[0]!.skill.fileHost = "gateway";
+      recordSkillFileHost(entries[0]!.skill, "gateway");
       vi.mocked(prepareWorkspaceSkills).mockResolvedValue(entries);
       const hostInstall = vi.fn(async () => ({
         ok: true,

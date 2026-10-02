@@ -107,13 +107,13 @@ describe("runDoctorSessionSqlite", () => {
     const quarantineBefore = [sqlitePath, laterPath].map((databasePath) =>
       readPersistedQuarantineRow(databasePath, { env: store.env }),
     );
-    const agentDatabase = await import("../state/openclaw-agent-db.js");
-    const migrate = agentDatabase.migrateOpenClawAgentDatabaseForMaintenance;
+    const agentMaintenance = await import("../state/openclaw-agent-db-maintenance.js");
+    const migrate = agentMaintenance.migrateOpenClawAgentDatabaseForMaintenance;
     // The competitor must not inherit the maintenance authority being revoked.
     const claimCompetingLease = AsyncResource.bind(claimOpenClawAgentDatabaseLease);
     let competingLeaseId: string | undefined;
     const repair = vi
-      .spyOn(agentDatabase, "migrateOpenClawAgentDatabaseForMaintenance")
+      .spyOn(agentMaintenance, "migrateOpenClawAgentDatabaseForMaintenance")
       .mockImplementationOnce(async (options, maintenance) => {
         await migrate(options, maintenance);
         // Lose the real owner at the caller's new await boundary, after native repair succeeds.

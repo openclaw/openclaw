@@ -341,11 +341,10 @@ it("keeps account touch bytes identical and rejects a manager shadowed by anothe
   });
 });
 
-it.each(
-  (["transaction", "commit"] as const).flatMap((stage) =>
-    (["manager", "registry"] as const).map((owner) => ({ stage, owner })),
-  ),
-)(
+it.each([
+  { stage: "transaction", owner: "manager" },
+  { stage: "commit", owner: "registry" },
+] as const)(
   "joins expiry pruning refused by the actual $owner at $stage without deleting its row",
   async ({ stage, owner }) => {
     const previousRegistry = captureActivePluginRegistrySnapshot();

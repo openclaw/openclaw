@@ -1645,9 +1645,9 @@ async function tryBind(port: number) {
 describe("SQLite flip mock endpoint ownership", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it.each([false, true])(
+  it.for([false, true])(
     "owns the first published endpoint and handles config failure (unverified stop=%s)",
-    async (unverifiedStop) => {
+    async (unverifiedStop, { signal }) => {
       vi.mocked(spawn).mockClear();
       const envSnapshot = captureFullEnv();
       process.env.ANTHROPIC_API_KEY = "ambient-provider-fixture";
@@ -1730,7 +1730,7 @@ describe("SQLite flip mock endpoint ownership", () => {
       );
 
       try {
-        const result = await runSqliteSessionsTranscriptsFlipProof().catch(
+        const result = await runSqliteSessionsTranscriptsFlipProof({ signal }).catch(
           (error: unknown) => error,
         );
         const mockAtSettlement = {

@@ -1,4 +1,3 @@
-// Memory Core helper module supports test helpers behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -15,18 +14,11 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, beforeAll } from "vitest";
 import { consolidateMemory } from "./dreaming-consolidation.js";
-import {
-  normalizeDailyIngestionState,
-  normalizeSessionIngestionState,
-} from "./dreaming-ingestion-state.js";
+import { readDailyIngestionState, readSessionIngestionState } from "./dreaming-ingestion-state.js";
 import {
   configureMemoryCoreDreamingState,
-  DREAMING_DAILY_INGESTION_NAMESPACE,
-  DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
-  DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
   memoryCoreWorkspaceStateKey,
   openMemoryCoreStateStore,
-  readMemoryCoreWorkspaceEntries,
   SHORT_TERM_LOCK_MAX_ENTRIES,
   SHORT_TERM_LOCK_NAMESPACE,
   SHORT_TERM_META_NAMESPACE,
@@ -40,10 +32,7 @@ import {
   recordMemorySessionTombstonesInDatabase,
 } from "./memory-session-tombstones.js";
 import { applyShortTermPromotions } from "./short-term-promotion-apply.js";
-import {
-  normalizeShortTermPhaseSignalStore,
-  readShortTermStore,
-} from "./short-term-promotion-store.js";
+import { readPhaseSignalStore, readShortTermStore } from "./short-term-promotion-store.js";
 import type { ShortTermLockEntry } from "./short-term-promotion-types.js";
 import { normalizeShortTermRecallStore } from "./short-term-promotion-utils.js";
 
@@ -148,12 +137,7 @@ export const shortTermTestState = {
       nowIso,
     );
   },
-  async readPhaseSignalStore(workspaceDir: string, nowIso: string) {
-    return normalizeShortTermPhaseSignalStore(
-      await readShortTermStore(workspaceDir, "phase", nowIso),
-      nowIso,
-    );
-  },
+  readPhaseSignalStore,
   writeRawRecallStore: (workspaceDir: string, raw: unknown) =>
     writeRawShortTermStore({
       workspaceDir,
@@ -183,44 +167,8 @@ export const shortTermTestState = {
 };
 
 export const dreamingTestState = {
-  async readDailyIngestionState(workspaceDir: string) {
-    const entries = await readMemoryCoreWorkspaceEntries({
-      namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
-      workspaceDir,
-    });
-    return normalizeDailyIngestionState({
-      version: 1,
-      files: Object.fromEntries(entries.map((entry) => [entry.key, entry.value])),
-    });
-  },
-  async readSessionIngestionState(workspaceDir: string) {
-    const [fileEntries, seenChunks] = await Promise.all([
-      readMemoryCoreWorkspaceEntries<Record<string, unknown>>({
-        namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
-        workspaceDir,
-      }),
-      readMemoryCoreWorkspaceEntries<{ scope: string; index: number; hashes: string[] }>({
-        namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
-        workspaceDir,
-      }),
-    ]);
-    const chunksByScope = new Map<string, Array<{ index: number; hashes: string[] }>>();
-    for (const chunk of seenChunks) {
-      const chunks = chunksByScope.get(chunk.value.scope) ?? [];
-      chunks.push({ index: chunk.value.index, hashes: chunk.value.hashes });
-      chunksByScope.set(chunk.value.scope, chunks);
-    }
-    return normalizeSessionIngestionState({
-      version: 3,
-      files: Object.fromEntries(fileEntries.map((entry) => [entry.key, entry.value])),
-      seenMessages: Object.fromEntries(
-        [...chunksByScope].map(([scope, chunks]) => [
-          scope,
-          chunks.toSorted((a, b) => a.index - b.index).flatMap((chunk) => chunk.hashes),
-        ]),
-      ),
-    });
-  },
+  readDailyIngestionState,
+  readSessionIngestionState,
 };
 
 export function createMemoryCoreTestHarness() {

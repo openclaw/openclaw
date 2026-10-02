@@ -137,10 +137,10 @@ export function hashToolResultProjectionSnapshot(
   return sha256Hex(JSON.stringify(snapshot));
 }
 
-export function persistToolResultProjections(
+export async function persistToolResultProjections(
   state: ToolResultPromptProjectionState,
-  appendEntry: (customType: string, data: unknown) => void,
-): void {
+  appendEntry: (customType: string, data: unknown) => unknown,
+): Promise<void> {
   if (state.frozen.size === 0) {
     return;
   }
@@ -149,7 +149,7 @@ export function persistToolResultProjections(
   if (hash === state.lastWrittenSnapshotHash) {
     return;
   }
-  appendEntry("openclaw.cache-ttl", snapshot);
+  await appendEntry("openclaw.cache-ttl", snapshot);
   // A failed owned write must leave the snapshot eligible for persistence.
   state.lastWrittenSnapshotHash = hash;
 }

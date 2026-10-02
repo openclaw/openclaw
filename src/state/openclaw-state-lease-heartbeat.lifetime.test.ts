@@ -43,7 +43,7 @@ vi.mock("../infra/node-sqlite.js", () => ({
 
 vi.mock("../infra/runtime-worker-url.js", () => ({
   resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/heartbeat.worker.js"),
-  resolveRuntimeWorkerArgv: () => ["/synthetic/heartbeat.worker.js"],
+  resolveRuntimeWorkerThreadExecArgv: () => [],
 }));
 
 // Error graph semantics have separate codec tests; keep this lifetime fixture JS-only.
@@ -339,6 +339,43 @@ describe("state lease heartbeat lifetime", () => {
       await finish(heartbeat, worker);
     }
   });
+
+  it.each([false, true])(
+    "preserves raw worker errors with received loss diagnostics=%s",
+    async (receivedLoss) => {
+      const params = options();
+      const heartbeat = startOpenClawStateLeaseHeartbeat(params);
+      const outcome = heartbeat.ready.catch((error: unknown) => error);
+      const worker = controls.workers[0];
+      assert(worker);
+      const cause = new Error("synthetic storage failure");
+      const error = Object.assign(new Error("worker activation failed", { cause }), {
+        code: "ERR_SQLITE_ERROR",
+        errcode: 266,
+      });
+      try {
+        if (receivedLoss) {
+          Atomics.store(worker.shared, state.status, state.lost);
+          worker.emit("message", { loss: { path: "activation", outcome: "operation-error" } });
+        }
+        expect(params.onLost).not.toHaveBeenCalled();
+        worker.emit("error", error);
+        worker.finishExit();
+        expect(params.onLost).toHaveBeenCalledExactlyOnceWith(error);
+        expect(await outcome).toBe(error);
+        expect(error).toMatchObject({
+          message: receivedLoss
+            ? "worker activation failed (lossPath=activation, lossOutcome=operation-error)"
+            : "worker activation failed",
+          code: "ERR_SQLITE_ERROR",
+          errcode: 266,
+        });
+        expect(error.cause).toBe(cause);
+      } finally {
+        await finish(heartbeat, worker);
+      }
+    },
+  );
 
   it("bounds an unanswered command even when the worker keeps renewing", async () => {
     const params = options();

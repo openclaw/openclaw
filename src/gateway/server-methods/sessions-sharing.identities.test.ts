@@ -1,9 +1,6 @@
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  SessionMembersListEvidenceResultSchema,
-  type SessionSharingIdentity,
-} from "../../../packages/gateway-protocol/src/index.js";
+import { SessionMembersListEvidenceResultSchema } from "../../../packages/gateway-protocol/src/index.js";
 import * as combinedStore from "../../config/sessions/combined-store-gateway.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
@@ -14,7 +11,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { setDisplayName } from "../../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail, listProfiles } from "../../state/user-profiles.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { authorizeResolvedSessionMutation } from "../session-sharing.js";
@@ -54,10 +51,7 @@ describe("session member picker identities", () => {
       for (const [index, storePath] of stores.entries()) {
         cfg = { ...initialConfig, session: { store: storePath } };
         sessionChanges.emit({ all: true, scope: "config" });
-        const expected = Object.values(
-          combinedStore.loadCombinedSessionStoreForGatewayCore(cfg, { projection: "list" }).store,
-        ).map((entry) => ({ type: entry.createdActor!.type, id: entry.createdActor!.id }));
-        expect(expected).toEqual([{ type: "agent", id: `creator-${index}` }]);
+        const expected = [{ type: "agent", id: `creator-${index}` }];
         const listed = await call(
           "session.members.listEvidence",
           { sessionKey: `agent:main:scope-${index}` },
@@ -74,11 +68,6 @@ describe("session member picker identities", () => {
       const sessionKey = "agent:main:profile-member";
       const profile = ensureProfileForEmail("member@example.com");
       setDisplayName(profile.id, "Member");
-      const selectable = (await listProfiles()).find((item) => item.id === profile.id);
-      expect(selectable).toMatchObject({ id: profile.id, displayName: "Member" });
-      if (!selectable) {
-        throw new Error("expected member profile in picker identities");
-      }
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
@@ -137,39 +126,15 @@ describe("session member picker identities", () => {
       await call("session.members.list", { sessionKey }, requestContext);
       const projection = getSessionRowProjection(requestContext)!;
       await projection.ensureMaterialized();
-      const legacy = new Map<string, SessionSharingIdentity>();
-      // Reference the old combined-store reduction, including its federation order.
-      for (const actor of [
-        ...Object.values(
-          combinedStore.loadCombinedSessionStoreForGatewayCore(requestContext.getRuntimeConfig(), {
-            projection: "list",
-          }).store,
-        ).map((entry) => entry.createdActor),
-        ...(await listProfiles()).map((item) => ({
-          type: "human" as const,
-          id: item.id,
-          label: item.displayName ?? undefined,
-        })),
-      ]) {
-        if (!actor?.id) {
-          continue;
-        }
-        const label = actor.label ?? legacy.get(actor.id)?.label;
-        legacy.set(actor.id, { type: actor.type, id: actor.id, ...(label ? { label } : {}) });
-      }
-      const expected = [...legacy.values()].toSorted(
-        (a, b) => (a.label ?? a.id).localeCompare(b.label ?? b.id) || a.id.localeCompare(b.id),
-      );
-      expect(expected).toEqual(
-        expect.arrayContaining([
-          { type: "agent", id: "archived-creator", label: "Archive" },
-          { type: "agent", id: "duplicate", label: "Last label" },
-          { type: "agent", id: "incognito-creator", label: "Incognito" },
-          { type: "human", id: profile.id, label: "Member" },
-          { type: "human", id: profileOnly.id, label: "Profile only" },
-        ]),
-      );
-      expect(expected.filter((identity) => identity.id.startsWith("sentinel-"))).toHaveLength(1);
+      const expected = [
+        { type: "agent", id: "research", label: "Alpha Research" },
+        { type: "agent", id: "archived-creator", label: "Archive" },
+        { type: "agent", id: "incognito-creator", label: "Incognito" },
+        { type: "agent", id: "duplicate", label: "Last label" },
+        { type: "agent", id: "sentinel-main", label: "Main sentinel" },
+        { type: "human", id: profile.id, label: "Member" },
+        { type: "human", id: profileOnly.id, label: "Profile only" },
+      ];
       const scans = vi.spyOn(combinedStore, "loadCombinedSessionStoreForGatewayCore");
       const parse = JSON.parse;
       let unrelatedDecodes = 0;
@@ -189,11 +154,7 @@ describe("session member picker identities", () => {
           projection.capture({ agentId: "main", key: "agent:main:archived" })?.materialized,
         ).toBeUndefined();
         expect(
-          await call(
-            "session.members.add",
-            { sessionKey, identityId: selectable.id },
-            requestContext,
-          ),
+          await call("session.members.add", { sessionKey, identityId: profile.id }, requestContext),
         ).toEqual([[true, { ok: true, sessionKey, identityId: profile.id }, undefined]]);
       } finally {
         parsed.mockRestore();

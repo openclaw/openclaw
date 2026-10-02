@@ -43,17 +43,17 @@ describe("tool-result projection persistence at dispatch", () => {
       manager
         .getEntries()
         .filter((entry) => entry.type === "custom" && entry.customType === "openclaw.cache-ttl");
-    persistToolResultProjections(restored, appendEntry);
+    await persistToolResultProjections(restored, appendEntry);
     expect(markers()).toHaveLength(3);
 
     restored.replacements.set("active", { content: [{ type: "text", text: "changed" }] });
-    expect(() =>
+    await expect(
       persistToolResultProjections(restored, () => {
         throw new Error("write failed");
       }),
-    ).toThrow("write failed");
-    persistToolResultProjections(restored, appendEntry);
-    persistToolResultProjections(restored, appendEntry);
+    ).rejects.toThrow("write failed");
+    await persistToolResultProjections(restored, appendEntry);
+    await persistToolResultProjections(restored, appendEntry);
     expect(markers()).toHaveLength(4);
     expect(manager.getBranch().at(-1)).toMatchObject({
       data: { frozenToolResults: [{ key: "active", sourceHash: "source", texts: ["changed"] }] },
@@ -97,8 +97,8 @@ describe("tool-result projection persistence at dispatch", () => {
       activeSession,
       persistToolResultProjections: async () => {
         await Promise.resolve();
-        persistToolResultProjections(projectionState, (customType, data) =>
-          manager.appendCustomEntry(customType, data),
+        await persistToolResultProjections(projectionState, (customType, data) =>
+          manager.appendCustomEntryAsync(customType, data),
         );
       },
       promptActiveSession: async () => {

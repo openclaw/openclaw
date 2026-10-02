@@ -26,7 +26,6 @@ import type { MatrixAuth, MatrixStoragePaths } from "./types.js";
 
 const DEFAULT_ACCOUNT_KEY = "default";
 const STORAGE_META_FILENAME = "storage-meta.json";
-const THREAD_BINDINGS_FILENAME = "thread-bindings.json";
 
 function openStorageMetaStore(rootDir: string) {
   return getMatrixRuntime().state.openKeyedStore<MatrixStorageMetadata>(
@@ -44,7 +43,6 @@ async function scoreStorageRoot(rootDir: string, metadata: MatrixStorageMetadata
   }
   for (const [filename, weight] of [
     ["crypto", 8],
-    [THREAD_BINDINGS_FILENAME, 4],
     [MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME, 3],
     [MATRIX_RECOVERY_KEY_FILENAME, 2],
     [MATRIX_IDB_SNAPSHOT_FILENAME, 2],

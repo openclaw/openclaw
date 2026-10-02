@@ -25,6 +25,7 @@ import {
   isInternalNonDeliveryChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { normalizeSessionConversationLink } from "./conversation-link.js";
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
 import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
 
@@ -198,7 +199,11 @@ export function deriveSessionMetaPatch(params: {
   const origin = deriveSessionOrigin(params.ctx, {
     skipSystemEventOrigin: params.skipSystemEventOrigin,
   });
-  if (!groupPatch && !origin) {
+  const conversationLink =
+    !params.existing?.conversationLink && params.ctx.InternalTurnSource === undefined
+      ? normalizeSessionConversationLink(params.ctx.ConversationLink)
+      : undefined;
+  if (!groupPatch && !origin && !conversationLink) {
     return null;
   }
 
@@ -243,6 +248,9 @@ export function deriveSessionMetaPatch(params: {
   }
 
   const patch: Partial<SessionEntry> = groupPatch ? { ...groupPatch } : {};
+  if (conversationLink) {
+    patch.conversationLink = conversationLink;
+  }
   const mergedOrigin = mergeSessionOrigin(existingOrigin, origin);
   if (mergedOrigin) {
     if (!patch.chatType && mergedOrigin.chatType) {

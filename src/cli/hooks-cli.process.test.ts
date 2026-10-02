@@ -5,6 +5,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   buildNativeHookRelayCommand,
@@ -149,6 +154,7 @@ async function createTimeoutOwnershipFixture(): Promise<{
       "const originalAsyncIterator = process.stdin[Symbol.asyncIterator].bind(process.stdin);",
       "process.stdin[Symbol.asyncIterator] = function () {",
       "  fs.writeFileSync(process.env.RELAY_READY_MARKER, `${process.pid}\\n`);",
+      '  process.stdout.write("relay-ready\\n");',
       "  return originalAsyncIterator();",
       "};",
       "",
@@ -349,7 +355,7 @@ describe("hooks CLI process lifecycle", () => {
 
   it.runIf(process.platform !== "win32")(
     "keeps the relay on the timeout-owned shell PID",
-    async () => {
+    async ({ signal }) => {
       const fixture = await createTimeoutOwnershipFixture();
       const command = buildNativeHookRelayCommand({
         provider: "codex",
@@ -376,6 +382,16 @@ describe("hooks CLI process lifecycle", () => {
         stdio: ["pipe", "pipe", "pipe"],
       });
       activeChildren.add(child);
+      const closed = once(child, "close");
+      const ready = createDeferred();
+      let stdout = "";
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (chunk: string) => {
+        stdout += chunk;
+        if (stdout.includes("relay-ready\n")) {
+          ready.resolve();
+        }
+      });
       child.once("close", () => activeChildren.delete(child));
       const timeoutOwnedPid = child.pid;
       if (!timeoutOwnedPid) {
@@ -383,27 +399,24 @@ describe("hooks CLI process lifecycle", () => {
       }
 
       try {
-        await expect
-          .poll(async () => (await readPidFile(fixture.readyMarkerPath))[0], {
-            interval: 100,
-            timeout: outputTimeoutMs,
-          })
-          .toBe(timeoutOwnedPid);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            ready.promise,
+            closed,
+            "native hook relay exited before writing its ready marker",
+          ),
+          signal,
+        );
+        expect((await readPidFile(fixture.readyMarkerPath))[0]).toBe(timeoutOwnedPid);
         expect(new Set(await readPidFile(fixture.pidLogPath))).toEqual(new Set([timeoutOwnedPid]));
 
-        const closed = once(child, "close");
         expect(child.kill("SIGKILL")).toBe(true);
-        await closed;
-        await expect
-          .poll(() => isProcessAlive(timeoutOwnedPid), { interval: 50, timeout: 5_000 })
-          .toBe(false);
-        await expect
-          .poll(
-            async () =>
-              (await readPidFile(fixture.pidLogPath)).filter((pid) => isProcessAlive(pid)),
-            { interval: 50, timeout: 5_000 },
-          )
-          .toEqual([]);
+        await withinTest(closed, signal);
+        // Every recorded relay is the reaped shell PID; close also joins its output streams.
+        expect(isProcessAlive(timeoutOwnedPid)).toBe(false);
+        expect(
+          (await readPidFile(fixture.pidLogPath)).filter((pid) => isProcessAlive(pid)),
+        ).toEqual([]);
       } finally {
         await terminateChild(child);
         for (const pid of await readPidFile(fixture.pidLogPath)) {

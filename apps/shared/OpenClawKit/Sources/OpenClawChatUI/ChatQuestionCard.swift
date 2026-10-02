@@ -299,8 +299,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
 
     private func answerValues(questionID: String) -> [String]? {
         guard let answer = self.record.answers?.answers[questionID],
-              let data = try? JSONEncoder().encode(answer),
-              let decoded = try? JSONDecoder().decode([String].self, from: data),
+              let decoded = try? GatewayPayloadDecoding.decode(answer, as: [String].self),
               !decoded.isEmpty
         else { return nil }
         return decoded

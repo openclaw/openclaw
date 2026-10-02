@@ -165,15 +165,15 @@ describe("runNodeDaemonInstall", () => {
     mocks.runtime.exit.mockClear();
     vi.stubEnv("OPENCLAW_NIX_MODE", undefined);
     vi.stubEnv("OPENCLAW_WRAPPER", undefined);
-    mocks.runExec.mockReset().mockResolvedValue({
+    mocks.runExec.mockReset().mockImplementation(async (executable: string) => ({
       stdout: JSON.stringify({
         nodeVersion: "26.8.1",
-        bunVersion: "1.4.2",
+        bunVersion: /(?:^|[/\\])bun(?:\.exe)?$/i.test(executable) ? "1.4.2" : null,
         sqliteVersion: "3.53.4",
         sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
       }),
       stderr: "",
-    });
+    }));
     mocks.service.readCommand.mockReset().mockResolvedValue(null);
     mocks.service.install.mockReset().mockResolvedValue(undefined);
     mocks.service.isLoaded.mockReset().mockResolvedValue(false);

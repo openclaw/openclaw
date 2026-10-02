@@ -19,6 +19,7 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
+import { resolveSessionSkillExecutionWorkspace } from "../../skills/loading/workspace-skill-roots.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
@@ -69,7 +70,8 @@ async function resolveCommandSkillsPrompt(params: {
   sandboxed: boolean;
   sessionKey: string | undefined;
   workspaceDir: string; // Preserve the caller's sandbox task root.
-  executionWorkspaceDir: string;
+  executionWorkspaceDir?: string;
+  executionWorkspaceFileHost?: "gateway";
   skillsSnapshot?: SkillSnapshot;
 }): Promise<string> {
   let skillsSnapshot: SkillSnapshot;
@@ -78,6 +80,7 @@ async function resolveCommandSkillsPrompt(params: {
       await resolveReusableWorkspaceSkillSnapshot({
         workspaceDir: resolveAgentWorkspaceDir(params.config, params.agentId),
         executionWorkspaceDir: params.executionWorkspaceDir,
+        executionWorkspaceFileHost: params.executionWorkspaceFileHost,
         config: params.config,
         agentId: params.agentId,
         resolveEligibility: () => ({
@@ -213,7 +216,10 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
     sandboxed: sandboxRuntime.sandboxed,
     sessionKey: toolPolicySessionKey,
     workspaceDir,
-    executionWorkspaceDir: targetSessionEntry?.worktree?.canonicalWorkspaceDir ?? workspaceDir,
+    ...resolveSessionSkillExecutionWorkspace(
+      targetSessionEntry?.worktree?.canonicalWorkspaceDir,
+      workspaceDir,
+    ),
     skillsSnapshot: targetSessionEntry?.skillsSnapshot,
   });
   const tools = (() => {

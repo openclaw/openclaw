@@ -8,6 +8,7 @@ import {
   upsertAuthProfileWithLock,
   upsertAuthProfileWithLockOrThrow,
 } from "../agents/auth-profiles/profiles.js";
+import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -295,12 +296,14 @@ function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
     .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
     .map((entry) => path.join(agentsRoot, entry.name, "agent"));
 
+  // Publish the shared profile before siblings decide whether to inherit it.
+  const sharedAgentDir = safeRealpathSync(resolveSharedMainAuthAgentDir());
   return uniqueStrings(
     [normalized, ...discovered].flatMap((dir) => {
       const real = safeRealpathSync(path.resolve(dir));
       return real ? [real] : [];
     }),
-  );
+  ).toSorted((left, right) => Number(right === sharedAgentDir) - Number(left === sharedAgentDir));
 }
 
 export async function writeOAuthCredentials(

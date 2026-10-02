@@ -28,6 +28,7 @@ const { mintSecretSentinel } = await import("../secrets/sentinel.js");
 const { getAdmittedRunDelegatedAuthority } = await import("./admitted-run-context.js");
 const { resolveModelFallbackError } = await import("./failover-error.js");
 const { PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE } = await import("../llm/types.js");
+const { resolveIsolatedCompletionRuntime } = await import("./isolated-completion-route.js");
 
 beforeEach(resetIsolatedCompletionTestState);
 
@@ -967,5 +968,40 @@ describe("isolated completion work ownership", () => {
     await parent.drain();
     await expect(invoke()).rejects.toThrow("Async work scope is closed");
     expect(mocks.acquireAgentRunPreparedModelRuntime).not.toHaveBeenCalled();
+  });
+});
+
+// Status displays report the route before any run; it must match the owner the run uses.
+describe("resolveIsolatedCompletionRuntime", () => {
+  it("reports the Claude CLI owner a subscription login dispatches to without a runtime pin", async () => {
+    mocks.resolveEmbeddedCliBackendDispatchEligibility.mockReturnValue({ provider: "claude-cli" });
+    mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "Utility result" }] });
+    const request = {
+      ...isolatedRequest(),
+      provider: "anthropic",
+      model: "claude-test",
+      agentHarnessRuntimeOverride: undefined,
+    };
+
+    const status = resolveIsolatedCompletionRuntime(request);
+    const run = await runIsolatedCompletion(request);
+
+    expect(run.owner).toEqual({ kind: "cli", id: "claude-cli" });
+    expect(status).toEqual({ id: run.owner.id, kind: "cli" });
+  });
+
+  it("reports the plugin harness a run dispatches to", async () => {
+    registerIsolatedHarness({
+      runIsolatedCompletionV2: vi.fn(async () => ({
+        assistant: isolatedAssistant([{ type: "text", text: "done" }]),
+      })),
+    });
+    const request = isolatedRequest();
+
+    const status = resolveIsolatedCompletionRuntime(request);
+    const run = await runIsolatedCompletion(request);
+
+    expect(run.owner).toEqual({ kind: "harness", id: "codex" });
+    expect(status).toEqual({ id: run.owner.id, kind: "harness", harnessLabel: "Codex" });
   });
 });

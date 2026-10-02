@@ -124,7 +124,7 @@ export function useSubagentPersistenceFixture() {
     // Delivery results can settle before their tracked cleanup tails release the stores.
     if (getActiveGatewayRootWorkCount() === 0) {
       try {
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
         if (tempStateDir) {
           await cleanupSessionStateForTest({ stateDir: tempStateDir });
         }

@@ -63,7 +63,7 @@ vi.mock("./server-chat.js", () => {
   mocks.events.push("agent-events");
   return { createAgentEventHandler: mocks.executeRequest };
 });
-vi.mock("./server-session-key.js", () => ({ resolveSessionKeyForRun: mocks.executeRequest }));
+vi.mock("./server-session-key.js", () => ({ resolveSessionForRun: mocks.executeRequest }));
 vi.mock("./server-methods/core-handlers.js", async () => {
   const { createLazyCoreHandlers } = await import("./server-methods/lazy-core-handlers.js");
   return {

@@ -2,6 +2,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-plane-sentinel.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
+import type { ManagedCommandProcessAuthority } from "../../infra/update-managed-command-custody.js";
 import type {
   ManagedHandoffLease,
   ManagedHandoffParent,
@@ -30,7 +31,10 @@ export async function withDelegatedUpdateCommandExecutor<T>(
   grant: UpdateCommandChildGrant,
   runId: string,
   root: string,
-  operation: (fence: UpdateRecoveryFence) => Promise<T>,
+  operation: (
+    fence: UpdateRecoveryFence,
+    commandAuthority: ManagedCommandProcessAuthority | undefined,
+  ) => Promise<T>,
   options?: { activationTimeoutMs: number },
 ): Promise<T> {
   const activation = createUpdateOperationDeadline();
@@ -192,7 +196,23 @@ export async function withDelegatedUpdateCommandExecutor<T>(
                 options.activationTimeoutMs,
               );
             }
-            outcome = { result: await operation(fence) };
+            outcome = {
+              result: await operation(
+                fence,
+                databaseIdentity
+                  ? {
+                      runId,
+                      databaseIdentity,
+                      parents: [
+                        originalChild,
+                        child,
+                        ...(retainedChild ? [retainedChild] : []),
+                        ...(slotChild ? [slotChild] : []),
+                      ],
+                    }
+                  : undefined,
+              ),
+            };
           } catch (error) {
             outcome = { error };
           }

@@ -3,7 +3,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { isSessionRouteId, type RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { i18n } from "../i18n/index.ts";
-import type { createStoredChatOutboxReader } from "../lib/chat/outbox-store-projection.ts";
+import type { SidebarOutboxSummary } from "../lib/chat/outbox-store-projection.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import { projectSidebarHomeSession } from "./app-sidebar-agent-session-rows.ts";
 import type { SidebarSessionCatalog } from "./app-sidebar-session-catalogs.ts";
@@ -50,9 +50,7 @@ export type SidebarProjectionHost = {
   readonly sessionOwnerFilterId: string | null;
   readonly sessionOwnerFilterActive: boolean;
   readonly sessionInvolvingMeFilterActive: boolean;
-  readonly storedOutboxes:
-    | ReturnType<ReturnType<typeof createStoredChatOutboxReader>["read"]>
-    | undefined;
+  readonly storedOutboxes: SidebarOutboxSummary | undefined;
   resolveSessionAttention: Parameters<typeof projectSidebarHomeSession>[0]["resolveAttention"];
   getRouteSessionKey(): string;
   getSessionNavigationState(): SidebarSessionNavigationState;

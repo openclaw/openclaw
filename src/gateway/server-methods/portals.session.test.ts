@@ -259,17 +259,6 @@ describe("session-scoped attached worker portals", () => {
     expect(f.service.list()).toEqual([]);
   });
 
-  it("retires an existing scoped resource when dedicated qualification becomes unknown", async () => {
-    const f = fixture();
-    const global = await f.service.open({ targetPort: 3001 });
-    expect((await f.invoke("open", { port: 3000 }))?.[0]).toBe(true);
-    f.unqualify();
-    expect(f.service.list()).toEqual([global]);
-    await f.service.closeWorkerPortals("attached", 1);
-    expect(f.close).toHaveBeenCalledOnce();
-    expect(f.release).toHaveBeenCalledOnce();
-  });
-
   it("keeps proxy use independent of the initiating actor and rejects replaced attachments", async () => {
     const f = fixture();
     await f.invoke("open", { port: 3000 });

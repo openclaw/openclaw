@@ -57,12 +57,12 @@ import type { WorkerSessionPlacementChangeSnapshot } from "../gateway/worker-env
 import type {
   WorkspaceJournalReadCommand,
   WorkspaceJournalReadResult,
-} from "../gateway/worker-environments/placement-workspace-journal.worker-contract.js";
+} from "../gateway/worker-environments/placement-workspace-journal.types.js";
 import type {
   WorkerEnvironmentFacts,
   WorkerEnvironmentPrunePage,
   WorkerEnvironmentPruneReadInput,
-} from "../gateway/worker-environments/store-worker-contract.js";
+} from "../gateway/worker-environments/store.types.js";
 import type {
   DevicePairingReadCommand,
   DevicePairingReadReply,
@@ -96,6 +96,7 @@ import type { SkillLibraryReadOnlyOperations } from "../skills/library/selection
 import type { TuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import type {
   AgentDatabaseDeletionSnapshot,
+  AgentDeletionJournalAuthority,
   AgentDeletionJournalPurpose,
   AgentDeletionJournalStatus,
 } from "./agent-deletion-journal.types.js";
@@ -199,6 +200,7 @@ export type OpenClawStateReadCommand =
   | { type: "agentDatabaseRegistry.read" }
   | { type: "agentDatabaseDeletion.snapshot"; purpose: AgentDeletionJournalPurpose }
   | { type: "agentDeletionJournal.status"; agentId: string }
+  | { type: "agentDeletionJournal.authority"; agentId: string }
   | { type: "workerEnvironments.snapshot"; ids?: readonly string[] }
   | { type: "workerEnvironments.pruneCandidates"; input: WorkerEnvironmentPruneReadInput }
   | { type: "sessionGroups.snapshot" }
@@ -280,6 +282,10 @@ export type OpenClawStateReadResult =
   | {
       type: "agentDeletionJournal.status";
       status: AgentDeletionJournalStatus;
+    }
+  | {
+      type: "agentDeletionJournal.authority";
+      authority: AgentDeletionJournalAuthority | undefined;
     }
   | {
       type: "deliveryQueue.outbound";
@@ -392,6 +398,7 @@ export type OpenClawStateReadResult =
       type: "subagents.runs";
       projection?: never;
       runs: Map<string, SubagentRunRecord>;
+      versions?: Map<string, string | null>;
       descendantBasis?: { digest: string; sessionKeys: Set<string>; runIds: readonly string[] };
     }
   | {

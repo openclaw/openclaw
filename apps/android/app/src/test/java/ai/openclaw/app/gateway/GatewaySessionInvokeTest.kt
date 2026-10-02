@@ -962,67 +962,96 @@ class GatewaySessionInvokeTest {
     }
 
   @Test
-  fun connect_retriesWithStoredDeviceTokenAfterSharedTokenMismatch() =
+  fun connect_requiresExplicitDeviceTokenRetryPermission() =
     runBlocking {
-      val json = testJson()
-      val connected = CompletableDeferred<Unit>()
-      val firstConnectAuth = CompletableDeferred<JsonObject?>()
-      val secondConnectAuth = CompletableDeferred<JsonObject?>()
-      val connectAttempts = AtomicInteger(0)
-      val lastDisconnect = AtomicReference("")
-      val server =
-        startGatewayServer(json) { webSocket, id, method, frame ->
-          when (method) {
-            "connect" -> {
-              val auth = frame["params"]?.jsonObject?.get("auth")?.jsonObject
-              when (connectAttempts.incrementAndGet()) {
-                1 -> {
-                  if (!firstConnectAuth.isCompleted) {
-                    firstConnectAuth.complete(auth)
+      val cases =
+        listOf(
+          Triple(
+            "explicit denial survives manual reconnect",
+            """{"code":"AUTH_TOKEN_MISMATCH","authReason":"token_mismatch","canRetryWithDeviceToken":false,"recommendedNextStep":"update_auth_credentials"}""",
+            false,
+          ),
+          Triple(
+            "explicit denial overrides retry advice",
+            """{"code":"AUTH_TOKEN_MISMATCH","canRetryWithDeviceToken":false,"recommendedNextStep":"retry_with_device_token"}""",
+            false,
+          ),
+          Triple(
+            "July 2026 Gateway permits trusted retry",
+            // v2026.7.1-beta.1 rejectUnauthorized emits this token-mismatch detail shape.
+            """{"code":"AUTH_TOKEN_MISMATCH","authReason":"token_mismatch","canRetryWithDeviceToken":true,"recommendedNextStep":"retry_with_device_token"}""",
+            true,
+          ),
+          Triple("pre-March code-only response", """{"code":"AUTH_TOKEN_MISMATCH"}""", false),
+          Triple("retry advice without permission", """{"recommendedNextStep":"retry_with_device_token"}""", false),
+        )
+      for ((caseName, errorDetails, retryAllowed) in cases) {
+        val json = testJson()
+        val connected = CompletableDeferred<Unit>()
+        val authFailure = CompletableDeferred<Boolean>()
+        val firstConnectAuth = CompletableDeferred<JsonObject?>()
+        val secondConnectAuth = CompletableDeferred<JsonObject?>()
+        val connectAttempts = AtomicInteger(0)
+        val lastDisconnect = AtomicReference("")
+        val server =
+          startGatewayServer(json) { webSocket, id, method, frame ->
+            when (method) {
+              "connect" -> {
+                val auth = frame["params"]?.jsonObject?.get("auth")?.jsonObject
+                when (connectAttempts.incrementAndGet()) {
+                  1 -> {
+                    if (!firstConnectAuth.isCompleted) {
+                      firstConnectAuth.complete(auth)
+                    }
+                    webSocket.send(
+                      """{"type":"res","id":"$id","ok":false,"error":{"code":"INVALID_REQUEST","message":"unauthorized","details":$errorDetails}}""",
+                    )
+                    webSocket.close(1000, "retry")
                   }
-                  webSocket.send(
-                    """{"type":"res","id":"$id","ok":false,"error":{"code":"INVALID_REQUEST","message":"unauthorized","details":{"code":"AUTH_TOKEN_MISMATCH","canRetryWithDeviceToken":true,"recommendedNextStep":"retry_with_device_token"}}}""",
-                  )
-                  webSocket.close(1000, "retry")
-                }
 
-                else -> {
-                  if (!secondConnectAuth.isCompleted) {
-                    secondConnectAuth.complete(auth)
+                  else -> {
+                    if (!secondConnectAuth.isCompleted) {
+                      secondConnectAuth.complete(auth)
+                    }
+                    webSocket.send(connectResponseFrame(id))
                   }
-                  webSocket.send(connectResponseFrame(id))
                 }
               }
             }
           }
+
+        val harness =
+          createNodeHarness(
+            connected = connected,
+            lastDisconnect = lastDisconnect,
+            onConnectFailure = { _, pauseReconnect -> authFailure.complete(pauseReconnect) },
+          ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+
+        try {
+          val deviceId = testDeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
+          harness.deviceAuthStore.saveToken(gatewayIdForPort(server.port), deviceId, "node", "stored-device-token")
+
+          connectNodeSession(
+            session = harness.session,
+            port = server.port,
+            token = "shared-auth-token",
+            bootstrapToken = null,
+          )
+          assertEquals(caseName, !retryAllowed, withTimeout(TEST_TIMEOUT_MS) { authFailure.await() })
+          if (!retryAllowed) harness.session.reconnect()
+          awaitConnectedOrThrow(connected, lastDisconnect, server)
+
+          val firstAuth = withTimeout(TEST_TIMEOUT_MS) { firstConnectAuth.await() }
+          val secondAuth = withTimeout(TEST_TIMEOUT_MS) { secondConnectAuth.await() }
+          assertEquals(caseName, "shared-auth-token", firstAuth?.get("token")?.jsonPrimitive?.content)
+          assertNull(caseName, firstAuth?.get("deviceToken"))
+          assertEquals(caseName, "shared-auth-token", secondAuth?.get("token")?.jsonPrimitive?.content)
+          assertEquals(caseName, if (retryAllowed) "stored-device-token" else null, secondAuth?.get("deviceToken")?.jsonPrimitive?.content)
+          assertEquals(caseName, 2, connectAttempts.get())
+          assertEquals(caseName, "stored-device-token", harness.deviceAuthStore.loadToken(gatewayIdForPort(server.port), deviceId, "node"))
+        } finally {
+          shutdownHarness(harness, server)
         }
-
-      val harness =
-        createNodeHarness(
-          connected = connected,
-          lastDisconnect = lastDisconnect,
-        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
-
-      try {
-        val deviceId = testDeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
-        harness.deviceAuthStore.saveToken(gatewayIdForPort(server.port), deviceId, "node", "stored-device-token")
-
-        connectNodeSession(
-          session = harness.session,
-          port = server.port,
-          token = "shared-auth-token",
-          bootstrapToken = null,
-        )
-        awaitConnectedOrThrow(connected, lastDisconnect, server)
-
-        val firstAuth = withTimeout(TEST_TIMEOUT_MS) { firstConnectAuth.await() }
-        val secondAuth = withTimeout(TEST_TIMEOUT_MS) { secondConnectAuth.await() }
-        assertEquals("shared-auth-token", firstAuth?.get("token")?.jsonPrimitive?.content)
-        assertNull(firstAuth?.get("deviceToken"))
-        assertEquals("shared-auth-token", secondAuth?.get("token")?.jsonPrimitive?.content)
-        assertEquals("stored-device-token", secondAuth?.get("deviceToken")?.jsonPrimitive?.content)
-      } finally {
-        shutdownHarness(harness, server)
       }
     }
 

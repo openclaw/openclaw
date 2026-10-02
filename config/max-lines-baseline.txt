@@ -520,9 +520,7 @@ src/infra/outbound/delivery-queue-recovery.ts
 src/infra/outbound/delivery-queue.recovery.test.ts
 src/infra/outbound/outbound-send-service.test.ts
 src/infra/outbound/targets.test.ts
-src/infra/package-update-steps.ts
 src/infra/restart.ts
-src/infra/session-cost-usage.test.ts
 src/infra/state-migrations.doctor.ts
 src/infra/state-migrations.session-store.ts
 src/infra/state-migrations.test.ts

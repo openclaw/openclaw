@@ -22,14 +22,16 @@ import {
   createGatewayMethodRegistry,
 } from "../methods/registry.js";
 import { coreGatewayHandlers, handleGatewayRequest } from "../server-methods.js";
-import * as sharing from "../session-sharing.js";
-import * as sessionUtils from "../session-utils.js";
+import * as sharingPreparation from "../session-sharing-preparation.js";
 import * as resolution from "./artifacts-session-resolution.js";
 import { assistantFileMessage } from "./artifacts.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const boundaries = vi.hoisted(() => ({
-  visit: vi.fn<typeof import("../session-transcript-readers.js").visitSessionMessagesAsync>(),
+  visit:
+    vi.fn<
+      typeof import("../session-transcript-native.test-support.js").visitSessionMessagesAsync
+    >(),
   managed:
     vi.fn<
       typeof import("../managed-image-attachments.js").resolveManagedOutgoingMediaArtifactDownload
@@ -250,8 +252,7 @@ async function exercise(
       expect(getActiveGatewayRootWorkCount()).toBe(0);
       return;
     }
-    const sessionReads = vi.spyOn(sessionUtils, "loadGatewaySessionEntryReadOnly");
-    const sharingReads = vi.spyOn(sharing, "resolveSessionSharingTarget");
+    const sessionReads = vi.spyOn(sharingPreparation, "prepareSessionMutationFacts");
     const preparing = createDeferred();
     const release = createDeferred();
     const prepare = resolution.prepareArtifactSessionResolution;
@@ -277,13 +278,10 @@ async function exercise(
       expect(guard).toHaveBeenCalled();
       const readsBeforeRelease = {
         session: sessionReads.mock.calls.length,
-        sharing: sharingReads.mock.calls.length,
         transcript: boundaries.visit.mock.calls.length,
       };
       expect(readsBeforeRelease).toEqual(
-        secondPreparation
-          ? { session: 2, sharing: 2, transcript: 1 }
-          : { session: 0, sharing: 0, transcript: 0 },
+        secondPreparation ? { session: 1, transcript: 1 } : { session: 0, transcript: 0 },
       );
       changeAuthority();
       expect(captured.isCurrent()).toBe(
@@ -310,7 +308,6 @@ async function exercise(
         ]);
         expect(respond).not.toHaveBeenCalled();
         expect(sessionReads).toHaveBeenCalledTimes(readsBeforeRelease.session);
-        expect(sharingReads).toHaveBeenCalledTimes(readsBeforeRelease.sharing);
         expect(boundaries.visit).toHaveBeenCalledTimes(readsBeforeRelease.transcript);
         expect(boundaries.managed).not.toHaveBeenCalled();
         expect(boundaries.managedUrl).not.toHaveBeenCalled();
@@ -333,9 +330,7 @@ describe("registered artifact request authority after session preparation", () =
         agents: { list: [{ id: "main", default: true }, { id: "work" }] },
       };
       await state.writeConfig(config);
-      const readers = await vi.importActual<typeof import("../session-transcript-readers.js")>(
-        "../session-transcript-readers.js",
-      );
+      const readers = await import("../session-transcript-native.test-support.js");
       boundaries.visit.mockImplementation(readers.visitSessionMessagesAsync);
       const client: GatewayClient = {
         connId: "artifact-default-agent",

@@ -69,7 +69,7 @@ describe("provider endpoint source eligibility", () => {
   });
 
   it("does not recover a generated native endpoint over an authored custom provider", async () => {
-    replacePersistedPluginModelCatalogs({
+    await replacePersistedPluginModelCatalogs({
       agentDir: state.agentDir(),
       pluginCatalogWrites: {
         "plugins/catalog-owner/catalog.json": JSON.stringify({

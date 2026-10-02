@@ -306,11 +306,11 @@ export async function settleEmbeddedAttemptStream(input: {
 
   try {
     await input.withOwnedTranscriptWrite(() =>
-      withSessionManagerWrite(sessionManager, () => {
+      withSessionManagerWrite(sessionManager, async () => {
         const { timedOutDuringCompaction } = input.readLifecycleState();
         compactionOccurredThisAttempt = subscription.getCompactionCount() > 0;
         const cacheTtlCompat: ModelCompatConfig | undefined = attempt.model.compat;
-        appendAttemptCacheTtlIfNeeded({
+        await appendAttemptCacheTtlIfNeeded({
           sessionManager,
           timedOutDuringCompaction,
           compactionOccurredThisAttempt,
@@ -348,7 +348,7 @@ export async function settleEmbeddedAttemptStream(input: {
           !attempt.abortSignal?.aborted
         ) {
           try {
-            sessionManager.appendCustomEntry("openclaw:prompt-error", {
+            await sessionManager.appendCustomEntryAsync("openclaw:prompt-error", {
               timestamp: Date.now(),
               runId: attempt.runId,
               sessionId: attempt.sessionId,

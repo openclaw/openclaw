@@ -1,4 +1,6 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
@@ -96,6 +98,37 @@ describe("Testbox spending admission", () => {
     expect(boundedTestboxIdleMinutes("90\n")).toBe(15);
     expect(boundedTestboxIdleMinutes("5\n")).toBe(5);
     expect(() => boundedTestboxIdleMinutes("0")).toThrow(/invalid/);
+  });
+
+  it("configures idle time after an admitted checkout crosses the queue deadline", () => {
+    const script = resolve("scripts/ci-testbox-budget.mjs");
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `
+          import assert from "node:assert/strict";
+          import fs from "node:fs";
+          import { syncBuiltinESMExports } from "node:module";
+          import { pathToFileURL } from "node:url";
+          const read = fs.readFileSync;
+          fs.readFileSync = (path, ...args) =>
+            path === "/tmp/.testbox/idle_timeout" ? "90\\n" : read(path, ...args);
+          fs.writeFileSync = (path, value) => {
+            assert.equal(path, "/tmp/.testbox/idle_timeout");
+            assert.equal(value, "15\\n");
+            console.log("idle setting updated");
+          };
+          syncBuiltinESMExports();
+          process.argv = [process.execPath, ${JSON.stringify(script)}, "configure"];
+          await import(pathToFileURL(process.argv[1]).href);
+        `,
+      ],
+      { encoding: "utf8", env: { TESTBOX_EXPIRES_AT: "1" } },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("idle setting updated");
   });
 
   it.each([

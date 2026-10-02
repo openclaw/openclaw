@@ -61,7 +61,7 @@ describe("registered subagent sweeper lifecycle", () => {
 
   afterEach(async () => {
     await vi.dynamicImportSettled();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     resetGatewayWorkAdmission();
     vi.useRealTimers();
   });
@@ -70,7 +70,7 @@ describe("registered subagent sweeper lifecycle", () => {
     await register("released");
     await vi.dynamicImportSettled();
     expect(subagentRuns.has("released")).toBe(true);
-    releaseSubagentRun("released");
+    await releaseSubagentRun("released");
     expect(subagentRuns.size).toBe(0);
     await vi.dynamicImportSettled();
     markGatewayRestartDraining();
@@ -144,7 +144,7 @@ describe("registered subagent sweeper lifecycle", () => {
         await advance(1);
         expect(recoverRow).toHaveBeenCalledOnce();
         if (released) {
-          releaseSubagentRun("active");
+          await releaseSubagentRun("active");
           expect(subagentRuns.size).toBe(0);
           await vi.dynamicImportSettled();
           expect(getActiveGatewayRootWorkCount()).toBe(1);

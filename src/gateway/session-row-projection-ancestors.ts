@@ -229,7 +229,8 @@ export function createSessionRowAncestorReads(owner: {
                   readSessionRowAncestors(row, {
                     ...owner.state(),
                     referenced: owner.referenced,
-                    prepare: (parent) => (records.hasEntry(parent) ? parent : undefined),
+                    // Resident identities must enter preparation even after a reset cleared metadata.
+                    prepare: (parent) => parent,
                   });
                 return (
                   ancestors?.map((parent) => ({

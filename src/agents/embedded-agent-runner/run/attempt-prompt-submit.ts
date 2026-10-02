@@ -240,7 +240,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
       cleanupRuntimeContextMessage();
     }
     if (input.leasedSteering) {
-      ackPendingAgentSteeringItems(input.leasedSteering);
+      await ackPendingAgentSteeringItems(input.leasedSteering);
       input.onSteeringAcknowledged();
     }
   } finally {
@@ -307,17 +307,19 @@ export async function handleEmbeddedAttemptPromptError(input: {
   error: unknown;
   handleMidTurnPrecheckRequest: (request: MidTurnPrecheckRequest) => Promise<void>;
   markYieldAborted: () => void;
-  releaseLeasedSteering: (error?: unknown) => void;
+  releaseLeasedSteering: (error?: unknown) => void | Promise<void>;
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
   yieldAbortSettled: Promise<void> | null;
   yieldDetected: boolean;
   yieldMessage: string | null;
 }): Promise<EmbeddedAttemptPromptErrorOutcome> {
-  input.releaseLeasedSteering(input.error);
   const yieldAborted = input.yieldDetected && isSessionsYieldAbortError(input.error);
   if (yieldAborted) {
     // Publish terminal state before fallible recovery so outer cleanup still recognizes the yield.
     input.markYieldAborted();
+  }
+  await input.releaseLeasedSteering(input.error);
+  if (yieldAborted) {
     await waitForEmbeddedAbortSettle({
       promise: input.yieldAbortSettled,
       runId: input.attempt.runId,

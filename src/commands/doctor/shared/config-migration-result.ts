@@ -18,7 +18,6 @@ export type DoctorConfigPreflightOptions = {
   invocationPurpose?: LegacyStateMigrationInvocationPurpose;
   migrateLegacyConfig?: boolean;
   repairPrefixedConfig?: boolean;
-  recoverCorruptTargetStore?: boolean;
   invalidConfigNote?: string | false;
   observe?: boolean;
   measure?: ConfigSnapshotReadMeasure;

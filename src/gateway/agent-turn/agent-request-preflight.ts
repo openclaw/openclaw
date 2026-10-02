@@ -26,6 +26,7 @@ import {
 } from "../../sessions/input-provenance.js";
 import { isSubagentSessionKey } from "../../sessions/session-key-utils.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
 import {
   resolveExpectedExistingSessionConstraint,
   type ExpectedExistingSessionConstraint,
@@ -34,7 +35,6 @@ import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "../session-utils-store-lookup.js";
 import { readGatewayDedupeEntry, resolveAgentDedupeKeys } from "./agent-dedupe.js";
-import { clientHasAdminScope } from "./agent-handler-helpers.js";
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
 export type AgentRequestPreflight = {
@@ -177,7 +177,7 @@ export function prepareAgentRequestPreflight(params: {
     return rejectInvalidRequest("cwd is reserved for plugin-owned subagent runs");
   }
   const allowModelOverride =
-    clientHasAdminScope(params.client) || params.client?.internal?.allowModelOverride === true;
+    hasGatewayAdminScope(params.client) || params.client?.internal?.allowModelOverride === true;
   const canUseCronRunContinuation = params.client?.internal?.cronRunContinuation === true;
   const expectedSessionResult = resolveExpectedExistingSessionConstraint({
     canUseInternalRuntimeHandoff,

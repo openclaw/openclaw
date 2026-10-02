@@ -135,6 +135,10 @@ capture and Doctor admission, during Doctor, or after Doctor finishes preserves 
 databases and reports `state-migrated-no-rollback` with the snapshot location and
 Doctor recovery guidance. Without Doctor write evidence, rollback requires the
 last verified database generations to remain unchanged.
+Snapshot capture first settles local SQLite writers under maintenance ownership,
+so later writer shutdown is not mistaken for intervening writes. The installed
+updater owns this ordering; staging a newer candidate cannot change an
+already-running older updater.
 On Windows, an eligible capture first runs the same native SQLite exclusion check
 used by rollback. This settles any retained WAL before recording write fingerprints,
 so later probe cleanup is not mistaken for another writer. If another connection
@@ -249,6 +253,20 @@ can run after update ownership and service compensation settle, including after
 failed rollback. Use the printed diagnostics and installation-specific repair
 command before considering an older version. Triage does not rewrite that
 failed update as successful.
+
+On macOS and Linux, if Doctor times out after migration, the updater stops its tracked process groups
+and waits for each group to disappear before attempting recovery. Once settlement
+is proven, it can start the installed candidate on the preserved migrated state
+and verify Gateway health. The report retains the Doctor failure, records a
+maintenance warning, and recommends `openclaw update repair`; recovery does not
+claim that unfinished Doctor repairs completed. If any writer remains or cannot
+be accounted for, the report names the known PIDs and keeps the Gateway stopped
+because concurrent writes put data at risk. Later update attempts retain this
+block even if the original updater has exited. Preserve the recovery snapshots
+and follow the reported process-inspection guidance before retrying repair.
+The installed updater owns this process supervision: a first update driven by
+2026.9.5 remains limited by that older parent's settlement checks.
+
 Automatic rollback restores code and captured config, and restores pre-migration
 database snapshots only when the Gateway was confirmed stopped during capture
 and the candidate was never allowed to start, with matching write fingerprints

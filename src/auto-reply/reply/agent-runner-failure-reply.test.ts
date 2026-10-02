@@ -78,7 +78,7 @@ describe("buildExternalRunFailureReply", () => {
       { isHeartbeat: true },
     );
 
-    expect(reply.text).toContain(message);
+    expect(reply.text).toContain(`\n\nDetails: ${message}.\n`);
     expect(reply.isGenericRunnerFailure).toBe(false);
     expect(reply.text).not.toContain("/new");
   });
@@ -125,7 +125,8 @@ describe("buildExternalRunFailureReply", () => {
   );
 
   it("keeps raw heartbeat failure details behind verbose opt-in", () => {
-    const input = { message: "boom-canary", error: new Error("boom-canary") };
+    const message = "Gateway SDK resource host is not bound";
+    const input = { message, error: new Error(message) };
     expect(buildExternalRunFailureReply(input, { isHeartbeat: true })).toEqual({
       text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
       isGenericRunnerFailure: false,
@@ -134,7 +135,7 @@ describe("buildExternalRunFailureReply", () => {
       isHeartbeat: true,
       includeDetails: true,
     });
-    expect(verbose.text).toContain("boom-canary");
+    expect(verbose.text).toContain(`\n\nDetails: ${message}.\n`);
     expect(verbose.text).not.toContain("/new");
     expect(verbose.isGenericRunnerFailure).toBe(false);
   });
@@ -167,6 +168,11 @@ describe("buildExternalRunFailureReply", () => {
           provider: "openai",
           model: "test-model",
         }),
+      localWorker: false,
+    },
+    {
+      name: "local request timeout with a synthesized status",
+      makeError: () => new Error("LLM request timed out."),
       localWorker: false,
     },
     {
@@ -217,12 +223,44 @@ describe("buildExternalRunFailureReply", () => {
     if (localWorker) {
       expect(reply.text).toMatch(/local worker/i);
       expect(reply.text).not.toMatch(/HTTP|openai\/test-model|context preparation/);
+    } else if (error.reason === "timeout") {
+      expect(reply.text).toBe(
+        "⚠️ The request timed out. Please try again. If it keeps happening, try a shorter request or a different model.",
+      );
+      expect(error).toMatchObject({
+        reason: "timeout",
+        status: 408,
+        provider: "openai",
+        model: "test-model",
+      });
     } else {
       expect(reply.text).toContain("openai/test-model");
       expect(reply.text).not.toMatch(/local worker/i);
-      if (error.reason === "timeout") {
-        expect(reply.text).toContain("HTTP 408");
-      }
     }
+  });
+
+  it("uses generic copy when useHeartbeatFailureCopy is false even if isHeartbeat is true", () => {
+    const reply = buildExternalRunFailureReply(
+      { message: "test error", error: new Error("test") },
+      { isHeartbeat: true, useHeartbeatFailureCopy: false },
+    );
+    expect(reply.text).toBe(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
+    expect(reply.isGenericRunnerFailure).toBe(false);
+  });
+
+  it("uses heartbeat copy when useHeartbeatFailureCopy is true", () => {
+    const reply = buildExternalRunFailureReply(
+      { message: "test error", error: new Error("test") },
+      { isHeartbeat: true, useHeartbeatFailureCopy: true },
+    );
+    expect(reply.text).toBe(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT);
+  });
+
+  it("falls back to isHeartbeat when useHeartbeatFailureCopy is undefined", () => {
+    const reply = buildExternalRunFailureReply(
+      { message: "test error", error: new Error("test") },
+      { isHeartbeat: true },
+    );
+    expect(reply.text).toBe(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT);
   });
 });

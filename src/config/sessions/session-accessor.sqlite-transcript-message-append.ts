@@ -110,10 +110,7 @@ export function prepareTranscriptMessageAppend<TMessage extends object>(
     envelope: TranscriptMessageEnvelope;
   },
 ): PreparedTranscriptMessageAppend<TMessage> | undefined {
-  if (
-    !isRecord(options.message) ||
-    (options.message.role !== "assistant" && options.message.role !== "toolResult")
-  ) {
+  if (!isRecord(options.message) || options.message.role === "user") {
     // Pending user custody retains its transaction-owned preparation.
     return undefined;
   }
@@ -121,7 +118,10 @@ export function prepareTranscriptMessageAppend<TMessage extends object>(
   const messageJson = JSON.stringify(canonicalizePersistedUserMessageMedia(message).message);
   // SAFETY: Decode the detached canonical message from its own JSON storage bytes.
   const prepared = { messageJson, persistedMessage: JSON.parse(messageJson) as TMessage };
-  if (!candidate) {
+  if (
+    !candidate ||
+    (options.message.role !== "assistant" && options.message.role !== "toolResult")
+  ) {
     return prepared;
   }
   const eventJson = serializePreparedMessageEvent(candidate.envelope, messageJson);

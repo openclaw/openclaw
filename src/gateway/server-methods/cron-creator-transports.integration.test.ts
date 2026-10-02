@@ -18,7 +18,6 @@ import {
   bindGatewayContextResolver,
   clearGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
-import { clientHasAdminScope } from "../agent-turn/agent-handler-helpers.js";
 import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
@@ -28,6 +27,7 @@ import {
   revokeMcpLoopbackClientGrant,
 } from "../mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../mcp-http.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { resolveGatewayChatCronCreatorAuthorityAdmission } from "./cron-creator-authority-admission.js";
 import {
@@ -78,7 +78,8 @@ describe("original caller through Cron creator transports", () => {
             delivery: { mode: "none" },
           },
         });
-        expect(await fixture.read()).toMatchObject([
+        const jobs = await fixture.read();
+        expect(jobs).toMatchObject([
           {
             createdActor: CREATOR,
             owner: { agentId: "main", sessionKey: SESSION, accountId: "default" },
@@ -90,6 +91,7 @@ describe("original caller through Cron creator transports", () => {
             payload: { toolsAllow: ["*"], timeoutSeconds: 0 },
           },
         ]);
+        expect(jobs[0]?.payload).not.toHaveProperty("toolsAllowIsDefault");
       } finally {
         clearGatewayContextResolver(admitted);
       }
@@ -185,7 +187,7 @@ describe("original caller through Cron creator transports", () => {
             config,
             admitted,
             creator,
-            senderIsOwner: clientHasAdminScope(client),
+            senderIsOwner: hasGatewayAdminScope(client),
           });
           transportTools = tools;
           const invoke = (name: string) =>
@@ -226,6 +228,7 @@ describe("original caller through Cron creator transports", () => {
               },
             },
           ]);
+          expect(before[0]?.payload).not.toHaveProperty("toolsAllowIsDefault");
           expect(before[0]?.runtimeAuthority).toBeUndefined();
           hold = true;
           pending = invoke("Revoked creator");

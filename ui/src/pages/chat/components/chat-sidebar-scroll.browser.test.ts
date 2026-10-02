@@ -5,7 +5,7 @@ import "../../../styles/chat.ts";
 import "../../../styles/chat/side-panel.css";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import "./chat-files-panel.ts";
-import "./chat-sidebar.ts";
+import "./chat-detail-panel.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
 

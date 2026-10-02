@@ -525,7 +525,7 @@ describe("interrupted canonical user replay", () => {
             }
           },
         );
-        appendOversizedCacheSnapshot(original);
+        await appendOversizedCacheSnapshot(original);
         await withReplaySession(fixture, false, async (_session, submit) => {
           await submit();
           expect(streamMocks.streamSimple).not.toHaveBeenCalled();
