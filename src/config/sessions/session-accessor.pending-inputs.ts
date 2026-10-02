@@ -132,7 +132,7 @@ export function bindSessionPendingInputSources(
     !idempotencyKey ||
     sources.some(
       (source) =>
-        source.databasePath !== first.databasePath ||
+        source.workerDatabasePath !== first.workerDatabasePath ||
         source.sessionId !== first.sessionId ||
         source.sessionKey !== first.sessionKey ||
         source.idempotencyKey === idempotencyKey,
