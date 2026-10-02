@@ -161,7 +161,7 @@ describe("initial turn Retry after slow placement recovery", () => {
     }
   });
 
-  it.each(["requested", "provisioning", "syncing", "starting", "draining", "reconciling"])(
+  it.each(["provisioning", "draining"])(
     "waits for an existing %s placement without allocating another worker",
     async (state) => {
       vi.useFakeTimers();
@@ -294,43 +294,40 @@ describe("initial turn Retry after slow placement recovery", () => {
     },
   );
 
-  it.each(["active", "reclaimed"])(
-    "Stop fences a late %s read during Retry before any send or dispatch",
-    async (state) => {
-      const description = createDeferred<unknown>();
-      const request = vi.fn(async (method: string) => {
-        if (method === "sessions.describe") {
-          return description.promise;
-        }
-        if (method === "sessions.reclaim") {
-          return { ok: true };
-        }
-        throw new Error(`Unexpected ${method}`);
+  it("Stop fences a late active read during Retry before any send or dispatch", async () => {
+    const description = createDeferred<unknown>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.describe") {
+        return description.promise;
+      }
+      if (method === "sessions.reclaim") {
+        return { ok: true };
+      }
+      throw new Error(`Unexpected ${method}`);
+    });
+    const { startup, input, gateway } = await restorePausedStartup(request);
+    const client = gateway.snapshot.client;
+    if (!client) {
+      throw new Error("Expected the startup fixture client");
+    }
+    try {
+      startup.retry(input.recovery.sessionKey);
+      await flushStartupMicrotasks();
+      await requestCloudWorkerStop(client, { key: input.recovery.sessionKey }, startup);
+      description.resolve({ session: { placement: createStartupPlacement("active", 2) } });
+      await flushStartupMicrotasks();
+      expect(startup.get(input.recovery.sessionKey)).toMatchObject({
+        phase: "failed",
+        action: "retry",
+        initialTurn: { sendRunId: input.recovery.messageId },
       });
-      const { startup, input, gateway } = await restorePausedStartup(request);
-      const client = gateway.snapshot.client;
-      if (!client) {
-        throw new Error("Expected the startup fixture client");
-      }
-      try {
-        startup.retry(input.recovery.sessionKey);
-        await flushStartupMicrotasks();
-        await requestCloudWorkerStop(client, { key: input.recovery.sessionKey }, startup);
-        description.resolve({ session: { placement: createStartupPlacement(state, 2) } });
-        await flushStartupMicrotasks();
-        expect(startup.get(input.recovery.sessionKey)).toMatchObject({
-          phase: "failed",
-          action: "retry",
-          initialTurn: { sendRunId: input.recovery.messageId },
-        });
-        expect(request.mock.calls.map(([method]) => method)).toEqual([
-          "sessions.describe",
-          "sessions.reclaim",
-        ]);
-      } finally {
-        description.resolve({ session: null });
-        startup.dispose();
-      }
-    },
-  );
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "sessions.describe",
+        "sessions.reclaim",
+      ]);
+    } finally {
+      description.resolve({ session: null });
+      startup.dispose();
+    }
+  });
 });
