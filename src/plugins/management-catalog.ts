@@ -15,8 +15,8 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import {
   resolveTrustedOfficialClawHubPackageName,
-  resolveTrustedSourceLinkedOfficialClawHubSpec,
-  resolveTrustedSourceLinkedOfficialNpmSpec,
+  resolveTrustedSourceLinkedOfficialClawHubInstall,
+  resolveTrustedSourceLinkedOfficialNpmInstall,
 } from "./official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogManifest,
@@ -478,16 +478,16 @@ export function resolveInstalledHostedOfficialEntry(params: {
 } {
   const identityPluginId = params.installOwner ?? params.record.pluginId;
   const trustedOfficialClawHubSpec = params.installRecord
-    ? resolveTrustedSourceLinkedOfficialClawHubSpec({
+    ? resolveTrustedSourceLinkedOfficialClawHubInstall({
         pluginId: identityPluginId,
         record: params.installRecord,
-      })
+      })?.clawhubSpec
     : undefined;
   const trustedOfficialNpmSpec = params.installRecord
-    ? resolveTrustedSourceLinkedOfficialNpmSpec({
+    ? resolveTrustedSourceLinkedOfficialNpmInstall({
         pluginId: identityPluginId,
         record: params.installRecord,
-      })
+      })?.npmSpec
     : undefined;
   const sourceLinkedOfficialClawHubPackage = trustedOfficialClawHubSpec
     ? parseClawHubPluginSpec(trustedOfficialClawHubSpec)?.name

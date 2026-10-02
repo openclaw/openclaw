@@ -38,7 +38,10 @@ import { logWarn } from "../logger.js";
 import { classifyMediaReferenceSource } from "../media/media-reference.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
-import { matchesMediaEntryCapability } from "./entry-capabilities.js";
+import {
+  matchesMediaEntryCapability,
+  resolveConfiguredMediaEntryCapabilities,
+} from "./entry-capabilities.js";
 import { inspectLocalAudioSelection } from "./local-audio.js";
 import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
 import {
@@ -381,13 +384,17 @@ function hasExplicitImageUnderstandingConfig(params: {
   cfg: OpenClawConfig;
   providerRegistry: LazyProviderRegistry;
 }): boolean {
-  return (params.cfg.tools?.media?.models ?? []).some((entry) =>
-    matchesMediaEntryCapability({
+  return (params.cfg.tools?.media?.models ?? []).some((entry) => {
+    const configured = resolveConfiguredMediaEntryCapabilities(entry);
+    if (configured) {
+      return configured.includes("image");
+    }
+    return matchesMediaEntryCapability({
       entry,
       capability: "image",
       providerRegistry: resolveProviderRegistry(params.providerRegistry),
-    }),
-  );
+    });
+  });
 }
 
 function isMinimaxNativeVisionModel(params: { provider: string; model?: string }): boolean {

@@ -23,14 +23,8 @@ import {
 } from "./legacy-config-migrations.runtime.models.refs.js";
 import { isRecord } from "./legacy-config-record-shared.js";
 import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
-import {
-  modelEntryWithRuntimePolicy,
-  selectedCanonicalModelRefsForRuntimePolicy,
-} from "./legacy-runtime-model-policy.js";
-import {
-  migrateLegacyRuntimeModelRef,
-  resolveLegacyCliRuntimeAlias,
-} from "./legacy-runtime-model-providers.js";
+import { modelEntryWithRuntimePolicy } from "./legacy-runtime-model-policy.js";
+import { migrateLegacyRuntimeModelRef } from "./legacy-runtime-model-providers.js";
 export { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
 
 const INHERITED_ACCOUNT_POLICY_KEYS = ["dmPolicy", "allowFrom", "groupPolicy", "groupAllowFrom"];
@@ -48,14 +42,6 @@ export function normalizeLegacyBrowserConfig(
 
   const browser = structuredClone(rawBrowser);
   let browserChanged = false;
-
-  if ("relayBindHost" in browser) {
-    delete browser.relayBindHost;
-    browserChanged = true;
-    changes.push(
-      "Removed browser.relayBindHost (legacy Chrome extension relay setting; the extension relay binds loopback on the profile cdpPort).",
-    );
-  }
 
   // driver "extension" is a live driver again (Chrome extension relay v2). Old
   // relay-era profiles could carry a cdpUrl pointing at the retired gateway
@@ -85,34 +71,6 @@ export function normalizeLegacyBrowserConfig(
       browser.profiles = profiles;
       browserChanged = true;
     }
-  }
-
-  const rawSsrFPolicy = browser.ssrfPolicy;
-  if (isRecord(rawSsrFPolicy) && "allowPrivateNetwork" in rawSsrFPolicy) {
-    const legacyAllowPrivateNetwork = rawSsrFPolicy.allowPrivateNetwork;
-    const currentDangerousAllowPrivateNetwork = rawSsrFPolicy.dangerouslyAllowPrivateNetwork;
-
-    let resolvedDangerousAllowPrivateNetwork: unknown = currentDangerousAllowPrivateNetwork;
-    if (
-      typeof legacyAllowPrivateNetwork === "boolean" ||
-      typeof currentDangerousAllowPrivateNetwork === "boolean"
-    ) {
-      resolvedDangerousAllowPrivateNetwork =
-        legacyAllowPrivateNetwork === true || currentDangerousAllowPrivateNetwork === true;
-    } else if (currentDangerousAllowPrivateNetwork === undefined) {
-      resolvedDangerousAllowPrivateNetwork = legacyAllowPrivateNetwork;
-    }
-
-    const nextSsrFPolicy: Record<string, unknown> = { ...rawSsrFPolicy };
-    delete nextSsrFPolicy.allowPrivateNetwork;
-    if (resolvedDangerousAllowPrivateNetwork !== undefined) {
-      nextSsrFPolicy.dangerouslyAllowPrivateNetwork = resolvedDangerousAllowPrivateNetwork;
-    }
-    browser.ssrfPolicy = nextSsrFPolicy;
-    browserChanged = true;
-    changes.push(
-      `Moved browser.ssrfPolicy.allowPrivateNetwork → browser.ssrfPolicy.dangerouslyAllowPrivateNetwork (${String(resolvedDangerousAllowPrivateNetwork)}).`,
-    );
   }
 
   if (!browserChanged) {
@@ -488,10 +446,6 @@ function normalizeLegacyRuntimeAgentContainer(
 ): { value: Record<string, unknown>; changed: boolean } {
   let changed = false;
   const next: Record<string, unknown> = { ...raw };
-  const legacyWholeAgentRuntime = resolveLegacyCliRuntimeAlias(
-    isRecord(raw.agentRuntime) ? raw.agentRuntime.id : undefined,
-  );
-
   const model = normalizeLegacyRuntimeAgentModelConfig(raw.model, blockedModelIdentities);
   if (model.changed) {
     next.model = model.value;
@@ -547,30 +501,6 @@ function normalizeLegacyRuntimeAgentContainer(
     }
     changed = true;
     changes.push(`Moved ${path}.${key}.model to canonical refs with model runtime policy.`);
-  }
-
-  if (legacyWholeAgentRuntime) {
-    const selectedRefs: SelectedRuntimeRef[] = selectedCanonicalModelRefsForRuntimePolicy(
-      next.model ?? raw.model,
-      legacyWholeAgentRuntime.provider,
-    ).map((ref) => ({
-      ref,
-      runtime: legacyWholeAgentRuntime.runtime,
-    }));
-    const modelRuntimes = ensureSelectedModelRuntimePolicies(next.models, selectedRefs);
-    if (modelRuntimes.changed) {
-      next.models = modelRuntimes.value;
-      changed = true;
-      changes.push(
-        `Moved ${path}.agentRuntime.id ${legacyWholeAgentRuntime.runtime} to matching ${legacyWholeAgentRuntime.provider} model runtime policy.`,
-      );
-    }
-  }
-
-  if (model.selectedRuntime && isRecord(raw.agentRuntime)) {
-    delete next.agentRuntime;
-    changed = true;
-    changes.push(`Removed ${path}.agentRuntime; runtime is now model scoped.`);
   }
 
   if (modelPolicy.runtimes.size > 0) {

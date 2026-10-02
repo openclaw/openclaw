@@ -253,6 +253,12 @@ export function renderUpdateRunReport(
     !currentHealth && run.verification.serviceRunning === true
       ? run.verification.runningVersion
       : undefined;
+  // These producer codes also cover unreadable runtimes and failed capability probes.
+  // They do not establish that Node is old or that upgrading it will repair the update.
+  const runtimeCheckFailed =
+    run.status === "failed" &&
+    (run.reason === "node-runtime-preflight" ||
+      run.reason === "preflight-node-runtime-incompatible");
   let headline: string;
   switch (run.status) {
     case "succeeded":
@@ -265,7 +271,9 @@ export function renderUpdateRunReport(
         ? "ℹ️ OpenClaw abandoned update reconciled."
         : run.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON
           ? `ℹ️ OpenClaw update abandoned: ${reason}.`
-          : `⚠️ OpenClaw update failed: ${reason}.${running ? ` The gateway is running ${running}.` : ""}`;
+          : runtimeCheckFailed
+            ? "⚠️ OpenClaw could not complete the update. A required system check failed."
+            : `⚠️ OpenClaw update failed: ${reason}.`;
       break;
     case "skipped":
       headline =
@@ -284,6 +292,9 @@ export function renderUpdateRunReport(
   }
   headline = bounded(headline, 500);
   const lines: string[] = [];
+  if (currentHealth && !run.origin.nextAction && !opts.nextAction) {
+    lines.push(formatUpdateRunCurrentHealth(currentHealth));
+  }
   if (opts.mode && opts.mode !== "unknown") {
     lines.push(`Update mode: ${opts.mode}`);
   }
@@ -371,14 +382,14 @@ export function renderUpdateRunReport(
   const observation = run.steps.findLast((step) => step.step === "gateway recovery verification");
   const recovery = observation && formatUpdateRunRecovery(facts, observation);
   if (recovery) {
-    lines.push(`Recovery: ${recovery}.`);
+    lines.push(`Recorded recovery: ${recovery}.`);
   }
   const verification = [
     facts.booted ? "gateway booted" : undefined,
     facts.serviceRunning === undefined
       ? undefined
       : facts.serviceRunning
-        ? "service running"
+        ? `service running${facts.runningVersion ? ` (${bounded(facts.runningVersion, 120)})` : ""}`
         : "service stopped",
     formatUpdateRunIdentity(facts, run.after),
     facts.channelsReady === undefined
@@ -392,12 +403,7 @@ export function renderUpdateRunReport(
       : undefined,
   ].filter(Boolean);
   if (verification.length) {
-    lines.push(
-      `${currentHealth ? "Recorded verification" : "Verification"}: ${verification.join("; ")}.`,
-    );
-  }
-  if (currentHealth && !run.origin.nextAction && !opts.nextAction) {
-    lines.push(formatUpdateRunCurrentHealth(currentHealth));
+    lines.push(`Recorded verification: ${verification.join("; ")}.`);
   }
   for (const attempt of run.repair.slice(-3)) {
     lines.push(
@@ -460,8 +466,24 @@ export function renderUpdateRunReport(
               ].filter((line): line is string => Boolean(line)),
             ),
           ];
-  lines.push(...hints);
   const next = hints.at(-1);
+  if (runtimeCheckFailed) {
+    // Keep the owner's selected action ahead of the diagnostic dump, including
+    // historical-advice qualifications. Neither this layout nor truncation selects recovery.
+    const details = [
+      "Details:",
+      `Reason code: ${reason}`,
+      ...lines,
+      ...hints.filter((line) => line !== next),
+    ];
+    const lead = [headline, ...(next ? [bounded(next, 1100)] : []), ""].join("\n");
+    return {
+      headline,
+      lines: [...(next ? [next, ""] : []), ...details],
+      markdown: `${lead}\n${bounded(details.join("\n"), 1500 - lead.length - 1)}`,
+    };
+  }
+  lines.push(...hints);
   const body = [headline, ...lines.filter((line) => line !== next)].join("\n");
   const suffix = next ? `\n${bounded(next, 1100)}` : "";
   return { headline, lines, markdown: `${bounded(body, 1500 - suffix.length)}${suffix}` };

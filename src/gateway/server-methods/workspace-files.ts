@@ -13,6 +13,7 @@ import { resolveToCwd as resolveSessionToolPathToCwd } from "../../agents/sessio
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { BROWSER_IMAGE_MIME_TYPES } from "../../shared/browser-image-mime-types.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import {
   decodeUtf8Strict,
@@ -46,15 +47,6 @@ const MAX_SEARCH_VISITED_ENTRIES = 5_000;
 // Matches file-type's documented default buffer sample while keeping metadata
 // classification independent from the 256 KiB inline-content cap.
 const MIME_SNIFF_PREFIX_BYTES = 4_100;
-// Inline previews stay limited to formats supported by modern Control UI browsers.
-// Native workspace clients intentionally own a broader, separate image policy.
-const BROWSER_PREVIEW_IMAGE_MIME_TYPES = new Set([
-  "image/avif",
-  "image/gif",
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-]);
 const DETECTED_TEXT_MIME_TYPES = new Set([
   "application/rtf",
   "application/xml",
@@ -173,7 +165,7 @@ function isDetectedTextMime(mimeType: string): boolean {
 }
 
 function applyInlineFilePreview(entry: SessionFileEntry, buffer: Buffer, mimeType?: string): void {
-  if (mimeType && BROWSER_PREVIEW_IMAGE_MIME_TYPES.has(mimeType)) {
+  if (mimeType && BROWSER_IMAGE_MIME_TYPES.has(mimeType)) {
     entry.mimeType = mimeType;
     entry.contentEncoding = "base64";
     entry.previewKind = "image";

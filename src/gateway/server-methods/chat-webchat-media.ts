@@ -110,10 +110,6 @@ async function readLocalAudioContentBlockForEmbedding(
   }
 }
 
-function isBase64DataPayload(value: string): boolean {
-  return value.length > 0 && !/[^A-Za-z0-9+/=\t\n\v\f\r ]/u.test(value);
-}
-
 function resolveEmbeddableImageUrl(url: string): string | null {
   const trimmed = url.trim();
   if (!trimmed) {
@@ -129,7 +125,7 @@ function resolveEmbeddableImageUrl(url: string): string | null {
   const metadata = trimmed.slice(0, commaIndex);
   const match = /^data:(image\/[a-z0-9.+-]+);base64$/i.exec(metadata);
   const base64Data = trimmed.slice(commaIndex + 1);
-  if (!match || !isBase64DataPayload(base64Data)) {
+  if (!match || !base64Data || /[^A-Za-z0-9+/=\t\n\v\f\r ]/u.test(base64Data)) {
     return null;
   }
   const mediaType = normalizeLowercaseStringOrEmpty(match[1]);

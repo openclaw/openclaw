@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles.js";
 import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
@@ -43,9 +44,15 @@ import { testState } from "./test-helpers.runtime-state.js";
 import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.server.js";
 
 installGatewayTestHooks();
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
+let pendingFixtureCleanup: Promise<void> | undefined;
+afterEach(async () => {
+  try {
+    await pendingFixtureCleanup;
+  } finally {
+    pendingFixtureCleanup = undefined;
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  }
 });
 
 function pauseIntegrityInspections(params: {
@@ -117,7 +124,7 @@ DatabaseSync.prototype.prepare = function(sql) {
   };
 }
 
-it.each([
+it.for([
   { outcome: "recover", agentId: "worker" },
   { outcome: "corrupt", agentId: "worker" },
   { outcome: "physical-corrupt", agentId: "main" },
@@ -130,7 +137,7 @@ it.each([
   { outcome: "shutdown-preparation", agentId: "worker" },
 ] as const)(
   "applies startup admission while $agentId follows its $outcome lifecycle",
-  async ({ outcome, agentId }) => {
+  async ({ outcome, agentId }, { signal }) => {
     const nativeBroker = process.platform === "linux" && !process.versions.bun;
     const brokerExpected =
       nativeBroker ||
@@ -400,10 +407,13 @@ it.each([
         expect(() => process.kill(pid, 0)).toThrow();
       } else if (outcome === "recover" || outcome === "superseded") {
         fs.writeFileSync(releasePath, "resume");
-        await Promise.race([
-          preparationEntered.promise,
-          hostJournalRead.promise.then(() => expect(hostJournalReads).toBe(0)),
-        ]);
+        await withinTest(
+          Promise.race([
+            preparationEntered.promise,
+            hostJournalRead.promise.then(() => expect(hostJournalReads).toBe(0)),
+          ]),
+          signal,
+        );
         expect(sessionPrepared).toBe(true);
         if (outcome === "recover") {
           expect(preparationParent).toBe(brokerExpected ? brokerPid : process.pid);
@@ -468,20 +478,23 @@ it.each([
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBeUndefined();
       }
     } finally {
-      preparationRelease.resolve();
-      fs.writeFileSync(releasePath, "resume");
-      if (pause) {
-        fs.writeFileSync(pause.preparationReleasePath, "resume");
-      }
-      try {
-        await server?.close();
-      } finally {
-        try {
-          await suppliedBroker?.close();
-        } finally {
-          await unadoptedPortClaim?.release();
+      pendingFixtureCleanup = (async () => {
+        preparationRelease.resolve();
+        fs.writeFileSync(releasePath, "resume");
+        if (pause) {
+          fs.writeFileSync(pause.preparationReleasePath, "resume");
         }
-      }
+        try {
+          await server?.close();
+        } finally {
+          try {
+            await suppliedBroker?.close();
+          } finally {
+            await unadoptedPortClaim?.release();
+          }
+        }
+      })();
+      await pendingFixtureCleanup;
     }
   },
 );

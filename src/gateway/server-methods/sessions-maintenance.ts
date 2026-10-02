@@ -5,7 +5,7 @@ import {
   validateSessionsStorageParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { runSessionsCleanup, serializeSessionCleanupResult } from "../../config/sessions.js";
-import { getSessionColdStorageStatus } from "../../config/sessions/session-cold-storage.js";
+import { getSessionColdStorageStatus } from "../../config/sessions/session-cold-storage-status.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   getSessionColdStorageMaintenanceStatus,
@@ -33,13 +33,13 @@ function createSessionStorageHandler(
     }
     try {
       const agents = await getSessionColdStorageStatus(context.getRuntimeConfig());
+      signal?.throwIfAborted();
+      sessionMutationCommitGuard?.();
+      sessionMutationAuthorization?.assertCurrent();
+      if (hasCurrentClientAuthority?.() === false) {
+        throw new Error("Transcript maintenance requester is no longer authorized");
+      }
       if (method === "sessions.storage.run") {
-        signal?.throwIfAborted();
-        sessionMutationCommitGuard?.();
-        sessionMutationAuthorization?.assertCurrent();
-        if (hasCurrentClientAuthority?.() === false) {
-          throw new Error("Transcript maintenance requester is no longer authorized");
-        }
         requestGatewaySessionColdStorageMaintenance(context.getRuntimeConfig);
       }
       respond(

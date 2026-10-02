@@ -733,7 +733,7 @@ describe("installed plugin index persistence", () => {
     });
   });
 
-  it("leaves retired JSON index files to the doctor migration owner", async () => {
+  it("does not read retired JSON index files", async () => {
     const stateDir = makeTempDir();
     const filePath = path.join(stateDir, "installs.json");
     fs.writeFileSync(filePath, JSON.stringify(createIndex()), "utf8");

@@ -1,5 +1,6 @@
 // Stable public surface for short-term promotion behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
 import { readPhaseSignalStore, readStore } from "./short-term-promotion-store.js";
 import {
@@ -216,9 +217,7 @@ export async function rankShortTermPromotionCandidates(
     return a.path.localeCompare(b.path);
   });
 
-  const limit = Number.isFinite(options.limit)
-    ? Math.max(0, Math.floor(options.limit as number))
-    : sorted.length;
+  const limit = resolveNonNegativeIntegerOption(options.limit, sorted.length);
   return sorted.slice(0, limit);
 }
 

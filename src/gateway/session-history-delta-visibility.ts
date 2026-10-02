@@ -11,7 +11,10 @@ import {
   unwrapSessionTranscriptWorkerReply,
 } from "../config/sessions/session-history-worker-errors.js";
 import { createChatHistoryRecoveryProjection } from "./chat-display-projection.core.js";
-import type { SubagentCoordinationDisplayResolver } from "./chat-display-projection.history.js";
+import {
+  createSubagentCoordinationHistoryProjection,
+  type SubagentCoordinationDisplayResolver,
+} from "./chat-display-projection.history.js";
 import { projectTranscriptEntryMessage } from "./session-transcript-entry-message.js";
 
 export function isAppendOnlySessionHistoryDelta(
@@ -28,11 +31,29 @@ export function isAppendOnlySessionHistoryDelta(
   );
 }
 
-/** Prepare only the visibility decisions requested by this bounded delta's messages. */
-export function prepareSessionHistoryDelta(
-  delta: SessionTranscriptDisplayDeltaResult,
+/** Inline projection asks at most one source or run question, without transferring message bodies. */
+export function readSessionHistorySubagentLookup(
+  message: unknown,
+): SessionHistorySubagentLookup | undefined {
+  let lookup: SessionHistorySubagentLookup | undefined;
+  createSubagentCoordinationHistoryProjection({
+    isSubagentSession: (sessionKey) => {
+      lookup = { kind: "session", sessionKey };
+      return false;
+    },
+    isSubagentRunMessage: (runId, messageSeq) => {
+      lookup = { kind: "run", runId, messageSeq };
+      return false;
+    },
+  })([message]);
+  return lookup;
+}
+
+export function prepareSessionHistorySubagentFacts(
   resolver: SubagentCoordinationDisplayResolver,
-): SessionHistoryDelta {
+  project: (recording: SubagentCoordinationDisplayResolver) => void,
+  onFailure?: (facts: SessionHistorySubagentFacts, error: unknown) => never,
+): SessionHistorySubagentFacts {
   const sessions = new Map<string, boolean>();
   const runMessages: SessionHistorySubagentFacts["runMessages"] = [];
   const readFact = (lookup: SessionHistorySubagentLookup, read: () => boolean): boolean => {
@@ -40,19 +61,14 @@ export function prepareSessionHistoryDelta(
       return read();
     } catch (error) {
       const encoded = encodeSessionTranscriptWorkerError(error);
-      if (!encoded) {
+      if (!encoded || !onFailure) {
         throw error;
       }
-      // Unwind the admitted reader before publishing the partial result. The host
-      // observes this error only if no earlier row already required a reset.
-      throw new SessionHistoryDeltaPreparationError(
+      return onFailure(
         {
-          delta,
-          subagentCoordination: {
-            sessions: [...sessions],
-            runMessages,
-            failure: { lookup, error: encoded },
-          },
+          sessions: [...sessions],
+          runMessages,
+          failure: { lookup, error: encoded },
         },
         error,
       );
@@ -75,23 +91,44 @@ export function prepareSessionHistoryDelta(
       return hidden;
     },
   };
-  if (isAppendOnlySessionHistoryDelta(delta)) {
-    for (const row of delta.events) {
-      if (row.messageSeq === undefined) {
-        continue;
+  project(recording);
+  return { sessions: [...sessions], runMessages };
+}
+
+/** Prepare only the visibility decisions requested by this bounded delta's messages. */
+export function prepareSessionHistoryDelta(
+  delta: SessionTranscriptDisplayDeltaResult,
+  resolver: SubagentCoordinationDisplayResolver,
+): SessionHistoryDelta {
+  const subagentCoordination = prepareSessionHistorySubagentFacts(
+    resolver,
+    (recording) => {
+      if (!isAppendOnlySessionHistoryDelta(delta)) {
+        return;
       }
-      const message = projectTranscriptEntryMessage(row.event, row.messageSeq, row.displayPosition);
-      if (!message) {
-        continue;
+      for (const row of delta.events) {
+        if (row.messageSeq === undefined) {
+          continue;
+        }
+        const message = projectTranscriptEntryMessage(
+          row.event,
+          row.messageSeq,
+          row.displayPosition,
+        );
+        if (message) {
+          // Recovery normalizes custom failures and nested-tool run IDs before visibility.
+          createChatHistoryRecoveryProjection({ subagentCoordination: recording }).append([
+            message,
+          ]);
+        }
       }
-      // Delta projection starts fresh per message. Recovery also normalizes custom
-      // failures and nested-tool run IDs before consulting the visibility owner.
-      createChatHistoryRecoveryProjection({ subagentCoordination: recording }).append([message]);
-    }
-  }
-  // One source-or-run question per row; identifiers come from the bounded raw
-  // events. Earlier input scans and source rows stay inside the worker.
-  return { delta, subagentCoordination: { sessions: [...sessions], runMessages } };
+    },
+    (facts, error) => {
+      // Join reader retirement before the host consumes partial facts or an earlier reset.
+      throw new SessionHistoryDeltaPreparationError({ delta, subagentCoordination: facts }, error);
+    },
+  );
+  return { delta, subagentCoordination };
 }
 
 export function createPreparedSessionHistorySubagentProjection(

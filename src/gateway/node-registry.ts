@@ -510,10 +510,6 @@ export class NodeRegistry {
         })
       : connect.permissions;
     connect.permissions = permissions;
-    const pathEnv = connect.pathEnv;
-    const declaredNodePluginTools: NodePluginToolDescriptor[] = [];
-    const nodePluginTools: NodePluginToolDescriptor[] = [];
-    const nodeSkills: NodeSkillDescriptor[] = [];
     const session: PairingBoundNodeSession = {
       nodeId,
       connId: client.connId,
@@ -538,12 +534,12 @@ export class NodeRegistry {
       commands,
       ...(declaredComputerUse ? { declaredComputerUse } : {}),
       ...(computerUse ? { computerUse } : {}),
-      declaredNodePluginTools,
-      nodePluginTools,
-      nodeSkills,
+      declaredNodePluginTools: [],
+      nodePluginTools: [],
+      nodeSkills: [],
       declaredPermissions,
       permissions,
-      pathEnv,
+      pathEnv: connect.pathEnv,
       connectedAtMs: Date.now(),
     };
     // Preserve the approved declaration independently of policy, so re-enabling
@@ -996,8 +992,8 @@ export class NodeRegistry {
     connId: string | undefined,
     tools: readonly NodePluginToolDescriptor[],
   ): NodeSession | null {
-    const node = this.nodesById.get(nodeId);
-    if (!node || node.connId !== connId || node.client.invalidated === true) {
+    const node = this.getRegisteredSession(nodeId);
+    if (!node || node.connId !== connId) {
       return null;
     }
     node.declaredNodePluginTools = [...tools];
@@ -1010,8 +1006,8 @@ export class NodeRegistry {
     connId: string | undefined,
     skills: readonly NodeSkillDescriptor[],
   ): NodeSession | null {
-    const node = this.nodesById.get(nodeId);
-    if (!node || node.connId !== connId || node.client.invalidated === true) {
+    const node = this.getRegisteredSession(nodeId);
+    if (!node || node.connId !== connId) {
       return null;
     }
     expectDefined(NODE_SESSION_POLICIES.get(node), "registered node policy missing").skills =
@@ -1036,10 +1032,9 @@ export class NodeRegistry {
       nextPairingGeneration: string;
     },
   ): NodeSession | null {
-    const node = this.nodesById.get(nodeId);
+    const node = this.getRegisteredSession(nodeId);
     if (
       !node ||
-      node.client.invalidated === true ||
       (generationTransition !== undefined &&
         (node.connId !== generationTransition.expectedConnId ||
           node.pairingIdentity !== generationTransition.expectedPairingIdentity ||

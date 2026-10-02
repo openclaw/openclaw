@@ -157,7 +157,7 @@ provider/auth configuration, switch to a reachable provider, or set
 
 ### API key resolution
 
-Remote embeddings require an API key. Bedrock uses the AWS SDK default credential chain instead (instance roles, SSO, access keys, or a Bedrock API key).
+Remote embedding authentication depends on the provider. Bedrock uses the AWS SDK default credential chain (instance roles, SSO, access keys, or a Bedrock API key).
 
 | Provider       | Env var                                             | Config key                          |
 | -------------- | --------------------------------------------------- | ----------------------------------- |
@@ -176,7 +176,9 @@ such as `my-embeddings:default`. Literal keys keep their configured value even
 when other profiles are saved for the provider. Empty keys do not select a saved profile.
 
 <Note>
-Codex OAuth covers chat/completions only and does not satisfy embedding requests.
+OpenAI embeddings can use a stored Codex OAuth profile when the account grants
+embedding access. The separate Sign in with ChatGPT token-sharing grant does not
+authorize embeddings. Run `openclaw memory status --deep` to check your account.
 </Note>
 
 ---

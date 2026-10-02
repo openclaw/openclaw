@@ -269,15 +269,20 @@ describe("compiled worker content cache", () => {
     await f.seed();
     const probe = cachedProbe(f.root, f.directory);
     f.nextInvocation();
-    const read = fs.promises.readFile.bind(fs.promises);
+    const read = fs.readFile.bind(fs);
     let changed = false;
-    const reader = vi.spyOn(fs.promises, "readFile").mockImplementation(async (...args) => {
-      const bytes = await read(...args);
-      if (args[0] === probe && !changed) {
-        changed = true;
-        f.write("src/package.json", '{"type":"commonjs"}');
+    const reader = vi.spyOn(fs, "readFile").mockImplementation((...args) => {
+      if (args[0] !== probe) {
+        return read(...args);
       }
-      return bytes;
+      const [filename, callback] = args;
+      read(filename, (error, bytes) => {
+        if (!error && !changed) {
+          changed = true;
+          f.write("src/package.json", '{"type":"commonjs"}');
+        }
+        callback(error, bytes);
+      });
     });
     try {
       expect(await f.restore()).toBeUndefined();
