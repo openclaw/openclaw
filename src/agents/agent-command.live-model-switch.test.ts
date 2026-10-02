@@ -40,7 +40,6 @@ import {
   createTestModelVisibilityPolicy,
   makeSuccessResult,
 } from "./agent-command.live-model-switch.test-helpers.js";
-import { createCommandSessionPaths } from "./agent-command.live-model-switch.test-paths.js";
 import {
   registerAgentCommandRecoveryCases,
   withStoredAgentCommandRecoverySession,
@@ -749,6 +748,14 @@ vi.mock("../acp/control-plane/manager.js", () => ({
     runTurn: (...args: unknown[]) => state.acpRunTurnMock(...args),
   }),
 }));
+
+/** Explicit store paths travel with session scope into database Workers. */
+function createCommandSessionPaths(root: string) {
+  return {
+    sessions: path.join(root, "visible", "agents", "default", "sessions", "sessions.json"),
+    internalStore: path.join(root, "internal", "agents", "default", "sessions", "sessions.json"),
+  };
+}
 
 const commandDirectories = useSessionStoreTempDirs(afterAll, "live-model-switch-");
 let commandPaths: ReturnType<typeof createCommandSessionPaths>;
