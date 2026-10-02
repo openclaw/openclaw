@@ -548,6 +548,14 @@ changed` when the updater's umask differs from the installed launcher's
   then run `openclaw doctor --fix` and restart the Gateway. See
   [#144858](https://github.com/openclaw/openclaw/issues/144858) and
   [#154381](https://github.com/openclaw/openclaw/issues/154381).
+- `Plugin dependency <name> is unresolvable inside the temporary update copy`:
+  an undeclared optional package was found only above the rehearsal directory.
+  Update inspection ignores that ancestor package and continues with a warning;
+  declared dependencies and links escaping the copy still fail containment.
+  After two identical candidate Doctor failures for the same version, automatic
+  updates pause before starting another rehearsal. Inspect the recorded failure
+  with `openclaw update status --json`, fix its cause, and run `openclaw update`
+  to retry. A new candidate version also clears the pause.
 - `doctor-failed`: run `openclaw doctor` on the Gateway host, resolve its
   findings, then retry. See [Doctor](/cli/doctor) for the check list and
   `--fix` behavior.

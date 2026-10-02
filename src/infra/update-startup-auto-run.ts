@@ -30,10 +30,12 @@ import {
   createUpdateRun,
   finishUpdateRun,
   getUpdateRun,
+  listUpdateRunsAsync,
   recordUpdateRunPhase,
   recordUpdateRunDiagnostics,
   recordUpdateRunStep,
 } from "./update-run-ledger.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { AUTO_UPDATE_STEP_TIMEOUT_MS } from "./update-run-timeouts.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
@@ -204,6 +206,47 @@ export async function runAutoUpdateCommand(
 
 export type AutoUpdateRunner = (params: AutoUpdateRunParams) => Promise<AutoUpdateRunResult>;
 
+function candidateDoctorFailureSignature(run: UpdateRunRecord): string | undefined {
+  if (run.trigger !== "campaign" || run.status !== "failed" || !run.reason) {
+    return undefined;
+  }
+  const failed = run.steps.filter(
+    (step) =>
+      step.status === "failed" &&
+      (step.step === "candidate-doctor" || step.step === "candidate-doctor-lint"),
+  );
+  if (!failed.length) {
+    return undefined;
+  }
+  // Rehearsal directory identities and elapsed time change between identical failures.
+  const stable = (detail: string | undefined) =>
+    detail
+      ?.replace(/openclaw-update-canary-[A-Za-z0-9]+/gu, "openclaw-update-canary-[attempt]")
+      .replace(/\(\d+ms\)/gu, "(elapsed)");
+  return JSON.stringify([
+    run.reason,
+    failed
+      .toSorted((a, b) => a.step.localeCompare(b.step))
+      .map((step) => [
+        step.step,
+        step.exitCode,
+        step.failureFacts?.length
+          ? step.failureFacts
+              .map((fact) =>
+                JSON.stringify([
+                  fact.check,
+                  fact.code,
+                  fact.affectedKey,
+                  fact.pluginId,
+                  stable(fact.message),
+                ]),
+              )
+              .toSorted()
+          : stable(step.detail),
+      ]),
+  ]);
+}
+
 // The owner joins handoff readiness, never the helper's subsequent wait for Gateway exit.
 export async function runCampaignUpdate(params: {
   channel: "stable" | "beta" | "dev";
@@ -229,6 +272,46 @@ export async function runCampaignUpdate(params: {
   // The countdown may outlive its config. After this admission, the applying
   // owner retains its target until handoff or stop/drain settles it.
   if (campaignId === undefined || !isCurrent() || !params.canApply()) {
+    return "failed";
+  }
+  const recent = await listUpdateRunsAsync({ limit: 2, excludeReason: "dry-run" }).catch(
+    (error: unknown) => {
+      params.log.info(
+        "Warning: Automatic update retry history is unavailable; continuing update.",
+        {
+          error: formatErrorMessage(error),
+        },
+      );
+      return [];
+    },
+  );
+  if (!isCurrent() || !params.canApply()) {
+    return "failed";
+  }
+  const signature = recent[0] && candidateDoctorFailureSignature(recent[0]);
+  // The existing terminal rows are the durable backoff fact. A new candidate or
+  // an intervening operator run breaks the pair without another state store.
+  if (
+    signature &&
+    recent.length === 2 &&
+    recent.every(
+      (run) =>
+        run.target.channel === params.channel &&
+        (params.mode === "git" ? run.target.sha : run.target.version) === params.version &&
+        candidateDoctorFailureSignature(run) === signature,
+    )
+  ) {
+    const nextAction =
+      "Inspect `openclaw update status`, resolve the reported check, then run `openclaw update` to retry; a new candidate also resumes automatic updates.";
+    params.log.info(
+      `Warning: Automatic updates paused after repeated candidate-doctor failure. ${nextAction}`,
+      {
+        version: params.version,
+        reason: recent[0]?.reason,
+        runIds: recent.map((run) => run.runId),
+        nextAction,
+      },
+    );
     return "failed";
   }
   const run = createUpdateRun({
