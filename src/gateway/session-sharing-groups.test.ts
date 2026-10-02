@@ -1,9 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  observeHostDataSql,
-  trackSqliteStatementExecutions,
-} from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { AgentSelectionRequiredError } from "../agents/agent-scope.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
@@ -13,7 +11,6 @@ import {
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import {
   closeOpenClawAgentDatabasesForTest,
-  getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -172,34 +169,24 @@ describe("session sharing group mutations", () => {
         expect(responses[0]?.[0]).toBe(true);
         return responses[0]?.[1];
       };
-      const database = expectDefined(
-        getOpenClawAgentDatabaseIfOpen(scope),
-        "seeded agent database",
-      );
-      const queries = trackSqliteStatementExecutions(database.db, ["entries"], (sql) =>
-        /\bselect\b/i.test(sql) && /\bsession_nodes\b/.test(sql) && /\bentry_json\b/.test(sql)
-          ? "entries"
-          : null,
-      );
+      expect(await readDefaults()).toEqual({ defaults: [{ name: "Personal" }] });
+      // Worker seeding need not leave a host writer; observe every host connection on warm reads.
+      const sql = observeHostDataSql();
       try {
-        expect(await readDefaults()).toEqual({ defaults: [{ name: "Personal" }] });
-        queries.counts.entries = 0;
-        queries.rowCounts.entries = 0;
         for (let index = 0; index < 3; index++) {
           expect(await readDefaults()).toEqual({ defaults: [{ name: "Personal" }] });
         }
-        expect(queries.counts.entries).toBe(0);
-        expect(queries.rowCounts.entries).toBe(0);
-
-        await upsertSessionEntryCore(scope, { category: "Personal" });
-        expect(await readDefaults()).toEqual({ defaults: [{ name: "Projects" }] });
-        await upsertSessionEntryCore(scope, { visibility: "shared" });
-        expect(await readDefaults()).toEqual({
-          defaults: [{ name: "Projects" }, { name: "Personal" }],
-        });
+        expect(sql.queries).toEqual([]);
       } finally {
-        queries.restore();
+        sql.restore();
       }
+
+      await upsertSessionEntryCore(scope, { category: "Personal" });
+      expect(await readDefaults()).toEqual({ defaults: [{ name: "Projects" }] });
+      await upsertSessionEntryCore(scope, { visibility: "shared" });
+      expect(await readDefaults()).toEqual({
+        defaults: [{ name: "Projects" }, { name: "Personal" }],
+      });
     });
   });
 
@@ -383,20 +370,40 @@ describe("session sharing group mutations", () => {
           await addMember();
         }
 
+        let transactionRequested = false;
         let commitRequested = false;
         const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
         const admissionSpy = vi
           .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit, attachment) =>
-            createAdmission((request, grant) => {
-              if (request.stage === "commit") {
+          .mockImplementation((admit, attachment) => {
+            // Only this catalog transaction can identify its later, fact-free commit request.
+            let catalogAdmission = false;
+            return createAdmission((request, grant) => {
+              if (
+                request.stage === "transaction" &&
+                isRecord(request.facts) &&
+                Array.isArray(request.facts.names) &&
+                Array.isArray(request.facts.groups)
+              ) {
+                catalogAdmission = true;
+                transactionRequested = true;
+              }
+              if (catalogAdmission && request.stage === "commit") {
                 commitRequested = true;
                 writeRole.sessions.others = "none";
               }
               admit(request, grant);
-            }, attachment),
-          );
+            }, attachment);
+          });
         try {
+          // A separate worker write must neither revoke this role nor count as the catalog commit.
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: "agent:main:unrelated-admission" },
+            { sessionId: "unrelated-admission", updatedAt: 1 },
+          );
+          expect(commitRequested).toBe(false);
+          expect(writeRole.sessions.others).toBe("write");
+
           await expect(
             sessionGroupHandlers["sessions.groups.update"]?.({
               params: { name: " Race ", cwd: null, worktree: false },
@@ -406,6 +413,7 @@ describe("session sharing group mutations", () => {
               respond: () => undefined,
             } as never),
           ).rejects.toBeInstanceOf(SessionMutationAuthorizationChangedError);
+          expect(transactionRequested).toBe(true);
           expect(commitRequested).toBe(stage === "commit");
         } finally {
           admissionSpy.mockRestore();
