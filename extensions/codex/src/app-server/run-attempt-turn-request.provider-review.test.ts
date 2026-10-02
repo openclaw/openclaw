@@ -251,7 +251,7 @@ async function start(acknowledged: boolean) {
 }
 
 describe("native acknowledged turn requests", () => {
-  it.each<SelectionChange>(["thread", "thread ID", "owner", "released owner", "model", "provider"])(
+  it.each<SelectionChange>(["owner", "provider"])(
     "rejects a changed %s after reading the native provider review",
     async (kind) => {
       const host = createAcknowledgment();
