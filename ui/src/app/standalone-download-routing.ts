@@ -28,6 +28,12 @@ function opensInPlace(anchor: HTMLAnchorElement): boolean {
   return target === "" || target === "_self" || target === "_top" || target === "_parent";
 }
 
+async function saveDownloadLink(href: string, filename?: string) {
+  // The save path loads on first use to keep it out of the startup bundle.
+  const { saveStandaloneUrl } = await import("../lib/download.ts");
+  await saveStandaloneUrl(href, filename);
+}
+
 /**
  * Keeps file links from replacing the app. A download link in a home screen
  * app saves through the share sheet; a raw gateway file link opens in a new
@@ -48,11 +54,7 @@ export function startStandaloneDownloadRouting(options: { signal?: AbortSignal }
         return;
       }
       event.preventDefault();
-      const filename = anchor.getAttribute("download") ?? undefined;
-      // The save path loads on first use to keep it out of the startup bundle.
-      void import("../lib/download.ts").then(({ saveStandaloneUrl }) =>
-        saveStandaloneUrl(url.href, filename),
-      );
+      void saveDownloadLink(url.href, anchor.getAttribute("download") ?? undefined);
       return;
     }
     const rawFile =
