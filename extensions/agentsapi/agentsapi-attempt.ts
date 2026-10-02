@@ -20,6 +20,7 @@ import {
   formatErrorMessage,
   resolveAgentDir,
   resolveAgentHarnessBeforePromptBuildResult,
+  resolveAgentExecutorController,
   runAgentEndSideEffects,
   runAgentHarnessLlmOutputHook,
   sanitizeToolArgs,
@@ -31,12 +32,8 @@ import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient } from "./agentsapi-client.js";
+import { ensureAgentsApiEnvironment } from "./agentsapi-environment.js";
 import { resolveAgentsApiSessionAccessError } from "./agentsapi-errors.js";
-import {
-  ensureAgentsApiEnvironment,
-  resolveAgentsApiWorkspace,
-  type AgentsApiExecutorController,
-} from "./agentsapi-environment.js";
 import * as files from "./agentsapi-files.js";
 import { buildAgentsApiMcpTools } from "./agentsapi-mcp.js";
 import { AgentsApiMessageProjection } from "./agentsapi-messages.js";
@@ -61,7 +58,6 @@ export async function runAgentsApiAttempt(
   target: ReturnType<typeof requireAgentsApiSessionTarget>,
   readPluginConfig: () => unknown,
   promptHistories: AgentsApiPromptHistories,
-  executorController?: AgentsApiExecutorController,
   prepareNativeCleanup?: (binding: AgentsApiBinding, apiKey: string) => void,
 ): Promise<EmbeddedRunAttemptResult> {
   const startedAtMs = Date.now();
@@ -235,26 +231,29 @@ export async function runAgentsApiAttempt(
       params.agentId,
     );
     assertCurrent();
-    if (binding?.executor && executorController) {
+    if (binding?.executor) {
       // Even rejected configuration changes must leave authenticated cleanup available.
       prepareNativeCleanup?.(binding, params.resolvedApiKey!);
     }
     const pluginConfig = agentsApiConfigSchema.parse(readPluginConfig() ?? {});
     const environment = resolveAgentsApiEnvironment(pluginConfig, params.workspaceDir);
-    if (binding?.executor && !executorController) {
+    if (
+      binding &&
+      binding.executorControllerPluginId !==
+        (environment.type === "self_hosted" ? pluginConfig.executorController : undefined)
+    ) {
       throw new Error(
-        "Agents API self-hosted executor controller is unavailable; restore it before continuing",
+        "Agents API executor controller changed; reset the OpenClaw session before continuing",
       );
     }
+    const controllerPluginId = pluginConfig.executorController;
+    const executorController =
+      environment.type === "self_hosted" && controllerPluginId
+        ? resolveAgentExecutorController(controllerPluginId)
+        : undefined;
     if (environment.type === "self_hosted" && executorController) {
       // Executor paths are independent of the Gateway's tool workspace.
-      environment.workspace_directory = await resolveAgentsApiWorkspace(
-        executorController,
-        target.sessionKey,
-        target.agentId,
-        controller.signal,
-        assertCurrent,
-      );
+      environment.workspace_directory = executorController.workspaceDirectory;
     }
     const surface = await buildAgentsApiToolSurface(
       runParams,
@@ -369,7 +368,11 @@ export async function runAgentsApiAttempt(
         },
       );
       assertCurrent();
-      await saveBinding({ sessionId: remoteSessionId, configFingerprint: fingerprint });
+      await saveBinding({
+        sessionId: remoteSessionId,
+        configFingerprint: fingerprint,
+        ...(executorController ? { executorControllerPluginId: controllerPluginId } : {}),
+      });
     } else {
       await client.setReasoningEffort(remoteSessionId, reasoningEffort, controller.signal);
     }

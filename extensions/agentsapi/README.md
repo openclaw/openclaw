@@ -217,37 +217,46 @@ an executor. Input submission has a 60-second HTTP deadline, including any wait
 for the executor to connect. Configure the controller to connect promptly;
 the API's longer connection window does not extend this deadline. Session
 connection events remain visible while it connects.
-A deployment that registers the harness itself can instead import
-`createAgentsApiHarness` and `AgentsApiExecutorController` from
-`@openclaw/agentsapi/api.js` and pass `{ executorController }` as the second
-factory argument. Register this harness in place of the default `agentsapi`
-entry, not alongside another harness with the same ID. No controller is installed
-by default, so the webhook-managed path above remains unchanged.
+A deployment can enable a separate executor plugin and select it explicitly with
+`plugins.entries.agentsapi.config.executorController: "my-executor"`.
+The selected plugin registers one controller through
+`api.registerAgentExecutorController({ workspaceDirectory, ensure, retire })`.
+The stock Agents API plugin continues to own the harness; the executor plugin
+must not register a second harness. Its manifest declares
+`activation.onAgentHarnesses: ["agentsapi"]` so the controller is loaded into
+the same prepared invocation registry as the harness. Omit `executorController` for the external
+webhook-managed path above.
 
-The optional controller implements three callbacks:
+The controller uses the public `AgentExecutorController`, `AgentExecutorBinding`
+and `AgentExecutorContext` types from `openclaw/plugin-sdk/agent-harness-runtime`:
 
-- `workspace(context)` returns an existing absolute path on the executor host.
-  It receives the OpenClaw session key and agent ID; Gateway tool paths stay unchanged.
+- `workspaceDirectory` is an existing absolute path on the executor host,
+  configured by the executor plugin. Gateway tool paths stay unchanged.
 - `ensure(binding, context)` idempotently starts or reconnects the executor using
   the exact environment ID, remote URL and workspace in the canonical binding.
-  The harness persists that binding before invoking the controller and waits for
-  the API to report the environment connected before submitting input.
+  The harness persists that binding and its controller owner before invocation,
+  then waits for the API to report the environment connected before input.
 - `retire(binding, context)` idempotently releases only that binding's executor
   after native work settles, before reset or session deletion discards the binding.
-  A failed retirement retains the binding for retry; a rolled-back deletion can
+  Failed retirement retains the binding for retry; rolled-back deletion can
   reconnect that executor on the next input.
 
-Each callback receives `signal` and `assertCurrent`. Honor cancellation, recheck
-`assertCurrent()` immediately before side effects and after asynchronous work,
-and do not retain these operation-scoped handles. The deployment owns process
-launch, authentication and filesystem provisioning. The harness owns native
-session identity, readiness, reconnection and cleanup ordering.
+Callbacks receive `signal` and `assertCurrent`. Honor cancellation and recheck
+`assertCurrent()` immediately before side effects and after asynchronous work.
+Do not retain operation-scoped handles. Controller registration and resolution
+belong to the active plugin registry, including reload and disposal; imported
+copies of the Agents API package do not maintain independent controller lists.
+The executor plugin owns process launch, authentication and filesystem provisioning.
+The harness owns native session identity, readiness and cleanup ordering.
 
-Gateway disposal retains the executor and its persisted binding. The next input
-reconciles the same native session. After a Gateway restart, resume a controlled
-session once before resetting or deleting it so the harness can prepare its
-credential handle for cleanup. If its controller is unavailable, the harness
-refuses continued input or cleanup and retains the binding for recovery.
+Changing controllers requires a session reset. Cleanup uses the original stored
+controller owner, even after configuration changes; a missing or disabled owner
+fails explicitly and retains the binding. Gateway disposal retains the executor
+and its binding. After a Gateway restart, resume a controlled session once before
+reset or deletion to prepare the authenticated cleanup handle.
+Bindings from the earlier factory-injected controller have no plugin owner.
+Retire those sessions using the previous version before adopting plugin selection;
+ownerless controlled bindings are rejected and retained rather than reassigned.
 
 Hosted environments support input attachments and output file transfers. Each
 turn transfers its admitted original files, including images, to unique hosted

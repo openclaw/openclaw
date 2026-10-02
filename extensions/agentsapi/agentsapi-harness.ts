@@ -1,5 +1,6 @@
 import {
   abortAndDrainAgentHarnessRun,
+  resolveAgentExecutorController,
   AgentHarnessPreflightError,
   AgentHarnessSessionSupersededError,
   toolPolicy,
@@ -14,10 +15,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { runAgentsApiAttempt, type AgentsApiPromptHistories } from "./agentsapi-attempt.js";
 import { createAgentsApiBindings, type AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient } from "./agentsapi-client.js";
-import {
-  retireAgentsApiExecutor,
-  type AgentsApiExecutorController,
-} from "./agentsapi-environment.js";
+import { retireAgentsApiExecutor } from "./agentsapi-environment.js";
 import { runAgentsApiIsolatedCompletion } from "./agentsapi-isolated-completion.js";
 import { requireAgentsApiSessionTarget } from "./agentsapi-target.js";
 
@@ -32,14 +30,7 @@ const AGENTS_API_NATIVE_TOOL_REQUIREMENTS = [
 ] as const;
 
 /** Agents API owns native protocol; the host harness runtime owns coordination. */
-export type AgentsApiHarnessOptions = {
-  executorController?: AgentsApiExecutorController;
-};
-
-export function createAgentsApiHarness(
-  runtime: PluginRuntime,
-  { executorController }: AgentsApiHarnessOptions = {},
-): AgentHarnessV2 {
+export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
   let disposed = false;
   let closing = false;
   const runningSessions = new Map<string, number>();
@@ -55,36 +46,31 @@ export function createAgentsApiHarness(
   >();
   let bindings: ReturnType<typeof createAgentsApiBindings> | undefined;
   const getBindings = () =>
-    (bindings ??= createAgentsApiBindings(
-      runtime,
-      executorController
-        ? {
-            settle: async (localSessionId, binding, assertCleanupCurrent) => {
-              const prepared = preparedNativeCleanup.get(localSessionId);
-              if (
-                !prepared ||
-                prepared.nativeSessionId !== binding.sessionId ||
-                prepared.configFingerprint !== binding.configFingerprint
-              ) {
-                throw new Error(
-                  "Agents API executor cleanup needs its prepared credential handle; resume this session once to reconcile it, then reset or delete it",
-                );
-              }
-              await prepared.settle(assertCleanupCurrent);
-              assertCleanupCurrent();
-            },
-            retire: async (_localSessionId, binding, assertCleanupCurrent) => {
-              if (binding.executor) {
-                await retireAgentsApiExecutor(
-                  executorController,
-                  binding.executor,
-                  assertCleanupCurrent,
-                );
-              }
-            },
-          }
-        : undefined,
-    ));
+    (bindings ??= createAgentsApiBindings(runtime, {
+      settle: async (localSessionId, binding, assertCleanupCurrent) => {
+        const prepared = preparedNativeCleanup.get(localSessionId);
+        if (
+          !prepared ||
+          prepared.nativeSessionId !== binding.sessionId ||
+          prepared.configFingerprint !== binding.configFingerprint
+        ) {
+          throw new Error(
+            "Agents API executor cleanup needs its prepared credential handle; resume this session once to reconcile it, then reset or delete it",
+          );
+        }
+        await prepared.settle(assertCleanupCurrent);
+        assertCleanupCurrent();
+      },
+      retire: async (_localSessionId, binding, assertCleanupCurrent) => {
+        if (binding.executor) {
+          await retireAgentsApiExecutor(
+            resolveAgentExecutorController(binding.executorControllerPluginId!),
+            binding.executor,
+            assertCleanupCurrent,
+          );
+        }
+      },
+    }));
   const assertCurrent = () => {
     if (disposed) {
       throw new Error("Agents API harness is disposed");
@@ -194,7 +180,6 @@ export function createAgentsApiHarness(
               target,
               () => runtime.config.current().plugins?.entries?.agentsapi?.config,
               promptHistories,
-              executorController,
               (binding, apiKey) => prepareNativeCleanup(params.sessionId, binding, apiKey),
             );
           },

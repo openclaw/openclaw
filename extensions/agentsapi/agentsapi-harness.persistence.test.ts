@@ -2,7 +2,9 @@ import path from "node:path";
 import {
   AgentHarnessPreflightError,
   type AgentHarnessAttemptParamsV2,
+  type AgentExecutorController,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import * as harnessRuntime from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
@@ -21,8 +23,6 @@ import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient, type AgentsApiInputFile } from "./agentsapi-client.js";
-import type { AgentsApiExecutorController } from "./agentsapi-environment.js";
-import { createAgentsApiHarness } from "./agentsapi-harness.js";
 import { createModel, createTurn } from "./agentsapi.test-support.js";
 import plugin from "./index.js";
 
@@ -484,7 +484,13 @@ it("retains the executor binding after uncertain startup and waits for readiness
     let harness = fixture.createHarness();
     let savedBeforeStartup: AgentsApiBinding | undefined;
     fixture.controller.ensure.mockImplementationOnce(async () => {
-      savedBeforeStartup = await fixture.openStore().lookup(fixture.params.sessionId);
+      const stored = await fixture.openStore().lookup(fixture.params.sessionId);
+      savedBeforeStartup = stored && {
+        sessionId: stored.sessionId,
+        configFingerprint: stored.configFingerprint,
+        executorControllerPluginId: stored.executorControllerPluginId,
+        executor: stored.executor,
+      };
       throw new Error("Executor startup was not acknowledged");
     });
     try {
@@ -496,6 +502,7 @@ it("retains the executor binding after uncertain startup and waits for readiness
       });
       expect(savedBeforeStartup).toMatchObject({
         sessionId: "native-executor-session",
+        executorControllerPluginId: "fixture-executor",
         executor: {
           sessionKey: fixture.params.sessionKey,
           agentId: "main",
@@ -580,7 +587,8 @@ it("settles native work before reset and retains the binding when executor retir
         saved?.executor,
         saved?.executor,
       ]);
-      expect(await fixture.openStore().lookup(fixture.params.sessionId)).toEqual({});
+      // The released lease leaves either an empty tombstone or an expired row.
+      expect((await fixture.openStore().lookup(fixture.params.sessionId)) ?? {}).toEqual({});
     } finally {
       await harness.dispose();
     }
@@ -607,7 +615,7 @@ it("can reset a retained executor after a restarted harness rejects a configurat
           kind: "failed",
           error: expect.objectContaining({
             message:
-              "Agents API model, environment, or MCP configuration changed; reset the OpenClaw session before continuing",
+              "Agents API executor controller changed; reset the OpenClaw session before continuing",
           }),
         },
       });
@@ -621,7 +629,148 @@ it("can reset a retained executor after a restarted harness rejects a configurat
           assertCurrent: expect.any(Function),
         }),
       );
-      expect(await fixture.openStore().lookup(fixture.params.sessionId)).toEqual({});
+      // The released lease leaves either an empty tombstone or an expired row.
+      expect((await fixture.openStore().lookup(fixture.params.sessionId)) ?? {}).toEqual({});
+      expect(fixture.create).toHaveBeenCalledTimes(1);
+    } finally {
+      await harness.dispose();
+    }
+  });
+});
+
+it("rejects an unavailable selected controller before allocating a native session", async () => {
+  await withOpenClawTestState({ label: "agentsapi-executor-selection" }, async (state) => {
+    const fixture = await executorFixture(state);
+    fixture.resolveController.mockImplementation(() => {
+      throw new Error(
+        'Agent executor controller plugin "fixture-executor" is missing, disabled, or unavailable',
+      );
+    });
+    const harness = fixture.createHarness();
+    try {
+      expect(await harness.runAttempt(fixture.params)).toMatchObject({
+        terminal: {
+          kind: "failed",
+          error: expect.objectContaining({
+            message:
+              'Agent executor controller plugin "fixture-executor" is missing, disabled, or unavailable',
+          }),
+        },
+      });
+      expect(fixture.create.mock.calls).toEqual([]);
+      // The released lease leaves either an empty tombstone or an expired row.
+      expect((await fixture.openStore().lookup(fixture.params.sessionId)) ?? {}).toEqual({});
+    } finally {
+      await harness.dispose();
+    }
+  });
+});
+
+it("requires reset before a controller can replace an externally managed session", async () => {
+  await withOpenClawTestState({ label: "agentsapi-executor-external-owner" }, async (state) => {
+    const fixture = await executorFixture(state);
+    fixture.controller.workspaceDirectory = fixture.params.workspaceDir;
+    const config = vi.spyOn(fixture.runtime.config, "current").mockReturnValue({
+      plugins: { entries: { agentsapi: { config: { environment: "self_hosted" } } } },
+    });
+    const harness = fixture.createHarness();
+    try {
+      expect(await harness.runAttempt(fixture.params)).toMatchObject({ terminal: { kind: "ok" } });
+      const saved = await fixture.openStore().lookup(fixture.params.sessionId);
+      config.mockRestore();
+      expect(
+        await harness.runAttempt({ ...fixture.params, runId: "controller-adoption-run" }),
+      ).toMatchObject({
+        terminal: {
+          kind: "failed",
+          error: expect.objectContaining({
+            message:
+              "Agents API executor controller changed; reset the OpenClaw session before continuing",
+          }),
+        },
+      });
+      expect(fixture.controller.ensure.mock.calls).toEqual([]);
+      expect(fixture.create).toHaveBeenCalledTimes(1);
+      expect(await fixture.openStore().lookup(fixture.params.sessionId)).toEqual(saved);
+    } finally {
+      await harness.dispose();
+    }
+  });
+});
+
+it("cleans up with the stored controller after selecting a different registered owner", async () => {
+  await withOpenClawTestState({ label: "agentsapi-executor-original-owner" }, async (state) => {
+    const fixture = await executorFixture(state);
+    const other = {
+      ...fixture.controller,
+      ensure: vi.fn(async () => {}),
+      retire: vi.fn(async () => {}),
+    };
+    fixture.resolveController.mockImplementation((id) =>
+      id === "other-executor" ? other : fixture.controller,
+    );
+    const harness = fixture.createHarness();
+    try {
+      expect(await harness.runAttempt(fixture.params)).toMatchObject({ terminal: { kind: "ok" } });
+      const saved = await fixture.openStore().lookup(fixture.params.sessionId);
+      vi.spyOn(fixture.runtime.config, "current").mockReturnValue({
+        plugins: {
+          entries: {
+            agentsapi: {
+              config: { environment: "self_hosted", executorController: "other-executor" },
+            },
+          },
+        },
+      });
+      expect(
+        await harness.runAttempt({ ...fixture.params, runId: "controller-replacement-run" }),
+      ).toMatchObject({
+        terminal: {
+          kind: "failed",
+          error: expect.objectContaining({
+            message:
+              "Agents API executor controller changed; reset the OpenClaw session before continuing",
+          }),
+        },
+      });
+      await harness.reset({ sessionId: fixture.params.sessionId, reason: "reset" });
+      expect(fixture.controller.retire).toHaveBeenCalledExactlyOnceWith(
+        saved?.executor,
+        expect.any(Object),
+      );
+      expect(other.ensure.mock.calls).toEqual([]);
+      expect(other.retire.mock.calls).toEqual([]);
+      // The released lease leaves either an empty tombstone or an expired row.
+      expect((await fixture.openStore().lookup(fixture.params.sessionId)) ?? {}).toEqual({});
+    } finally {
+      await harness.dispose();
+    }
+  });
+});
+
+it("retains earlier controlled bindings and explains the required upgrade cutover", async () => {
+  await withOpenClawTestState({ label: "agentsapi-executor-legacy-owner" }, async (state) => {
+    const fixture = await executorFixture(state);
+    let harness = fixture.createHarness();
+    try {
+      expect(await harness.runAttempt(fixture.params)).toMatchObject({ terminal: { kind: "ok" } });
+      const legacy = { ...(await fixture.openStore().lookup(fixture.params.sessionId))! };
+      delete legacy.executorControllerPluginId;
+      await fixture.openStore().register(fixture.params.sessionId, legacy);
+      await harness.dispose();
+      await reopenState();
+      harness = fixture.createHarness();
+      await expect(
+        harness.runAttempt({ ...fixture.params, runId: "ownerless-controller-run" }),
+      ).rejects.toThrow(
+        "Agents API executor binding predates plugin ownership; retire this session with the previous version before upgrading",
+      );
+      await expect(
+        harness.reset({ sessionId: fixture.params.sessionId, reason: "reset" }),
+      ).rejects.toThrow(
+        "Agents API executor binding predates plugin ownership; retire this session with the previous version before upgrading",
+      );
+      expect(await fixture.openStore().lookup(fixture.params.sessionId)).toEqual(legacy);
       expect(fixture.create).toHaveBeenCalledTimes(1);
     } finally {
       await harness.dispose();
@@ -638,6 +787,11 @@ it("preserves an owned executor binding when its deployment controller is unavai
       const saved = await fixture.openStore().lookup(fixture.params.sessionId);
       await harness.dispose();
       await reopenState();
+      fixture.resolveController.mockImplementation(() => {
+        throw new Error(
+          'Agent executor controller plugin "fixture-executor" is missing, disabled, or unavailable',
+        );
+      });
       harness = requireExecutorHarness(fixture.runtime);
       const rejected = await harness.runAttempt({
         ...fixture.params,
@@ -648,20 +802,24 @@ it("preserves an owned executor binding when its deployment controller is unavai
           kind: "failed",
           error: expect.objectContaining({
             message:
-              "Agents API self-hosted executor controller is unavailable; restore it before continuing",
+              'Agent executor controller plugin "fixture-executor" is missing, disabled, or unavailable',
           }),
         },
       });
       await expect(
         harness.reset({ sessionId: fixture.params.sessionId, reason: "reset" }),
-      ).rejects.toThrow("Agents API self-hosted executor cleanup is unavailable");
+      ).rejects.toThrow(
+        'Agent executor controller plugin "fixture-executor" is missing, disabled, or unavailable',
+      );
       const deleteSession = vi.fn(async () => {});
       await expect(
         harness.withSessionDeletion(
           { ...fixture.params.sessionTarget!, assertCurrent: () => {} },
           deleteSession,
         ),
-      ).rejects.toThrow("Agents API self-hosted executor cleanup is unavailable");
+      ).rejects.toThrow(
+        'Agent executor controller plugin "fixture-executor" is missing, disabled, or unavailable',
+      );
       expect(deleteSession).not.toHaveBeenCalled();
       expect(fixture.message).toHaveBeenCalledTimes(1);
       expect(await fixture.openStore().lookup(fixture.params.sessionId)).toEqual(saved);
@@ -771,7 +929,13 @@ function registerHarness(env: NodeJS.ProcessEnv, readConfig: () => OpenClawConfi
 async function executorFixture(state: { stateDir: string; env: NodeJS.ProcessEnv }) {
   const params = await createAttempt(state.stateDir);
   const runtime = createBindingRuntime(state.env, () => ({
-    plugins: { entries: { agentsapi: { config: { environment: "self_hosted" } } } },
+    plugins: {
+      entries: {
+        agentsapi: {
+          config: { environment: "self_hosted", executorController: "fixture-executor" },
+        },
+      },
+    },
   }));
   const openStore = () =>
     createPluginStateKeyedStoreForTests<AgentsApiBinding>("agentsapi", {
@@ -782,12 +946,22 @@ async function executorFixture(state: { stateDir: string; env: NodeJS.ProcessEnv
     });
   const events: string[] = [];
   const controller = {
-    workspace: vi.fn<AgentsApiExecutorController["workspace"]>(async () => "/executor/project"),
-    ensure: vi.fn<AgentsApiExecutorController["ensure"]>(async () => {}),
-    retire: vi.fn<AgentsApiExecutorController["retire"]>(async () => {
+    workspaceDirectory: "/executor/project",
+    ensure: vi.fn<AgentExecutorController["ensure"]>(async () => {}),
+    retire: vi.fn<AgentExecutorController["retire"]>(async () => {
       events.push("retire");
     }),
   };
+  const resolveController = vi
+    .spyOn(harnessRuntime, "resolveAgentExecutorController")
+    .mockImplementation((pluginId) => {
+      if (pluginId !== "fixture-executor") {
+        throw new Error(
+          `Agent executor controller plugin "${pluginId}" is missing, disabled, or unavailable`,
+        );
+      }
+      return controller;
+    });
   const nativeSession: Awaited<ReturnType<AgentsApiClient["session"]>> = {
     id: "native-executor-session",
     agent: {
@@ -840,16 +1014,16 @@ async function executorFixture(state: { stateDir: string; env: NodeJS.ProcessEnv
     environment,
     message,
     events,
-    createHarness: () => requireExecutorHarness(runtime, controller),
+    resolveController,
+    createHarness: () => requireExecutorHarness(runtime),
   };
 }
 
-function requireExecutorHarness(
-  runtime: PluginRuntime,
-  executorController?: AgentsApiExecutorController,
-) {
-  const harness = createAgentsApiHarness(runtime, { executorController });
-  if (!harness.runAttempt || !harness.reset || !harness.withSessionDeletion || !harness.dispose) {
+function requireExecutorHarness(runtime: PluginRuntime) {
+  const registerAgentHarness = vi.fn<OpenClawPluginApi["registerAgentHarness"]>();
+  plugin.register(createTestPluginApi({ id: "agentsapi", runtime, registerAgentHarness }));
+  const harness = registerAgentHarness.mock.calls[0]?.[0];
+  if (!harness?.runAttempt || !harness.reset || !harness.withSessionDeletion || !harness.dispose) {
     throw new Error("The Agents API harness requires run, reset, deletion, and disposal");
   }
   return {

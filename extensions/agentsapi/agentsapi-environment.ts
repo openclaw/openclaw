@@ -1,30 +1,14 @@
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
+import type { AgentExecutorController } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { z } from "zod";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient } from "./agentsapi-client.js";
 
-/** Deployment callbacks run only while their context still owns the operation. */
-export type AgentsApiExecutorContext = {
-  signal: AbortSignal;
-  assertCurrent: () => void;
-};
-
-export type AgentsApiExecutorWorkspaceContext = AgentsApiExecutorContext & {
-  sessionKey: string;
-  agentId: string;
-};
-
-export interface AgentsApiExecutorController {
-  workspace(context: AgentsApiExecutorWorkspaceContext): Promise<string>;
-  ensure(binding: AgentsApiExecutorBinding, context: AgentsApiExecutorContext): Promise<void>;
-  retire(binding: AgentsApiExecutorBinding, context: AgentsApiExecutorContext): Promise<void>;
-}
-
 /** The plugin owns native environment identity; deployments own executor processes. */
 export async function ensureAgentsApiEnvironment(params: {
-  controller: AgentsApiExecutorController;
+  controller: AgentExecutorController;
   client: AgentsApiClient;
   binding: AgentsApiBinding;
   bind: (binding: AgentsApiBinding) => Promise<void>;
@@ -95,28 +79,8 @@ export async function ensureAgentsApiEnvironment(params: {
   }
 }
 
-export async function resolveAgentsApiWorkspace(
-  controller: AgentsApiExecutorController,
-  sessionKey: string,
-  agentId: string,
-  signal: AbortSignal,
-  assertCurrent: () => void,
-): Promise<string> {
-  assertCurrent();
-  signal.throwIfAborted();
-  const workspaceDirectory = await controller.workspace({
-    sessionKey,
-    agentId,
-    signal,
-    assertCurrent,
-  });
-  assertCurrent();
-  signal.throwIfAborted();
-  return workspaceSchema.parse({ workspaceDirectory }).workspaceDirectory;
-}
-
 export async function retireAgentsApiExecutor(
-  controller: AgentsApiExecutorController,
+  controller: AgentExecutorController,
   executor: AgentsApiExecutorBinding,
   assertCurrent: () => void,
 ): Promise<void> {
@@ -131,7 +95,10 @@ export async function retireAgentsApiExecutor(
 }
 
 const workspaceSchema = z.object({
-  workspaceDirectory: z.string().min(1).refine(path.posix.isAbsolute),
+  workspaceDirectory: z
+    .string()
+    .min(1)
+    .refine((value) => path.posix.isAbsolute(value) || path.win32.isAbsolute(value)),
 });
 
 export const agentsApiExecutorBindingSchema = workspaceSchema.extend({

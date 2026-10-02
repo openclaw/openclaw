@@ -53,6 +53,66 @@ export default definePluginEntry({
 `authBootstrap: "harness"` only when the harness meets the
 [harness-owned auth bootstrap contract](/plugins/sdk-agent-harness/core-ownership#harness-owned-auth-bootstrap).
 
+### Executor controller plugins
+
+A harness can delegate self-hosted executor connection management to a separate
+plugin. Register one controller with `api.registerAgentExecutorController(...)`.
+The registry assigns ownership from the registering plugin's ID; the controller
+does not choose another ID or register a second harness.
+
+Declare `activation.onAgentHarnesses` with the runtime IDs that use this
+controller, for example `["my-harness"]`. This manifest hint includes the plugin
+in the prepared runtime registry without registering a harness. Startup
+activation alone does not include the plugin in every model-selected registry.
+
+```typescript
+import type { AgentExecutorController } from "openclaw/plugin-sdk/agent-harness-runtime";
+
+const controller: AgentExecutorController = {
+  workspaceDirectory: "/srv/agent/workspace",
+  async ensure(binding, context) {
+    context.assertCurrent();
+    await connectExecutor(binding, context.signal);
+    context.assertCurrent();
+  },
+  async retire(binding, context) {
+    context.assertCurrent();
+    await disconnectExecutor(binding, context.signal);
+    context.assertCurrent();
+  },
+};
+
+api.registerAgentExecutorController(controller);
+```
+
+`workspaceDirectory` is an absolute path on the executor. It can differ from the
+Gateway's workspace. `AgentExecutorBinding` contains `sessionKey`, `agentId`,
+`nativeSessionId`, `environmentId`, `remoteUrl`, and `workspaceDirectory`.
+`ensure` idempotently connects or reconnects that exact environment; `retire`
+idempotently releases that environment's connection. Neither operation creates
+or deletes the native agent session. The controller owns its transport,
+credentials, and process management. Multiple native environment registrations
+can refer to one physical executor.
+
+Harness implementations import `resolveAgentExecutorController(pluginId)` from
+`openclaw/plugin-sdk/agent-harness-runtime` and resolve the explicitly configured
+plugin during an admitted invocation. Resolution uses only that invocation's
+registry and fails for a missing, disabled, or unavailable owner. It does not
+activate plugins or fall back to a process-global registry. Handles expire when
+their registry generation or owner retires or their registration is replaced;
+resolve a new handle in each invocation instead of caching one across turns.
+
+Pass an `AgentExecutorContext` with a required `signal` and `assertCurrent`.
+The host combines caller cancellation with registry and plugin lifetime, checks
+authority before and after each operation, and preserves the caller's scope when
+the controller calls `assertCurrent`. Controller implementations must honor the
+signal and recheck authority after awaits and before each side effect. The
+assertion expires when the operation finishes.
+
+The harness retains session binding persistence, native readiness checks, work
+settlement before retirement, and retryable cleanup. An executor controller
+does not confer permission to reset unrelated sessions or stop a shared runtime.
+
 ### Isolated completion
 
 The optional `runIsolatedCompletionV2(params)` capability serves product paths

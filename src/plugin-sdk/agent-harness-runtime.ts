@@ -2,6 +2,13 @@
 // Keep heavyweight tool construction out of this module so harness imports can
 // register quickly inside gateway startup and Docker e2e runs.
 
+export type {
+  AgentExecutorBinding,
+  AgentExecutorContext,
+  AgentExecutorController,
+} from "../plugins/agent-executor-controller.types.js";
+export { resolveAgentExecutorController } from "../plugins/agent-executor-controller.js";
+
 import { shouldLoadRequesterScopedMcpHarnessRuntime } from "../agents/agent-bundle-mcp-runtime-shared.js";
 import {
   mergeAgentRunAttemptTerminal,

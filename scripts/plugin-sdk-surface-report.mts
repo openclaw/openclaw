@@ -194,7 +194,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: captureToolAuthoredSourceReply lets the Codex harness deliver canDeliverSourceReply tool replies.
       // +1: owner-approved async agent-end preparation with retained sync compatibility.
       // +1: owner-approved async coding-tool construction with retained sync compatibility.
-      3647,
+      // +4: executor controller, binding, context, and resolver.
+      3651,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -206,7 +207,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: captureToolAuthoredSourceReply lets the Codex harness deliver canDeliverSourceReply tool replies.
       // +1: owner-approved async agent-end preparation with retained sync compatibility.
       // +1: owner-approved async coding-tool construction with retained sync compatibility.
-      2112,
+      // +1: resolve the controller from the current invocation registry.
+      2113,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

@@ -208,6 +208,7 @@ function nativeBinding(row: StoredBinding | undefined): AgentsApiBinding | undef
     ? {
         sessionId: row.sessionId,
         configFingerprint: row.configFingerprint,
+        executorControllerPluginId: row.executorControllerPluginId,
         executor: row.executor,
       }
     : undefined;
