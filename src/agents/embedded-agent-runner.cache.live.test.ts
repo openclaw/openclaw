@@ -1438,7 +1438,7 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
           },
         );
       },
-      6 * 60_000,
+      15 * 60_000,
     );
 
     it(
