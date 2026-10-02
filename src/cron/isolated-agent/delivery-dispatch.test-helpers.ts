@@ -44,6 +44,7 @@ function makeWithRunSession() {
 }
 
 export function makeBaseParams(overrides: {
+  runId?: string;
   synthesizedText?: string;
   deliveryRequested?: boolean;
   runStartedAt?: number;
@@ -63,6 +64,7 @@ export function makeBaseParams(overrides: {
   };
   const runStartedAt = overrides.runStartedAt ?? Date.now();
   return {
+    runId: overrides.runId ?? "test-session-id",
     cfg: {} as never,
     cfgWithAgentDefaults: {} as never,
     deps: {} as never,

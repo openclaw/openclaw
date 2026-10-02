@@ -34,6 +34,22 @@ import {
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 const { executeCronRun } = await import("./run-executor.js");
+let restoreOccurrencePreparation: (() => void) | undefined;
+
+async function useRunContextFixtureId() {
+  const preparation = await import("./run-prepare.js");
+  const original = preparation.prepareCronRunContext;
+  // Exercise same-id ownership and cleanup even though normal occurrences now
+  // receive independent ids. Diagnostic ids still do not establish authority.
+  const spy = vi.spyOn(preparation, "prepareCronRunContext").mockImplementation(async (params) => {
+    const prepared = await original(params);
+    if ("context" in prepared) {
+      prepared.context.runId = "test-session-id";
+    }
+    return prepared;
+  });
+  restoreOccurrencePreparation = () => spy.mockRestore();
+}
 
 function makeMessageToolPolicyJob(
   delivery: Record<string, unknown> = { mode: "none" },
@@ -371,6 +387,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     return {
       runPrompt: async (commandBody: string) =>
         await executeCronRun({
+          runId: "test-session-id",
           cfg: {},
           cfgWithAgentDefaults: {},
           job: makeMessageToolPolicyJob(),
@@ -425,6 +442,8 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   }
 
   afterEach(() => {
+    restoreOccurrencePreparation?.();
+    restoreOccurrencePreparation = undefined;
     restoreFastTestEnv(previousFastTestEnv);
   });
 
@@ -1072,6 +1091,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("releases cron run context references after completion", async () => {
+    await useRunContextFixtureId();
     const initialSessionEntry = { retained: true };
     loadSessionEntryMock.mockImplementation((_storePath, sessionKey) =>
       sessionKey === "agent:default:cron:message-tool-policy" ? initialSessionEntry : undefined,
@@ -1095,6 +1115,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("does not let old cron cleanup clear a newer same-id run context", async () => {
+    await useRunContextFixtureId();
     mockRunCronFallbackPassthrough();
     const { claimAgentRunContext, clearAgentRunContext, getAgentRunContext } =
       await import("../../infra/agent-run-registry.js");
@@ -1129,6 +1150,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("rejects cron work when the gateway lifecycle rotates during preparation", async () => {
+    await useRunContextFixtureId();
     let releasePreflight: (() => void) | undefined;
     const preflightStarted = new Promise<void>((resolveStarted) => {
       preflightCronModelProviderMock.mockImplementationOnce(async () => {
@@ -1156,6 +1178,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("keeps shared cron run context references active after completion", async () => {
+    await useRunContextFixtureId();
     const initialSessionEntry = { retained: true };
     loadSessionEntryMock.mockImplementation((_storePath, sessionKey) =>
       sessionKey === "agent:default:cron:message-tool-policy" ? initialSessionEntry : undefined,
@@ -1187,6 +1210,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("releases a shared cron run context created by this invocation", async () => {
+    await useRunContextFixtureId();
     mockRunCronFallbackPassthrough();
     runEmbeddedAgentMock.mockRejectedValueOnce(new Error("runner failed"));
     const { getAgentRunContext } = await import("../../infra/agent-run-registry.js");
@@ -1206,6 +1230,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("keeps shared cron context until overlapping invocations finish", async () => {
+    await useRunContextFixtureId();
     // This test owns process-local run-context reference counting, not the
     // persistent session admission that serializes real turns on one key.
     process.env.OPENCLAW_TEST_FAST = "1";
@@ -1271,6 +1296,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("releases a stale shared cron context replaced by this invocation", async () => {
+    await useRunContextFixtureId();
     mockRunCronFallbackPassthrough();
     runEmbeddedAgentMock.mockRejectedValueOnce(new Error("runner failed"));
     const { claimAgentRunContext, getAgentRunContext } =

@@ -1,4 +1,5 @@
 /** Session identity and context preparation for isolated cron runs. */
+import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
@@ -101,6 +102,7 @@ export type PreparedCronRunContext = {
   sourceSessionKey?: string;
   sourceSessionGeneration?: { sessionId: string; lifecycleRevision: string | undefined };
   runSessionId: string;
+  runId: string;
   currentRunSessionId: () => string;
   runSessionKey: string;
   usesDetachedRunSession: boolean;
@@ -254,6 +256,9 @@ export async function prepareCronRunContext(params: {
     throw new Error(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
   }
   const runSessionId = cronSession.sessionEntry.sessionId;
+  // Named sessions retain history across occurrences. Their session id must not
+  // also identify new work or bind delivery to a previous occurrence's state.
+  const runId = randomUUID();
   const currentRunSessionId = () => cronSession.sessionEntry.sessionId ?? runSessionId;
   const usesExactRunSession = usesDetachedRunSession || baseSessionKey.startsWith("cron:");
   const runSessionKey = usesExactRunSession
@@ -660,6 +665,7 @@ export async function prepareCronRunContext(params: {
         sourceSessionKey,
         sourceSessionGeneration,
         runSessionId,
+        runId,
         currentRunSessionId,
         runSessionKey,
         usesDetachedRunSession,
@@ -673,7 +679,7 @@ export async function prepareCronRunContext(params: {
                 sourceTool: "cron",
                 sourcePromptPrefix,
                 jobId: input.job.id,
-                runId: runSessionId,
+                runId,
                 sourceSessionKey: runSessionKey,
               }
             : undefined,

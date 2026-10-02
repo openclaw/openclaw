@@ -55,11 +55,12 @@ const cronExecutorRuntimeLoader = createLazyImportLoader(() => import("./run-exe
 // Release the full session snapshot after persistence and delivery to avoid retaining skill prompts.
 async function disposeCronRunContext(params: {
   sessionId: string;
+  runId: string;
   cronSession: MutableCronSession;
   ownsRunContext: boolean;
   runContextOwnerToken?: string;
 }): Promise<void> {
-  releaseAgentRunContext(params.sessionId, params.runContextOwnerToken);
+  releaseAgentRunContext(params.runId, params.runContextOwnerToken);
   if (params.ownsRunContext) {
     await retireSessionMcpRuntime({
       sessionId: params.sessionId,
@@ -120,8 +121,9 @@ async function runCronIsolatedAgentTurnInTrace(
       preparedRuntimeLease.pluginGeneration,
       () =>
         withPluginRuntimeGenerationScope(preparedRuntimeLease.snapshot, async () => {
-          // Capture the stable run id before execution can rotate its persisted session.
+          // Session continuity and this occurrence's work identity are independent.
           const initialSessionId = prepared.context.cronSession.sessionEntry.sessionId;
+          const runId = prepared.context.runId;
           const ownsRunContext = params.job.sessionTarget === "isolated";
           let runContextOwnerToken: string | undefined;
           let runLifecycleGeneration = admittedLifecycleGeneration;
@@ -205,7 +207,7 @@ async function runCronIsolatedAgentTurnInTrace(
           // The execution owner spans fallback and interim-ack retries. Individual
           // attempts must not retire the shared run before that execution settles.
           const lifecycle = createAgentLifecycleTerminalBackstop({
-            runId: initialSessionId,
+            runId,
             sessionKey: prepared.context.runSessionKey,
             startedAt: turnStartedAtMs,
             getLifecycleGeneration: () => runLifecycleGeneration,
@@ -214,9 +216,9 @@ async function runCronIsolatedAgentTurnInTrace(
           });
           try {
             assertAgentRunLifecycleGenerationCurrent(runLifecycleGeneration);
-            const existingRunContext = getAgentRunContext(initialSessionId);
+            const existingRunContext = getAgentRunContext(runId);
             runContextOwnerToken = claimAgentRunContext(
-              initialSessionId,
+              runId,
               {
                 sessionKey:
                   ownsRunContext || !existingRunContext?.sessionKey
@@ -243,6 +245,7 @@ async function runCronIsolatedAgentTurnInTrace(
             );
             const { executeCronRun } = await cronExecutorRuntimeLoader.load();
             const executionParams: Parameters<typeof executeCronRun>[0] = {
+              runId,
               cfg: params.cfg,
               cfgWithAgentDefaults: prepared.context.cfgWithAgentDefaults,
               job: params.job,
@@ -321,13 +324,13 @@ async function runCronIsolatedAgentTurnInTrace(
               outcome = "error";
               outcomeError = finalized.error;
             }
-            const nextCheck = consumeCronNextCheckProposal(initialSessionId, params.job.id);
+            const nextCheck = consumeCronNextCheckProposal(runId, params.job.id);
             return finalized.status !== "ok" || nextCheck === undefined
               ? finalized
               : { ...finalized, nextCheck };
           } catch (err) {
             lifecycle.emit("error", err);
-            consumeCronNextCheckProposal(initialSessionId, params.job.id);
+            consumeCronNextCheckProposal(runId, params.job.id);
             const isCronLaneTimeout =
               isAborted() || isCommandLaneTaskTimeoutError(err, CommandLane.CronNested);
             const error = isCronLaneTimeout ? abortReason() : normalizeCronRunErrorText(err);
@@ -416,6 +419,7 @@ async function runCronIsolatedAgentTurnInTrace(
                   try {
                     await disposeCronRunContext({
                       sessionId: initialSessionId,
+                      runId,
                       cronSession: prepared.context.cronSession,
                       ownsRunContext,
                       runContextOwnerToken,

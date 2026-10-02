@@ -388,6 +388,7 @@ function makeExecuteCronRunParams(overrides: Record<string, unknown> = {}) {
   };
 
   return {
+    runId: "test-session-id",
     cfg: {},
     cfgWithAgentDefaults: {},
     job,

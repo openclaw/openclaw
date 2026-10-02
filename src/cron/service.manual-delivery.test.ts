@@ -61,6 +61,7 @@ describe("manual cron delivery occurrence", () => {
               const text = "Fresh result from this invocation.";
               const sessionKey = `agent:main:cron:${job.id}`;
               const delivery = await dispatchCronDelivery({
+                runId: "manual-occurrence",
                 cfg,
                 cfgWithAgentDefaults: cfg,
                 deps: {},

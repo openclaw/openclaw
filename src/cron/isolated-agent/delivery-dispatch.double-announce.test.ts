@@ -371,7 +371,10 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   });
 
   it("sends announce fallback when source delivery is not satisfied", async () => {
-    const params = makeBaseParams({ synthesizedText: "Fallback cron summary." });
+    const params = makeBaseParams({
+      runId: "new-occurrence",
+      synthesizedText: "Fallback cron summary.",
+    });
 
     const state = await dispatchCronDelivery(params);
 
@@ -381,7 +384,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       to: "123456",
       payloads: [{ text: "Fallback cron summary." }],
       deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
-      runId: params.sessionId,
+      runId: params.runId,
       replyKind: "final",
     });
     expect(state.deliveryAttempted).toBe(true);

@@ -59,6 +59,7 @@ async function createCompletionFixture(state: OpenClawTestState) {
   const payload: ReplyPayload = { text: "Example report", mediaUrl: imagePath };
   const job = makeCronJob({ id: "report-job", sessionTarget: "current", sessionKey });
   const params: DispatchCronDeliveryParams = {
+    runId: "report-occurrence",
     cfg,
     cfgWithAgentDefaults: cfg,
     deps: createCliDeps(),

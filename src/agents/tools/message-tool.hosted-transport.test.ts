@@ -341,6 +341,7 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
         cfg: configA,
         agentId: "ops",
         runId,
+        sessionId: runId,
         sessionKey,
         jobId,
         toolsAllow: ["message"],

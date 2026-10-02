@@ -352,7 +352,7 @@ export async function dispatchCronDelivery(
           session: deliverySession,
           identity,
           ...(params.undeliveredRunStatus === "ok"
-            ? { runId: params.sessionId, replyKind: "final" as const }
+            ? { runId: params.runId, replyKind: "final" as const }
             : {}),
           bestEffort: params.deliveryBestEffort,
           durability: params.deliveryBestEffort ? "best_effort" : "required",

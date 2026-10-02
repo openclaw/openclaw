@@ -175,6 +175,7 @@ export type CronExecutionResult = CronCompletedPromptRun & {
 };
 
 type CronRunExecutionParams = {
+  runId: string;
   cfg: OpenClawConfig;
   cfgWithAgentDefaults: OpenClawConfig;
   job: CronStoredJob;
@@ -383,7 +384,7 @@ function createCronPromptExecutor(
             errorContext: "cron user turn transcript",
           });
     pendingUserTurn = { promptText, recorder: userTurnTranscriptRecorder };
-    const runId = params.cronSession.sessionEntry.sessionId;
+    const runId = params.runId;
     const {
       preparedRunAdmission,
       messageActionTurnCapability,
@@ -392,6 +393,7 @@ function createCronPromptExecutor(
       cfg: params.cfgWithAgentDefaults,
       agentId: params.agentId,
       runId,
+      sessionId: params.cronSession.sessionEntry.sessionId,
       sessionKey: params.runSessionKey,
       jobId: params.job.id,
       channelRequester: resolveCronAuthenticatedChannelRequester(params.job),
@@ -576,9 +578,6 @@ function createCronPromptExecutor(
             config: params.cfgWithAgentDefaults,
             agentId: params.agentId,
           });
-          // Cron intentionally reuses its durable session id as the run id; turn
-          // claims stay unique via per-claim ids and the worker gate handles this
-          // via credential rotation (see worker-environments/service.ts fences).
           // Keep CLI work visible to recovery until execution and settlement finish.
           const deferredLifecycle = createDeferredEmbeddedRunLifecycleManager({
             runId,
@@ -809,7 +808,7 @@ function createCronPromptExecutor(
               }
             : undefined,
           sourceReplyDeliveryMode,
-          runId: params.cronSession.sessionEntry.sessionId,
+          runId,
           deferTerminalLifecycle: true,
           onAgentEvent: params.lifecycle.note,
           allowEmptyAssistantReplyAsSilent,
@@ -891,7 +890,7 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
     normalizeVerboseLevel(params.cronSession.sessionEntry.verboseLevel) ??
     normalizeVerboseLevel(params.agentVerboseDefault) ??
     "off";
-  registerAgentRunContext(params.cronSession.sessionEntry.sessionId, {
+  registerAgentRunContext(params.runId, {
     sessionKey: params.runSessionKey,
     sessionId: params.cronSession.sessionEntry.sessionId,
     verboseLevel: resolvedVerboseLevel,

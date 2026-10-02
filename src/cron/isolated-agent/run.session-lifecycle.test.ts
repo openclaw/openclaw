@@ -106,12 +106,15 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       );
       isCliProviderMock.mockReturnValue(runner === "cli");
       let modelPrompt: string | undefined;
+      let occurrenceRunId: string | undefined;
       (runner === "cli" ? runCliAgentMock : runEmbeddedAgentMock).mockImplementationOnce(
         async (runParams: {
+          runId: string;
           prompt: string;
           userTurnTranscriptRecorder: UserTurnTranscriptRecorder;
         }) => {
           modelPrompt = runParams.prompt;
+          occurrenceRunId = runParams.runId;
           await runParams.userTurnTranscriptRecorder.persistApproved({ cwd: dir });
           return { payloads: [{ text: "Monitor complete" }], meta: { agentMeta: {} } };
         },
@@ -132,6 +135,8 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       );
 
       expect(result.status).toBe("ok");
+      expect(occurrenceRunId).toEqual(expect.any(String));
+      expect(occurrenceRunId).not.toBe(sessionId);
       expect(result.sessionKey).toBe(runSessionKey);
       expect(modelPrompt).toContain(
         `[cron:${jobId} Daily monitor] Read REFRESH.md.\n    Keep indentation.\nCurrent time:`,
@@ -154,7 +159,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
             sourceTool: "cron",
             sourcePromptPrefix: `[cron:${jobId} Daily monitor]`,
             jobId,
-            runId: sessionId,
+            runId: occurrenceRunId,
             sourceSessionKey: runSessionKey,
           },
         },
