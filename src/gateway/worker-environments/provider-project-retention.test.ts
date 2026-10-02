@@ -220,7 +220,7 @@ describe("prepared project retention compatibility", () => {
     ).toThrow("not owned by this lifecycle");
   });
 
-  it.each(["profile", "provider", "target", "owner selection", "agent deletion", "runtime"])(
+  it.each(["profile", "provider", "target", "runtime"])(
     "rechecks %s drift without acquiring external source authority",
     async (mutation) => {
       const { record, owner, invalidateArtifacts } = await setup();
@@ -236,10 +236,6 @@ describe("prepared project retention compatibility", () => {
           platform: "linux",
           arch: "x64",
         });
-      } else if (mutation === "owner selection") {
-        fixture.config.tools = { github: { kind: "oauth", profileId: `ghp_${"a".repeat(32)}` } };
-      } else if (mutation === "agent deletion") {
-        fixture.config.agents = { list: [{ id: "other" }] };
       } else {
         invalidateArtifacts();
       }

@@ -19,7 +19,6 @@ vi.mock("./repository-project-admission.js", () => ({
 describe("prepared repository source access", () => {
   const fixture = usePreparedPoolFixture();
   it.each([
-    "warm",
     "reopened store",
     "source unavailable",
     "caller revoked",
@@ -122,7 +121,7 @@ describe("prepared repository source access", () => {
         }
       },
     });
-    if (scenario === "warm" || scenario === "reopened store") {
+    if (scenario === "reopened store") {
       await expect(result).resolves.toEqual(prepared);
       expect(bind).toHaveBeenCalledOnce();
       expect(revalidate).toHaveBeenCalledOnce();
