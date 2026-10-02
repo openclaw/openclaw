@@ -173,11 +173,7 @@ export async function readSubagentOutput(
       : undefined;
   const sourceMessages = messages ?? (Array.isArray(history?.messages) ? history.messages : []);
   const snapshot = summarizeSubagentOutputHistory(sourceMessages);
-  const selected = selectSubagentOutputText(snapshot, outcome);
-  if (selected?.trim()) {
-    return selected;
-  }
-  return undefined;
+  return selectSubagentOutputText(snapshot, outcome);
 }
 
 export async function readLatestSubagentOutputWithRetry(params: {

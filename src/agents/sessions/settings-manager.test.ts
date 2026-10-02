@@ -86,22 +86,35 @@ describe("SettingsManager scoped persistence", () => {
     expect(settingsManager.getThemePaths()).toEqual(["external-theme"]);
   });
 
-  it("isolates parse failures to the affected scope", async () => {
-    const storage = new InspectableSettingsStorage();
-    storage.set("global", "{");
-    storage.set("project", { skills: ["old-skill"] });
-    const settingsManager = SettingsManager.fromStorage(storage);
+  it.each([
+    { input: "{", error: SyntaxError, expected: undefined },
+    { input: "null", error: TypeError, expected: null },
+    { input: "42", error: TypeError, expected: 42 },
+    { input: "true", error: TypeError, expected: true },
+    { input: '"invalid"', error: TypeError, expected: "invalid" },
+  ])(
+    "isolates invalid settings $input to the affected scope",
+    async ({ input, error, expected }) => {
+      const storage = new InspectableSettingsStorage();
+      storage.set("global", input);
+      storage.set("project", { skills: ["old-skill"] });
+      const settingsManager = SettingsManager.fromStorage(storage);
 
-    expect(settingsManager.drainErrors()).toEqual([
-      expect.objectContaining({ scope: "global", error: expect.any(SyntaxError) }),
-    ]);
-    settingsManager.setTheme("blocked-global-write");
-    settingsManager.setProjectSkillPaths(["new-skill"]);
-    await settingsManager.flush();
+      expect(settingsManager.drainErrors()).toEqual([
+        expect.objectContaining({ scope: "global", error: expect.any(error) }),
+      ]);
+      settingsManager.setTheme("blocked-global-write");
+      settingsManager.setProjectSkillPaths(["new-skill"]);
+      await settingsManager.flush();
 
-    expect(() => storage.get("global")).toThrow(SyntaxError);
-    expect(storage.get("project")).toEqual({ skills: ["new-skill"] });
-  });
+      if (error === SyntaxError) {
+        expect(() => storage.get("global")).toThrow(SyntaxError);
+      } else {
+        expect(storage.get("global")).toBe(expected);
+      }
+      expect(storage.get("project")).toEqual({ skills: ["new-skill"] });
+    },
+  );
 });
 
 describe("SettingsManager runtime overrides", () => {

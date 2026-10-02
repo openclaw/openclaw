@@ -6,7 +6,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
-import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { mergeDeep } from "../../infra/deep-merge.js";
 import { getAgentDir } from "../config.js";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.js";
@@ -45,6 +45,13 @@ export type {
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
 function deepMergeSettings(base: Settings, overrides: Settings): Settings {
   return mergeDeep(base, overrides) as Settings;
+}
+
+function requireSettingsObject(value: unknown): Settings {
+  if (value === null || typeof value !== "object") {
+    throw new TypeError("Session settings must be an object");
+  }
+  return value as Settings;
 }
 
 interface SettingsScopeState {
@@ -87,9 +94,7 @@ export class SettingsManager {
   /** Create an in-memory SettingsManager (no file I/O) */
   static inMemory(settings: Partial<Settings> = {}): SettingsManager {
     const storage = new InMemorySettingsStorage();
-    const initialSettings = SettingsManager.migrateSettings(
-      structuredClone(settings) as Record<string, unknown>,
-    );
+    const initialSettings = requireSettingsObject(structuredClone(settings));
     storage.withLock("global", () => JSON.stringify(initialSettings, null, 2));
     return SettingsManager.fromStorage(storage);
   }
@@ -105,9 +110,7 @@ export class SettingsManager {
           return undefined;
         });
       }
-      const settings = content
-        ? SettingsManager.migrateSettings(JSON.parse(content) as Record<string, unknown>)
-        : {};
+      const settings = content ? requireSettingsObject(JSON.parse(content)) : {};
       return SettingsManager.createScopeState(settings);
     } catch (error) {
       return SettingsManager.createScopeState({}, error as Error);
@@ -123,58 +126,6 @@ export class SettingsManager {
       modified: new Map(),
       loadError,
     };
-  }
-
-  /** Migrate old settings format to new format */
-  private static migrateSettings(settings: Record<string, unknown>): Settings {
-    // Migrate queueMode -> steeringMode
-    if ("queueMode" in settings && !("steeringMode" in settings)) {
-      settings.steeringMode = settings.queueMode;
-      delete settings.queueMode;
-    }
-
-    // Migrate legacy websockets boolean -> transport enum
-    if (!("transport" in settings) && typeof settings.websockets === "boolean") {
-      settings.transport = settings.websockets ? "websocket" : "sse";
-      delete settings.websockets;
-    }
-
-    // Migrate old skills object format to new array format
-    if (isRecord(settings.skills)) {
-      const skillsSettings = settings.skills;
-      if (
-        skillsSettings.enableSkillCommands !== undefined &&
-        settings.enableSkillCommands === undefined
-      ) {
-        settings.enableSkillCommands = skillsSettings.enableSkillCommands;
-      }
-      if (
-        Array.isArray(skillsSettings.customDirectories) &&
-        skillsSettings.customDirectories.length > 0
-      ) {
-        settings.skills = skillsSettings.customDirectories;
-      } else {
-        delete settings.skills;
-      }
-    }
-
-    // Migrate retry.maxDelayMs -> retry.provider.maxRetryDelayMs
-    if (isRecord(settings.retry)) {
-      const retrySettings = settings.retry;
-      const providerSettings = asOptionalObjectRecord(retrySettings.provider);
-      if (
-        typeof retrySettings.maxDelayMs === "number" &&
-        providerSettings?.maxRetryDelayMs == null
-      ) {
-        retrySettings.provider = {
-          ...providerSettings,
-          maxRetryDelayMs: retrySettings.maxDelayMs,
-        };
-      }
-      delete retrySettings.maxDelayMs;
-    }
-
-    return settings as Settings;
   }
 
   getGlobalSettings(): Settings {
@@ -239,9 +190,7 @@ export class SettingsManager {
     modified: Map<keyof Settings, Set<string> | null>,
   ): void {
     this.storage.withLock(scope, (current) => {
-      const currentFileSettings = current
-        ? SettingsManager.migrateSettings(JSON.parse(current) as Record<string, unknown>)
-        : {};
+      const currentFileSettings = current ? requireSettingsObject(JSON.parse(current)) : {};
       const mergedSettings: Settings = { ...currentFileSettings };
       for (const [field, nestedModified] of modified) {
         const value = snapshotSettings[field];

@@ -11,6 +11,7 @@ import { isExactSemverVersion, resolveNpmJsonEntries } from "../../infra/npm-reg
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 import {
   DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
   readWorkerBundleArchiveManifest,
@@ -445,27 +446,13 @@ async function prepareWorkerBundle(
 export function createWorkerBundleProducer(
   options: WorkerBundleProducerOptions = {},
 ): WorkerBundleProducer {
-  let prepared: Promise<WorkerBundleArtifact> | undefined;
   let currentArtifact: WorkerBundleArtifact | undefined;
   let pruning = Promise.resolve();
   return {
-    prepare() {
-      if (!prepared) {
-        const pending = prepareWorkerBundle(options)
-          .then((artifact) => {
-            currentArtifact = artifact;
-            return artifact;
-          })
-          .catch((error: unknown) => {
-            if (prepared === pending) {
-              prepared = undefined;
-            }
-            throw error;
-          });
-        prepared = pending;
-      }
-      return prepared;
-    },
+    prepare: createLazyPromise(async () => {
+      currentArtifact = await prepareWorkerBundle(options);
+      return currentArtifact;
+    }),
     async prune(readRetainedBundleHashes) {
       const artifact = currentArtifact;
       if (options.cacheOwnership !== "exclusive" || !artifact) {

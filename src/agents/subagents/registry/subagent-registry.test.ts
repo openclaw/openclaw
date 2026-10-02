@@ -1291,7 +1291,7 @@ describe("subagent registry seam flow", () => {
       throw new Error("sqlite busy");
     });
 
-    await expect(mod.testing.failQueuedSubagentRun(runId, "launch failed")).rejects.toThrow(
+    await expect(mod.settleFailedQueuedSubagentLaunch(runId, "launch failed")).rejects.toThrow(
       "sqlite busy",
     );
 

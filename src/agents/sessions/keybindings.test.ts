@@ -6,23 +6,21 @@ import { KeybindingsManager } from "./keybindings.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it("loads legacy overrides with canonical precedence and replaces them on reload", async () => {
+it("loads valid overrides in canonical order and replaces them on reload", async () => {
   const agentDir = tempDirs.make("openclaw-keybindings-");
   const configPath = join(agentDir, "keybindings.json");
   await writeFile(
     configPath,
     JSON.stringify({
       "extra.z": "ctrl+z",
-      followUp: "ctrl+f",
-      interrupt: "ctrl+x",
+      "app.message.followUp": "ctrl+f",
       "app.interrupt": "ctrl+i",
-      clear: "ctrl+l",
       "app.clear": 42,
-      exit: ["ctrl+q", 1],
+      "app.exit": ["ctrl+q", 1],
       "extra.a": [],
       ["__proto__"]: ["ctrl+p"],
       toString: "ctrl+b",
-      submit: ["enter", "ctrl+j"],
+      "tui.input.submit": ["enter", "ctrl+j"],
     }),
   );
 
@@ -46,7 +44,10 @@ it("loads legacy overrides with canonical precedence and replaces them on reload
     toString: "ctrl+b",
   });
 
-  await writeFile(configPath, JSON.stringify({ followUp: "ctrl+g", ["__proto__"]: "ctrl+y" }));
+  await writeFile(
+    configPath,
+    JSON.stringify({ "app.message.followUp": "ctrl+g", ["__proto__"]: "ctrl+y" }),
+  );
   manager.reload();
   expect(manager.getKeys("app.interrupt")).toEqual(["escape"]);
   expect(manager.getKeys("app.message.followUp")).toEqual(["ctrl+g"]);

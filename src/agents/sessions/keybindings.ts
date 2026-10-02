@@ -1,12 +1,11 @@
 /**
- * Application keybinding definitions and user-config migration helpers.
+ * Application keybinding definitions and user-config loading.
  *
  * Wraps pi-tui keybindings with OpenClaw-specific actions and per-agent overrides.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  type Keybinding,
   type KeybindingDefinitions,
   type KeybindingsConfig,
   type KeyId,
@@ -165,85 +164,14 @@ const KEYBINDINGS = {
   },
 } as const satisfies KeybindingDefinitions;
 
-const KEYBINDING_NAME_MIGRATIONS = {
-  cursorUp: "tui.editor.cursorUp",
-  cursorDown: "tui.editor.cursorDown",
-  cursorLeft: "tui.editor.cursorLeft",
-  cursorRight: "tui.editor.cursorRight",
-  cursorWordLeft: "tui.editor.cursorWordLeft",
-  cursorWordRight: "tui.editor.cursorWordRight",
-  cursorLineStart: "tui.editor.cursorLineStart",
-  cursorLineEnd: "tui.editor.cursorLineEnd",
-  jumpForward: "tui.editor.jumpForward",
-  jumpBackward: "tui.editor.jumpBackward",
-  pageUp: "tui.editor.pageUp",
-  pageDown: "tui.editor.pageDown",
-  deleteCharBackward: "tui.editor.deleteCharBackward",
-  deleteCharForward: "tui.editor.deleteCharForward",
-  deleteWordBackward: "tui.editor.deleteWordBackward",
-  deleteWordForward: "tui.editor.deleteWordForward",
-  deleteToLineStart: "tui.editor.deleteToLineStart",
-  deleteToLineEnd: "tui.editor.deleteToLineEnd",
-  yank: "tui.editor.yank",
-  yankPop: "tui.editor.yankPop",
-  undo: "tui.editor.undo",
-  newLine: "tui.input.newLine",
-  submit: "tui.input.submit",
-  tab: "tui.input.tab",
-  copy: "tui.input.copy",
-  selectUp: "tui.select.up",
-  selectDown: "tui.select.down",
-  selectPageUp: "tui.select.pageUp",
-  selectPageDown: "tui.select.pageDown",
-  selectConfirm: "tui.select.confirm",
-  selectCancel: "tui.select.cancel",
-  interrupt: "app.interrupt",
-  clear: "app.clear",
-  exit: "app.exit",
-  suspend: "app.suspend",
-  cycleThinkingLevel: "app.thinking.cycle",
-  cycleModelForward: "app.model.cycleForward",
-  cycleModelBackward: "app.model.cycleBackward",
-  selectModel: "app.model.select",
-  expandTools: "app.tools.expand",
-  toggleThinking: "app.thinking.toggle",
-  toggleSessionNamedFilter: "app.session.toggleNamedFilter",
-  externalEditor: "app.editor.external",
-  followUp: "app.message.followUp",
-  dequeue: "app.message.dequeue",
-  pasteImage: "app.clipboard.pasteImage",
-  newSession: "app.session.new",
-  tree: "app.session.tree",
-  fork: "app.session.fork",
-  resume: "app.session.resume",
-  treeFoldOrUp: "app.tree.foldOrUp",
-  treeUnfoldOrDown: "app.tree.unfoldOrDown",
-  treeEditLabel: "app.tree.editLabel",
-  treeToggleLabelTimestamp: "app.tree.toggleLabelTimestamp",
-  toggleSessionPath: "app.session.togglePath",
-  toggleSessionSort: "app.session.toggleSort",
-  renameSession: "app.session.rename",
-  deleteSession: "app.session.delete",
-  deleteSessionNoninvasive: "app.session.deleteNoninvasive",
-} as const satisfies Record<string, Keybinding>;
-
-function isLegacyKeybindingName(key: string): key is keyof typeof KEYBINDING_NAME_MIGRATIONS {
-  return Object.hasOwn(KEYBINDING_NAME_MIGRATIONS, key);
-}
-
-/** Migrates legacy keybinding names and orders known entries ahead of unknown extras. */
-function migrateKeybindingsConfig(rawConfig: Record<string, unknown>): KeybindingsConfig {
+/** Validates bindings and orders known entries ahead of unknown extras. */
+function parseKeybindingsConfig(rawConfig: Record<string, unknown>): KeybindingsConfig {
   const config = new Map<string, KeyId | KeyId[]>();
   for (const [key, binding] of Object.entries(rawConfig)) {
-    const nextKey = isLegacyKeybindingName(key) ? KEYBINDING_NAME_MIGRATIONS[key] : key;
-    if (key !== nextKey && Object.hasOwn(rawConfig, nextKey)) {
-      // New names win even when their configured value is invalid.
-      continue;
-    }
     if (typeof binding === "string") {
-      config.set(nextKey, binding as KeyId);
+      config.set(key, binding as KeyId);
     } else if (Array.isArray(binding) && binding.every((entry) => typeof entry === "string")) {
-      config.set(nextKey, binding as KeyId[]);
+      config.set(key, binding as KeyId[]);
     }
   }
   return orderKeybindingsConfig(Object.fromEntries(config));
@@ -289,7 +217,7 @@ export class KeybindingsManager extends TuiKeybindingsManager {
   private static loadFromFile(path: string): KeybindingsConfig {
     try {
       const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
-      return isRecord(parsed) ? migrateKeybindingsConfig(parsed) : {};
+      return isRecord(parsed) ? parseKeybindingsConfig(parsed) : {};
     } catch {
       return {};
     }
