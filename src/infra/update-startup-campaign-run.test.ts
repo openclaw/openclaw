@@ -1,11 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createDeferred, awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import * as sentinelStore from "./restart-sentinel.js";
 import { readRestartSentinel } from "./restart-sentinel.js";
 import { UpdateCampaignController } from "./update-campaign.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
@@ -85,8 +87,69 @@ describe("automatic campaign handoff failure", () => {
   });
 
   afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     await state.cleanup();
+  });
+
+  it("does not clear a replacement campaign after sentinel settlement", async () => {
+    const campaign = createApplyingCampaign();
+    const persisted = createDeferred();
+    const release = createDeferred();
+    const write = sentinelStore.writeRestartSentinelIfUnchanged;
+    const spy = vi
+      .spyOn(sentinelStore, "writeRestartSentinelIfUnchanged")
+      .mockImplementationOnce(async (params) => {
+        const result = await write(params);
+        persisted.resolve();
+        await release.promise;
+        return result;
+      });
+    const operation = runCampaignUpdate({
+      channel: "beta",
+      mode: "npm",
+      version: "2.0.0-beta.1",
+      tag: "beta",
+      forced: false,
+      root: "/opt/openclaw",
+      log: { info: vi.fn() },
+      campaign,
+      onAttempt: vi.fn(),
+      canApply: () => true,
+      runAuto: async () => ({
+        status: "skipped",
+        message: "Already current",
+        result: {
+          status: "skipped",
+          mode: "npm",
+          reason: "already-current",
+          steps: [],
+          durationMs: 0,
+        },
+      }),
+    });
+    try {
+      await awaitGateBeforeSettlement(
+        persisted.promise,
+        operation,
+        "Campaign did not persist its sentinel",
+      );
+      campaign.clear();
+      campaign.announce({
+        target: { kind: "package", version: "3.0.0" },
+        inspect: { getQueueSize: () => 1 },
+        apply: async () => "failed",
+        onChange: () => {},
+      });
+      const replacement = campaign.getState()?.id;
+      release.resolve();
+      await expect(operation).resolves.toBe("failed");
+      expect(campaign.getState()?.id).toBe(replacement);
+    } finally {
+      release.resolve();
+      await operation;
+      spy.mockRestore();
+      campaign.clear();
+    }
   });
 
   it.each(["state", "diagnostics"] as const)(

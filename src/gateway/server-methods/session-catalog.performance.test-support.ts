@@ -183,7 +183,7 @@ export async function createComposedCatalogFixture(
       computerUse: { enabled: false },
     };
     const config: OpenClawConfig = {
-      agents: { list: [{ id: "main", default: true, agentDir, workspace: state.workspaceDir }] },
+      agents: { entries: { main: { agentDir, workspace: state.workspaceDir } } },
       plugins: {
         slots: { memory: "none" },
         entries: { codex: { enabled: true, config: pluginConfig } },

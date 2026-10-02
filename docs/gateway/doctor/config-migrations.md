@@ -134,6 +134,23 @@ Gateway `cron.add` and `cron.update` requests still accept the deprecated
 `announce`. This request adapter does not repair stored `deliver` values; those
 still require Doctor.
 
+## Exec approval policy
+
+Doctor normalizes legacy exec approval policy already stored in SQLite as well
+as imported JSON files. Before rewriting a SQLite row, it preserves a verified,
+private database snapshot named `openclaw.sqlite.pre-exec-approvals-migration-*.bak`.
+It moves the historical `default` agent policy into `main`, retaining explicit
+`main` values and merging allowlist entries and MCP grants. String allowlist
+entries become objects with stable IDs. Obsolete `commandText` and unrecognized
+source labels remain in the backup; current command-use metadata, socket
+credentials, and the row's update timestamp are preserved.
+
+Runtime readers require canonical policy and report `openclaw doctor --fix`
+guidance for a legacy row without replacing it. The update-time Doctor pass
+runs the same migration. Repeating Doctor leaves the normalized row and its IDs
+unchanged. Published SDK and operator input normalization remain available at
+the input boundary.
+
 ## Channel ownership during an update
 
 When Doctor migrates a legacy `agents.list` roster without a `default: true` marker
@@ -163,6 +180,37 @@ original values in the normal config backup before saving the repair.
 Runtime config requires typed sender keys or `"*"`. After replacing the binary
 directly, run `openclaw doctor --fix` before starting the Gateway. Explicit
 `id:@user:server` policies and incoming sender-ID matching remain supported.
+
+## Agent roster migration
+
+Ordinary config reads require canonical keyed `agents.entries`; they do not
+convert a populated `agents.list` or remove legacy `default` markers. Run
+`openclaw doctor --fix` before starting a directly replaced binary with those
+inputs. The normal `openclaw update` flow invokes the candidate Doctor. Fresh
+configs without a roster still receive the in-memory `main` default.
+
+Doctor retains the original roster order and historical owner while migrating
+config and persisted state, including ownerless cron jobs. It preserves the
+legacy workspace and materializes the required per-surface owners before
+retiring the marker. Explicit system-agent, auth-inheritance, and other role
+owners remain independent: choosing a different system agent does not change
+which agent owns existing legacy data. Keep the original markers until Doctor
+has completed both the config and state repairs.
+
+Doctor follows the existing [include write constraints](/gateway/config-secrets-env).
+A root-level `$include`, or a repair spanning an included roster and root-owned
+roles, can require manual preparation; repeating `doctor --fix` alone does not
+remove that ownership constraint. Preserve backups of the root config, included
+files, and persisted state. Temporarily consolidate the original include-resolved
+legacy config into one `openclaw.json`, retaining list order, default markers,
+authored environment and secret references, and the meaning of configured paths.
+Do not substitute an already normalized runtime view or remove the legacy marker
+by hand: Doctor still needs that provenance to migrate data ownership.
+
+Run `openclaw doctor --fix` or retry the update with that single-file config.
+After repair completes and `openclaw config validate` succeeds, split the
+canonical config back into includes if desired, then validate it again. Keep
+the backups until the repaired config and migrated state have been verified.
 
 ## Channel webhook listeners
 
@@ -470,7 +518,7 @@ against the current SQLite owners before the import can rename profiles.
     If this is a git checkout and Doctor is running interactively, it offers to update before running its checks. Accepting uses the normal `openclaw update` lifecycle for that checkout, including validation, recovery, and Gateway restart. The source update keeps your saved update channel unchanged. Externally managed installs continue Doctor without offering self-update; update them through their deployment owner.
   </Accordion>
   <Accordion title="1. Config normalization">
-    GitHub Copilot now requires explicit provider config, a saved Copilot auth profile, or `COPILOT_GITHUB_TOKEN`. Generic `GH_TOKEN` and `GITHUB_TOKEN` no longer activate it. Doctor reports this change once when only a generic GitHub token is present. The retired `plugins.entries.github-copilot.config.discovery.enabled` setting is ignored during config loading, including malformed values, and removed when Doctor saves the config.
+    GitHub Copilot now requires explicit provider config, a saved Copilot auth profile, or `COPILOT_GITHUB_TOKEN`. Generic `GH_TOKEN` and `GITHUB_TOKEN` no longer activate it. Doctor reports this change once when only a generic GitHub token is present. Doctor removes the retired `plugins.entries.github-copilot.config.discovery.enabled` setting, including malformed values, before validating and saving the config. Ordinary config reads require the repaired config.
 
     Doctor normalizes legacy value shapes into the current schema. Current Talk speech config is `talk.provider` + `talk.providers.<provider>`, with realtime voice config under `talk.realtime.*`. Doctor rewrites old `talk.voiceId` / `talk.voiceAliases` / `talk.modelId` / `talk.outputFormat` / `talk.apiKey` shapes into the provider map, and rewrites legacy top-level realtime selectors (`talk.mode`, `talk.transport`, `talk.brain`, `talk.model`, `talk.voice`) into `talk.realtime`.
 
@@ -504,7 +552,7 @@ against the current SQLite owners before the import can rename profiles.
 
     Per-agent migrations apply to both keyed `agents.entries` and legacy `agents.list` rosters, including rosters that already set `agents.ownership: "explicit"`. For example, Doctor preserves an agent's legacy `memorySearch` settings under `memory.search`. Existing values at the current config paths take precedence.
 
-    For legacy rosters with multiple agents and no resolvable ambient owner, Doctor seeds `agents.defaults.systemAgent.agentId` from a uniquely marked `default: true` agent, or `main` when present. Sole-agent rosters and legacy default markers already honored by the runtime need no owner repair and produce no missing-owner advice. Explicit fleet ownership disables the legacy default-marker fallback, so those rosters may still need repair. Doctor also pins `agents.defaults.heartbeat.agentId` only when heartbeat enrollment would otherwise be unresolved; existing heartbeat owners, shared defaults, and per-agent enrollment are preserved. These changes are reported and saved by `doctor --fix`, including the update-time doctor pass. If no default can be identified, configure the system-agent owner explicitly.
+    For legacy rosters with multiple agents and no resolvable ambient owner, Doctor seeds `agents.defaults.systemAgent.agentId` from a uniquely marked `default: true` agent, or `main` when present. Sole-agent rosters need no owner repair. Doctor converts valid legacy default markers into explicit per-surface owners before runtime admission. Explicit fleet ownership disables the legacy default-marker fallback, so those rosters may still need repair. Doctor also pins `agents.defaults.heartbeat.agentId` only when heartbeat enrollment would otherwise be unresolved; existing heartbeat owners, shared defaults, and per-agent enrollment are preserved. These changes are reported and saved by `doctor --fix`, including the update-time doctor pass. If no default can be identified, configure the system-agent owner explicitly.
 
     <Note>
       Migration retention follows the July 2026 cutoff in the

@@ -33,14 +33,16 @@ export async function preserveDoctorOriginalState(params: {
     );
     return;
   }
-  const admission = updateInProgress
-    ? resolveDoctorUpdateAdmission(params.env, original?.runId)
-    : undefined;
+  let admission: ReturnType<typeof resolveDoctorUpdateAdmission> | undefined;
   const assertCurrent = () => {
     assertCallerCurrent();
     admission?.assertCurrent();
   };
   try {
+    // Older drivers may lack capture lineage; repair keeps its live maintenance and write authority.
+    admission = updateInProgress
+      ? resolveDoctorUpdateAdmission(params.env, original?.runId)
+      : undefined;
     if (admission && runId) {
       const { readUpdateRecoveryBaselineIdentity } =
         await import("../infra/update-recovery-backup-reader.js");

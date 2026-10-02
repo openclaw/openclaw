@@ -595,7 +595,11 @@ describe("createGatewayKernel", () => {
           controlUi: { enabled: false },
           port,
         },
-        agents: { entries: { main: { default: true }, worker: {} } },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, worker: {} },
+        },
       });
       state.applyEnv();
       kernel = await openKernel();

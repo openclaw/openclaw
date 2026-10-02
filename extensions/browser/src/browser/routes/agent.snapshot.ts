@@ -762,7 +762,7 @@ export function registerBrowserAgentSnapshotRoutes(
         },
       });
     } catch (err) {
-      handleRouteError(ctx, res, err);
+      handleRouteError(res, err);
     }
   });
 }

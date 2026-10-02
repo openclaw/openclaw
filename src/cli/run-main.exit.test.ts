@@ -162,7 +162,7 @@ describe("runCli exit behavior", () => {
         expect(consoleErrorSpy).toHaveBeenCalledWith(
           "[openclaw] OpenClaw hit an unexpected runtime error.",
         );
-        expect(consoleErrorSpy).toHaveBeenCalledWith("[openclaw] Reason: boom");
+        expect(consoleErrorSpy).toHaveBeenCalledWith("[openclaw] For help, run `openclaw doctor`.");
         expect(restoreRuntimeTerminalStateMock).toHaveBeenCalledWith("uncaught exception", {
           resumeStdinIfPaused: false,
         });

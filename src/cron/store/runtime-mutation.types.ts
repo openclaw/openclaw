@@ -22,7 +22,6 @@ export type CronRuntimeMutationContracts = {
     preparation: {
       nowMs: number;
       defaultAgentId?: string;
-      legacyDefaultAgentId?: string;
       notificationRouting: CronNotificationRouting;
       cronConfig?: CronRunRecoveryPreparation["cronConfig"];
       ownership: CronScheduleOwnershipFacts[];
@@ -42,7 +41,6 @@ export type CronRuntimeMutationContracts = {
     preparation: {
       nowMs: number;
       skipMissedJobs: boolean;
-      legacyDefaultAgentId?: string;
       notificationRouting: CronNotificationRouting;
       ownership: CronScheduleOwnershipFacts[];
     };

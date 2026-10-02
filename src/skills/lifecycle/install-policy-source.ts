@@ -6,8 +6,8 @@ import {
 import type { SkillInstallSpecMetadata } from "../../plugins/install-security-scan.js";
 import { prepareSkillBundle } from "../library/bundle.js";
 import type { Skill } from "../loading/skill-contract.js";
-import { resolveSkillFileHost } from "../loading/skill-file-host.js";
 import { materializeSkillResources } from "../runtime/resources.js";
+import { resolveSkillFileHost } from "../skill-file-host.js";
 import type { SkillEntry, SkillInstallSpec } from "../types.js";
 
 /** Gateway hooks inspect a local source tree, never a path supplied by the workspace host. */

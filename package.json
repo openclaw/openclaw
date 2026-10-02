@@ -1038,10 +1038,6 @@
     "./plugin-sdk/dangerous-name-runtime": {
       "default": "./dist/plugin-sdk/dangerous-name-runtime.js"
     },
-    "./plugin-sdk/command-auth": {
-      "types": "./dist/plugin-sdk/command-auth.d.ts",
-      "default": "./dist/plugin-sdk/command-auth.js"
-    },
     "./plugin-sdk/command-auth-native": {
       "types": "./dist/plugin-sdk/command-auth-native.d.ts",
       "default": "./dist/plugin-sdk/command-auth-native.js"
@@ -1070,10 +1066,6 @@
     },
     "./plugin-sdk/direct-dm-guard-policy": {
       "default": "./dist/plugin-sdk/direct-dm-guard-policy.js"
-    },
-    "./plugin-sdk/discord": {
-      "types": "./dist/plugin-sdk/discord.d.ts",
-      "default": "./dist/plugin-sdk/discord.js"
     },
     "./plugin-sdk/device-bootstrap": {
       "types": "./dist/plugin-sdk/device-bootstrap.d.ts",
@@ -1584,10 +1576,6 @@
     },
     "./plugin-sdk/target-resolver-runtime": {
       "default": "./dist/plugin-sdk/target-resolver-runtime.js"
-    },
-    "./plugin-sdk/telegram-account": {
-      "types": "./dist/plugin-sdk/telegram-account.d.ts",
-      "default": "./dist/plugin-sdk/telegram-account.js"
     },
     "./plugin-sdk/text-autolink-runtime": {
       "default": "./dist/plugin-sdk/text-autolink-runtime.js"

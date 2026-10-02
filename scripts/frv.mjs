@@ -16,7 +16,6 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { promisify, stripVTControlCharacters } from "node:util";
 import { validateArtifactProducerRun } from "./full-release-artifacts.mjs";
-import { loadFlakeClassifications } from "./full-release-flake-classification.mjs";
 import {
   publicationAdmissionContract,
   publicationSourceContract,
@@ -808,17 +807,6 @@ export async function inspectContinuation(plan, client, options = {}) {
         runId: child.runId,
         status: run.status,
       };
-      if (!active && child.key === "normalCi" && run.conclusion !== "success") {
-        Object.assign(
-          policyChild,
-          await client.loadFlakeClassifications({
-            child: policyChild,
-            parentRunId: plan.parentRunId,
-            parentRunAttempt: plan.parentRunAttempt,
-            targetSha: plan.targetSha,
-          }),
-        );
-      }
       const passed = !active && terminalPolicyPass(policyChild);
       return {
         compositeJobsSha256: evidence.compositeJobsSha256,
@@ -907,9 +895,6 @@ export function createClient(repository, dependencies = {}) {
   };
   return {
     repository,
-    loadFlakeClassifications(request) {
-      return loadFlakeClassifications({ ...request, repo: repository });
-    },
     getReleaseEvidenceClient() {
       releaseEvidenceClient ??= createReleaseEvidenceClient(repository);
       return releaseEvidenceClient;

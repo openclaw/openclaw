@@ -76,22 +76,17 @@ still require Windows shards to pass.
 
 Every failed test needs an explicit release-lead decision: blocker or flake.
 Rerun a flake on the same Release SHA at most twice, file its fix-in-parallel
-issue or PR on `main`, and retain the original failure. A still-failing eligible
-`normalCi` job can use the authenticated `recorded-flake` classification workflow;
-its receipt binds the parent, child run, exact job attempt, Release SHA, reason,
-and tracking link. The decision, manifest, and release verification notes retain
-the failure. Do not re-cut, change tooling, or start another Full Release
-Validation for a flake. See [recorded flakes](/reference/full-release-validation/continuation#record-a-flake).
+issue or PR on `main`, and retain the original failure. Do not re-cut, change
+tooling, or start another Full Release Validation solely to clear a flake; a
+selected job that remains red blocks publication.
 
-Other children stay strict in v1; extending classification to them is follow-up
-work. Non-classifiable jobs remain blocking: the CI coverage gate, seal/evidence,
+Blocking jobs include the CI coverage gate, seal/evidence,
 Build Artifacts, install smoke, survivor lanes, `update-first-hop-compat*`, pack/npm
 qualification, package integrity, and all Linux/Windows/macOS Gateway checks,
 including Windows packaged install/upgrade checks in Release Checks. A cancelled
-run still blocks. A failed CI gate is accepted only when its own log proves that
-every non-passing entry selected a failed advisory job; missing, skipped, or
-cancelled coverage blocks. Publication waivers cannot bypass failures or required
-coverage. Validation covers source CI, packages, plugins,
+run still blocks. The selected `openclaw/ci-gate` must succeed; failed, missing,
+skipped, or cancelled coverage blocks. Publication waivers cannot bypass failures
+or required coverage. Validation covers source CI, packages, plugins,
 Gateway installs and upgrades, and selected app, UI, Telegram, QA, and
 live-provider checks. All-group qualification includes all nine Gateway
 install/upgrade combinations across Linux, Windows, and macOS. Coverage otherwise

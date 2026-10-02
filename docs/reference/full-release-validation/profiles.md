@@ -93,8 +93,7 @@ or `packaged-fresh,installer-fresh,packaged-upgrade` are accepted, while any all
 filter that omits one of the nine Linux/Windows/macOS install and upgrade pairs is
 rejected before scheduling. All selected cross-OS outcomes block on failure. Every all-group run must retain
 all nine install/upgrade combinations. Selected lanes must succeed except
-`normalCi`'s policy-derived `windows-node-ci` and authenticated `recorded-flake`
-jobs; see [record a flake](/reference/full-release-validation/continuation#record-a-flake).
+`normalCi`'s policy-derived `windows-node-ci` jobs.
 Other children stay strict. No operator waiver can authorize publication with
 failed selected tests. Stable publication requires stable/full evidence,
 soak, and blocking performance.

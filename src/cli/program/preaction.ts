@@ -12,7 +12,6 @@ import {
   applyCliExecutionStartupPresentation,
   ensureCliExecutionBootstrap,
 } from "../command-execution-startup.js";
-import { inheritOptionFromParent } from "../command-options.js";
 import { resolveCliCommandPathPolicy } from "../command-path-policy.js";
 import { resolveCliStartupPolicy } from "../command-startup-policy.js";
 import { applyResolvedCommandOutputMode } from "../json-output-mode.js";
@@ -52,17 +51,6 @@ function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
   }
   const logLevel = actionCommand.optsWithGlobals<{ logLevel?: unknown }>().logLevel;
   return typeof logLevel === "string" ? (logLevel as LogLevel) : undefined;
-}
-
-function getCommandAgentId(actionCommand: Command): string | undefined {
-  if (!actionCommand.options.some((option) => option.attributeName() === "agent")) {
-    return undefined;
-  }
-  const value =
-    actionCommand.getOptionValueSource("agent") === "cli"
-      ? actionCommand.getOptionValue("agent")
-      : inheritOptionFromParent(actionCommand, "agent", "cli");
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function isBareParentDefaultHelpInvocation(actionCommand: Command, argv: string[]): boolean {
@@ -219,27 +207,6 @@ export function registerPreActionHooks(program: Command, programVersion: string)
           runtime: defaultRuntime,
           ...(snapshot ? { snapshot } : {}),
         });
-    }
-    const commandAgentId = getCommandAgentId(actionCommand);
-    if (commandAgentId) {
-      const existingGuard = beforeStatePreparation;
-      beforeStatePreparation = async (snapshot) => {
-        if (snapshot) {
-          const { isValidAgentId, normalizeAgentId } =
-            await import("@openclaw/normalization-core/agent-id");
-          if (isValidAgentId(commandAgentId)) {
-            const [{ listAgentIds }, { retainLegacyDefaultAgentId }] = await Promise.all([
-              import("../../agents/agent-scope-config.js"),
-              import("../../config/legacy.default-agent-owner.js"),
-            ]);
-            const agentId = normalizeAgentId(commandAgentId);
-            if (listAgentIds(snapshot.sourceConfig).includes(agentId)) {
-              retainLegacyDefaultAgentId(snapshot.sourceConfig, agentId);
-            }
-          }
-        }
-        return (await existingGuard?.(snapshot)) ?? true;
-      };
     }
     await ensureCliExecutionBootstrap({
       runtime: defaultRuntime,

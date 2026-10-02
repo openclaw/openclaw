@@ -172,6 +172,7 @@ export async function spawnSubagentDirect(
     const initialSession = await createInitialSubagentSession({
       assertActive,
       cfg,
+      requesterAgentId,
       targetAgentId,
       childSessionKey,
       label: label || undefined,

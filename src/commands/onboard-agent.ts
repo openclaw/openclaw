@@ -7,7 +7,6 @@ import {
 } from "../agents/agent-scope-config.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { readConfigFileSnapshot, resolveConfigSnapshotHash } from "../config/config.js";
-import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { createMergePatch, applyMergePatch } from "../config/merge-patch.js";
 import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -43,13 +42,13 @@ function mergeOnboardingCandidate(params: {
   // patch onto snapshot.parsed, preserving include ownership and env refs.
   const merged = applyMergePatch(params.currentRuntime, proposalPatch) as OpenClawConfig;
   const { list: _legacyList, ...agents } = merged.agents ?? {};
-  return inheritLegacyDefaultAgentId(params.currentRuntime, {
+  return {
     ...merged,
     agents: {
       ...agents,
       entries: toAgentEntriesRecord(listAgentEntries(params.currentRuntime)),
     },
-  });
+  };
 }
 
 export async function ensureOnboardingAgent(params: {
@@ -91,9 +90,6 @@ export async function ensureOnboardingAgent(params: {
   if (before && (resolveConfigSnapshotHash(before) ?? null) !== params.expectedConfigHash) {
     throw new Error("OpenClaw config changed before first-agent creation. Retry setup.");
   }
-  // Provider, gateway, and hook proposals can copy config. Restore the reader's
-  // owner before returning an existing fleet to the remaining setup effects.
-  inheritLegacyDefaultAgentId(params.baseConfig ?? params.config, params.config);
   const candidateRoster = listAgentEntries(params.config);
   const hasCandidateRoster =
     candidateRoster.length > 0 &&

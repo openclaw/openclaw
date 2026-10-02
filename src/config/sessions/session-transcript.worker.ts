@@ -454,6 +454,17 @@ serveOwnedWorkerTasks(
           ),
         };
       }
+      if (request.kind === "conversation-rows") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { selectConversationRowsFromDatabase } =
+          await import("./session-accessor.sqlite-conversation-read.js");
+        const read = withOpenClawAgentDatabaseReadOnly(
+          (database) => selectConversationRowsFromDatabase(database, request.query),
+          { ...request.database, env: cloneEnvWithPlatformSemantics(request.env) },
+        );
+        return { kind: "conversation-rows", rows: read.found ? read.value : [] };
+      }
       if (request.kind === "conversation-delivery") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");

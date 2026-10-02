@@ -12,18 +12,7 @@ interface ReleaseAdvisoryJobBase {
   runId: string;
   url: string;
 }
-export type ReleaseAdvisoryJob = ReleaseAdvisoryJobBase &
-  (
-    | { class: "windows-node-ci" }
-    | {
-        class: "recorded-flake";
-        jobId: string;
-        trackingUrl: string;
-        reason: string;
-        receiptRunId: string;
-      }
-  );
-export function releaseChildClassificationEvidence(child: ReleaseRecord): ReleaseRecord;
+export type ReleaseAdvisoryJob = ReleaseAdvisoryJobBase & { class: "windows-node-ci" };
 export function releaseAdvisoryJobs(children: ReleaseRecord[]): ReleaseAdvisoryJob[];
 export function validateReleaseManifestAdvisoryJobs(manifest: unknown): ReleaseAdvisoryJob[];
 export const SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY: "split-changelog-release-v1";
@@ -183,7 +172,6 @@ export function selectReleaseStateArtifacts(
   };
 };
 export function formatReleaseStateOutcome(payload: ReleaseRecord): string;
-export function releaseStateChildEvidence(child: ReleaseRecord): ReleaseRecord;
 export function affectedActiveRunIds(
   children: ReleaseRecord[],
   blockers: ReleaseRecord[],
