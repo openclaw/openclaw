@@ -1063,7 +1063,6 @@ src/plugins/installed-plugin-index.ts
 src/plugins/installed-plugin-package-ownership.ts
 src/plugins/installed-plugin-record-match.ts
 src/plugins/jiti-factory.ts
-src/plugins/legacy-npm-declaration.ts
 src/plugins/loader-cache-state.ts
 src/plugins/managed-npm-retention-contract.ts
 src/plugins/managed-npm-retention.ts
