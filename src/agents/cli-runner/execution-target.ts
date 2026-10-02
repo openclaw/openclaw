@@ -1,3 +1,4 @@
+import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import type { CliBackendExecute } from "../../plugins/cli-backend.types.js";
 import { getPluginValueInstance } from "../../plugins/plugin-instance-scope.js";
@@ -7,16 +8,26 @@ import { resolveReplyExpectation } from "../reply-completion.js";
 import type { CliExecutionTarget, PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 /** Keep all CLI transports bound to the same reply-operation identity and terminal contract. */
-export function attachCliReplyBackend(params: RunCliAgentParams, cancel: () => void) {
+export function attachCliReplyBackend(
+  params: RunCliAgentParams,
+  cancel: () => void,
+  capabilities?: Pick<ReplyBackendHandle, "messageInjectionV2">,
+) {
   if (!params.replyOperation) {
     return undefined;
   }
-  const handle = {
+  const handle: ReplyBackendHandle = {
     kind: "cli" as const,
     runId: params.runId,
     toolAuthorityFingerprint: params.toolAuthorityFingerprint,
     terminalReplyExpectation: resolveReplyExpectation(params),
+    // Admission compares these against the arriving message: a handle that
+    // omits them rejects message-tool-only and gateway task-suggestion turns,
+    // which then wait for the turn to end instead of joining it.
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     cancel,
+    ...capabilities,
   };
   params.replyOperation.attachBackend(handle);
   return () => params.replyOperation?.detachBackend(handle);

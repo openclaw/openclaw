@@ -302,6 +302,18 @@ The host rejects restart when the caller is revoked or an exact live generation
 must be preserved. `register()` remains a synchronous admission check and refuses
 replacement while cleanup is unresolved.
 
+A runtime that can accept user input into a turn already in flight offers it
+through `ctx.registerMessageInjection`. Call it once the turn is ready to take
+input; the host then exposes same-turn steering for that run instead of queueing
+the message as a separate turn. The sink answers `isAvailable()` for admission
+and resolves `queueMessage(text, assertCurrent)` only after the runtime has
+actually started the input — an acknowledgement from the runtime, not the write
+itself. Invoke `assertCurrent()` synchronously immediately before that write: it
+re-checks the host fences, and a turn that is finalizing must refuse. Reject when
+the input never started, so the host replays it as an ordinary queued turn rather
+than losing it; the host records a started input in the session transcript, so a
+runtime must not also write it there. The registration lives as long as the run.
+
 `runtimeArtifact` is plugin-owned. It is consulted
 only when a live inference turn mints or revalidates verified setup authority;
 normal CLI runs do not require it. A backend without this declaration cannot
