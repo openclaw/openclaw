@@ -410,7 +410,7 @@ describe("subagent registry seam flow", () => {
     const now = Date.now();
     mocks.getRuntimeConfig.mockReturnValue({
       agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
-      session: { mainKey: "main", scope: "per-sender" },
+      session: { mainKey: "main", scope: "per-sender", store: mocks.resolveStorePath() },
     });
     mocks.entries = createSessionStore(
       {
@@ -1584,7 +1584,7 @@ describe("subagent registry seam flow", () => {
     expect(completedRun?.archiveAtMs).toBeUndefined();
     // The child's own session entry must not have been stamped terminal by our
     // guess either — it is the only independent record of the child's liveness.
-    expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
+    expect(mocks.applySessionEntryExactReplacements).not.toHaveBeenCalled();
 
     expect(mocks.getAgentRunContext("run-unconfirmed-delete-cleanup")).toBeUndefined();
     // Long past any retention window, with the child session still reporting
@@ -1619,7 +1619,7 @@ describe("subagent registry seam flow", () => {
     });
     // The child's session entry gets its real terminal timing only now, from an
     // observed stop rather than from our own deadline guess.
-    expect(mocks.patchSessionEntryCore).toHaveBeenCalled();
+    expect(mocks.applySessionEntryExactReplacements).toHaveBeenCalled();
     // The actual completion must follow the provisional wake.
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
   });
@@ -1710,7 +1710,7 @@ describe("subagent registry seam flow", () => {
     // …but nothing the child owns may be torn down yet.
     expect(mocks.removeInternalSessionEffectsSession).not.toHaveBeenCalled();
     expect(mocks.onSubagentEnded).not.toHaveBeenCalled();
-    expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
+    expect(mocks.applySessionEntryExactReplacements).not.toHaveBeenCalled();
 
     // An observed stop promotes the row, and only then do the tails run.
     mocks.entries = createSessionStore({
@@ -2131,8 +2131,17 @@ describe("subagent registry seam flow", () => {
     "$name",
     async ({ runId, task, eventStartedAfterMs, eventEndedAfterMs, expectCapturedReply }) => {
       const startedAt = Date.now();
-      mockGatewayMethods(mocks.callGateway, {
-        "agent.wait": { status: "timeout", startedAt, endedAt: startedAt + 1_000 },
+      let waitAttempts = 0;
+      mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+        if (request.method !== "agent.wait") {
+          return {};
+        }
+        waitAttempts += 1;
+        // The first wait expires before the run deadline without a terminal
+        // snapshot; the retry observes the child's own timeout stop.
+        return waitAttempts === 1
+          ? { status: "timeout" }
+          : { status: "timeout", startedAt, endedAt: startedAt + 1_000 };
       });
       mocks.entries = {
         "agent:main:subagent:child": createSessionEntry({
@@ -2688,6 +2697,7 @@ describe("subagent registry seam flow", () => {
       runId: "run-plain-timeout-session-store-start",
       task: "do not timeout before session store start deadline",
       initialNowAfterMs: 0,
+      waitStartedAfterMs: undefined,
       sessionStartedAfterMs: 10_000,
       observedStartedAfterMs: 10_000,
       sessionUpdatedAfterMs: 61_000,
@@ -2699,6 +2709,7 @@ describe("subagent registry seam flow", () => {
       runId,
       task,
       initialNowAfterMs,
+      waitStartedAfterMs,
       sessionStartedAfterMs,
       observedStartedAfterMs,
       sessionUpdatedAfterMs,
@@ -2716,7 +2727,9 @@ describe("subagent registry seam flow", () => {
         if (advanceOnFirstWait && waitAttempts === 1) {
           vi.setSystemTime(createdAt + 61_000);
         }
-        return { status: "timeout" };
+        return waitStartedAfterMs === undefined
+          ? { status: "timeout" }
+          : { status: "timeout", startedAt: createdAt + waitStartedAfterMs };
       });
       mocks.entries = {
         "agent:main:subagent:child": createSessionEntry({

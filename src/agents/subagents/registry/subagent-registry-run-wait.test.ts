@@ -55,6 +55,7 @@ function createWaitManager(params: {
       await Promise.resolve();
       publication.onCommitted?.();
     },
+    acquireTerminalCompletionLock: async () => () => {},
     callGateway: (async (_opts: CallGatewayOptions) => {
       waitCalls += 1;
       if (waitCalls === 1 || laterWaits.length === 0) {
@@ -72,9 +73,9 @@ function createWaitManager(params: {
     resolveSubagentWaitTimeoutMs: () => 50,
     scheduleSweep: vi.fn(),
     // No reconciled session completion exists while the child is mid-turn.
-    resolveSubagentSessionCompletion: () => null,
+    resolveSubagentSessionCompletion: async () => null,
     resolveSubagentSessionStartedAt:
-      params.resolveSubagentSessionStartedAt ?? (() => params.entry.execution.startedAt),
+      params.resolveSubagentSessionStartedAt ?? (async () => params.entry.execution.startedAt),
     notifyContextEngineSubagentEnded: async () => {},
     completeCleanupBookkeeping: vi.fn(),
     completeSubagentRun: async (request: SubagentCompletionRequest) => {
@@ -200,7 +201,7 @@ describe("subagent run wait disposition", () => {
       wait: { status: "timeout" },
       laterWaits: [{ status: "timeout", startedAt: observedStartedAt }],
       reportSubagentWaitExpiry,
-      resolveSubagentSessionStartedAt: () => entry.execution.startedAt,
+      resolveSubagentSessionStartedAt: async () => entry.execution.startedAt,
     });
 
     await manager.waitForSubagentCompletion(RUN_ID, 50, entry);

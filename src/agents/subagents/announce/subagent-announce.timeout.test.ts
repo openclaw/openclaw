@@ -760,7 +760,6 @@ describe("subagent announce still-running disposition", () => {
     await runAnnounceFlowForTest("run-wait-expiry-embedded-active", {
       outcome: { status: "timeout" },
       roundOneReply: undefined,
-      waitForCompletion: false,
       cleanup: "keep",
     });
 

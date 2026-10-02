@@ -1696,7 +1696,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       requesterSessionKey: "agent:main:local-session",
       targetRequesterSessionKey: "agent:main:local-session",
       triggerMessage: "child done",
-      steerMessage: "child done",
       requesterIsSubagent: false,
       expectsCompletionMessage: true,
       bestEffortDeliver: true,

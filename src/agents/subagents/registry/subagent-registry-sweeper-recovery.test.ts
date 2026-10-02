@@ -24,7 +24,7 @@ import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
-import { resolveSubagentAttachmentDir } from "../subagent-attachment-paths.js";
+import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
 import { prepareSubagentKillSession } from "./subagent-control-session.js";
 import { reconcileDurableSubagentKillIntent } from "./subagent-registry-sweep-kill.js";
 import { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
@@ -812,10 +812,14 @@ describe("subagent registry recovery scheduling", () => {
     const { entry, completeCleanupBookkeeping, sweeper } = createHarness(runtime);
     const attachmentId = "9b1e4c2a-7d3f-4a2e-8b5c-6f0d1a2b3c4d";
     const stateDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-suspended-expiry-"));
-    const attachmentsDir = resolveSubagentAttachmentDir("main", entry.childSessionKey, attachmentId, {
-      ...process.env,
-      OPENCLAW_STATE_DIR: stateDir,
-    });
+    const attachmentsDir = path.join(
+      resolveSubagentSessionAttachmentRootDir({
+        agentId: "main",
+        childSessionKey: entry.childSessionKey,
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      }),
+      attachmentId,
+    );
     fsSync.mkdirSync(attachmentsDir, { recursive: true });
     const artifactPath = path.join(attachmentsDir, "child-output.txt");
     fsSync.writeFileSync(artifactPath, "written by a child that may still be running");
