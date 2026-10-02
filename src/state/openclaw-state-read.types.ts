@@ -25,6 +25,7 @@ import type {
   ChannelIngressReadCommand,
   ChannelIngressReadReply,
 } from "../channels/message/ingress-queue-read-contract.js";
+import type { ClawInventory } from "../claws/inventory-read.kernel.js";
 import type { ConfigSnapshotAuditRecord } from "../config/config-journal-snapshot.kernel.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronScratchReadCommand, CronScratchSnapshot } from "../cron/scratch-contract.js";
@@ -151,6 +152,7 @@ export type OpenClawStateReadCommand =
   | { type: "capture.readOnlyBlob"; blobId: string }
   | { type: "deliveryQueue.outbound"; id?: string; mode: "pending" | "unfinished" }
   | { type: "config.snapshot.read" }
+  | { type: "claws.inventory" }
   | { type: "doctor.gatewayOwnerLease.read" }
   | { type: "acpSessions.list" }
   | { type: "acpSessions.metadata"; entries: readonly AcpSessionReadInput[] }
@@ -289,6 +291,7 @@ export type OpenClawStateReadResult =
       type: "config.snapshot.read";
       snapshot: ConfigSnapshotAuditRecord | null;
     }
+  | { type: "claws.inventory"; inventory: ClawInventory }
   | {
       type: "acpSessions.list";
       rows: AcpSessionRow[];

@@ -394,6 +394,28 @@ describe("Claw tool policy consent provenance", () => {
     ).toThrow("Cannot verify the installed tool authority");
   });
 
+  it("keeps reviewed tool authority after an operator changes model and delegation", async () => {
+    const root = tempDirs.make("openclaw-operator-owned-claw-settings-");
+    const env = stateEnv(root);
+    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+    const { plan } = await makeToolConsentPlan(root);
+    persistClawInstallRecord(plan, { env });
+    const config = {
+      agents: {
+        list: [
+          {
+            ...plan.agent.config,
+            model: { primary: "acme/operator" },
+            subagents: { allowAgents: ["researcher"], delegationMode: "prefer" as const },
+          },
+        ],
+      },
+    };
+    setRuntimeConfigSnapshot(config);
+
+    expect(() => resolveConversationCapabilityProfile({ agentId: "worker", config })).not.toThrow();
+  });
+
   it("fails closed after a host upgrade leaves legacy profile provenance", async () => {
     const root = tempDirs.make("openclaw-claw-tool-consent-");
     const env = stateEnv(root);

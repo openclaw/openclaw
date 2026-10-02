@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildClawAddPlan } from "./lifecycle.js";
+import { emptyPluginPlanEvidence } from "./packages.test-support.js";
 import { readClawManifestFile } from "./reader.js";
 import { parseClawManifest, parseClawOpenClawProfile } from "./schema.js";
 import type { ClawManifest, ClawOpenClawProfile, ClawSourceIdentity } from "./types.js";
@@ -731,7 +732,12 @@ describe("buildClawAddPlan", () => {
           action: "install",
           integrity: `sha256:${(pkg.kind === "skill" ? "a" : "b").repeat(64)}`,
           warning: `Review ${pkg.ref} before installation.`,
-          ...(pkg.kind === "plugin" ? { installId: "github" } : {}),
+          ...(pkg.kind === "plugin"
+            ? {
+                installId: "github",
+                ...emptyPluginPlanEvidence,
+              }
+            : {}),
         }),
       },
     });
@@ -792,6 +798,7 @@ describe("buildClawAddPlan", () => {
           ...(pkg.kind === "plugin"
             ? {
                 installId: "github",
+                ...emptyPluginPlanEvidence,
                 requirements: [
                   {
                     kind: "plugin-setup" as const,

@@ -3,6 +3,7 @@ export * from "./schema/sessions-goal.js";
 export * from "./schema/sessions-provider-review.js";
 export * from "./schema/human-mentions.js";
 export * from "./schema/presence.js";
+export * from "./schema/claws.js";
 export * from "./public-schema-push.js";
 export * from "./public-schema-users.js";
 export * from "./public-schema-plugins.js";

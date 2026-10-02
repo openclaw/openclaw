@@ -1,5 +1,3 @@
-import { inspectModelReference } from "../commands/models/model-reference-validation.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { digestClawValue } from "./digest.js";
 import type {
   ClawAddCapabilityChange,
@@ -30,8 +28,6 @@ export function clawAgentCapabilityChange(
   settings: ClawOpenClawProfile["agent"],
 ): ClawAddCapabilityChange | undefined {
   const effect = {
-    ...(settings.model ? { model: settings.model } : {}),
-    ...(settings.subagents ? { subagents: settings.subagents } : {}),
     ...(settings.sandbox ? { sandbox: settings.sandbox } : {}),
     ...(settings.tools ? { tools: settings.tools } : {}),
     ...(settings.memory ? { memory: settings.memory } : {}),
@@ -46,53 +42,9 @@ export function clawAgentCapabilityChange(
     path: "agent",
     action: "create",
     reason:
-      settings.model || settings.subagents
-        ? "The new agent declares model, delegation, sandbox, tool, memory-search, or recurring heartbeat configuration."
-        : "The new agent declares sandbox, tool, memory-search, or recurring heartbeat capabilities.",
+      "The new agent declares sandbox, tool, memory-search, or recurring heartbeat capabilities.",
     effect,
   });
-}
-
-export function clawAgentConfigurationNotices(
-  agent: ClawOpenClawProfile["agent"],
-  config: OpenClawConfig,
-  agentIds: ReadonlySet<string>,
-): ClawDiagnostic[] {
-  const notices: ClawDiagnostic[] = [];
-  const notice = (code: string, path: string, message: string) => {
-    notices.push({
-      level: "warning",
-      phase: "plan",
-      code,
-      path: `$.profiles.openclaw.agent.${path}`,
-      message,
-    });
-  };
-  for (const [index, target] of (agent.subagents?.allowAgents ?? []).entries()) {
-    if (!agentIds.has(target)) {
-      notice(
-        "delegation_target_unresolved",
-        `subagents.allowAgents[${index}]`,
-        `Delegation target ${JSON.stringify(target)} is not in the local agent roster; it will be applied as declared. Install that agent before delegating to it.`,
-      );
-    }
-  }
-  const refs = agent.model ? [agent.model.primary, ...(agent.model.fallbacks ?? [])] : [];
-  for (const [index, ref] of refs.entries()) {
-    const slash = ref.indexOf("/");
-    const inspection = inspectModelReference({
-      cfg: config,
-      ref: { provider: ref.slice(0, slash), model: ref.slice(slash + 1) },
-    });
-    if (inspection.status !== "known") {
-      notice(
-        "model_not_in_catalog",
-        index === 0 ? "model.primary" : `model.fallbacks[${index - 1}]`,
-        `Model ${JSON.stringify(ref)} is not in the local model catalog; it will be applied as declared. Configure it before running the agent.`,
-      );
-    }
-  }
-  return notices;
 }
 
 function blocker(code: string, path: string, message: string): ClawDiagnostic {

@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   fetchClawHubPackageArtifact,
   fetchClawHubPackageSecurity,
+  listClawHubPackages,
   resolveLatestVersionFromPackage,
+  searchClawHubPackages,
 } from "./clawhub-packages.js";
 
 const packageSelector = { name: "@openclaw/diagnostics-otel", version: "2026.3.22" };
@@ -31,6 +33,75 @@ function jsonResponse(body: unknown) {
 }
 
 describe("clawhub packages", () => {
+  it("lists official Claws with an opaque continuation cursor", async () => {
+    const page = {
+      items: [
+        {
+          name: "@openclaw/research-briefing",
+          displayName: "Research Briefing",
+          family: "claw",
+          channel: "official",
+          isOfficial: true,
+          ownerHandle: "openclaw",
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      ],
+      nextCursor: "next page",
+    };
+    let requestedUrl = "";
+    await expect(
+      listClawHubPackages({
+        family: "claw",
+        isOfficial: true,
+        limit: 100,
+        cursor: "prior page",
+        fetchImpl: async (input) => {
+          requestedUrl = input instanceof Request ? input.url : String(input);
+          return jsonResponse(page);
+        },
+      }),
+    ).resolves.toEqual(page);
+    expect(new URL(requestedUrl).pathname).toBe("/api/v1/packages");
+    expect(Object.fromEntries(new URL(requestedUrl).searchParams)).toEqual({
+      family: "claw",
+      isOfficial: "true",
+      limit: "100",
+      cursor: "prior page",
+    });
+  });
+
+  it("rejects malformed package list items before catalog projection", async () => {
+    await expect(
+      listClawHubPackages({
+        fetchImpl: async () => jsonResponse({ items: [null], nextCursor: null }),
+      }),
+    ).rejects.toThrow("Malformed ClawHub package list response");
+  });
+
+  it("requests official search results before ClawHub applies the result cap", async () => {
+    let requestedUrl = "";
+    await expect(
+      searchClawHubPackages({
+        query: " research ",
+        family: "claw",
+        isOfficial: true,
+        limit: 1,
+        fetchImpl: async (input) => {
+          requestedUrl = input instanceof Request ? input.url : String(input);
+          return jsonResponse({ results: [] });
+        },
+      }),
+    ).resolves.toEqual([]);
+    expect(new URL(requestedUrl).pathname).toBe("/api/v1/packages/search");
+    expect(Object.fromEntries(new URL(requestedUrl).searchParams)).toEqual({
+      q: "research",
+      family: "claw",
+      isOfficial: "true",
+      limit: "1",
+    });
+  });
+
   it("resolves latest versions from latestVersion before tags", () => {
     const pkg = {
       name: "demo",

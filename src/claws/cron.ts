@@ -1,4 +1,4 @@
-import type { SQLInputValue } from "node:sqlite";
+import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type { Selectable } from "kysely";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
@@ -394,26 +394,58 @@ export function readClawCronRefs(
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): PersistedClawCronRef[] {
-  const database = openOpenClawStateDatabase(options);
+  return readClawCronRefsInDatabase(
+    openOpenClawStateDatabase(options).db,
+    agentId,
+    options.readOnly,
+  );
+}
+
+export function readClawCronRefsInDatabase(
+  db: DatabaseSync,
+  agentId: string,
+  readOnly = false,
+): PersistedClawCronRef[] {
   if (
-    options.readOnly &&
-    !database.db /* sqlite-allow-raw: read-only Claw cron table-existence probe. */
+    readOnly &&
+    !db /* sqlite-allow-raw: read-only Claw cron table-existence probe. */
       .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claw_cron_refs'")
       .get()
   ) {
     return [];
   }
-  const query = getNodeSqliteKysely<CronRefDatabase>(database.db)
+  const query = getNodeSqliteKysely<CronRefDatabase>(db)
     .selectFrom("claw_cron_refs")
     .selectAll()
     .where("agent_id", "=", agentId)
     .orderBy("manifest_id")
     .compile();
   const rows =
-    database.db /* sqlite-allow-raw: execute compiled Kysely with the existing native read error boundary. */
+    db /* sqlite-allow-raw: execute compiled Kysely with the existing native read error boundary. */
       .prepare(query.sql)
       // SAFETY: The compiled predicate binds a string; the canonical schema supplies the row shape.
       .all(...(query.parameters as SQLInputValue[])) as CronRefRow[];
+  return rows.map(rowToRef);
+}
+
+export function readAllClawCronRefsInDatabase(db: DatabaseSync): PersistedClawCronRef[] {
+  if (
+    !db /* sqlite-allow-raw: read-only Claw cron table-existence probe. */
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claw_cron_refs'")
+      .get()
+  ) {
+    return [];
+  }
+  const query = getNodeSqliteKysely<CronRefDatabase>(db)
+    .selectFrom("claw_cron_refs")
+    .selectAll()
+    .orderBy("agent_id")
+    .orderBy("manifest_id")
+    .compile();
+  const rows = db /* sqlite-allow-raw: read-only Claw cron reference inventory. */
+    .prepare(query.sql)
+    // SAFETY: the query projects every persisted Claw cron reference column.
+    .all() as CronRefRow[];
   return rows.map(rowToRef);
 }
 

@@ -1,5 +1,7 @@
+import type { PluginOperatorGrants } from "../../packages/gateway-protocol/src/schema/plugins.js";
 // Shared types for grouped OpenClaw Claw manifests and read-only add plans.
 import type { AgentConfig } from "../config/types.agents.js";
+import type { PluginAcceptedDeclaredSurface } from "../config/types.plugins.js";
 import type { CLAW_SCHEMA_VERSION, ClawDiagnostic } from "./manifest-contract.js";
 import type {
   ClawManifest,
@@ -59,6 +61,8 @@ export type ClawPackagePreflightResult = {
   mapped?: string[];
   unavailable?: string[];
   adapterIdentity?: string;
+  declaredCapabilities?: PluginAcceptedDeclaredSurface;
+  capabilityGrants?: PluginOperatorGrants;
 };
 
 export type ClawPackagePreflight = (
@@ -139,6 +143,8 @@ export type ClawExtensionPlan = ClawOpenClawExtension & {
   mapped: string[];
   unavailable: string[];
   adapterIdentity?: string;
+  declaredCapabilities?: PluginAcceptedDeclaredSurface;
+  capabilityGrants?: PluginOperatorGrants;
   blocked: boolean;
 };
 

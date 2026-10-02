@@ -84,7 +84,8 @@ function applyPreparedClawToolPolicyConsent(
         schemaVersionRead.agentConfigDigest !==
           (adopted
             ? candidate.adoptedAgentConfigDigest(stateOptions.env)
-            : candidate.agentConfigDigest)
+            : candidate.agentConfigDigest) &&
+        (adopted || schemaVersionRead.agentConfigDigest !== candidate.legacyAgentConfigDigest)
       ) {
         throw new Error("Claw agent configuration does not match its consent provenance.");
       }

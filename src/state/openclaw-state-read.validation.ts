@@ -182,6 +182,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         Array.isArray(input.command.profileIds) &&
         input.command.profileIds.every((id) => typeof id === "string")) ||
       input.command.type === "config.snapshot.read" ||
+      input.command.type === "claws.inventory" ||
       (input.command.type === "githubPublication.lifecycle" &&
         (input.command.publicationKind === "shared" ||
           input.command.publicationKind === "personal") &&

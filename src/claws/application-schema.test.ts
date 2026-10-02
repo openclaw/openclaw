@@ -3,7 +3,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clawTargetPackages } from "./application-provenance.js";
-import { buildClawAddPlan, type ClawAddPlanContext } from "./lifecycle.js";
+import { buildClawAddPlan } from "./lifecycle.js";
+import { emptyPluginCapabilityEvidence } from "./packages.test-support.js";
 import { parseClawManifest, parseClawOpenClawProfile } from "./schema.js";
 import type { ClawManifest, ClawPackagePreflightResult, ClawSourceIdentity } from "./types.js";
 
@@ -57,6 +58,8 @@ function extensionPreflight(
     mapped: ["skills"],
     unavailable: [],
     adapterIdentity: "openclaw/test",
+    declaredCapabilities: emptyPluginCapabilityEvidence.declared,
+    capabilityGrants: emptyPluginCapabilityEvidence.grants,
     ...overrides,
   };
 }
@@ -91,70 +94,21 @@ describe("Claw application schema v1", () => {
 });
 
 describe("Claw application planning v1", () => {
-  it("discloses model and delegation effects with nonblocking local availability notices", async () => {
+  it("allows ordinary sessions_spawn tool authority without model or named delegates", async () => {
     const { source, workspace } = await createPlanSource();
-    const agent = {
-      model: { primary: "acme/primary", fallbacks: ["acme/missing"] },
-      subagents: { allowAgents: ["researcher", "writer"], delegationMode: "prefer" as const },
-    };
-    const params = {
+    const plan = await buildClawAddPlan({
       manifest: requireManifest({ schemaVersion: 1, agent: { id: "analyst" } }),
-      openClawProfile: { schemaVersion: 1 as const, agent },
+      openClawProfile: { schemaVersion: 1, agent: { tools: { allow: ["sessions_spawn"] } } },
       source,
-    };
-    const context: ClawAddPlanContext = {
-      workspace,
-      existingAgentIds: ["researcher"],
-      config: {
-        models: {
-          providers: {
-            acme: {
-              baseUrl: "https://models.example.test",
-              models: [
-                {
-                  id: "primary",
-                  name: "Primary",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  maxTokens: 4096,
-                },
-              ],
-            },
-          },
-        },
-      },
-    };
-    const plan = await buildClawAddPlan({ ...params, context });
-    expect(plan.agent.config).toMatchObject(agent);
+      context: { workspace },
+    });
+    expect(plan.agent.config).not.toHaveProperty("model");
+    expect(plan.agent.config).not.toHaveProperty("subagents");
     expect(plan.capabilityChanges).toContainEqual(
-      expect.objectContaining({ kind: "agent", effect: agent }),
+      expect.objectContaining({ kind: "agent", effect: { tools: { allow: ["sessions_spawn"] } } }),
     );
     expect(plan.blockers).toEqual([]);
-    expect(plan.readiness).toEqual({ ready: true, requirements: [] });
-    expect(plan.diagnostics).toMatchObject([
-      {
-        level: "warning",
-        phase: "plan",
-        code: "delegation_target_unresolved",
-        path: "$.profiles.openclaw.agent.subagents.allowAgents[1]",
-      },
-      {
-        level: "warning",
-        phase: "plan",
-        code: "model_not_in_catalog",
-        path: "$.profiles.openclaw.agent.model.fallbacks[0]",
-      },
-    ]);
-    const unavailable = await buildClawAddPlan({ ...params, context: { workspace } });
-    expect(unavailable.diagnostics).toContainEqual(
-      expect.objectContaining({
-        code: "model_not_in_catalog",
-        path: "$.profiles.openclaw.agent.model.primary",
-      }),
-    );
-    expect(unavailable.blockers).toEqual([]);
-    expect(unavailable.planIntegrity).not.toBe(plan.planIntegrity);
+    expect(plan.diagnostics).toEqual([]);
   });
 
   it("indexes profile extensions by canonical plugin package identity", () => {
@@ -335,40 +289,25 @@ describe("Claw application planning v1", () => {
   });
 });
 
-describe("parseClawOpenClawProfile model and delegation", () => {
+describe("parseClawOpenClawProfile package authority", () => {
   it.each([
-    {
-      model: { primary: "acme/model", fallbacks: ["acme/team/fallback"] },
-      subagents: { allowAgents: ["researcher", "writer_2"], delegationMode: "prefer" },
-    },
-    {
-      model: { primary: "acme/model", fallbacks: [] },
-      subagents: { allowAgents: [], delegationMode: "suggest" },
-    },
-    { model: { primary: "acme/model" }, subagents: {} },
-  ])("preserves declared selections: %j", (agent) => {
-    expect(parseClawOpenClawProfile({ schemaVersion: 1, agent })).toMatchObject({
-      ok: true,
-      profile: { agent },
-    });
-  });
-
-  it.each([
+    { model: { primary: "acme/model" } },
+    { provider: "acme" },
+    { subagents: { allowAgents: ["researcher"] } },
+    { subagents: { delegationMode: "prefer" } },
     { model: {} },
     { model: "acme/model" },
-    { model: { primary: "model" } },
-    { model: { primary: "/model" } },
-    { model: { primary: "acme/" } },
-    { model: { primary: "acme/has space" } },
-    { model: { primary: "acme/model", fallbacks: [""] } },
-    { model: { primary: "acme/model", fallbacks: ["invalid"] } },
-    { model: { primary: "acme/model", extra: true } },
-    { subagents: { delegationMode: "required" } },
-    { subagents: { allowAgents: ["Invalid"] } },
-    { subagents: { allowAgents: ["*"] } },
-    { subagents: { allowAgents: [""] } },
-    { subagents: { extra: true } },
-  ])("rejects invalid profile selections: %j", (agent) => {
+    { subagents: {} },
+  ])("rejects host-owned profile fields: %j", (agent) => {
     expect(parseClawOpenClawProfile({ schemaVersion: 1, agent }).ok).toBe(false);
+  });
+
+  it("accepts the ordinary sessions_spawn tool grant", () => {
+    expect(
+      parseClawOpenClawProfile({
+        schemaVersion: 1,
+        agent: { tools: { allow: ["sessions_spawn"] } },
+      }).ok,
+    ).toBe(true);
   });
 });

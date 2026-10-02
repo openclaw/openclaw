@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { resolveClawHubBaseUrl } from "./clawhub-client.js";
+import { resolveClawHubBaseUrl, type ClawHubFetch } from "./clawhub-client.js";
 import {
   fetchClawHubPackageSecurity,
   type ClawHubPackageSecurityResponse,
@@ -53,6 +53,7 @@ type ClawHubInstallLogger = {
 
 type ClawHubTrustSubject =
   | { kind: "plugin"; packageName: string }
+  | { kind: "claw"; packageName: string }
   | { kind: "skill"; packageName: string; workspaceDir: string; ownerHandle?: string };
 
 type ClawHubFetchedSubjectSecurity = {
@@ -160,7 +161,12 @@ function resolveClawHubSubjectUrl(params: {
   if (params.subject.kind === "skill" && params.subject.ownerHandle) {
     return `${resolveClawHubBaseUrl(params.baseUrl)}/${encodeURIComponent(params.subject.ownerHandle)}/skills/${encodeURIComponent(params.subject.packageName)}`;
   }
-  const pathRoot = params.subject.kind === "skill" ? "skills" : "plugins";
+  const pathRoot =
+    params.subject.kind === "skill"
+      ? "skills"
+      : params.subject.kind === "claw"
+        ? "claws"
+        : "plugins";
   return `${resolveClawHubBaseUrl(params.baseUrl)}/${pathRoot}/${encodeClawHubPackagePath(params.subject.packageName)}`;
 }
 
@@ -268,6 +274,7 @@ function validateClawHubSecurityIdentity(params: {
   packageName: string;
   packageLabel?: string;
   version: string;
+  expectedFamily?: string;
 }): ClawHubTrustFailure | null {
   const packageLabel = params.packageLabel ?? params.packageName;
   const responsePackageName = normalizeOptionalString(params.security.package?.name);
@@ -275,6 +282,14 @@ function validateClawHubSecurityIdentity(params: {
     return {
       ok: false,
       error: `ClawHub release trust check for "${formatClawHubReleaseLabel(packageLabel, params.version)}" returned package "${sanitizeTerminalText(responsePackageName ?? "unknown")}".`,
+      code: CLAWHUB_TRUST_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE,
+      version: params.version,
+    };
+  }
+  if (params.expectedFamily && params.security.package?.family !== params.expectedFamily) {
+    return {
+      ok: false,
+      error: `ClawHub release trust check for "${formatClawHubReleaseLabel(packageLabel, params.version)}" returned a different package family.`,
       code: CLAWHUB_TRUST_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE,
       version: params.version,
     };
@@ -454,14 +469,16 @@ async function fetchClawHubSubjectSecurity(params: {
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
+  fetchImpl?: ClawHubFetch;
 }): Promise<ClawHubFetchedSubjectSecurity> {
-  if (params.subject.kind === "plugin") {
+  if (params.subject.kind === "plugin" || params.subject.kind === "claw") {
     const security = await fetchClawHubPackageSecurity({
       name: params.subject.packageName,
       version: params.version,
       baseUrl: params.baseUrl,
       token: params.token,
       timeoutMs: params.timeoutMs,
+      fetchImpl: params.fetchImpl,
     });
     return {
       security,
@@ -502,6 +519,7 @@ export async function checkClawHubPackageTrust(params: {
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
+  fetchImpl?: ClawHubFetch;
   logger?: ClawHubInstallLogger;
   mode?: "install" | "update";
   confirmInstall?: () => boolean | Promise<boolean>;
@@ -518,12 +536,14 @@ export async function checkClawHubPackageTrust(params: {
       baseUrl: params.baseUrl,
       token: params.token,
       timeoutMs: params.timeoutMs,
+      fetchImpl: params.fetchImpl,
     });
     const identityFailure = validateClawHubSecurityIdentity({
       security: fetchedSecurity.security,
       packageName: params.subject.packageName,
       packageLabel,
       version: params.version,
+      ...(params.subject.kind === "claw" ? { expectedFamily: "claw" } : {}),
     });
     if (identityFailure) {
       return identityFailure;

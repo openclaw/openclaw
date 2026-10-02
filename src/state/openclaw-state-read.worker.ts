@@ -22,6 +22,7 @@ import {
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { readChannelIngressInDatabase } from "../channels/message/ingress-queue-read.worker.js";
+import { readClawInventoryInDatabase } from "../claws/inventory-read.kernel.js";
 import {
   isCronStateReadCommand,
   readCronStateCommandInDatabase,
@@ -514,6 +515,9 @@ serveOwnedWorkerTasks(
                   database: { db, path: input.databasePath },
                 }),
               };
+            }
+            if (command.type === "claws.inventory") {
+              return { type: command.type, inventory: readClawInventoryInDatabase(db) };
             }
             if (command.type === "githubPublication.lifecycle") {
               return {

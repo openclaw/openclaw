@@ -21,8 +21,6 @@ export type ClawDiagnostic = {
 };
 
 export type ClawOpenClawAgentSettings = {
-  model?: { primary: string; fallbacks?: string[] };
-  subagents?: { allowAgents?: string[]; delegationMode?: "suggest" | "prefer" };
   groupChat?: {
     mentionPatterns?: string[];
   };

@@ -689,4 +689,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["backup.status", "backup", "operator.read", "2026.9"],
   ["storage.locations.list", "storage", "operator.read", "2026.9"],
   ["storage.locations.probe", "storage", "operator.read", "2026.9"],
+  ["claws.status", "claws", "operator.read", "2026.9"],
+  ["claws.catalog.search", "claws", "operator.read", "2026.9"],
+  ["claws.catalog.detail", "claws", "operator.read", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

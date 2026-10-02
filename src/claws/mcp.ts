@@ -254,8 +254,19 @@ export function readClawMcpServerRefs(
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): PersistedClawMcpServerRef[] {
-  const { db } = openOpenClawStateDatabase(options);
-  if (options.readOnly && !tableExists(db, "claw_mcp_server_refs")) {
+  return readClawMcpServerRefsInDatabase(
+    openOpenClawStateDatabase(options).db,
+    agentId,
+    options.readOnly,
+  );
+}
+
+export function readClawMcpServerRefsInDatabase(
+  db: DatabaseSync,
+  agentId: string,
+  readOnly = false,
+): PersistedClawMcpServerRef[] {
+  if (readOnly && !tableExists(db, "claw_mcp_server_refs")) {
     return [];
   }
   const { compiled, bind } = compileSqliteQueryBindings<string>((parameter) =>
@@ -272,6 +283,18 @@ export function readClawMcpServerRefs(
       .prepare(compiled.sql)
       // SAFETY: The canonical table and explicit projection provide this generated row shape.
       .all(...bind(agentId)) as McpRefRow[];
+  return rows.map(rowToRef);
+}
+
+export function readAllClawMcpServerRefsInDatabase(db: DatabaseSync): PersistedClawMcpServerRef[] {
+  if (!tableExists(db, "claw_mcp_server_refs")) {
+    return [];
+  }
+  const query = selectMcpRefs(db).orderBy("agent_id").orderBy("name").compile();
+  const rows = db /* sqlite-allow-raw: read-only Claw MCP reference inventory. */
+    .prepare(query.sql)
+    // SAFETY: the query projects every persisted Claw MCP reference column.
+    .all() as McpRefRow[];
   return rows.map(rowToRef);
 }
 

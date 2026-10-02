@@ -9,6 +9,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "../state/openclaw-state-schema-compatibility.js";
+import { readClawInventory } from "./inventory-read.js";
 import { readClawResumeStateReadOnly } from "./package-resume.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
@@ -82,6 +83,18 @@ async function createFixture(label: string): Promise<{
 }
 
 describe("read-only Claw state compatibility", () => {
+  it("reads base-shape provenance through the Claw inventory worker without mutation", async () => {
+    const fixture = await createFixture("openclaw-claw-base-shape-inventory-");
+    const before = await readFile(fixture.databasePath);
+
+    const inventory = await readClawInventory({ path: fixture.databasePath, env: fixture.env });
+
+    expect(inventory.installs).toMatchObject([{ agentId: "legacy-worker", status: "complete" }]);
+    expect(inventory.installs[0]).not.toHaveProperty("bootstrap");
+    expect(inventory.packages).toEqual([]);
+    expect(before.equals(await readFile(fixture.databasePath))).toBe(true);
+  });
+
   it("plans an update against a base-shape database without mutating it", async () => {
     const fixture = await createFixture("openclaw-claw-base-shape-");
     const before = await readFile(fixture.databasePath);

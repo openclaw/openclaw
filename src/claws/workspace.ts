@@ -276,8 +276,19 @@ export function readClawWorkspaceFiles(
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): PersistedClawWorkspaceFile[] {
-  const { db } = openOpenClawStateDatabase(options);
-  if (options.readOnly && !tableExists(db, "claw_workspace_files")) {
+  return readClawWorkspaceFilesInDatabase(
+    openOpenClawStateDatabase(options).db,
+    agentId,
+    options.readOnly,
+  );
+}
+
+export function readClawWorkspaceFilesInDatabase(
+  db: DatabaseSync,
+  agentId: string,
+  readOnly = false,
+): PersistedClawWorkspaceFile[] {
+  if (readOnly && !tableExists(db, "claw_workspace_files")) {
     return [];
   }
   const { compiled, bind } = compileSqliteQueryBindings<string, WorkspaceFileRow>((parameter) =>
@@ -299,7 +310,12 @@ export function readClawWorkspaceFiles(
 export function readAllClawWorkspaceFiles(
   options: OpenClawStateDatabaseOptions,
 ): PersistedClawWorkspaceFile[] {
-  const { db } = openOpenClawStateDatabase(options);
+  return readAllClawWorkspaceFilesInDatabase(openOpenClawStateDatabase(options).db);
+}
+
+export function readAllClawWorkspaceFilesInDatabase(
+  db: DatabaseSync,
+): PersistedClawWorkspaceFile[] {
   if (!tableExists(db, "claw_workspace_files")) {
     return [];
   }
