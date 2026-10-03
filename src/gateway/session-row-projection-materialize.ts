@@ -24,6 +24,7 @@ import {
 } from "../state/openclaw-agent-db.paths.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
+import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import * as records from "./session-row-projection-record.js";
 import type { prepareSessionRowScopes } from "./session-row-scope.js";
@@ -185,6 +186,31 @@ export function createSessionRowPublication(owner: {
       row.sharingEntry = undefined;
     }
     owner.defer(row);
+  };
+}
+
+/** Bind live projection state to the same prepared or resident source-read boundary. */
+export function createSessionRowModelFactsReader(params: {
+  lookup: (query: records.Lookup) => records.Row | undefined;
+  readSourceEntry: (row: records.Row, key: string, prepared: boolean) => records.Row["storedEntry"];
+  state: () => Pick<
+    Parameters<typeof readSessionRowModelFacts>[0],
+    "cfg" | "modelCatalog" | "rowContext"
+  >;
+}) {
+  return (query: records.Lookup, metadataPrepared = false) => {
+    const row = params.lookup(query);
+    if (!row?.entry) {
+      throw new Error("Session changed while preparing search facts; retry the request");
+    }
+    return readSessionRowModelFacts({
+      ...params.state(),
+      ...row,
+      source: {
+        entry: row.storedEntry,
+        readSourceEntry: (key) => params.readSourceEntry(row, key, metadataPrepared),
+      },
+    });
   };
 }
 

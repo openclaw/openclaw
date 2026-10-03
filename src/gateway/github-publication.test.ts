@@ -1,10 +1,6 @@
 import os from "node:os";
 import { describe, expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
@@ -570,18 +566,9 @@ describe("Gateway GitHub publication", () => {
       title: "Publish once",
     };
 
-    const firstResult = first.requestForSession(request);
-    const secondResult = second.requestForSession(request);
-    const requests = [firstResult, secondResult];
+    const requests = [first.requestForSession(request), second.requestForSession(request)];
     try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          repositoryEntered.promise,
-          Promise.race(requests),
-          "Publication settled before repository resolution",
-        ),
-        signal,
-      );
+      await withinTest(Promise.race([repositoryEntered.promise, ...requests]), signal);
       expect(mocks.resolveRepository).toHaveBeenCalledOnce();
     } finally {
       releaseRepository();
