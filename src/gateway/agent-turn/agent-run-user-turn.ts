@@ -55,7 +55,6 @@ export type PreparedAgentRunUserTurn = {
   claimedExecApprovalFollowupHandoffId?: string;
   execApprovalFollowupHandoffClaimId: string;
   execApprovalContinuationPromptRange?: ExecApprovalContinuationPromptRange;
-  execApprovalContinuationTranscriptPromptRange?: ExecApprovalContinuationPromptRange;
   message: string;
   inputProvenance?: InputProvenance;
   recorder?: UserTurnTranscriptRecorder;
@@ -197,9 +196,6 @@ export async function prepareAgentRunUserTurn(params: {
     let message = params.message;
     let effectiveTranscriptInputText = params.effectiveTranscriptInputText;
     let execApprovalContinuationPromptRange: ExecApprovalContinuationPromptRange | undefined;
-    let execApprovalContinuationTranscriptPromptRange:
-      | ExecApprovalContinuationPromptRange
-      | undefined;
     if (execApprovalFollowupRuntimeHandoff?.resultText !== undefined) {
       const continuation = buildExecApprovalContinuationPrompt(
         execApprovalFollowupRuntimeHandoff.resultText,
@@ -207,7 +203,6 @@ export async function prepareAgentRunUserTurn(params: {
       message = continuation.message;
       effectiveTranscriptInputText = continuation.message;
       execApprovalContinuationPromptRange = continuation.resultRange;
-      execApprovalContinuationTranscriptPromptRange = continuation.resultRange;
     } else if (message === EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE) {
       throw new Error("exec approval followup runtime handoff is unavailable");
     }
@@ -391,9 +386,6 @@ export async function prepareAgentRunUserTurn(params: {
       ...(claimedExecApprovalFollowupHandoffId ? { claimedExecApprovalFollowupHandoffId } : {}),
       execApprovalFollowupHandoffClaimId,
       ...(execApprovalContinuationPromptRange ? { execApprovalContinuationPromptRange } : {}),
-      ...(execApprovalContinuationTranscriptPromptRange
-        ? { execApprovalContinuationTranscriptPromptRange }
-        : {}),
       message,
       inputProvenance,
       ...(recorder ? { recorder } : {}),

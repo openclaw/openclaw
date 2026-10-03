@@ -13,6 +13,7 @@ import { listLoadedChannelPluginsForRegistry } from "../../channels/plugins/regi
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { resolveRuntimeAccountSnapshot } from "./channels-account.js";
 import { respondUnavailable } from "./response.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -133,17 +134,10 @@ function wasChannelRunning(params: {
   accountId?: string;
 }): boolean {
   const runtime = params.context.getRuntimeSnapshot();
-  if (params.accountId) {
-    const accountRuntime = runtime.channelAccounts[params.channelId]?.[params.accountId];
-    if (accountRuntime) {
-      return accountRuntime.running === true;
-    }
-  }
-  if (!params.accountId) {
-    return runtime.channels[params.channelId]?.running === true;
-  }
-  const defaultRuntime = runtime.channels[params.channelId];
-  return defaultRuntime?.accountId === params.accountId && defaultRuntime.running === true;
+  const account = params.accountId
+    ? resolveRuntimeAccountSnapshot({ ...params, runtime, accountId: params.accountId })
+    : runtime.channels[params.channelId];
+  return account?.running === true;
 }
 
 export const webHandlers: GatewayRequestHandlers = {

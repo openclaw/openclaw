@@ -17,7 +17,7 @@ import type {
   WorkerWorkspaceSyncResult,
 } from "./tunnel-contract.js";
 import {
-  createAcceptedWorkspacePublisherFactory,
+  createAcceptedWorkspacePublisher,
   recoverAcceptedWorkspacePublication,
 } from "./workspace-accepted-sync.js";
 import { runInstrumentedWorkspaceReconcile } from "./workspace-finalize.js";
@@ -494,16 +494,6 @@ export function createWorkerWorkspaceActions(
     const manifestRoot = path.join(temporaryDirectory, "manifests");
     // Inbound files stay private until verified; stable names keep live quota scans complete.
     const transferListPath = path.join(temporaryDirectory, "transfer-list");
-    const acceptedWorkspacePublisher = createAcceptedWorkspacePublisherFactory({
-      runWorkspaceCommand,
-      runRsync: async (argv) => await runRsync(prepared, argv),
-      scpTarget: prepared.scpTarget,
-      receiverEntryPath,
-      localPath: request.localPath,
-      remoteWorkspaceDir: request.remoteWorkspaceDir,
-      hashMemo,
-      metrics,
-    });
     const downloadManifest = async (manifestRef: string) => {
       const digest = manifestRef.slice("sha256:".length);
       const manifestPath = path.join(manifestRoot, `${digest}.json`);
@@ -575,10 +565,18 @@ export function createWorkerWorkspaceActions(
       if (changed) {
         ({ raw: currentRaw, manifest: current } = await downloadManifest(currentRef));
       }
-      const { expectedRemoteRef, publishAcceptedManifest } = acceptedWorkspacePublisher(
-        current,
-        currentRef,
-      );
+      const { expectedRemoteRef, publishAcceptedManifest } = createAcceptedWorkspacePublisher({
+        runWorkspaceCommand,
+        runRsync: (argv) => runRsync(prepared, argv),
+        scpTarget: prepared.scpTarget,
+        receiverEntryPath,
+        localPath: request.localPath,
+        remoteWorkspaceDir: request.remoteWorkspaceDir,
+        remoteManifest: current,
+        initialRemoteRef: currentRef,
+        hashMemo,
+        metrics,
+      });
       if (changed) {
         const transferPaths = workerWorkspaceTransferPaths(current, base, options.ownerSignal);
         const transferPathSet = new Set(transferPaths);

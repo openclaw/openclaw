@@ -438,9 +438,6 @@ export async function sendTextMediaPayload(params: {
         ),
     }))!;
   }
-  if (!text) {
-    return { channel: params.channel, messageId: "" };
-  }
   const limit = params.adapter.textChunkLimit;
   const chunkedText =
     limit && params.adapter.chunker

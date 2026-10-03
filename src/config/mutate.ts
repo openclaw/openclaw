@@ -46,6 +46,7 @@ import {
   type ConfigWriteOptions,
   type ConfigWriteResult,
 } from "./io.js";
+import { hasWebhookMigrationProgress } from "./io.meta.js";
 import { containsConfigIncludeDirective, hashConfigRaw } from "./io.read-helpers.js";
 import { resolveManagedRuntimeEnvBaseline } from "./io.runtime-env.js";
 import { configWriteCommittedSnapshot } from "./io.types.js";
@@ -357,8 +358,11 @@ function resolveIncludeOwnedWriteCandidate(params: {
   writeOptions?: ConfigWriteOptions;
   io?: ConfigMutationIO;
 }): (IncludeWriteBoundary & { nextConfig: OpenClawConfig }) | null {
-  // A roster-format persist is a root write; an include-only commit cannot carry it.
-  if (params.writeOptions?.persistCanonicalAgentRoster === true) {
+  // Root-owned migration markers and roster format cannot travel in an include-only commit.
+  if (
+    params.writeOptions?.persistCanonicalAgentRoster === true ||
+    hasWebhookMigrationProgress(params.snapshot.sourceConfig, params.nextConfig)
+  ) {
     return null;
   }
   const projection = {
@@ -393,16 +397,10 @@ function resolveIncludeOwnedWriteCandidate(params: {
     env: params.io?.env ?? process.env,
     explicitSetPaths: params.writeOptions?.explicitSetPaths,
   });
-  const markerPath = ["meta", "migrations", "modelPolicyAllowlist"];
   const nextConfig = projectIncludeModelPolicyWrite({
     config: values.authoredConfig,
     previousConfig: params.snapshot.sourceConfig,
-    preserveMarker:
-      params.writeOptions?.explicitSetPaths?.some(
-        (segments) =>
-          segments.length <= markerPath.length &&
-          segments.every((part, i) => part === markerPath[i]),
-      ) === true,
+    explicitSetPaths: params.writeOptions?.explicitSetPaths,
   });
   let changed = collectChangedConfigPaths(values.authoredSourceConfig, nextConfig);
   if (changed.paths.length === 0 && !changed.rootChanged && nextConfig !== values.authoredConfig) {

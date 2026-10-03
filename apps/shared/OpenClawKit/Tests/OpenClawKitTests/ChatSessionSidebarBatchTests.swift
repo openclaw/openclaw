@@ -361,6 +361,117 @@ struct ChatSessionSidebarBatchTests {
         ])
     }
 
+    @Test func `new group precedes guarded moves and survives partial assignment failure`() async throws {
+        let rows = try (0..<205).map { try self.row($0, fields: ["pinned": $0 == 0]) }
+        var methods: [String] = []
+        var groupNames = ["Research", "Ops"]
+        var sizes: [Int] = []
+        let connection = try self.connection { request in
+            methods.append(request.method)
+            let params = try self.params(request)
+            if request.method == "sessions.groups.put" {
+                groupNames = try #require(params["names"] as? [String])
+                #expect(groupNames == ["Research", "Ops", "Launch"])
+                #expect(params["sectionOrder"] == nil)
+            }
+            if request.method.hasPrefix("sessions.groups.") {
+                return try JSONSerialization.data(withJSONObject: [
+                    "ok": true,
+                    "groups": groupNames.enumerated().map { ["name": $0.element, "position": $0.offset] },
+                    "sectionOrder": ["category:Research", "catalog:external", "category:Ops"],
+                ])
+            }
+            let targets = try #require(params["targets"] as? [[String: Any]])
+            #expect(params["patch"] as? [String: String] == ["category": "Launch"])
+            sizes.append(targets.count)
+            for target in targets {
+                let key = try #require(target["key"] as? String)
+                #expect(target["agentId"] as? String == "bulk")
+                #expect(target["expectedSessionId"] as? String == "id-" + key.components(separatedBy: "thread-").last!)
+            }
+            let outcomes = try targets.map { target -> [String: Any] in
+                let key = try #require(target["key"] as? String)
+                return key == rows[101].key ?
+                    ["key": key, "ok": false, "error": ["code": "CONFLICT", "message": "Thread replaced"]] :
+                    ["key": key, "ok": true]
+            }
+            return try JSONSerialization.data(withJSONObject: ["outcomes": outcomes])
+        }
+        let batch = ChatSessionSidebarBatch()
+        let success = await batch.run(.newGroup("Launch"), rows: rows, mainKey: "main", connection: connection)
+        #expect(methods == ["sessions.groups.list", "sessions.groups.put"] + Array(
+            repeating: "sessions.patchMany",
+            count: 3))
+        #expect(sizes == [100, 100, 5])
+        #expect(success == rows.filter { $0.key != rows[101].key })
+        #expect(batch.errors == [OpenClawChatSessionSidebarData.identity(rows[101]): "Thread replaced"])
+        #expect(groupNames.contains("Launch"))
+    }
+
+    @Test func `new group requires every captured incarnation before writing the catalog`() async throws {
+        var calls = 0
+        let connection = try self.connection { _ in
+            calls += 1
+            return Data()
+        }
+        let rows = try [self.row(0), self.row(1, fields: ["sessionId": NSNull()])]
+        let batch = ChatSessionSidebarBatch()
+        #expect(await batch.run(.newGroup("Launch"), rows: rows, mainKey: "main", connection: connection).isEmpty)
+        #expect(calls == 0)
+        #expect(Set(batch.errors.keys) == Set(rows.map(OpenClawChatSessionSidebarData.identity)))
+    }
+
+    @Test(arguments: ["sessions.groups.list", "sessions.groups.put"])
+    func `retired new group scope never moves captured rows`(retireAfter: String) async throws {
+        let batch = ChatSessionSidebarBatch()
+        let rows = try [self.row(0), self.row(1)]
+        var methods: [String] = []
+        let connection = try self.connection { request in
+            methods.append(request.method)
+            if request.method == retireAfter { batch.reset() }
+            return Data(#"{"ok":true,"groups":[{"name":"Research","position":0}]}"#.utf8)
+        }
+        #expect(await batch.run(.newGroup("Launch"), rows: rows, mainKey: "main", connection: connection).isEmpty)
+        #expect(methods == (retireAfter == "sessions.groups.list" ?
+                ["sessions.groups.list"] : ["sessions.groups.list", "sessions.groups.put"]))
+        #expect(batch.errors.isEmpty)
+    }
+
+    @Test func `failed new group catalog write reports every captured row without assigning any`() async throws {
+        let rows = try [self.row(0), self.row(1)]
+        var methods: [String] = []
+        let connection = try self.connection { request in
+            methods.append(request.method)
+            if request.method == "sessions.groups.put" { throw URLError(.networkConnectionLost) }
+            return Data(#"{"ok":true,"groups":[{"name":"Research","position":0}]}"#.utf8)
+        }
+        let batch = ChatSessionSidebarBatch()
+        #expect(await batch.run(.newGroup("Launch"), rows: rows, mainKey: "main", connection: connection).isEmpty)
+        #expect(methods == ["sessions.groups.list", "sessions.groups.put"])
+        #expect(Set(batch.errors.keys) == Set(rows.map(OpenClawChatSessionSidebarData.identity)))
+    }
+
+    @Test func `existing group names skip writes and ordinary moves skip catalog requests`() async throws {
+        let rows = try [self.row(0), self.row(1)]
+        var methods: [String] = []
+        let connection = try self.connection { request in
+            methods.append(request.method)
+            if request.method == "sessions.groups.list" {
+                return Data(#"{"ok":true,"groups":[{"name":"Research","position":0}]}"#.utf8)
+            }
+            let targets = try #require(self.params(request)["targets"] as? [[String: Any]])
+            return try JSONSerialization.data(withJSONObject: [
+                "outcomes": targets.map { ["key": $0["key"]!, "ok": true] },
+            ])
+        }
+        let batch = ChatSessionSidebarBatch()
+        #expect(await batch.run(.newGroup("Research"), rows: rows, mainKey: "main", connection: connection) == rows)
+        #expect(methods == ["sessions.groups.list", "sessions.patchMany"])
+        methods = []
+        #expect(await batch.run(.category("Ops"), rows: rows, mainKey: "main", connection: connection) == rows)
+        #expect(methods == ["sessions.patchMany"])
+    }
+
     @Test func `205 roots use guarded sequential chunks and retain per-row partial failures`() async throws {
         let rows = try (0..<205).map { try self.row($0) }
         var sizes: [Int] = []

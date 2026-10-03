@@ -185,7 +185,10 @@ struct ChatSessionInspectorSheet: View {
                         .help("Copy session key")
                     }
                     self.optionalRow("Kind", self.details.kind)
-                    self.optionalRow("Agent", self.details.agentID)
+                    self.optionalRow(
+                        "Agent",
+                        self.details
+                            .agentID ?? (self.viewModel.sidebarData == nil ? nil : self.displayedSession.agentId))
                 }
 
                 Section("Organization") {

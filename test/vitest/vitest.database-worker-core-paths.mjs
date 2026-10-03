@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/state/openclaw-agent-execution-incognito.compute.test.ts",
   "src/state/openclaw-agent-execution-incognito.lifecycle.test.ts",
   "src/state/openclaw-agent-execution-incognito.history.test.ts",
   "src/agents/bash-tools.visible-subagent-notify.test.ts",
@@ -21,6 +22,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/wait-for-idle-before-flush.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-identity.worker.test.ts",
   "src/agents/embedded-agent-runner/run-entry.cleanup.test.ts",
+  "src/agents/embedded-agent-runner/run-orchestrator.rooted-proof.test.ts",
   "src/agents/runtime-plugins.context-engine.integration.test.ts",
   "src/context-engine/context-engine.test.ts",
   "src/context-engine/host-param-projection.test.ts",

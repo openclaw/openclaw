@@ -41,10 +41,6 @@ vi.mock("./doctor-auth-legacy-oauth.js", () => ({
   })),
 }));
 
-vi.mock("./doctor-auth-oauth-sidecar.js", () => ({
-  maybeRepairLegacyOAuthSidecarProfiles: vi.fn().mockResolvedValue(undefined),
-}));
-
 vi.mock("./doctor-browser.js", () => ({
   maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
     changes: [],

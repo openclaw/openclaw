@@ -25,7 +25,6 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { repairDoctorAgentDeletionJournal } from "./doctor-agent-deletion-journal.js";
 import { maybeMigrateAuthProfileJsonStoresToSqlite } from "./doctor-auth-flat-profiles.js";
 import { listAuthProfileRepairCandidates } from "./doctor-auth-legacy-paths.js";
-import { maybeRepairLegacyOAuthSidecarProfiles } from "./doctor-auth-oauth-sidecar.js";
 import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
 import { maybeMigrateModelCatalogCredentials } from "./doctor-model-catalog-credentials.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
@@ -349,20 +348,8 @@ it.each([
         }),
       );
       fs.copyFileSync(catalogPath, secondCatalog);
-      const sidecar = path.join(stateDir, "credentials", "auth-profiles", `${ref.id}.json`);
-      fs.mkdirSync(path.dirname(sidecar), { recursive: true });
-      fs.writeFileSync(
-        sidecar,
-        JSON.stringify({
-          version: 1,
-          profileId,
-          provider: ref.provider,
-          access: "synthetic-held-access",
-          refresh: "synthetic-held-refresh",
-        }),
-      );
       authPaths.push(secondAuth);
-      aliasArtifacts.push(secondDatabase, secondAuth, secondCatalog, sidecar);
+      aliasArtifacts.push(secondDatabase, secondAuth, secondCatalog);
     }
     const configPath = path.join(stateDir, "openclaw.json");
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
@@ -425,13 +412,6 @@ it.each([
         (await repairDoctorAgentDeletionJournal({ preflight: next, shouldRepair: true, env }))
           .changes,
       ).toEqual([]);
-      const sidecarRepair = await maybeRepairLegacyOAuthSidecarProfiles({
-        cfg,
-        env,
-        emitNotes: false,
-        prompter: { confirmAutoFix: async () => true },
-      });
-      expect(sidecarRepair.changes).toEqual([]);
       const repairPaths = listAuthProfileRepairCandidates(cfg, env).map(
         (candidate) => candidate.authPath,
       );

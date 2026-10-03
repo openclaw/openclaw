@@ -190,31 +190,3 @@ export interface WhatsAppObservedMessage extends WhatsAppQaDriverObservedMessage
   scenarioId?: string;
   scenarioTitle?: string;
 }
-
-export type WhatsAppQaScenarioResult = {
-  details: string;
-  id: string;
-  posture: WhatsAppQaScenarioPosture;
-  requestStartedAt?: string;
-  responseObservedAt?: string;
-  rttMs?: number;
-  rttMeasurement?: {
-    finalMatchedReplyRttMs: number;
-    requestStartedAt: string;
-    responseObservedAt: string;
-    source: "approval-request-to-resolution" | "request-to-observed-message";
-  };
-  status: "fail" | "pass" | "skip";
-  title: string;
-};
-
-export function buildWhatsAppQaScenarioResultBase(
-  scenario: WhatsAppQaScenarioMetadata,
-  implementation: WhatsAppQaScenarioImplementation,
-) {
-  return {
-    id: scenario.id,
-    title: scenario.title,
-    posture: implementation.posture,
-  };
-}

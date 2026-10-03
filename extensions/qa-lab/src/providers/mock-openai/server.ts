@@ -31,7 +31,6 @@ import {
 import {
   type ResponsesInputItem,
   type StreamEvent,
-  type MockOpenAiRequestSnapshotBase,
   type MockOpenAiRequestKind,
   type MockCompactionSummaryFaultMode,
   type AnthropicMessagesRequest,
@@ -2076,7 +2075,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       requestKind,
       compactionSummaryFaultMode,
       rawByteLength,
-    } satisfies MockOpenAiRequestSnapshotBase;
+    };
     if (
       requestKind === "agent-initial" &&
       (QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText) ||

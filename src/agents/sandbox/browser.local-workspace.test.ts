@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createSandboxBrowserTestHarness } from "./browser.create.test-helpers.js";
 
 describe("managed browser workspace custody", () => {
@@ -128,5 +129,29 @@ describe("managed browser workspace custody", () => {
     expect(reserveOrder).toBeLessThan(
       dockerMocks.execDocker.mock.invocationCallOrder[createIndex]!,
     );
+  });
+
+  it("awaits reservation acknowledgment before allocation and retains the allocation guard", async () => {
+    const started = createDeferred();
+    const acknowledgment = createDeferred();
+    const assertCurrent = vi.fn();
+    registryMocks.updateBrowserRegistry.mockImplementationOnce(async (_entry, guard) => {
+      expect(guard).toBe(assertCurrent);
+      started.resolve();
+      await acknowledgment.promise;
+    });
+    const operation = ensureTestSandboxBrowser({
+      ...browserParams(),
+      withWorkspace: async (run) => await run(),
+      assertCurrent,
+    });
+    try {
+      await awaitGateBeforeSettlement(started.promise, operation, "reservation was not reached");
+      expect(dockerMocks.execDocker.mock.calls.some(([args]) => args[0] === "create")).toBe(false);
+    } finally {
+      acknowledgment.resolve();
+      await operation;
+    }
+    expect(registryMocks.updateBrowserRegistry.mock.calls.at(-1)?.[1]).toBe(assertCurrent);
   });
 });

@@ -1096,113 +1096,48 @@ describe("plugin conversation binding approvals", () => {
     ).toEqual({ removed: true });
   });
 
-  it("refuses to claim a conversation already bound by core", async () => {
-    sessionBindingState.setRecord({
-      bindingId: "binding-core",
-      targetSessionKey: "agent:main:discord:channel:1",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1",
-      },
-      status: "active",
-      boundAt: Date.now(),
-      metadata: { owner: "core" },
-    });
-
-    const result = await requestPluginConversationBinding({
-      pluginId: "codex",
-      pluginName: "Codex App Server",
-      pluginRoot: "/plugins/codex-a",
-      requestedBySenderId: "user-1",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1",
-      },
-      binding: { summary: "Bind this conversation to Codex thread 123." },
-    });
-
-    expect(result).toEqual({
-      status: "error",
-      message:
-        "This conversation is already bound by core routing and cannot be claimed by a plugin.",
-    });
-  });
-
   it.each([
-    {
-      name: "migrates a legacy plugin binding record through the new approval flow even if the old plugin id differs",
-      existingRecord: {
-        bindingId: "binding-legacy",
-        targetSessionKey: "plugin-binding:old-codex-plugin:legacy123",
-        targetKind: "session" as const,
+    "agent:main:discord:channel:1",
+    "plugin-binding:old-codex-plugin:legacy123",
+    "openclaw-app-server:thread:legacy-thread",
+    "openclaw-codex-app-server:thread:legacy-thread",
+  ])(
+    "refuses to claim a binding without plugin ownership metadata: %s",
+    async (targetSessionKey) => {
+      sessionBindingState.setRecord({
+        bindingId: "binding-core",
+        targetSessionKey,
+        targetKind: "session",
         conversation: {
-          channel: "telegram",
+          channel: "discord",
           accountId: "default",
-          conversationId: "-10099:topic:77",
+          conversationId: "channel:1",
         },
-        status: "active" as const,
-        metadata: {
-          label: "legacy plugin bind",
-        },
-      },
-      requestInput: createCodexBindRequest({
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "-10099:topic:77",
-        parentConversationId: "-10099",
-        threadId: "77",
-        summary: "Bind this conversation to Codex thread abc.",
-      }),
-      expectedBinding: {
+        status: "active",
+        boundAt: Date.now(),
+        metadata: { owner: "core" },
+      });
+
+      const result = await requestPluginConversationBinding({
         pluginId: "codex",
+        pluginName: "Codex App Server",
         pluginRoot: "/plugins/codex-a",
-        conversationId: "-10099:topic:77",
-      },
-    },
-    {
-      name: "migrates a legacy codex thread binding session key through the new approval flow",
-      existingRecord: {
-        bindingId: "binding-legacy-codex-thread",
-        targetSessionKey: "openclaw-app-server:thread:019ce411-6322-7db2-a821-1a61c530e7d9",
-        targetKind: "session" as const,
+        requestedBySenderId: "user-1",
         conversation: {
-          channel: "telegram",
+          channel: "discord",
           accountId: "default",
-          conversationId: "8460800771",
+          conversationId: "channel:1",
         },
-        status: "active" as const,
-        metadata: {
-          label: "legacy codex thread bind",
-        },
-      },
-      requestInput: createCodexBindRequest({
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "8460800771",
-        summary: "Bind this conversation to Codex thread 019ce411-6322-7db2-a821-1a61c530e7d9.",
-        pluginId: "openclaw-codex-app-server",
-      }),
-      expectedBinding: {
-        pluginId: "openclaw-codex-app-server",
-        pluginRoot: "/plugins/codex-a",
-        conversationId: "8460800771",
-      },
+        binding: { summary: "Bind this conversation to Codex thread 123." },
+      });
+
+      expect(result).toEqual({
+        status: "error",
+        message:
+          "This conversation is already bound by core routing and cannot be claimed by a plugin.",
+      });
+      expect(sessionBindingState.bind).not.toHaveBeenCalled();
     },
-  ] as const)("$name", async ({ existingRecord, requestInput, expectedBinding }) => {
-    sessionBindingState.setRecord({
-      ...existingRecord,
-      boundAt: Date.now(),
-    });
-
-    const request = await requestPluginConversationBinding(requestInput);
-    const binding = await resolveRequestedBinding(request);
-
-    expect(binding.pluginId).toBe(expectedBinding.pluginId);
-    expect(binding.pluginRoot).toBe(expectedBinding.pluginRoot);
-    expect(binding.conversationId).toBe(expectedBinding.conversationId);
-  });
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

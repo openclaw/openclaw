@@ -71,15 +71,10 @@ export type SourceDeliveryPlan = {
     force: boolean;
     requireExplicitTarget: boolean;
     requireExplicitTargetEvidence: boolean;
-    defaultTarget: boolean;
   };
   fallback: {
     directDelivery: boolean;
     skipWhenMessageToolSentToTarget: boolean;
-    bestEffort: boolean;
-  };
-  progress: {
-    allowCallbacksWhenSourceDeliverySuppressed: boolean;
   };
 };
 
@@ -177,8 +172,6 @@ export function createSourceDeliveryPlan(params: {
   requireExplicitMessageTargetEvidence?: boolean;
   directFallback?: boolean;
   skipFallbackWhenMessageToolSentToTarget?: boolean;
-  fallbackBestEffort?: boolean;
-  allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
 }): SourceDeliveryPlan {
   const messageToolOwnsDelivery = isMessageToolOwnedDelivery(params.owner);
   const sourceReplyDeliveryMode = messageToolOwnsDelivery ? "message_tool_only" : undefined;
@@ -199,18 +192,12 @@ export function createSourceDeliveryPlan(params: {
       force: params.messageToolForced ?? messageToolOwnsDelivery,
       requireExplicitTarget: params.requireExplicitMessageTarget ?? false,
       requireExplicitTargetEvidence: params.requireExplicitMessageTargetEvidence ?? false,
-      defaultTarget: Boolean(params.target?.channel || params.target?.to),
     },
     fallback: {
       directDelivery,
       skipWhenMessageToolSentToTarget:
         params.skipFallbackWhenMessageToolSentToTarget ??
         params.owner === "message_tool_then_direct_fallback",
-      bestEffort: params.fallbackBestEffort ?? false,
-    },
-    progress: {
-      allowCallbacksWhenSourceDeliverySuppressed:
-        params.allowProgressCallbacksWhenSourceDeliverySuppressed ?? false,
     },
   };
 }

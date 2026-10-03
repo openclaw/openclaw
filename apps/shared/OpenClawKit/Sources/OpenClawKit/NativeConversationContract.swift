@@ -132,9 +132,7 @@ public struct NativeConversationCommand: Codable, Equatable, Sendable {
     }
 
     public func javaScript() throws -> String {
-        guard let json = try String(bytes: JSONEncoder().encode(self), encoding: .utf8) else {
-            throw EncodingError.invalidValue(self, .init(codingPath: [], debugDescription: "Invalid UTF-8 JSON"))
-        }
+        let json = try String(bytes: JSONEncoder().encode(self), encoding: .utf8)!
         // A replacement can commit after native queues evaluation.
         return """
         (() => {

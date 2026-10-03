@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
@@ -87,6 +89,46 @@ describe("SQLite admitted input reset fence", () => {
       ).toBe(false);
     },
   );
+
+  it("accepts an admission store path that aliases the same database", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        transcriptMessage("source", null, {
+          role: "user",
+          content: "source",
+          idempotencyKey: "source:user",
+        }),
+        transcriptMessage("admitted", "source", {
+          role: "user",
+          content: "admitted",
+          idempotencyKey: "admitted:user",
+        }),
+      ],
+      touchSessionEntry: false,
+    });
+    const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: "admitted" });
+    if (!anchor) {
+      throw new Error("missing real admission anchor");
+    }
+    const aliasDir = path.join(path.dirname(path.dirname(anchor.storePath)), "agent-alias");
+    fs.symlinkSync(
+      path.dirname(anchor.storePath),
+      aliasDir,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    expect(
+      runWithSessionTranscriptReadFence(
+        {
+          ...anchor,
+          logicalTurnId: "aliased-store",
+          role: "user",
+          storePath: path.join(aliasDir, path.basename(anchor.storePath)),
+        },
+        () => everySessionTranscriptUserInputFrom(scope, "source:user", () => true),
+      ),
+    ).toBe(true);
+  });
 
   it.each([false, true])(
     "keeps pre-fence control facts through a later reset (human=%s)",

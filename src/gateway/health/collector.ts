@@ -544,7 +544,6 @@ export async function collectGatewayHealthSnapshot(params: {
       ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
       : [];
     const preferredAccountId = resolvePreferredAccountId({
-      accountIds,
       defaultAccountId,
       boundAccounts,
     });

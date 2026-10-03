@@ -56,7 +56,10 @@ export function isManifestPluginOwnerAllowedByControlPlanePolicy(params: {
   if (
     channelIds.some((channelId) => {
       const channelConfig = resolveChannelConfigRecord(config, channelId);
-      return channelConfig?.enabled !== false && hasMeaningfulChannelConfigShallow(channelConfig);
+      return (
+        channelConfig?.enabled !== false &&
+        hasMeaningfulChannelConfigShallow(channelConfig, channelId)
+      );
     })
   ) {
     return true;

@@ -23,6 +23,7 @@ import {
   MAX_WORKSPACE_MANIFEST_BYTES,
 } from "./workspace-inventory-limits.js";
 import { gitFileMode } from "./workspace-manifest.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 
 /** Exact rsync exemptions, prepared once without walking input file contents. */
@@ -260,9 +261,8 @@ async function selectTransferPaths(params: {
   const append = async (entry: Exclude<WorkerWorkspaceInventoryEntry, { type: "directory" }>) => {
     const file = entry.path;
     transferredPaths.add(file);
-    const segments = file.split("/");
-    for (let index = 1; index < segments.length; index += 1) {
-      budget.addEntry({ path: segments.slice(0, index).join("/"), type: "directory" });
+    for (const ancestor of workspacePathAncestors(file)) {
+      budget.addEntry({ path: ancestor, type: "directory" });
     }
     budget.addEntry(entry);
     budget.addTransferPath(file);

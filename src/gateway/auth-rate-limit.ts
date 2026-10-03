@@ -50,7 +50,7 @@ interface RateLimitEntry {
   lockedUntil?: number;
 }
 
-export interface RateLimitCheckResult {
+interface RateLimitCheckResult {
   /** Whether the request is allowed to proceed. */
   allowed: boolean;
   /** Number of remaining attempts before the limit is reached. */

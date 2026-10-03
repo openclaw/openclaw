@@ -49,14 +49,6 @@ import type { PluginRuntime } from "./types.js";
 
 type RuntimeSession = PluginRuntime["agent"]["session"];
 type RuntimeSessionStoreReadParams = Parameters<RuntimeSession["getSessionEntry"]>[0];
-type RuntimeSessionStoreListParams = NonNullable<
-  Parameters<RuntimeSession["listSessionEntries"]>[0]
->;
-type RuntimeSessionStoreEntrySummary = ReturnType<RuntimeSession["listSessionEntries"]>[number];
-type RuntimeSessionStoreEntryUpdateParams = Parameters<
-  RuntimeSession["updateSessionStoreEntry"]
->[0];
-type RuntimeUpsertSessionEntryParams = Parameters<RuntimeSession["upsertSessionEntry"]>[0];
 
 const loadEmbeddedAgentRuntime = createLazyRuntimeModule(
   () => import("./runtime-embedded-agent.runtime.js"),
@@ -88,9 +80,7 @@ function getSessionEntry(params: RuntimeSessionStoreReadParams): SessionEntry | 
   return loadSessionEntryReadOnly(toSessionAccessScope(params));
 }
 
-function listSessionEntries(
-  params: RuntimeSessionStoreListParams = {},
-): RuntimeSessionStoreEntrySummary[] {
+const listSessionEntries: RuntimeSession["listSessionEntries"] = (params = {}) => {
   const listEntries = params.readOnly
     ? listAccessorSessionEntriesReadOnly
     : listAccessorSessionEntries;
@@ -102,11 +92,9 @@ function listSessionEntries(
       : {}),
     ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
   });
-}
+};
 
-async function patchSessionEntry(
-  params: Parameters<PluginRuntime["agent"]["session"]["patchSessionEntry"]>[0],
-): Promise<SessionEntry | null> {
+const patchSessionEntry: RuntimeSession["patchSessionEntry"] = async (params) => {
   return await patchAccessorSessionEntry(toSessionAccessScope(params), params.update, {
     assertCommitAllowed: params.assertCommitAllowed,
     fallbackEntry: params.fallbackEntry,
@@ -117,11 +105,9 @@ async function patchSessionEntry(
     preserveActivity: params.preserveActivity,
     replaceEntry: params.replaceEntry,
   });
-}
+};
 
-async function updateSessionStoreEntry(
-  params: RuntimeSessionStoreEntryUpdateParams,
-): Promise<SessionEntry | null> {
+const updateSessionStoreEntry: RuntimeSession["updateSessionStoreEntry"] = async (params) => {
   // Maintainer note: keep the legacy object-parameter API here, but route
   // mutations through the session accessor boundary.
   return await updateSessionEntry(
@@ -136,13 +122,13 @@ async function updateSessionStoreEntry(
       requireWriteSuccess: params.requireWriteSuccess,
     },
   );
-}
+};
 
-async function upsertSessionEntry(params: RuntimeUpsertSessionEntryParams): Promise<void> {
+const upsertSessionEntry: RuntimeSession["upsertSessionEntry"] = async (params) => {
   // Maintainer note: this compatibility helper has full-entry replacement
   // semantics, so removed fields must not survive as merge leftovers.
   await replaceSessionEntry(toSessionAccessScope(params), params.entry);
-}
+};
 
 async function createSessionEntry(
   params: Parameters<PluginRuntime["agent"]["session"]["createSessionEntry"]>[0],

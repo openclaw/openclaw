@@ -3,6 +3,7 @@ import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import {
   registerOpenClawStateDatabaseLifecycleListener,
   requireOpenClawStateDatabaseIdentity,
@@ -204,10 +205,13 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
     if (change.kind === "journal" && !change.uncertain) {
       // Journal-only commits leave the exact placement and pending result unchanged.
     } else if (result?.pendingResult) {
-      owner.workspaceResults.set(change.sessionId, {
-        placement: result.placement,
-        pendingResult: result.pendingResult,
-      });
+      owner.workspaceResults.set(
+        change.sessionId,
+        Object.freeze({
+          placement: result.placement,
+          pendingResult: result.pendingResult,
+        }),
+      );
     } else if (
       !result &&
       placement &&
@@ -215,10 +219,13 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
       isCurrentWorkerWorkspacePendingResultOwner(placement, retained.pendingResult)
     ) {
       // Drain keeps exact result custody. Read at commit so earlier clears stay cleared.
-      owner.workspaceResults.set(change.sessionId, {
-        placement,
-        pendingResult: retained.pendingResult,
-      });
+      owner.workspaceResults.set(
+        change.sessionId,
+        Object.freeze({
+          placement,
+          pendingResult: retained.pendingResult,
+        }),
+      );
     } else {
       // Native writers without a complete postimage cannot preserve prepared custody.
       owner.workspaceResults.delete(change.sessionId);
@@ -338,7 +345,7 @@ export function stagePlacementTurnClaimWorkerPublication(
   return stageWorkerChange(identity, {
     kind: "claim",
     sessionId: facts.sessionId,
-    facts: structuredClone(facts),
+    facts: freezeJsonSnapshot(facts),
     workspaceResult: captureWorkspaceResultPostimage(facts.sessionId, workspaceResult),
   });
 }
@@ -354,7 +361,7 @@ function captureWorkspaceResultPostimage(
   ) {
     throw new Error("Workspace result publication has a different session owner");
   }
-  return facts ? structuredClone(facts) : undefined;
+  return freezeJsonSnapshot(facts);
 }
 
 /** Pending-result changes invalidate read observations without revoking turn authority. */
@@ -394,7 +401,7 @@ export function readPlacementWorkspaceResultAuthority(
   ) {
     return undefined;
   }
-  return structuredClone(facts);
+  return facts;
 }
 
 /** Bind the worker read to the original store before yielding and reject obsolete snapshots. */
@@ -430,7 +437,7 @@ export async function preparePlacementWorkspaceResultAuthority(
       pendingResult &&
       isCurrentWorkerWorkspacePendingResultOwner(placement, pendingResult)
     ) {
-      owner.workspaceResults.set(claim.sessionId, structuredClone({ placement, pendingResult }));
+      owner.workspaceResults.set(claim.sessionId, freezeJsonSnapshot({ placement, pendingResult }));
     } else {
       owner.workspaceResults.delete(claim.sessionId);
     }
@@ -542,22 +549,12 @@ export function publishPlacementTurnClaimState(
   db: DatabaseSync,
   record: WorkerSessionPlacementRecord,
 ): void {
-  const { sessionId, agentId, sessionKey, state, executionMode, environmentId, activeOwnerEpoch } =
-    record;
+  const snapshot = freezeJsonSnapshot(structuredClone(record));
   stageChange(db, {
     kind: "claim",
-    sessionId,
-    workspacePlacement: structuredClone(record),
-    facts: {
-      sessionId,
-      agentId,
-      sessionKey,
-      state,
-      executionMode,
-      environmentId,
-      activeOwnerEpoch,
-      turnClaim: record.turnClaim ? { ...record.turnClaim } : null,
-    },
+    sessionId: snapshot.sessionId,
+    workspacePlacement: snapshot,
+    facts: snapshot,
   });
 }
 

@@ -104,15 +104,6 @@ function resolveChannelOperationParams<TParams extends ChannelOperationParams>(p
   return { params: rawParams, channelId, plugin };
 }
 
-async function respondWithChannelOperationPayload<TPayload>(params: {
-  respond: RespondFn;
-  run: () => Promise<TPayload>;
-}): Promise<void> {
-  await respondUnavailableOnThrow(params.respond, async () => {
-    params.respond(true, await params.run(), undefined);
-  });
-}
-
 function channelAccountOperationHandler(
   method: "channels.start" | "channels.stop",
   validate: Validator<ChannelsStartParams>,
@@ -128,54 +119,24 @@ function channelAccountOperationHandler(
     if (!resolved) {
       return;
     }
-    await respondWithChannelOperationPayload({
-      respond,
-      run: () =>
-        run({
+    await respondUnavailableOnThrow(respond, async () => {
+      respond(
+        true,
+        await run({
           channelId: resolved.channelId,
           accountId: resolved.params.accountId,
           cfg: context.getRuntimeConfig(),
           context,
           plugin: resolved.plugin,
         }),
+        undefined,
+      );
     });
   };
 }
 
 const CHANNEL_STATUS_MAX_TIMEOUT_MS = 30_000;
 const CHANNEL_STATUS_PROBE_CONCURRENCY = 5;
-
-type TimeoutRaceResult<T> =
-  | { kind: "value"; value: T }
-  | { kind: "error"; error: unknown }
-  | { kind: "timeout" };
-
-async function raceWithTimeout<T>(params: {
-  timeoutMs: number;
-  run: () => Promise<T> | T;
-}): Promise<TimeoutRaceResult<T>> {
-  const timeoutMs = params.timeoutMs;
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  const timeout = new Promise<{ kind: "timeout" }>((resolve) => {
-    timer = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
-    if (typeof timer === "object" && "unref" in timer) {
-      timer.unref();
-    }
-  });
-  const result = await Promise.race([
-    Promise.resolve()
-      .then(params.run)
-      .then(
-        (value) => ({ kind: "value" as const, value }),
-        (error: unknown) => ({ kind: "error" as const, error }),
-      ),
-    timeout,
-  ]);
-  if (timer) {
-    clearTimeout(timer);
-  }
-  return result;
-}
 
 type ChannelStatusResult =
   | { ok: true; value: unknown }
@@ -190,19 +151,28 @@ async function runChannelStatusHook(params: {
   run: () => unknown;
 }): Promise<ChannelStatusResult> {
   const timeoutMs = Math.max(1, params.timeoutMs);
-  // Plugin hooks can be slow or fail independently; keep the remaining status usable.
-  const result = await raceWithTimeout({ timeoutMs, run: params.run });
-  if (result.kind === "value") {
-    return { ok: true, value: result.value };
-  }
   const warningPrefix = `${params.channelId}${params.accountId === undefined ? "" : `:${params.accountId}`} ${params.step}`;
-  if (result.kind === "timeout") {
-    params.warnings.push(`${warningPrefix} timed out after ${timeoutMs}ms`);
-    return { ok: false, timedOut: true, error: `${params.step} timed out after ${timeoutMs}ms` };
+  const timedOut = Symbol("channel-status-timeout");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<typeof timedOut>((resolve) => {
+    timer = setTimeout(() => resolve(timedOut), timeoutMs);
+    timer.unref();
+  });
+  try {
+    // Plugin hooks can be slow or fail independently; keep the remaining status usable.
+    const value = await Promise.race([Promise.resolve().then(params.run), timeout]);
+    if (value === timedOut) {
+      params.warnings.push(`${warningPrefix} timed out after ${timeoutMs}ms`);
+      return { ok: false, timedOut: true, error: `${params.step} timed out after ${timeoutMs}ms` };
+    }
+    return { ok: true, value };
+  } catch (error) {
+    const message = formatForLog(error);
+    params.warnings.push(`${warningPrefix} failed: ${message}`);
+    return { ok: false, error: message };
+  } finally {
+    clearTimeout(timer);
   }
-  const message = formatForLog(result.error);
-  params.warnings.push(`${warningPrefix} failed: ${message}`);
-  return { ok: false, error: message };
 }
 
 function channelStatusFailureMessage(value: unknown): string | null {
@@ -351,53 +321,34 @@ export const channelsHandlers: GatewayRequestHandlers = {
       const account = await resolveChannelAccount({ plugin, cfg, accountId });
       const enabled = plugin.config.isEnabled?.(account, cfg) ?? isAccountEnabled(account);
       let probeResult: unknown;
+      let auditResult: unknown;
       let lastProbeAt: number | null = null;
-      if (probe && enabled && plugin.status?.probeAccount) {
-        // Skip expensive probes for accounts that are not configured; the
-        // snapshot builder still reports the config state below.
-        let configured = true;
-        if (plugin.config.isConfigured) {
-          configured = await plugin.config.isConfigured(account, cfg);
+      for (const step of ["probe", "audit"] as const) {
+        if (!probe || !enabled || !plugin.status?.[`${step}Account`]) {
+          continue;
         }
-        if (configured) {
-          const result = await runChannelStatusHook({
-            channelId,
-            accountId,
-            step: "probe",
-            timeoutMs,
-            warnings: statusWarnings,
-            run: () =>
-              plugin.status!.probeAccount!({
-                account,
-                timeoutMs,
-                cfg,
-              }),
-          });
+        // Recheck configuration for each hook, including after an awaited probe.
+        if (plugin.config.isConfigured && !(await plugin.config.isConfigured(account, cfg))) {
+          continue;
+        }
+        const result = await runChannelStatusHook({
+          channelId,
+          accountId,
+          step,
+          timeoutMs,
+          warnings: statusWarnings,
+          run: () =>
+            plugin.status![`${step}Account`]!({
+              account,
+              timeoutMs,
+              cfg,
+              ...(step === "audit" ? { probe: probeResult } : {}),
+            }),
+        });
+        if (step === "probe") {
           probeResult = result.ok ? result.value : result;
           lastProbeAt = Date.now();
-        }
-      }
-      let auditResult: unknown;
-      if (probe && enabled && plugin.status?.auditAccount) {
-        let configured = true;
-        if (plugin.config.isConfigured) {
-          configured = await plugin.config.isConfigured(account, cfg);
-        }
-        if (configured) {
-          const result = await runChannelStatusHook({
-            channelId,
-            accountId,
-            step: "audit",
-            timeoutMs,
-            warnings: statusWarnings,
-            run: () =>
-              plugin.status!.auditAccount!({
-                account,
-                timeoutMs,
-                cfg,
-                probe: probeResult,
-              }),
-          });
+        } else {
           auditResult = result.ok ? result.value : result;
         }
       }
@@ -609,10 +560,10 @@ export const channelsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    await respondWithChannelOperationPayload({
-      respond,
-      run: () =>
-        logoutChannelAccount({
+    await respondUnavailableOnThrow(respond, async () => {
+      respond(
+        true,
+        await logoutChannelAccount({
           channelId,
           accountId,
           cfg: context.getRuntimeConfig(),
@@ -621,6 +572,8 @@ export const channelsHandlers: GatewayRequestHandlers = {
           methodRegistry,
           assertRequestCurrent: requestAuthority.assertCurrent,
         }),
+        undefined,
+      );
     });
   },
 };

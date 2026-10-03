@@ -23,10 +23,7 @@ import {
 import { SessionTranscriptStorageUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import type { TranscriptAnchorPageOptions } from "../sessions/transcript-anchor-page.js";
-import type {
-  TranscriptReadWindow,
-  TranscriptReadWindowOptions,
-} from "../sessions/transcript-read-window.js";
+import type { TranscriptReadWindowOptions } from "../sessions/transcript-read-window.js";
 import type { SubagentCoordinationDisplayResolver } from "./chat-display-projection.history.js";
 import { ArchivedTranscriptReader } from "./session-transcript-archive-reader.js";
 import { sqliteMessageEventWithSeq } from "./session-transcript-entry-message.js";
@@ -109,36 +106,18 @@ function capAnchorEventsByBytes(
   return events.slice(start);
 }
 
-function normalizeRecentSqliteReadOptions(
-  opts?: Partial<ReadRecentSessionMessagesOptions> &
-    TranscriptReadWindowOptions & { readOnly?: boolean },
-) {
+function readRecentSqliteMessageRecords(
+  projection: CurrentTranscriptProjection,
+  opts?: Partial<ReadRecentSessionMessagesOptions> & TranscriptReadWindowOptions,
+): ReadRecentSessionMessagesResult {
   const maxMessages = Math.max(0, Math.floor(opts?.maxMessages ?? 0));
-  return {
+  const page = readRecentSessionTranscriptHistoryEventsFromProjection(projection, {
     maxMessages,
     maxBytes: resolveIntegerOption(opts?.maxBytes, 8 * 1024 * 1024, { min: 1024 }),
     maxLines: resolveIntegerOption(opts?.maxLines, maxMessages * 20 + 20, { min: maxMessages }),
     captureReadWindow: opts?.captureReadWindow,
     expectedReadWindow: opts?.expectedReadWindow,
-    readOnly: opts?.readOnly,
-  };
-}
-
-function readRecentSqliteMessageRecords(
-  projection: CurrentTranscriptProjection,
-  opts?: Partial<ReadRecentSessionMessagesOptions> &
-    TranscriptReadWindowOptions & { readOnly?: boolean },
-): {
-  activeLeafEntryId?: string | null;
-  deltaCursor?: string;
-  displaySource?: string;
-  readWindow?: TranscriptReadWindow;
-  windowReset?: boolean;
-  messages: unknown[];
-  totalMessages: number;
-} {
-  const normalized = normalizeRecentSqliteReadOptions(opts);
-  const page = readRecentSessionTranscriptHistoryEventsFromProjection(projection, normalized);
+  });
   return {
     ...(page.activeLeafEntryId !== undefined ? { activeLeafEntryId: page.activeLeafEntryId } : {}),
     ...(page.deltaCursor ? { deltaCursor: page.deltaCursor } : {}),

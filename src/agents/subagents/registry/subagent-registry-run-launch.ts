@@ -592,58 +592,6 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     return true;
   };
 
-  readonly failQueuedSubagentRun = async (runId: string, error: string): Promise<boolean> => {
-    const selected = this.findRunByIdentity(runId.trim());
-    if (!selected) {
-      return false;
-    }
-    const context = captureOpenClawStateWorkerContext();
-    const prepared = await prepareSwarmCollectorCompletion(
-      selected,
-      this.options.getRuntimeConfig(),
-      () => assertSubagentRegistryWriteSourceCurrent(context),
-    );
-    return mutateSubagentRuns(
-      [selected.runId],
-      (rows) => {
-        const current = rows.get(selected.runId);
-        if (
-          !current ||
-          !isSameSubagentRunOwner(current, selected) ||
-          current.execution.status !== "queued" ||
-          current.killIntent ||
-          current.killReconciliation
-        ) {
-          return { value: false };
-        }
-        const entry = structuredClone(current);
-        const endedAt = Date.now();
-        entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
-        entry.execution = {
-          ...entry.execution,
-          status: "terminal",
-          endedAt,
-          outcome: { status: "error", error, endedAt },
-        };
-        entry.queuedLaunch = undefined;
-        entry.collectorLaunchCleanupPending = true;
-        entry.completion = { required: false, resultText: error, capturedAt: endedAt };
-        updateSwarmCollectorCompletion(entry, this.options.getRuntimeConfig(), prepared);
-        return { value: true, postimages: new Map([[entry.runId, entry]]) };
-      },
-      {
-        runs: this.options.runs,
-        context,
-        onPublished: (postimages) => {
-          const published = postimages.get(selected.runId);
-          if (published) {
-            clearPublishedSwarmCollectorOutput(published);
-          }
-        },
-      },
-    );
-  };
-
   readonly settleFailedQueuedSubagentLaunch = async (
     runId: string,
     error: string,
@@ -652,9 +600,8 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     if (!selected?.collect) {
       return false;
     }
-    if (typeof selected.execution.endedAt !== "number") {
-      return this.failQueuedSubagentRun(runId, error);
-    }
+    // Usage preparation can outlive completion; retain the phase selected for this attempt.
+    const wasQueued = typeof selected.execution.endedAt !== "number";
     const context = captureOpenClawStateWorkerContext();
     const prepared = await prepareSwarmCollectorCompletion(
       selected,
@@ -665,26 +612,44 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       [selected.runId],
       (rows) => {
         const current = rows.get(selected.runId);
-        if (
-          !current ||
-          !isSameSubagentRunOwner(current, selected) ||
-          !current.collect ||
-          current.killIntent ||
-          typeof current.execution.endedAt !== "number"
-        ) {
+        if (!current || !isSameSubagentRunOwner(current, selected) || current.killIntent) {
           return { value: false };
         }
-        if (current.collectorCompletion) {
-          return { value: true };
+        let entry: SubagentRunRecord;
+        if (wasQueued) {
+          if (current.execution.status !== "queued" || current.killReconciliation) {
+            return { value: false };
+          }
+          entry = structuredClone(current);
+          const endedAt = Date.now();
+          entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
+          entry.execution = {
+            ...entry.execution,
+            status: "terminal",
+            endedAt,
+            outcome: { status: "error", error, endedAt },
+          };
+          entry.queuedLaunch = undefined;
+          entry.collectorLaunchCleanupPending = true;
+          entry.completion = { required: false, resultText: error, capturedAt: endedAt };
+          updateSwarmCollectorCompletion(entry, this.options.getRuntimeConfig(), prepared);
+        } else {
+          const endedAt = current.execution.endedAt;
+          if (!current.collect || typeof endedAt !== "number") {
+            return { value: false };
+          }
+          if (current.collectorCompletion) {
+            return { value: true };
+          }
+          entry = structuredClone(current);
+          prepareTerminatedCollectorLaunch(
+            entry,
+            endedAt,
+            error,
+            () => this.options.getRuntimeConfig(),
+            prepared,
+          );
         }
-        const entry = structuredClone(current);
-        prepareTerminatedCollectorLaunch(
-          entry,
-          current.execution.endedAt,
-          error,
-          () => this.options.getRuntimeConfig(),
-          prepared,
-        );
         return { value: true, postimages: new Map([[entry.runId, entry]]) };
       },
       {
