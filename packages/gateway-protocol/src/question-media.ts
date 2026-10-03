@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { QuestionResourcePreview, QuestionResourceInput } from "./schema/questions.js";
 
 /** Images are rendered by clients, never fetched by the Gateway. */
@@ -20,7 +19,7 @@ export function isQuestionThumbnail(value: unknown): value is string {
 }
 
 export function readQuestionResourcePreview(value: unknown): QuestionResourcePreview | undefined {
-  if (!isRecord(value)) {
+  if (!record(value)) {
     return undefined;
   }
   const bounded = (entry: unknown, max = 2048): entry is string =>
@@ -31,14 +30,14 @@ export function readQuestionResourcePreview(value: unknown): QuestionResourcePre
   if (value.type === "mcp_app_tool" && bounded(value.name, 256)) {
     if (
       value.arguments !== undefined &&
-      (!isRecord(value.arguments) || JSON.stringify(value.arguments).length > 65536)
+      (!record(value.arguments) || JSON.stringify(value.arguments).length > 65536)
     ) {
       return undefined;
     }
     return {
       type: "mcp_app_tool",
       name: value.name,
-      ...(isRecord(value.arguments) ? { arguments: value.arguments } : {}),
+      ...(record(value.arguments) ? { arguments: value.arguments } : {}),
     };
   }
   if (value.type !== "resource_link" || !bounded(value.uri) || !bounded(value.name, 256)) {
@@ -64,9 +63,13 @@ export function readQuestionResourcePreview(value: unknown): QuestionResourcePre
   };
 }
 
+function record(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 export function readQuestionResourceInput(value: unknown): QuestionResourceInput | undefined {
   if (
-    !isRecord(value) ||
+    !record(value) ||
     (value.viewId !== undefined &&
       (typeof value.viewId !== "string" || !value.viewId || value.viewId.length > 128)) ||
     (value.selection !== "explicit" && value.selection !== "implicit")
@@ -76,7 +79,7 @@ export function readQuestionResourceInput(value: unknown): QuestionResourceInput
   let userOptions: QuestionResourceInput["userOptions"];
   if (value.userOptions !== undefined) {
     if (
-      !isRecord(value.userOptions) ||
+      !record(value.userOptions) ||
       (value.userOptions.kind !== "file" && value.userOptions.kind !== "directory")
     ) {
       return undefined;
