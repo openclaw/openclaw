@@ -588,6 +588,18 @@ owners, so a nested scope cannot close an executor retained by its parent.
 
 ## Carry facts, publish after commit
 
+Personal model-account success and failover-failure bookkeeping use typed reductions
+in the existing `authProfiles` shared-state worker. The host captures the physical
+store before provider probes or writer admission; the synchronous transaction
+rereads current usage and refuses changed credentials. Both host and worker use
+the same usage reducers, and provider observations retain their credential and
+block-generation checks. Transaction and commit grants recheck live host authority
+without caller-thread SQL. Acknowledged usage returns to the selected turn only;
+personal credentials and selection never enter shared rotation. Post-run success
+remains nonblocking, while maintenance close joins accepted bookkeeping. OAuth
+refresh, selection, and released SDK updater callbacks retain their existing
+owners. Schemas, credential bytes, retention, and update behavior are unchanged.
+
 Message-tool-only completion records use the canonical per-agent writer. The
 host captures the original store and run facts before waiting; configured-store
 discovery uses the existing reader. First-use schema admission commits separately

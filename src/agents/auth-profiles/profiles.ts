@@ -20,6 +20,7 @@ import {
   type OAuthRefreshGenerationPeer,
 } from "./oauth-refresh-peers.js";
 import { resolveSharedAuthStorePath } from "./path-resolve.js";
+import { preparePersonalAuthProfileUsage } from "./personal-usage.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import { removeRuntimeExternalProfileReferences } from "./runtime-external-profile-references.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
@@ -659,32 +660,40 @@ export async function markAuthProfileSuccess(params: {
   const updatesSelection = !inherited && !personal;
   const lastUsed = Date.now();
   let applied = false;
-  const updated = await updateAuthProfileStoreWithLock({
-    agentDir: ownerAgentDir,
-    profileId,
-    updater: (freshStore) => {
-      const freshProfile = freshStore.profiles[profileId];
-      if (
-        !freshProfile ||
-        freshProfile.setup?.replacement ||
-        resolveProviderIdForAuth(freshProfile.provider) !== providerKey
-      ) {
-        return false;
-      }
-      // Inherited selection ownership is not defined. Clear shared health in
-      // the credential owner without changing its last-good or rotation state.
-      if (updatesSelection) {
-        freshStore.lastGood = replaceProviderAuthState(freshStore.lastGood, providerKey, profileId);
-      }
-      freshStore.usageStats ??= {};
-      freshStore.usageStats[profileId] = resetAuthProfileFailureState(
-        freshStore.usageStats[profileId] ?? {},
-        { lastProbeAt: Date.now(), ...(inherited ? {} : { lastUsed }) },
-      );
-      applied = true;
-      return true;
-    },
-  });
+  const updated = personal
+    ? await preparePersonalAuthProfileUsage(store, profileId)
+        .record({ kind: "success", expectedProfile: profile, lastUsed })
+        .then((result) => (result === null ? null : store))
+    : await updateAuthProfileStoreWithLock({
+        agentDir: ownerAgentDir,
+        profileId,
+        updater: (freshStore) => {
+          const freshProfile = freshStore.profiles[profileId];
+          if (
+            !freshProfile ||
+            freshProfile.setup?.replacement ||
+            resolveProviderIdForAuth(freshProfile.provider) !== providerKey
+          ) {
+            return false;
+          }
+          // Inherited selection ownership is not defined. Clear shared health in
+          // the credential owner without changing its last-good or rotation state.
+          if (updatesSelection) {
+            freshStore.lastGood = replaceProviderAuthState(
+              freshStore.lastGood,
+              providerKey,
+              profileId,
+            );
+          }
+          freshStore.usageStats ??= {};
+          freshStore.usageStats[profileId] = resetAuthProfileFailureState(
+            freshStore.usageStats[profileId] ?? {},
+            { lastProbeAt: Date.now(), ...(inherited ? {} : { lastUsed }) },
+          );
+          applied = true;
+          return true;
+        },
+      });
   if (updated && applied) {
     const usage = updated.usageStats?.[profileId];
     if (usage) {
