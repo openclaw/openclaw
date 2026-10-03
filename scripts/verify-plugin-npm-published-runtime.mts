@@ -73,7 +73,11 @@ export function isPluginTestFixturePath(packagePath: string) {
   ) {
     return false;
   }
-  if (/(?:^|\/)(?:test|tests|__fixtures__|__tests__)\//u.test(packagePath)) {
+  if (
+    /(?:^|\/)(?:fixture|fixtures|mock|mocks|spec|test|tests|test-harness|test-helper|test-helpers|test-support|__fixtures__|__tests__)\//u.test(
+      packagePath,
+    )
+  ) {
     return true;
   }
   return /(?:^|[.-])(?:fixture|fixtures|mock|mocks|spec|test|test-helper|test-helpers|test-harness|test-support)(?:[.-]|$)/u.test(

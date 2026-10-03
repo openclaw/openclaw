@@ -104,12 +104,13 @@ describe("collectPluginNpmPublishedRuntimeErrors", () => {
           "skills/example/src/index.ts",
           "src/index.ts",
           "src/__fixtures__/plugin.ts",
+          "src/test-support/helper.ts",
           "test/pack.test.ts",
           "root.test.ts",
         ],
       }),
     ).toEqual([
-      "runtime-entry-fixture plugin npm package must not include test or fixture files: root.test.ts, src/__fixtures__/plugin.ts, test/pack.test.ts",
+      "runtime-entry-fixture plugin npm package must not include test or fixture files: root.test.ts, src/__fixtures__/plugin.ts, src/test-support/helper.ts, test/pack.test.ts",
     ]);
   });
 

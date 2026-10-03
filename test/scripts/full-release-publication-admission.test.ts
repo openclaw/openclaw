@@ -2327,6 +2327,12 @@ describe("FRV publication source admission", () => {
         check(result.fact?.projection?.packages).toEqual([
           { name: "@openclaw/demo-plugin", version: "2026.9.9", targets: ["clawhub", "npm"] },
         ]);
+        check(result.steps.plugin_npm_preflight?.outputs).toEqual({
+          required: "true",
+          publish_scope: "selected",
+          plugins: "@openclaw/demo-plugin",
+          npm_dist_tag: "default",
+        });
         check(result.fact?.projection?.platforms).not.toContainEqual(
           expect.objectContaining({ id: "linux" }),
         );

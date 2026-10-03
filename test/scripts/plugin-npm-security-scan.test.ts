@@ -84,7 +84,9 @@ describe("plugin npm artifact security scan", () => {
       scanPluginNpmArtifactSecurity({
         packageName: "@openclaw/example",
         packageVersion: "1.0.0",
-        tarball: packageTarball("@openclaw/example", { "src/example.test.ts": SPAWN_SOURCE }),
+        tarball: packageTarball("@openclaw/example", {
+          "src/fixtures/example.ts": SPAWN_SOURCE,
+        }),
       }),
     ).toThrow("artifact contains test or fixture files");
   });

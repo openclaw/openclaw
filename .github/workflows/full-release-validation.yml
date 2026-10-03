@@ -312,38 +312,6 @@ jobs:
           set -euo pipefail
           node workflow/scripts/full-release-publication-contract.mjs --dispatch
 
-      - name: Resolve plugin npm artifact qualification
-        id: plugin_npm_preflight
-        env:
-          PUBLICATION_SELECTION_JSON: ${{ steps.publication_dispatch.outputs.publication_selection_json }}
-        run: |
-          set -euo pipefail
-          node <<'NODE'
-          const fs = require("node:fs");
-          const selection = process.env.PUBLICATION_SELECTION_JSON
-            ? JSON.parse(process.env.PUBLICATION_SELECTION_JSON)
-            : null;
-          const scope = selection?.pluginPublishScope ?? "none";
-          if (!["none", "selected", "all-publishable"].includes(scope)) {
-            throw new Error(`Unsupported plugin publication scope: ${scope}`);
-          }
-          const plugins = Array.isArray(selection?.plugins) ? selection.plugins : [];
-          if (plugins.some((name) => typeof name !== "string" || !name.trim() || /[\r\n,\0]/u.test(name))) {
-            throw new Error("Plugin publication selection is invalid.");
-          }
-          if ((scope === "selected") !== (plugins.length > 0)) {
-            throw new Error("Selected plugin publication requires an explicit non-empty roster.");
-          }
-          const npmDistTag = selection?.npmDistTag === "extended-stable" ? "extended-stable" : "default";
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, [
-            `required=${scope === "none" ? "false" : "true"}`,
-            `publish_scope=${scope}`,
-            `plugins=${plugins.join(",")}`,
-            `npm_dist_tag=${npmDistTag}`,
-            "",
-          ].join("\n"));
-          NODE
-
       - name: Resolve trusted workflow identity
         id: tooling_identity
         env:
@@ -639,6 +607,38 @@ jobs:
           set -euo pipefail
           umask 077
           node workflow/scripts/full-release-publication-contract.mjs --request > "$RUNNER_TEMP/publication-source-request.json"
+
+      - name: Resolve plugin npm artifact qualification
+        id: plugin_npm_preflight
+        env:
+          PUBLICATION_SELECTION_JSON: ${{ steps.publication_request.outputs.publication_selection_json }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require("node:fs");
+          const selection = process.env.PUBLICATION_SELECTION_JSON
+            ? JSON.parse(process.env.PUBLICATION_SELECTION_JSON)
+            : null;
+          const scope = selection?.pluginPublishScope ?? "none";
+          if (!["none", "selected", "all-publishable"].includes(scope)) {
+            throw new Error(`Unsupported plugin publication scope: ${scope}`);
+          }
+          const plugins = Array.isArray(selection?.plugins) ? selection.plugins : [];
+          if (plugins.some((name) => typeof name !== "string" || !name.trim() || /[\r\n,\0]/u.test(name))) {
+            throw new Error("Plugin publication selection is invalid.");
+          }
+          if ((scope === "selected") !== (plugins.length > 0)) {
+            throw new Error("Selected plugin publication requires an explicit non-empty roster.");
+          }
+          const npmDistTag = selection?.npmDistTag === "extended-stable" ? "extended-stable" : "default";
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, [
+            `required=${scope === "none" ? "false" : "true"}`,
+            `publish_scope=${scope}`,
+            `plugins=${plugins.join(",")}`,
+            `npm_dist_tag=${npmDistTag}`,
+            "",
+          ].join("\n"));
+          NODE
 
       - name: Plan frozen source admission
         id: frozen_selection
