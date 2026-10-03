@@ -322,10 +322,6 @@ export const listManagedPlugins = withManagedPluginCache(
         officialEntry,
         hostedListingAuthoritative,
       });
-      const remoteIcon = resolveInstalledPluginClawHubIconSource({ installRecord, clawhubPackage });
-      // Discovery names are registry-scoped; trusted official/npm counterparts belong to the public catalog.
-      const discoveryClawHubPackage =
-        remoteIcon?.baseUrl === discoveryRegistry ? remoteIcon.packageName : undefined;
       const plugin: ManagedPluginCatalogEntry = {
         id: record.pluginId,
         name: presentation.name,
@@ -337,17 +333,39 @@ export const listManagedPlugins = withManagedPluginCache(
           setupMode: setup.mode,
         }),
         removable,
-        ...projectPluginCatalogCategoryFacts(manifest, enabled),
-        ...(record.packageName ? { packageName: record.packageName } : {}),
-        ...(discoveryClawHubPackage ? { clawhubPackage: discoveryClawHubPackage } : {}),
-        ...(presentation.description ? { description: presentation.description } : {}),
-        ...(presentation.version ? { version: presentation.version } : {}),
-        ...(kind ? { kind } : {}),
-        ...(record.origin ? { origin: record.origin } : {}),
-        ...(catalog?.featured !== undefined ? { featured: catalog.featured } : {}),
-        ...(featuredAt !== undefined ? { featuredAt } : {}),
-        ...(catalog?.order !== undefined ? { order: catalog.order } : {}),
       };
+      Object.assign(plugin, projectPluginCatalogCategoryFacts(manifest, enabled));
+      if (record.packageName) {
+        plugin.packageName = record.packageName;
+      }
+      const remoteIcon = resolveInstalledPluginClawHubIconSource({ installRecord, clawhubPackage });
+      // Discovery names are registry-scoped; trusted official/npm counterparts belong to the public catalog.
+      const discoveryClawHubPackage =
+        remoteIcon?.baseUrl === discoveryRegistry ? remoteIcon.packageName : undefined;
+      if (discoveryClawHubPackage) {
+        plugin.clawhubPackage = discoveryClawHubPackage;
+      }
+      if (presentation.description) {
+        plugin.description = presentation.description;
+      }
+      if (presentation.version) {
+        plugin.version = presentation.version;
+      }
+      if (kind) {
+        plugin.kind = kind;
+      }
+      if (record.origin) {
+        plugin.origin = record.origin;
+      }
+      if (catalog?.featured !== undefined) {
+        plugin.featured = catalog.featured;
+      }
+      if (featuredAt !== undefined) {
+        plugin.featuredAt = featuredAt;
+      }
+      if (catalog?.order !== undefined) {
+        plugin.order = catalog.order;
+      }
       const normalizedPluginId = metadata.normalizePluginId(record.pluginId);
       // Icon lookup uses the first normalized record, even when that record has no icon.
       if (!installedIconsById.has(normalizedPluginId)) {

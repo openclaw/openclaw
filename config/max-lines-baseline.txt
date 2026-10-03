@@ -570,7 +570,6 @@ src/plugins/marketplace.ts
 src/plugins/plugin-registry-snapshot.test.ts
 src/plugins/provider-runtime.test.ts
 src/plugins/provider-runtime.ts
-src/plugins/providers.ts
 src/plugins/schema-validator.test.ts
 src/plugins/sdk-alias.test.ts
 src/plugins/sdk-alias.ts

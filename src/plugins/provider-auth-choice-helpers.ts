@@ -195,34 +195,43 @@ function normalizeModelProviderConfigsForWrite(
   };
 }
 
-const agentModelFieldNormalizers = {
-  model: normalizeAgentModelConfigForWrite,
-  models: normalizeAgentModelMapForWrite,
-  modelPolicy: normalizeAgentModelPolicyForWrite,
-};
-
-function normalizeAgentModelFieldsForWrite<T extends Record<string, unknown>>(value: T): T {
-  let next = value;
-  for (const [key, normalize] of Object.entries(agentModelFieldNormalizers)) {
-    if (!Object.hasOwn(value, key)) {
-      continue;
-    }
-    const normalized = normalize(value[key]);
-    if (normalized !== value[key]) {
-      next = { ...next, [key]: normalized };
-    }
-  }
-  return next;
-}
-
 function normalizeAgentListForWrite(value: unknown): unknown {
   if (!Array.isArray(value)) {
     return value;
   }
-  const next = value.map((agent) =>
-    isPlainRecord(agent) ? normalizeAgentModelFieldsForWrite(agent) : agent,
-  );
-  return next.some((agent, index) => agent !== value[index]) ? next : value;
+
+  let mutated = false;
+  const next = value.map((agent) => {
+    if (!isPlainRecord(agent)) {
+      return agent;
+    }
+
+    let nextAgent = agent;
+    if (Object.hasOwn(agent, "model")) {
+      const normalizedModel = normalizeAgentModelConfigForWrite(agent.model);
+      if (normalizedModel !== agent.model) {
+        nextAgent = { ...nextAgent, model: normalizedModel };
+        mutated = true;
+      }
+    }
+    if (Object.hasOwn(agent, "models")) {
+      const normalizedModels = normalizeAgentModelMapForWrite(agent.models);
+      if (normalizedModels !== agent.models) {
+        nextAgent = { ...nextAgent, models: normalizedModels };
+        mutated = true;
+      }
+    }
+    if (Object.hasOwn(agent, "modelPolicy")) {
+      const normalizedModelPolicy = normalizeAgentModelPolicyForWrite(agent.modelPolicy);
+      if (normalizedModelPolicy !== agent.modelPolicy) {
+        nextAgent = { ...nextAgent, modelPolicy: normalizedModelPolicy };
+        mutated = true;
+      }
+    }
+    return nextAgent;
+  });
+
+  return mutated ? next : value;
 }
 
 function normalizeConfigModelRefsForWrite(
@@ -234,14 +243,26 @@ function normalizeConfigModelRefsForWrite(
   const agentsList = listAgentEntries(providerNormalized);
   const roster = readAgentRosterProperty(providerNormalized);
 
-  const nextDefaults = defaults
-    ? normalizeAgentModelFieldsForWrite({
-        ...defaults,
-        ...(defaults.model !== undefined ? { model: defaults.model } : {}),
-        ...(defaults.models !== undefined ? { models: defaults.models } : {}),
-        ...(defaults.modelPolicy !== undefined ? { modelPolicy: defaults.modelPolicy } : {}),
-      })
-    : defaults;
+  let nextDefaults = defaults;
+  if (defaults) {
+    nextDefaults = { ...defaults };
+    if (defaults.model !== undefined) {
+      nextDefaults.model = normalizeAgentModelConfigForWrite(
+        defaults.model,
+      ) as typeof defaults.model;
+    }
+    if (defaults.models !== undefined) {
+      nextDefaults.models = normalizeAgentModelMapForWrite(
+        defaults.models,
+      ) as typeof defaults.models;
+    }
+    if (defaults.modelPolicy !== undefined) {
+      nextDefaults.modelPolicy = normalizeAgentModelPolicyForWrite(
+        defaults.modelPolicy,
+      ) as typeof defaults.modelPolicy;
+    }
+  }
+
   const nextAgentsList = normalizeAgentListForWrite(agentsList);
   if (nextDefaults === defaults && nextAgentsList === agentsList) {
     return providerNormalized;
