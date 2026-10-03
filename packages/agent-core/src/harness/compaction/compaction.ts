@@ -879,10 +879,7 @@ export async function compact(
     messagesToSummarize,
     turnPrefixMessages,
     isSplitTurn,
-    tokensBefore,
     previousSummary,
-    previousSummaryDetails,
-    fileOps,
     settings,
   } = preparation;
   if (!firstKeptEntryId) {
@@ -895,13 +892,6 @@ export async function compact(
   }
 
   const summarizeTurnPrefix = isSplitTurn && turnPrefixMessages.length > 0;
-  const previousFileOperations = previousSummaryDetails
-    ? formatFileOperations(previousSummaryDetails.readFiles, previousSummaryDetails.modifiedFiles)
-    : "";
-  const preservedPreviousSummary =
-    previousFileOperations && previousSummary?.endsWith(previousFileOperations)
-      ? previousSummary.slice(0, -previousFileOperations.length)
-      : previousSummary;
   const historyResult =
     messagesToSummarize.length > 0 || !summarizeTurnPrefix
       ? await generateSummary(
@@ -917,7 +907,9 @@ export async function compact(
           streamFn,
           runtime,
         )
-      : ok<string, CompactionError>(preservedPreviousSummary ?? "No prior history.");
+      : ok<string, CompactionError>(
+          previousSummaryWithoutFileOperations(preparation) ?? "No prior history.",
+        );
   if (!historyResult.ok) {
     return err(historyResult.error);
   }
@@ -943,8 +935,51 @@ export async function compact(
     }
     latestContext = `${TURN_CONTEXT_PREFIX}${turnPrefixResult.value}`;
   }
+  return finalizeCompaction(preparation, historyResult.value, latestContext);
+}
 
-  const { readFiles, modifiedFiles } = computeFileLists(fileOps);
+/**
+ * Builds the same commit-ready artifact without a model call, for when summary
+ * generation failed. The prepared cut keeps the recent suffix verbatim; the
+ * previous summary, a split turn's raw source ask, file operations, and the
+ * unresolved request carry forward, and the dropped span is named, not summarized.
+ */
+export function compactWithoutSummary(
+  preparation: CompactionPreparation,
+): Result<CompactionResult, CompactionError> {
+  const droppedCount =
+    preparation.messagesToSummarize.length + preparation.turnPrefixMessages.length;
+  const droppedNote = `[${droppedCount} earlier message(s) were removed without a summary because summarization failed. The messages after this summary are verbatim; ask the user if older details matter.]`;
+  const previousSummary = previousSummaryWithoutFileOperations(preparation);
+  const sourceAsk = preparation.isSplitTurn
+    ? extractLatestUserRequest(preparation.turnPrefixMessages)
+    : undefined;
+  return finalizeCompaction(
+    preparation,
+    previousSummary ? `${previousSummary}\n\n${droppedNote}` : droppedNote,
+    sourceAsk ? `${TURN_CONTEXT_PREFIX}## Original Request\n${JSON.stringify(sourceAsk)}` : "",
+  );
+}
+
+// File metadata is re-merged by finalizeCompaction, so the carried summary drops its old copy.
+function previousSummaryWithoutFileOperations(
+  preparation: CompactionPreparation,
+): string | undefined {
+  const { previousSummary, previousSummaryDetails } = preparation;
+  const previousFileOperations = previousSummaryDetails
+    ? formatFileOperations(previousSummaryDetails.readFiles, previousSummaryDetails.modifiedFiles)
+    : "";
+  return previousFileOperations && previousSummary?.endsWith(previousFileOperations)
+    ? previousSummary.slice(0, -previousFileOperations.length)
+    : previousSummary;
+}
+
+function finalizeCompaction(
+  preparation: CompactionPreparation,
+  historySummary: string,
+  latestContext: string,
+): Result<CompactionResult, CompactionError> {
+  const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
   const fileOperations = formatFileOperations(readFiles, modifiedFiles);
   const unresolvedRequestContext = preparation.latestUnresolvedUserRequest
     ? `## Latest unresolved user request\n${JSON.stringify(preparation.latestUnresolvedUserRequest)}\n\n`
@@ -955,7 +990,7 @@ export async function compact(
       return undefined;
     }
     const preservedHistoryChars = Math.min(
-      historyResult.value.length,
+      historySummary.length,
       Math.floor(
         (preparation.summaryTokenBudget === undefined ? maxChars : maxChars - requiredChars) / 2,
       ),
@@ -974,7 +1009,7 @@ export async function compact(
     const suffix = `${latestContextBudget > 0 ? capCompactionSummary(latestContext, latestContextBudget) : ""}${fileOperations}`;
     return {
       summary: `${unresolvedRequestContext}${capCompactionSummary(
-        `${historyResult.value}${suffix}`,
+        `${historySummary}${suffix}`,
         maxChars - unresolvedRequestContext.length,
         suffix,
       )}`,
@@ -983,12 +1018,11 @@ export async function compact(
   if (!fitted.ok) {
     return fitted;
   }
-  const { summary } = fitted.value;
 
   return ok({
-    summary,
-    firstKeptEntryId,
-    tokensBefore,
+    summary: fitted.value.summary,
+    firstKeptEntryId: preparation.firstKeptEntryId,
+    tokensBefore: preparation.tokensBefore,
     details: {
       readFiles,
       modifiedFiles,

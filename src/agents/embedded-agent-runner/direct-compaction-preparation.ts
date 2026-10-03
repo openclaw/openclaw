@@ -48,6 +48,8 @@ import type { EmbeddedAgentCompactResult } from "./types.js";
 export type PreparedCompactEmbeddedAgentSessionParams = CompactEmbeddedAgentSessionParams & {
   preparedModelRuntime: PreparedModelRuntimeSnapshot;
   requestedRouteResolution?: "resolved";
+  /** A later model-fallback candidate retries this attempt's failover-eligible summary failure. */
+  summaryFailoverPending?: true;
   transcriptBytePreflightAuthority?: true;
   transcriptByteCompactionPersistence?: TranscriptByteCompactionPersistence;
   transcriptByteCompactionPersistenceAsync?: TranscriptByteCompactionPersistenceAsync;

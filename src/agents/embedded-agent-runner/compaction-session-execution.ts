@@ -28,6 +28,7 @@ import {
 } from "../agent-settings.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import { pickFallbackThinkingLevel } from "../embedded-agent-helpers.js";
+import { coerceToFailoverError } from "../failover-error.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
@@ -42,7 +43,7 @@ import { DefaultResourceLoader } from "../sessions/resource-loader.js";
 import { createAgentSession } from "../sessions/sdk.js";
 import { setSessionModelUsageSink } from "../sessions/session-model-usage.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
-import { resolveCompactionFailure } from "./compact-reasons.js";
+import { classifyCompactionReason, resolveCompactionFailure } from "./compact-reasons.js";
 import {
   containsRealConversationMessages,
   summarizeCompactionMessages,
@@ -477,17 +478,16 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             });
         const activeSession = session;
         let clientResult: Awaited<ReturnType<typeof activeSession.compact>> | undefined;
+        let summaryTimedOut = false;
         if (!serverResult) {
-          try {
-            // The client watchdog starts here; refresh the delegated host watchdog with it.
-            params.compactionTimeoutReset?.();
-            const outcome = await compactWithSafetyTimeout(
+          const requestState =
+            accountingRecorder?.pendingRequestState ??
+            (trigger === "overflow" ? ("unresolved" as const) : undefined);
+          const compactClient = (summaryOutputPolicy: "none" | "deterministic" | undefined) =>
+            compactWithSafetyTimeout(
               async (_signal, resetTimeout) => {
                 resetCompactionTimeout = resetTimeout;
                 setCompactionSafeguardCancellation(compactionSessionManager, undefined);
-                const requestState =
-                  accountingRecorder?.pendingRequestState ??
-                  (trigger === "overflow" ? ("unresolved" as const) : undefined);
                 if (trigger === "manual") {
                   return {
                     status: "completed" as const,
@@ -497,7 +497,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                 return activeSession[agentSessionAutomaticCompaction](
                   params.customInstructions,
                   requestState,
-                  resolveEffectiveCompactionMode(params.config) === "default" ? undefined : "none",
+                  summaryOutputPolicy,
                   {
                     requestBudget: accountingRecorder?.requestBudget,
                     pendingUserEntryId: accountingRecorder?.pendingUserEntryId,
@@ -510,6 +510,45 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                 onCancel: () => activeSession.abortCompaction(),
               },
             );
+          try {
+            // The client watchdog starts here; refresh the delegated host watchdog with it.
+            params.compactionTimeoutReset?.();
+            const outcome = await compactClient(
+              resolveEffectiveCompactionMode(params.config) === "default" ? undefined : "none",
+            ).catch(async (error: unknown) => {
+              // Caller Stop, run timeout, and the outer host deadline abort params.abortSignal
+              // (#133260, #159105, #130993); manual /compact reports its own failure.
+              if (trigger === "manual" || params.abortSignal?.aborted) {
+                throw error;
+              }
+              const failure = resolveCompactionFailure({
+                error,
+                safeguardCancellation: getCompactionSafeguardRuntime(sessionManager)?.cancellation,
+                abortSignal: params.abortSignal,
+              });
+              // Other summary failures are fast and keep their owners' outcomes.
+              if (classifyCompactionReason(failure.reason) !== "timeout") {
+                throw error;
+              }
+              // The timed-out request consumed the delegated window too. Rearm it synchronously,
+              // before its same-window timer fires, for the next model candidate or the commit.
+              params.compactionTimeoutReset?.();
+              if (
+                params.summaryFailoverPending &&
+                coerceToFailoverError(failure.error, { provider, model: modelId })
+              ) {
+                throw error;
+              }
+              // The same summary would time out again next turn (#164220): commit the
+              // prepared cut without one.
+              summaryTimedOut = true;
+              log.warn(
+                `[compaction-diag] fallback runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
+                  `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
+                  `reason=timeout summary=deterministic`,
+              );
+              return await compactClient("deterministic");
+            });
             if (outcome.status === "skipped") {
               assertActive();
               return { ok: true, compacted: false, reason: outcome.reason };
@@ -557,7 +596,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           log.debug(
             `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
               `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +
-              `attempt=${attempt} maxAttempts=${maxAttempts} outcome=compacted reason=none ` +
+              `attempt=${attempt} maxAttempts=${maxAttempts} outcome=compacted ` +
+              `reason=${summaryTimedOut ? "timeout summary=deterministic" : "none"} ` +
               `durationMs=${Date.now() - compactStartedAt} retrying=false ` +
               `post.messages=${postMetrics.messages} post.historyTextChars=${postMetrics.historyTextChars} ` +
               `post.toolResultChars=${postMetrics.toolResultChars} post.estTokens=${postMetrics.estTokens ?? "unknown"} ` +

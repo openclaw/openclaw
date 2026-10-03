@@ -1,6 +1,9 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { capCompactionSummary } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
+import {
+  capCompactionSummary,
+  compactWithoutSummary,
+} from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import { InvalidSummaryOutputError } from "../../../packages/agent-core/src/harness/types.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { AssistantMessage } from "../../llm/types.js";
@@ -41,7 +44,8 @@ import type { SettingsManager } from "./settings-manager.js";
 
 type CompactionReason = "manual" | "threshold" | "overflow";
 type CompactionRequestState = "unresolved";
-type SummaryOutputPolicy = "none" | "retry-invalid-once";
+// "deterministic" makes no model call: the host commits compactWithoutSummary after a failed summary.
+type SummaryOutputPolicy = "none" | "retry-invalid-once" | "deterministic";
 type CompactionWorkOutcome =
   | { status: "completed"; result: CompactionResult; tokensAfter: number }
   | { status: "aborted" }
@@ -211,17 +215,19 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     const compactionThinkingLevel =
       this.resolveCompactionThinkingLevel?.(model, this.thinkingLevel) ?? this.thinkingLevel;
 
-    let auth: Awaited<ReturnType<typeof this.getCompactionRequestAuth>>;
-    try {
-      auth = await this.getCompactionRequestAuth(model);
-    } catch (error) {
-      if (isManual) {
-        throw error;
+    let auth: { apiKey?: string; headers?: Record<string, string> } = {};
+    if (options.summaryOutputPolicy !== "deterministic") {
+      try {
+        auth = await this.getCompactionRequestAuth(model);
+      } catch (error) {
+        if (isManual) {
+          throw error;
+        }
+        return {
+          status: "skipped",
+          reason: compactionErrorMessage(error, "Compaction authentication failed"),
+        };
       }
-      return {
-        status: "skipped",
-        reason: compactionErrorMessage(error, "Compaction authentication failed"),
-      };
     }
 
     const pathEntries = this.sessionManager.getBranch();
@@ -311,7 +317,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
 
     let compactionResult: CompactionResult | undefined;
     let fromExtension = false;
-    if (this.currentExtensionRunner.hasHandlers("session_before_compact")) {
+    if (options.summaryOutputPolicy === "deterministic") {
+      // Summary producers, including session_before_compact hooks, already failed.
+      compactionResult = unwrapCoreResult(compactWithoutSummary(preparation));
+    } else if (this.currentExtensionRunner.hasHandlers("session_before_compact")) {
       const extensionResult = await this.currentExtensionRunner.emit({
         type: "session_before_compact",
         preparation,
