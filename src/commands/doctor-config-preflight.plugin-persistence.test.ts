@@ -79,6 +79,7 @@ async function withPreflightPluginFixture(
     };
     await writeVersion("1.0.0");
     const config: OpenClawConfig = {
+      meta: { migrations: { webhookListeners: true } },
       ...(workspaceNames.length
         ? {
             agents: {

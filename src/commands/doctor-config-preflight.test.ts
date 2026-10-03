@@ -521,6 +521,7 @@ describe("runDoctorConfigPreflight", () => {
     await withUnscopedDoctorConfigPreflightHome(async (home) => {
       await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const configPath = await writeOpenClawConfig(home, {
+          meta: { migrations: { webhookListeners: true } },
           gateway: { mode: "local" },
           plugins: {
             enabled: false,

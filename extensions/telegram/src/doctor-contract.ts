@@ -11,12 +11,20 @@ import {
   normalizeChannelAccounts,
   type CompatMutationResult,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { mergeTelegramAccountConfig } from "./account-config.js";
+import { listTelegramAccountIds } from "./account-selection.js";
+import {
+  DEFAULT_TELEGRAM_WEBHOOK_PATH,
+  resolveTelegramGatewayWebhookUrl,
+  resolveTelegramWebhookPathConflict,
+} from "./webhook-route.js";
 
 const webhookListenerMigration = createLegacyWebhookListenerDoctorContract({
   channelKey: "telegram",
   defaultPort: 8787,
   defaultHost: "127.0.0.1",
 });
+export const { historicalWebhookListener } = webhookListenerMigration;
 
 const RETIRED_TUNING_KEYS = new Set([
   "timeoutSeconds",
@@ -152,13 +160,29 @@ export function normalizeCompatibilityConfig({
 }: {
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
+  const historicalWebhookAccountIds =
+    cfg.channels?.telegram?.enabled === false
+      ? []
+      : listTelegramAccountIds(cfg).filter((accountId) => {
+          const account = mergeTelegramAccountConfig(cfg, accountId);
+          if (account.enabled === false || !account.webhookUrl?.trim()) {
+            return false;
+          }
+          const path = account.webhookPath ?? DEFAULT_TELEGRAM_WEBHOOK_PATH;
+          const gatewayUrl = resolveTelegramGatewayWebhookUrl(cfg, path);
+          return (
+            !gatewayUrl ||
+            URL.parse(account.webhookUrl)?.href !== gatewayUrl ||
+            resolveTelegramWebhookPathConflict(path) !== undefined
+          );
+        });
   const webhook = webhookListenerMigration.normalizeCompatibilityConfig({ cfg });
   const changes = [...webhook.changes];
   const rawEntry = asObjectRecord(
     (webhook.config.channels as Record<string, unknown> | undefined)?.telegram,
   );
   if (!rawEntry) {
-    return { config: cfg, changes: [] };
+    return { config: cfg, changes: [], historicalWebhookAccountIds };
   }
 
   const tuningKnobs = stripRetiredTelegramTuning(rawEntry, "channel");
@@ -225,7 +249,7 @@ export function normalizeCompatibilityConfig({
   changed = changed || accounts.changed;
 
   if (!changed && changes.length === 0) {
-    return { config: cfg, changes: [] };
+    return { config: cfg, changes: [], historicalWebhookAccountIds };
   }
   return {
     config: {
@@ -236,5 +260,6 @@ export function normalizeCompatibilityConfig({
       } as OpenClawConfig["channels"],
     },
     changes,
+    historicalWebhookAccountIds,
   };
 }

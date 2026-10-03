@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveTelegramTransport } from "./fetch.js";
 
 const mocks = vi.hoisted(() => ({
-  captureAvailable: true,
   capture: vi.fn<typeof import("openclaw/plugin-sdk/proxy-capture").captureHttpExchangeAsync>(),
   syncCapture: vi.fn(),
   fetch: vi.fn<typeof fetch>(),
@@ -10,9 +9,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
-  get captureHttpExchangeAsync() {
-    return mocks.captureAvailable ? mocks.capture : undefined;
-  },
+  captureHttpExchangeAsync: mocks.capture,
   captureHttpExchange: mocks.syncCapture,
   resolveEffectiveDebugProxyUrl: () => undefined,
 }));
@@ -30,7 +27,6 @@ vi.mock("undici/index.js", async (importOriginal) => ({
 }));
 
 beforeEach(() => {
-  mocks.captureAvailable = true;
   mocks.capture.mockReset().mockResolvedValue(undefined);
   mocks.syncCapture.mockReset();
   mocks.fetch.mockReset();
@@ -56,11 +52,10 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe.each(["owned", "caller"] as const)("%s dispatcher with optional capture", (owner) => {
-  it.each(["absent", "present", "rejected"] as const)(
+describe.each(["owned", "caller"] as const)("%s dispatcher with async capture", (owner) => {
+  it.each(["present", "rejected"] as const)(
     "preserves responses, transport errors, and close ownership when capture is %s",
     async (capability) => {
-      mocks.captureAvailable = capability !== "absent";
       if (capability === "rejected") {
         mocks.capture.mockRejectedValue(new Error("diagnostic store failed"));
       }
@@ -91,20 +86,16 @@ describe.each(["owned", "caller"] as const)("%s dispatcher with optional capture
         );
         await expect(transport.fetch(url, init)).rejects.toBe(transportError);
         expect(mocks.fetch).toHaveBeenCalledTimes(2);
-        if (capability === "absent") {
-          expect(mocks.capture).not.toHaveBeenCalled();
-        } else {
-          expect(mocks.capture).toHaveBeenCalledOnce();
-          expect(mocks.capture).toHaveBeenCalledWith(
-            expect.objectContaining({
-              url,
-              method: "POST",
-              requestBody: "{}",
-              response,
-              meta: { subsystem: "telegram-fetch" },
-            }),
-          );
-        }
+        expect(mocks.capture).toHaveBeenCalledOnce();
+        expect(mocks.capture).toHaveBeenCalledWith(
+          expect.objectContaining({
+            url,
+            method: "POST",
+            requestBody: "{}",
+            response,
+            meta: { subsystem: "telegram-fetch" },
+          }),
+        );
         expect(mocks.syncCapture).not.toHaveBeenCalled();
       } finally {
         await transport.close();

@@ -441,7 +441,7 @@ describe("Feishu webhook Doctor notes", () => {
           appSecret: "secret_test",
           connectionMode: "webhook",
           webhookPath,
-          legacyWebhook: legacy ? undefined : false,
+          legacyWebhook: legacy ? { port: 3000 } : undefined,
         }),
       );
       expect(result.infoNotes).toEqual([]);
@@ -451,7 +451,7 @@ describe("Feishu webhook Doctor notes", () => {
       expect(result.warningNotes[0]).toContain("/feishu/events");
       expect(result.warningNotes[0]).toContain("callback");
       expect(result.warningNotes[0]).toContain(
-        legacy ? "before setting legacyWebhook:false" : "startup is blocked",
+        legacy ? "before removing the legacyWebhook pin" : "startup is blocked",
       );
     },
   );
@@ -474,8 +474,8 @@ describe("Feishu webhook Doctor notes", () => {
     );
     expect(result.warningNotes).toEqual([]);
     expect(result.infoNotes).toEqual([expect.stringContaining('Feishu account "active"')]);
-    expect(result.infoNotes?.[0]).toContain("127.0.0.1:3000");
-    expect(result.infoNotes?.[0]).toContain("legacyWebhook:false");
+    expect(result.infoNotes?.[0]).toContain("Gateway port");
+    expect(result.infoNotes?.[0]).toContain("No legacy listener is configured");
   });
 
   it("describes raw SecretRef webhook config without inspecting credentials", async () => {
@@ -504,7 +504,9 @@ describe("Feishu webhook Doctor notes", () => {
         }),
       );
       expect(result.warningNotes).toEqual([]);
-      expect(result.infoNotes).toEqual([expect.stringContaining("127.0.0.1:3000")]);
+      expect(result.infoNotes).toEqual([
+        expect.stringContaining("No legacy listener is configured"),
+      ]);
       expect(inspectSecret).not.toHaveBeenCalled();
     } finally {
       inspectSecret.mockRestore();
