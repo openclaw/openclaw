@@ -242,6 +242,7 @@ function findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
   params: {
     assistantMessageIndex: number;
     mediaUrls: readonly string[];
+    rejectedMediaCount: number;
   },
 ): { messageId: string; message: Record<string, unknown> } | null {
   const expectedMedia = new Set(
@@ -250,7 +251,7 @@ function findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
       .filter((value) => value.length > 0),
   );
   if (
-    expectedMedia.size === 0 ||
+    (expectedMedia.size === 0 && params.rejectedMediaCount === 0) ||
     !Number.isSafeInteger(params.assistantMessageIndex) ||
     params.assistantMessageIndex < 1
   ) {
@@ -264,14 +265,17 @@ function findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
   if (!found || !text) {
     return null;
   }
+  const parsed = splitMediaFromOutput(text);
   const actualMedia = new Set(
-    (splitMediaFromOutput(text).mediaUrls ?? [])
+    (parsed.mediaUrls ?? [])
       .map((value) => normalizeMediaReferenceForComparison(value))
       .filter((value) => value.length > 0),
   );
+  // A reply whose only directives were rejected is identified by their count.
   const exactMediaMatch =
     actualMedia.size === expectedMedia.size &&
-    [...expectedMedia].every((value) => actualMedia.has(value));
+    [...expectedMedia].every((value) => actualMedia.has(value)) &&
+    (parsed.rejectedMediaCount ?? 0) === params.rejectedMediaCount;
   return exactMediaMatch ? found : null;
 }
 
@@ -562,9 +566,13 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
   content: AssistantDisplayContentBlock[];
   expectedGeneration: string | null;
   mediaUrls: readonly string[];
+  rejectedMediaCount: number;
   scope: ResolvedAssistantTranscriptScope;
 }): Promise<{ generation: string; messageId: string } | null> {
-  if (params.content.length === 0 || params.mediaUrls.length === 0) {
+  if (
+    params.content.length === 0 ||
+    (params.mediaUrls.length === 0 && params.rejectedMediaCount === 0)
+  ) {
     return null;
   }
   const currentWatermark = readSessionTranscriptWatermark(params.scope);

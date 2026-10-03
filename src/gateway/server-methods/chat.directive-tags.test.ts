@@ -23,6 +23,7 @@ import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js"
 import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.js";
 import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { getTotalPendingReplies } from "../../auto-reply/reply/dispatcher-registry.js";
+import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import {
   replyRunRegistry,
   type ReplyBackendQueueMessageOptions,
@@ -2849,6 +2850,43 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         expect(mockState.disposedTranscriptWriteAttempts).toBe(0);
       },
     );
+  });
+
+  it("rewrites a reply whose only MEDIA directive was rejected instead of appending a copy", async () => {
+    await withTranscriptFixtureState("openclaw-chat-send-rejected-media-", async () => {
+      const text =
+        "Here is the movie.\nMEDIA:http://192.168.1.138:64384/movie.mp4?openclaw_portal=synthetic";
+      const parsed = parseReplyDirectives(text);
+      mockState.triggerAgentRunStart = true;
+      mockState.runtimeAssistantTextsBeforeDelivery = [text];
+      mockState.dispatchedReplies = [
+        {
+          kind: "final",
+          payload: setReplyPayloadMetadata(
+            { text: parsed.text },
+            { assistantMessageIndex: 1, assistantMediaFailures: parsed.mediaFailures },
+          ),
+        },
+      ];
+      await createChatRequestFixture().send({
+        idempotencyKey: "idem-rejected-media",
+        expectBroadcast: false,
+        waitFor: "dedupe",
+      });
+
+      const messages = await readActiveAssistantTranscriptMessages();
+      expect(messages).toHaveLength(1);
+      expect(JSON.stringify(messages)).not.toContain(":assistant-media");
+      const content = Array.isArray(messages[0]?.content)
+        ? (messages[0].content as Array<Record<string, unknown>>)
+        : [];
+      expect(content.filter((block) => block.type === "attachment_error")).toEqual([
+        {
+          type: "attachment_error",
+          attachment: { code: "invalid-reference", kind: "document", label: "Media not attached" },
+        },
+      ]);
+    });
   });
 
   it("materializes latest media payloads once in first-seen order", async () => {
