@@ -64,30 +64,23 @@ export class McpAppContextStrip extends OpenClawLightDomElement {
           }
           const generation = (refreshes.get(entry.viewId) ?? 0) + 1;
           refreshes.set(entry.viewId, generation);
+          const publish = (nextContext: McpAppContextState) => {
+            if (
+              this.isConnected &&
+              gateway.snapshot.client === client &&
+              refreshes.get(entry.viewId) === generation
+            ) {
+              publishMcpAppContext(client, { ...entry, state: nextContext });
+            }
+          };
           void client
             .request<{ state: McpAppContextState }>("mcp.app.modelContext", {
               sessionKey: entry.sessionKey,
               agentId: entry.agentId,
               viewId: entry.viewId,
             })
-            .then((result) => {
-              if (
-                this.isConnected &&
-                gateway.snapshot.client === client &&
-                refreshes.get(entry.viewId) === generation
-              ) {
-                publishMcpAppContext(client, { ...entry, state: result.state });
-              }
-            })
-            .catch(() => {
-              if (
-                this.isConnected &&
-                gateway.snapshot.client === client &&
-                refreshes.get(entry.viewId) === generation
-              ) {
-                publishMcpAppContext(client, { ...entry, state: null });
-              }
-            });
+            .then((result) => publish(result.state))
+            .catch(() => publish(null));
         });
         return () => {
           stop();

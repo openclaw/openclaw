@@ -477,24 +477,27 @@ export class McpAppView extends LitElement {
       createdResources.bridge = bridge;
       const request = (method: string, params: Record<string, unknown>) =>
         this.request(binding, method, params);
-      const refreshModelContext = async () => {
-        const generation = ++contextGeneration;
-        try {
-          const response = (await request("mcp.app.modelContext", {})) as {
-            state: McpAppContextState;
-          };
-          if (createdResources.disposed || generation !== contextGeneration) {
-            return;
-          }
-          modelContext = response.state;
-        } catch {
-          if (createdResources.disposed || generation !== contextGeneration) {
-            return;
-          }
-          modelContext = null;
+      const refreshModelContext = (clearedUpdateId?: string) => {
+        if (clearedUpdateId && modelContext && modelContext.updateId !== clearedUpdateId) {
+          return undefined;
         }
-        bridge.setHostContext(buildHostContext());
-        publishContext();
+        const generation = ++contextGeneration;
+        const publish = (nextContext: McpAppContextState) => {
+          if (createdResources.disposed || generation !== contextGeneration) {
+            return;
+          }
+          modelContext = nextContext;
+          bridge.setHostContext(buildHostContext());
+          publishContext();
+        };
+        if (clearedUpdateId) {
+          publish(null);
+          return undefined;
+        }
+        return request("mcp.app.modelContext", {})
+          .then((response) => (response as { state: McpAppContextState }).state)
+          .catch(() => null)
+          .then(publish);
       };
       const handleRequestTeardown = () => {
         void this.teardown();
@@ -538,17 +541,7 @@ export class McpAppView extends LitElement {
         },
         dispatchEvent: (event) => this.dispatchEvent(event),
         onModelContextChanged: (clearedUpdateId) => {
-          if (clearedUpdateId) {
-            if (modelContext && modelContext.updateId !== clearedUpdateId) {
-              return;
-            }
-            ++contextGeneration;
-            modelContext = null;
-            bridge.setHostContext(buildHostContext());
-            publishContext();
-          } else {
-            void refreshModelContext().catch(() => undefined);
-          }
+          void refreshModelContext(clearedUpdateId)?.catch(() => undefined);
         },
         onConversationInputRequested: () => {
           this.displayMode = "inline";
@@ -651,13 +644,9 @@ export class McpAppView extends LitElement {
   }
 
   override render() {
-    const error = this.setupTask.status === TaskStatus.ERROR ? this.setupTask.error : null;
-    const errorText =
-      error && !this.inactive
-        ? t("mcpApp.unavailable", {
-            error: formatUiError(error, t("mcpApp.errors.requestFailed")),
-          })
-        : null;
+    const error =
+      !this.inactive && this.setupTask.status === TaskStatus.ERROR ? this.setupTask.error : null;
+    const relaunch = this.inactive === "ended" && this.onRelaunch;
     return html`${
         this.displayMode === "fullscreen"
           ? html`<button
@@ -673,15 +662,13 @@ export class McpAppView extends LitElement {
       ${
         this.inactive
           ? html`<div class="inactive" role="status">
-              <span
-                >${t(this.inactive === "ended" && this.onRelaunch ? "mcpApp.sessionEnded" : "mcpApp.reconstructed")}</span
-              >
-              ${this.inactive === "ended" && this.onRelaunch ? html`<button type="button" ?disabled=${this.relaunching} @click=${this.onRelaunch}>${t("mcpApp.relaunch")}</button>` : nothing}
+              <span>${t(relaunch ? "mcpApp.sessionEnded" : "mcpApp.reconstructed")}</span>
+              ${relaunch ? html`<button type="button" ?disabled=${this.relaunching} @click=${relaunch}>${t("mcpApp.relaunch")}</button>` : nothing}
             </div>`
           : nothing
       }
       <div ${ref(this.mount)} class="mount"></div>
-      ${errorText ? html`<div class="error">${errorText}</div>` : nothing}`;
+      ${error ? html`<div class="error">${t("mcpApp.unavailable", { error: formatUiError(error, t("mcpApp.errors.requestFailed")) })}</div>` : nothing}`;
   }
 }
 

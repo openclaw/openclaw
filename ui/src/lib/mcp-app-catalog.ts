@@ -127,18 +127,15 @@ export class McpAppCatalogController implements ReactiveController {
       JSON.stringify(target) === JSON.stringify(this.target());
     try {
       if (this.prepareSession() && this.preparedSessionIdentity !== this.identity) {
-        const described = await context.sessions.describe({
-          key: target.sessionKey,
-          agentId: target.agentId,
-        });
+        const sessionTarget = { key: target.sessionKey, agentId: target.agentId };
+        const described = await context.sessions.describe(sessionTarget);
         if (!current()) {
           return;
         }
         if (!described.session) {
-          const session = await context.sessions.createResult(
-            { key: target.sessionKey, agentId: target.agentId },
-            { reconciliation: "background" },
-          );
+          const session = await context.sessions.createResult(sessionTarget, {
+            reconciliation: "background",
+          });
           if (!current()) {
             return;
           }

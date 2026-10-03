@@ -351,10 +351,6 @@ export async function fetchMcpAppView(params: {
           }
         : undefined;
     const requestedDisplayMode = params.displayMode ?? preferredDisplayMode ?? "inline";
-    const displayMode =
-      availableDisplayModes?.length && !availableDisplayModes.includes(requestedDisplayMode)
-        ? availableDisplayModes[0]
-        : requestedDisplayMode;
     const csp = normalizeMcpAppCsp(uiMeta?.csp);
     const permissions = normalizePermissions(uiMeta?.permissions);
     const title = `${params.toolName} UI`;
@@ -389,7 +385,10 @@ export async function fetchMcpAppView(params: {
         ? { richModelContextSupported: params.richModelContextSupported }
         : {}),
       ...(params.deepLink ? { deepLink: params.deepLink } : {}),
-      displayMode,
+      displayMode:
+        availableDisplayModes?.length && !availableDisplayModes.includes(requestedDisplayMode)
+          ? availableDisplayModes[0]
+          : requestedDisplayMode,
       ...(displayModes ? { displayModes } : {}),
       toolInput: params.toolInput,
       toolResult: params.toolResult,

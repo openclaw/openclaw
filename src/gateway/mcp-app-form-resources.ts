@@ -82,7 +82,6 @@ const actionSchema = z.discriminatedUnion("action", [
     .strict(),
 ]);
 
-/** Binds resource capabilities to the originating MCP call's live authority. */
 export async function createMcpAppFormResourceContext(params: {
   origin: McpAppFormOrigin;
   snapshot: Record<string, unknown>;
