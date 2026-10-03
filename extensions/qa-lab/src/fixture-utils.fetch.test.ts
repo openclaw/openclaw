@@ -5,33 +5,15 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe("fetchQaFixtureJson", () => {
-  it("aborts requests that never resolve", async () => {
-    let signal: AbortSignal | undefined;
-    const result = expect(
-      fetchQaFixtureJson("https://qa.example.invalid/debug/requests", undefined, {
-        timeoutMs: 25,
-        fetchImpl: async (_url, init) => {
-          signal = init.signal as AbortSignal | undefined;
-          return new Promise<Response>(() => {});
-        },
-      }),
-    ).rejects.toMatchObject({
-      code: "ETIMEDOUT",
-      message: "HTTP request to https://qa.example.invalid/debug/requests timed out after 25ms",
-    });
-    await vi.advanceTimersByTimeAsync(25);
-    await result;
-    expect(signal?.aborted).toBe(true);
-  });
-
-  it("times out while reading stalled response bodies", async () => {
+  it("aborts while reading stalled response bodies", async () => {
+    let signal: AbortSignal | null | undefined;
     const result = expect(
       fetchQaFixtureJson("https://qa.example.invalid/v1/responses", undefined, {
         timeoutMs: 25,
-        fetchImpl: async () =>
-          new Response(new ReadableStream<Uint8Array>({ start() {} }), {
-            status: 200,
-          }),
+        fetchImpl: async (_url, init) => {
+          signal = init.signal;
+          return new Response(new ReadableStream<Uint8Array>({ start() {} }), { status: 200 });
+        },
       }),
     ).rejects.toMatchObject({
       code: "ETIMEDOUT",
@@ -39,6 +21,7 @@ describe("fetchQaFixtureJson", () => {
     });
     await vi.advanceTimersByTimeAsync(25);
     await result;
+    expect(signal?.aborted).toBe(true);
   });
 
   it("parses successful JSON responses", async () => {

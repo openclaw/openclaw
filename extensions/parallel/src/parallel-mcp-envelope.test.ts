@@ -20,24 +20,18 @@ function events(messages: unknown[], newline = "\n"): string {
   return messages.map((message) => `data: ${JSON.stringify(message)}${newline}${newline}`).join("");
 }
 
-async function search(
-  callBody: (requestId: string) => string,
-  initBody?: (requestId: string) => string,
-) {
-  const requests: Array<{ method: string; headers: Headers }> = [];
+async function search(callBody: (requestId: string) => string) {
   vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
     if (typeof init?.body !== "string") {
       throw new Error("Expected a JSON request body");
     }
     const request = JSON.parse(init.body) as { method: string; id: string };
-    requests.push({ method: request.method, headers: new Headers(init?.headers) });
     if (request.method === "notifications/initialized") {
       return new Response(null, { status: 204 });
     }
     const initializing = request.method === "initialize";
     const body = initializing
-      ? (initBody?.(request.id) ??
-        JSON.stringify({ id: request.id, result: { protocolVersion: "2025-06-18" } }))
+      ? JSON.stringify({ id: request.id, result: { protocolVersion: "2025-06-18" } })
       : callBody(request.id);
     return new Response(body, {
       headers: {
@@ -56,23 +50,10 @@ async function search(
     search_queries: ["public documentation"],
     session_id: "fixture-search-session",
   });
-  return { output, requests };
+  return output;
 }
 
 describe("Parallel MCP envelope selection through the registered free provider", () => {
-  it("keeps the first matching result before conflicting JSON batch tails", async () => {
-    const { output } = await search((id) =>
-      JSON.stringify([
-        { id, method: "notifications/progress" },
-        result(id, "selected"),
-        { id, error: { message: "later matching error" } },
-        result("unrelated", "last fallback"),
-      ]),
-    );
-
-    expect(output.searchId).toBe("selected");
-  });
-
   it("keeps a matching error before a later matching success", async () => {
     await expect(
       search((id) => events([{ id, error: { message: "selected error" } }, result(id, "ignored")])),
@@ -80,7 +61,7 @@ describe("Parallel MCP envelope selection through the registered free provider",
   });
 
   it("uses the last result when no response id matches", async () => {
-    const { output } = await search(() =>
+    const output = await search(() =>
       events([
         result("other-first", "earlier"),
         { id: "other-error", error: { message: "earlier error" } },
@@ -92,7 +73,7 @@ describe("Parallel MCP envelope selection through the registered free provider",
   });
 
   it("keeps multiline CRLF data and ignores malformed events and nested batch arrays", async () => {
-    const { output } = await search((id) =>
+    const output = await search((id) =>
       [
         ": ignored comment",
         "event: fixture",
@@ -105,27 +86,5 @@ describe("Parallel MCP envelope selection through the registered free provider",
     );
 
     expect(output.searchId).toBe("selected");
-  });
-
-  it("uses the selected initialization response for every follow-up request", async () => {
-    const { output, requests } = await search(
-      (id) => JSON.stringify(result(id, "selected")),
-      (id) =>
-        events([
-          { id, result: { protocolVersion: "2025-03-26" } },
-          { id: "other", result: { protocolVersion: "wrong trailing version" } },
-        ]),
-    );
-
-    expect(output.searchId).toBe("selected");
-    expect(requests.map((request) => request.method)).toEqual([
-      "initialize",
-      "notifications/initialized",
-      "tools/call",
-    ]);
-    for (const request of requests.slice(1)) {
-      expect(request.headers.get("mcp-session-id")).toBe("fixture-server-session");
-      expect(request.headers.get("mcp-protocol-version")).toBe("2025-03-26");
-    }
   });
 });

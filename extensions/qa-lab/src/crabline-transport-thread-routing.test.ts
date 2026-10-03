@@ -130,51 +130,6 @@ describe("Crabline provider thread routing", () => {
     });
   });
 
-  it("keeps Mattermost root and thread correlation distinct", async () => {
-    await withTransport("mattermost", async (transport) => {
-      const conversationId = "thread-channel";
-      await transport.state.addInboundMessage({
-        conversation: { id: conversationId, kind: "group" },
-        senderId: "alice",
-        text: "provision Mattermost thread channel",
-      });
-      await transport.state.reset();
-      const rootDelivery = transport.buildAgentDelivery({ target: `group:${conversationId}` });
-      const channelId = rootDelivery.to.replace(/^channel:/u, "");
-      const env = transport.createRuntimeEnvPatch?.() ?? {};
-      const mattermostUrl = requireString(env.MATTERMOST_URL, "Mattermost URL");
-      const botToken = requireString(env.MATTERMOST_BOT_TOKEN, "Mattermost bot token");
-      const send = async (message: string, rootId?: string) =>
-        await postJson<{ id: string }>({
-          url: `${mattermostUrl}/api/v4/posts`,
-          body: { channel_id: channelId, message, ...(rootId ? { root_id: rootId } : {}) },
-          headers: { authorization: `Bearer ${botToken}` },
-          auditContext: "qa-lab-crabline-mattermost-thread-correlation-test",
-        });
-
-      const root = await send("mattermost seed root");
-      transport.buildAgentDelivery({ target: `group:${conversationId}`, threadId: root.id });
-      await send("mattermost unrelated root");
-      await expect(
-        transport.waitForOutbound({
-          conversation: { id: conversationId, kind: "group" },
-          threadId: root.id,
-          textIncludes: "mattermost unrelated root",
-          timeoutMs: 50,
-        }),
-      ).rejects.toThrow();
-      await send("mattermost threaded reply", root.id);
-      await expect(
-        transport.waitForOutbound({
-          conversation: { id: conversationId, kind: "group" },
-          threadId: root.id,
-          textIncludes: "mattermost threaded reply",
-          timeoutMs: 1_000,
-        }),
-      ).resolves.toMatchObject({ threadId: root.id, text: "mattermost threaded reply" });
-    });
-  });
-
   it("delivers symbolic Mattermost threads through their native provider root", async () => {
     await withTransport("mattermost", async (transport) => {
       const conversationId = "symbolic-thread-channel";

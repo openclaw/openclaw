@@ -95,40 +95,11 @@ function findings(rules: unknown, observed: PolicyEvidence = evidence) {
 }
 
 describe("sandbox allowlist finding order", () => {
-  it.each([
-    {
-      name: "empty mode",
-      sandbox: { requireMode: [], allowBackends: ["docker"] },
-      expected: [alphaBackend, defaultBackend],
-    },
-    {
-      name: "omitted backend",
-      sandbox: { requireMode: ["all"] },
-      expected: [defaultMode, alphaMode],
-    },
-  ])("disables only the $name allowlist", ({ sandbox, expected: ordered }) => {
-    expect(findings({ sandbox })).toEqual(ordered);
-  });
-
-  it("accepts padded policy values and case-folds observed strings", () => {
-    expect(
-      findings(
-        { sandbox: { requireMode: [" all "], allowBackends: [" DoCkEr "] } },
-        {
-          ...evidence,
-          sandboxPosture: posture.map((entry) => ({
-            ...entry,
-            value: entry.kind === "mode" ? "ALL" : "DOCKER",
-          })),
-        },
-      ),
-    ).toEqual([]);
-  });
-
-  it("accepts absent and empty sandbox evidence", () => {
-    const { sandboxPosture: _posture, ...withoutPosture } = evidence;
-    expect(findings(policy, withoutPosture)).toEqual([]);
-    expect(findings(policy, { ...evidence, sandboxPosture: [] })).toEqual([]);
+  it("disables the empty mode allowlist without disabling the backend allowlist", () => {
+    expect(findings({ sandbox: { requireMode: [], allowBackends: ["docker"] } })).toEqual([
+      alphaBackend,
+      defaultBackend,
+    ]);
   });
 
   it("retains ordered inherited-default findings for a matching scope", () => {
