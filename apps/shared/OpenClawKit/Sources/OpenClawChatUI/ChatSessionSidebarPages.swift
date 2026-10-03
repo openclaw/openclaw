@@ -132,7 +132,7 @@ extension ChatSessionSidebar {
     @ViewBuilder var agentScopePicker: some View {
         if self.viewModel.agentChoices.count > 1 || self.showsAllAgents {
             Picker(String(localized: "Agent scope"), selection: Binding(
-                get: { self.showsAllAgents }, set: self.setAllAgents))
+                get: { self.showsAllAgents }, set: { all in self.setAllAgents(all) }))
             {
                 Text("Selected agent").tag(false)
                 Text("All agents").tag(true)
