@@ -395,7 +395,7 @@ suite.define(() => {
           },
         ],
       });
-      await page.getByRole("button", { name: "Filter & sort" }).click();
+      await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
       await chooseSidebarMenuOption(page, "Status", "Archived");
       await closeSidebarMenu(page);
       await gateway.waitForRequest("sessions.list", {

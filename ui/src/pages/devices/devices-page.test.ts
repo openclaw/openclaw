@@ -316,6 +316,13 @@ describe("DevicesPage gateway lifecycle", () => {
       desktop: false,
       scopes: ["operator.read"],
     },
+    {
+      name: "session-only",
+      methods: ["system.info", "desktop.observe"],
+      systemInfo: false,
+      desktop: false,
+      scopes: ["operator.sessions.read", "operator.sessions.write"],
+    },
   ])("loads only available host details for $name connections", async (scenario) => {
     const request = vi.fn(async (method: string) =>
       method === "system.info" ? deviceSystemInfo : { environments: deviceDesktopEnvironments },

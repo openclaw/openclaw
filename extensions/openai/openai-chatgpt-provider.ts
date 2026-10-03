@@ -126,13 +126,6 @@ function isOpenAIProvider(provider: string | undefined): boolean {
   return normalized === PROVIDER_ID;
 }
 
-function isLegacyCodexCompatBaseUrl(baseUrl?: string): boolean {
-  const trimmed = baseUrl?.trim();
-  return (
-    trimmed !== undefined && /^https?:\/\/api\.githubcopilot\.com(?:\/v1)?\/?$/iu.test(trimmed)
-  );
-}
-
 function normalizeCodexTransportFields(params: {
   api?: ProviderRuntimeModel["api"] | null;
   baseUrl?: string;
@@ -141,10 +134,7 @@ function normalizeCodexTransportFields(params: {
   baseUrl?: string;
 } {
   const useCodexTransport =
-    !params.baseUrl ||
-    isOpenAIApiBaseUrl(params.baseUrl) ||
-    isOpenAICodexBaseUrl(params.baseUrl) ||
-    isLegacyCodexCompatBaseUrl(params.baseUrl);
+    !params.baseUrl || isOpenAIApiBaseUrl(params.baseUrl) || isOpenAICodexBaseUrl(params.baseUrl);
   const api =
     useCodexTransport &&
     (!params.api || params.api === "openai-responses" || params.api === "openai-completions")

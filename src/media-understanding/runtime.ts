@@ -244,10 +244,7 @@ export async function describeImageFile(
 export async function prepareImageDescriptionInput(params: PrepareImageDescriptionInputParams) {
   const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   const image = await readImageDescriptionInput({
-    filePath: params.filePath,
-    mediaUrl: params.mediaUrl,
-    mime: params.mime,
-    cfg: params.cfg,
+    ...params,
     timeoutMs,
   });
   const normalizedImage = await normalizeImageDescriptionInput({

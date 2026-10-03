@@ -360,6 +360,7 @@ export function createTelegramMessagePipeline({
       explicitParticipants.length > 0
         ? createTelegramSpooledReplayParticipant(
             `message-processing:${params.msg.chat.id}:${params.msg.message_id}`,
+            explicitParticipants,
           )
         : frameParticipant;
     if (processingParticipant && explicitParticipants.length > 0) {

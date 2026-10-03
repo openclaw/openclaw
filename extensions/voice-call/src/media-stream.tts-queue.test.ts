@@ -113,11 +113,9 @@ describe("MediaStreamHandler TTS queue", () => {
 
     const state = handler as unknown as {
       ttsQueues: Map<string, unknown[]>;
-      ttsPlaying: Map<string, boolean>;
       ttsActiveControllers: Map<string, AbortController>;
     };
     expect(state.ttsQueues.has("stream-1")).toBe(false);
-    expect(state.ttsPlaying.has("stream-1")).toBe(false);
     expect(state.ttsActiveControllers.has("stream-1")).toBe(false);
   });
 });

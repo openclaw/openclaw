@@ -5,6 +5,7 @@ import {
   createIncognitoSessionFacts,
   type IncognitoSessionRunner,
 } from "../config/sessions/session-incognito-actor.js";
+import { forkIncognitoSessionFromParent } from "../config/sessions/session-incognito-lifecycle.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
@@ -490,6 +491,7 @@ export function createAgentDatabaseExecutionCapture<FileExecution, FileConstrain
     return captureFile(target, constraints);
   }
   return Object.assign(capture, {
+    forkIncognitoSessionFromParent,
     /** Inactive topology view; production discovery continues to use the native owner. */
     listIncognito(env: NodeJS.ProcessEnv = process.env) {
       const capturedEnv = { ...env, OPENCLAW_STATE_DIR: resolveStateDir(env) };

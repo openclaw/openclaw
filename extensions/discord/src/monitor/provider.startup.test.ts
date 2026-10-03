@@ -1,4 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Client } from "../internal/client.js";
@@ -91,6 +92,7 @@ describe("Discord provider startup", () => {
     overrides: Partial<Parameters<typeof createDiscordMonitorClient>[0]> = {},
   ) {
     return createDiscordMonitorClient({
+      scheduler: createTestPluginServiceScheduler(),
       accountId: "default",
       applicationId: "app-1",
       token: "token-1",
@@ -109,7 +111,6 @@ describe("Discord provider startup", () => {
           start: vi.fn(),
           stop: vi.fn(),
           refresh: vi.fn(),
-          runNow: vi.fn(),
         }) as never,
       isDisallowedIntentsError: () => false,
       ...overrides,

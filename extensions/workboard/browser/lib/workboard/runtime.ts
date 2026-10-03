@@ -26,7 +26,6 @@ type WorkboardRuntime = {
   liveHighestSeenRevision?: number;
   liveAppliedRevision?: number;
   liveRefreshPending?: boolean;
-  liveInvalidationRevision?: number;
   liveRefreshPromise?: Promise<void>;
   liveRefreshRetryTimer?: ReturnType<typeof setTimeout>;
   liveRefreshEntry?: WorkboardLiveRefreshEntry;
@@ -76,7 +75,6 @@ export function stopWorkboardLiveRefresh(host: WorkboardHost): void {
   delete runtime.liveHighestSeenRevision;
   delete runtime.liveAppliedRevision;
   delete runtime.liveRefreshPending;
-  delete runtime.liveInvalidationRevision;
   if (loadInFlight) {
     invalidateWorkboardLoads(host);
   }

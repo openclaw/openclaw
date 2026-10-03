@@ -653,10 +653,10 @@ describe("repository checkpoint GitHub publication", () => {
             runId: "pending-result-run",
             owner: { kind: "local", environmentId: "pending-publication-worker", ownerEpoch: 7 },
           });
-          blocked.placements.markWorkspaceResultPending(pendingClaim);
+          await blocked.placements.markWorkspaceResultPending(pendingClaim);
           expect(blocked.placements.clearLocalTurnClaimsAfterRestart()).toBe(1);
           expect(blocked.placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
-          expect(blocked.placements.listPendingWorkspaceResults()).toHaveLength(1);
+          expect(await blocked.placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
         } else if (blocker === "reservation") {
           const entered = createDeferredCore();
           held = blocked.placements.withWorkspaceExclusion(REQUEST.sessionId, async () => {
@@ -742,9 +742,9 @@ describe("repository checkpoint GitHub publication", () => {
       if (publication === "unavailable") {
         checkpoint.mockImplementation(async (_request, use) => await use({}));
       }
-      f.placements.markWorkspaceResultPending(claim);
+      await f.placements.markWorkspaceResultPending(claim);
       await f.coordinator.prepareClaimWorkspace(claim);
-      f.placements.acceptWorkspaceResult(claim);
+      await f.placements.acceptWorkspaceResult(claim);
       if (publication === "unavailable") {
         expect(await f.coordinator.processClaim(claim)).toEqual([]);
         expect(readRepositoryGitHubPublication(requested.requestId)).toMatchObject({
@@ -902,7 +902,7 @@ describe("repository checkpoint GitHub publication", () => {
       expect(await f.coordinator.processClaim(claim)).toEqual([]);
       f.coordinator.deferClaimPreparation(claim);
       expect(readRepositoryGitHubPublication(accepted.requestId)?.claim_id).toBe(claim.claimId);
-      f.coordinator.deferOrphanedRequests();
+      expect(f.coordinator.deferOrphanedRequests()).toBeUndefined();
       expect(readRepositoryGitHubPublication(accepted.requestId)?.claim_id).toBeNull();
       expect(f.runtime.effects).toEqual([]);
     },

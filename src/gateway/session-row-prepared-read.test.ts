@@ -4,10 +4,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { deferCanonicalSessionValidation } from "../config/sessions/session-canonical-validation-deferral.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  authorizeGatewayRequestPreDispatch,
-  createRequestGatewayMethodRegistry,
-} from "./server-methods.js";
+import { createRequestGatewayMethodRegistry, handleGatewayRequest } from "./server-methods.js";
+import { authorizeGatewayRequestPreDispatch } from "./server-methods/request-authorization.js";
 import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
 import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
 import { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
@@ -120,6 +118,44 @@ it("refuses a disposed projection before selecting or consuming rows", async () 
   expect(queries).not.toHaveBeenCalled();
   expect(consume).not.toHaveBeenCalled();
 });
+
+it.each(["operator.admin", "operator.read"])(
+  "ends describe readiness retries after its %s connection closes",
+  async (scope) => {
+    const { projection, context, client } = describeFixture();
+    const connection = new AbortController();
+    client.connect.scopes = [scope];
+    client.connectionSignal = connection.signal;
+    const prepare = vi.spyOn(projection, "withPreparedExactRows").mockResolvedValueOnce({
+      kind: "pending",
+      database: { agentId: "main", path: "/synthetic/cancelled.sqlite" },
+    });
+    certifyReadiness.mockImplementationOnce(async () => {
+      connection.abort(new Error("Requesting connection closed"));
+    });
+    const respond = vi.fn();
+    try {
+      await handleGatewayRequest({
+        req: {
+          type: "req",
+          id: "cancelled-description",
+          method: "sessions.describe",
+          params: { key: "agent:main:cancelled-read" },
+        },
+        context,
+        client,
+        respond,
+        isWebchatConnect: () => false,
+        extraHandlers: sessionByKeyReadHandlers,
+      });
+      expect(certifyReadiness).toHaveBeenCalledOnce();
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(respond).not.toHaveBeenCalled();
+    } finally {
+      projection.dispose();
+    }
+  },
+);
 
 it("captures refreshed metadata after preparation without rereading the state getter during consumption", async () => {
   const owner = createSessionRowProjectionFixture({ cfg, store: {} });

@@ -149,7 +149,7 @@ export default {
           loadPluginMetadataSnapshot({ config, env: state.env }),
         );
         const prepared = createDoctorPluginMetadataSnapshotScope({
-          baseSnapshot,
+          getBaseSnapshot: () => baseSnapshot,
           env: state.env,
         });
         const check = createRuntimeToolSchemaCheck({

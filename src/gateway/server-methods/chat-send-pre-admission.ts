@@ -15,6 +15,7 @@ import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
+import { errorShapeFromError } from "../error-shape.js";
 import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
@@ -111,7 +112,11 @@ export function respondChatSendAdmissionError(
     );
     return;
   }
-  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(error)));
+  respond(
+    false,
+    undefined,
+    errorShapeFromError(ErrorCodes.INVALID_REQUEST, error, { message: formatForLog(error) }),
+  );
 }
 
 export type ChatSendPreAdmissionParams = {

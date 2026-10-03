@@ -173,6 +173,24 @@ describe("memory-wiki Doctor state compatibility", () => {
     resetPluginStateStoreForTests();
   });
 
+  it("declares active cache files without reviving retired JSON inventory", async () => {
+    const stateDir = await tempDirs.createTempDir("memory-wiki-capture-");
+    const vaultRoot = path.join(stateDir, "selected-vault");
+    const params = migrationParams({ stateDir, vaultRoot });
+    const resources = stateMigrations.map((migration) =>
+      migration.collectBackupResources?.(params),
+    );
+    expect(resources).toEqual([
+      [
+        { path: path.join(vaultRoot, ".openclaw-wiki/cache/agent-digest.json"), kind: "file" },
+        { path: path.join(vaultRoot, ".openclaw-wiki/cache/claims.jsonl"), kind: "file" },
+      ],
+      [],
+      [],
+    ]);
+    await expect(fs.stat(vaultRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("deletes rebuildable compiled cache files without importing them", async () => {
     const stateDir = await tempDirs.createTempDir("memory-wiki-doctor-");
     const vaultRoot = path.join(stateDir, "vault");

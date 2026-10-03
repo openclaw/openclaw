@@ -3,8 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { sqliteWorkerStoreCompileCacheParentEntrypoint } from "./sqlite-worker-store.compile-cache-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -58,11 +57,8 @@ describe("SQLite store worker compile cache", () => {
     delete env.NODE_DISABLE_COMPILE_CACHE;
     delete env.NODE_OPTIONS;
     const result = await runNodeScript(
-      [
-        ...resolveRuntimeWorkerArgv(
-          resolveRuntimeWorkerUrl(sqliteWorkerStoreCompileCacheParentEntrypoint),
-          resolveTestNodeExecPath(),
-        ),
+      (workerArgv) => [
+        ...workerArgv(resolveRuntimeWorkerUrl(sqliteWorkerStoreCompileCacheParentEntrypoint)),
         root,
         testCase.owner,
         testCase.cache ?? "unset",

@@ -59,20 +59,14 @@ function create(opts: Partial<Parameters<typeof createPageViaPlaywright>[0]> = {
   return createPageViaPlaywright({ cdpUrl, url: "about:blank", ...opts });
 }
 function pauseAtBoundary() {
-  let started!: () => void;
-  let release!: () => void;
-  const entered = new Promise<void>((resolve) => {
-    started = resolve;
-  });
-  const pending = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  const entered = Promise.withResolvers<void>();
+  const pending = Promise.withResolvers<void>();
   return {
-    entered,
-    release,
+    entered: entered.promise,
+    release: pending.resolve,
     pause: async <T>(result: T) => {
-      started();
-      await pending;
+      entered.resolve();
+      await pending.promise;
       return result;
     },
   };

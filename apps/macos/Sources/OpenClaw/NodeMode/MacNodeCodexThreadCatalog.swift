@@ -1128,17 +1128,11 @@ extension MacNodeCodexThreadCatalog {
     }
 
     private static func encodeResponse(_ response: WireResponse) throws -> String {
-        let data = try JSONEncoder().encode(response)
-        guard let json = String(data: data, encoding: .utf8) else {
-            throw CatalogError.appServerUnavailable
-        }
-        return json
+        try String(bytes: JSONEncoder().encode(response), encoding: .utf8)!
     }
 
     fileprivate static func nonEmptyString(_ value: Any?) -> String? {
-        guard let value = value as? String else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        (value as? String)?.nonEmpty
     }
 
     private static func boundedString(

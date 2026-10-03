@@ -6,6 +6,7 @@ import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import {
   createReplyOperation,
@@ -24,6 +25,7 @@ import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { startPluginServices } from "../plugins/services.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
@@ -53,8 +55,14 @@ import {
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import type { GatewayServer } from "./server-public.js";
 
-it("closes a Gateway with an active plugin while retaining a deleted agent store", async () => {
+it("joins scheduled plugin work before closing stores while retaining a deleted agent store", async ({
+  signal,
+}) => {
   const fixture = await createGatewayMetadataCloseFixture("gateway-retained-deleted-agent-close");
+  const stopEntered = createDeferredCore();
+  const rootJoinEntered = createDeferredCore();
+  const releaseRootWork = createDeferredCore();
+  let closing: Promise<void> | undefined;
   try {
     const pluginId = fixture.pluginId;
     const registry = createEmptyPluginRegistry();
@@ -68,6 +76,8 @@ it("closes a Gateway with an active plugin while retaining a deleted agent store
     setActivePluginRegistry(registry);
     const port = await fixture.reservePort();
     const server = await fixture.start(port);
+    const kernel = fixture.kernels.get(port);
+    assert(kernel);
     expect(fixture.kernels.get(port)?.pluginRuntime.registry.plugins).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: pluginId })]),
     );
@@ -104,14 +114,77 @@ it("closes a Gateway with an active plugin while retaining a deleted agent store
       (database) => completeAgentDeletionJournalInDatabase(database, "retired", operationId),
       { env: fixture.state.env },
     );
-    await expect(server.close({ reason: "gateway stopping" })).resolves.toBeUndefined();
+    const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
+    const pluginWorkEntered = createDeferredCore();
+    const rootWorkEntered = createDeferredCore();
+    const stopService = vi.fn(() => stopEntered.resolve());
+    const services = createEmptyPluginRegistry();
+    services.services.push({
+      pluginId,
+      id: "scheduled-close",
+      source: "synthetic",
+      origin: "workspace",
+      service: {
+        id: "scheduled-close",
+        apiVersion: 2,
+        start(context) {
+          context.scheduler.schedule({
+            id: "held",
+            delayMs: 0,
+            everyMs: 1,
+            async run() {
+              pluginWorkEntered.resolve();
+              await stopEntered.promise;
+            },
+          });
+        },
+        stop: stopService,
+      },
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    kernel.runtimeState.pluginServices = await startPluginServices({
+      registry: services,
+      config: fixture.config,
+      scheduler: kernel.scheduler,
+    });
+    kernel.scheduler.schedule({
+      id: "kernel-held-work",
+      delayMs: 0,
+      async run() {
+        rootWorkEntered.resolve();
+        await releaseRootWork.promise;
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await withinTest(Promise.all([pluginWorkEntered.promise, rootWorkEntered.promise]), signal);
+    vi.useRealTimers();
+    const stopScheduler = kernel.scheduler.stop.bind(kernel.scheduler);
+    vi.spyOn(kernel.scheduler, "stop").mockImplementation(() => {
+      rootJoinEntered.resolve();
+      return stopScheduler();
+    });
+    closing = server.close({ reason: "gateway stopping" });
+    await withinTest(Promise.race([stopEntered.promise, rootJoinEntered.promise, closing]), signal);
+    expect(stopService).toHaveBeenCalledOnce();
+    await withinTest(rootJoinEntered.promise, signal);
+    expect(kernel.scheduler.signal.aborted).toBe(true);
+    expect(disposed).toBe(false);
+    expect(shared.isOpen).toBe(true);
+    releaseRootWork.resolve();
+    await expect(closing).resolves.toBeUndefined();
     expect(disposed).toBe(true);
+    expect(shared.isOpen).toBe(false);
     expect((await fs.stat(retainedDatabase)).isFile()).toBe(true);
     expect(
       loadSessionEntry({ agentId: "main", storePath: activeStore, sessionKey: "agent:main:main" })
         ?.pluginExtensions,
     ).toBeUndefined();
   } finally {
+    stopEntered.resolve();
+    releaseRootWork.resolve();
+    await Promise.allSettled([closing]);
+    vi.useRealTimers();
+    vi.restoreAllMocks();
     await fixture.cleanup();
   }
 }, 300_000);

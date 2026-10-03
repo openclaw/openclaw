@@ -13,7 +13,7 @@ import { personActivityRouting } from "../../components/person-activity-link.ts"
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
 import { isModelIndependentChatCommand } from "../../lib/chat/commands.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   pickFreshestObserverDigest,
   projectSessionObserverDigest,
@@ -284,7 +284,8 @@ export class ChatPane extends ChatPaneLayoutRender {
     if (
       !publicationScope ||
       !publicationRow ||
-      !isGatewayMethodAdvertised(gatewaySnapshot, "sessions.github.publish")
+      isGatewayMethodAdvertised(gatewaySnapshot, "sessions.github.publish") !== true ||
+      !canCallGatewayMethod(gatewaySnapshot, "sessions.github.options", "operator.read")
     ) {
       this.githubPublication?.detach();
       this.githubPublication = null;

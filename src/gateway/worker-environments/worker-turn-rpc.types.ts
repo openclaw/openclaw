@@ -2,7 +2,7 @@ import type { WorkerProtocolCloseReason } from "../../../packages/gateway-protoc
 import type { createWorkerInferenceManager } from "./inference.js";
 import type { WorkerLiveEventApplicationResult } from "./live-events.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
-import type { WorkerTranscriptCommitOutcome } from "./transcript-commit-store.js";
+import type { WorkerTranscriptCommitOutcome } from "./transcript-commit-ledger.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
 
 export type WorkerProcessTurnBinding = {

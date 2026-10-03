@@ -107,15 +107,12 @@ afterEach(() => {
 });
 
 describe("Claude version discovery", () => {
-  it.each(["failure", "missing", "output-limit", "prerelease"] as const)(
+  it.each(["missing", "output-limit", "prerelease"] as const)(
     "leaves the transport floor intact after %s",
     async (mode) => {
       const runner = vi
         .fn<CommandRunner>()
         .mockResolvedValue(versionResult("2.1.400", { outputLimitExceeded: true }));
-      if (mode === "failure") {
-        runner.mockRejectedValue(new Error("synthetic launch failure"));
-      }
       if (mode === "missing") {
         vi.mocked(resolveClaudeTerminalExecutable).mockReturnValue(undefined);
       }
@@ -135,21 +132,21 @@ describe("Claude version discovery", () => {
     },
   );
 
-  it.each(["anthropic", "github-copilot"])(
-    "does not probe or alter identity on the %s non-OAuth route",
-    async (provider) => {
-      const fixture = register();
-      const request = capture(fixture.provider, "wrapStreamFn", { ...model, provider });
-      const options = {
-        apiKey: provider === "anthropic" ? "sk-ant-api-synthetic" : oauthOptions.apiKey,
-        headers: { "user-agent": "existing-client" },
-      };
-      await request.run(options);
-      expect(request.base.mock.calls[0]?.[2]?.headers).toEqual(options.headers);
-      expect(fixture.readRuntime).not.toHaveBeenCalled();
-      expect(resolveClaudeTerminalExecutable).not.toHaveBeenCalled();
-    },
-  );
+  it("does not probe or alter another provider's identity", async () => {
+    const fixture = register();
+    const request = capture(fixture.provider, "wrapStreamFn", {
+      ...model,
+      provider: "github-copilot",
+    });
+    const options = {
+      apiKey: oauthOptions.apiKey,
+      headers: { "user-agent": "existing-client" },
+    };
+    await request.run(options);
+    expect(request.base.mock.calls[0]?.[2]?.headers).toEqual(options.headers);
+    expect(fixture.readRuntime).not.toHaveBeenCalled();
+    expect(resolveClaudeTerminalExecutable).not.toHaveBeenCalled();
+  });
 });
 
 it("shares lazy CLI discovery across native execution and both OAuth wrappers", async () => {

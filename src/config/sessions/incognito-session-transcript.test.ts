@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   inspectOpenClawAgentDatabaseOwner,
   listOpenClawRegisteredAgentDatabases,
@@ -165,6 +166,7 @@ describe("session creation scope", () => {
         expect.objectContaining({ agentId: physicalOwner, path: databasePath }),
       ]);
       expect(fs.existsSync(databasePath)).toBe(true);
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       expect(loadSessionEntry(scope)).toMatchObject(entry);
       await expect(loadTranscriptEvents({ ...scope, sessionId: entry.sessionId })).resolves.toEqual(

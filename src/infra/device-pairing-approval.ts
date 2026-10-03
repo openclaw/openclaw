@@ -81,23 +81,17 @@ export async function approveDevicePairing(
   const { isApprovalCurrent: _isApprovalCurrent, ...wireOptions } = options ?? {};
   return await withDevicePairingLock(async () => {
     const admission = approvalAdmission(options);
-    try {
-      return await executeDevicePairingMutation(
-        {
-          type: "devicePairing.approve",
-          input: { requestId, options: wireOptions, nowMs: Date.now() },
-        },
-        {
-          baseDir,
-          admit: admission.admit,
-        },
-      );
-    } catch (error) {
-      if (error instanceof DevicePairingAuthorityRefusedError) {
-        return admission.refusedResult;
-      }
-      throw error;
-    }
+    return await executeDevicePairingMutation(
+      {
+        type: "devicePairing.approve",
+        input: { requestId, options: wireOptions, nowMs: Date.now() },
+      },
+      {
+        baseDir,
+        onAuthorityRefused: () => admission.refusedResult,
+        admit: admission.admit,
+      },
+    );
   });
 }
 

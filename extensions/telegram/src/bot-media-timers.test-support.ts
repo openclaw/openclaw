@@ -1,8 +1,8 @@
 import { clearTimeout as cancelTimeout, setTimeout as scheduleTimeout } from "node:timers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import type { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
-import { expect, vi } from "vitest";
+import { expect, vi, type MockInstance } from "vitest";
 
 export async function withTelegramGetFileRetryClock(
   error: string,
@@ -85,31 +85,32 @@ export function resolveFlushTimerForDelay(
   return setTimeoutSpy.mock.calls[index]?.[0];
 }
 
-/** Runs held buffer timers and returns the queue work each one admitted. */
-export function runHeldTelegramBufferTimers(timers: ReadonlyArray<() => unknown>) {
-  const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue");
-  try {
-    // These timers synchronously admit work, then discard the real queue promise.
-    for (const timer of timers) {
-      timer();
-    }
-    expect(enqueueSpy).toHaveBeenCalledTimes(timers.length);
-    return enqueueSpy.mock.results.flatMap((queued) =>
-      queued.type === "return" ? [Promise.resolve(queued.value)] : [],
-    );
-  } finally {
-    enqueueSpy.mockRestore();
+/** Runs held buffer timers and returns their already-admitted album work. */
+export function runHeldTelegramBufferTimers(
+  timers: ReadonlyArray<() => unknown>,
+  enqueueSpy: MockInstance<KeyedAsyncQueue["enqueue"]>,
+) {
+  for (const timer of timers) {
+    timer();
   }
+  const work = enqueueSpy.mock.results.flatMap((queued, index) =>
+    enqueueSpy.mock.calls[index]?.[0].startsWith("media:") && queued.type === "return"
+      ? [Promise.resolve(queued.value)]
+      : [],
+  );
+  expect(work).toHaveLength(timers.length);
+  return work;
 }
 
 export async function flushChannelPostMediaGroup(
   setTimeoutSpy: ReturnType<typeof holdTelegramMediaTimeouts>,
+  enqueueSpy: MockInstance<KeyedAsyncQueue["enqueue"]>,
   completionTimeoutMs = 75,
   delayMs = 20,
 ) {
   const flushTimer = resolveFlushTimerForDelay(setTimeoutSpy, delayMs);
   expect(flushTimer).toBeTypeOf("function");
-  const [completion] = runHeldTelegramBufferTimers(flushTimer ? [flushTimer] : []);
+  const [completion] = runHeldTelegramBufferTimers(flushTimer ? [flushTimer] : [], enqueueSpy);
   expect(completion).toBeDefined();
   await withTimeout(Promise.resolve(completion), completionTimeoutMs, {
     message: `Telegram buffered flush for the ${delayMs} ms timer did not complete`,

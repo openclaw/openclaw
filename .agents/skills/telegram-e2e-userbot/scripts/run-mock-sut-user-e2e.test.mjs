@@ -302,6 +302,28 @@ test("gateway token stays in a private run-owned file until scratch cleanup", as
   assert.equal(fs.existsSync(temp.root), false);
 });
 
+test("source Gateway selects the checkout's Telegram plugin entry over its built peer", () => {
+  const repoRoot = path.resolve(import.meta.dirname, "../../../..");
+  const params = {
+    sutToken: "42:synthetic-file-token",
+    backend: "mock",
+    gatewayPort: 19879,
+    mockPort: 19882,
+    telegramApiRoot: "http://127.0.0.1:19881",
+    testerId: "123",
+    groupId: "-1001",
+    repoRoot,
+  };
+  const readPlugins = (sourceGateway) =>
+    JSON.parse(fs.readFileSync(writeConfig({ ...params, sourceGateway }).configPath, "utf8"))
+      .plugins;
+  // Without this selection, Gateway startup runs dist/extensions/telegram whenever it exists.
+  const sourcePaths = readPlugins(true).load?.paths;
+  assert.deepEqual(sourcePaths, [path.join(repoRoot, "extensions", "telegram")]);
+  assert.equal(fs.existsSync(path.join(sourcePaths[0], "openclaw.plugin.json")), true);
+  assert.equal(Object.hasOwn(readPlugins(false), "load"), false);
+});
+
 test("scenario command evidence retains no argv or process output", () => {
   const credential = "123456789:leased-test-token";
   const summary = summarizeScenarioCommand({

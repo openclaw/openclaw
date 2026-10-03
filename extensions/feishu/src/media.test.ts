@@ -167,7 +167,9 @@ describe("sendMediaFeishu msg_type routing", () => {
       contentType: "audio/ogg",
     });
 
-    messageResourceGetMock.mockResolvedValue(Buffer.from("resource-bytes"));
+    messageResourceGetMock.mockImplementation(async () => ({
+      getReadableStream: () => Readable.from([Buffer.from("resource-bytes")]),
+    }));
     runFfmpegMock.mockImplementation(async (args: string[]) => {
       await fs.writeFile(args.at(-1) ?? "", Buffer.from("opus-output"));
       return "";
@@ -586,23 +588,6 @@ describe("sendMediaFeishu msg_type routing", () => {
     ).rejects.toThrow(/Media exceeds/i);
   });
 
-  it("rejects oversized writeFile resources before saving the temp file", async () => {
-    messageResourceGetMock.mockResolvedValueOnce({
-      writeFile: async (tmpPath: string) => {
-        await fs.writeFile(tmpPath, Buffer.alloc(8));
-      },
-    });
-
-    await expect(
-      downloadResource({
-        messageId: "om_123",
-        fileKey: "file_v3_01abc123",
-        type: "file",
-        maxBytes: 7,
-      }),
-    ).rejects.toThrow(/Media exceeds/i);
-  });
-
   it("rejects invalid file keys before calling feishu api", async () => {
     await expect(
       saveMessageResourceFeishu({
@@ -646,7 +631,9 @@ describe("saveMessageResourceFeishu", () => {
       },
     });
 
-    messageResourceGetMock.mockResolvedValue(Buffer.from("fake-audio-data"));
+    messageResourceGetMock.mockImplementation(async () => ({
+      getReadableStream: () => Readable.from([Buffer.from("fake-audio-data")]),
+    }));
   });
 
   // Regression: Feishu API only supports type=image|file for messageResource.get.
@@ -669,7 +656,9 @@ describe("saveMessageResourceFeishu", () => {
   });
 
   it("image uses type=image", async () => {
-    messageResourceGetMock.mockResolvedValue(Buffer.from("fake-image-data"));
+    messageResourceGetMock.mockResolvedValueOnce({
+      getReadableStream: () => Readable.from([Buffer.from("fake-image-data")]),
+    });
 
     const result = await downloadResource({
       messageId: "om_img_msg",
@@ -690,7 +679,7 @@ describe("saveMessageResourceFeishu", () => {
   it("retries file resources as media after HTTP 502", async () => {
     const originalError = httpStatusError(502);
     messageResourceGetMock.mockRejectedValueOnce(originalError).mockResolvedValueOnce({
-      data: Buffer.from("fake-ios-video-data"),
+      getReadableStream: () => Readable.from([Buffer.from("fake-ios-video-data")]),
       headers: {
         "content-type": "video/mp4",
         "content-disposition": `attachment; filename="ios-video.mp4"`,
@@ -779,7 +768,7 @@ describe("saveMessageResourceFeishu", () => {
     const fileName = "武汉15座山登山信息汇总.csv";
     const latin1HeaderFileName = Buffer.from(fileName, "utf8").toString("latin1");
     messageResourceGetMock.mockResolvedValueOnce({
-      data: Buffer.from("fake-file-data"),
+      getReadableStream: () => Readable.from([Buffer.from("fake-file-data")]),
       headers: {
         "content-disposition": `attachment; filename="${latin1HeaderFileName}"`,
       },
@@ -796,7 +785,7 @@ describe("saveMessageResourceFeishu", () => {
 
   it("keeps valid Latin-1 filenames from plain Content-Disposition headers unchanged", async () => {
     messageResourceGetMock.mockResolvedValueOnce({
-      data: Buffer.from("fake-file-data"),
+      getReadableStream: () => Readable.from([Buffer.from("fake-file-data")]),
       headers: {
         "content-disposition": `attachment; filename="café-Â©.txt"`,
       },
@@ -809,23 +798,6 @@ describe("saveMessageResourceFeishu", () => {
     });
 
     expect(result.fileName).toBe("café-Â©.txt");
-  });
-
-  it("keeps JSON-derived file_name metadata unchanged", async () => {
-    const fileName = "武汉15座山登山信息汇总.csv";
-    const latin1LookingFileName = Buffer.from(fileName, "utf8").toString("latin1");
-    messageResourceGetMock.mockResolvedValueOnce({
-      data: Buffer.from("fake-file-data"),
-      file_name: latin1LookingFileName,
-    });
-
-    const result = await downloadResource({
-      messageId: "om_json_file_msg",
-      fileKey: "file_key_json",
-      type: "file",
-    });
-
-    expect(result.fileName).toBe(latin1LookingFileName);
   });
 
   it("saves message resource streams directly to the media store", async () => {

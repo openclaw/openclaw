@@ -35,8 +35,9 @@ const portal = {
 } satisfies PortalSummary;
 
 function createContext(
-  methods: string[],
+  methods: string[] | null,
   request: (method: string, params: Record<string, unknown>) => Promise<unknown>,
+  scopes = ["operator.write"],
 ) {
   const requestMock = vi.fn(request);
   const client = { request: requestMock } as unknown as GatewayBrowserClient;
@@ -45,13 +46,16 @@ function createContext(
     phase: "connected",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
-    hello: gatewayHelloForMethods(methods, ["operator.write"]),
+    hello: methods
+      ? gatewayHelloForMethods(methods, scopes)
+      : { ...gatewayHelloForMethods([], scopes), features: undefined },
     assistantAgentId: null,
     sessionKey: "main",
     lastError: null,
     lastErrorCode: null,
   };
   const eventListeners = new Set<(event: GatewayEventFrame) => void>();
+  const snapshotListeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
   const gateway = {
     snapshot,
     connection: {
@@ -60,7 +64,10 @@ function createContext(
       bootstrapToken: "",
       password: "",
     },
-    subscribe: () => () => undefined,
+    subscribe(listener: (snapshot: ApplicationGatewaySnapshot) => void) {
+      snapshotListeners.add(listener);
+      return () => snapshotListeners.delete(listener);
+    },
     subscribeEvents(listener: (event: GatewayEventFrame) => void) {
       eventListeners.add(listener);
       return () => eventListeners.delete(listener);
@@ -68,6 +75,12 @@ function createContext(
   } as unknown as ApplicationContext["gateway"];
   return {
     context: { gateway } as unknown as ApplicationContext,
+    updateSnapshot(update: Partial<ApplicationGatewaySnapshot>) {
+      Object.assign(snapshot, update);
+      for (const listener of snapshotListeners) {
+        listener(snapshot);
+      }
+    },
     emitPortals(portals: PortalSummary[]) {
       for (const listener of eventListeners) {
         listener({ type: "event", event: "portal.changed", payload: { portals } });
@@ -103,6 +116,76 @@ beforeEach(() => {
 });
 
 describe("PortalsPage", () => {
+  it.each([undefined, "pending-machine"])(
+    "does not read portal state without operator.read (environment: %s)",
+    async (environmentId) => {
+      const source = createContext(
+        ["portal.list", "environments.status"],
+        async () => {
+          throw new Error("unauthorized portal read");
+        },
+        ["operator.sessions.read", "operator.sessions.write"],
+      );
+      const page = await mountPage(source.context, undefined, environmentId);
+      await page.updateComplete;
+      expect(source.request).not.toHaveBeenCalled();
+      expect(page.textContent).toContain("This action requires operator.read access.");
+      expect(page.textContent).not.toContain("unauthorized portal read");
+      expect(page.textContent).not.toContain("This gateway does not support portals.");
+      expect(page.textContent).not.toContain("Starting your machine");
+    },
+  );
+
+  it.each([undefined, "pending-machine"])(
+    "retains read access without a method catalog (environment: %s)",
+    async (environmentId) => {
+      const source = createContext(
+        null,
+        async () =>
+          environmentId
+            ? { id: environmentId, type: "worker", status: "available" }
+            : { portals: [] },
+        ["operator.read"],
+      );
+      await mountPage(source.context, undefined, environmentId);
+      await vi.waitFor(() =>
+        expect(source.request).toHaveBeenCalledWith(
+          environmentId ? "environments.status" : "portal.list",
+          environmentId ? { environmentId } : {},
+        ),
+      );
+    },
+  );
+
+  it.each([undefined, "pending-machine"])(
+    "drops portal state and stops reads after reconnect without read scope (environment: %s)",
+    async (environmentId) => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const methods = ["portal.list", "environments.status"];
+      const source = createContext(methods, async () =>
+        environmentId
+          ? { id: environmentId, type: "worker", status: "starting" }
+          : { portals: [portal] },
+      );
+      const page = await mountPage(source.context, undefined, environmentId);
+      await vi.waitFor(() => expect(source.request).toHaveBeenCalledTimes(1));
+      source.updateSnapshot({ phase: "reconnecting" });
+      await page.updateComplete;
+      expect(page.textContent).not.toContain("This action requires operator.read access.");
+      source.updateSnapshot({
+        phase: "connected",
+        hello: gatewayHelloForMethods(methods, ["operator.sessions.read"]),
+      });
+      await page.updateComplete;
+      source.emitPortals([portal]);
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(source.request).toHaveBeenCalledTimes(1);
+      expect(page.textContent).toContain("This action requires operator.read access.");
+      expect(page.querySelector("iframe")).toBeNull();
+      expect(page.textContent).not.toContain("Starting your machine");
+    },
+  );
+
   it("shows machine startup before selecting only the portal explicitly opened for its app", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     let environment: EnvironmentSummary = {
@@ -238,9 +321,11 @@ describe("PortalsPage", () => {
 
   it("requires write access instead of opening a portal without credentials", async () => {
     const { tokenQuery: _tokenQuery, url: _url, ...redactedPortal } = portal;
-    const source = createContext(["portal.list"], async () => ({
-      portals: [redactedPortal as PortalSummary],
-    }));
+    const source = createContext(
+      ["portal.list"],
+      async () => ({ portals: [redactedPortal as PortalSummary] }),
+      ["operator.read"],
+    );
     const page = await mountPage(source.context);
 
     await vi.waitFor(() => {

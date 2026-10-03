@@ -7,6 +7,7 @@ export type SessionOperatorScope = "operator.sessions.read" | "operator.sessions
 const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "agent.identity.get",
   "agents.list",
+  "canvas.document.preview",
   "models.list",
   "progressCard.get",
   "projects.list",
@@ -28,6 +29,7 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "sessions.search",
   "sessions.files.list",
   "sessions.files.get",
+  "sessions.files.assets",
   "sessions.setInvolvement",
   "chat.history",
   "chat.startup",

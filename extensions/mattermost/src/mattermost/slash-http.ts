@@ -400,12 +400,9 @@ async function validateMattermostSlashCommandToken(params: {
   return true;
 }
 
-type SlashInvocationAuth = Omit<
-  Awaited<ReturnType<typeof authorizeMattermostCommandInvocation>>,
-  "denyReason"
-> & {
-  denyResponse?: MattermostSlashCommandResponse;
-};
+type SlashInvocationAuth =
+  | Extract<Awaited<ReturnType<typeof authorizeMattermostCommandInvocation>>, { ok: true }>
+  | { ok: false; denyResponse: MattermostSlashCommandResponse };
 
 async function authorizeSlashInvocation(params: {
   account: ResolvedMattermostAccount;
@@ -436,13 +433,6 @@ async function authorizeSlashInvocation(params: {
         response_type: "ephemeral",
         text: "Temporary error: unable to determine channel type. Please try again.",
       },
-      commandAuthorized: false,
-      channelInfo: null,
-      kind: "channel",
-      chatType: "channel",
-      channelName: "",
-      channelDisplay: "",
-      roomLabel: `#${channelId}`,
     };
   }
 
@@ -480,7 +470,7 @@ async function authorizeSlashInvocation(params: {
         meta: { name: senderName },
       });
       return {
-        ...decision,
+        ok: false,
         denyResponse: {
           response_type: "ephemeral",
           text: core.channel.pairing.buildPairingReply({
@@ -503,7 +493,7 @@ async function authorizeSlashInvocation(params: {
               ? "Slash commands are not configured for this channel (no allowlist)."
               : "Unauthorized.";
     return {
-      ...decision,
+      ok: false,
       denyResponse: {
         response_type: "ephemeral",
         text: denyText,
@@ -511,10 +501,7 @@ async function authorizeSlashInvocation(params: {
     };
   }
 
-  return {
-    ...decision,
-    denyResponse: undefined,
-  };
+  return decision;
 }
 
 export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
@@ -620,11 +607,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     });
 
     if (!auth.ok) {
-      sendSlashCommandResponse(
-        res,
-        200,
-        auth.denyResponse ?? { response_type: "ephemeral", text: "Unauthorized." },
-      );
+      sendSlashCommandResponse(res, 200, auth.denyResponse);
       return;
     }
 

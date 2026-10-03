@@ -242,10 +242,13 @@ export function createBoundSpawnInvocation(
     completionTarget?: "parent";
   },
   requesterModel?: { provider: string; model: string },
+  senderIsOwner?: boolean,
 ) {
   const { parentSessionKey, parentRunId } = bound;
   const source = createSessionsSpawnTool({
     config: bound.cfg,
+    senderIsOwner,
+    expectedParentSessionId: "parent-session",
     agentSessionKey: parentSessionKey,
     requesterRunId: parentRunId,
     requesterTurnRunId: parentRunId,

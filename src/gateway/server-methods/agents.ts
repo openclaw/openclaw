@@ -537,7 +537,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
         const skipBootstrap = Boolean(nextConfig.agents?.defaults?.skipBootstrap);
         ensuredWorkspace = await ensureAgentWorkspace({
           dir: workspaceDir,
-          beforePersistentApply: assertUploadAllowed,
+          guard: { assertHost: assertUploadAllowed },
           ensureBootstrapFiles: !skipBootstrap,
           skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
         });

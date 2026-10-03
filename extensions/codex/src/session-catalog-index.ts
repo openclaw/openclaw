@@ -11,6 +11,7 @@ import type { CodexCatalogIndexOptions } from "./session-catalog-index-contract.
 import { readCodexCatalogCursor } from "./session-catalog-index-cursor.js";
 import { CodexCatalogIndexEvents } from "./session-catalog-index-events.js";
 import { CodexCatalogField } from "./session-catalog-index-field.js";
+import { reconcileCodexCatalogFiles } from "./session-catalog-index-files.js";
 import { applyCodexCatalogName } from "./session-catalog-index-names.js";
 import { CodexCatalogObservations } from "./session-catalog-index-observations.js";
 import {
@@ -36,17 +37,12 @@ import {
 import { projectCodexCatalogNativeThread } from "./session-catalog-native-projection.js";
 import {
   projectCodexCatalogThread,
-  mergeCodexCatalogRolloutRow,
   CodexCatalogProjections,
   CodexCatalogProjectionCapacityError,
 } from "./session-catalog-projection.js";
-import {
-  CodexCatalogRolloutScanner,
-  isCodexCatalogRolloutPathCovered,
-} from "./session-catalog-rollout-scanner.js";
+import { CodexCatalogRolloutScanner } from "./session-catalog-rollout-scanner.js";
 import {
   codexCatalogRolloutLogicalPath,
-  readCodexCatalogRollout,
   resolveCodexCatalogRolloutFingerprint,
 } from "./session-catalog-rollouts.js";
 import { CodexCatalogSettingsIndex } from "./session-catalog-settings.js";
@@ -485,98 +481,17 @@ export class CodexCatalogIndex {
       return;
     }
     this.assertCurrent();
-    const byPath = new Map<string, CodexCatalogIndexRow>();
-    let processed = 0;
-    for (const row of this.rows.values()) {
-      if (row.rolloutPath) {
-        byPath.set(codexCatalogRolloutLogicalPath(row.rolloutPath), row);
-      }
-      if (++processed % 128 === 0) {
-        await nextTurn();
-        this.assertCurrent();
-      }
-    }
-    const { files, present } = await this.rolloutScanner.scan(new Set(byPath.keys()));
-    this.assertCurrent();
-    const observed = new Map(files);
-    for (const [file, fingerprint] of files) {
-      if (++processed % 128 === 0) {
-        await nextTurn();
-        this.assertCurrent();
-      }
-      const previous = byPath.get(codexCatalogRolloutLogicalPath(file));
-      const known = this.observedFiles.get(file) ?? previous?.fingerprint;
-      if (known?.mtimeMs === fingerprint.mtimeMs && known.size === fingerprint.size) {
-        continue;
-      }
-      this.currency.requestNativeRefresh();
-      // Publish a new fingerprint only after its projection survives concurrent native updates.
-      observed.delete(file);
-      if (known) {
-        observed.set(file, known);
-      }
-      let thread: CodexThread | undefined;
-      try {
-        thread = await readCodexCatalogRollout(root, file);
-      } catch (error) {
-        this.assertCurrent();
-        this.report(error);
-        continue;
-      }
-      this.assertCurrent();
-      if (!thread) {
-        observed.set(file, fingerprint);
-        continue;
-      }
-      if (!isCurrent(thread.id)) {
-        continue;
-      }
-      const existing = this.rows.get(thread.id);
-      if (
-        existing?.rolloutPath &&
-        codexCatalogRolloutLogicalPath(existing.rolloutPath) !==
-          codexCatalogRolloutLogicalPath(file)
-      ) {
-        // Reverts retain older immutable files with the same thread id. Only
-        // native metadata may change which rollout the catalog considers current.
-        observed.set(file, fingerprint);
-        continue;
-      }
-      if (!existing && !thread.preview) {
-        observed.set(file, fingerprint);
-        continue;
-      }
-      thread.preview ||= existing?.preview;
-      const projected = await projectCodexCatalogThread(thread, root);
-      this.assertCurrent();
-      if (!isCurrent(thread.id)) {
-        continue;
-      }
-      observed.set(file, fingerprint);
-      const row = projected.rows[0];
-      if (!row) {
-        continue;
-      }
-      this.observations.mark(row.threadId);
-      this.put(mergeCodexCatalogRolloutRow(row, existing, fingerprint));
-      await nextTurn();
-    }
-    for (const row of byPath.values()) {
-      if (++processed % 128 === 0) {
-        await nextTurn();
-        this.assertCurrent();
-      }
-      if (
-        row.rolloutPath &&
-        isCodexCatalogRolloutPathCovered(root, row.rolloutPath) &&
-        !present.has(codexCatalogRolloutLogicalPath(row.rolloutPath)) &&
-        this.rows.get(row.threadId) === row
-      ) {
-        this.currency.requestNativeRefresh();
-        this.remove(row.threadId);
-      }
-    }
-    this.observedFiles = observed;
+    this.observedFiles = await reconcileCodexCatalogFiles(root, isCurrent, {
+      rows: this.rows,
+      observedFiles: this.observedFiles,
+      scanner: this.rolloutScanner,
+      assertCurrent: () => this.assertCurrent(),
+      requestNativeRefresh: () => this.currency.requestNativeRefresh(),
+      report: (error) => this.report(error),
+      mark: (id) => this.observations.mark(id),
+      put: (row) => this.put(row),
+      remove: (id) => this.remove(id),
+    });
   }
 
   upsertThread(thread: CodexThread): Promise<void> {

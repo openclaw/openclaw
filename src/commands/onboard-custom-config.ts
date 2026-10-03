@@ -76,22 +76,6 @@ export function resolveCustomModelImageInputInference(
   return { supportsImageInput: false, confidence: "unknown" };
 }
 
-function resolveCustomModelSupportsImageInput(params: {
-  modelId: string;
-  explicit?: boolean;
-  fallback: boolean;
-  inferKnownModels: boolean;
-}): boolean {
-  if (params.explicit !== undefined) {
-    return params.explicit;
-  }
-  if (!params.inferKnownModels) {
-    return params.fallback;
-  }
-  const inference = resolveCustomModelImageInputInference(params.modelId);
-  return inference.confidence === "known" ? inference.supportsImageInput : params.fallback;
-}
-
 function isAzureUrl(baseUrl: string, openAiOnly = false): boolean {
   try {
     const host = new URL(baseUrl).hostname.toLowerCase();
@@ -566,14 +550,13 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
     params.supportsImageInput === undefined
       ? undefined
       : customModelInputs(params.supportsImageInput);
-  const generatedInput = customModelInputs(
-    resolveCustomModelSupportsImageInput({
-      modelId,
-      explicit: params.supportsImageInput,
-      fallback: isAzure && isLikelyReasoningModel,
-      inferKnownModels: !isAzure,
-    }),
-  );
+  const generatedInput =
+    explicitInput ??
+    customModelInputs(
+      isAzure
+        ? isLikelyReasoningModel
+        : resolveCustomModelImageInputInference(modelId).supportsImageInput,
+    );
   const nextModel = {
     id: modelId,
     name: `${modelId} (Custom Provider)`,

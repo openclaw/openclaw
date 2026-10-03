@@ -51,13 +51,14 @@ title: "Configuration — agent models"
       toolProgressDetail: "explain",
       reasoningDefault: "off",
       elevatedDefault: "on",
-      timeoutSeconds: 600,
       mediaMaxMb: 5,
       maxConcurrent: 4,
     },
   },
 }
 ```
+
+Leaving `agents.defaults.timeoutSeconds` unset gives ordinary agent runs the 48-hour default. Set it only when you need a different whole-run limit; see [Agent runtime](/concepts/agent-loop#timeouts).
 
 - `model`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - String form sets only the primary model.

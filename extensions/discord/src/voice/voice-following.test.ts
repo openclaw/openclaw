@@ -602,22 +602,24 @@ defineDiscordVoiceTests(
 
     it("does not reconnect from an in-flight followed user reconciliation after destroy", async () => {
       const client = createClient();
-      let resolveVoiceState: (state: unknown) => void = () => {};
-      client.rest.get.mockImplementation(
-        () =>
-          new Promise((resolve) => {
-            resolveVoiceState = resolve;
-          }),
-      );
+      const requested = Promise.withResolvers<void>();
+      const response = Promise.withResolvers<unknown>();
+      client.rest.get.mockImplementation(() => {
+        requested.resolve();
+        return response.promise;
+      });
       const manager = createFollowManager({}, client, { guilds: { g1: {} } });
 
       const autoJoinPromise = manager.autoJoin();
-      await vi.waitFor(() => {
-        expect(client.rest.get).toHaveBeenCalled();
+      await requested.promise;
+      let destroyed = false;
+      const destroying = manager.destroy().then(() => {
+        destroyed = true;
       });
-      await manager.destroy();
-      resolveVoiceState({ guild_id: "g1", user_id: "u-owner", channel_id: "1001" });
-      await autoJoinPromise;
+      await Promise.resolve();
+      expect(destroyed).toBe(false);
+      response.resolve({ guild_id: "g1", user_id: "u-owner", channel_id: "1001" });
+      await Promise.all([destroying, autoJoinPromise]);
 
       expect(joinVoiceChannelMock).not.toHaveBeenCalled();
       expect(manager.status()).toEqual([]);

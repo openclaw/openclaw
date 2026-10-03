@@ -19,6 +19,7 @@ import {
 } from "../infra/delivery-queue-state-context.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { RESTART_CONTINUATION_CONTEXT_PREFIX } from "../infra/heartbeat-events-filter.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import {
   clearRestartSentinelIfRevision,
@@ -117,7 +118,7 @@ function enqueueRestartSentinelWake(
   const eventOptions = {
     sessionKey,
     // Recovered work keeps its ordinary turn budget when delivered by heartbeat.
-    contextKey: `task:restart-sentinel:${entry.id}`,
+    contextKey: `${RESTART_CONTINUATION_CONTEXT_PREFIX}${entry.id}`,
     ...(deliveryContext ? { deliveryContext } : {}),
   };
   enqueueSystemEvent(message, withSystemEventOwner(eventOptions, agentId));

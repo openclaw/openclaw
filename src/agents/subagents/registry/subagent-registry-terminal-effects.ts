@@ -19,6 +19,7 @@ import {
 } from "./subagent-registry-lifecycle-log.js";
 import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
 import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
+import { SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
@@ -289,25 +290,44 @@ export async function completeTerminalEffects(
         isSessionEffectsOwnerCurrent() &&
         entry.browserCleanupDispatchedAt === undefined
       ) {
-        entry = await commitSubagentLifecycleMutation(context, {
-          entry,
-          stateContext: args.stateContext,
-          assertCurrent: () => {
-            if (!isSessionEffectsOwnerCurrent()) {
-              throw new Error("Subagent browser cleanup lost its original owner");
+        const retiredOwner = new Error("Subagent browser cleanup lost its original owner");
+        try {
+          entry = await commitSubagentLifecycleMutation(context, {
+            entry,
+            stateContext: args.stateContext,
+            assertCurrent: () => {
+              if (!isSessionEffectsOwnerCurrent()) {
+                throw retiredOwner;
+              }
+            },
+            mutate: (draft) => {
+              if (draft.browserCleanupDispatchedAt !== undefined) {
+                return false;
+              }
+              draft.browserCleanupDispatchedAt = Date.now();
+              return undefined;
+            },
+            onPublished: () => {
+              dispatchedBrowserCleanup = true;
+            },
+          });
+        } catch (error) {
+          // A newer terminal publication can retire this callback while its
+          // cleanup claim waits for persistence. Only that pre-commit refusal
+          // is harmless; persistence and unknown-outcome failures must propagate.
+          if (
+            error === retiredOwner ||
+            (error instanceof SubagentRegistryWriteError &&
+              error.outcome === "not-committed" &&
+              error.cause === retiredOwner)
+          ) {
+            if (isCurrentTerminalCallback() && context.newerGenerationOwnsSession(entry)) {
+              await retireSupersededSession(entry);
             }
-          },
-          mutate: (draft) => {
-            if (draft.browserCleanupDispatchedAt !== undefined) {
-              return false;
-            }
-            draft.browserCleanupDispatchedAt = Date.now();
-            return undefined;
-          },
-          onPublished: () => {
-            dispatchedBrowserCleanup = true;
-          },
-        });
+            return;
+          }
+          throw error;
+        }
         if (dispatchedBrowserCleanup) {
           if (!isSessionEffectsOwnerCurrent() || !context.sessionEffectsHostCurrent(entry)) {
             return;

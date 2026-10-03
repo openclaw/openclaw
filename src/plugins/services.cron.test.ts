@@ -7,8 +7,11 @@ import { getGatewayProcessInstanceId } from "../gateway/process-instance.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
-import { startPluginServices, type PluginServicesHandle } from "./services.js";
-import { createRegistry } from "./services.test-support.js";
+import {
+  createRegistry,
+  startPluginServices,
+  type PluginServicesHandle,
+} from "./services.test-support.js";
 import type { OpenClawPluginServiceContext } from "./types.js";
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "plugin-service-cron-" });

@@ -30,10 +30,6 @@ type TelegramPlainFallbackPlan = {
   chunks: string[];
 };
 
-function isTelegramRichEntityInvalidError(err: unknown): boolean {
-  return RICH_ENTITY_INVALID_RE.test(formatErrorMessage(err));
-}
-
 export function isTelegramHtmlParseError(err: unknown): boolean {
   return PARSE_ERR_RE.test(formatErrorMessage(err));
 }
@@ -46,19 +42,17 @@ export function isTelegramEmptyContentError(err: unknown): boolean {
 function getTelegramPlainFallbackTrigger(
   err: unknown,
 ): TelegramRichPlainFallbackTrigger | undefined {
-  if (isTelegramRichEntityInvalidError(err)) {
+  const message = formatErrorMessage(err);
+  if (RICH_ENTITY_INVALID_RE.test(message)) {
     return "rich-entity-invalid";
   }
-  if (RICH_CONTENT_REQUIRED_RE.test(formatErrorMessage(err))) {
+  if (RICH_CONTENT_REQUIRED_RE.test(message)) {
     return "rich-content-required";
   }
-  if (RICH_STRUCTURE_INVALID_RE.test(formatErrorMessage(err))) {
+  if (RICH_STRUCTURE_INVALID_RE.test(message)) {
     return "rich-structure-invalid";
   }
-  if (isTelegramHtmlParseError(err)) {
-    return "html-parse";
-  }
-  return undefined;
+  return PARSE_ERR_RE.test(message) ? "html-parse" : undefined;
 }
 
 export function splitTelegramPlainTextChunks(text: string, limit: number): string[] {

@@ -29,6 +29,10 @@ export function isSuccess(result: SpawnResult): boolean {
   return result.termination === "exit" && result.code === 0;
 }
 
+export function matchesCommandFailure(result: SpawnResult, code: number, marker: string): boolean {
+  return result.code === code || result.stderr.includes(marker) || result.stdout.includes(marker);
+}
+
 export async function runSshScript(params: {
   prepared: PreparedWorkerSsh;
   runCommand: WorkerBootstrapCommandRunner;

@@ -1,8 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
-import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { sqliteReadOnlyCompileCacheParentEntrypoint } from "./sqlite-readonly-worker.compile-cache-runtime.test-support.js";
 
 const fixture = createFixtureLifetime();
@@ -22,11 +21,8 @@ it.for(["sync", "async", "scoped"] as const)(
     delete env.NODE_OPTIONS;
     const result = await fixture.track(
       runNodeScript(
-        [
-          ...resolveRuntimeWorkerArgv(
-            resolveRuntimeWorkerUrl(sqliteReadOnlyCompileCacheParentEntrypoint),
-            resolveTestNodeExecPath(),
-          ),
+        (workerArgv) => [
+          ...workerArgv(resolveRuntimeWorkerUrl(sqliteReadOnlyCompileCacheParentEntrypoint)),
           root,
           mode,
         ],

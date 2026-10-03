@@ -1,4 +1,3 @@
-import { clearGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayDetachedWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
@@ -7,6 +6,7 @@ import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-too
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import { markRequesterSettleWakePending } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import { retireSubagentGatewayBinding } from "./subagent-registry-execution-cleanup.js";
 import type {
   CleanupBookkeepingParams,
   SubagentLifecycleWakeContext,
@@ -189,7 +189,7 @@ export async function completeCleanupBookkeeping(
     subagentRuns.confirmRetirement(entry);
   }
   if (retireImmediately || entry.collect || cleanupParams.skipRequesterSettleWake) {
-    clearGatewayContextResolver(entry);
+    retireSubagentGatewayBinding(entry);
   }
   if (isDeleteCleanup || retireAfterSettle) {
     params.clearPendingLifecycleError(entry.runId);

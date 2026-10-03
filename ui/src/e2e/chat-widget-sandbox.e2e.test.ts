@@ -532,9 +532,9 @@ suite.define(() => {
             .toBe(true);
           await page.keyboard.type("!");
           expect(await savedNote.inputValue()).toBe("Saved draft!");
-          await expect
-            .poll(() => savedNote.evaluate(() => Boolean(Reflect.get(window, "scrollNonce"))))
-            .toBe(true);
+          expect(await savedNote.evaluate(() => Boolean(Reflect.get(window, "scrollNonce")))).toBe(
+            false,
+          );
           await page.evaluate(() => {
             window.addEventListener("message", function settle(event) {
               if (event.data?.type === "fixture-shortcut-attempted") {

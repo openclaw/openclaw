@@ -105,13 +105,7 @@ function hasMatrixApprovalApprovers(params: {
   accountId?: string | null;
   approvalKind: ChannelApprovalKind;
 }): boolean {
-  return (
-    getMatrixApprovalApprovers({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      approvalKind: params.approvalKind,
-    }).length > 0
-  );
+  return getMatrixApprovalApprovers(params).length > 0;
 }
 
 function hasAnyMatrixApprovalApprovers(params: {
@@ -201,8 +195,7 @@ const matrixNativeApprovalCapability = createApproverRestrictedNativeApprovalCap
       cfg: cfg as CoreConfig,
       accountId,
     }),
-  isExecAuthorizedSender: ({ cfg, accountId, senderId }) =>
-    isMatrixExecApprovalAuthorizedSender({ cfg, accountId, senderId }),
+  isExecAuthorizedSender: isMatrixExecApprovalAuthorizedSender,
   isPluginAuthorizedSender: ({ cfg, accountId, senderId }) =>
     isMatrixApprovalReactionAuthorizedSender({
       cfg: cfg as CoreConfig,
@@ -210,10 +203,8 @@ const matrixNativeApprovalCapability = createApproverRestrictedNativeApprovalCap
       senderId,
       approvalKind: "plugin",
     }),
-  isNativeDeliveryEnabled: ({ cfg, accountId }) =>
-    isMatrixExecApprovalClientEnabled({ cfg, accountId }),
-  resolveNativeDeliveryMode: ({ cfg, accountId }) =>
-    resolveMatrixExecApprovalTarget({ cfg, accountId }),
+  isNativeDeliveryEnabled: isMatrixExecApprovalClientEnabled,
+  resolveNativeDeliveryMode: resolveMatrixExecApprovalTarget,
   requireMatchingTurnSourceChannel: true,
   resolveSuppressionAccountId,
   resolveOriginTarget: resolveMatrixOriginTarget,
@@ -222,18 +213,8 @@ const matrixNativeApprovalCapability = createApproverRestrictedNativeApprovalCap
   nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
     capabilityBoundary: true,
     eventKinds: ["exec", "plugin", "system-agent"],
-    isConfigured: ({ cfg, accountId }) =>
-      isMatrixAnyApprovalClientEnabled({
-        cfg,
-        accountId,
-      }),
-    shouldHandle: ({ cfg, accountId, approvalKind, request }) =>
-      shouldHandleMatrixApprovalRequest({
-        cfg,
-        accountId,
-        approvalKind,
-        request,
-      }),
+    isConfigured: isMatrixAnyApprovalClientEnabled,
+    shouldHandle: shouldHandleMatrixApprovalRequest,
     load: async () => (await import("./approval-handler.runtime.js")).matrixApprovalNativeRuntime,
   }),
 });

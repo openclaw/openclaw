@@ -135,8 +135,6 @@ describe("runtime postbuild static assets", () => {
     `);
 
     expect(payload.outputs).toEqual([
-      "dist/extensions/acpx/mcp-command-line.mjs",
-      "dist/extensions/acpx/mcp-proxy.mjs",
       "dist/extensions/apple-fm/assets/AppleFoundationModels.swift",
       "dist/extensions/code-mode-quickjs/assets/encoding.so",
       "dist/extensions/code-mode-quickjs/assets/quickjs.wasm",

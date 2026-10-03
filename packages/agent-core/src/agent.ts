@@ -128,7 +128,7 @@ export interface AgentOptions {
     context: PrepareNextTurnContext,
     signal?: AbortSignal,
   ) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
-  /** Queue drain mode for steering messages applied before the next unstarted tool or model turn. */
+  /** Queue drain mode for steering messages applied at tool or model checkpoints. */
   steeringMode?: QueueMode;
   /** Queue drain mode for follow-up messages injected after the agent would otherwise stop. */
   followUpMode?: QueueMode;
@@ -393,8 +393,8 @@ export class Agent {
   }
 
   /**
-   * Queue a message for the active run. Running tools finish, while sequential
-   * tail calls or a parallel batch that has not launched yet are skipped.
+   * Queue a message for the active run. After its first tool starts, an assistant
+   * message's unstarted sequential tail can be skipped. Parallel batches always run.
    */
   steer(message: AgentMessage): void {
     this.steeringQueue.enqueue(message);

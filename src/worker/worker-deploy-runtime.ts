@@ -6,8 +6,6 @@ import {
   WORKER_BUNDLE_IMAGE_PROCESSOR_PATH,
   WORKER_BUNDLE_SQLITE_STORE_PATH,
 } from "../shared/worker-bundle-hash.js";
-import loadHighlightJsRuntime from "./worker-deploy-highlight-runtime.cjs";
-import { setWorkerDeployHighlightJsLoader } from "./worker-deploy-runtime-registry.js";
 
 registerSealedRuntimeProcessEntrypoint(
   "fileToolPlanning",
@@ -31,4 +29,3 @@ for (const name of ["sqliteStore", "sharedStateStore"] as const) {
     new URL(`./${WORKER_BUNDLE_SQLITE_STORE_PATH}`, import.meta.url),
   );
 }
-setWorkerDeployHighlightJsLoader(loadHighlightJsRuntime);

@@ -4,6 +4,15 @@ import { describe, expect, it } from "vitest";
 import { extractText, extractTextCached, extractThinkingCached } from "./message-extract.ts";
 
 describe("extractTextCached", () => {
+  it("projects the stored subagent envelope only for user text", () => {
+    const text =
+      "[Subagent Context] You are running as a subagent (depth 1/5). Complete the current [Subagent Task]; inherited conversation is background context, not your assignment.\n\n[Subagent Task]\n\nInvestigate Side chat.\n\nBegin. Execute the assigned task to completion.";
+    const message = { role: "user", content: [{ type: "text", text }] };
+    expect(extractTextCached(message)).toBe("Investigate Side chat.");
+    expect(message.content).toEqual([{ type: "text", text }]);
+    expect(extractText({ role: "assistant", content: text })).toBe(text);
+  });
+
   it("returns consistent text output for repeated calls", () => {
     const message = {
       role: "user",

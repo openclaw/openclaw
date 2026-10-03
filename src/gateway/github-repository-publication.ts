@@ -556,6 +556,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
         (candidate) =>
           candidate.claim_id === null || matchesRepositoryGitHubPublicationClaim(candidate, claim),
       )) {
+        await placements.prepareWorkspaceResultClaim(claim);
         results.push(
           await placements.withWorkspaceExclusion(
             row.session_id,

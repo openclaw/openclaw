@@ -66,10 +66,10 @@ describe("worker inference lifecycle caller", () => {
           launchDesktopApp: unexpected,
           startTunnel: unexpected,
           stopTunnel: unexpected,
-          hasInferenceForSession: () => true,
-        } satisfies WorkerEnvironmentServiceContract & { hasInferenceForSession(): boolean };
+        } satisfies WorkerEnvironmentServiceContract;
         registerWorkerInferenceSessionControl(workerService, {
-          reserveDrain: () => ({
+          hasSession: () => true,
+          reserveSessionDrain: () => ({
             assertReserved: () => {},
             release: unacceptedRelease,
             accept: () => {
@@ -80,8 +80,8 @@ describe("worker inference lifecycle caller", () => {
               return { drained: drained.promise, hasWork: () => true, start, release };
             },
           }),
-          captureCancel: () => ({ runIds: [], cancel: async () => [] }),
-          resolveTarget: () => undefined,
+          captureSessionCancellation: () => ({ runIds: [], cancel: async () => [] }),
+          resolveSessionTargetForRunId: () => undefined,
         });
         const sessionKey = `agent:main:lifecycle-custody-${failureMode}`;
         const identities = [sessionKey, REQUEST.sessionId];

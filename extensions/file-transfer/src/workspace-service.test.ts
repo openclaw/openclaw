@@ -13,10 +13,12 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import type {
   OpenClawPluginApi,
-  OpenClawPluginService,
   OpenClawPluginServiceContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import {
   afterEach,
@@ -59,7 +61,8 @@ vi.mock("openclaw/plugin-sdk/agent-workspace-runtime", async (importOriginal) =>
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let local: string;
 let remote: string;
-let service: OpenClawPluginService;
+let service: Parameters<OpenClawPluginApi["registerService"]>[0];
+let scheduler: ReturnType<typeof createTestPluginServiceScheduler>;
 let api: OpenClawPluginApi;
 let nodePolicy: {
   allowReadPaths: string[];
@@ -79,6 +82,7 @@ function context() {
     stateDir: local,
     invokeNode: invoke,
     openNodeDuplex: openDuplex,
+    scheduler,
   };
 }
 
@@ -108,6 +112,7 @@ function captureOutput() {
 }
 
 beforeEach(async () => {
+  scheduler = createTestPluginServiceScheduler();
   openDuplex = undefined;
   const parent = await fs.realpath(tempDirs.make("node-workspace-test-"));
   local = path.join(parent, "gateway");
@@ -184,8 +189,13 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await service.stop?.(context());
-  vi.unstubAllEnvs();
+  scheduler.beginClose();
+  try {
+    await service.stop?.(context());
+  } finally {
+    await scheduler.stop();
+    vi.unstubAllEnvs();
+  }
 });
 
 describe("registered node workspace service", () => {

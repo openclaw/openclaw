@@ -4,6 +4,7 @@ import type {
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { vi } from "vitest";
 import type { ClickClackClient } from "../http-client.js";
 import type { ClickClackChannel, ClickClackMessage, CoreConfig } from "../types.js";
@@ -217,12 +218,13 @@ export function createHarness(
     clientFactory: () => client,
     installationId: TEST_INSTALLATION_ID,
     bindingGenerationFactory: options.bindingGenerationFactory ?? (() => TEST_BINDING_GENERATION),
-    startTimer: options.startTimer ?? false,
     ...(options.maxRetainedDetachedBindings !== undefined
       ? { maxRetainedDetachedBindings: options.maxRetainedDetachedBindings }
       : {}),
-    ...(options.gatewayEvents ? { gatewayEvents: options.gatewayEvents } : {}),
   });
+  if (options.gatewayEvents || options.startTimer) {
+    void service.bindGatewayEvents(options.gatewayEvents, createTestPluginServiceScheduler());
+  }
   return {
     runtime,
     service,

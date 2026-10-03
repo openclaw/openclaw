@@ -490,7 +490,7 @@ suite.define(() => {
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
 
-    const filterAndSort = currentPage.getByRole("button", { name: "Filter & sort" });
+    const filterAndSort = currentPage.getByRole("button", { name: "Filter & sort", exact: true });
     await filterAndSort.focus();
     await currentPage.keyboard.press("Enter");
 

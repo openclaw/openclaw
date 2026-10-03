@@ -18,6 +18,13 @@ const resolveMemorySearchConfig = vi.hoisted(() =>
   })),
 );
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
+const getActiveMemoryProviderCore = vi.hoisted(() => vi.fn());
+const resolveActiveMemoryBackendConfig = vi.hoisted(() =>
+  vi.fn<() => { backend: "builtin" } | { backend: "provider-runtime"; providerId: string }>(() => ({
+    backend: "builtin",
+  })),
+);
+const captureGatewayOperatorRunAuthority = vi.hoisted(() => vi.fn());
 const getAgentWorkspaceAccess = vi.hoisted(() =>
   vi.fn<
     (workspaceDir: string) =>
@@ -37,6 +44,12 @@ vi.mock("../../agents/workspace-access.js", async (importOriginal) => ({
 
 beforeEach(() => {
   getAgentWorkspaceAccess.mockReset();
+  resolveActiveMemoryBackendConfig.mockReset().mockReturnValue({ backend: "builtin" });
+  getActiveMemoryProviderCore.mockReset();
+  captureGatewayOperatorRunAuthority.mockReset().mockResolvedValue({
+    authority: { scopes: ["operator.read"], assertCurrent: vi.fn() },
+    release: vi.fn(),
+  });
 });
 
 const previewGroundedRemMarkdown = vi.hoisted(() => vi.fn());
@@ -73,6 +86,12 @@ vi.mock("../../agents/memory-search.js", () => ({
 
 vi.mock("../../plugins/memory-runtime.js", () => ({
   getActiveMemorySearchManagerCore: getMemorySearchManager,
+  getActiveMemoryProviderCore,
+  resolveActiveMemoryBackendConfig,
+}));
+
+vi.mock("../operator-run-authority.js", () => ({
+  captureGatewayOperatorRunAuthority,
 }));
 
 import { createDoctorHandlers } from "./doctor.js";
@@ -262,6 +281,8 @@ export {
   resolveAgentWorkspaceDir,
   resolveMemorySearchConfig,
   getMemorySearchManager,
+  getActiveMemoryProviderCore,
+  resolveActiveMemoryBackendConfig,
   getAgentWorkspaceAccess,
   previewGroundedRemMarkdown,
   dedupeDreamDiaryEntries,

@@ -100,13 +100,6 @@ export function readTranscriptIdentityByEventId(
   return createTranscriptIdentityReader(database, sessionId)(eventId);
 }
 
-/** Loads raw transcript events from the additive SQLite transcript store. */
-export async function loadTranscriptEvents(
-  scope: SessionTranscriptReadScope,
-): Promise<TranscriptEvent[]> {
-  return readRestoredSessionTranscript(scope, () => loadTranscriptEventsSync(scope));
-}
-
 /** Loads raw transcript events synchronously from the additive SQLite transcript store. */
 export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): TranscriptEvent[] {
   return loadTranscriptReadSnapshotSync(scope).events;

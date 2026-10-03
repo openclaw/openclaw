@@ -54,6 +54,7 @@ import {
   type AssistantMediaSession,
   type AssistantMediaReader,
 } from "./assistant-media-policy.js";
+import { isControlUiPrecompressedAssetExtension } from "./control-ui-asset-manifest.js";
 import { resolveControlUiBootstrapPresentation } from "./control-ui-bootstrap-presentation.js";
 import {
   buildControlUiRootAssetPath,
@@ -88,7 +89,6 @@ import { isControlUiSharePath, serveControlUiShareDocument } from "./control-ui-
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import {
   isControlUiFileUnmodified,
-  isControlUiPrecompressedAssetExtension,
   isControlUiStaticAssetExtension,
   resolveControlUiHtmlEncoding,
   resolveControlUiRepresentation,

@@ -417,34 +417,14 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     return { id: parsed.id, params: parsed.params };
   };
 
-  const isPreparedControlConnect = (data: GatewayConnectionFrame): boolean => {
-    const parsed = parsePreauthConnectFrame(data);
-    if (!parsed) {
-      return false;
-    }
-    return parsed.params.role !== "node" && !claimsWorkerConnectionIdentity(parsed.params);
-  };
-
-  const isStartupNodePreauth = (data: GatewayConnectionFrame): boolean => {
-    const parsed = parsePreauthConnectFrame(data);
-    return parsed ? isStartupNodeConnect(parsed.params) : false;
-  };
-
-  const rejectConnectForClosedAdmission = async (
-    data: GatewayConnectionFrame,
-  ): Promise<boolean> => {
-    const parsed = parsePreauthConnectFrame(data);
-    if (!parsed) {
-      return false;
-    }
-
+  const rejectConnectForClosedAdmission = async (id: string): Promise<void> => {
     const restartDraining = isGatewayRestartDraining();
     const reason = restartDraining
       ? GATEWAY_RESTART_UNAVAILABLE_REASON
       : GATEWAY_SUSPEND_UNAVAILABLE_REASON;
     const operation = restartDraining ? "restart" : "suspension";
     const phase = getGatewaySuspendAdmissionPhase();
-    setLastFrameMeta({ type: "req", method: "connect", id: parsed.id });
+    setLastFrameMeta({ type: "req", method: "connect", id });
     setHandshakeState("failed");
     setCloseCause(reason, {
       method: "connect",
@@ -452,7 +432,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     });
     await sendFrame({
       type: "res",
-      id: parsed.id,
+      id,
       ok: false,
       error: errorShape(ErrorCodes.UNAVAILABLE, `connect unavailable during gateway ${operation}`, {
         retryable: true,
@@ -467,7 +447,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     queueMicrotask(() =>
       close(GATEWAY_WORK_ADMISSION_CLOSE_CODE, `gateway ${operation} in progress`),
     );
-    return true;
   };
 
   const handleIncomingMessage = async (
@@ -480,11 +459,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     }
     const admission = tryBeginGatewayRootWorkAdmission("ws:connect");
     if (!admission) {
+      const connect = parsePreauthConnectFrame(data);
       if (
+        connect &&
         isGatewayRestartDraining() &&
         getGatewaySuspendAdmissionPhase() === "accepting" &&
         params.isStartupPending?.() === true &&
-        isStartupNodePreauth(data)
+        isStartupNodeConnect(connect.params)
       ) {
         const startupAdmission = tryBeginGatewayRestartStartupRootWorkAdmission();
         if (startupAdmission) {
@@ -496,14 +477,20 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           return;
         }
       }
-      if (isGatewaySuspendControlAvailable() && isPreparedControlConnect(data)) {
+      if (
+        connect &&
+        isGatewaySuspendControlAvailable() &&
+        connect.params.role !== "node" &&
+        !claimsWorkerConnectionIdentity(connect.params)
+      ) {
         // Suspension fences work, not authenticated owner recovery. Operators
         // can reconnect through suspension and its drain; node and worker connects
         // would attach presence/registry state, so they stay refused.
         await handleMessage(data);
         return;
       }
-      if (await rejectConnectForClosedAdmission(data)) {
+      if (connect) {
+        await rejectConnectForClosedAdmission(connect.id);
         return;
       }
       // Malformed pre-auth frames still use the established validation and

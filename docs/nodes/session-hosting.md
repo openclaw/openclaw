@@ -40,7 +40,9 @@ When a session first needs the current worker build, the Gateway sends its seale
 worker artifact to the paired host. The node verifies the exact content hash,
 publishes the artifact atomically, and prewarms it when supported by the execution mode.
 The artifact contains its complete JavaScript dependency closure; the node does
-not install packages or execute lifecycle scripts. Installation belongs to the
+not install packages or execute lifecycle scripts. Runtime chunks are sealed and
+verified with the artifact, and cold workers complete admission before loading
+the turn runtime. Installation belongs to the
 session request and receives its cancellation signal. Reconnect maintenance does
 not install or prewarm a worker build.
 

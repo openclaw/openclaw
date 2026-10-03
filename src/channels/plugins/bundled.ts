@@ -17,7 +17,7 @@ import { getPluginCacheRoot, getPluginCacheSource } from "../../plugins/plugin-c
 import { resolveBundledChannelRootScope, type BundledChannelRootScope } from "./bundled-root.js";
 import { normalizeChannelMeta } from "./meta-normalization.js";
 import { loadChannelPluginModule } from "./module-loader.js";
-import type { ChannelPlugin } from "./types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
 type PluginRuntime = import("../../plugins/runtime/types.js").PluginRuntime;

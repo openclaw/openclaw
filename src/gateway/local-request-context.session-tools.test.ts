@@ -563,9 +563,7 @@ describe("built-in session tool role authority", () => {
           expect(startChild).toHaveBeenCalledOnce();
           const childMessage = startChild.mock.calls[0]?.[0].params.message;
           expect(childMessage).toContain("inherited conversation is background context");
-          expect(childMessage).toContain(
-            "[Subagent Task]\n\nContinue from the inherited reproduction",
-          );
+          expect(childMessage).toContain("Continue from the inherited reproduction");
           expect(registerRun).toHaveBeenCalledOnce();
           expect(loadSessionEntry(scope)?.sessionId).toBe(sessionId);
         } finally {

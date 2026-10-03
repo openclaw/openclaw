@@ -68,8 +68,8 @@ async function requestUsage(params: Record<string, unknown>, method = "sessions.
 }
 
 async function readUsage(params: Record<string, unknown>) {
-  const [ok, payload] = await requestUsage(params);
-  expect(ok).toBe(true);
+  const [ok, payload, error] = await requestUsage(params);
+  expect(ok, JSON.stringify({ params, error })).toBe(true);
   return payload as SessionsUsageResult;
 }
 

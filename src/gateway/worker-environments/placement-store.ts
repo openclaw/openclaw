@@ -13,13 +13,11 @@ import { createPlacementMoveOps } from "./placement-move-intent.js";
 import { createPlacementPendingFailureOps } from "./placement-pending-failure.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
 import {
-  isCurrentPlacementTurnClaim,
   nextGeneration,
   normalizeEpoch,
   placementTurnOwner,
   projectWorkerSessionTurnClaim,
   required,
-  resolvePlacementTurnEnvironment,
   type WorkerSessionPlacementDispatchIdentity,
   type WorkerSessionPlacementRecord,
   type WorkerSessionPlacementTransitionPatch,
@@ -61,12 +59,8 @@ import {
 } from "./placement-turn-claims.js";
 import { createPlacementWorkspaceJournalWorkerOps } from "./placement-workspace-journal-store.js";
 import { createPlacementWorkspaceReservationOps } from "./placement-workspace-reservation.js";
-import {
-  createPlacementWorkspaceResultOps,
-  hasCurrentWorkspaceResultClaim,
-  hasWorkerWorkspacePendingResult,
-  readWorkerWorkspaceReconciliationFacts,
-} from "./placement-workspace-result.js";
+import { createPlacementWorkspaceResultReader } from "./placement-workspace-result-store.js";
+import { hasWorkerWorkspacePendingResult } from "./placement-workspace-result.js";
 import { consumePreparedEnvironment } from "./prepared-environment-store.js";
 import type { PreparedEnvironmentSelection } from "./store.js";
 import { boundedWorkerError } from "./worker-error.js";
@@ -105,6 +99,8 @@ export function createWorkerSessionPlacementStore(
     write: (operation) => runOpenClawStateWriteTransaction(({ db }) => operation(db), { path }),
   };
   const { read, write } = runtime;
+  const { clearLocalTurnClaimsAfterRestart, waitForTurnClaimRelease, validateTurnClaim } =
+    createPlacementTurnClaimOps(runtime);
   const workspaceResultConflicts = new Map<
     string,
     {
@@ -125,7 +121,9 @@ export function createWorkerSessionPlacementStore(
 
   const store = {
     ...createPlacementWorkspaceReservationOps(runtime),
-    ...createPlacementTurnClaimOps(runtime),
+    clearLocalTurnClaimsAfterRestart,
+    waitForTurnClaimRelease,
+    validateTurnClaim,
     ...createPlacementSessionToolOperationOps({
       path,
       instanceId: runtime.instanceId,
@@ -139,7 +137,11 @@ export function createWorkerSessionPlacementStore(
     ...createPlacementPendingFailureOps(runtime),
     ...createPlacementMoveOps(runtime),
     ...createPlacementWorkspaceJournalWorkerOps({ path, now: options.now }),
-    ...createPlacementWorkspaceResultOps(runtime),
+    ...createPlacementWorkspaceResultReader(
+      runtime,
+      (ids): Promise<WorkerSessionPlacementProjection> =>
+        store.readProjection(ids, { current: true }),
+    ),
 
     registerTurnClaimClosedHandler(handler: (claim: WorkerSessionTurnClaim) => void): () => void {
       return registerWorkerTurnClaimClosedHandler(path, handler);
@@ -285,13 +287,6 @@ export function createWorkerSessionPlacementStore(
       return records;
     },
 
-    getWorkspaceResultReconcilingSessionIds(sessionIds: readonly string[]): ReadonlySet<string> {
-      const normalizedIds = [
-        ...new Set(sessionIds.map((sessionId) => required(sessionId, "session id"))),
-      ];
-      return readWorkerWorkspaceReconciliationFacts(read(), normalizedIds).reconcilingSessionIds;
-    },
-
     retireSessionPlacement(input: WorkerSessionPlacementRetirement): void {
       const sessionId = required(input.sessionId, "session id");
       if (!(RETIRABLE_PLACEMENT_STATES as readonly string[]).includes(input.expectedState)) {
@@ -323,12 +318,8 @@ export function createWorkerSessionPlacementStore(
       claim: WorkerSessionTurnClaim,
       conflict: WorkerWorkspaceResultConflict | undefined,
     ): void {
-      const db = read();
-      const current = find(db, required(claim.sessionId, "session id"));
-      if (
-        !current ||
-        (!isCurrentPlacementTurnClaim(current, claim) && !hasCurrentWorkspaceResultClaim(db, claim))
-      ) {
+      const current = store.preparedWorkspaceResultPlacement(claim);
+      if (!current) {
         throw new Error(`Session ${claim.sessionId} workspace result conflict owner changed`);
       }
       if (!conflict) {
@@ -418,39 +409,6 @@ export function createWorkerSessionPlacementStore(
       workspaceBaseManifestRef?: string;
     }): WorkerSessionPlacementRecord {
       return write((db) => drainWorkerSessionPlacement(db, input, now()));
-    },
-
-    startWorkspaceResultDrain(claim: WorkerSessionTurnClaim): WorkerSessionPlacementRecord {
-      return write((db) => {
-        const current = getRequired(db, required(claim.sessionId, "session id"));
-        const ownsWorkspaceResult = hasCurrentWorkspaceResultClaim(db, claim);
-        const currentOwner = resolvePlacementTurnEnvironment(current, claim);
-        const owner =
-          currentOwner ??
-          (ownsWorkspaceResult &&
-          current.state === "active" &&
-          current.environmentId &&
-          current.activeOwnerEpoch !== null
-            ? {
-                environmentId: current.environmentId,
-                ownerEpoch: current.activeOwnerEpoch,
-              }
-            : undefined);
-        if (current.state !== "active" || !owner || !ownsWorkspaceResult) {
-          throw new Error(`Cannot drain stale workspace result for session ${claim.sessionId}`);
-        }
-        return drainWorkerSessionPlacement(
-          db,
-          {
-            sessionId: current.sessionId,
-            environmentId: owner.environmentId,
-            ownerEpoch: owner.ownerEpoch,
-            expectedGeneration: current.generation,
-            allowPendingWorkspaceResult: true,
-          },
-          now(),
-        );
-      });
     },
 
     startReconcile(input: {

@@ -76,6 +76,7 @@ Use `--` to stop option parsing. Command words still dispatch after it: for exam
   report to return.
 - Long-running commands show a progress indicator (`OSC 9;4` when supported).
 - Connection failures give a short explanation and a status-check command. If a request may have completed, check its result before retrying. Unexpected failures point to a recovery command; use `OPENCLAW_DEBUG=1` when rerunning to include diagnostics. JSON failures keep their diagnostic fields.
+- Update failures keep their reason on stderr, including in JSON mode.
 
 ### JSON failures
 

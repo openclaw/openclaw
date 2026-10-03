@@ -58,6 +58,17 @@ type ResolvedSqliteSessionEntry = {
   normalizedKey: string;
 };
 
+/** Private prepared reads must reject a different physical owner at the captured path. */
+export function loadSessionEntryReadOnlyInScope(
+  scope: SessionEntryReadScope & { databaseAgentId: string },
+): SessionEntry | undefined {
+  return resolveSessionEntry(scope, {
+    readOnly: true,
+    databaseAgentId: scope.databaseAgentId,
+    projection: scope.projection,
+  }).existing;
+}
+
 /** Resolves one exact canonical entry without materializing the store. */
 export function resolveSessionEntry(
   scope: SessionAccessScope,

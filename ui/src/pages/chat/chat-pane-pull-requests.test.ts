@@ -56,6 +56,7 @@ function createPullRequestPane(sessions: SessionCapability) {
     sessions: sessionCapability,
   });
   harness.pane.context.gateway.snapshot.hello = {
+    auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
     features: { methods: [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD] },
   } as never;
   return { ...harness, request };
@@ -127,7 +128,12 @@ function createPublicationPane(
   const initial = createInitializationContext();
   const eventListeners = new Set<GatewayEventListener>();
   const hello = gatewayHelloForMethods(
-    ["sessions.github.publish", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, "projects.list"],
+    [
+      "sessions.github.publish",
+      "sessions.github.options",
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      "projects.list",
+    ],
     operatorScopes,
   );
   if (scope) {
@@ -231,6 +237,12 @@ function createPublicationPane(
 }
 
 describe("chat pane pushed pull request state", () => {
+  it("does not attach the publication card from an advertised method without read access", () => {
+    const { pane, request } = createPublicationPane(undefined, []);
+    pane.render();
+    expect(pane.chatProps?.githubPublication).toBeUndefined();
+    expect(request.mock.calls.some(([method]) => method === "sessions.github.options")).toBe(false);
+  });
   it("keeps the pane quiet for unrelated PR snapshots while publishing its own changes", () => {
     const { pane, state, emitGatewayEvent } = createPullRequestPane({
       capturePullRequestEpoch: vi.fn(() => ({})),

@@ -8,6 +8,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import type { WorkspaceStateGuard } from "../agents/workspace-state-store.worker-contract.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import { printClawBanner } from "../cli/claw-banner.js";
 import { readSourceConfigBestEffort } from "../config/config.js";
@@ -201,18 +202,18 @@ export async function ensureWorkspaceAndSessions(
     skipBootstrap?: boolean;
     skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
     agentId: string;
-    beforePersistentApply?: () => void;
+    guard?: WorkspaceStateGuard;
   },
 ): Promise<{ bootstrapPending: boolean }> {
   const ws = await ensureAgentWorkspace({
     dir: workspaceDir,
     ensureBootstrapFiles: !options.skipBootstrap,
     skipOptionalBootstrapFiles: options.skipOptionalBootstrapFiles,
-    beforePersistentApply: options.beforePersistentApply,
+    guard: options.guard,
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
   const sessionsDir = resolveSessionTranscriptsDirForAgent(options.agentId);
-  options.beforePersistentApply?.();
+  options.guard?.assertHost?.();
   await fs.mkdir(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
   return { bootstrapPending: ws.bootstrapPending === true };

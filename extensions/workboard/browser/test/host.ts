@@ -117,6 +117,7 @@ export function createWorkboardTestHost() {
       registerPage: register("page"),
       registerNavigation: register("navigation"),
       registerPanel: register("panel"),
+      openPanel: vi.fn(),
       registerAction: register("action"),
       registerAccessory: register("accessory"),
       registerWidget: register("widget"),

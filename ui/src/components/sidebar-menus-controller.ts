@@ -5,7 +5,7 @@ import {
   type NavigationRouteId,
 } from "../app-navigation.ts";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { IdentityAvatarController } from "../lib/identity-avatar-loader.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import {
@@ -290,13 +290,13 @@ export class SidebarMenusController implements ReactiveController {
     );
     void fetchSessionMenuWork({
       client,
-      loadPullRequests:
-        isGatewayMethodAdvertised(
-          context.gateway.snapshot,
-          SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-        ) === true
-          ? () => store.load(this, pullRequestKey)
-          : undefined,
+      loadPullRequests: canCallGatewayMethod(
+        context.gateway.snapshot,
+        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+        "operator.read",
+      )
+        ? () => store.load(this, pullRequestKey)
+        : undefined,
       worktreeId: session.worktreeId,
       execNode: session.execNode,
     }).then((work) => {

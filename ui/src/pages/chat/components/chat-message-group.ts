@@ -238,7 +238,10 @@ export function renderActivityGroup(
     ? t(`chat.toolCards.review.${reviewOutcome}`, { reviewer })
     : "";
   const content = html`
-    <div class="chat-activity-group ${activityExpanded ? "is-open" : ""}">
+    <div
+      class="chat-activity-group ${activityExpanded ? "is-open" : ""}"
+      data-file-session-key=${firstGroup.senderSession?.sessionKey ?? nothing}
+    >
       <button
         class="chat-inline-disclosure chat-activity-group__summary"
         type="button"
@@ -333,7 +336,33 @@ function isActivityMessageGroup(group: MessageGroup): boolean {
   );
 }
 
-export function renderMessageGroupContent(group: MessageGroup, opts: RenderMessageGroupOptions) {
+function resolveFileLinkOwnerOptions(group: MessageGroup, options: RenderMessageGroupOptions) {
+  const sourceSessionKey = group.senderSession?.sessionKey;
+  const owned: RenderMessageGroupOptions = sourceSessionKey
+    ? {
+        ...options,
+        fileLinkSessionKey: sourceSessionKey,
+        onOpenWorkspaceFile:
+          options.onOpenWorkspaceFile &&
+          ((target) => {
+            const ownedTarget = { ...target, sessionKey: sourceSessionKey };
+            options.onOpenWorkspaceFile?.(ownedTarget);
+          }),
+        onOpenSidebar:
+          options.onOpenSidebar &&
+          ((content) =>
+            options.onOpenSidebar?.(
+              content.kind === "markdown"
+                ? { ...content, fileLinkSessionKey: sourceSessionKey }
+                : content,
+            )),
+      }
+    : options;
+  return owned;
+}
+
+export function renderMessageGroupContent(group: MessageGroup, options: RenderMessageGroupOptions) {
+  const opts = resolveFileLinkOwnerOptions(group, options);
   if (isActivityMessageGroup(group)) {
     return renderActivityGroup([group], opts, "continuation");
   }
@@ -354,7 +383,9 @@ export function renderMessageGroupContent(group: MessageGroup, opts: RenderMessa
   }`;
 }
 
-export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
+export function renderMessageGroup(group: MessageGroup, options: RenderMessageGroupOptions) {
+  const sourceSessionKey = group.senderSession?.sessionKey;
+  const opts = resolveFileLinkOwnerOptions(group, options);
   if (isInterSessionGroup(group)) {
     return renderInterSessionActivity(group, opts, (item, index) => {
       const prepared = prepareGroupMessage(group, item, opts);
@@ -414,7 +445,6 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   const visibleSources = group.sourceClients?.filter(
     (source) => gatewayClientKind(source) !== "web",
   );
-  const sourceSessionKey = group.senderSession?.sessionKey;
   const who = resolveMessageGroupSenderLabel(group, opts);
   const roleClass =
     normalizedRole === "user" || normalizedRole === "assistant" || normalizedRole === "tool"
@@ -540,6 +570,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       }${senderHue === null ? "" : " chat-group--sender-tint"}${holdsReplyRow ? " chat-group--reply" : ""}"
       style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
       data-chat-row-key=${group.key}
+      data-file-session-key=${sourceSessionKey ?? nothing}
     >
       ${inlineUserAvatar ? nothing : avatar}
       <div class="chat-group-messages">

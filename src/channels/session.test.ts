@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 
 type InboundRuntime = typeof import("../config/sessions/inbound.runtime.js");
@@ -45,6 +46,55 @@ describe("recordInboundSession", () => {
   beforeEach(() => {
     recordSessionMetaFromInboundMock.mockClear();
     updateLastRouteMock.mockClear();
+  });
+
+  it("settles metadata persistence before returning to the dispatcher", async () => {
+    const started = createDeferred();
+    const writer = createDeferred<undefined>();
+    recordSessionMetaFromInboundMock.mockImplementationOnce(() => {
+      started.resolve();
+      return writer.promise;
+    });
+    const returned = vi.fn();
+    const work = record({}).then(returned);
+    try {
+      await started.promise;
+      await Promise.resolve();
+      expect(returned).not.toHaveBeenCalled();
+    } finally {
+      writer.resolve(undefined);
+      await work;
+    }
+    expect(returned).toHaveBeenCalledOnce();
+  });
+
+  it("tracks slow error reporting without holding dispatch after a failed write", async ({
+    signal,
+  }) => {
+    const failure = new Error("metadata write failed");
+    const reporter = createDeferred();
+    const onRecordError = vi.fn(() => reporter.promise);
+    const reported = vi.fn();
+    let trackedTask: Promise<unknown> | undefined;
+    recordSessionMetaFromInboundMock.mockRejectedValueOnce(failure);
+    const work = record({
+      onRecordError,
+      trackSessionMetaTask: (task) => {
+        trackedTask = task;
+        void task.then(reported);
+      },
+    });
+    try {
+      await withinTest(work, signal);
+      expect(onRecordError).toHaveBeenCalledExactlyOnceWith(failure);
+      expect(trackedTask).toBeInstanceOf(Promise);
+      expect(reported).not.toHaveBeenCalled();
+    } finally {
+      reporter.reject(new Error("reporting failed"));
+      await work;
+      await trackedTask;
+    }
+    expect(reported).toHaveBeenCalledOnce();
   });
 
   it("does not pass ctx when updating a different session key", async () => {
@@ -154,15 +204,13 @@ describe("recordInboundSession", () => {
   it.each([
     {
       name: "throws synchronously",
-      handler: (_err: unknown): void => {
+      handler: (_err: unknown): never => {
         throw new Error("handler failed");
       },
     },
     {
       name: "returns a rejected promise",
-      handler: ((_err: unknown) => Promise.reject(new Error("handler failed"))) as (
-        _err: unknown,
-      ) => void,
+      handler: (_err: unknown) => Promise.reject(new Error("handler failed")),
     },
   ])("settles the tracked meta task when onRecordError $name", async ({ handler }) => {
     const recordError = new Error("db failed");

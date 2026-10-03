@@ -80,25 +80,6 @@ function parseManualOAuthInput(
   return parsed;
 }
 
-function buildAuthorizeUrl(params: {
-  clientId: string;
-  redirectUri: string;
-  scopes: string[];
-  state: string;
-  challenge: string;
-}): string {
-  const qs = new URLSearchParams({
-    client_id: params.clientId,
-    redirect_uri: params.redirectUri,
-    response_type: "code",
-    scope: params.scopes.join(" "),
-    state: params.state,
-    code_challenge: params.challenge,
-    code_challenge_method: "S256",
-  });
-  return `${CHUTES_AUTHORIZE_ENDPOINT}?${qs.toString()}`;
-}
-
 function resolveChutesExpiresAt(value: unknown, now: number): number | undefined {
   return resolveExpiresAtMsFromDurationSeconds(value, {
     nowMs: now,
@@ -275,13 +256,16 @@ export async function loginChutes(params: {
   const { verifier, challenge } = generatePkceVerifierChallenge();
   const state = params.createState?.() ?? randomBytes(16).toString("hex");
   const timeoutMs = params.timeoutMs ?? 3 * 60 * 1000;
-  const url = buildAuthorizeUrl({
-    clientId: params.app.clientId,
-    redirectUri: params.app.redirectUri,
-    scopes: params.app.scopes,
+  const query = new URLSearchParams({
+    client_id: params.app.clientId,
+    redirect_uri: params.app.redirectUri,
+    response_type: "code",
+    scope: params.app.scopes.join(" "),
     state,
-    challenge,
+    code_challenge: challenge,
+    code_challenge_method: "S256",
   });
+  const url = `${CHUTES_AUTHORIZE_ENDPOINT}?${query}`;
   const promptForCode = async () =>
     parseManualOAuthInput(
       await params.onPrompt({

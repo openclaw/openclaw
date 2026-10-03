@@ -37,6 +37,7 @@ import {
   type PreparedGitHubSourceReadIdentity,
 } from "./github-read-identity.js";
 import type { GitHubToolAccount } from "./github-tool-account.js";
+import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.types.js";
 
 export { GitHubIdentityError } from "./github-read-identity.js";
 
@@ -137,14 +138,6 @@ function resolveScopedGitHubToolIdentity(params: {
 }
 
 type ResolvedGitHubToolIdentity = ReturnType<typeof resolveGitHubToolIdentity>;
-
-export type PreparedGitHubToolEnvironment = Readonly<{
-  credentialScrubEnv: Readonly<Record<string, string>>;
-  localIdentityEnv: Readonly<Record<string, string>>;
-  excludedStoreNames: readonly string[];
-  /** A local process must retain the host-selected profile and author identity. */
-  managedLocalIdentity: boolean;
-}>;
 
 export function managedGitHubIdentityEnvironment(params: {
   profileDir: string;

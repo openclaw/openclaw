@@ -68,6 +68,120 @@ describe("imessage actions runtime", () => {
     expect(client.stop).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    {
+      method: "tapback",
+      send: (transport: typeof options | typeof remote) =>
+        runtime.sendReaction({
+          chatGuid: "chat-guid",
+          messageId: "message-guid",
+          reaction: "like",
+          options: transport,
+        }),
+      fields: {
+        chat_guid: "chat-guid",
+        message_id: "message-guid",
+        reaction: "like",
+        part_index: 0,
+      },
+      args: [
+        "tapback",
+        "--chat",
+        "chat-guid",
+        "--message",
+        "message-guid",
+        "--kind",
+        "like",
+        "--part",
+        "0",
+      ],
+    },
+    {
+      method: "tapback removal",
+      rpcMethod: "tapback",
+      send: (transport: typeof options | typeof remote) =>
+        runtime.sendReaction({
+          chatGuid: "chat-guid",
+          messageId: "message-guid",
+          reaction: "love",
+          remove: true,
+          partIndex: 2,
+          options: transport,
+        }),
+      fields: {
+        chat_guid: "chat-guid",
+        message_id: "message-guid",
+        reaction: "love",
+        part_index: 2,
+        remove: true,
+      },
+      args: [
+        "tapback",
+        "--chat",
+        "chat-guid",
+        "--message",
+        "message-guid",
+        "--kind",
+        "love",
+        "--part",
+        "2",
+        "--remove",
+      ],
+    },
+    {
+      method: "message.unsend",
+      send: (transport: typeof options | typeof remote) =>
+        runtime.unsendMessage({
+          chatGuid: "chat-guid",
+          messageId: "message-guid",
+          partIndex: 3,
+          options: transport,
+        }),
+      fields: { chat_guid: "chat-guid", message_id: "message-guid", part_index: 3 },
+      args: ["unsend", "--chat", "chat-guid", "--message", "message-guid", "--part", "3"],
+    },
+    {
+      method: "group.addParticipant",
+      send: (transport: typeof options | typeof remote) =>
+        runtime.addParticipant({
+          chatGuid: "chat-guid",
+          address: "+15550000123",
+          options: transport,
+        }),
+      fields: { chat_guid: "chat-guid", address: "+15550000123" },
+      args: ["chat-add-member", "--chat", "chat-guid", "--address", "+15550000123"],
+    },
+    {
+      method: "group.removeParticipant",
+      send: (transport: typeof options | typeof remote) =>
+        runtime.removeParticipant({
+          chatGuid: "chat-guid",
+          address: "+15550000123",
+          options: transport,
+        }),
+      fields: { chat_guid: "chat-guid", address: "+15550000123" },
+      args: ["chat-remove-member", "--chat", "chat-guid", "--address", "+15550000123"],
+    },
+  ])(
+    "preserves local and remote $method wire contracts",
+    async ({ method, rpcMethod, send, fields, args }) => {
+      runIMessageCliJsonCommandMock.mockResolvedValue({ ok: true });
+      await send(options);
+      expect(runIMessageCliJsonCommandMock).toHaveBeenCalledWith({
+        ...options,
+        timeoutMs: undefined,
+        args,
+      });
+      const client = rpc({ ok: true });
+      await send(remote);
+      expect(client.request).toHaveBeenCalledWith(rpcMethod ?? method, fields, {
+        timeoutMs: undefined,
+      });
+      expect(client.stop).toHaveBeenCalledOnce();
+      expect(runIMessageCliJsonCommandMock).toHaveBeenCalledOnce();
+    },
+  );
+
   it("uses poll.vote RPC only for stable option ids on remote accounts", async () => {
     const client = rpc({ guid: "vote-guid", option_text: "Blue" });
     await expect(

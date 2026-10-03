@@ -10,6 +10,7 @@ import {
   resolveMatrixAccountAllowlistConfig,
   resolveMatrixAccountConfig,
 } from "../account-config.js";
+import { setBoundedMap } from "./bounded-cache.js";
 import {
   resolveMatrixMonitorLiveUserAllowlist,
   type MatrixResolvedAllowlistEntry,
@@ -117,21 +118,15 @@ export function createMatrixHandlerState(config: {
 
   const shouldSendPairingReply = (senderId: string, created: boolean): boolean => {
     const now = Date.now();
-    if (created) {
-      pairingReplySentAtMsBySender.set(senderId, now);
-      return true;
-    }
     const lastSentAtMs = pairingReplySentAtMsBySender.get(senderId);
-    if (typeof lastSentAtMs === "number" && now - lastSentAtMs < PAIRING_REPLY_COOLDOWN_MS) {
+    if (
+      !created &&
+      typeof lastSentAtMs === "number" &&
+      now - lastSentAtMs < PAIRING_REPLY_COOLDOWN_MS
+    ) {
       return false;
     }
-    pairingReplySentAtMsBySender.set(senderId, now);
-    if (pairingReplySentAtMsBySender.size > MAX_TRACKED_PAIRING_REPLY_SENDERS) {
-      const oldestSender = pairingReplySentAtMsBySender.keys().next().value;
-      if (typeof oldestSender === "string") {
-        pairingReplySentAtMsBySender.delete(oldestSender);
-      }
-    }
+    setBoundedMap(pairingReplySentAtMsBySender, senderId, now, MAX_TRACKED_PAIRING_REPLY_SENDERS);
     return true;
   };
 

@@ -50,15 +50,6 @@ export function createHarness(params?: {
   const sendPayload = vi
     .fn<Parameters<typeof createLaneTextDeliverer>[0]["sendPayload"]>()
     .mockResolvedValue({ visibleReplySent: true });
-  const flushDraftLane = vi.fn().mockImplementation(async (lane: DraftLaneState) => {
-    await lane.stream?.flush();
-  });
-  const stopDraftLane = vi.fn().mockImplementation(async (lane: DraftLaneState) => {
-    await lane.stream?.stop();
-  });
-  const clearDraftLane = vi.fn().mockImplementation(async (lane: DraftLaneState) => {
-    await lane.stream?.clear();
-  });
   const editStreamMessage = vi.fn().mockResolvedValue(undefined);
   const recordPromptContextPreview = vi.fn<PromptContextRecord>().mockResolvedValue(true);
   const createPromptContextSequence = () =>
@@ -67,11 +58,7 @@ export function createHarness(params?: {
 
   const deliverLaneText = createLaneTextDeliverer({
     lanes,
-    applyTextToPayload: (payload: ReplyPayload, text: string) => ({ ...payload, text }),
     sendPayload,
-    flushDraftLane,
-    stopDraftLane,
-    clearDraftLane,
     editStreamMessage,
     createPromptContextSequence,
     resolveFinalPayloadCandidate: params?.resolveFinalPayloadCandidate,
@@ -86,9 +73,6 @@ export function createHarness(params?: {
     answer,
     reasoning,
     sendPayload,
-    flushDraftLane,
-    stopDraftLane,
-    clearDraftLane,
     editStreamMessage,
     recordPromptContextPreview,
     markDelivered,

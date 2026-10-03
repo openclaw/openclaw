@@ -6,10 +6,6 @@ struct QuickChatTextContext: Equatable, Sendable {
     let appName: String
     let windowTitle: String
     let text: String
-
-    var characterCount: Int {
-        self.text.count
-    }
 }
 
 struct QuickChatTextCollectionLimits: Equatable, Sendable {
@@ -213,7 +209,12 @@ enum QuickChatFocusedTextCaptureService {
         let hasPermission = await PermissionManager.grantedStatus([.accessibility])[.accessibility] == true
         guard !Task.isCancelled else { return .cancelled }
         if !hasPermission {
-            guard self.confirmAccessibilityRequest(appName: appName) else { return .cancelled }
+            guard AppLaunchRuntimePlan.current.allowsActivation else {
+                PermissionManager.reportDeferredRequest()
+                return .failed(String(
+                    format: String(localized: "Accessibility access is required to attach text from %@."), appName))
+            }
+            guard await self.confirmAccessibilityRequest(appName: appName) else { return .cancelled }
             guard !Task.isCancelled else { return .cancelled }
             let result = await PermissionManager.ensure([.accessibility], interactive: true)
             guard !Task.isCancelled else { return .cancelled }
@@ -303,14 +304,14 @@ enum QuickChatFocusedTextCaptureService {
         }
     }
 
-    private static func confirmAccessibilityRequest(appName: String) -> Bool {
+    private static func confirmAccessibilityRequest(appName: String) async -> Bool {
         let alert = NSAlert()
         alert.messageText = String(format: String(localized: "Allow OpenClaw to read text from %@"), appName)
         alert.informativeText = String(localized: "Attaching focused-window text uses macOS Accessibility access.")
         alert.addButton(withTitle: String(localized: "Grant Access"))
         alert.addButton(withTitle: String(localized: "Cancel"))
         // User-initiated confirmation owns the only path that may trigger the TCC prompt.
-        return alert.runModal() == .alertFirstButtonReturn
+        return await AppActivation.shared.response(to: alert) == .alertFirstButtonReturn
     }
 }
 

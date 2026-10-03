@@ -9,10 +9,59 @@ import {
 } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { testing as swarmScheduler } from "../../agents/subagents/swarm/swarm-scheduler.test-support.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import {
+  createAgentDatabaseInspectionRefusal,
+  inspectAgentDatabaseAdmission,
+  recordAgentDatabaseAdmissions,
+} from "../../state/agent-database-admission.js";
 import * as sessionStoreLookup from "../session-utils-store-lookup.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 import { createAgentTurnService } from "./agent-turn-service.js";
 import { createAgentTurnIo } from "./io.js";
+
+describe("agent database admission preflight", () => {
+  afterEach(() => recordAgentDatabaseAdmissions([]));
+
+  it.each(["pending", "failed", "mismatch"] as const)(
+    "reports %s admission with the appropriate retry contract",
+    (state) => {
+      const refusal =
+        state === "mismatch"
+          ? inspectAgentDatabaseAdmission({
+              agentId: "worker",
+              path: "/isolated/worker.sqlite",
+              metadata: { role: "agent", agentId: "other" },
+            })!
+          : createAgentDatabaseInspectionRefusal({
+              agentId: "worker",
+              paths: ["/isolated/worker.sqlite"],
+              reason: "Inspection has not admitted this agent.",
+              pending: state === "pending",
+            });
+      recordAgentDatabaseAdmissions([refusal]);
+      const respond = vi.fn();
+      const result = prepareAgentRequestPreflight({
+        request: {
+          message: "continue",
+          agentId: "worker",
+          idempotencyKey: "inspection-retry",
+        },
+        context: { getRuntimeConfig: () => ({}), dedupe: new Map() },
+        client: null,
+        io: createAgentTurnIo(respond),
+      } as never);
+
+      expect(result).toBeUndefined();
+      expect(respond).toHaveBeenCalledWith(false, undefined, {
+        code: "UNAVAILABLE",
+        message: `${refusal.reason}\n${refusal.repairHint}`,
+        details: refusal,
+        retryable: state === "pending",
+        ...(state === "pending" ? { retryAfterMs: 250 } : {}),
+      });
+    },
+  );
+});
 
 function runPreflight(
   swarmOutputSchema?: Record<string, unknown>,

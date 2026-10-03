@@ -36,25 +36,15 @@ export type TelegramFormattedChunk = {
   text: string;
 };
 
-function isTelegramRichLinkHref(href: string): boolean {
-  return /^(?:https?:\/\/|tg:\/\/|mailto:|tel:|#)/i.test(href);
-}
-
 function buildTelegramLink(
   link: MarkdownLinkSpan,
   text: string,
   context: { origin: "authored" | "linkify" },
 ) {
   const href = link.href.trim();
-  if (!href) {
-    return null;
-  }
-  if (link.start === link.end) {
-    return null;
-  }
   // Telegram rich links reject local or relative hrefs; keep the label visible
   // instead of letting one unsupported link drop the whole message.
-  if (!isTelegramRichLinkHref(href)) {
+  if (link.start === link.end || !/^(?:https?:\/\/|tg:\/\/|mailto:|tel:|#)/i.test(href)) {
     return null;
   }
   // Suppress auto-linkified file references (e.g. README.md → http://README.md)
@@ -95,12 +85,6 @@ function renderTelegramHtml(ir: MarkdownIR): string {
       code_block: { open: buildTelegramCodeBlockOpen, close: "</code></pre>" },
       spoiler: { open: "<tg-spoiler>", close: "</tg-spoiler>" },
       blockquote: { open: "<blockquote>", close: "</blockquote>" },
-      heading_1: { open: "<h1>", close: "</h1>" },
-      heading_2: { open: "<h2>", close: "</h2>" },
-      heading_3: { open: "<h3>", close: "</h3>" },
-      heading_4: { open: "<h4>", close: "</h4>" },
-      heading_5: { open: "<h5>", close: "</h5>" },
-      heading_6: { open: "<h6>", close: "</h6>" },
     },
     escapeText: escapeTelegramHtml,
     buildLink: buildTelegramLink,
@@ -115,18 +99,10 @@ function leadingWhitespaceLength(line: string): number {
   return length;
 }
 
-function isTelegramBulletLine(line: string): boolean {
-  return /^[ \t]*(?:[•*+-])[ \t]+\S/.test(line);
-}
-
-function isTelegramListBoundaryLine(line: string): boolean {
-  return /^[ \t]*(?:\d+\.|#{1,6})[ \t]+\S/.test(line);
-}
-
 function shouldPreserveTelegramListBoundarySpacing(previous: string, next: string): boolean {
   return (
-    isTelegramBulletLine(previous) &&
-    isTelegramListBoundaryLine(next) &&
+    /^[ \t]*[•*+-][ \t]+\S/.test(previous) &&
+    /^[ \t]*(?:\d+\.|#{1,6})[ \t]+\S/.test(next) &&
     leadingWhitespaceLength(next) <= leadingWhitespaceLength(previous)
   );
 }
@@ -175,11 +151,7 @@ export function markdownToTelegramHtml(
   const ir = parseTelegramLegacyMarkdown(markdown, options.tableMode);
   const html = renderTelegramHtml(ir);
   const telegramHtml = renderSupportedTelegramHtml(html);
-  // Apply file reference wrapping if requested (for chunked rendering)
-  if (options.wrapFileRefs !== false) {
-    return wrapFileReferencesInHtml(telegramHtml);
-  }
-  return telegramHtml;
+  return options.wrapFileRefs === false ? telegramHtml : wrapFileReferencesInHtml(telegramHtml);
 }
 
 const HTML_MODE_TAG_PATTERN = /^<(\/?)([a-zA-Z][a-zA-Z0-9-]*)([^<>]*)>$/;
@@ -369,11 +341,9 @@ export function renderTelegramHtmlText(
   text: string,
   options: { textMode?: "markdown" | "html"; tableMode?: MarkdownTableMode } = {},
 ): string {
-  const textMode = options.textMode ?? "markdown";
-  if (textMode === "html") {
+  if (options.textMode === "html") {
     return escapeUnsupportedTelegramHtml(normalizeTelegramLegacyHtmlTables(text));
   }
-  // markdownToTelegramHtml already wraps file references by default
   return markdownToTelegramHtml(text, { tableMode: options.tableMode });
 }
 

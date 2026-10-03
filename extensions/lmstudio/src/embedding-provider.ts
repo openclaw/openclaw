@@ -63,18 +63,12 @@ async function resolveLmstudioApiKey(
   providerId?: string,
 ): Promise<string | undefined> {
   const selectedProviderId = providerId?.trim();
-  const selectedApiKey =
-    selectedProviderId && selectedProviderId !== LMSTUDIO_PROVIDER_ID
-      ? options.config.models?.providers?.[selectedProviderId]?.apiKey
-      : undefined;
   if (selectedProviderId && selectedProviderId !== LMSTUDIO_PROVIDER_ID) {
-    return selectedApiKey === undefined || selectedApiKey === null
-      ? undefined
-      : await resolveLmstudioConfiguredApiKeyForProvider({
-          providerId: selectedProviderId,
-          config: options.config,
-          env: process.env,
-        });
+    return await resolveLmstudioConfiguredApiKeyForProvider({
+      providerId: selectedProviderId,
+      config: options.config,
+      env: process.env,
+    });
   }
   try {
     return await resolveLmstudioRuntimeApiKey({

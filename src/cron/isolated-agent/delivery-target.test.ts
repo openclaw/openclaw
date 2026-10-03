@@ -69,10 +69,6 @@ vi.mock("../../infra/outbound/channel-selection.runtime.js", () => ({
     .mockResolvedValue({ channel: "alpha", configured: ["alpha"] }),
 }));
 
-vi.mock("../../infra/outbound/target-id-resolution.js", () => ({
-  maybeResolveIdLikeTarget: vi.fn(),
-}));
-
 vi.mock("../../infra/outbound/targets.runtime.js", () => ({
   resolveOutboundTarget: vi.fn(),
 }));
@@ -83,7 +79,6 @@ const mockedModuleIds = [
   "../../config/sessions/session-accessor.js",
   "../../infra/outbound/channel-selection.runtime.js",
   "../../infra/outbound/targets.runtime.js",
-  "../../infra/outbound/target-id-resolution.js",
 ];
 
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";

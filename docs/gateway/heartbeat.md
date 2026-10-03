@@ -342,7 +342,8 @@ Heartbeat configuration is strict: only the fields listed above are accepted. Ac
 <AccordionGroup>
   <Accordion title="Session and target routing">
     - Heartbeats run in the agent's main session by default (`agent:<id>:main`), or `global` when `session.scope = "global"`. Set `session` to override to a specific channel session (Discord/WhatsApp/etc.).
-    - `session` only affects the run context. Delivery is controlled by `target` and `to`.
+    - `session` only affects the run context. Delivery is controlled by `target` and `to`, except for session-owned events in an internal session (see below).
+    - A wake whose pending events are all session-owned (background exec completions, or the continuation of a turn interrupted by a Gateway restart) in an internal session (Control UI/WebChat, or another operator-owned session without an external route) publishes the reply into that session's transcript instead of the `target`/`to` channel. `target: "none"` still suppresses it. If the session write fails, the event stays queued for a later wake and does not fall back to the channel. Batches that also contain other events use `target`/`to` as usual.
     - The default `owner` target chooses an explicitly configured owner identity. It reuses the exact account/thread only when the session's last route is a direct chat to that owner.
     - A wake that carries a channel and recipient uses that named origin before owner discovery. This event destination can be a group because it is explicit, not inferred.
     - To deliver to a specific channel/recipient, set a channel `target` plus `to`. `target: "last"` is an explicit opt-in to the last external conversation, including groups.

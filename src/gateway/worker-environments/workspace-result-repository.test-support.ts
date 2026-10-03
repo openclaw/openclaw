@@ -200,7 +200,7 @@ export function useRepositoryWorkspaceResultFixture() {
         owner: placementTurnOwner(placement),
       });
       if (markResultPending) {
-        placements.markWorkspaceResultPending(turnClaim);
+        await placements.markWorkspaceResultPending(turnClaim);
       }
       return { placement, turnClaim };
     };

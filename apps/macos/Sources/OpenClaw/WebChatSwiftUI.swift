@@ -1028,8 +1028,6 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
     private let conversationController: NativeConversationController?
     private let viewModel: OpenClawChatViewModel
     private let contentController: NSViewController
-    private let speech: OpenClawChatSpeechController
-    private let voiceNoteRecorder: OpenClawVoiceNoteRecorder
     private var routingIdentityTask: Task<Void, Never>?
     private var window: ExperienceWindow?
     var onBecameKey: (() -> Void)?
@@ -1126,14 +1124,12 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         voiceNoteRecorder.setCaptureAdmissionHandler {
             !AppStateStore.shared.talkEnabled
         }
-        self.voiceNoteRecorder = voiceNoteRecorder
         let speech = OpenClawChatSpeechController { text in
             guard let transport = transport as? MacGatewayChatTransport else {
                 throw MacChatMessageSpeechError.unsupportedTransport
             }
             return try await transport.synthesizeSpeech(text: text)
         }
-        self.speech = speech
         let sessionKeyRelay = WebChatSessionKeyRelay()
         let conversationOwner: OpenClawWebConversation? = gatewayTarget != nil &&
             !AppDefaults.standard.bool(forKey: nativeConversationForcedKey) ? OpenClawWebConversation() : nil
@@ -1307,9 +1303,9 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         self.ensureWindowSize()
         window.isHiddenForExperience = false
         window.isExcludedFromWindowsMenu = false
-        if window.isMiniaturized { window.deminiaturize(nil) }
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        if window.isMiniaturized { AppActivation.shared.deminiaturize(window: window) }
+        AppActivation.shared.makeKeyAndOrderFront(window: window)
+        AppActivation.shared.activate()
         self.onBecameKey?()
         self.onVisibilityChanged?(true)
         self.conversationController?.present(visible: true, active: window.isKeyWindow)
@@ -1319,7 +1315,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         guard let window else { return }
         window.isHiddenForExperience = true
         window.isExcludedFromWindowsMenu = true
-        if window.isMiniaturized { window.deminiaturize(nil) }
+        if window.isMiniaturized { AppActivation.shared.deminiaturize(window: window) }
         window.orderOut(nil)
         self.onVisibilityChanged?(false)
         self.conversationController?.present(visible: false, active: false)

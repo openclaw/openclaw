@@ -61,10 +61,6 @@ export function createMatrixCryptoFacade(deps: {
 
   return {
     isRoomEncrypted: deps.isRoomEncrypted,
-    requestOwnUserVerification: async () => {
-      const crypto = deps.client.getCrypto() as MatrixVerificationCryptoApi | undefined;
-      return await deps.verificationManager.requestOwnUserVerification(crypto);
-    },
     encryptMedia: async (
       buffer: Buffer,
     ): Promise<{ buffer: Buffer; file: Omit<EncryptedFile, "url"> }> => {

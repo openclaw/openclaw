@@ -1,6 +1,6 @@
 /** Validated channel plugin retained by the active runtime registry. */
 export type ActiveChannelPluginRuntimeShape =
-  import("../channels/plugins/types.plugin.js").ChannelPlugin & {
+  import("../channels/plugins/types.plugin.js").AnyChannelPlugin & {
     meta: NonNullable<import("../channels/plugins/types.plugin.js").ChannelPlugin["meta"]>;
   };
 

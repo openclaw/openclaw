@@ -80,23 +80,20 @@ describe("host env security policy parity", () => {
     expect(swiftBlockedOverridePrefixes).toEqual(policy.blockedOverridePrefixes ?? []);
     expect(swiftBlockedPrefixes).toEqual(policy.blockedPrefixes);
 
-    expect(sanitizerSource).toContain(
-      "private static let blockedInheritedKeys = HostEnvSecurityPolicy.blockedInheritedKeys",
+    // The sanitizer may consume the generated policy directly or through local aliases.
+    const consumedPolicyFields = Array.from(
+      sanitizerSource.matchAll(/\bHostEnvSecurityPolicy\s*\.\s*(\w+)/g),
+      (match) => expectDefined(match[1], "Swift policy field"),
     );
-    expect(sanitizerSource).toContain(
-      "private static let blockedInheritedPrefixes = HostEnvSecurityPolicy.blockedInheritedPrefixes",
-    );
-    expect(sanitizerSource).toContain(
-      "private static let blockedKeys = HostEnvSecurityPolicy.blockedKeys",
-    );
-    expect(sanitizerSource).toContain(
-      "private static let blockedOverrideKeys = HostEnvSecurityPolicy.blockedOverrideKeys",
-    );
-    expect(sanitizerSource).toContain(
-      "private static let blockedOverridePrefixes = HostEnvSecurityPolicy.blockedOverridePrefixes",
-    );
-    expect(sanitizerSource).toContain(
-      "private static let blockedPrefixes = HostEnvSecurityPolicy.blockedPrefixes",
+    expect(new Set(consumedPolicyFields)).toEqual(
+      new Set([
+        "blockedInheritedKeys",
+        "blockedInheritedPrefixes",
+        "blockedKeys",
+        "blockedOverrideKeys",
+        "blockedOverridePrefixes",
+        "blockedPrefixes",
+      ]),
     );
   });
 });

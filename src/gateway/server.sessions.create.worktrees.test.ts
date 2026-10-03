@@ -169,6 +169,7 @@ test("sessions.create fences the first workspace write behind its diff baseline"
 
 test("sessions.create rolls back failed provisioning before a same-key creator proceeds", async () => {
   const openClawState = await createOpenClawTestState({
+    applyEnv: false,
     layout: "state-only",
     prefix: "openclaw-session-worktree-rollback-",
   });
@@ -297,6 +298,7 @@ test.each([
   "sessions.create rolls back only its own allocation after concurrent $source worktree $change",
   async ({ source, change }) => {
     const openClawState = await createOpenClawTestState({
+      applyEnv: false,
       layout: "state-only",
       prefix: "openclaw-session-worktree-allocation-outcome-",
     });
@@ -422,6 +424,7 @@ test.each([
 
 test("sessions.create provisions and reuses a session worktree for later runs", async () => {
   const openClawState = await createOpenClawTestState({
+    applyEnv: false,
     layout: "state-only",
     prefix: "openclaw-session-worktree-",
   });
@@ -689,6 +692,7 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
 
 test("sessions.create preserves pending worktree intent when initial-turn admission fails", async () => {
   const openClawState = await createOpenClawTestState({
+    applyEnv: false,
     layout: "state-only",
     prefix: "openclaw-session-worktree-post-commit-failure-",
   });

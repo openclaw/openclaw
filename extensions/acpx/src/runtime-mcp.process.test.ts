@@ -48,112 +48,149 @@ async function withRuntime(
   });
 }
 
-it.each([
-  "bridge",
-  "catalog",
-  "openclaw-direct",
-  ...(process.platform === "win32" ? [] : ["env-bridge"]),
-])("scopes MCP at the real ACP boundary across reconnect (%s)", async (scenario) => {
-  const bridge = scenario === "bridge" || scenario === "env-bridge";
-  const catalog = scenario === "catalog";
-  const agent = scenario === "openclaw-direct" ? "openclaw" : "fixture";
-  await withOpenClawTestState({ label: "acpx-mcp-process" }, async (state) => {
-    const directory = path.join(state.root, "peer");
-    await fs.mkdir(directory);
-    const wrapper = path.join(state.root, "openclaw.mjs");
-    await fs.writeFile(
-      wrapper,
-      `process.argv.splice(2, 1); await import(${JSON.stringify(new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url).href)});`,
-    );
-    const directCommand = [process.execPath, peer, directory];
-    const bridgeCommand = [process.execPath, wrapper, "acp", directory];
-    const command =
-      scenario === "env-bridge"
-        ? ["env", "OPENCLAW_HIDE_BANNER=1", ...bridgeCommand]
-        : bridge
-          ? bridgeCommand
-          : directCommand;
-    const servers = ["openclaw-plugin-tools", "openclaw-tools", "user-server"].map((name) => ({
-      name,
-      command: process.execPath,
-      args: ["server.mjs"],
-      env: [],
-    }));
-    const store = createFileSessionStore({ stateDir: state.root });
-    const createRuntime = (configuredCommand = command) =>
-      new AcpxRuntime({
-        cwd: state.root,
-        sessionStore: store,
-        agentRegistry: createAgentRegistry({ overrides: { [agent]: configuredCommand } }),
-        pluginToolsMcpBridgeEnabled: true,
-        openclawToolsMcpBridgeEnabled: true,
-        mcpServers: servers,
-        permissionMode: "deny-all",
-        timeoutMs: 5000,
-      });
-    let runtime = createRuntime();
-    const handles: Awaited<ReturnType<AcpxRuntime["ensureSession"]>>[] = [];
-    try {
-      for (const agentId of ["main", "work"]) {
-        const handle = await runtime.ensureSession({
-          sessionKey: "shared",
-          agentId,
-          agent,
-          mode: catalog ? "oneshot" : "persistent",
-          bridgeSession: catalog ? null : undefined,
-        });
-        handles.push(handle);
-      }
-      const prompt = async (handle: (typeof handles)[number]) => {
-        const turn = runtime.startTurn({
-          handle,
-          text: "show context",
-          mode: "prompt",
-          requestId: handle.agentId!,
-        });
-        let text = "";
-        for await (const event of turn.events) {
-          if (event.type === "text_delta") {
-            text += event.text;
-          }
-        }
-        expect(await turn.result).toMatchObject({ status: "completed" });
-        return JSON.parse(text);
-      };
-      const verify = async (reconnected = false) => {
-        const results = await Promise.all(handles.map(prompt));
-        for (const [index, result] of results.entries()) {
-          expect(reconnected ? result.loadedMcpServers : result.mcpServers).toEqual(
-            bridge || catalog
-              ? []
-              : servers.map((server) =>
-                  server.name === "user-server"
-                    ? server
-                    : Object.assign({}, server, {
-                        args: [...server.args, "--openclaw-agent-id", handles[index]!.agentId],
-                        env: [{ name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY", value: "shared" }],
-                      }),
-                ),
-          );
-        }
-      };
-      await verify();
-      for (const handle of handles) {
-        await runtime.close({ handle, reason: "restart" });
-      }
-      runtime = createRuntime(bridge ? directCommand : bridgeCommand);
-      for (const handle of handles) {
-        await runtime.setMode({ handle, mode: "review" });
-        await runtime.setConfigOption({ handle, key: "tone", value: "brief" });
-      }
-      await verify(true);
-    } finally {
-      for (const handle of handles) {
-        await runtime.close({ handle, reason: "test-complete", discardPersistentState: true });
-      }
+function startTurnWithHeldCheckpoint(
+  runtime: AcpxRuntime,
+  store: ReturnType<typeof createFileSessionStore>,
+  handle: Awaited<ReturnType<AcpxRuntime["ensureSession"]>>,
+  requestId: string,
+) {
+  const saveStarted = createDeferred<void>();
+  const releaseSave = createDeferred<void>();
+  const save = store.save.bind(store);
+  let held = false;
+  let promptAdmitted = false;
+  const saveSpy = vi.spyOn(store, "save").mockImplementation(async (record) => {
+    if (
+      promptAdmitted &&
+      !held &&
+      record.acpxRecordId === handle.acpxRecordId &&
+      record.messages.length > 0
+    ) {
+      held = true;
+      saveStarted.resolve();
+      await releaseSave.promise;
     }
+    await save(record);
   });
-});
+  const turn = runtime.startTurn({ handle, text: `${requestId} turn`, mode: "prompt", requestId });
+  const events = (async () => {
+    for await (const ignoredEventValue of turn.events) {
+      // Drain the real adapter while its persistence checkpoint is held.
+      void ignoredEventValue;
+    }
+  })();
+  void events.catch(() => {});
+  const admit = async () => {
+    await turn.promptStarted;
+    promptAdmitted = true;
+  };
+  return { turn, events, saveStarted, releaseSave, saveSpy, admit };
+}
+
+it.each([process.platform === "win32" ? "bridge" : "env-bridge", "catalog", "openclaw-direct"])(
+  "scopes MCP at the real ACP boundary across reconnect (%s)",
+  async (scenario) => {
+    const bridge = scenario === "bridge" || scenario === "env-bridge";
+    const catalog = scenario === "catalog";
+    const agent = scenario === "openclaw-direct" ? "openclaw" : "fixture";
+    await withOpenClawTestState({ label: "acpx-mcp-process" }, async (state) => {
+      const directory = path.join(state.root, "peer");
+      await fs.mkdir(directory);
+      const wrapper = path.join(state.root, "openclaw.mjs");
+      await fs.writeFile(
+        wrapper,
+        `process.argv.splice(2, 1); await import(${JSON.stringify(new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url).href)});`,
+      );
+      const directCommand = [process.execPath, peer, directory];
+      const bridgeCommand = [process.execPath, wrapper, "acp", directory];
+      const command =
+        scenario === "env-bridge"
+          ? ["env", "OPENCLAW_HIDE_BANNER=1", ...bridgeCommand]
+          : bridge
+            ? bridgeCommand
+            : directCommand;
+      const servers = ["openclaw-plugin-tools", "openclaw-tools", "user-server"].map((name) => ({
+        name,
+        command: process.execPath,
+        args: ["server.mjs"],
+        env: [],
+      }));
+      const store = createFileSessionStore({ stateDir: state.root });
+      const createRuntime = (configuredCommand = command) =>
+        new AcpxRuntime({
+          cwd: state.root,
+          sessionStore: store,
+          agentRegistry: createAgentRegistry({ overrides: { [agent]: configuredCommand } }),
+          pluginToolsMcpBridgeEnabled: true,
+          openclawToolsMcpBridgeEnabled: true,
+          mcpServers: servers,
+          permissionMode: "deny-all",
+          timeoutMs: 5000,
+        });
+      let runtime = createRuntime();
+      const handles: Awaited<ReturnType<AcpxRuntime["ensureSession"]>>[] = [];
+      try {
+        for (const agentId of ["main", "work"]) {
+          const handle = await runtime.ensureSession({
+            sessionKey: "shared",
+            agentId,
+            agent,
+            mode: catalog ? "oneshot" : "persistent",
+            bridgeSession: catalog ? null : undefined,
+          });
+          handles.push(handle);
+        }
+        const prompt = async (handle: (typeof handles)[number]) => {
+          const turn = runtime.startTurn({
+            handle,
+            text: "show context",
+            mode: "prompt",
+            requestId: handle.agentId!,
+          });
+          let text = "";
+          for await (const event of turn.events) {
+            if (event.type === "text_delta") {
+              text += event.text;
+            }
+          }
+          expect(await turn.result).toMatchObject({ status: "completed" });
+          return JSON.parse(text);
+        };
+        const verify = async (reconnected = false) => {
+          const results = await Promise.all(handles.map(prompt));
+          for (const [index, result] of results.entries()) {
+            expect(reconnected ? result.loadedMcpServers : result.mcpServers).toEqual(
+              bridge || catalog
+                ? []
+                : servers.map((server) =>
+                    server.name === "user-server"
+                      ? server
+                      : Object.assign({}, server, {
+                          args: [...server.args, "--openclaw-agent-id", handles[index]!.agentId],
+                          env: [{ name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY", value: "shared" }],
+                        }),
+                  ),
+            );
+          }
+        };
+        await verify();
+        for (const handle of handles) {
+          await runtime.close({ handle, reason: "restart" });
+        }
+        runtime = createRuntime(bridge ? directCommand : bridgeCommand);
+        for (const handle of handles) {
+          await runtime.setMode({ handle, mode: "review" });
+          await runtime.setConfigOption({ handle, key: "tone", value: "brief" });
+        }
+        await verify(true);
+      } finally {
+        for (const handle of handles) {
+          await runtime.close({ handle, reason: "test-complete", discardPersistentState: true });
+        }
+      }
+    });
+  },
+);
 
 it("finishes an admitted discard after reset retires its pending snapshot", async () => {
   await withRuntime("acpx-discard-snapshot", async (runtime, store) => {
@@ -257,37 +294,8 @@ it.each([false, true])(
             await runtime.prepareFreshSession(target);
             const first = await runtime.ensureSession(target);
             const shutdown = vi.spyOn(BaseAcpxRuntime.prototype, "shutdown");
-            const saveStarted = createDeferred<void>();
-            const releaseSave = createDeferred<void>();
-            const save = store.save.bind(store);
-            let held = false;
-            let promptAdmitted = false;
-            const saveSpy = vi.spyOn(store, "save").mockImplementation(async (record) => {
-              if (
-                promptAdmitted &&
-                !held &&
-                record.acpxRecordId === first.acpxRecordId &&
-                record.messages.length > 0
-              ) {
-                held = true;
-                saveStarted.resolve();
-                await releaseSave.promise;
-              }
-              await save(record);
-            });
-            const turn = runtime.startTurn({
-              handle: first,
-              text: "first turn",
-              mode: "prompt",
-              requestId: "first",
-            });
-            const events = (async () => {
-              for await (const ignoredEventValue of turn.events) {
-                // Drain the real adapter while its persistence checkpoint is held.
-                void ignoredEventValue;
-              }
-            })();
-            void events.catch(() => {});
+            const { turn, events, saveStarted, releaseSave, saveSpy, admit } =
+              startTurnWithHeldCheckpoint(runtime, store, first, "first");
             let turnFinished = false;
             void turn.result.then(
               () => {
@@ -300,8 +308,7 @@ it.each([false, true])(
             let second: typeof first | undefined;
             let cancellation: Promise<void> | undefined;
             try {
-              await turn.promptStarted;
-              promptAdmitted = true;
+              await admit();
               // Terminal persistence owns ACPX's record lock; these controls need a live prompt.
               await Promise.all([promptBlocked.promise, saveStarted.promise]);
               second = await runtime.ensureSession(target);
@@ -356,43 +363,17 @@ it("creates a fresh oneshot while an old physical record write is still pending"
       mode: "oneshot" as const,
     };
     const first = await runtime.ensureSession(target);
-    const saveStarted = createDeferred<void>();
-    const releaseSave = createDeferred<void>();
-    const save = store.save.bind(store);
-    let held = false;
-    let promptAdmitted = false;
-    const saveSpy = vi.spyOn(store, "save").mockImplementation(async (record) => {
-      if (
-        promptAdmitted &&
-        !held &&
-        record.acpxRecordId === first.acpxRecordId &&
-        record.messages.length > 0
-      ) {
-        held = true;
-        saveStarted.resolve();
-        await releaseSave.promise;
-      }
-      await save(record);
-    });
-    const turn = runtime.startTurn({
-      handle: first,
-      text: "old turn",
-      mode: "prompt",
-      requestId: "old",
-    });
-    const events = (async () => {
-      for await (const ignoredEventValue of turn.events) {
-        // Drain the real adapter while its physical record checkpoint is held.
-        void ignoredEventValue;
-      }
-    })();
-    void events.catch(() => {});
+    const { turn, events, saveStarted, releaseSave, saveSpy, admit } = startTurnWithHeldCheckpoint(
+      runtime,
+      store,
+      first,
+      "old",
+    );
     void turn.result.catch(() => {});
     let creating: Promise<typeof first> | undefined;
     let fresh: typeof first | undefined;
     try {
-      await turn.promptStarted;
-      promptAdmitted = true;
+      await admit();
       await saveStarted.promise;
       await runtime.prepareFreshSession(target);
       creating = runtime.ensureSession(target).then((handle) => {

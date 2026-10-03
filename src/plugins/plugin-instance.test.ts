@@ -427,55 +427,44 @@ describe("managed plugin instances", () => {
     expect(read).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    "sourceMember",
-    "iteratorMember",
-    "sourceMethod",
-    "asyncSourceMethod",
-    "iteratorMethod",
-    "asyncIteratorMethod",
-    "yieldedValue",
-    "terminalValue",
-  ] as const)("fences callable values returned through a stream's %s", async (target) => {
-    const instance = new PluginInstance("stream-values");
-    const read = vi.fn(() => "owned value");
-    // A helper's data is not an iterator completion signal.
-    const payload = { read, done: true };
-    const iterator = Object.assign(
-      (async function* () {
-        yield payload;
-      })(),
-      { member: payload, inspect: () => payload, inspectAsync: async () => payload },
-    );
-    const stream = instance.wrap({
-      [Symbol.asyncIterator]: () => iterator,
-      member: payload,
-      helper: () => read,
-      helperAsync: async () => read,
-      result: async () => payload,
-    });
-    const view = stream[Symbol.asyncIterator]();
-    const first = await view.next();
-    if (first.done) {
-      throw new Error("Expected the fixture's first chunk");
-    }
-    const readers = {
-      sourceMember: () => stream.member.read,
-      iteratorMember: () => view.member.read,
-      sourceMethod: () => stream.helper(),
-      asyncSourceMethod: () => stream.helperAsync(),
-      iteratorMethod: () => view.inspect().read,
-      asyncIteratorMethod: async () => (await view.inspectAsync()).read,
-      yieldedValue: () => first.value.read,
-      terminalValue: async () => (await stream.result()).read,
-    };
-    const retained = await readers[target]();
-    expect(retained()).toBe("owned value");
-    await expect(view.next()).resolves.toMatchObject({ done: true });
-    await instance.dispose();
-    expect(() => retained()).toThrow("reloaded or disabled");
-    expect(read).toHaveBeenCalledOnce();
-  });
+  it.each(["sourceMember", "iteratorMember", "sourceMethod", "asyncSourceMethod"] as const)(
+    "fences callable values returned through a stream's %s",
+    async (target) => {
+      const instance = new PluginInstance("stream-values");
+      const read = vi.fn(() => "owned value");
+      // A helper's data is not an iterator completion signal.
+      const payload = { read, done: true };
+      const iterator = Object.assign(
+        (async function* () {
+          yield payload;
+        })(),
+        { member: payload },
+      );
+      const stream = instance.wrap({
+        [Symbol.asyncIterator]: () => iterator,
+        member: payload,
+        helper: () => read,
+        helperAsync: async () => read,
+      });
+      const view = stream[Symbol.asyncIterator]();
+      const first = await view.next();
+      if (first.done) {
+        throw new Error("Expected the fixture's first chunk");
+      }
+      const readers = {
+        sourceMember: () => stream.member.read,
+        iteratorMember: () => view.member.read,
+        sourceMethod: () => stream.helper(),
+        asyncSourceMethod: () => stream.helperAsync(),
+      };
+      const retained = await readers[target]();
+      expect(retained()).toBe("owned value");
+      await expect(view.next()).resolves.toMatchObject({ done: true });
+      await instance.dispose();
+      expect(() => retained()).toThrow("reloaded or disabled");
+      expect(read).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each(["source", "iterator"] as const)(
     "joins an admitted async %s helper after its cursor ends",

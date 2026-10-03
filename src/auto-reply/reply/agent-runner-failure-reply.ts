@@ -18,6 +18,7 @@ import {
   findCliTerminalStopError,
   findCliTimeoutError,
   isFailoverError,
+  isNonProviderRuntimeCoordinationError,
 } from "../../agents/failover-error.js";
 import {
   renderAssistantRequestFailureCopy,
@@ -288,10 +289,10 @@ export function buildExternalRunFailureReply(
   if (failoverCodeCopy) {
     return { text: failoverCodeCopy, isGenericRunnerFailure: false };
   }
-  const runtimeCoordinationFailure = renderRuntimeCoordinationFailureCopy(
-    error,
-    failoverFacts.code,
-  );
+  const runtimeCoordinationFailure =
+    failoverFacts.code && isNonProviderRuntimeCoordinationError(error)
+      ? renderRuntimeCoordinationFailureCopy(failoverFacts.code)
+      : undefined;
   if (runtimeCoordinationFailure) {
     return { text: runtimeCoordinationFailure, isGenericRunnerFailure: false };
   }

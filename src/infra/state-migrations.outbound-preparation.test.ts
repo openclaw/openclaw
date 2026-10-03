@@ -124,32 +124,22 @@ function legacy(id: string): LegacyQueuedDelivery {
 }
 
 describe("Doctor outbound preparation", () => {
-  it.each(["file", "sqlite", "claimed"] as const)(
+  it.each(["sqlite", "claimed"] as const)(
     "prepares %s custody with real plugin modifiers once without publishing a registry",
     async (kind) => {
-      const source = path.join(stateDir, "delivery-queue", "from-file.json");
-      await fs.mkdir(path.dirname(source), { recursive: true });
-      const bytes = JSON.stringify(legacy("from-file"));
-      if (kind === "file") {
-        await fs.writeFile(source, bytes);
-      } else {
-        seedDeliveryQueueEntry({
-          stateDir,
-          queueName: kind === "sqlite" ? "outbound" : "outbound-legacy-preparing-v1",
-          entry: {
-            ...legacy("from-file"),
-            ...(kind === "claimed" ? { legacyPreparationState: "claimed" } : {}),
-          },
-        });
-      }
+      seedDeliveryQueueEntry({
+        stateDir,
+        queueName: kind === "sqlite" ? "outbound" : "outbound-legacy-preparing-v1",
+        entry: {
+          ...legacy("from-sqlite"),
+          ...(kind === "claimed" ? { legacyPreparationState: "claimed" } : {}),
+        },
+      });
       await autoMigrateLegacyState({
         cfg,
         env: process.env,
         legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
       });
-      if (kind === "file") {
-        expect(await fs.readFile(source, "utf8")).toBe(bytes);
-      }
       const active = getActivePluginRegistry();
       expect(getGlobalHookRunner()).toBeNull();
       const result = await repair();
@@ -159,9 +149,11 @@ describe("Doctor outbound preparation", () => {
           outcome: "completed",
         },
       );
-      expect(loadDeliveryQueueEntry("outbound-prepared-v1", "from-file", stateDir)).toMatchObject({
-        preparedBatch: { entries: [{ payload: { text: "original|reply|message" } }] },
-      });
+      expect(loadDeliveryQueueEntry("outbound-prepared-v1", "from-sqlite", stateDir)).toMatchObject(
+        {
+          preparedBatch: { entries: [{ payload: { text: "original|reply|message" } }] },
+        },
+      );
       expect(await fs.readFile(eventsFile, "utf8")).toBe("reply\nmessage\ndispose\n");
       expect(getActivePluginRegistry()).toBe(active);
       expect(getGlobalHookRunner()).toBeNull();

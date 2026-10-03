@@ -447,6 +447,27 @@ connection confirmation rules.
 
   (`--webchat` is accepted as a legacy alias.)
 
+- Background automation/proof rigs:
+
+  ```bash
+  dist/OpenClaw.app/Contents/MacOS/OpenClaw --no-activate --chat
+  ```
+
+  `--no-activate` keeps app-initiated windows and panels behind the active app
+  and suppresses application activation for the entire process. Combine it with
+  `--chat` or `--dashboard`; `--background-only` still suppresses automatic windows.
+  Drive the app through background Accessibility and capture a window by ID with
+  `screencapture -l <windowId>`, which can capture occluded windows. When launching
+  through Launch Services, use `open -g -n dist/OpenClaw.app --args --no-activate --chat`
+  so the launcher also leaves focus alone.
+
+  Sheets may become key within the inactive app. Update dialogs, macOS permission
+  requests, web media-permission prompts, and file dialogs are deferred; Keychain
+  operations that need interaction fail through the existing
+  error/log paths. Relaunch without the flag to grant access or choose files, then
+  retry automation. External navigation (Finder, browsers, and editor launches)
+  is also deferred and logged. Normal launches retain their existing focus behavior.
+
 - Logs: `./scripts/clawlog.sh` (subsystem `ai.openclaw`, category `WebChatSwiftUI`).
 
 ## How it is wired

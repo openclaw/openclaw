@@ -5,6 +5,7 @@ import type { ConversationReadInvocationOrigin } from "../channels/plugins/conve
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { MemoryAudience } from "./memory-provider-types.js";
 
 export type OpenClawPluginActiveModelContext = {
   provider?: string;
@@ -64,6 +65,10 @@ type OpenClawPluginToolContextBase = {
   requesterSenderId?: string;
   /** Trusted owner bit from inbound context (runtime-provided, not tool args). */
   senderIsOwner?: boolean;
+  /** Host-resolved memory partition for this turn. Providers must not reconstruct it. */
+  memoryAudience?: MemoryAudience;
+  /** Rejects a retained audience after any captured session incarnation changes. */
+  assertMemoryAudienceCurrent?: () => void;
   /** Live host-bound authority. Recheck inside the final synchronous effect/write guard. */
   assertInvocationCurrent?: () => void;
   /**

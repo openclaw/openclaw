@@ -176,6 +176,12 @@ describe("worker placement session evidence", () => {
         });
       }
       const database = openOpenClawAgentDatabase({ agentId: "main" });
+      // Retain an admitted reader so one later corrupt row does not block unrelated evidence.
+      expect(
+        readSessionIdentityEvidenceInDatabase(database, identities.slice(0, 2)).map(
+          (row) => row.status,
+        ),
+      ).toEqual(["current", "current"]);
       database.db
         .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
         .run("{", identities[1]!.sessionKey);

@@ -34,6 +34,7 @@ function createPolicyHarness(overrides?: {
   channelName?: string;
   allowFrom?: string[];
   useAccessGroups?: boolean;
+  channelAllowed?: boolean;
   slashEphemeral?: boolean;
   slashCommandEnabled?: boolean;
   slashCommandName?: string;
@@ -102,7 +103,7 @@ function createPolicyHarness(overrides?: {
     },
     textLimit: 4000,
     app,
-    isChannelAllowed: () => true,
+    isChannelAllowed: vi.fn(() => overrides?.channelAllowed ?? true),
     shouldDropMismatchedSlackEvent: (body: unknown) =>
       overrides?.shouldDropMismatchedSlackEvent?.(body) ?? false,
     resolveChannelName:
@@ -251,46 +252,17 @@ describe("slack slash commands channel policy", () => {
     expect(respond).not.toHaveBeenCalled();
   });
 
-  it.each<{
-    name: string;
-    policy: NonNullable<Parameters<typeof createPolicyHarness>[0]>;
-    blocked: boolean;
-  }>([
-    {
-      name: "allows unlisted channels when groupPolicy is open",
-      policy: {
-        groupPolicy: "open",
-        channelsConfig: { C_LISTED: { requireMention: true } },
-        channelId: "C_UNLISTED",
-        channelName: "unlisted",
-      },
-      blocked: false,
-    },
-    {
-      name: "blocks explicitly denied channels when groupPolicy is open",
-      policy: {
-        groupPolicy: "open",
-        channelsConfig: { C_DENIED: { enabled: false } },
-        channelId: "C_DENIED",
-        channelName: "denied",
-      },
-      blocked: true,
-    },
-    {
-      name: "blocks unlisted channels when groupPolicy is allowlist",
-      policy: {
-        groupPolicy: "allowlist",
-        channelsConfig: { C_LISTED: { requireMention: true } },
-        channelId: "C_UNLISTED",
-        channelName: "unlisted",
-      },
-      blocked: true,
-    },
-  ])("$name", async ({ policy, blocked }) => {
-    const harness = createPolicyHarness(policy);
+  it.each([true, false])("honors monitor channel admission: allowed=%s", async (allowed) => {
+    const harness = createPolicyHarness({ channelAllowed: allowed });
     const { respond } = await registerAndRunPolicySlash({ harness });
 
-    if (blocked) {
+    expect(harness.ctx.isChannelAllowed).toHaveBeenCalledWith({
+      teamId: "T1",
+      channelId: "C_UNLISTED",
+      channelName: "unlisted",
+      channelType: "channel",
+    });
+    if (!allowed) {
       expectChannelBlockedResponse(respond);
       return;
     }

@@ -694,7 +694,7 @@ suite.define(() => {
       // Group by "None" flattens the category sections into the plain list. The
       // confirm left the pointer over the dialog rather than the sidebar; the
       // global toolbar remains available without revealing a section action.
-      const filterAndSortButton = page.getByRole("button", { name: "Filter & sort" });
+      const filterAndSortButton = page.getByRole("button", { name: "Filter & sort", exact: true });
       await filterAndSortButton.click();
       await openSidebarMenu(page);
       const showAutomationSessions = page.getByRole("switch", {
@@ -937,7 +937,7 @@ suite.define(() => {
       await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(11);
 
       const patchCountBeforeFlatDrag = (await gateway.getRequests("sessions.patch")).length;
-      const filterAndSortButton = page.getByRole("button", { name: "Filter & sort" });
+      const filterAndSortButton = page.getByRole("button", { name: "Filter & sort", exact: true });
       await filterAndSortButton.click();
       await chooseSidebarMenuOption(page, "Group by", "None");
       await closeSidebarMenu(page);

@@ -1,4 +1,4 @@
-import type { SessionTranscriptBoundedActiveContext } from "../../config/sessions/session-accessor.sqlite-active-context.js";
+import type { SessionTranscriptBoundedActiveContext } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import type { PreparedSessionTranscriptHydration } from "../../config/sessions/session-transcript-worker.types.js";
 import type { SessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 

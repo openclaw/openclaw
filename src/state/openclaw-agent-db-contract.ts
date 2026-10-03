@@ -24,9 +24,6 @@ import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.
 // v8 added per-transcript session provenance. v7 added per-entry lifecycle status projection.
 // v6 added session/transcript hot-path indexes.
 // v5 added transcript mutation watermarks.
-// The v4 session/transcript flip and main's v2 memory-identity
-// change is folded in structure-gated migrations, so v2 main DBs and
-// pre-merge v4 flip DBs both converge on this schema.
 export const OPENCLAW_AGENT_SCHEMA_VERSION = 24;
 export const AGENT_STORAGE_SCHEMA_VERSION = 23;
 export const TRANSCRIPT_FTS_ROW_SCHEMA_VERSION = 22;

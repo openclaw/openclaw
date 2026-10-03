@@ -42,17 +42,11 @@ function fixture(
         ts: "1770408530.000000",
         ...message,
       },
-      isDirectMessage: false,
-      isGroupDm: false,
-      isRoom: true,
-      isRoomish: true,
+      chatType: "channel",
       ...options,
     });
   const direct = (message: Partial<SlackMessageEvent> = {}, eventScope?: SlackEventScope) =>
-    route(
-      { channel: "D456", channel_type: "im", ...message },
-      { isDirectMessage: true, isRoom: false, isRoomish: false, eventScope },
-    );
+    route({ channel: "D456", channel_type: "im", ...message }, { chatType: "direct", eventScope });
   return { ctx, route, direct };
 }
 
@@ -78,7 +72,7 @@ describe("thread-level session keys", () => {
       channel_type: "mpim",
       text: "<@B1> send a subagent",
     } satisfies Partial<SlackMessageEvent>;
-    const options = { isGroupDm: true, isRoom: false };
+    const options = { chatType: "group" } as const;
     const root = route(message, { ...options, seedTopLevelRoomThread: true });
     const followUp = route(
       {

@@ -13,6 +13,7 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { danger, warn } from "openclaw/plugin-sdk/runtime-env";
@@ -35,7 +36,10 @@ import type {
   TelegramAmbientTranscriptWatermark,
   TelegramChannelIngressResolver,
 } from "./bot-message-context.types.js";
-import type { TelegramSpooledReplayDeferredParticipant } from "./bot-processing-outcome.js";
+import {
+  resolveTelegramSpooledReplayHeartbeatIntervalMs,
+  type TelegramSpooledReplayDeferredParticipant,
+} from "./bot-processing-outcome.js";
 import { MEDIA_GROUP_TIMEOUT_MS, type MediaGroupEntry } from "./bot-updates.js";
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
 import {
@@ -78,6 +82,8 @@ type TelegramMediaGroupInput = MediaAuthorization & {
 type BufferedMediaGroupEntry = MediaGroupEntry &
   Omit<TelegramMediaGroupInput, "ctx" | "msg"> & {
     spooledReplayParticipants: TelegramSpooledReplayDeferredParticipant[];
+    collectionClosed: ReturnType<typeof createDeferred<void>>;
+    heartbeatTimer?: ReturnType<typeof setInterval>;
   };
 
 type TelegramGroupMediaDisposition = "process" | "skip" | "silent-ingest";
@@ -139,6 +145,7 @@ export function createTelegramInboundMedia({
       : MEDIA_GROUP_TIMEOUT_MS;
   const buffer = new Map<string, BufferedMediaGroupEntry>();
   const queue = new KeyedAsyncQueue();
+  const heads = new Map<string, BufferedMediaGroupEntry>();
 
   const resolveUnaddressedGroupMediaDisposition = async (
     authorization: MediaAuthorization & { ctx: TelegramContext; msg: Message },
@@ -454,17 +461,62 @@ export function createTelegramInboundMedia({
       runtime.error?.(danger(`media group handler failed: ${String(error)}`));
     }
   };
-  const queueEntry = (key: string, entry: BufferedMediaGroupEntry) =>
+  const renewWaitingEntry = (key: string, entry: BufferedMediaGroupEntry) => {
+    if (heads.get(key) === entry) {
+      return;
+    }
+    const participants = entry.spooledReplayParticipants;
+    const heartbeat = () => {
+      // Only a live predecessor can renew followers; the head must prove its own progress.
+      if (
+        heads.get(key)?.spooledReplayParticipants.some((participant) => !participant.isSettled())
+      ) {
+        for (const participant of participants) {
+          participant.heartbeat();
+        }
+      }
+    };
+    heartbeat();
+    const intervalMs = resolveTelegramSpooledReplayHeartbeatIntervalMs(participants);
+    // Members share the drain cadence; each tick includes members appended after reservation.
+    if (
+      entry.heartbeatTimer === undefined &&
+      intervalMs !== undefined &&
+      participants.some((participant) => !participant.isSettled())
+    ) {
+      entry.heartbeatTimer = setInterval(heartbeat, intervalMs);
+      entry.heartbeatTimer.unref();
+    }
+  };
+  const queueEntry = (key: string, entry: BufferedMediaGroupEntry) => {
+    const participants = entry.spooledReplayParticipants;
+    const claimsSettled = entry.collectionClosed.promise.then(() =>
+      Promise.all(participants.map((participant) => participant.task)),
+    );
+    const stopHeartbeat = () => clearInterval(entry.heartbeatTimer);
+    renewWaitingEntry(key, entry);
+    void claimsSettled.then(stopHeartbeat);
     void queue.enqueue(key, async () => {
-      await processMediaGroup(entry).catch(() => undefined);
+      stopHeartbeat();
+      heads.set(key, entry);
+      try {
+        await entry.collectionClosed.promise;
+        const processing = processMediaGroup(entry).catch(() => undefined);
+        // Released claims advance the queue even if a download ignores cancellation.
+        await (participants.length > 0 ? Promise.race([processing, claimsSettled]) : processing);
+      } finally {
+        heads.delete(key);
+      }
     });
+  };
 
   const handleMediaGroup = (input: TelegramMediaGroupInput): boolean => {
     const mediaGroupId = input.msg.media_group_id;
     if (!mediaGroupId) {
       return false;
     }
-    const key = `media:${input.chatId}:${input.threadSpec.scope}:${input.threadSpec.id ?? "main"}:${mediaGroupId}`;
+    const conversationKey = `media:${input.chatId}:${input.threadSpec.scope}:${input.threadSpec.id ?? "main"}`;
+    const key = `${conversationKey}:${mediaGroupId}`;
     const existing = buffer.get(key);
     const participant = createSpooledReplayParticipantForBufferedWork(
       `media-group:${key}:${input.msg.message_id}`,
@@ -472,6 +524,7 @@ export function createTelegramInboundMedia({
     if (existing) {
       if (participant) {
         existing.spooledReplayParticipants.push(participant);
+        renewWaitingEntry(conversationKey, existing);
       }
       clearTimeout(existing.timer);
       existing.messages.push({ msg: input.msg, ctx: input.ctx });
@@ -494,7 +547,7 @@ export function createTelegramInboundMedia({
       ];
       existing.timer = setTimeout(() => {
         buffer.delete(key);
-        queueEntry(key, existing);
+        existing.collectionClosed.resolve();
       }, timeoutMs);
       return true;
     }
@@ -502,16 +555,18 @@ export function createTelegramInboundMedia({
       ...input,
       messages: [{ msg: input.msg, ctx: input.ctx }],
       spooledReplayParticipants: participant ? [participant] : [],
+      collectionClosed: createDeferred<void>(),
       ...promptContextBoundaryOptions(
         input.promptContextMinTimestampMs,
         input.promptContextAmbientWatermark,
       ),
       timer: setTimeout(() => {
         buffer.delete(key);
-        queueEntry(key, entry);
+        entry.collectionClosed.resolve();
       }, timeoutMs),
     };
     buffer.set(key, entry);
+    queueEntry(conversationKey, entry);
     return true;
   };
 

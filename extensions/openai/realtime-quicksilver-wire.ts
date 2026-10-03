@@ -152,13 +152,9 @@ export function buildOpenAIQuicksilverSession(params: {
 }
 
 /** Builds the initial WebSocket frame for the selected Live protocol. */
-export function buildOpenAIQuicksilverSessionUpdate(params: {
-  model: string;
-  hostControlsInput?: boolean;
-  instructions?: string;
-  voice?: string;
-  initialItems?: readonly RealtimeVoiceAgentConsultTranscriptEntry[];
-}): OpenAIQuicksilverSessionUpdate {
+export function buildOpenAIQuicksilverSessionUpdate(
+  params: Parameters<typeof buildOpenAIQuicksilverSession>[0],
+): OpenAIQuicksilverSessionUpdate {
   const configured = buildOpenAIQuicksilverSession(params);
   if (isOpenAIGptLiveApiModel(params.model)) {
     return { type: "session.start", session: configured };
@@ -410,23 +406,7 @@ export async function createOpenAIQuicksilverCall(
     onCallAllocated?: (callId: string) => void;
   } & ({ gaSideband: true; onCallAllocated: (callId: string) => void } | { gaSideband?: false }),
   runtime: OpenAIRealtimeHost,
-): Promise<
-  | {
-      kind: "gpt-live";
-      status: number;
-      answerSdp: string;
-      callId: string;
-      sidebandUrl: string;
-    }
-  | { kind: "ga-realtime"; status: number; answerSdp: string }
-  | {
-      kind: "ga-sideband";
-      status: number;
-      answerSdp: string;
-      callId: string;
-      sidebandUrl: string;
-    }
-> {
+) {
   const isGptLive = isOpenAIGptLiveModel(params.session.model);
   if (params.gaSideband && (isGptLive || params.auth.type !== "api-key")) {
     throw new Error("OpenAI Realtime Gateway control requires a GA model and Platform API key");
@@ -529,7 +509,7 @@ export async function createOpenAIQuicksilverCall(
   }
   if (gaCallId) {
     return {
-      kind: "ga-sideband",
+      kind: "ga-sideband" as const,
       status: response.status,
       answerSdp,
       callId: gaCallId,
@@ -537,7 +517,7 @@ export async function createOpenAIQuicksilverCall(
     };
   }
   if (!isGptLive) {
-    return { kind: "ga-realtime", status: response.status, answerSdp };
+    return { kind: "ga-realtime" as const, status: response.status, answerSdp };
   }
   const callId = decodeOpenAIQuicksilverCallId({
     location: response.headers.get("Location"),
@@ -545,7 +525,7 @@ export async function createOpenAIQuicksilverCall(
     callUrl,
   });
   return {
-    kind: "gpt-live",
+    kind: "gpt-live" as const,
     status: response.status,
     answerSdp,
     callId,

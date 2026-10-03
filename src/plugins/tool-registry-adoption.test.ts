@@ -28,7 +28,7 @@ import {
 } from "./runtime.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { setPluginRuntimeLoadContext } from "./runtime/load-context.js";
-import { startPluginServices, type PluginServicesHandle } from "./services.js";
+import { startPluginServices, type PluginServicesHandle } from "./services.test-support.js";
 import { adoptRuntimeToolRegistrations } from "./tool-registry-adoption.js";
 
 it("keeps discovery tools when the Gateway source, config, or lifetime does not match", () => {

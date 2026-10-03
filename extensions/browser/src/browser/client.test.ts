@@ -14,8 +14,8 @@ import {
   browserPdfSave,
   browserScreenshotAction,
 } from "./client-actions.js";
+import { browserCloseTabByRawTargetId } from "./client-tab-close.runtime.js";
 import {
-  browserCloseTabByRawTargetId,
   browserDoctor,
   browserOpenTab,
   browserSnapshot,

@@ -146,7 +146,19 @@ describe("Discord security audit findings", () => {
       dm: { allowFrom: ["387380367612706819"] },
       expectFinding: false,
     },
-  ])("$name", async ({ dm, expectFinding }) => {
+    {
+      name: "respects an empty canonical allowlist over nested aliases",
+      allowFrom: [],
+      dm: { allowFrom: ["387380367612706819"] },
+      expectFinding: true,
+    },
+    {
+      name: "does not flag a canonical account allowFrom list",
+      allowFrom: ["387380367612706819"],
+      dm: undefined,
+      expectFinding: false,
+    },
+  ])("$name", async ({ dm, allowFrom, expectFinding }) => {
     const cfg = {
       commands: { native: true },
       channels: {
@@ -154,6 +166,7 @@ describe("Discord security audit findings", () => {
           enabled: true,
           token: "t",
           dm,
+          allowFrom,
           groupPolicy: "allowlist",
           guilds: { "123": { channels: { general: { enabled: true } } } },
         },

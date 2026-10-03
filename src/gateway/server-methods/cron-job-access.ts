@@ -5,7 +5,10 @@ import {
   GatewayErrorDetailCodes,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { CronJob, CronJobPatch } from "../../cron/types.js";
-import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
+import {
+  createAgentDatabaseAdmissionErrorShape,
+  readAgentDatabaseAdmissionRefusal,
+} from "../../state/agent-database-admission.js";
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import {
   cronJobMatchesCallerScope,
@@ -47,13 +50,7 @@ export function respondRefusedCronAgent(agentId: string | undefined, respond: Re
   if (!refusal) {
     return false;
   }
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.UNAVAILABLE, `${refusal.reason}\n${refusal.repairHint}`, {
-      details: refusal,
-    }),
-  );
+  respond(false, undefined, createAgentDatabaseAdmissionErrorShape(refusal));
   return true;
 }
 

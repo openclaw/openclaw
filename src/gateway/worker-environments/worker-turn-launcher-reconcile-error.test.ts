@@ -197,7 +197,7 @@ describe("worker turn recovery after environment reconciliation errors", () => {
       expect(inspect).toHaveBeenCalledOnce();
       expect(stopRequests).toHaveBeenCalled();
       expect(store.getCredential(ENVIRONMENT_ID)).toBeUndefined();
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "failed", turnClaim: null });
       expect(failure).toBeInstanceOf(Error);
       expect(warn).toHaveBeenCalledWith(

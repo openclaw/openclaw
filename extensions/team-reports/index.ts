@@ -54,6 +54,7 @@ export default definePluginEntry({
 
     api.registerService({
       id: "team-reports",
+      apiVersion: 2,
       async start(ctx) {
         if (retired) {
           throw new Error("Team Reports runtime has been retired");

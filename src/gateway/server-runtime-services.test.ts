@@ -514,7 +514,7 @@ describe("server-runtime-services", () => {
     );
   });
 
-  it.each(["clean", "legacy rows", "legacy files"])(
+  it.each(["clean", "legacy rows"])(
     "keeps current delivery recovery running with %s while diagnosing legacy state once",
     async (condition) => {
       vi.useFakeTimers();
@@ -522,9 +522,6 @@ describe("server-runtime-services", () => {
       const recoveryLog = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
       log.child.mockReturnValue(recoveryLog);
       hoisted.countPendingDeliveryQueueEntries.mockReturnValue(condition === "legacy rows" ? 2 : 0);
-      hoisted.listLegacyDeliveryQueueArtifacts.mockReturnValue(
-        condition === "legacy files" ? ["legacy.json"] : [],
-      );
       const { services } = activateScheduledServicesForTest({ log });
       await vi.dynamicImportSettled();
       expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();
@@ -537,7 +534,6 @@ describe("server-runtime-services", () => {
       }
       await vi.advanceTimersByTimeAsync(15_000);
       expect(hoisted.countPendingDeliveryQueueEntries).toHaveBeenCalledOnce();
-      expect(hoisted.listLegacyDeliveryQueueArtifacts).toHaveBeenCalledOnce();
       expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();
       expect(hoisted.drainPendingDeliveries).toHaveBeenCalledTimes(3);
       await services.stopDeliveryRecovery();

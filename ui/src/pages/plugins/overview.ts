@@ -167,6 +167,7 @@ export function renderPluginCapabilitySection(
     description?: string;
     onOpen?: () => void;
     trailing?: TemplateResult;
+    details?: TemplateResult;
   }>,
   icon: TemplateResult,
 ): TemplateResult {
@@ -182,15 +183,67 @@ export function renderPluginCapabilitySection(
                 ><span class="plugin-capability__copy"
                   ><strong>${value.name}</strong
                   >${value.description ? html`<span>${value.description}</span>` : nothing}</span
-                >${value.trailing ? html`<span class="plugin-capability__trailing">${value.trailing}</span>` : nothing}${open ? icons.chevronRight : nothing}`;
+                >${value.trailing ? html`<span class="plugin-capability__trailing">${value.trailing}</span>` : nothing}${open || value.details ? html`<span class="plugin-capability__chevron" aria-hidden="true">${icons.chevronRight}</span>` : nothing}`;
               return html`<div class="plugin-capability">
-                ${open ? html`<button type="button" @click=${open}>${content}</button>` : html`<div class="plugin-capability__static">${content}</div>`}
+                ${
+                  value.details
+                    ? html`<details class="plugin-capability__disclosure">
+                        <summary>${content}</summary>
+                        <div class="plugin-capability__details">${value.details}</div>
+                      </details>`
+                    : open
+                      ? html`<button type="button" @click=${open}>${content}</button>`
+                      : html`<div class="plugin-capability__static">${content}</div>`
+                }
               </div>`;
             })}
           </div>
         </section>`
       : nothing
   }`;
+}
+
+export function renderPluginMcpServers(
+  names: readonly string[],
+  details: PluginDiscoveryDetailResult["detail"]["mcpServerDetails"] = [],
+): TemplateResult {
+  return renderPluginCapabilitySection(
+    t(names.length === 1 ? "pluginsPage.detailMcpServer" : "pluginsPage.detailMcpServers"),
+    names.map((name) => {
+      const server = details.find((entry) => entry.name === name);
+      const fields = [
+        [
+          t("pluginsPage.mcpDetails.endpoint"),
+          server?.endpointRedacted ? t("pluginsPage.mcpDetails.endpointRedacted") : server?.url,
+        ],
+        [t("pluginsPage.mcpDetails.transport"), server?.transport],
+        [
+          t("pluginsPage.mcpDetails.authentication"),
+          server?.auth ? t(`pluginsPage.mcpDetails.auth.${server.auth}`) : undefined,
+        ],
+        [t("pluginsPage.mcpDetails.scope"), server?.scope],
+      ].filter(([, value]) => value);
+      return {
+        name,
+        details: html`
+          ${
+            fields.length
+              ? html`<dl class="plugin-mcp-details">
+                  ${fields.map(
+                    ([label, value]) =>
+                      html`<dt>${label}</dt>
+                        <dd>${value}</dd>`,
+                  )}
+                </dl>`
+              : nothing
+          }
+          ${server?.setup ? html`<p>${server.setup}</p>` : nothing}
+          ${!fields.length && !server?.setup ? html`<p>${t("pluginsPage.mcpDetails.unavailable")}</p>` : nothing}
+        `,
+      };
+    }),
+    icons.plug,
+  );
 }
 
 // Runtime plumbing is intentionally absent: the overview describes user capabilities.

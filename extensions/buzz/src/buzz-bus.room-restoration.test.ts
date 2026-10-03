@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { startBuzzBus, type BuzzBus } from "./buzz-bus.js";
 import { createBuzzRelayFixture } from "./buzz-relay.test-harness.js";
@@ -45,6 +46,7 @@ async function startBus(
   options: Partial<Pick<BusOptions, "onMessage" | "channelIds" | "onRoomUnavailable">> = {},
 ) {
   cleanupBus = await startBuzzBus({
+    scheduler: createTestPluginServiceScheduler(),
     accountId: randomUUID(),
     relayUrl: fixture.relayUrl,
     privateKey: fixture.botPrivateKey,

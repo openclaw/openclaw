@@ -13,7 +13,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -34,10 +34,16 @@ import {
 } from "./telegram-ingress-coalescing.test-support.js";
 
 const downstreamTurns = vi.hoisted(() =>
-  vi.fn(async (_ctx: MsgContext, _abortSignal?: AbortSignal) => ({
-    queuedFinal: false,
-    counts: { block: 0, final: 0, tool: 0 },
-  })),
+  vi.fn(
+    async (
+      _ctx: MsgContext,
+      _abortSignal?: AbortSignal,
+      _turnAdoptionLifecycle?: GetReplyOptions["turnAdoptionLifecycle"],
+    ) => ({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    }),
+  ),
 );
 const runtimeErrors: unknown[] = [];
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-telegram-album-ingress-");
@@ -66,7 +72,11 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
     ...actual,
     runChannelInboundEvent: async (params: Parameters<typeof actual.runChannelInboundEvent>[0]) =>
       await runTelegramChannelInboundEventWithHarness(actual, params, async (dispatchParams) => {
-        return await downstreamTurns(dispatchParams.ctx, dispatchParams.replyOptions?.abortSignal);
+        return await downstreamTurns(
+          dispatchParams.ctx,
+          dispatchParams.replyOptions?.abortSignal,
+          dispatchParams.replyOptions?.turnAdoptionLifecycle,
+        );
       }),
   };
 });
@@ -187,6 +197,7 @@ async function assertSpoolTombstoned(params: { stateDir: string; updateIds: numb
   const queue = openTelegramIngressQueue(params);
   expect(await queue.listClaims()).toEqual([]);
   expect(await queue.listPending({ limit: "all" })).toEqual([]);
+  expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
   // Every member tombstones independently, so a replayed update cannot re-enter.
   for (const updateId of params.updateIds) {
     await expect(queue.enqueue(telegramQueueEventId(updateId), {} as never)).resolves.toMatchObject(
@@ -200,13 +211,13 @@ async function assertAlbumTurnAndTombstones(params: {
   updateIds: number[];
   monitor: ReturnType<typeof createTelegramTransportIngressMonitor>;
 }) {
+  await params.monitor.waitForDeferredClaims();
   const turn = await awaitSingleDownstreamTurn();
   expect(turn.Body).toContain("Two photo album");
   expect(turn.media).toMatchObject([
     { path: "/tmp/photo-1.jpg", kind: "image" },
     { path: "/tmp/photo-2.jpg", kind: "image" },
   ]);
-  await params.monitor.waitForDeferredClaims();
   await assertSpoolTombstoned(params);
 }
 
@@ -365,6 +376,258 @@ describe("Telegram durable ingress coalescing", () => {
       albumTimers.mockRestore();
       await monitor.stop();
       await telegramTransport.close();
+    }
+  });
+
+  async function admitAlbum(
+    monitor: ReturnType<typeof createTelegramTransportIngressMonitor>,
+    name: "A" | "B",
+    firstId: number,
+  ) {
+    for (let index = 0; index < 2; index += 1) {
+      const update = photoUpdate({
+        updateId: firstId + index,
+        messageId: firstId + index,
+        ...(index === 0 ? { caption: `Album ${name}` } : {}),
+      });
+      update.message.media_group_id = `album-${name}`;
+      await monitor.admit(update);
+      await monitor.waitForIdle();
+    }
+    await vi.advanceTimersByTimeAsync(40);
+  }
+
+  it("keeps a later album alive and ordered behind a slowly adopting album", async () => {
+    const headDispatched = createDeferred<void>();
+    const releaseHead = createDeferred<void>();
+    const headFinished = createDeferred<void>();
+    const { monitor } = await createMonitor({ adoptionStallTimeoutMs: 1_000 });
+    downstreamTurns.mockImplementation(async (_ctx, abortSignal, lifecycle) => {
+      if (downstreamTurns.mock.calls.length === 1) {
+        if (!lifecycle?.deferredHeartbeatIntervalMs) {
+          throw new Error("Expected the deferred turn's heartbeat cadence");
+        }
+        lifecycle.onDeferred?.();
+        const heartbeat = setInterval(
+          () => lifecycle.onDeferredHeartbeat?.(),
+          lifecycle.deferredHeartbeatIntervalMs,
+        );
+        headDispatched.resolve();
+        try {
+          await releaseHead.promise;
+          if (!abortSignal?.aborted) {
+            await lifecycle.onAdopted();
+          }
+        } finally {
+          clearInterval(heartbeat);
+          headFinished.resolve();
+        }
+      }
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+    });
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"],
+    });
+    monitor.start();
+    try {
+      await admitAlbum(monitor, "A", 1_001);
+      // Freeze the claim clock while dispatch finishes its real worker I/O.
+      await headDispatched.promise;
+      await admitAlbum(monitor, "B", 1_003);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(downstreamTurns, "Album B must wait for album A's adoption").toHaveBeenCalledOnce();
+      releaseHead.resolve();
+      await monitor.waitForDeferredClaims();
+      expect(downstreamTurns).toHaveBeenCalledTimes(2);
+      expect(downstreamTurns.mock.calls.map(([turn]) => turn.RawBody)).toEqual([
+        "Album A",
+        "Album B",
+      ]);
+      await assertSpoolTombstoned({ stateDir, updateIds: [1_001, 1_002, 1_003, 1_004] });
+      expect(runtimeErrors).toEqual([]);
+    } finally {
+      releaseHead.resolve();
+      await headFinished.promise;
+      await monitor.stop();
+    }
+  });
+
+  it("releases later albums when the album ahead of it stops making progress", async () => {
+    const fetchStarted = createDeferred<void>();
+    const releaseFetch = createDeferred<void>();
+    const headFinished = createDeferred<void>();
+    const followerDispatched = createDeferred<void>();
+    const transport = createBotApiTransport();
+    let fetchHeld = false;
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input;
+      if (url.includes("/getFile") && !fetchHeld) {
+        fetchHeld = true;
+        fetchStarted.resolve();
+        // Deliberately ignore init.signal: claim settlement must release the queue.
+        await releaseFetch.promise;
+        throw new Error("released stuck album download");
+      }
+      return await transport.fetch(input, init);
+    };
+    const { monitor } = await createMonitor({
+      adoptionStallTimeoutMs: 1_000,
+      telegramTransport: { ...transport, fetch: fetchImpl, sourceFetch: fetchImpl },
+      onRuntimeError: () => headFinished.resolve(),
+    });
+    downstreamTurns.mockImplementation(async () => {
+      followerDispatched.resolve();
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+    });
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"],
+    });
+    monitor.start();
+    try {
+      await admitAlbum(monitor, "A", 1_101);
+      await fetchStarted.promise;
+      await admitAlbum(monitor, "B", 1_103);
+      expect(downstreamTurns).not.toHaveBeenCalled();
+      // Observe this attempt's disposition without the monitor reclaiming retryable rows.
+      await monitor.pause();
+      await vi.advanceTimersByTimeAsync(1_000);
+      // B's dispatch needs worker I/O after A's claims settle; keep time frozen.
+      await followerDispatched.promise;
+      await monitor.waitForDeferredClaims();
+      expect(downstreamTurns).toHaveBeenCalledOnce();
+      expect(downstreamTurns.mock.calls[0]?.[0].RawBody).toBe("Album B");
+      const queue = openTelegramIngressQueue({ stateDir });
+      expect(await queue.listClaims()).toEqual([]);
+      expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
+      expect(await queue.listPending({ limit: "all" })).toMatchObject([
+        {
+          id: telegramQueueEventId(1_101),
+          attempts: 1,
+          lastError: expect.stringContaining("handler-timeout"),
+        },
+        {
+          id: telegramQueueEventId(1_102),
+          attempts: 1,
+          lastError: expect.stringContaining("handler-timeout"),
+        },
+      ]);
+      for (const updateId of [1_101, 1_102, 1_103, 1_104]) {
+        await expect(
+          queue.enqueue(telegramQueueEventId(updateId), {} as never),
+        ).resolves.toMatchObject({
+          kind: updateId < 1_103 ? "pending" : "completed",
+        });
+      }
+    } finally {
+      releaseFetch.resolve();
+      await headFinished.promise;
+      await monitor.stop();
+    }
+  });
+
+  it("keeps every album member claimed while durable adoption commit is held", async () => {
+    const commitStarted = createDeferred<void>();
+    const releaseCommit = createDeferred<void>();
+    const createGuard = messageDispatchDedupe.createTelegramMessageDispatchReplayGuard;
+    const commitReplay = messageDispatchDedupe.commitTelegramMessageDispatchReplay;
+    const settlements: Promise<void>[] = [];
+    const commitSpy = vi
+      .spyOn(messageDispatchDedupe, "commitTelegramMessageDispatchReplay")
+      .mockImplementation((params) => {
+        const settlement = commitReplay(params);
+        settlements.push(settlement);
+        return settlement;
+      });
+    let commitCount = 0;
+    const guardSpy = vi
+      .spyOn(messageDispatchDedupe, "createTelegramMessageDispatchReplayGuard")
+      .mockImplementation((options) => {
+        const guard = createGuard(options);
+        return {
+          ...guard,
+          claim: async (...args) => {
+            const claim = await guard.claim(...args);
+            if (claim.kind !== "claimed") {
+              return claim;
+            }
+            return {
+              ...claim,
+              handle: {
+                ...claim.handle,
+                commit: async (commitOptions) => {
+                  commitCount += 1;
+                  if (commitCount === 1) {
+                    commitStarted.resolve();
+                    await releaseCommit.promise;
+                  }
+                  return await claim.handle.commit(commitOptions);
+                },
+              },
+            };
+          },
+        };
+      });
+    const { monitor } = await createMonitor({
+      adoptionStallTimeoutMs: 1_000,
+      onRuntimeError: (error) => runtimeErrors.push(error),
+    });
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"],
+    });
+    monitor.start();
+    try {
+      await admitAlbum(monitor, "A", 1_201);
+      // The normal downstream return starts durable finalization without turn heartbeats.
+      await commitStarted.promise;
+      await vi.advanceTimersByTimeAsync(3_000);
+      releaseCommit.resolve();
+      await Promise.all(settlements);
+      await monitor.waitForDeferredClaims();
+      expect(downstreamTurns).toHaveBeenCalledOnce();
+      await assertSpoolTombstoned({ stateDir, updateIds: [1_201, 1_202] });
+      expect(runtimeErrors).toEqual([]);
+    } finally {
+      releaseCommit.resolve();
+      await Promise.allSettled(settlements);
+      await monitor.stop();
+      commitSpy.mockRestore();
+      guardSpy.mockRestore();
+    }
+  });
+
+  it("dispatches interleaved albums in first-member arrival order", async () => {
+    const { monitor } = await createMonitor();
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"],
+    });
+    monitor.start();
+    try {
+      for (const [index, name] of ["A", "B", "A"].entries()) {
+        const update = photoUpdate({
+          updateId: 1_301 + index,
+          messageId: 1_301 + index,
+          ...(index < 2 ? { caption: `Album ${name}` } : {}),
+        });
+        update.message.media_group_id = `album-${name}`;
+        await monitor.admit(update);
+        await monitor.waitForIdle();
+        if (index < 2) {
+          await vi.advanceTimersByTimeAsync(10);
+        }
+      }
+      // B closes at 50 ms; A's last member moves its close to 60 ms.
+      await vi.advanceTimersByTimeAsync(40);
+      await monitor.waitForDeferredClaims();
+      expect(downstreamTurns).toHaveBeenCalledTimes(2);
+      expect(downstreamTurns.mock.calls.map(([turn]) => turn.RawBody)).toEqual([
+        "Album A",
+        "Album B",
+      ]);
+      expect(downstreamTurns.mock.calls.map(([turn]) => turn.media?.length)).toEqual([2, 1]);
+      await assertSpoolTombstoned({ stateDir, updateIds: [1_301, 1_302, 1_303] });
+      expect(runtimeErrors).toEqual([]);
+    } finally {
+      await monitor.stop();
     }
   });
 
@@ -734,16 +997,12 @@ describe("Telegram durable ingress coalescing", () => {
     } finally {
       forwardWindow.restore();
     }
-    await vi.waitFor(
-      async () => {
-        expect(await queue.listClaims()).toEqual([]);
-        expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
-        expect(await queue.listPending({ limit: "all" })).toMatchObject([
-          { id: eventId, attempts: 2, lastError: sessionError.message },
-        ]);
-      },
-      { timeout: 2_000, interval: 5 },
-    );
+    await monitor.waitForDeferredClaims();
+    expect(await queue.listClaims()).toEqual([]);
+    expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
+    expect(await queue.listPending({ limit: "all" })).toMatchObject([
+      { id: eventId, attempts: 2, lastError: sessionError.message },
+    ]);
     expect(downstreamTurns).toHaveBeenCalledOnce();
     expect(runtimeError).toHaveBeenCalledOnce();
 

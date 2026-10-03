@@ -119,17 +119,15 @@ export class WorkerFaultPlacementLifecycle {
     if (!claim || claim.runId !== runId) {
       throw new Error(`fault run ${runId} does not own the active placement`);
     }
-    const pending = this.options.placementStore
-      .listPendingWorkspaceResults()
-      .some(
-        (result) =>
-          result.sessionId === claim.sessionId &&
-          result.claimId === claim.claimId &&
-          result.runId === claim.runId,
-      );
+    const pending = (await this.options.placementStore.listPendingWorkspaceResultsAsync()).some(
+      (result) =>
+        result.sessionId === claim.sessionId &&
+        result.claimId === claim.claimId &&
+        result.runId === claim.runId,
+    );
     if (pending) {
-      this.options.placementStore.acceptWorkspaceResult(claim);
-      this.options.placementStore.completeWorkspaceResultAndReleaseTurn(claim);
+      await this.options.placementStore.acceptWorkspaceResult(claim);
+      await this.options.placementStore.completeWorkspaceResultAndReleaseTurn(claim);
       return;
     }
     await this.options.placementStore.releaseTurn(claim);

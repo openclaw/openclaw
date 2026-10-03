@@ -3,7 +3,10 @@ import path from "node:path";
 import { afterEach } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   detectLegacyWorkspaceState,
@@ -13,7 +16,8 @@ import {
 export function useWorkspaceMigrationTestFixture() {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-    afterEach(() => {
+    afterEach(async () => {
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       envSnapshot?.restore();
       envSnapshot = undefined;

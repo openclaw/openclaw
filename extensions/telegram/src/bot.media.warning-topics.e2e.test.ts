@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   flushChannelPostMediaGroup,
   holdTelegramMediaTimeouts,
@@ -158,6 +159,7 @@ describe("Telegram media failure notices", () => {
   it.each([0, 1, 2])("accounts for %s failed attachments in an album", async (failedCount) => {
     const { handler, replySpy } = await createBotHandlerWithOptions({});
     const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
+    const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue");
     try {
       mockTelegramPngDownload();
       for (let index = 0; index < failedCount; index++) {
@@ -180,7 +182,12 @@ describe("Telegram media failure notices", () => {
           getFile: async () => ({ file_path: `photos/album-${index}.jpg` }),
         });
       }
-      await flushChannelPostMediaGroup(setTimeoutSpy, 0, TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
+      await flushChannelPostMediaGroup(
+        setTimeoutSpy,
+        enqueueSpy,
+        0,
+        TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
+      );
       expect(replySpy).toHaveBeenCalledTimes(1);
       const payload = replySpy.mock.calls[0]?.[0];
       expect(payload).toMatchObject({
@@ -209,6 +216,7 @@ describe("Telegram media failure notices", () => {
       }
     } finally {
       setTimeoutSpy.mockRestore();
+      enqueueSpy.mockRestore();
     }
   });
 });

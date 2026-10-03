@@ -1,4 +1,3 @@
-// Voice Call API module exposes the plugin public contract.
 import { fetchWithSsrFGuard } from "../../../api.js";
 import type { GetCallStatusResult } from "../../types.js";
 import {
@@ -7,20 +6,19 @@ import {
   readVoiceCallProviderJsonResponse,
 } from "./response-body.js";
 
-// Shared guarded JSON API client for voice-call providers.
-
 const VOICE_CALL_PROVIDER_API_TIMEOUT_MS = 30_000;
 
-/** Parameters for an SSRF-guarded provider JSON request. */
 type GuardedJsonApiRequestParams = {
   url: string;
   method: "GET" | "POST" | "DELETE" | "PUT" | "PATCH";
   headers: Record<string, string>;
-  body?: Record<string, unknown>;
+  body?: Record<string, unknown> | URLSearchParams;
   allowNotFound?: boolean;
   allowedHostnames: string[];
   auditContext: string;
   errorPrefix: string;
+  malformedJsonMessage?: string;
+  createError?: (status: number, text: string) => Error;
 };
 
 /** Send a provider JSON request through the SSRF guard and parse bounded JSON responses. */
@@ -32,7 +30,12 @@ export async function guardedJsonApiRequest<T = unknown>(
     init: {
       method: params.method,
       headers: params.headers,
-      body: params.body ? JSON.stringify(params.body) : undefined,
+      body:
+        params.body instanceof URLSearchParams
+          ? params.body
+          : params.body
+            ? JSON.stringify(params.body)
+            : undefined,
     },
     policy: { allowedHostnames: params.allowedHostnames },
     auditContext: params.auditContext,
@@ -46,12 +49,14 @@ export async function guardedJsonApiRequest<T = unknown>(
         return undefined as T;
       }
       const errorText = await readProviderErrorResponseSnippet(response);
-      throw new Error(`${params.errorPrefix}: ${response.status} ${errorText}`);
+      throw params.createError
+        ? params.createError(response.status, errorText)
+        : new Error(`${params.errorPrefix}: ${response.status} ${errorText}`);
     }
 
     return (await readVoiceCallProviderJsonResponse<T>(
       response,
-      `${params.errorPrefix}: malformed JSON response`,
+      params.malformedJsonMessage ?? `${params.errorPrefix}: malformed JSON response`,
     )) as T;
   } finally {
     await release();

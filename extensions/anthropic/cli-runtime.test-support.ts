@@ -94,10 +94,6 @@ for await (const line of createInterface({ input: process.stdin })) {
       send({ type: "system", subtype: "fixture_shutdown", pid: process.pid, descendantPid: shutdownDescendant });
       continue;
     }
-    if (scenario === "stream-then-wait") {
-      send({ type: "system", subtype: "fixture_waiting", pid: process.pid });
-      continue;
-    }
     if (scenario === "mcp-elicitation") {
       request("elicitation", { subtype: "elicitation", mcp_server_name: "fixture",
         message: "Choose a fixture option", requested_schema: { type: "object" } });
@@ -123,26 +119,13 @@ for await (const line of createInterface({ input: process.stdin })) {
       }
       continue;
     }
-    if (scenario === "late-approval" || (scenario === "background-bash-late-approval" && turn > 1)) {
-      if (turn === 1) {
-        request("late-approval", { subtype: "can_use_tool", tool_name: "Bash",
-          input: { command: "echo late" }, tool_use_id: "late-tool" });
-        result();
-      } else {
-        send({ type: "system", subtype: "fixture_second_turn" });
-        if (lateDecision) result({ lateDecision });
-      }
+    if (scenario === "background-bash-late-approval" && turn > 1) {
+      send({ type: "system", subtype: "fixture_second_turn" });
+      if (lateDecision) result({ lateDecision });
       continue;
     }
     if (scenario === "missing-result") {
       process.stderr.write("PermissionError: fixture cannot read its input\n", () => process.exit(1));
-      continue;
-    }
-    if (scenario === "ordinary-error") {
-      if (turn === 1) {
-        send({ type: "result", subtype: "error_during_execution", is_error: true,
-          errors: ["fixture foreground turn failed"], session_id: "fixture-session" });
-      } else result();
       continue;
     }
     if (scenario === "background-success") {
@@ -225,16 +208,7 @@ for await (const line of createInterface({ input: process.stdin })) {
           tool_input: { file_path: "fixture.txt" } } });
       continue;
     }
-    if (scenario === "background-bash-explicit") {
-      // run_in_background: started already backgrounded, may never finish; not held.
-      send({ type: "system", subtype: "task_started", task_id: "server",
-        tool_use_id: "tool-bg", description: "dev server", is_backgrounded: true, task_type: "local_bash" });
-      send({ type: "system", subtype: "background_tasks_changed",
-        tasks: [{ task_id: "server", task_type: "local_bash" }] });
-      result({ explicitBackground: true });
-      continue;
-    }
-    if (["background-error", "background-raw-result", "background-bash-error", "background-bash-raw-result", "background-bash-queued-error", "background-bash-queued-raw-result"].includes(scenario) && turn === 1) {
+    if (["background-bash-queued-error", "background-bash-queued-raw-result"].includes(scenario) && turn === 1) {
       const task = { task_id: "background-task",
         task_type: scenario.startsWith("background-bash-") ? "local_bash" : "local_agent" };
       if (task.task_type === "local_bash") {
@@ -258,7 +232,7 @@ for await (const line of createInterface({ input: process.stdin })) {
       });
       continue;
     }
-    if (["background-error", "background-raw-result", "background-bash-error", "background-bash-raw-result", "background-bash-queued-error", "background-bash-queued-raw-result"].includes(scenario)) {
+    if (["background-bash-queued-error", "background-bash-queued-raw-result"].includes(scenario)) {
       send({ type: "system", subtype: "background_tasks_changed", tasks: [] });
       result();
       continue;

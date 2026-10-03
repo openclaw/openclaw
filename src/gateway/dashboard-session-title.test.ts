@@ -429,6 +429,53 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     expect(await update?.({ ...baseEntry })).toEqual({ displayName: "Release Planning" });
   });
 
+  it.each(["unavailable", "renamed"])(
+    "finishes a contended title safely when the session is %s",
+    async (outcome) => {
+      vi.useFakeTimers();
+      const reply = createDeferredCore();
+      const firstAttempt = createDeferredCore();
+      const label = createDeferredCore<string>();
+      const params = titleParams();
+      const onFallback = vi.fn();
+      generateConversationLabelWithFallback.mockImplementationOnce(async () => {
+        firstAttempt.resolve();
+        return await label.promise;
+      });
+      if (outcome === "unavailable") {
+        generateConversationLabelWithFallback.mockRejectedValue(new Error("endpoint unavailable"));
+      }
+      const pending = maybeGenerateDashboardSessionTitle({
+        ...params,
+        retryAfter: reply.promise,
+        onFallback,
+      });
+      await firstAttempt.promise;
+      label.reject(new Error("conversation label generation failed (primary fallback)"));
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(updateSessionEntry).not.toHaveBeenCalled();
+        expect(onFallback).not.toHaveBeenCalled();
+        if (outcome === "renamed") {
+          mockSessionUpdate({ ...baseEntry, label: "My custom name" });
+        }
+      } finally {
+        reply.resolve();
+        await pending;
+      }
+      await expect(pending).resolves.toBe(outcome !== "renamed");
+      if (outcome === "unavailable") {
+        expect(loadSessionEntry().displayName).toMatch(/^[a-z]+-[a-z]+$/);
+        expect(onFallback).toHaveBeenCalledOnce();
+      } else {
+        expect(loadSessionEntry()).toMatchObject({ label: "My custom name" });
+        expect(loadSessionEntry().displayName).toBeUndefined();
+        expect(onFallback).not.toHaveBeenCalled();
+      }
+      expect(generateConversationLabelWithFallback).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("does not overwrite a name added while the model request is running", async () => {
     mockSessionUpdate({ ...baseEntry, label: "Manual title" });
 

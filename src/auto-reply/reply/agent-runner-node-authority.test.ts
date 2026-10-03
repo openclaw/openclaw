@@ -340,7 +340,7 @@ describe("webchat admission to plugin node duplex authority", () => {
                     if (claimed?.type !== "return") {
                       throw new Error("expected an admitted placement claim");
                     }
-                    placements.cancelWorkspaceResultAndReleaseTurn(await claimed.value, {
+                    await placements.cancelWorkspaceResultAndReleaseTurn(await claimed.value, {
                       reason: "node-disconnect",
                     });
                     break;

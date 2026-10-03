@@ -11,11 +11,8 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  authorizeGatewayRequestPreDispatch,
-  createRequestGatewayMethodRegistry,
-  handleGatewayRequest,
-} from "./server-methods.js";
+import { createRequestGatewayMethodRegistry, handleGatewayRequest } from "./server-methods.js";
+import { authorizeGatewayRequestPreDispatch } from "./server-methods/request-authorization.js";
 import { sessionSubscriptionHandlers } from "./server-methods/sessions-subscriptions.js";
 import type { GatewayRequestContext, GatewayRequestHandler } from "./server-methods/types.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";

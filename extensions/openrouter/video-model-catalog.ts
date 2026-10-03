@@ -14,6 +14,7 @@ import {
   isRecord,
   normalizeOptionalString,
   normalizeTrimmedStringList,
+  normalizeUniqueTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   VideoGenerationModelCapabilitiesContext,
@@ -21,7 +22,7 @@ import type {
   VideoGenerationResolution,
 } from "openclaw/plugin-sdk/video-generation";
 import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
-import { fetchOpenRouterVideoGet, type OpenRouterVideoDispatcherPolicy } from "./video-http.js";
+import { fetchOpenRouterVideoGet } from "./video-http.js";
 
 const DEFAULT_HTTP_TIMEOUT_MS = 60_000;
 
@@ -48,13 +49,9 @@ function normalizeResolutionArray(value: unknown): VideoGenerationResolution[] {
 }
 
 function normalizeFrameImageRoles(value: unknown): Array<"first_frame" | "last_frame"> {
-  const seen = new Set<"first_frame" | "last_frame">();
-  for (const entry of normalizeTrimmedStringList(value)) {
-    if (entry === "first_frame" || entry === "last_frame") {
-      seen.add(entry);
-    }
-  }
-  return [...seen];
+  return normalizeUniqueTrimmedStringList(value).filter(
+    (entry) => entry === "first_frame" || entry === "last_frame",
+  );
 }
 
 function normalizeStringRecord(value: unknown): Record<string, string> | undefined {
@@ -226,30 +223,23 @@ function resolveOpenRouterVideoCatalogRequest(params: {
 }
 
 async function fetchOpenRouterVideoModels(params: {
-  baseUrl: string;
+  baseUrl: string | undefined;
   apiKey: string;
-  headers: Headers;
-  requestPolicyCacheKey: unknown;
+  request: OpenRouterVideoRequestConfig;
   timeoutMs: number;
-  allowPrivateNetwork: boolean;
-  dispatcherPolicy: OpenRouterVideoDispatcherPolicy;
 }): Promise<unknown[]> {
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy, requestPolicyCacheKey } =
+    resolveOpenRouterVideoCatalogRequest(params);
   return await getCachedLiveCatalogValue({
-    keyParts: [
-      "openrouter",
-      "video-models",
-      params.baseUrl,
-      params.apiKey,
-      params.requestPolicyCacheKey,
-    ],
+    keyParts: ["openrouter", "video-models", baseUrl, params.apiKey, requestPolicyCacheKey],
     load: async () => {
       const { response, release } = await fetchOpenRouterVideoGet({
         url: "videos/models",
-        baseUrl: params.baseUrl,
-        headers: params.headers,
+        baseUrl,
+        headers,
         timeoutMs: params.timeoutMs,
-        allowPrivateNetwork: params.allowPrivateNetwork,
-        dispatcherPolicy: params.dispatcherPolicy,
+        allowPrivateNetwork,
+        dispatcherPolicy,
         auditContext: "openrouter-video-models",
       });
       try {
@@ -273,20 +263,11 @@ export async function listOpenRouterVideoModelCatalog(
   if (!apiKey) {
     return null;
   }
-  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy, requestPolicyCacheKey } =
-    resolveOpenRouterVideoCatalogRequest({
-      apiKey,
-      baseUrl: ctx.config.models?.providers?.openrouter?.baseUrl,
-      request: ctx.config.models?.providers?.openrouter?.request,
-    });
   const payload = await fetchOpenRouterVideoModels({
-    baseUrl,
+    baseUrl: ctx.config.models?.providers?.openrouter?.baseUrl,
     apiKey,
-    headers,
-    requestPolicyCacheKey,
+    request: ctx.config.models?.providers?.openrouter?.request,
     timeoutMs: ctx.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
-    allowPrivateNetwork,
-    dispatcherPolicy,
   });
   return projectOpenRouterVideoModelsToCatalogEntries(payload);
 }
@@ -303,20 +284,11 @@ export async function resolveOpenRouterVideoModelCapabilities(
   if (!auth.apiKey) {
     return undefined;
   }
-  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy, requestPolicyCacheKey } =
-    resolveOpenRouterVideoCatalogRequest({
-      apiKey: auth.apiKey,
-      baseUrl: ctx.cfg?.models?.providers?.openrouter?.baseUrl,
-      request: ctx.cfg?.models?.providers?.openrouter?.request,
-    });
   const payload = await fetchOpenRouterVideoModels({
-    baseUrl,
+    baseUrl: ctx.cfg?.models?.providers?.openrouter?.baseUrl,
     apiKey: auth.apiKey,
-    headers,
-    requestPolicyCacheKey,
+    request: ctx.cfg?.models?.providers?.openrouter?.request,
     timeoutMs: ctx.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
-    allowPrivateNetwork,
-    dispatcherPolicy,
   });
   const model = payload.find((row) => {
     const id = isRecord(row) ? normalizeOptionalString(row.id) : undefined;

@@ -21,7 +21,7 @@ import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/types.js";
 import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
-import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.js";
+import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.types.js";
 
 /** Failure categories used to explain exec process exits. */
 type ExecProcessFailureKind =

@@ -118,19 +118,11 @@ const telegramNativeApprovalCapability = createApproverRestrictedNativeApprovalC
 const resolveTelegramApproveCommandBehavior: NonNullable<
   ChannelApprovalCapability["resolveApproveCommandBehavior"]
 > = (params) => {
-  const { cfg, accountId, senderId, approvalKind } = params;
-  if (approvalKind !== "exec") {
-    return undefined;
-  }
-  if (isTelegramExecApprovalClientEnabled({ cfg, accountId })) {
-    return undefined;
-  }
-  if (isTelegramExecApprovalTargetRecipient({ cfg, accountId, senderId })) {
-    return undefined;
-  }
   if (
-    isTelegramExecApprovalAuthorizedSender({ cfg, accountId, senderId }) &&
-    !isTelegramExecApprovalApprover({ cfg, accountId, senderId })
+    params.approvalKind !== "exec" ||
+    isTelegramExecApprovalClientEnabled(params) ||
+    isTelegramExecApprovalTargetRecipient(params) ||
+    (isTelegramExecApprovalAuthorizedSender(params) && !isTelegramExecApprovalApprover(params))
   ) {
     return undefined;
   }

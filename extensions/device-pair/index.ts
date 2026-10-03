@@ -8,7 +8,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-type NotifyModule = typeof import("./notify.js");
 
 const loadDevicePairApiModule = createLazyRuntimeModule(() => import("./api.js"));
 
@@ -412,17 +411,12 @@ export default definePluginEntry({
   name: "Device Pair",
   description: "QR/bootstrap pairing helpers for OpenClaw devices",
   register(api: OpenClawPluginApi) {
-    let notifierService: ReturnType<NotifyModule["createPairingNotifierService"]> | undefined;
     api.registerService({
       id: "device-pair-notifier",
-      start: async (ctx) => {
-        const { createPairingNotifierService } = await loadNotifyModule();
-        notifierService = createPairingNotifierService(api);
-        await notifierService.start(ctx);
-      },
-      stop: async (ctx) => {
-        await notifierService?.stop?.(ctx);
-        notifierService = undefined;
+      apiVersion: 2,
+      start: async ({ scheduler }) => {
+        const { startPairingNotifier } = await loadNotifyModule();
+        startPairingNotifier(api, scheduler);
       },
     });
 

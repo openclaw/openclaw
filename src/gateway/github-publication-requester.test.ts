@@ -412,14 +412,14 @@ describe("shared GitHub publication requester authority", () => {
     expect(f.externalWrites).toEqual([]);
 
     if (path === "accepted-claim") {
-      f.placements.markWorkspaceResultPending(claim);
+      await f.placements.markWorkspaceResultPending(claim);
       await f.coordinator.prepareClaimWorkspace(claim);
-      f.placements.acceptWorkspaceResult(claim);
+      await f.placements.acceptWorkspaceResult(claim);
       await f.revoke();
       await f.coordinator.processClaim(claim);
     } else {
       await f.placements.releaseTurn(claim);
-      f.coordinator.deferOrphanedRequests();
+      await f.coordinator.deferOrphanedRequestsAsync();
       await f.revoke();
       await f.restart().resumeSessionRequests();
     }

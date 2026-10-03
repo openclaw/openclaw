@@ -3,10 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
-import {
-  readAgentDeletionRecoveryHolds,
-  reconstructAgentDeletionJournal,
-} from "../state/agent-deletion-journal-recovery.js";
+import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
+import { readAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.kernel.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   runOpenClawAgentWriteTransaction,

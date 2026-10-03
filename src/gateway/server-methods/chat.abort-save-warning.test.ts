@@ -75,11 +75,12 @@ it.each([false, true])(
     });
     const service = {};
     registerWorkerInferenceSessionControl(service, {
-      reserveDrain: () => {
+      hasSession: () => true,
+      reserveSessionDrain: () => {
         throw new Error("unexpected drain reservation");
       },
-      resolveTarget: () => undefined,
-      captureCancel: () => ({
+      resolveSessionTargetForRunId: () => undefined,
+      captureSessionCancellation: () => ({
         runIds: ["worker-run"],
         cancel: (control) => {
           control?.assertCurrent?.();

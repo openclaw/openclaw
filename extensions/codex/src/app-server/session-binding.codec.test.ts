@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   bindingStoreKey,
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
@@ -23,6 +23,19 @@ function importBinding(fields: Record<string, unknown>) {
   });
 }
 
+function importPolicy(
+  fields: Record<string, unknown>,
+  pluginAppIds: Record<string, string[]> = {},
+) {
+  return importBinding({
+    pluginAppPolicyContext: {
+      fingerprint: "policy",
+      apps: { app: pluginEntry(fields) },
+      pluginAppIds,
+    },
+  })?.binding.pluginAppPolicyContext;
+}
+
 function pluginEntry(fields: Record<string, unknown>) {
   return {
     configKey: "app",
@@ -34,49 +47,25 @@ function pluginEntry(fields: Record<string, unknown>) {
   };
 }
 
-afterEach(async () => {
-  vi.useRealTimers();
-  await closeOpenClawStateDatabaseAsync();
-  resetPluginStateStoreForTests();
-});
-
 describe("Codex app-server binding codec", () => {
-  it.each([
-    { stored: "on-failure", expected: "on-request" },
-    { stored: "untrusted", expected: "untrusted" },
-  ])("reads persisted approval policy $stored as $expected", ({ stored, expected }) => {
+  it("migrates the retired on-failure approval policy", () => {
     expect(
       readCodexAppServerThreadBinding({
         threadId: "thread-policy",
         cwd: "/repo",
-        approvalPolicy: stored,
+        approvalPolicy: "on-failure",
         sandbox: "workspace-write",
       }),
     ).toEqual({
       threadId: "thread-policy",
       cwd: "/repo",
-      approvalPolicy: expected,
+      approvalPolicy: "on-request",
       sandbox: "workspace-write",
     });
   });
 
   it("rejects unsafe marketplace names in imported plugin app ownership", () => {
-    const imported = importBinding({
-      pluginAppPolicyContext: {
-        fingerprint: "unsafe-plugin-policy",
-        apps: {
-          github: pluginEntry({
-            configKey: "security-review",
-            marketplaceName: "../unsafe-marketplace",
-            pluginName: "security-review",
-            mcpServerNames: ["github"],
-          }),
-        },
-        pluginAppIds: { "security-review": ["github"] },
-      },
-    });
-
-    expect(imported?.binding.pluginAppPolicyContext).toBeUndefined();
+    expect(importPolicy({ marketplaceName: "../unsafe-marketplace" })).toBeUndefined();
   });
 
   it("normalizes legacy fingerprints without rehashing canonical values", () => {
@@ -178,6 +167,7 @@ describe("Codex app-server binding codec", () => {
         });
         const imported = importBinding({
           ...binding,
+          createdAt: "2025-12-31T00:00:00.000Z",
           updatedAt: "2026-01-01T00:00:00.000Z",
         });
         expect(imported?.binding).toEqual({
@@ -195,66 +185,27 @@ describe("Codex app-server binding codec", () => {
     }
   });
 
-  it("maps the legacy sidecar update timestamp to the history watermark", () => {
-    const updatedAt = "2026-01-01T00:00:00.000Z";
-    const stored = importBinding({
-      createdAt: "2025-12-31T00:00:00.000Z",
-      updatedAt,
-    });
-
-    expect(stored?.binding).toMatchObject({ historyCoveredThrough: updatedAt });
-    expect(stored?.binding).not.toHaveProperty("createdAt");
-    expect(stored?.binding).not.toHaveProperty("updatedAt");
-  });
-
-  it.each(["allow", "deny", "auto", "ask"])("preserves imported approval mode %s", (mode) => {
-    const stored = importBinding({
-      pluginAppPolicyContext: {
-        fingerprint: "policy-2",
-        apps: {
-          app: pluginEntry({ destructiveApprovalMode: mode }),
-        },
-        pluginAppIds: {},
-      },
-    });
-
-    expect(stored?.binding.pluginAppPolicyContext?.apps.app?.destructiveApprovalMode).toBe(mode);
-  });
-
   it.each([
     { destructiveApprovalMode: "ask", appId: "not-allowed" },
     { destructiveApprovalMode: "on-request" },
   ])("drops invalid imported policy contexts: %j", (fields) => {
-    const invalid = importBinding({
-      pluginAppPolicyContext: {
-        fingerprint: "policy-2",
-        apps: { app: pluginEntry(fields) },
-        pluginAppIds: {},
-      },
-    });
-
-    expect(invalid?.binding.pluginAppPolicyContext).toBeUndefined();
+    expect(importPolicy(fields)).toBeUndefined();
   });
 
   it("round-trips workspace-directory plugin policy context", () => {
-    const stored = importBinding({
-      pluginAppPolicyContext: {
-        fingerprint: "policy-workspace",
-        apps: {
-          workspaceData: pluginEntry({
-            configKey: "workspaceData",
-            marketplaceName: "workspace-directory",
-            pluginName: "workspace-data@workspace-directory",
-            destructiveApprovalMode: "ask",
-          }),
-        },
-        pluginAppIds: { workspaceData: ["workspace-data"] },
+    const stored = importPolicy(
+      {
+        configKey: "workspaceData",
+        marketplaceName: "workspace-directory",
+        pluginName: "workspace-data@workspace-directory",
+        destructiveApprovalMode: "ask",
       },
-    });
+      { workspaceData: ["workspace-data"] },
+    );
 
-    expect(stored?.binding.pluginAppPolicyContext).toMatchObject({
+    expect(stored).toMatchObject({
       apps: {
-        workspaceData: {
+        app: {
           marketplaceName: "workspace-directory",
           pluginName: "workspace-data@workspace-directory",
           destructiveApprovalMode: "ask",

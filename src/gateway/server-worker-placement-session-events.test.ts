@@ -45,7 +45,7 @@ describe("worker placement session events", () => {
         retireSessionPlacement: vi.fn(),
         pruneOrphanedWorkspaceReconciliations: async () => [],
         listWorkspaceReconciliationOwners: async () => [],
-        listPendingWorkspaceResults: () => [],
+        listPendingWorkspaceResultsAsync: async () => [],
       } as never,
       environments: {
         subscribeMachineShapeChanged: vi.fn(() => vi.fn()),

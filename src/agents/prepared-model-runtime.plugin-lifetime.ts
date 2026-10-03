@@ -20,6 +20,7 @@ import {
 } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
+  aggregatePluginRuntimeCloseErrors,
   hasRetainedPluginRuntimeCloseError,
   PluginRuntimeCloseRetainedError,
 } from "../plugins/runtime-close-error.js";
@@ -191,7 +192,7 @@ export function ownPreparedPluginGeneration(
         result.status === "rejected" ? [result.reason] : [],
       );
       if (failures.length) {
-        throw new AggregateError(
+        throw aggregatePluginRuntimeCloseErrors(
           [...acquisitionFailures, ...failures],
           "Prepared plugin generation cleanup failed",
         );

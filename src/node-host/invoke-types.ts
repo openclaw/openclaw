@@ -52,23 +52,6 @@ export type ExecEventPayload = {
   suppressNotifyOnExit?: boolean;
 };
 
-export type ExecFinishedResult = {
-  stdout?: string;
-  stderr?: string;
-  error?: string | null;
-  exitCode?: number | null;
-  timedOut?: boolean;
-  success?: boolean;
-};
-
-export type ExecFinishedEventParams = {
-  sessionKey: string;
-  runId: string;
-  commandText: string;
-  result: ExecFinishedResult;
-  suppressNotifyOnExit?: boolean;
-};
-
 export type SkillBinsProvider = {
   current(force?: boolean): Promise<SkillBinTrustEntry[]>;
 };

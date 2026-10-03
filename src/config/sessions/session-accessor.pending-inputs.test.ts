@@ -14,6 +14,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
@@ -269,13 +270,17 @@ describe("accepted input custody", () => {
   it("rolls transcript promotion and custody consumption back together", async () => {
     const receipt = await stage("atomic");
     const before = await loadTranscriptEvents(scope());
-    database().db.exec(
-      "CREATE TRIGGER reject_pending_consume BEFORE DELETE ON session_pending_inputs BEGIN SELECT RAISE(ABORT, 'consume failed'); END",
-    );
+    await runOpenClawAgentWriteAdmission(toDatabaseOptions(resolveSqliteScope(scope())), () => {
+      database().db.exec(
+        "CREATE TRIGGER reject_pending_consume BEFORE DELETE ON session_pending_inputs BEGIN SELECT RAISE(ABORT, 'consume failed'); END",
+      );
+    });
     await expect(promote(receipt)).rejects.toThrow("consume failed");
     expect(await loadTranscriptEvents(scope())).toEqual(before);
     expect((await readSessionPendingInput(scope(), receipt.inputId))?.state).toBe("queued");
-    database().db.exec("DROP TRIGGER reject_pending_consume");
+    await runOpenClawAgentWriteAdmission(toDatabaseOptions(resolveSqliteScope(scope())), () => {
+      database().db.exec("DROP TRIGGER reject_pending_consume");
+    });
     expect(await promote(receipt)).toMatchObject({ appended: true, messageId: receipt.inputId });
     expect(await readSessionPendingInput(scope(), receipt.inputId)).toBeUndefined();
   });
@@ -295,13 +300,17 @@ describe("accepted input custody", () => {
       ),
     ).toMatchObject({ ok: true, value: { appended: false, messageId: receipt.inputId } });
 
-    database().db.exec(
-      "CREATE TRIGGER reject_relocation BEFORE INSERT ON transcript_events WHEN NEW.event_json LIKE '%relocation-copy%' BEGIN SELECT RAISE(ABORT, 'relocation failed'); END",
-    );
+    await runOpenClawAgentWriteAdmission(toDatabaseOptions(resolveSqliteScope(scope())), () => {
+      database().db.exec(
+        "CREATE TRIGGER reject_relocation BEFORE INSERT ON transcript_events WHEN NEW.event_json LIKE '%relocation-copy%' BEGIN SELECT RAISE(ABORT, 'relocation failed'); END",
+      );
+    });
     expect(() => receipt.run(() => appendCopy(receipt.inputId, "relocation-copy"))).toThrow(
       "relocation failed",
     );
-    database().db.exec("DROP TRIGGER reject_relocation");
+    await runOpenClawAgentWriteAdmission(toDatabaseOptions(resolveSqliteScope(scope())), () => {
+      database().db.exec("DROP TRIGGER reject_relocation");
+    });
     expect(
       await receipt.run(() => appendTranscriptMessage(scope(), { message: receipt.message })),
     ).toMatchObject({ appended: false, messageId: receipt.inputId });
@@ -473,9 +482,11 @@ describe("accepted input custody", () => {
     const aggregate = bindSessionPendingInputSources([first, second], message("atomic-c"))!;
     receipts.push(aggregate);
     const before = await loadTranscriptEvents(scope());
-    database().db.exec(
-      "CREATE TRIGGER reject_collect_consume BEFORE UPDATE OF consumed_event_id ON session_pending_inputs WHEN OLD.run_id = 'atomic-b' BEGIN SELECT RAISE(ABORT, 'collect consume failed'); END",
-    );
+    await runOpenClawAgentWriteAdmission(toDatabaseOptions(resolveSqliteScope(scope())), () => {
+      database().db.exec(
+        "CREATE TRIGGER reject_collect_consume BEFORE UPDATE OF consumed_event_id ON session_pending_inputs WHEN OLD.run_id = 'atomic-b' BEGIN SELECT RAISE(ABORT, 'collect consume failed'); END",
+      );
+    });
     await expect(promote(aggregate)).rejects.toThrow("collect consume failed");
     expect(await loadTranscriptEvents(scope())).toEqual(before);
     expect((await listSessionPendingInputs(scope())).total).toBe(2);
@@ -483,7 +494,9 @@ describe("accepted input custody", () => {
       { runId: "atomic-a", state: "pending" },
       { runId: "atomic-b", state: "pending" },
     ]);
-    database().db.exec("DROP TRIGGER reject_collect_consume");
+    await runOpenClawAgentWriteAdmission(toDatabaseOptions(resolveSqliteScope(scope())), () => {
+      database().db.exec("DROP TRIGGER reject_collect_consume");
+    });
     expect(await promote(aggregate)).toMatchObject({
       appended: true,
       messageId: aggregate.inputId,

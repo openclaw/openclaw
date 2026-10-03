@@ -32,7 +32,7 @@ import type {
 } from "./types.js";
 
 export type DurableInboundReplyDeliveryOptions = ChannelTurnDurableDeliveryOptions & {
-  /** Validate the admitted sender and pin its resolved credential before a registry handoff. */
+  /** Optional: validate the admitted sender and pin its resolved credential before a registry handoff. */
   prepareRuntimeHandoff?: (cfg: OpenClawConfig) => OpenClawConfig;
 };
 

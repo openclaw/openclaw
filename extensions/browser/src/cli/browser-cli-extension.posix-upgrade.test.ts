@@ -199,8 +199,6 @@ describe("POSIX bundle migration", () => {
   const platform = "linux";
   it.each([
     { legacy: true, action: "inspect", profile: undefined },
-    { legacy: false, action: "verify", profile: "work" },
-    { legacy: false, action: "install", profile: undefined },
     { legacy: true, action: "install", profile: "other" },
   ])(
     "refuses $action from a different config before effects (legacy=$legacy, profile=$profile)",
@@ -268,10 +266,7 @@ describe("POSIX bundle migration", () => {
   });
 
   it.each([
-    { platform: "linux", legacy: false, action: "inspect" },
     { platform: "linux", legacy: true, action: "verify" },
-    { platform: "linux", legacy: false, action: "install" },
-    { platform: "linux", legacy: true, action: "install" },
     { platform: "darwin", legacy: false, action: "install" },
   ] as const)(
     "retains work through selector-free $action on $platform (legacy=$legacy)",

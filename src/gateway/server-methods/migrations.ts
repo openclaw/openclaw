@@ -53,22 +53,6 @@ function memoryApplyInflightMap(dedupe: object): Map<string, InFlightMemoryApply
   return active;
 }
 
-function memoryApplyRequestFingerprint(params: {
-  agentId: string;
-  providerId: string;
-  planFingerprint: string;
-  itemIds: string[];
-  overwrite?: boolean;
-}): string {
-  return stableStringify({
-    agentId: params.agentId,
-    providerId: params.providerId,
-    planFingerprint: params.planFingerprint,
-    itemIds: params.itemIds,
-    overwrite: params.overwrite === true,
-  });
-}
-
 function isCachedMemoryApply(value: unknown): value is CachedMemoryApply {
   if (!value || typeof value !== "object") {
     return false;
@@ -243,12 +227,12 @@ export const migrationsHandlers: GatewayRequestHandlers = {
       if (!agentId) {
         return;
       }
-      const requestFingerprint = memoryApplyRequestFingerprint({
+      const requestFingerprint = stableStringify({
         agentId,
         providerId: params.providerId,
         planFingerprint: params.planFingerprint,
         itemIds: params.itemIds,
-        overwrite: params.overwrite,
+        overwrite: params.overwrite === true,
       });
       const dedupeKey = `${MEMORY_APPLY_DEDUPE_PREFIX}${params.idempotencyKey}`;
       const cached = context.dedupe.get(dedupeKey);

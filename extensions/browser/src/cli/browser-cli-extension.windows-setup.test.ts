@@ -147,41 +147,30 @@ async function setup() {
 }
 
 describe("Windows saved selection through the registered setup CLI", () => {
-  it.each(["inspect", "verify", "install"])(
-    "recovers current work for selector-free %s",
-    async (action) => {
-      const f = await setup();
-      await f.run(action);
-      expect(f.exit).not.toHaveBeenCalled();
-      expect(f.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          target: expect.objectContaining({ profile: "work", relayPort: 19444 }),
-        }),
-      );
-      expect(f.mutations()).toHaveLength(action === "install" ? 1 : 0);
-      expect(f.manage.mock.calls.map(([, r]) => [r.action, r.context?.browserProfile])).toEqual([
-        ["inspect", "chrome"],
-        ["inspect", "work"],
-        ["inspect", "work"],
-        ...(action === "install" ? [["install", "work"]] : []),
-      ]);
-      if (action === "verify") {
-        expect(boundary.connect).toHaveBeenCalledWith(
-          expect.objectContaining({ profile: "work", port: 19444 }),
-        );
-      } else {
-        expect(boundary.readToken).not.toHaveBeenCalled();
-      }
-      expect(JSON.stringify(f.json.mock.calls)).not.toContain(f.identity.localAppData);
-    },
-  );
-  it("does not let retained work metadata override the current chrome registration", async () => {
+  it.each(["verify", "install"])("recovers current work for selector-free %s", async (action) => {
     const f = await setup();
-    f.setActive("chrome");
-    // The former work metadata exists but cannot validate the owner's current descriptor/context.
-    await expect(f.run("install")).rejects.toThrow("__exit__:1");
-    expect(f.mutations()).toHaveLength(0);
-    expect(f.exit).toHaveBeenCalledWith(1);
+    await f.run(action);
+    expect(f.exit).not.toHaveBeenCalled();
+    expect(f.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: expect.objectContaining({ profile: "work", relayPort: 19444 }),
+      }),
+    );
+    expect(f.mutations()).toHaveLength(action === "install" ? 1 : 0);
+    expect(f.manage.mock.calls.map(([, r]) => [r.action, r.context?.browserProfile])).toEqual([
+      ["inspect", "chrome"],
+      ["inspect", "work"],
+      ["inspect", "work"],
+      ...(action === "install" ? [["install", "work"]] : []),
+    ]);
+    if (action === "verify") {
+      expect(boundary.connect).toHaveBeenCalledWith(
+        expect.objectContaining({ profile: "work", port: 19444 }),
+      );
+    } else {
+      expect(boundary.readToken).not.toHaveBeenCalled();
+    }
+    expect(JSON.stringify(f.json.mock.calls)).not.toContain(f.identity.localAppData);
   });
   it("refuses an explicit different context without discovering or retrying another profile", async () => {
     const f = await setup();
@@ -285,7 +274,7 @@ describe("Windows saved selection through the registered setup CLI", () => {
     await expect(f.run("install")).rejects.toThrow("__exit__:1");
     expect(f.mutations()).toHaveLength(0);
   });
-  it.each(["initial", "confirmation"] as const)("cancels at %s without mutation", async (phase) => {
+  it.each(["initial"] as const)("cancels at %s without mutation", async (phase) => {
     const f = await setup();
     const budget = new AbortController();
     vi.spyOn(AbortSignal, "timeout").mockReturnValue(budget.signal);

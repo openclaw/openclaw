@@ -54,6 +54,13 @@ export type ChatAbortControllerEntry = {
   projectSessionTerminalPersistence?: Promise<void>;
   /** Caller completion requested cleanup before terminal lifecycle persistence settled. */
   registrationCleanupRequested?: boolean;
+  /** The exact execution still owns async disposal after logical cleanup. */
+  executionSettlement?: {
+    /** True only after successful execution cleanup or an owner-certified completed cleanup fault. */
+    cleanupSettled: boolean;
+    completion: Promise<void>;
+    status: "pending" | "fulfilled" | "rejected";
+  };
   /** Bounded private timeout settlement while the aborted producer unwinds. */
   pendingTimeoutCompletion?: { expiresAtMs: number; settle: () => void };
   /** False after the owning reply run commits a terminal outcome. */

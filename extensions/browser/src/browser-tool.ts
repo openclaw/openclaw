@@ -1,7 +1,6 @@
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { assertBrowserDashboardTargetCurrent } from "./browser-dashboard.js";
 import type { BrowserDashboardResponse } from "./browser-dashboard.types.js";
 import {
   createBrowserNodeProxyRequest,
@@ -484,6 +483,7 @@ export function createBrowserTool(
       }
       let tabIdentity: BrowserTabIdentity | undefined;
       if (browserDashboard) {
+        const { assertBrowserDashboardTargetCurrent } = await import("./browser-dashboard.js");
         await assertBrowserDashboardTargetCurrent(browserDashboard, opts?.agentId, { signal });
       }
       const dispatchTabAction = () =>
@@ -530,8 +530,8 @@ export function createBrowserTool(
         ? await withBrowserRequestScope(
             {
               managedOnly: true,
-              assertCurrent: (admittedProfile) =>
-                assertBrowserDashboardTargetCurrent(
+              assertCurrent: async (admittedProfile) =>
+                (await import("./browser-dashboard.js")).assertBrowserDashboardTargetCurrent(
                   dashboardTarget,
                   opts?.agentId,
                   { signal },

@@ -11,12 +11,45 @@ import { sessionChanges, type SessionRowChange } from "../sessions/session-row-c
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   defaultPersistDigest,
+  normalizeSessionObserverModelOutput,
   synthesizeSessionObserverTerminalDigest,
   type SessionObserverState,
 } from "./session-observer-model.js";
 import { createSessionObserverDigestPersister } from "./session-observer-persistence.js";
 
 const agentId = "main";
+
+describe("normalizeSessionObserverModelOutput", () => {
+  const digest = {
+    headline: "Checking the fix",
+    assessment: "Tests are passing.",
+    health: "on-track",
+    planProgress: { completed: 2, total: 3 },
+  };
+  const json = JSON.stringify(digest);
+
+  it.each([
+    ["raw JSON", json],
+    ["Haiku JSON fence", `\`\`\`json\n${json}\n\`\`\``],
+    ["unlabeled fence", `\`\`\`\n${json}\n\`\`\``],
+    ["mixed-case label and whitespace", ` \n\`\`\`JsOn \r\n ${json} \r\n\`\`\`\t`],
+    ["inline fence", `\`\`\`${json}\`\`\``],
+  ])("accepts %s", (_label, text) => {
+    expect(normalizeSessionObserverModelOutput(text)).toEqual(digest);
+  });
+
+  it.each([
+    ["leading prose", `Here is the digest: ${json}`],
+    ["prose before a fence", `Here is the digest:\n\`\`\`json\n${json}\n\`\`\``],
+    ["prose after a fence", `\`\`\`json\n${json}\n\`\`\`\nAll done.`],
+    ["another fence language", `\`\`\`javascript\n${json}\n\`\`\``],
+    ["nested fences", `\`\`\`\n\`\`\`json\n${json}\n\`\`\`\n\`\`\``],
+    ["unknown fields", `\`\`\`json\n${JSON.stringify({ ...digest, extra: true })}\n\`\`\``],
+    ["invalid health", `\`\`\`json\n${JSON.stringify({ ...digest, health: "ok" })}\n\`\`\``],
+  ])("rejects %s", (_label, text) => {
+    expect(normalizeSessionObserverModelOutput(text)).toBeNull();
+  });
+});
 
 function observeRowChanges() {
   const changes: SessionRowChange[] = [];

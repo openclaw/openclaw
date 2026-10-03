@@ -175,6 +175,8 @@ The qualified TypeScript compiler analysis files and `src/library.test.ts` run
 on Bun. The pinned fork exposes the child-process pipe handles and stream
 reference controls used by TypeScript's synchronous native API. Compiler
 assertions in mixed runtime suites remain enabled.
+The worker connection-closing-window test is also qualified in the aggregate
+and src-only unit owners.
 The Code Mode executor runs with Vitest on Bun using the fork's
 copy-on-write diagnostics-channel subscriber handling. Markdown render-aware
 chunking stays on Node because the pinned WebKit lacks the `Intl.Segmenter`
@@ -204,13 +206,19 @@ support Bun when qualified files make up the entire exact selection in their
 existing scoped owner. Mixed and broad PR selections retain their original Node
 invocation. Dual-runtime validation keeps that complete Node selection and adds
 only the qualified files selected by the original include patterns.
+The pinned hooks-capable fork extends that whole-file qualification to proven
+tooling, update, Doctor, handoff, QA, and workspace-hash fixtures. The Crabbox
+wrapper suite retains Node because its retained-allocation and source-capsule
+short-write cases still fail on Bun.
 
 The gateway-client leaf config also supports Bun. Its existing ordered
-gateway-core/gateway-client stripes run the core portion on Node and the client
-portion on Bun, sequentially in the original worker slot. Both retain the original
+gateway-core/gateway-client stripes use the core leaf's exact-file qualification
+and run the client portion on Bun, sequentially in the original worker slot.
+Broad and mixed core selections retain Node. Both leaves retain their selected
 include patterns and worker limits. Explicit project-parallel overrides other
 than one retain the complete Node stripe. Dual-runtime validation keeps the
-complete original stripe on Node and adds the client portion on Bun. The shared
+complete original stripe on Node and adds the qualified core files and client
+portion on Bun. The shared
 Vitest config resolves `ws` to the installed package so its imports and mocks use
 the same module identity on both runtimes.
 
@@ -276,15 +284,28 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `1e6f0e7f70462d3c0c3fc121f4ffa453091a74e8` with WebKit
+The pinned build pairs Bun `13311cf83e758c6a1fb720845a1a2d1ff23fd26f` with WebKit
 `fb1167ebf2cb9edc1f6771a2c11771b024693ae0` in prerelease
-`openclaw-v1.4.3-20261002-1e6f0e7f70-webkit-fb1167ebf2`.
-WebKit is unchanged from the previous `86bd9e1972` pin. The build fixes child-process
+`openclaw-v1.4.3-20261002-13311cf83e-webkit-fb1167ebf2`.
+WebKit is unchanged from the previous `1e6f0e7f70` pin. The build adds synchronous
+`module.registerHooks` resolve/load chains and deregistration. JavaScriptCore
+limitations remain explicit: static input attributes are unavailable, static cycles
+can repeat resolution, and completed imports can be reused by `require`.
+Unsafe in-flight record collisions throw `ERR_MODULE_HOOK_REENTRANCY`, and static
+resolve-returned type attributes throw `ERR_MODULE_HOOK_ATTRIBUTE_IDENTITY`.
+The plugin loader keeps its Bun-native path even when hooks are available;
+tooling and fixtures that call hooks directly use the new implementation.
+Hooks receive valid WHATWG URLs for Bun-replaced packages and virtual modules,
+while native loading keeps its original module identity. Installed replacements
+expose file URLs; missing packages and opaque virtual IDs use `bun-builtin:` and
+`bun-virtual:` URLs. This avoids tsx `Invalid URL` failures without replacing Bun's
+native implementations.
+It retains fixes for child-process
 spawn tracing outcomes, preservation of destroy errors during in-flight socket writes,
 MessagePort creation async context and emitted payloads, retained duplicated standard
 I/O descriptors, inherited `NODE_OPTIONS` preloads, and socket standard I/O shutdown.
 Forced full GC now completes in-flight JIT plans, addressing the usage-page retention
-failure. Synchronous `module.registerHooks` remains unavailable. The standard I/O
+failure. The standard I/O
 shutdown workaround remains necessary for supported stock Bun releases.
 It retains fixes for worker heap capacity reporting, OS-visible `process.title`,
 synchronous event-listener exception propagation, and queued WebSocket upgrades.
@@ -930,6 +951,15 @@ remains the explicit operator override for attempting a different budget.
 sizes. Budget violations do not prevent artifact generation. The separate
 `control-ui-performance` job enforces the budgets without blocking other jobs
 from building or testing the same source.
+
+The report counts retained identity bytes: asset-manifest entries minus `.br`/`.gz`
+sidecars, which the Gateway keeps for already-open tabs after an update. The limit
+is 48 MiB, half the 96 MiB retention budget in
+`src/gateway/control-ui-asset-manifest.ts`, so the current and previous builds
+stay retained. Like the other size limits, it fails locally and warns in GitHub
+Actions; `--base-dist` reports the delta. Exceeding it means shrinking retained
+assets (locale catalogs are the largest share) or deliberately changing the
+retention budget.
 
 Startup CSS has a 45 KiB advisory target and a 50 KiB hard ceiling. Growth below
 1 KiB passes; an increase of 1 KiB or more in either startup CSS or the largest

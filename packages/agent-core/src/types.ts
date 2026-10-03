@@ -26,8 +26,8 @@ export type StreamFn = LlmStreamFn;
 /**
  * Configuration for how tool calls from a single assistant message are executed.
  *
- * - "sequential": each tool call is prepared, checked for steering, executed, and finalized before the next one starts.
- * - "parallel": tool calls are prepared sequentially, checked for steering once, then allowed tools execute concurrently.
+ * - "sequential": prepare, execute, and finalize each call before the next; steering can skip the tail after one call starts.
+ * - "parallel": prepare calls sequentially, then execute allowed tools concurrently without steering skips.
  *   `tool_execution_end` is emitted in tool completion order after each tool is finalized,
  *   while tool-result message artifacts are emitted later in assistant source order.
  */
@@ -312,11 +312,11 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
   /**
    * Returns steering messages to inject into the conversation mid-run.
    *
-   * Sequential execution checks before each tool starts, including again after
-   * asynchronous preparation. Parallel execution checks once after preparation
-   * and immediately before launching the prepared calls. A non-empty result
-   * skips calls that have not started and is added to context before the next
-   * LLM call; already-running calls continue.
+   * After a call from the assistant message actually starts, sequential execution
+   * checks before each later call, including again after asynchronous preparation.
+   * Streamed batches share that started state. Parallel batches never steering-skip.
+   * Both modes check after a batch settles, before stop hooks. Drained messages
+   * follow tool results before the next LLM call; already-running calls continue.
    *
    * Once a check returns messages, the loop carries that exact result to the
    * next turn without polling again. This preserves queue drain ordering.
@@ -345,9 +345,9 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 
   /**
    * Tool execution mode.
-   * - "sequential": execute tool calls one by one, checking for steering before each starts
+   * - "sequential": execute calls one by one; after one starts, steering can skip later calls
    * - "parallel": preflight tool calls sequentially, then execute allowed tools concurrently;
-   *   steering is checked once immediately before prepared calls launch;
+   *   steering is checked after settlement without skipping prepared calls;
    *   emit `tool_execution_end` in tool completion order after each tool is finalized,
    *   then emit tool-result message artifacts later in assistant source order
    *

@@ -19,8 +19,11 @@ import {
 } from "./message-action-discovery.js";
 import { dispatchChannelMessageAction } from "./message-action-dispatch.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
-import type { ChannelMessageActionContext, ChannelPlugin } from "./types.js";
-import type { ChannelMessageToolSchemaContribution } from "./types.public.js";
+import type {
+  ChannelMessageActionContext,
+  ChannelMessageToolSchemaContribution,
+  ChannelPlugin,
+} from "./types.public.js";
 
 type DispatchContext = Parameters<typeof dispatchChannelMessageAction>[0];
 type Actions = NonNullable<ChannelPlugin["actions"]>;

@@ -5,6 +5,7 @@ import {
   buildMemoryPromptSection,
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
+  getMemoryProviderRuntime,
   getMemoryRuntime,
   listMemoryCorpusSupplements,
   listMemoryPromptPreparations,
@@ -72,6 +73,7 @@ function expectClearedMemoryState() {
     [],
   );
   expect(listMemoryCorpusSupplements()).toStrictEqual([]);
+  expect(getMemoryProviderRuntime()).toBeUndefined();
   expect(getMemoryRuntime()).toBeUndefined();
 }
 
@@ -191,15 +193,18 @@ describe("memory plugin state", () => {
 
   it("preserves sidecar runtime fields when a memory plugin adds public artifacts only", async () => {
     const runtime = createMemoryRuntime();
+    const providerRuntime = { open: async () => ({ provider: null }) };
     const flushPlanResolver = () => createMemoryFlushPlan("memory/sidecar.md");
 
     registerMemoryCapability("memory-core", {
       flushPlanResolver,
+      providerRuntime,
       runtime,
     });
     registerArtifacts("memory-lancedb", [memoryArtifact()]);
 
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/sidecar.md");
+    expect(getMemoryProviderRuntime()).toBe(providerRuntime);
     expect(getMemoryRuntime()).toBe(runtime);
     expect(getMemoryCapabilityRegistration()?.pluginId).toBe("memory-lancedb");
     await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([

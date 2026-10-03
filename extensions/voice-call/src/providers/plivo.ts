@@ -198,7 +198,7 @@ export class PlivoProvider implements VoiceCallProvider {
         pending?.listenAfterPlayback && callId ? this.buildActionUrl(ctx, callId) : null;
       providerResponseBody = pending
         ? actionUrl
-          ? PlivoProvider.xmlSpeakAndListen({
+          ? PlivoProvider.xmlGetInputSpeech({
               text: pending.text,
               language: pending.locale,
               actionUrl,
@@ -250,8 +250,6 @@ export class PlivoProvider implements VoiceCallProvider {
     }
 
     const direction = params.get("Direction");
-    const from = params.get("From") || undefined;
-    const to = params.get("To") || undefined;
     const callStatus = params.get("CallStatus");
 
     const baseEvent = {
@@ -266,8 +264,8 @@ export class PlivoProvider implements VoiceCallProvider {
           : direction === "outbound"
             ? ("outbound" as const)
             : undefined,
-      from,
-      to,
+      from: params.get("From") || undefined,
+      to: params.get("To") || undefined,
     };
 
     const digits = params.get("Digits");
@@ -285,7 +283,6 @@ export class PlivoProvider implements VoiceCallProvider {
       };
     }
 
-    // Call lifecycle.
     if (callStatus === "ringing") {
       return { ...baseEvent, type: "call.ringing" };
     }
@@ -335,8 +332,6 @@ export class PlivoProvider implements VoiceCallProvider {
 
     this.callIdToWebhookUrl.set(input.callId, input.webhookUrl);
 
-    const ringTimeoutSec = this.options.ringTimeoutSec ?? 30;
-
     const result = await this.apiRequest<PlivoCreateCallResponse>({
       method: "POST",
       endpoint: "/Call/",
@@ -348,7 +343,7 @@ export class PlivoProvider implements VoiceCallProvider {
         hangup_url: hangupUrl.toString(),
         hangup_method: "POST",
         // Plivo's API uses `hangup_on_ring` for outbound ring timeout.
-        hangup_on_ring: ringTimeoutSec,
+        hangup_on_ring: this.options.ringTimeoutSec ?? 30,
       },
     });
 
@@ -364,55 +359,44 @@ export class PlivoProvider implements VoiceCallProvider {
 
   async hangupCall(input: HangupCallInput): Promise<void> {
     const callUuid = this.requestUuidToCallUuid.get(input.providerCallId);
-    if (callUuid) {
+    await this.apiRequest({
+      method: "DELETE",
+      endpoint: `/Call/${callUuid || input.providerCallId}/`,
+      allowNotFound: true,
+    });
+    // Without a resolved call UUID, also try canceling the outbound request.
+    if (!callUuid) {
       await this.apiRequest({
         method: "DELETE",
-        endpoint: `/Call/${callUuid}/`,
+        endpoint: `/Request/${input.providerCallId}/`,
         allowNotFound: true,
       });
-      this.releaseCallState({
-        callId: input.callId,
-        providerCallId: input.providerCallId,
-        callUuid,
-      });
-      return;
     }
-
-    // Best-effort: try hangup (call UUID), then cancel (request UUID).
-    await this.apiRequest({
-      method: "DELETE",
-      endpoint: `/Call/${input.providerCallId}/`,
-      allowNotFound: true,
-    });
-    await this.apiRequest({
-      method: "DELETE",
-      endpoint: `/Request/${input.providerCallId}/`,
-      allowNotFound: true,
-    });
     this.releaseCallState({
       callId: input.callId,
       providerCallId: input.providerCallId,
+      callUuid,
     });
   }
 
-  private resolveCallContext(params: {
-    providerCallId: string;
-    callId: string;
-    operation: string;
-  }): {
+  private resolveCallContext(
+    input: Pick<PlayTtsInput, "callId" | "providerCallId">,
+    operation: string,
+  ): {
     callUuid: string;
     webhookBase: string;
+    callId: string;
   } {
-    const callUuid = this.requestUuidToCallUuid.get(params.providerCallId) ?? params.providerCallId;
+    const callUuid = this.requestUuidToCallUuid.get(input.providerCallId) ?? input.providerCallId;
     const webhookBase =
-      this.callUuidToWebhookUrl.get(callUuid) || this.callIdToWebhookUrl.get(params.callId);
+      this.callUuidToWebhookUrl.get(callUuid) || this.callIdToWebhookUrl.get(input.callId);
     if (!webhookBase) {
       throw new Error("Missing webhook URL for this call (provider state missing)");
     }
     if (!callUuid) {
-      throw new Error(`Missing Plivo CallUUID for ${params.operation}`);
+      throw new Error(`Missing Plivo CallUUID for ${operation}`);
     }
-    return { callUuid, webhookBase };
+    return { callUuid, webhookBase, callId: input.callId };
   }
 
   private async transferCallLeg(params: {
@@ -438,11 +422,7 @@ export class PlivoProvider implements VoiceCallProvider {
   }
 
   async playTts(input: PlayTtsInput): Promise<void> {
-    const { callUuid, webhookBase } = this.resolveCallContext({
-      providerCallId: input.providerCallId,
-      callId: input.callId,
-      operation: "playTts",
-    });
+    const context = this.resolveCallContext(input, "playTts");
 
     this.pendingSpeakByCallId.set(input.callId, {
       text: input.text,
@@ -450,31 +430,17 @@ export class PlivoProvider implements VoiceCallProvider {
       listenAfterPlayback: input.listenAfterPlayback,
     });
 
-    await this.transferCallLeg({
-      callUuid,
-      webhookBase,
-      callId: input.callId,
-      flow: "xml-speak",
-    });
+    await this.transferCallLeg({ ...context, flow: "xml-speak" });
   }
 
   async startListening(input: StartListeningInput): Promise<void> {
-    const { callUuid, webhookBase } = this.resolveCallContext({
-      providerCallId: input.providerCallId,
-      callId: input.callId,
-      operation: "startListening",
-    });
+    const context = this.resolveCallContext(input, "startListening");
 
     this.pendingListenByCallId.set(input.callId, {
       language: input.language,
     });
 
-    await this.transferCallLeg({
-      callUuid,
-      webhookBase,
-      callId: input.callId,
-      flow: "xml-listen",
-    });
+    await this.transferCallLeg({ ...context, flow: "xml-listen" });
   }
 
   async stopListening(_input: StopListeningInput): Promise<void> {
@@ -540,27 +506,20 @@ export class PlivoProvider implements VoiceCallProvider {
 </Response>`;
   }
 
-  private static xmlGetInputSpeech(params: { actionUrl: string; language?: string }): string {
-    const language = params.language || "en-US";
-    return `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <GetInput inputType="speech" method="POST" action="${escapeXml(params.actionUrl)}" language="${escapeXml(language)}" executionTimeout="30" speechEndTimeout="2" redirect="false">
-  </GetInput>
-  <Wait length="300" />
-</Response>`;
-  }
-
-  private static xmlSpeakAndListen(params: {
-    text: string;
+  private static xmlGetInputSpeech(params: {
+    text?: string;
     actionUrl: string;
     language?: string;
   }): string {
     const language = params.language || "en-US";
+    const prompt =
+      params.text === undefined
+        ? ""
+        : `    <Speak language="${escapeXml(language)}">${escapeXml(params.text)}</Speak>\n`;
     return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <GetInput inputType="speech" method="POST" action="${escapeXml(params.actionUrl)}" language="${escapeXml(language)}" executionTimeout="30" speechEndTimeout="2" redirect="false">
-    <Speak language="${escapeXml(language)}">${escapeXml(params.text)}</Speak>
-  </GetInput>
+${prompt}  </GetInput>
   <Wait length="300" />
 </Response>`;
   }
@@ -608,9 +567,9 @@ export class PlivoProvider implements VoiceCallProvider {
     ] as const;
 
     for (const key of candidates) {
-      const value = params.get(key);
-      if (value && value.trim()) {
-        return value.trim();
+      const value = params.get(key)?.trim();
+      if (value) {
+        return value;
       }
     }
     return null;

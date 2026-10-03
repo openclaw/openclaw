@@ -1,12 +1,3 @@
-/**
- * Media Stream Handler
- *
- * Handles bidirectional audio streaming between Twilio and the AI services.
- * - Receives mu-law audio from Twilio via WebSocket
- * - Forwards to the selected realtime transcription provider
- * - Sends TTS audio back to Twilio
- */
-
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -30,7 +21,6 @@ import { WebSocket, WebSocketServer, type RawData } from "openclaw/plugin-sdk/we
 import { canonicalizeVoiceCallMediaBase64 } from "./media-base64.js";
 
 export interface MediaStreamConfig {
-  /** Realtime transcription provider for streaming STT. */
   transcriptionProvider: RealtimeTranscriptionProviderPlugin;
   /** Provider-owned config blob passed into the transcription session. */
   providerConfig: RealtimeTranscriptionProviderConfig;
@@ -48,17 +38,11 @@ export interface MediaStreamConfig {
   resolveClientIp?: (request: IncomingMessage) => string | undefined;
   /** Validate whether to accept a media stream for the given call ID. Missing validator rejects. */
   shouldAcceptStream?: (params: { callId: string; streamSid: string; token?: string }) => boolean;
-  /** Callback when transcript is received */
   onTranscript?: (callId: string, transcript: string, streamSid: string) => void;
-  /** Callback for partial transcripts (streaming UI) */
   onPartialTranscript?: (callId: string, partial: string, streamSid: string) => void;
-  /** Callback when stream connects */
   onConnect?: (callId: string, streamSid: string) => void;
-  /** Callback when realtime transcription is ready for the stream */
   onTranscriptionReady?: (callId: string, streamSid: string) => void;
-  /** Callback when speech starts (barge-in) */
   onSpeechStart?: (callId: string, streamSid: string) => void;
-  /** Callback when stream disconnects */
   onDisconnect?: (callId: string, streamSid: string) => void;
   /** Callback for common Talk events emitted by the telephony STT/TTS adapter. */
   onTalkEvent?: (callId: string, streamSid: string, event: TalkEvent) => void;
@@ -124,25 +108,20 @@ export class MediaStreamHandler {
   private closePromise: Promise<void> | null = null;
   private closing = false;
   private sessions = new Map<string, StreamSession>();
-  private config: MediaStreamConfig;
   /** Pending sockets that have upgraded but not yet sent an accepted `start` frame. */
   private pendingConnections = new Map<WebSocket, PendingConnection>();
-  /** Pending socket count per remote IP for pre-auth throttling. */
   private pendingByIp = new Map<string, number>();
   private preStartTimeoutMs: number;
   private maxPendingConnections: number;
   private maxPendingConnectionsPerIp: number;
   private maxConnections: number;
   private inflightUpgrades = 0;
-  /** TTS playback queues per stream (serialize audio to prevent overlap) */
   private ttsQueues = new Map<string, TtsQueueEntry[]>();
-  private ttsPlaying = new Map<string, boolean>();
   private ttsActiveControllers = new Map<string, AbortController>();
   private pendingPlaybackMarks = new Map<string, Map<string, PendingPlaybackMark>>();
   private ignoredPlaybackMarks = new Map<string, Set<string>>();
 
-  constructor(config: MediaStreamConfig) {
-    this.config = config;
+  constructor(private readonly config: MediaStreamConfig) {
     this.preStartTimeoutMs = resolveTimerTimeoutMs(
       config.preStartTimeoutMs,
       DEFAULT_PRE_START_TIMEOUT_MS,
@@ -703,7 +682,7 @@ export class MediaStreamHandler {
       reject,
     });
 
-    if (!this.ttsPlaying.get(streamSid)) {
+    if (!this.ttsActiveControllers.has(streamSid)) {
       void this.processQueue(streamSid);
     }
 
@@ -711,11 +690,7 @@ export class MediaStreamHandler {
   }
 
   clearTtsQueue(streamSid: string, _reason = "unspecified"): void {
-    const queue = this.ttsQueues.get(streamSid);
-    if (queue) {
-      this.resolveQueuedTtsEntries(queue);
-    }
-    this.ttsActiveControllers.get(streamSid)?.abort();
+    this.abortTtsPlayback(streamSid);
     const session = this.sessions.get(streamSid);
     if (session?.talk.activeTurnId) {
       const cancelled = session.talk.cancelTurn({
@@ -763,17 +738,10 @@ export class MediaStreamHandler {
     this.ignoredPlaybackMarks.set(streamSid, ignored);
   }
 
-  /**
-   * Process the TTS queue for a stream.
-   * Uses iterative approach to avoid stack accumulation from recursion.
-   */
   private async processQueue(streamSid: string): Promise<void> {
-    this.ttsPlaying.set(streamSid, true);
-
     while (true) {
       const queue = this.ttsQueues.get(streamSid);
       if (!queue || queue.length === 0) {
-        this.ttsPlaying.delete(streamSid);
         this.ttsActiveControllers.delete(streamSid);
         this.ttsQueues.delete(streamSid);
         return;
@@ -861,24 +829,19 @@ export class MediaStreamHandler {
   }
 
   private clearTtsState(streamSid: string): void {
-    const queue = this.ttsQueues.get(streamSid);
-    if (queue) {
-      this.resolveQueuedTtsEntries(queue);
-    }
-    this.ttsActiveControllers.get(streamSid)?.abort();
+    this.abortTtsPlayback(streamSid);
     this.ttsActiveControllers.delete(streamSid);
-    this.ttsPlaying.delete(streamSid);
     this.ttsQueues.delete(streamSid);
     this.invalidatePlaybackMarks(streamSid);
     this.ignoredPlaybackMarks.delete(streamSid);
   }
 
-  private resolveQueuedTtsEntries(queue: TtsQueueEntry[]): void {
-    const pending = queue.splice(0);
-    for (const entry of pending) {
+  private abortTtsPlayback(streamSid: string): void {
+    for (const entry of this.ttsQueues.get(streamSid)?.splice(0) ?? []) {
       entry.controller.abort();
       entry.resolve();
     }
+    this.ttsActiveControllers.get(streamSid)?.abort();
   }
 }
 

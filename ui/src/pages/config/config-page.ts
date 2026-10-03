@@ -46,7 +46,11 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
-import { readSystemInfo, SYSTEM_INFO_POLL_INTERVAL_MS } from "../../lib/system-info.ts";
+import {
+  canReadSystemInfo,
+  readSystemInfo,
+  SYSTEM_INFO_POLL_INTERVAL_MS,
+} from "../../lib/system-info.ts";
 import {
   GatewayPageController,
   type GatewayPageChange,
@@ -62,7 +66,7 @@ import {
   type RealtimeTalkInputDevice,
 } from "../chat/talk/input.ts";
 import { switchActiveRealtimeTalkCameras } from "../chat/talk/session.ts";
-import { isUnknownSystemInfoMethodError, supportsSystemInfo } from "../connection/system-info.ts";
+import { isUnknownSystemInfoMethodError } from "../connection/system-info.ts";
 import { renderBrowserLinkPreferencesRow } from "./browser-link-preferences.ts";
 import { ConfigRouteScrollController } from "./config-route-scroll-controller.ts";
 import {
@@ -625,7 +629,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.systemInfo = null;
     }
     if (snapshot.phase === "connected" && snapshot.hello) {
-      this.systemInfoUnavailable = !supportsSystemInfo(snapshot.hello);
+      this.systemInfoUnavailable = !canReadSystemInfo(snapshot);
       if (this.systemInfoUnavailable) {
         this.invalidateSystemInfoRequest();
         this.systemInfo = null;
@@ -655,22 +659,18 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   private systemInfoRequestClient(): GatewayBrowserClient | null {
-    const gatewaySource = this.gateway.gateway;
-    const gateway = gatewaySource?.snapshot;
+    const gateway = this.gateway.gateway;
     if (
-      !gatewaySource ||
-      !gateway ||
       !this.isConnected ||
       document.visibilityState === "hidden" ||
       this.pageId !== "appearance" ||
-      this.context.gateway !== gatewaySource ||
-      gateway.phase !== "connected" ||
-      !supportsSystemInfo(gateway.hello) ||
+      this.context.gateway !== gateway ||
+      !canReadSystemInfo(gateway?.snapshot) ||
       this.systemInfoUnavailable
     ) {
       return null;
     }
-    return gateway.client;
+    return gateway?.snapshot.client ?? null;
   }
 
   private resetSessionObserverModels(unavailable = false) {

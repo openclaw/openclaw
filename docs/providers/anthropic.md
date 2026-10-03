@@ -505,7 +505,9 @@ their Desktop title and remain colorless.
 
 No additional OpenClaw config is required for discovery. The Anthropic plugin
 is bundled and enabled by default; a native macOS node advertises the read-only
-Claude session commands when the local `~/.claude/projects/` directory exists.
+Claude session commands when the local Claude projects directory exists
+(`$CLAUDE_CONFIG_DIR/projects/` when `CLAUDE_CONFIG_DIR` is set, otherwise
+`~/.claude/projects/`, matching Gateway-side discovery).
 Approve the node pairing upgrade when those commands first appear.
 
 The sidebar groups rows by their Gateway or paired-node host and shows each

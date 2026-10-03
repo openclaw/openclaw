@@ -17,6 +17,14 @@ import { recordGatewayRestartTraceDetail, recordGatewayRestartTraceSpan } from "
 
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 type Awaitable<T> = T | Promise<T>;
+const STARTUP_PROGRESS_PHASES = new Set([
+  "process.bootstrap",
+  "state.schema-preflight",
+  "config.auth",
+  "startup.maintenance",
+  "http.bound",
+  "ready",
+]);
 
 export type GatewayStartupTrace = {
   detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
@@ -141,6 +149,8 @@ export function createGatewayStartupTrace(
       log.info(
         `startup trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms ${metrics.map(([key, value]) => formatMetric(key, value)).join(" ")}`,
       );
+    } else if (STARTUP_PROGRESS_PHASES.has(name)) {
+      log.info(`startup phase: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms`);
     }
   };
   return {
@@ -215,6 +225,9 @@ export function createGatewayStartupTrace(
       options: { omitErrorMessage?: boolean } = {},
     ): Promise<T> {
       const before = performance.now();
+      if (STARTUP_PROGRESS_PHASES.has(name)) {
+        log.info(`startup phase: ${name} starting total=${(before - started).toFixed(1)}ms`);
+      }
       const mappedName = mapTimelineName(name);
       const span = {
         name: mappedName,

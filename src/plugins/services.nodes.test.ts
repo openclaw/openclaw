@@ -33,7 +33,7 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
-import { startPluginServices, type PluginServicesHandle } from "./services.js";
+import { startPluginServices, type PluginServicesHandle } from "./services.test-support.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import type { OpenClawPluginServiceContext } from "./types.js";
 

@@ -5,7 +5,6 @@ import { createApplicationConfigCapability } from "../../app/config.ts";
 import { createApplicationPlacementStartup } from "../../app/session-placement-startup.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
-import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
 import {
   createTestGatewayClient,
   type GatewayRequestHandler,
@@ -84,7 +83,6 @@ export function createMountedPanes(
     config: createApplicationConfigCapability({ resourceBasePath: "" }),
     runtimeConfig,
     placementStartup,
-    plugins: new ControlUiPluginRuntime(() => context),
   });
   const panes: TestChatPane[] = [];
   const mount = (sessionKey: string, paneAgentId = agentId) => {

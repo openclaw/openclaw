@@ -30,6 +30,13 @@ assembly, and contract enforcement.
 - Keep loader behavior aligned with the documented Plugin SDK and manifest
   contracts. Do not create private backdoors that bundled plugins can use but
   external plugins cannot.
+- Admit plugins once at load/registration through the existing manifest,
+  provenance, and load-policy owners. All loaded plugins pass results and stream
+  events by reference; never add per-value copying, deep validation, or a second
+  boundary. Plugins must not mutate values after handing them to the host. Keep
+  managed callables scoped and bind each stream's scope, abort propagation, and
+  lease once for its lifetime; see the
+  [SDK contract](../../docs/plugins/sdk-runtime.md#plugin-value-boundary).
 - Preserve laziness in discovery and activation flows. Loader, registry, and
   public-artifact changes must not eagerly import bundled plugin runtime barrels
   when metadata, light exports, or typed contracts are sufficient.

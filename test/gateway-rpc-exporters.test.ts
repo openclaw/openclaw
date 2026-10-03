@@ -23,10 +23,13 @@ import {
   type DiagnosticEventPayload,
 } from "../src/infra/diagnostic-events.js";
 import type {
-  OpenClawPluginService,
-  OpenClawPluginServiceContext,
+  OpenClawPluginApi,
+  OpenClawPluginServiceContextV2,
 } from "../src/plugin-sdk/plugin-entry.js";
-import { createTestPluginApi } from "../src/plugin-sdk/plugin-test-api.js";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "../src/plugin-sdk/plugin-test-api.js";
 import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
 import { createDeferredCore } from "../src/shared/deferred.js";
 import { withEnvAsync } from "../src/test-utils/env.js";
@@ -80,8 +83,9 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
       let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
       let ws: WebSocket | undefined;
       let unsubscribe: (() => void) | undefined;
-      let serviceContext: OpenClawPluginServiceContext | undefined;
-      let prometheus: OpenClawPluginService | undefined;
+      let serviceContext: OpenClawPluginServiceContextV2 | undefined;
+      let prometheus: Parameters<OpenClawPluginApi["registerService"]>[0] | undefined;
+      const scheduler = createTestPluginServiceScheduler();
       const cleanupFailures: unknown[] = [];
       try {
         const receiverPort = await receiver.listen();
@@ -102,7 +106,7 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
             };
           },
         });
-        const services: OpenClawPluginService[] = [];
+        const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
         prometheusPlugin.register(
           createTestPluginApi({
             registerService: (service) => {
@@ -141,6 +145,7 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
         );
         const endpoint = `http://127.0.0.1:${receiverPort}`;
         serviceContext = {
+          scheduler,
           config: {
             diagnostics: {
               enabled: true,
@@ -430,8 +435,10 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
           () => server?.close(),
           () => waitForDiagnosticEventsDrained(),
           () => unsubscribe?.(),
+          () => scheduler.beginClose(),
           () => serviceContext && otel.stop?.(serviceContext),
           () => serviceContext && prometheus?.stop?.(serviceContext),
+          () => scheduler.stop(),
           () => receiver.close(),
           () => resetTestPluginRegistry(),
         ]) {

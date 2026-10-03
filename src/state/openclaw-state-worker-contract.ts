@@ -10,6 +10,10 @@ import type {
   WorkspaceAttestation,
   WorkspaceAttestationInput,
 } from "../agents/workspace-state-store.kernel.js";
+import type {
+  WorkspaceStateGuard,
+  WorkspaceStateWorkerOperations,
+} from "../agents/workspace-state-store.worker-contract.js";
 import type { ClawInstallSchemaVersionRow } from "../claws/provenance-runtime-read.kernel.js";
 import type { ConfigHealthPatch } from "../config/io.health-state.kernel.js";
 import type {
@@ -68,6 +72,7 @@ export type OpenClawStateWorkerOpenPreparation = { type: "deviceIdentity"; ident
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
 export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
+  WorkspaceStateWorkerOperations &
   UpdateRunReconciliationOperations &
   UpdateRunWriteOperations &
   CaptureWorkerOperations &
@@ -85,7 +90,7 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
     "sandboxRegistry.insertIfMissing": { input: SandboxRegistryInsert; output: void };
     "sandboxRegistry.write": { input: SandboxRegistryWrite; output: void };
     "workspace.replaceAttestation": {
-      input: WorkspaceAttestationInput;
+      input: WorkspaceAttestationInput & Pick<WorkspaceStateGuard, "recoveryHoldPredicate">;
       output: WorkspaceAttestation;
     };
     "updateRuns.reconcileInterrupted": {

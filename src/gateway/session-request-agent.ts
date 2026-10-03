@@ -1,9 +1,5 @@
 import { ok, type Result } from "@openclaw/normalization-core/result";
-import {
-  ErrorCodes,
-  type ErrorShape,
-  errorShape,
-} from "../../packages/gateway-protocol/src/index.js";
+import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
 import {
   AgentSelectionRequiredError,
   listAgentIds,
@@ -19,7 +15,10 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import {
+  createAgentDatabaseAdmissionErrorShape,
+  readAgentDatabaseAdmissionRefusal,
+} from "../state/agent-database-admission.js";
 import { invalidSessionRequest } from "./session-request-error.js";
 import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
 
@@ -32,9 +31,7 @@ function admitRequestedAgent(agentId: string): RequestedSessionAgentIdResolution
   return refusal
     ? {
         ok: false,
-        error: errorShape(ErrorCodes.UNAVAILABLE, `${refusal.reason}\n${refusal.repairHint}`, {
-          details: refusal,
-        }),
+        error: createAgentDatabaseAdmissionErrorShape(refusal),
       }
     : { ok: true, agentId };
 }

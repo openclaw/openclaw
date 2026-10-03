@@ -69,7 +69,6 @@ export function wrapOpenAIResponsesStream(ctx: ProviderWrapStreamFnContext) {
     wrapStreamFn?.(streamContext) ?? streamContext.streamFn,
     {
       config: ctx.config,
-      agentId: ctx.agentId,
       nativeWebSearchAllowedByToolPolicy: ctx.nativeWebSearchAllowedByToolPolicy,
     },
   );

@@ -25,43 +25,20 @@ function* mcpServerEntries(value: unknown): Generator<[string, Record<string, un
   }
 }
 
-const MCP_SERVER_TYPE_RULES: LegacyConfigRule[] = [
-  ["mcp", "servers"],
-  ["nodeHost", "mcp", "servers"],
-].map((path) => ({
-  path,
-  message: `${path.join(".")} entries use OpenClaw transport names; CLI-native type aliases are legacy here. Run "openclaw doctor --fix".`,
-  match: (value) =>
-    isRecord(value) &&
-    Object.values(value).some((server) => isRecord(server) && isKnownCliMcpTypeAlias(server.type)),
-}));
-
-const MCP_SERVER_DISABLED_RULES: LegacyConfigRule[] = [
-  ["mcp", "servers"],
-  ["nodeHost", "mcp", "servers"],
-].map((path) => ({
-  path,
-  message:
-    `${path.join(".")} entries use the unsupported "disabled" key; use "enabled" with the inverse boolean value. ` +
-    'Run "openclaw doctor --fix" to migrate it.',
-  match: (value) =>
-    isRecord(value) &&
-    Object.values(value).some((server) => isRecord(server) && typeof server.disabled === "boolean"),
-}));
-
-const MCP_SERVER_TIMEOUT_ALIASES_RULES: LegacyConfigRule[] = [
-  ["mcp", "servers"],
-  ["nodeHost", "mcp", "servers"],
-].map((path) => ({
-  path,
-  message: `${path.join(".")} timeout aliases were retired; use connectionTimeoutMs and requestTimeoutMs. Run "openclaw doctor --fix".`,
-  match: (value) =>
-    isRecord(value) &&
-    Object.values(value).some(
-      (server) =>
-        isRecord(server) && MCP_SERVER_TIMEOUT_ALIASES.some(([key]) => Object.hasOwn(server, key)),
-    ),
-}));
+function mcpServerRules(
+  message: string,
+  match: (server: Record<string, unknown>) => boolean,
+): LegacyConfigRule[] {
+  return [
+    ["mcp", "servers"],
+    ["nodeHost", "mcp", "servers"],
+  ].map((path) => ({
+    path,
+    message: `${path.join(".")} ${message}`,
+    match: (value) =>
+      isRecord(value) && Object.values(value).some((server) => isRecord(server) && match(server)),
+  }));
+}
 
 function hasMcpServerLegacyAliases(server: Record<string, unknown>): boolean {
   const codex = isRecord(server.codex) ? server.codex : undefined;
@@ -73,17 +50,6 @@ function hasMcpServerLegacyAliases(server: Record<string, unknown>): boolean {
     Boolean(codex && Object.hasOwn(codex, "default_tools_approval_mode"))
   );
 }
-
-const MCP_SERVER_ALIASES_RULES: LegacyConfigRule[] = [
-  ["mcp", "servers"],
-  ["nodeHost", "mcp", "servers"],
-].map((path) => ({
-  path,
-  message: `${path.join(".")} legacy aliases were retired; use camelCase spellings and cwd. Run "openclaw doctor --fix".`,
-  match: (value) =>
-    isRecord(value) &&
-    Object.values(value).some((server) => isRecord(server) && hasMcpServerLegacyAliases(server)),
-}));
 
 function migrateMcpServerAliases(servers: unknown, pathPrefix: string, changes: string[]): void {
   const records = getRecord(servers);
@@ -166,10 +132,22 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MCP: LegacyConfigMigrationSpec[] =
     id: "mcp.servers.canonicalize",
     describe: "Normalize legacy MCP server config",
     legacyRules: [
-      ...MCP_SERVER_DISABLED_RULES,
-      ...MCP_SERVER_TYPE_RULES,
-      ...MCP_SERVER_TIMEOUT_ALIASES_RULES,
-      ...MCP_SERVER_ALIASES_RULES,
+      ...mcpServerRules(
+        'entries use the unsupported "disabled" key; use "enabled" with the inverse boolean value. Run "openclaw doctor --fix" to migrate it.',
+        (server) => typeof server.disabled === "boolean",
+      ),
+      ...mcpServerRules(
+        'entries use OpenClaw transport names; CLI-native type aliases are legacy here. Run "openclaw doctor --fix".',
+        (server) => isKnownCliMcpTypeAlias(server.type),
+      ),
+      ...mcpServerRules(
+        'timeout aliases were retired; use connectionTimeoutMs and requestTimeoutMs. Run "openclaw doctor --fix".',
+        (server) => MCP_SERVER_TIMEOUT_ALIASES.some(([key]) => Object.hasOwn(server, key)),
+      ),
+      ...mcpServerRules(
+        'legacy aliases were retired; use camelCase spellings and cwd. Run "openclaw doctor --fix".',
+        hasMcpServerLegacyAliases,
+      ),
     ],
     apply: (raw, changes) => {
       const mcp = getRecord(raw.mcp);

@@ -20,11 +20,8 @@ enum OnboardingProviderIcon {
         if let image = self.imageCache[name] {
             return image
         }
-        guard let url = self.resourceBundle?.url(
-            forResource: name,
-            withExtension: "svg",
-            subdirectory: "ProviderIcons"),
-            let image = NSImage(contentsOf: url)
+        guard let url = self.resourceURL(for: kind),
+              let image = NSImage(contentsOf: url)
         else { return nil }
         image.isTemplate = true
         self.imageCache[name] = image

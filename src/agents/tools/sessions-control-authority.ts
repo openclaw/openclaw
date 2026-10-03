@@ -103,7 +103,12 @@ export async function prepareSessionControlTarget(params: {
         },
         currentFacts,
         {
-          policy: resolveOperatorRolePolicyForAssignment(profile.profileId, profile.role, cfg),
+          policy: resolveOperatorRolePolicyForAssignment(
+            profile.profileId,
+            profile.role,
+            cfg,
+            profile.githubLogin ?? null,
+          ),
           aliases: new Set(profile.aliases),
         },
       );

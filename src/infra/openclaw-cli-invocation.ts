@@ -43,7 +43,7 @@ export function filterOpenClawChildExecArgv(
       }
       continue;
     }
-    // Node resolves bare preloads from the child cwd. Pin only our known TSX
+    // Runtimes resolve bare preloads from the child cwd. Pin only our known TSX
     // spelling; unrelated parent import hooks retain their own semantics.
     const bareTsx = arg === "tsx" && execArgv[index - 1] === "--import";
     filtered.push(
@@ -109,9 +109,7 @@ export function resolveCurrentOpenClawCliInvocation(
     ? [
         ...filterOpenClawChildExecArgv(
           options.execArgv ?? process.execArgv,
-          currentEntry === sourceEntry && !isBunRuntime(execPath)
-            ? (packageRoot ?? undefined)
-            : undefined,
+          currentEntry === sourceEntry ? (packageRoot ?? undefined) : undefined,
         ),
         currentEntry,
       ]

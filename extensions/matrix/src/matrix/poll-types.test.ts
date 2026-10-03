@@ -148,20 +148,15 @@ describe("poll relation parsing", () => {
 describe("buildPollResultsSummary", () => {
   it("counts only the latest valid response from each sender", () => {
     const summary = buildPollResultsSummary({
-      pollEventId: "$poll",
-      roomId: "!room:example.org",
       sender: "@alice:example.org",
-      senderName: "Alice",
-      content: {
-        "m.poll.start": {
-          question: { "m.text": "Lunch?" },
-          kind: "m.poll.disclosed",
-          max_selections: 1,
-          answers: [
-            { id: "a1", "m.text": "Pizza" },
-            { id: "a2", "m.text": "Sushi" },
-          ],
-        },
+      poll: {
+        question: "Lunch?",
+        kind: "m.poll.disclosed",
+        maxSelections: 1,
+        answers: [
+          { id: "a1", text: "Pizza" },
+          { id: "a2", text: "Sushi" },
+        ],
       },
       relationEvents: [
         {
@@ -226,11 +221,16 @@ describe("buildPollResultsSummary", () => {
       ["$before", -0.5, "answer1"],
     ];
     const summary = buildPollResultsSummary({
-      pollEventId: "$poll",
-      roomId: "!room:example.org",
       sender: "@alice:example.org",
-      senderName: "Alice",
-      content: buildPollStartContent({ question: "Lunch?", options: ["Pizza", "Sushi"] }),
+      poll: {
+        question: "Lunch?",
+        kind: "m.poll.disclosed",
+        maxSelections: 1,
+        answers: [
+          { id: "answer1", text: "Pizza" },
+          { id: "answer2", text: "Sushi" },
+        ],
+      },
       relationEvents: [
         ...endTimes.map((origin_server_ts, index) => ({
           event_id: "$end" + index,
@@ -254,14 +254,8 @@ describe("buildPollResultsSummary", () => {
 
   it("formats disclosed poll results with vote totals", () => {
     const text = formatPollResultsAsText({
-      eventId: "$poll",
-      roomId: "!room:example.org",
-      sender: "@alice:example.org",
-      senderName: "Alice",
       question: "Lunch?",
-      answers: ["Pizza", "Sushi"],
       kind: "m.poll.disclosed",
-      maxSelections: 1,
       entries: [
         { id: "a1", text: "Pizza", votes: 1 },
         { id: "a2", text: "Sushi", votes: 0 },

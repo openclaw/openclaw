@@ -136,7 +136,7 @@ suite.define(() => {
       await page.screenshot({ path: path.join(artifactDir, `${stage}.png`) });
     };
     const filter = async (label: "Archived" | "All") => {
-      await sidebar.getByRole("button", { name: "Filter & sort" }).click();
+      await sidebar.getByRole("button", { name: "Filter & sort", exact: true }).click();
       await chooseSidebarMenuOption(sidebar.page(), "Status", label);
       await closeSidebarMenu(page);
     };

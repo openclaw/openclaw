@@ -8,7 +8,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { PreparedConversationRegistryScope } from "../../config/sessions/conversation-registry.js";
 import {

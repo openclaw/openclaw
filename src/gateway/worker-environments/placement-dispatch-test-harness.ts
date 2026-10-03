@@ -93,7 +93,7 @@ export function createHarness(
     prepareAcceptedWorkspacePublication?: DispatchOptions["prepareAcceptedWorkspacePublication"];
     publishAcceptedWorkspace?: DispatchOptions["publishAcceptedWorkspace"];
     beforeMoveBegin?: (abandoned: { runId: string } | undefined) => Promise<void>;
-    afterMoveBegin?: () => void;
+    afterMoveBegin?: () => Promise<void> | void;
     afterDestroy?: () => Promise<void> | void;
     afterReconcile?: () => Promise<void> | void;
     afterStopTunnel?: () => Promise<void> | void;
@@ -140,9 +140,9 @@ export function createHarness(
       log.push("placement:local");
       return placementStore.completeAbandonedPlacementMoveSourceToLocal(params);
     },
-    acceptWorkspaceResult: (claim) => placementStore.acceptWorkspaceResult(claim),
-    completeWorkspaceResultAndReleaseTurn: (claim) =>
-      placementStore.completeWorkspaceResultAndReleaseTurn(claim),
+    acceptWorkspaceResult: (...args) => placementStore.acceptWorkspaceResult(...args),
+    completeWorkspaceResultAndReleaseTurn: (...args) =>
+      placementStore.completeWorkspaceResultAndReleaseTurn(...args),
     failWorkspaceResultAndReleaseTurn: (pending, error) => {
       const current = placementStore.get(pending.sessionId);
       if (current?.state === "active") {
@@ -181,9 +181,9 @@ export function createHarness(
       }
       return placementStore.startDrain(params);
     },
-    startWorkspaceResultDrain: (claim) => {
+    startWorkspaceResultDrain: (...args) => {
       log.push("placement:draining");
-      return placementStore.startWorkspaceResultDrain(claim);
+      return placementStore.startWorkspaceResultDrain(...args);
     },
     startReconcile: (params) => {
       log.push("placement:reconciling");
@@ -268,10 +268,10 @@ export function createHarness(
             ownerEpoch: persistedClaim.ownerEpoch,
           },
         };
-        placementStore.acceptWorkspaceResult(claim);
+        await placementStore.acceptWorkspaceResult(claim);
         setEnvironment(destroyedEnvironment(currentEnvironment?.ownerEpoch ?? 1));
         log.push("teardown:destroy");
-        completeReclaimedWorkspaceTeardown({
+        await completeReclaimedWorkspaceTeardown({
           placements: placementStore,
           turnClaim: claim,
           environmentId: owned.environmentId,
@@ -483,7 +483,7 @@ export function createHarness(
             authorize?.();
           }
         });
-        options.afterMoveBegin?.();
+        await options.afterMoveBegin?.();
         if (options.failMoveAfterBegin) {
           throw new Error("move barrier interrupted");
         }

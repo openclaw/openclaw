@@ -40,7 +40,7 @@ export type {
 type BundledChannelRuntime = unknown;
 
 type ChannelEntryConfigSchema<TPlugin> =
-  TPlugin extends ChannelPlugin<unknown>
+  TPlugin extends ChannelPlugin<unknown, unknown, unknown, 1 | 2>
     ? NonNullable<TPlugin["configSchema"]>
     : ChannelConfigSchema;
 

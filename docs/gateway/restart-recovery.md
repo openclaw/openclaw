@@ -241,8 +241,9 @@ same, and systemd's own 90-second default is unaffected.
 
 Service-child cleanup uses the remaining Gateway shutdown budget, leaving time
 for final exit bookkeeping. A forced restart drains admitted work within the same
-budget. When the restart scheduler has already exhausted its deferral budget,
-cleanup retains the 10-second reserve without starting a second drain.
+budget. Expiring the restart scheduler's idle deferral starts the normal drain:
+new work is fenced and admitted work gets the computed grace period, still capped
+by the native shutdown deadline. Deferral time does not spend that shutdown budget.
 For a supervisor's SIGTERM restart, a shorter requested drain limits when active
 runs are interrupted, not when database cleanup must finish: cleanup can use the
 remaining native stop budget. The Gateway still exits before the supervisor's

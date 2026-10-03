@@ -257,20 +257,25 @@ export async function maybeApplyTtsToPayloadCore(
     persistTtsAudio,
   );
 
-  if (result.success && result.audioPath) {
-    lastTtsAttempt = {
-      timestamp: Date.now(),
-      success: true,
-      textLength: text.length,
-      summarized: wasSummarized,
-      provider: result.provider,
-      persona: result.persona,
-      fallbackFrom: result.fallbackFrom,
-      attemptedProviders: result.attemptedProviders,
-      attempts: result.attempts,
-      latencyMs: result.latencyMs,
-    };
+  const succeeded = result.success && Boolean(result.audioPath);
+  lastTtsAttempt = {
+    timestamp: Date.now(),
+    success: succeeded,
+    textLength: text.length,
+    summarized: wasSummarized,
+    persona: result.persona,
+    attemptedProviders: result.attemptedProviders,
+    attempts: result.attempts,
+    ...(succeeded
+      ? {
+          provider: result.provider,
+          fallbackFrom: result.fallbackFrom,
+          latencyMs: result.latencyMs,
+        }
+      : { error: result.error }),
+  };
 
+  if (result.success && result.audioPath) {
     const payloadWithAudio: ReplyPayload = {
       ...nextPayload,
       mediaUrl: result.audioPath,
@@ -282,17 +287,6 @@ export async function maybeApplyTtsToPayloadCore(
       ? markReplyPayloadAsTtsSupplement(payloadWithAudio)
       : payloadWithAudio;
   }
-
-  lastTtsAttempt = {
-    timestamp: Date.now(),
-    success: false,
-    textLength: text.length,
-    summarized: wasSummarized,
-    persona: result.persona,
-    attemptedProviders: result.attemptedProviders,
-    attempts: result.attempts,
-    error: result.error,
-  };
 
   const latency = Date.now() - ttsStart;
   logVerbose(`TTS: conversion failed after ${latency}ms (${result.error ?? "unknown"}).`);

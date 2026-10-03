@@ -40,13 +40,6 @@ export async function runPluginCleanupScope<T>(values: readonly object[], run: (
   try {
     return await pluginInvocationContext.run(
       {
-        assertCurrent: (instance) => {
-          if (bindings.has(instance)) {
-            assertOpen();
-          } else {
-            parent?.assertCurrent?.(instance);
-          }
-        },
         lookup: (instance) => {
           const binding = bindings.get(instance);
           if (binding) {

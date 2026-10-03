@@ -11,6 +11,12 @@ import {
 import { configureRuntimeActionDecisionSink } from "../../audit/runtime-action-decision.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  assertMemoryAudienceCurrent,
+  assertMemoryAudienceSession,
+  resolveMemoryAudienceFromEntry,
+} from "../memory-audience.js";
+import { fakeSessionOwner } from "../memory-audience.test-support.js";
 import { withPluginRuntimePluginScope } from "./gateway-request-scope.js";
 import type { PluginRuntime } from "./types.js";
 
@@ -37,6 +43,38 @@ vi.mock("../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: mocks.runEmbeddedAgentCore,
 }));
 vi.mock("../../config/config.js", () => ({ getRuntimeConfig: mocks.getRuntimeConfig }));
+vi.mock("../../config/sessions/session-delivery-generation.js", async () => {
+  const { fakeSessionGenerationModule } = await import("../memory-audience.test-support.js");
+  return fakeSessionGenerationModule;
+});
+vi.mock("../../config/sessions/session-entry-read-runtime.js", async () => {
+  const { fakeSessionEntryReadModule } = await import("../memory-audience.test-support.js");
+  return fakeSessionEntryReadModule;
+});
+
+async function parentAudience(agentId: string) {
+  const sessionKey = `agent:${agentId}:parent`;
+  const entry = {
+    sessionId: "00000000-0000-4000-8000-000000000001",
+    updatedAt: 1,
+    chatType: "direct" as const,
+  };
+  fakeSessionOwner.rows.set(sessionKey, entry);
+  const resolution = await resolveMemoryAudienceFromEntry(
+    {
+      agentId,
+      sessionKey,
+      sessionId: entry.sessionId,
+      senderIsOwner: true,
+      storePath: "/tmp/sessions",
+    },
+    entry,
+  );
+  if (resolution.status !== "granted") {
+    throw new Error(resolution.reason);
+  }
+  return resolution.audience;
+}
 
 import { runPluginEmbeddedAgent } from "./runtime-embedded-agent.runtime.js";
 
@@ -119,6 +157,42 @@ describe("plugin embedded-agent runtime admission", () => {
       ),
     ).rejects.toThrow("core failed");
     expect(mocks.close).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a forged inherited memory audience before admitting the child run", async () => {
+    await expect(
+      withPluginRuntimePluginScope({ pluginId: "memory-plugin" }, () =>
+        runPluginEmbeddedAgent({
+          ...params,
+          memoryAudience: { kind: "owner-private", agentId: "researcher" },
+        }),
+      ),
+    ).rejects.toThrow("memory audience must be host-minted");
+    expect(mocks.prepareAgentRunAdmission).not.toHaveBeenCalled();
+    expect(mocks.runEmbeddedAgentCore).not.toHaveBeenCalled();
+  });
+
+  it("delegates the parent audience to the child session before core execution", async () => {
+    const audience = await parentAudience("researcher");
+    fakeSessionOwner.rows.set("agent:researcher:plugin", {
+      sessionId: "session-plugin",
+      updatedAt: 1,
+    });
+    await withPluginRuntimePluginScope({ pluginId: "memory-plugin" }, () =>
+      runPluginEmbeddedAgent({ ...params, memoryAudience: audience }),
+    );
+    const childAudience = mocks.runEmbeddedAgentCore.mock.calls[0]![0].memoryAudience;
+    expect(childAudience).toEqual(audience);
+    expect(childAudience).not.toBe(audience);
+    expect(() =>
+      assertMemoryAudienceSession(childAudience, params.sessionTarget!.sessionKey),
+    ).not.toThrow();
+    expect(() => assertMemoryAudienceSession(childAudience, "agent:researcher:parent")).toThrow(
+      "different session",
+    );
+    // The run releases its delegated grant when it ends.
+    expect(() => assertMemoryAudienceCurrent(childAudience)).toThrow("released by its owner");
+    expect(() => assertMemoryAudienceCurrent(audience)).not.toThrow();
   });
 
   it.each([true, false])("ignores the shipped GitHub availability input %s", async (available) => {

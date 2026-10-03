@@ -1,4 +1,3 @@
-// Voice Call provider HTTP clients share bounded response body readers.
 import {
   readResponseTextPrefix,
   readResponseWithLimit,
@@ -11,10 +10,6 @@ const TRUNCATED_SUFFIX = "... [truncated]";
 
 export async function cancelProviderResponseBody(response: Response): Promise<void> {
   await response.body?.cancel().catch(() => undefined);
-}
-
-function appendTruncatedSuffix(text: string): string {
-  return `${text.trimEnd()}${TRUNCATED_SUFFIX}`;
 }
 
 export async function readVoiceCallProviderJsonResponse<T>(
@@ -42,5 +37,5 @@ export async function readProviderErrorResponseSnippet(response: Response): Prom
   // headers, account identifiers, signed URLs), so redact before the snippet reaches
   // error messages and logs. Tools mode keeps redaction on regardless of log config.
   const text = redactSensitiveText(prefix.text, { mode: "tools" });
-  return prefix.truncated ? appendTruncatedSuffix(text) : text;
+  return prefix.truncated ? `${text.trimEnd()}${TRUNCATED_SUFFIX}` : text;
 }

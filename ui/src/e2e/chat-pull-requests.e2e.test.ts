@@ -330,6 +330,7 @@ describeControlUiE2e("session pull request chips", () => {
           "chat.startup",
           SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
           "sessions.github.publish",
+          "sessions.github.options",
         ],
         methodResponses: {
           [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
@@ -416,6 +417,7 @@ describeControlUiE2e("session pull request chips", () => {
         "chat.startup",
         SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
         "sessions.github.publish",
+        "sessions.github.options",
       ],
       methodResponses: {
         [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
@@ -534,6 +536,7 @@ describeControlUiE2e("session pull request chips", () => {
         "chat.startup",
         SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
         "sessions.github.publish",
+        "sessions.github.options",
       ],
       methodResponses: {
         [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
@@ -637,6 +640,7 @@ describeControlUiE2e("session pull request chips", () => {
         "chat.startup",
         SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
         "sessions.github.publish",
+        "sessions.github.options",
       ],
       methodResponses: {
         [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
@@ -712,6 +716,7 @@ describeControlUiE2e("session pull request chips", () => {
         "chat.startup",
         SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
         "sessions.github.publish",
+        "sessions.github.options",
       ],
       methodResponses: {
         [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
@@ -779,6 +784,7 @@ describeControlUiE2e("session pull request chips", () => {
         "chat.startup",
         SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
         "sessions.github.publish",
+        "sessions.github.options",
       ],
       methodResponses: {
         [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },

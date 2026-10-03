@@ -2,7 +2,7 @@ import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
   summarizeSessionPullRequests,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
@@ -66,6 +66,17 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
     worktreeId: string,
     initial?: SessionCatalogPullRequestSummary,
   ): SessionCatalogPullRequestSummary | undefined {
+    const gateway = this.options.getGateway();
+    if (
+      !gateway ||
+      !canCallGatewayMethod(
+        gateway.snapshot,
+        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+        "operator.read",
+      )
+    ) {
+      return undefined;
+    }
     const entry = this.states.get(sessionKey);
     // A ready empty snapshot is authoritative; only seed a row before its first snapshot.
     return entry?.worktreeId === worktreeId ? entry.summary : initial;
@@ -157,7 +168,11 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
     if (
       !gateway ||
       !this.options.getConnected() ||
-      isGatewayMethodAdvertised(gateway.snapshot, SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD) !== true
+      !canCallGatewayMethod(
+        gateway.snapshot,
+        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+        "operator.read",
+      )
     ) {
       this.releaseStore();
       this.reset(true);

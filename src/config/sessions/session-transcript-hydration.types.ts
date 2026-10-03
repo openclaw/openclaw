@@ -1,14 +1,38 @@
+import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
-import type { SessionTranscriptBoundedActiveContext } from "./session-accessor.sqlite-active-context.js";
 import type {
+  SessionTranscriptBoundedActiveContext,
   SessionTranscriptContextVersion,
+  SessionTranscriptReadScope,
+  SessionTranscriptWriteScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import type { loadTranscriptReadSnapshotSync } from "./session-accessor.sqlite-read.js";
 import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
-import type { SessionTranscriptMaintenanceRead } from "./session-transcript-maintenance-read.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
+
+export type SessionTranscriptMaintenanceRead =
+  | { operation: "previous"; beforeSeq: number }
+  | { operation: "identity"; eventId: string }
+  | { operation: "version" }
+  | {
+      operation: "suffix";
+      startSeq: number;
+      maxBytes: number;
+      maxEvents: number;
+      retainedCustomDataIds: readonly string[];
+    };
+
+export type SessionTranscriptMaintenanceFacts = {
+  kind: "transcript-maintenance";
+  previous?: TranscriptEvent;
+  seq?: number;
+  version?: SessionTranscriptContextVersion;
+  appendParentId?: string | null;
+  lifecycleRevision?: SessionTranscriptWriteScope["expectedLifecycleRevision"];
+  events?: TranscriptEvent[];
+};
 
 export type PreparedSessionTranscriptHydration =
   | { kind: "full"; snapshot: ReturnType<typeof loadTranscriptReadSnapshotSync> }
@@ -44,32 +68,36 @@ export type SessionTranscriptCurrentTurnEntryRequest = {
 export type SessionTranscriptHydrationWorkerInput = {
   kind: "transcript-hydration";
   database: { agentId: string; path: string };
-  target: SessionTranscriptRuntimeTarget & { env?: NodeJS.ProcessEnv };
+  target: SessionTranscriptReadScope;
   resolvedScope: ResolvedTranscriptReadScope;
+  expectedIdentity?: DatabaseFileIdentity;
   limits?: { maxBytes: number; maxEvents: number };
   admission?: UserTurnTranscriptAdmissionReceipt;
 };
 
-export type SessionTranscriptCurrentTurnEntryWorkerInput = Omit<
+type SessionTranscriptRuntimeHydrationInput = Omit<
   SessionTranscriptHydrationWorkerInput,
-  "kind" | "limits"
-> &
+  "kind" | "limits" | "target" | "expectedIdentity"
+> & { target: SessionTranscriptRuntimeTarget & { env?: NodeJS.ProcessEnv } };
+
+export type SessionTranscriptCurrentTurnEntryWorkerInput = SessionTranscriptRuntimeHydrationInput &
   SessionTranscriptCurrentTurnEntryRequest & { kind: "current-turn-entry" };
 
-export type SessionTranscriptRecentActiveEventsWorkerInput = Omit<
-  SessionTranscriptHydrationWorkerInput,
-  "kind" | "limits"
-> & { kind: "recent-active-events"; maxEvents: number };
+export type SessionTranscriptRecentActiveEventsWorkerInput =
+  SessionTranscriptRuntimeHydrationInput & {
+    kind: "recent-active-events";
+    maxEvents: number;
+  };
 
-export type SessionTranscriptLatestActiveMessageWorkerInput = Omit<
-  SessionTranscriptHydrationWorkerInput,
-  "kind" | "limits"
-> & { kind: "latest-active-message" };
+export type SessionTranscriptLatestActiveMessageWorkerInput =
+  SessionTranscriptRuntimeHydrationInput & {
+    kind: "latest-active-message";
+  };
 
-export type SessionTranscriptMaintenanceWorkerInput = Omit<
-  SessionTranscriptHydrationWorkerInput,
-  "kind" | "limits"
-> & { kind: "transcript-maintenance"; request: SessionTranscriptMaintenanceRead };
+export type SessionTranscriptMaintenanceWorkerInput = SessionTranscriptRuntimeHydrationInput & {
+  kind: "transcript-maintenance";
+  request: SessionTranscriptMaintenanceRead;
+};
 
 export type SessionTranscriptHydrationWorkerRequest =
   | SessionTranscriptHydrationWorkerInput

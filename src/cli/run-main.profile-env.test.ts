@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { prepareDoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
 import {
   finalizeDebugProxyCaptureAsync,
   initializeDebugProxyCaptureAsync,
@@ -20,7 +21,7 @@ const startup = vi.hoisted(() => ({
   ensureDispatcher: vi.fn(),
   route: vi.fn(async () => true),
   schemas: { incompatible: [], indeterminate: [] },
-  prepareDoctorDatabasePreflight: vi.fn(),
+  prepareDoctorDatabasePreflight: vi.fn<typeof prepareDoctorDatabasePreflight>(),
   runDoctorHealthFlow: vi.fn(),
 }));
 
@@ -222,7 +223,10 @@ describe("runCli environment and passive startup", () => {
       }
     }
 
-    expect(startup.prepareDoctorDatabasePreflight).toHaveBeenCalledExactlyOnceWith();
+    // Omitted options and explicit undefined both select the full fleet.
+    expect(
+      startup.prepareDoctorDatabasePreflight.mock.calls.map(([options]) => options?.scope),
+    ).toEqual([undefined]);
     expect(startup.prepareDoctorDatabasePreflight).toHaveBeenCalledBefore(startup.startProxy);
     expect(startup.runDoctorHealthFlow).toHaveBeenCalledExactlyOnceWith(
       expect.any(Object),

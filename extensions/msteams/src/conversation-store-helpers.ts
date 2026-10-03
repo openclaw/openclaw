@@ -5,15 +5,6 @@ import type {
   StoredConversationReference,
 } from "./conversation-store.js";
 
-export function toConversationStoreEntries(
-  entries: Iterable<[string, StoredConversationReference]>,
-): MSTeamsConversationStoreEntry[] {
-  return Array.from(entries, ([conversationId, reference]) => ({
-    conversationId,
-    reference,
-  }));
-}
-
 export function mergeStoredConversationReference(
   existing: StoredConversationReference | undefined,
   incoming: StoredConversationReference,

@@ -29,7 +29,7 @@ import {
 } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import * as commandResolution from "../infra/exec-command-resolution.js";
-import type { ExecHostResponse } from "../infra/exec-host.js";
+import { requestExecHostViaSocket, type ExecHostResponse } from "../infra/exec-host.js";
 import { formatExecCommand } from "../infra/system-run-command.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -41,21 +41,21 @@ import { handleSystemRunInvoke } from "./invoke-system-run.js";
 
 type InvokeOptions = Parameters<typeof handleSystemRunInvoke>[0];
 
+vi.mock("../infra/exec-host.js", () => ({ requestExecHostViaSocket: vi.fn() }));
+
 vi.mock("../logger.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../logger.js")>()),
   logWarn: vi.fn(),
 }));
 
 type MockedRunCommand = Mock<InvokeOptions["runCommand"]>;
-type MockedRunViaMacAppExecHost = Mock<InvokeOptions["runViaMacAppExecHost"]>;
+type MockedRequestExecHost = Mock<typeof requestExecHostViaSocket>;
 type MockedSendInvokeResult = Mock<InvokeOptions["sendInvokeResult"]>;
-type MockedSendExecFinishedEvent = Mock<InvokeOptions["sendExecFinishedEvent"]>;
-type MockedSendNodeEvent = Mock<InvokeOptions["sendNodeEvent"]>;
+type MockedSendNodeEvent = Mock<NonNullable<InvokeOptions["sendNodeEvent"]>>;
 type InvokeSpies = {
   runCommand: MockedRunCommand;
-  runViaMacAppExecHost: MockedRunViaMacAppExecHost;
+  requestExecHost: MockedRequestExecHost;
   sendInvokeResult: MockedSendInvokeResult;
-  sendExecFinishedEvent: MockedSendExecFinishedEvent;
   sendNodeEvent: MockedSendNodeEvent;
 };
 
@@ -214,8 +214,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     return firstMockCall(runCommand)[0];
   }
 
-  function readMacCall(runViaMacAppExecHost: MockedRunViaMacAppExecHost) {
-    return firstMockCall(runViaMacAppExecHost)[0];
+  function readMacCall(requestExecHost: MockedRequestExecHost) {
+    return firstMockCall(requestExecHost)[0];
   }
 
   function expectExecDeniedEvent(
@@ -226,8 +226,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     if (!call) {
       throw new Error("expected sendNodeEvent call");
     }
-    expect(call[1]).toBe("exec.denied");
-    expect(call[2]).toMatchObject({ reason });
+    expect(call[0]).toBe("exec.denied");
+    expect(call[1]).toMatchObject({ reason });
   }
 
   function expectApprovalRequired(
@@ -352,26 +352,16 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     return { tempDir, prepared, commandPattern };
   }
 
-  function resolveSecurity(value?: string): "deny" | "allowlist" | "full" {
-    return value === "deny" || value === "allowlist" || value === "full" ? value : "allowlist";
-  }
-
-  function resolveAsk(value?: string): "off" | "on-miss" | "always" {
-    return value === "off" || value === "on-miss" || value === "always" ? value : "on-miss";
-  }
-
   function createInvokeSpies(params?: {
     runCommand?: InvokeOptions["runCommand"];
-    runViaMacAppExecHost?: InvokeOptions["runViaMacAppExecHost"];
+    requestExecHost?: typeof requestExecHostViaSocket;
     sendInvokeResult?: InvokeOptions["sendInvokeResult"];
-    sendExecFinishedEvent?: InvokeOptions["sendExecFinishedEvent"];
     sendNodeEvent?: InvokeOptions["sendNodeEvent"];
   }): InvokeSpies {
     return {
       runCommand: vi.fn(params?.runCommand ?? (async () => localResult())),
-      runViaMacAppExecHost: vi.fn(params?.runViaMacAppExecHost ?? (async () => null)),
+      requestExecHost: vi.fn(params?.requestExecHost ?? (async () => null)),
       sendInvokeResult: vi.fn(params?.sendInvokeResult ?? (async () => {})),
-      sendExecFinishedEvent: vi.fn(params?.sendExecFinishedEvent ?? (async () => {})),
       sendNodeEvent: vi.fn(params?.sendNodeEvent ?? (async () => {})),
     };
   }
@@ -424,7 +414,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expect(params.runCommand).toHaveBeenCalledWith(
       [params.expected, ...params.commandTail],
       params.cwd,
-      undefined,
+      expect.any(Object),
       undefined,
       undefined,
       expect.any(Function),
@@ -450,15 +440,10 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     needsScreenRecording?: boolean;
     suppressNotifyOnExit?: boolean;
     runCommand?: InvokeOptions["runCommand"];
-    runViaMacAppExecHost?: InvokeOptions["runViaMacAppExecHost"];
+    requestExecHost?: typeof requestExecHostViaSocket;
     sendInvokeResult?: InvokeOptions["sendInvokeResult"];
-    sendExecFinishedEvent?: InvokeOptions["sendExecFinishedEvent"];
     sendNodeEvent?: InvokeOptions["sendNodeEvent"];
     skillBinsCurrent?: () => Promise<Array<{ name: string; resolvedPath: string }>>;
-    isCmdExeInvocation?: InvokeOptions["isCmdExeInvocation"];
-    sanitizeEnv?: InvokeOptions["sanitizeEnv"];
-    resolveExecSecurity?: InvokeOptions["resolveExecSecurity"];
-    resolveExecAsk?: InvokeOptions["resolveExecAsk"];
     autoReviewer?: ExecAutoReviewer;
     commitExecAuthorization?: InvokeOptions["commitExecAuthorization"];
     bindApproval?: boolean;
@@ -466,12 +451,12 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   }): Promise<InvokeSpies> {
     const spies = createInvokeSpies({
       runCommand: params.runCommand,
-      runViaMacAppExecHost:
-        params.runViaMacAppExecHost ?? (async () => params.runViaResponse ?? null),
+      requestExecHost: params.requestExecHost ?? (async () => params.runViaResponse ?? null),
       sendInvokeResult: params.sendInvokeResult,
-      sendExecFinishedEvent: params.sendExecFinishedEvent,
       sendNodeEvent: params.sendNodeEvent,
     });
+
+    vi.mocked(requestExecHostViaSocket).mockImplementation(spies.requestExecHost);
 
     const command = params.command ?? params.preparedPlan?.argv ?? ["echo", "ok"];
     let dispatchCommand = command;
@@ -514,7 +499,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     }
 
     await handleSystemRunInvoke({
-      client: {} as never,
       params: {
         command: dispatchCommand,
         env: params.env,
@@ -535,14 +519,24 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       signal: params.signal,
       execHostEnforced: false,
       execHostFallbackAllowed: params.execHostFallbackAllowed ?? true,
-      resolveExecSecurity: params.resolveExecSecurity ?? (() => params.security ?? "full"),
-      resolveExecAsk: params.resolveExecAsk ?? (() => params.ask ?? "off"),
-      isCmdExeInvocation: params.isCmdExeInvocation ?? (() => false),
-      sanitizeEnv: params.sanitizeEnv ?? (() => undefined),
-      ...spies,
-      buildExecEventPayload: (payload) => payload,
+      runCommand: spies.runCommand,
+      sendInvokeResult: spies.sendInvokeResult,
+      sendNodeEvent: spies.sendNodeEvent,
       preferMacAppExecHost: params.preferMacAppExecHost,
-      getRuntimeConfig: () => getRuntimeConfigSnapshot() ?? {},
+      getRuntimeConfig: () => {
+        const cfg = getRuntimeConfigSnapshot() ?? {};
+        return {
+          ...cfg,
+          tools: {
+            ...cfg.tools,
+            exec: {
+              security: params.security ?? "full",
+              ask: params.ask ?? "off",
+              ...cfg.tools?.exec,
+            },
+          },
+        };
+      },
       autoReviewer: params.autoReviewer,
       commitExecAuthorization: params.commitExecAuthorization,
     });
@@ -577,7 +571,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
   it("keeps a lost companion response ambiguous", async () => {
     const result = await runMac({ execHostFallbackAllowed: false });
-    expect(result.runViaMacAppExecHost).toHaveBeenCalledOnce();
+    expect(result.requestExecHost).toHaveBeenCalledOnce();
     expect(result.runCommand).not.toHaveBeenCalled();
     expect(invokeResult(result.sendInvokeResult)).toMatchObject({
       ok: false,
@@ -592,7 +586,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     const result = await runLocal({ signal: controller.signal });
 
     expect(result.runCommand).not.toHaveBeenCalled();
-    expect(result.runViaMacAppExecHost).not.toHaveBeenCalled();
+    expect(result.requestExecHost).not.toHaveBeenCalled();
   });
 
   it("does not publish a cancelled local command completion", async () => {
@@ -608,14 +602,14 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
     expect(result.runCommand).toHaveBeenCalledOnce();
     expect(result.sendInvokeResult).not.toHaveBeenCalled();
-    expect(result.sendExecFinishedEvent).not.toHaveBeenCalled();
+    expect(result.sendNodeEvent).not.toHaveBeenCalledWith("exec.finished", expect.anything());
   });
 
   it("cancels pending Mac exec without replay or publication", async () => {
     const controller = new AbortController();
     const result = await runMac({
       signal: controller.signal,
-      runViaMacAppExecHost: ({ signal }) => {
+      requestExecHost: ({ signal }) => {
         expect(signal).toBe(controller.signal);
         return new Promise((resolve) => {
           signal?.addEventListener("abort", () => resolve(null), { once: true });
@@ -624,11 +618,10 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       },
     });
 
-    expect(result.runViaMacAppExecHost).toHaveBeenCalledOnce();
+    expect(result.requestExecHost).toHaveBeenCalledOnce();
     expect(result.runCommand).not.toHaveBeenCalled();
     expect(result.sendNodeEvent).not.toHaveBeenCalled();
     expect(result.sendInvokeResult).not.toHaveBeenCalled();
-    expect(result.sendExecFinishedEvent).not.toHaveBeenCalled();
   });
 
   it.each(["medium"] as const)(
@@ -652,8 +645,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         cwd: prepared.plan.cwd ?? tmp,
         systemRunPlan: prepared.plan,
         runCommand,
-        resolveExecSecurity: resolveSecurity,
-        resolveExecAsk: resolveAsk,
+        security: "allowlist",
+        ask: "on-miss",
         autoReviewer,
         commitExecAuthorization: commitAuthorization,
       });
@@ -686,11 +679,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         command: prepared.plan.argv,
         cwd: prepared.plan.cwd ?? tmp,
         systemRunPlan: prepared.plan,
-        resolveExecSecurity: resolveSecurity,
-        resolveExecAsk: resolveAsk,
+        security: "allowlist",
+        ask: "on-miss",
         autoReviewer,
       });
-      const macCall = readMacCall(macInvoke.runViaMacAppExecHost);
+      const macCall = readMacCall(macInvoke.requestExecHost);
       expect(macCall.request?.approvalSource).toBe("auto-review");
       expect(macCall.request?.approvalDecision).toBeNull();
       expect(macCall.request?.policySnapshot).toEqual(
@@ -715,8 +708,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       command: [executablePath],
       cwd: tmp,
       runCommand,
-      resolveExecSecurity: resolveSecurity,
-      resolveExecAsk: resolveAsk,
+      security: "allowlist",
+      ask: "on-miss",
       autoReviewer,
     });
 
@@ -752,8 +745,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         rawCommand: approvalPlan.commandText,
         cwd: tmp,
         systemRunPlan: approvalPlan,
-        resolveExecSecurity: resolveSecurity,
-        resolveExecAsk: resolveAsk,
+        security: "allowlist",
+        ask: "on-miss",
         autoReviewer,
       });
 
@@ -783,8 +776,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         cwd: prepared.plan.cwd ?? tmp,
         systemRunPlan: prepared.plan,
         runCommand,
-        resolveExecSecurity: resolveSecurity,
-        resolveExecAsk: resolveAsk,
+        security: "allowlist",
+        ask: "on-miss",
         autoReviewer,
       });
 
@@ -801,7 +794,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           },
         });
         expect(invoke.sendNodeEvent).toHaveBeenCalledWith(
-          expect.anything(),
           "exec.denied",
           expect.objectContaining({ reason: "auto-review-denied" }),
         );
@@ -829,7 +821,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         if (preferMacAppExecHost) {
           const canonicalCwd = fs.realpathSync(tmp);
           expect(invoke.runCommand).not.toHaveBeenCalled();
-          const macHostCall = readMacCall(invoke.runViaMacAppExecHost);
+          const macHostCall = readMacCall(invoke.requestExecHost);
           expect(macHostCall.request?.command).toEqual(["env", "sh", "-c", "echo SAFE"]);
           expect(macHostCall.request?.rawCommand).toBe('env sh -c "echo SAFE"');
           expect(macHostCall.request?.cwd).toBe(canonicalCwd);
@@ -1025,7 +1017,9 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
       expect(stdout).toBe(revoke ? "" : "approved.txt\n");
       expect(invokeResult(invoke.sendInvokeResult).ok).toBe(!revoke);
-      expect(invoke.sendExecFinishedEvent.mock.calls.length).toBe(revoke ? 0 : 1);
+      expect(
+        invoke.sendNodeEvent.mock.calls.filter(([event]) => event === "exec.finished"),
+      ).toHaveLength(revoke ? 0 : 1);
       if (revoke) {
         expect(invokeResult(invoke.sendInvokeResult).error?.code).toBe("SYSTEM_RUN_DENIED");
         expectError(invoke.sendInvokeResult, "exec approval changed before execution");
@@ -1078,8 +1072,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           cwd: prepared.plan.cwd ?? tmp,
           systemRunPlan: prepared.plan,
           ...(approval === "human" ? { approvalDecision: "allow-once" } : {}),
-          resolveExecSecurity: resolveSecurity,
-          resolveExecAsk: resolveAsk,
+          security: "allowlist",
+          ask: "on-miss",
           autoReviewer,
           commitExecAuthorization: commitAuthorization,
         });
@@ -1271,15 +1265,12 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         LANG: "C",
         LC_TIME: "C",
       },
-      sanitizeEnv: (overrides) => overrides ?? undefined,
     });
 
     expect(runCommand).toHaveBeenCalledTimes(1);
     const passedEnv = firstMockCall(runCommand)[2];
-    expect(passedEnv).toEqual({
-      LANG: "C",
-      LC_TIME: "C",
-    });
+    expect(passedEnv).toMatchObject({ LANG: "C", LC_TIME: "C" });
+    expect(passedEnv).not.toHaveProperty("OPENCLAW_TEST");
     expectOk(sendInvokeResult);
   });
 
@@ -1343,7 +1334,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       requireDurableAllowlistApproval: false,
     });
     expect(invoke.runCommand).not.toHaveBeenCalled();
-    expect(invoke.sendExecFinishedEvent).not.toHaveBeenCalled();
+    expect(invoke.sendNodeEvent).not.toHaveBeenCalledWith("exec.finished", expect.anything());
     expect(loadExecApprovals().agents?.main?.allowlist ?? []).toStrictEqual([]);
     expectWriteDenied(invoke);
   });
@@ -1367,7 +1358,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         expect(authorization.policySnapshot).toMatchObject({ ask: "off" });
       }
       expect(result.runCommand).not.toHaveBeenCalled();
-      expect(result.sendExecFinishedEvent).not.toHaveBeenCalled();
+      expect(result.sendNodeEvent).not.toHaveBeenCalledWith("exec.finished", expect.anything());
       expectWriteDenied(result);
     },
   );
@@ -1408,7 +1399,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expect(invoke.runCommand).not.toHaveBeenCalled();
     expect(loadExecApprovals().agents?.main?.allowlist ?? []).toStrictEqual([]);
     expect(invoke.sendNodeEvent).toHaveBeenCalledWith(
-      expect.anything(),
       "exec.denied",
       expect.objectContaining({ reason: "permission:screenRecording" }),
     );
@@ -1431,7 +1421,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
 
     expect(invoke.runCommand).not.toHaveBeenCalled();
-    expect(invoke.sendExecFinishedEvent).not.toHaveBeenCalled();
+    expect(invoke.sendNodeEvent).not.toHaveBeenCalledWith("exec.finished", expect.anything());
     expectWriteDenied(invoke);
   });
 
@@ -1594,7 +1584,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       approvalSource: "ask-fallback",
     });
 
-    const call = readMacCall(invoke.runViaMacAppExecHost);
+    const call = readMacCall(invoke.requestExecHost);
     expect(call.request?.approvalSource).toBe("ask-fallback");
     expect(call.request?.approvalDecision).toBeNull();
     expect(invoke.runCommand).not.toHaveBeenCalled();
@@ -1726,26 +1716,13 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
             },
           }),
         );
-        const seenArgv: string[][] = [];
         const invoke = await runLocal({
           security: "allowlist",
           ask: "on-miss",
           command,
           cwd: tempDir,
-          isCmdExeInvocation: (argv) => {
-            seenArgv.push([...argv]);
-            const token = argv[0]?.trim();
-            if (!token) {
-              return false;
-            }
-            const base = path.win32.basename(token).toLowerCase();
-            return base === "cmd.exe" || base === "cmd";
-          },
         });
 
-        expect(seenArgv, testCase.name).toEqual([
-          ["cmd.exe", "/d", "/s", "/c", `${scriptPath} --limit 5`],
-        ]);
         expect(invoke.runCommand, testCase.name).not.toHaveBeenCalled();
         expectApprovalRequired(invoke.sendNodeEvent, invoke.sendInvokeResult);
       }
@@ -1791,14 +1768,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         ask: "on-miss",
         preparedPlan: prepared.plan,
         cwd: prepared.plan.cwd ?? tempDir,
-        isCmdExeInvocation: (argv) => {
-          const token = argv[0]?.trim();
-          if (!token) {
-            return false;
-          }
-          const base = path.win32.basename(token).toLowerCase();
-          return base === "cmd.exe" || base === "cmd";
-        },
         commitExecAuthorization: commitAuthorization,
       });
 
@@ -1811,7 +1780,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         }),
       );
       expect(invoke.runCommand).not.toHaveBeenCalled();
-      expect(invoke.sendExecFinishedEvent).not.toHaveBeenCalled();
+      expect(invoke.sendNodeEvent).not.toHaveBeenCalledWith("exec.finished", expect.anything());
       expectWriteDenied(invoke);
     } finally {
       platformSpy.mockRestore();

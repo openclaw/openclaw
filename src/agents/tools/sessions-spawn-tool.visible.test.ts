@@ -111,6 +111,7 @@ describe("sessions_spawn visible work receipts", () => {
         via: "spawn",
         actor: { type: "agent", id: "main" },
         requesterSessionKey: "agent:main:main",
+        requesterSenderIsOwner: false,
         completionOwnerSessionKey: "agent:main:main",
         spawnModelAutoSelection: { model: "mock-provider/primary", hasFallbackOrigin: false },
         inheritedToolPolicy: {

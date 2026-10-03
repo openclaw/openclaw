@@ -2,6 +2,7 @@
 // Sealed CLI composition root for the private macOS app node-host worker.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { disableExitUnsafeCompilers } from "../bootstrap/node-exit-safe-compilers.js";
 import { ensureCliExecutionBootstrap } from "../cli/command-execution-startup.js";
 import { resolveCliStartupPolicy } from "../cli/command-startup-policy.js";
 import { loadCliDotEnv } from "../cli/dotenv.js";
@@ -82,6 +83,7 @@ async function runMacNodeWorkerEntry(argv: string[] = process.argv): Promise<voi
 }
 
 if (isMainModule({ currentFile: fileURLToPath(import.meta.url) })) {
+  disableExitUnsafeCompilers();
   // The worker records its exit request after draining runtime-owned resources.
   // Finalize it here so plugin-owned pipes cannot pin shutdown or startup failure.
   await runCliWithExitFinalization({

@@ -375,52 +375,56 @@ describe("describeImageWithModelCore", () => {
     expect(options.maxTokens).toBe(1024);
   });
 
-  it("derives workspaceDir from agentId for image runtime resolution", async () => {
-    mockImageModel({
-      provider: "google",
-      id: "gemini-2.5-flash",
-      api: "google-generative-ai",
-    });
-    completeMock.mockResolvedValue(
-      imageCompletion("google-generative-ai", "google", "gemini-2.5-flash", "workspace ok"),
-    );
-    const cfg = {
-      agents: {
-        list: [
-          {
-            id: "vision-agent",
-            agentDir: "/tmp/openclaw-agent",
-            workspace: "/tmp/openclaw-workspace",
-          },
-        ],
-      },
-    };
+  it.each([undefined, ""])(
+    "derives workspaceDir from agentId when workspaceDir is %j",
+    async (workspaceDir) => {
+      mockImageModel({
+        provider: "google",
+        id: "gemini-2.5-flash",
+        api: "google-generative-ai",
+      });
+      completeMock.mockResolvedValue(
+        imageCompletion("google-generative-ai", "google", "gemini-2.5-flash", "workspace ok"),
+      );
+      const cfg = {
+        agents: {
+          list: [
+            {
+              id: "vision-agent",
+              agentDir: "/tmp/openclaw-agent",
+              workspace: "/tmp/openclaw-workspace",
+            },
+          ],
+        },
+      };
 
-    await describeImageWithModelCore({
-      ...imageRequestDefaults(),
-      cfg,
-      agentId: "vision-agent",
-      provider: "google",
-      model: "gemini-2.5-flash",
-      buffer: Buffer.alloc(1),
-      prompt: "Describe the image.",
-    });
+      await describeImageWithModelCore({
+        ...imageRequestDefaults(),
+        cfg,
+        agentId: "vision-agent",
+        workspaceDir,
+        provider: "google",
+        model: "gemini-2.5-flash",
+        buffer: Buffer.alloc(1),
+        prompt: "Describe the image.",
+      });
 
-    expect(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceDir: "/tmp/openclaw-workspace",
-        loadRuntimePlugins: true,
-      }),
-      expect.objectContaining({ catalogMode: "static", abortSignal: expect.any(AbortSignal) }),
-    );
-    expect(resolveModelAsyncMock).toHaveBeenCalledWith(
-      "google",
-      "gemini-2.5-flash",
-      "/tmp/openclaw-agent",
-      cfg,
-      expect.objectContaining({ workspaceDir: "/tmp/openclaw-workspace" }),
-    );
-  });
+      expect(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceDir: "/tmp/openclaw-workspace",
+          loadRuntimePlugins: true,
+        }),
+        expect.objectContaining({ catalogMode: "static", abortSignal: expect.any(AbortSignal) }),
+      );
+      expect(resolveModelAsyncMock).toHaveBeenCalledWith(
+        "google",
+        "gemini-2.5-flash",
+        "/tmp/openclaw-agent",
+        cfg,
+        expect.objectContaining({ workspaceDir: "/tmp/openclaw-workspace" }),
+      );
+    },
+  );
 
   it("uses one committed prepared generation for image setup and streaming", async () => {
     const requestedCfg: OpenClawConfig = { logging: { level: "info" } };

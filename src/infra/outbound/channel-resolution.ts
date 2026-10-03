@@ -2,7 +2,7 @@
 // optional bootstrap for deliverable channels that are not loaded yet.
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";

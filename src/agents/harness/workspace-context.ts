@@ -1,6 +1,7 @@
 import path from "node:path";
 import { prepareMemorySystemPromptAddition } from "../../context-engine/delegate.js";
-import { buildBootstrapContextForFiles, resolveBootstrapFilesForRun } from "../bootstrap-files.js";
+import { resolveBootstrapFilesForRun } from "../bootstrap-files.js";
+import { buildBootstrapContextForFiles } from "../embedded-agent-helpers/bootstrap.js";
 import type { EmbeddedContextFile } from "../embedded-agent-helpers/context-file.js";
 import {
   PERSONAL_USER_CONTEXT_INSTRUCTIONS,

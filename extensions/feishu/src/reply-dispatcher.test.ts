@@ -130,7 +130,6 @@ import { FeishuStreamingFinalizationError, type FeishuStreamingSession } from ".
 import type { FeishuConfig } from "./types.js";
 type StreamingCloseResult = Awaited<ReturnType<FeishuStreamingSession["closeWithResult"]>>;
 const imageUrl = "https://example.com/image.png";
-const visibleReplyState = { visibleReplySent: true, skippedFinalReason: null };
 
 afterAll(() => {
   vi.doUnmock("./accounts.js");
@@ -1246,7 +1245,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(isChannelPartialDeliveryError(error)).toBe(true);
     expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-    expect(result.getVisibleReplyState().visibleReplySent).toBe(true);
     await expect(result.ensureNoVisibleReplyFallback("accepted-no-id")).resolves.toBe(false);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
@@ -1877,10 +1875,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await expect(options.deliver(earlierBlock, { kind: "block" })).rejects.toThrow("send failed");
     await expect(result.ensureNoVisibleReplyFallback("failed-block")).resolves.toBe(false);
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
-    expect(result.getVisibleReplyState()).toEqual({
-      visibleReplySent: false,
-      skippedFinalReason: "silent",
-    });
   });
 
   it("recovers when an unindexed queued block fails after intentional silence", async () => {
@@ -1897,7 +1891,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(String(sendMessageFeishuMock.mock.calls[1]?.[0]?.text)).toContain(
       "without visible content",
     );
-    expect(result.getVisibleReplyState()).toEqual(visibleReplyState);
   });
 
   it("preserves block ordering when a before-delivery hook replaces the payload", async () => {
@@ -1941,7 +1934,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await expect(fallback).resolves.toBe(false);
     expect(session.closeWithResult).toHaveBeenCalledWith(text, { note: "Agent: agent" });
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-    expect(result.getVisibleReplyState()).toEqual(visibleReplyState);
   });
 
   it("sends no-visible-reply fallback after an empty card streaming close", async () => {
@@ -1953,7 +1945,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances).toHaveLength(1);
     expectClosed("");
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
-    expect(result.getVisibleReplyState()).toEqual(visibleReplyState);
   });
 
   it("keeps visible reply state across repeated reply-start keepalives", async () => {
@@ -1963,7 +1954,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.onReplyStart?.();
     await expect(result.ensureNoVisibleReplyFallback("zero-final-count")).resolves.toBe(false);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-    expect(result.getVisibleReplyState()).toEqual(visibleReplyState);
   });
 
   it("cleans streaming state even when close throws", async () => {

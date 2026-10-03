@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { TeamReportsConfig } from "./config.js";
 import { DAY_MS, describePeriod } from "./periods.js";
 import { REPORT_RUN_TIMEOUT_MS, type ReportRunRequest } from "./run-worker-contract.js";
@@ -51,12 +51,9 @@ function runPeriods(config: TeamReportsConfig, days: PeriodDescriptor[]): Period
 
 export class TeamReportsScheduler {
   private accepting = false;
-  private closed = false;
   private active?: ActiveRun;
   private stopPromise?: Promise<void>;
   private startPromise?: Promise<void>;
-  private scheduledWork = new Set<Promise<void>>();
-  private timers = new Set<ReturnType<typeof setTimeout>>();
   private due: { closedDay?: number; intraday?: number; catchUp?: number } = {};
   private deferred = new Set<"closed-day" | "intraday">();
   private roster: Person[];
@@ -67,7 +64,7 @@ export class TeamReportsScheduler {
       resolved: ResolvedTeamReportsConfig;
       store: TeamReportsStore;
       llm: SummaryLlm;
-      context: Pick<OpenClawPluginServiceContext, "logger" | "serviceHealth">;
+      context: Pick<OpenClawPluginServiceContextV2, "logger" | "serviceHealth" | "scheduler">;
       runReports: (params: ReportRunRequest) => Promise<Record<string, SourceStatus>>;
       closeRunner: () => Promise<void>;
     },
@@ -76,7 +73,7 @@ export class TeamReportsScheduler {
   }
 
   async start(): Promise<void> {
-    if (this.closed || this.accepting || this.stopPromise) {
+    if (this.accepting || this.stopPromise || this.options.context.scheduler.signal.aborted) {
       throw new Error("Team Reports scheduler cannot be started again");
     }
     this.accepting = true;
@@ -96,7 +93,7 @@ export class TeamReportsScheduler {
     this.armIntraday();
     if (!completed) {
       this.due.catchUp = Date.now() + 60_000;
-      this.schedule(this.due.catchUp, () => {
+      this.schedule("catch-up", this.due.catchUp, () => {
         delete this.due.catchUp;
         return this.tick("closed-day", true);
       });
@@ -166,10 +163,7 @@ export class TeamReportsScheduler {
   private async stopOnce(): Promise<void> {
     this.accepting = false;
     this.due = {};
-    for (const timer of this.timers) {
-      clearTimeout(timer);
-    }
-    this.timers.clear();
+    this.options.context.scheduler.beginClose();
     this.deferred.clear();
     const active = this.active;
     const timeout = active
@@ -180,40 +174,36 @@ export class TeamReportsScheduler {
       : undefined;
     try {
       await this.startPromise?.catch(() => undefined);
-      await Promise.all(this.scheduledWork);
+      await this.options.context.scheduler.stop();
       await active?.done;
     } finally {
       clearTimeout(timeout);
-      this.closed = true;
       await this.options.closeRunner();
       await this.options.store.close();
     }
   }
 
-  private schedule(atMs: number, callback: () => void | Promise<void>): void {
-    const timer = setTimeout(
-      () => {
-        this.timers.delete(timer);
-        if (this.accepting) {
-          const work = Promise.resolve()
-            .then(callback)
-            .catch((error: unknown) => {
-              this.options.context.logger.error(`team-reports: ${this.safeError(error)}`);
-            });
-          this.scheduledWork.add(work);
-          void work.finally(() => this.scheduledWork.delete(work));
+  private schedule(id: string, atMs: number, callback: () => void | Promise<void>): void {
+    if (this.options.context.scheduler.signal.aborted) {
+      return;
+    }
+    this.options.context.scheduler.schedule({
+      id,
+      atMs,
+      run: async () => {
+        try {
+          await callback();
+        } catch (error) {
+          this.options.context.logger.error(`team-reports: ${this.safeError(error)}`);
         }
       },
-      Math.max(0, atMs - Date.now()),
-    );
-    timer.unref?.();
-    this.timers.add(timer);
+    });
   }
 
   private armClosedDay(afterMs = Date.now()): void {
     const due = nextClosedDayDue(afterMs, this.options.config.schedule);
     this.due.closedDay = due;
-    this.schedule(due, async () => {
+    this.schedule("closed-day", due, async () => {
       await this.tick("closed-day");
       if (!this.accepting) {
         return;
@@ -228,7 +218,7 @@ export class TeamReportsScheduler {
       this.options.config.schedule.intradayEveryHours,
     );
     if (this.due.intraday !== undefined) {
-      this.schedule(this.due.intraday, async () => {
+      this.schedule("intraday", this.due.intraday, async () => {
         await this.tick("intraday");
         if (this.accepting) {
           this.armIntraday();
@@ -250,7 +240,7 @@ export class TeamReportsScheduler {
     if (this.active) {
       if (!this.deferred.has(kind)) {
         this.deferred.add(kind);
-        this.schedule(Date.now() + 60_000, () => {
+        this.schedule(`deferred:${kind}`, Date.now() + 60_000, () => {
           this.deferred.delete(kind);
           return this.tick(kind, catchUp);
         });
@@ -280,7 +270,7 @@ export class TeamReportsScheduler {
     days: PeriodDescriptor[],
     reuseCollectedDays = false,
   ): Promise<string> {
-    if (!this.accepting) {
+    if (!this.accepting || this.options.context.scheduler.signal.aborted) {
       throw new Error("Team Reports service is not running");
     }
     if (this.active) {

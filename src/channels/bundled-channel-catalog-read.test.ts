@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../../test/helpers/temp-dir.js";
 import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 import type { PluginChannelCatalogEntry } from "../plugins/channel-catalog-registry.js";
+import { captureEnv } from "../test-utils/env.js";
 
 // src/plugins/bundled-dir.test.ts owns source/dist directory precedence.
 vi.mock("../plugins/bundled-dir.js", () => ({
@@ -46,20 +47,13 @@ import {
 import { listBundledChannelIds } from "./plugins/bundled-ids.js";
 
 const tempDirs: string[] = [];
-const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-const originalTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+const originalEnv = captureEnv([
+  "OPENCLAW_BUNDLED_PLUGINS_DIR",
+  "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR",
+]);
 
 afterEach(() => {
-  if (originalBundledPluginsDir === undefined) {
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-  } else {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
-  }
-  if (originalTrustBundledPluginsDir === undefined) {
-    delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
-  } else {
-    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTrustBundledPluginsDir;
-  }
+  originalEnv.restore();
   cleanupTempDirs(tempDirs);
   bundledOfficialExternalCatalogEntriesMock.length = 0;
   vi.restoreAllMocks();

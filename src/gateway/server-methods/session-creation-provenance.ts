@@ -40,6 +40,7 @@ export function resolveOperatorSessionCreation(
     const {
       requesterProfileId,
       completionOwnerSessionKey,
+      requesterSenderIsOwner,
       inheritedToolPolicy,
       inheritedPermissionMode,
       resolvedModel,
@@ -51,6 +52,7 @@ export function resolveOperatorSessionCreation(
       requesterSessionKey: agentRuntimeIdentity.sessionKey,
       ...(requesterProfileId ? { requesterProfileId } : {}),
       ...(completionOwnerSessionKey ? { completionOwnerSessionKey } : {}),
+      requesterSenderIsOwner,
       inheritedToolPolicy,
       ...(inheritedPermissionMode ? { inheritedPermissionMode } : {}),
       ...(resolvedModel ? { resolvedModel } : {}),

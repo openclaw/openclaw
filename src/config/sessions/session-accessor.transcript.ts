@@ -32,7 +32,6 @@ export {
   inspectTranscriptEventsSync,
   loadLatestAssistantText as readLatestTranscriptAssistantText,
   loadTranscriptEventRowsAfterSeqSync,
-  loadTranscriptEvents,
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,
   readTranscriptExportSnapshotReadOnlySync,
@@ -42,6 +41,7 @@ export {
   readTranscriptEventAtSeqSync,
   readTranscriptIdentityByEventId,
 } from "./session-accessor.sqlite-read.js";
+export { loadTranscriptEvents } from "./session-transcript-events.js";
 export {
   loadTranscriptSuffixEventsBoundedSync,
   readPreviousIndexedTranscriptEventSync,

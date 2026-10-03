@@ -3,7 +3,7 @@ import { listChatChannels } from "../../channels/chat-meta.js";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import { isChannelVisibleInSetup } from "../../channels/plugins/exposure.js";
 import { normalizeChannelMeta } from "../../channels/plugins/meta-normalization.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelMeta } from "../../channels/plugins/types.public.js";
 import { isStaticallyChannelConfigured } from "../../config/channel-configured-shared.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";

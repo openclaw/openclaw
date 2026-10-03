@@ -603,7 +603,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/memory-host-core` | Deprecated compatibility facade for vendor-neutral memory host helpers. New memory plugins use injected memory capabilities and host-prepared prompts; companion plugins still use the retained facade for public-artifact discovery until a focused read seam exists. |
     | `plugin-sdk/memory-host-events` | Private-local after July 2026; Vendor-neutral alias for memory host event journal helpers |
     | `plugin-sdk/memory-host-markdown` | Private-local after July 2026; Shared managed-markdown helpers for memory-adjacent plugins |
-    | `plugin-sdk/memory-host-search` | Private-local after July 2026; Active memory runtime facade for search-manager access |
+    | `plugin-sdk/memory-host-search` | Private-local after July 2026; Bundled active-memory facade for search managers, provider-neutral leases, and their local types |
   </Accordion>
 
   <Accordion title="Reserved bundled-helper subpaths">

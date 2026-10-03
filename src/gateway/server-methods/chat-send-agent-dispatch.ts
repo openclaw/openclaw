@@ -122,14 +122,16 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
   let { messageInjectionAttempt } = injection;
   const { chatSendAckedAtMs, chatSendTiming } = timing;
 
-  const titleReady = createDeferredCore();
+  // The first release wins: true when reply progress frees naming while the turn still runs.
+  const titleReady = createDeferredCore<boolean>();
+  const turnSettled = createDeferredCore();
   let titleWaiting = true;
   let stopTitleWait: (() => void) | undefined;
-  const releaseTitle = () => {
+  const releaseTitle = (duringTurn: boolean) => {
     stopTitleWait?.();
     stopTitleWait = undefined;
     titleWaiting = false;
-    titleReady.resolve();
+    titleReady.resolve(duringTurn);
   };
 
   const jobSessionBinding = admission.sessionBinding;
@@ -401,7 +403,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                         event.stream === "thinking" ||
                         event.stream === "approval"
                       ) {
-                        releaseTitle();
+                        releaseTitle(true);
                       }
                     });
                   }
@@ -693,7 +695,8 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       await dispatch;
     } finally {
       // Empty, rejected, and interrupted turns still receive an independent title.
-      releaseTitle();
+      releaseTitle(false);
+      turnSettled.resolve();
       await dispatchErrorLifecycle.finalize();
       // Terminal lifecycle can precede owner release; publish exact liveness after cleanup.
       emitSessionsChanged(
@@ -712,6 +715,6 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
   })();
   scheduleChatDashboardSessionTitle(
     { admittedSessionId, agentId, cfg, context, request, sessionKey, storePath },
-    titleReady.promise,
+    { released: titleReady.promise, settled: turnSettled.promise },
   );
 }

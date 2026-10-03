@@ -6,7 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { readConfigFileSnapshot } from "../config/config.js";
+import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
@@ -667,6 +667,7 @@ describe("gateway node command allowlist", () => {
   });
 
   test("exposes and invokes live commands only after pending node pairing is approved", async () => {
+    await writeConfigFile({ gateway: { nodes: { pairing: { autoApproveLocal: false } } } });
     const invokeCapture = createInvokeCapture();
     const fixture = nodeFixture("node-approve-live-commands", {
       commands: ["canvas.snapshot", "system.run"],
@@ -691,6 +692,7 @@ describe("gateway node command allowlist", () => {
   });
 
   test("rechecks current allowlist before exposing approved live commands", async () => {
+    await writeConfigFile({ gateway: { nodes: { pairing: { autoApproveLocal: false } } } });
     let originalConfig: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;
     const reconcileRuntimePolicy = reloadFixture.reconcileRuntimePolicy;
     if (!reconcileRuntimePolicy) {
@@ -721,6 +723,7 @@ describe("gateway node command allowlist", () => {
   });
 
   test("records only allowlisted commands in pending node pairing requests", async () => {
+    await writeConfigFile({ gateway: { nodes: { pairing: { autoApproveLocal: false } } } });
     const fixture = nodeFixture("node-pending-allowlisted-only", {
       commands: ["system.run", "canvas.snapshot"],
       platform: "İOS",

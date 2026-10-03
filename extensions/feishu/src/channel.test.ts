@@ -81,6 +81,7 @@ const cfg = {
 const actionContext = { cfg, accountId: undefined };
 type Action = ChannelMessageActionContext["action"];
 type Context = Partial<Omit<ChannelMessageActionContext, "action" | "params">>;
+const directOperatorContext: Context = { conversationReadOrigin: "direct-operator" };
 type FeishuConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["feishu"]>;
 const config = (feishu: Partial<FeishuConfig>): OpenClawConfig => ({
   channels: { feishu: { appId: "cli_main", appSecret: "secret_main", ...feishu } },
@@ -967,13 +968,7 @@ describe("Feishu conversation reads and mutations", () => {
     getMessageFeishuMock.mockResolvedValueOnce(fetched());
     editMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_1", contentType: "post" });
     expect(
-      details(
-        await run(
-          "edit",
-          { messageId: "om_1", text: "updated" },
-          { conversationReadOrigin: "direct-operator" },
-        ),
-      ),
+      details(await run("edit", { messageId: "om_1", text: "updated" }, directOperatorContext)),
     ).toMatchObject({ ok: true, messageId: "om_1", contentType: "post" });
     expect(editMessageFeishuMock).toHaveBeenCalledExactlyOnceWith({
       ...actionContext,
@@ -985,11 +980,7 @@ describe("Feishu conversation reads and mutations", () => {
   it.each(["pin", "unpin"] as const)("authorizes %s mutations", async (action) => {
     getMessageFeishuMock.mockResolvedValueOnce(fetched());
     createPinFeishuMock.mockResolvedValueOnce({ messageId: "om_1", chatId: "oc_group_1" });
-    const result = await run(
-      action,
-      { messageId: "om_1" },
-      { conversationReadOrigin: "direct-operator" },
-    );
+    const result = await run(action, { messageId: "om_1" }, directOperatorContext);
     expect(
       action === "pin" ? createPinFeishuMock : removePinFeishuMock,
     ).toHaveBeenCalledExactlyOnceWith({ ...actionContext, messageId: "om_1" });
@@ -1025,23 +1016,34 @@ describe("Feishu conversation reads and mutations", () => {
     });
     expect(getChatInfoMock).toHaveBeenCalledWith({ tag: "client" }, "oc_group_1");
   });
-  it("lists group members without accepting non-decimal page sizes", async () => {
-    getChatMembersMock.mockResolvedValueOnce({
-      chat_id: "oc_group_1",
-      members: [{ member_id: "ou_1", name: "Alice" }],
-      has_more: false,
-    });
-    expect(
-      details(await run("member-info", { chatId: "oc_group_1", pageSize: "0x10" })),
-    ).toMatchObject({ ok: true, members: [{ member_id: "ou_1", name: "Alice" }] });
-    expect(getChatMembersMock).toHaveBeenCalledExactlyOnceWith(
-      { tag: "client" },
-      "oc_group_1",
-      undefined,
-      undefined,
-      "open_id",
-    );
-  });
+  it.each([
+    ["member-info", {}],
+    ["channel-info", { includeMembers: true }],
+    ["channel-info", { members: true }],
+  ] as const)(
+    "lists group members via %s %j without accepting non-decimal page sizes",
+    async (action, params) => {
+      const members = [{ member_id: "ou_1", name: "Alice" }];
+      const page = { chat_id: "oc_group_1", members, has_more: false };
+      getChatMembersMock.mockResolvedValueOnce(page);
+      const result = details(
+        await run(action, { chatId: "oc_group_1", pageSize: "0x10", ...params }),
+      );
+      expect(result).toMatchObject(
+        action === "channel-info"
+          ? { ok: true, provider: "feishu", action, members: page }
+          : { ok: true, channel: "feishu", action, ...page },
+      );
+      expect(getChatMembersMock).toHaveBeenCalledExactlyOnceWith(
+        { tag: "client" },
+        "oc_group_1",
+        undefined,
+        undefined,
+        "open_id",
+      );
+    },
+  );
+
   it.each([
     [{ memberId: "ou_1" }, "ou_1", "open_id"],
     [{ userId: "u_1" }, "u_1", "user_id"],
@@ -1193,13 +1195,7 @@ describe("Feishu reactions", () => {
   it("adds a reaction to an authorized direct-operator target", async () => {
     getMessageFeishuMock.mockResolvedValueOnce(fetched());
     expect(
-      details(
-        await run(
-          "react",
-          { messageId: "om_1", emoji: "THUMBSUP" },
-          { conversationReadOrigin: "direct-operator" },
-        ),
-      ),
+      details(await run("react", { messageId: "om_1", emoji: "THUMBSUP" }, directOperatorContext)),
     ).toMatchObject({ ok: true, added: "THUMBSUP" });
     expect(addReactionFeishuMock).toHaveBeenCalledExactlyOnceWith({
       ...actionContext,

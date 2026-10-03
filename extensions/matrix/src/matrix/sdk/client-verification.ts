@@ -16,6 +16,7 @@ import {
 import { LogService } from "./logger.js";
 import { isRepairableSecretStorageAccessError } from "./recovery-key-store.js";
 import type { MatrixCryptoBootstrapApi, MatrixDeviceVerificationStatusLike } from "./types.js";
+import { trustMatrixOwnIdentity } from "./verification-status.js";
 
 export abstract class MatrixClientVerification extends MatrixClientCore {
   async refreshOwnDeviceKeys(): Promise<void> {
@@ -159,16 +160,6 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
     };
   }
 
-  async getOwnDeviceIdentityVerificationStatus(): Promise<MatrixDeviceVerificationStatus> {
-    const userId = this.client.getUserId() ?? this.selfUserId ?? null;
-    const deviceId = this.client.getDeviceId()?.trim() || null;
-    const deviceVerification = await this.getDeviceVerificationStatus(userId, deviceId);
-    return {
-      ...deviceVerification,
-      verified: deviceVerification.crossSigningVerified,
-    };
-  }
-
   async trustOwnIdentityAfterSelfVerification(): Promise<void> {
     if (!this.encryptionEnabled) {
       return;
@@ -177,24 +168,8 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
     await this.ensureStartedForCryptoControlPlane();
     await this.ensureCryptoSupportInitialized();
     const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
-    const ownIdentity =
-      crypto && typeof crypto.getOwnIdentity === "function"
-        ? await crypto.getOwnIdentity().catch(() => undefined)
-        : undefined;
-    if (!ownIdentity) {
-      return;
-    }
-
-    try {
-      if (typeof ownIdentity.isVerified === "function" && ownIdentity.isVerified()) {
-        return;
-      }
-      if (typeof ownIdentity.verify !== "function") {
-        return;
-      }
-      await ownIdentity.verify();
-    } finally {
-      ownIdentity.free?.();
+    if (crypto) {
+      await trustMatrixOwnIdentity(crypto);
     }
   }
 

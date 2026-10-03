@@ -3,6 +3,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createPluginRecord,
   createPluginRegistry,
@@ -110,6 +111,7 @@ async function createRegisteredResume() {
     ok: true,
     payloadJSON: await command.handle(JSON.stringify(request.params)),
   }));
+  const scheduler = createTestPluginServiceScheduler();
   return {
     alphaHome: await fs.realpath(alphaHome),
     betaHome: await fs.realpath(betaHome),
@@ -131,10 +133,16 @@ async function createRegisteredResume() {
     },
     request: (agentId?: string) =>
       JSON.stringify({ sessionId, prompt: "continue", cwd: stateDir, agentId }),
-    stop: () =>
-      registry.registry.services
-        .find((entry) => entry.service.id === "codex-session-catalog")
-        ?.service.stop?.({ config, stateDir, logger }),
+    stop: async () => {
+      scheduler.beginClose();
+      try {
+        await registry.registry.services
+          .find((entry) => entry.service.id === "codex-session-catalog")
+          ?.service.stop?.({ config, stateDir, logger, scheduler });
+      } finally {
+        await scheduler.stop();
+      }
+    },
   };
 }
 

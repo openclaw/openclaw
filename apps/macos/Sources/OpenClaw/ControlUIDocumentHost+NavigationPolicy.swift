@@ -32,7 +32,7 @@ extension ControlUIDocumentHost {
         isMainFrame && self.isTrustedLinkSource(sourceURL, dashboardURL: dashboardURL)
     }
 
-    static func isHTTPURL(_ url: URL) -> Bool {
+    nonisolated static func isHTTPURL(_ url: URL) -> Bool {
         guard let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https",
               url.host?.isEmpty == false
@@ -266,7 +266,7 @@ extension ControlUIDocumentHost {
             navigationType: navigationAction.navigationType,
             buttonNumber: navigationAction.buttonNumber)
         {
-            self.openExternal(url)
+            Self.openExternal(url)
         }
         decisionHandler(.cancel)
     }
@@ -345,15 +345,15 @@ extension ControlUIDocumentHost {
         case .allow:
             decisionHandler(.allow)
         case .openExternal:
-            self.openExternal(url)
+            Self.openExternal(url)
             decisionHandler(.cancel)
         case .cancel:
             decisionHandler(.cancel)
         }
     }
 
-    private func openExternal(_ url: URL) {
-        guard Self.isExternalURL(url) || Self.isEditorURL(url) else { return }
-        NSWorkspace.shared.open(url)
+    static func openExternal(_ url: URL) {
+        guard self.isExternalURL(url) || self.isEditorURL(url) else { return }
+        AppActivation.shared.open(url)
     }
 }

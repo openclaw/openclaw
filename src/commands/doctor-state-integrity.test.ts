@@ -13,10 +13,9 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { readDeferredPluginSessionImport } from "../infra/deferred-plugin-session-sources.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
@@ -87,10 +86,9 @@ describe("doctor state integrity", () => {
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     noteMock.mockClear();
   });
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    await cleanupSessionStateForTest({ stateDir, rootPath: tempHome });
     envSnapshot.restore();
     fs.rmSync(tempHome, { recursive: true, force: true });
   });

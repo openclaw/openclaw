@@ -11,7 +11,7 @@ import {
   resolveChannelAccountConfigured,
   resolveChannelAccountEnabled,
 } from "./account-summary.js";
-import type { ChannelPlugin } from "./plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "./plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "./plugins/types.public.js";
 import { inspectReadOnlyChannelAccount } from "./read-only-account-inspect.js";
 import { resolveUnavailableChannelAccountSnapshot } from "./status/account-state.js";

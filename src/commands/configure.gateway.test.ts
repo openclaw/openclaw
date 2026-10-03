@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => ({
   resolveGatewayPort: vi.fn(),
   note: vi.fn(),
   randomToken: vi.fn(),
-  getTailnetHostname: vi.fn(),
+  getTailnetHostname: vi.fn(async (): Promise<string | null> => null),
 }));
 
 const chatChannels = vi.hoisted(() =>
@@ -92,13 +92,14 @@ async function runGatewayPrompt(params: {
 
 async function runTrustedProxyPrompt(params: {
   textQueue: Array<string | undefined>;
-  tailscaleMode?: "off" | "serve";
+  bind?: "loopback" | "lan";
+  tailscaleMode?: "off" | "serve" | "funnel";
   baseConfig?: OpenClawConfig;
   confirmResult?: boolean;
 }) {
   return runGatewayPrompt({
     ...params,
-    selectQueue: ["loopback", "trusted-proxy", params.tailscaleMode ?? "off"],
+    selectQueue: [params.bind ?? "loopback", "trusted-proxy", params.tailscaleMode ?? "off"],
   });
 }
 
@@ -185,30 +186,34 @@ describe("promptGatewayConfig", () => {
     expect(mocks.password).toHaveBeenCalledOnce();
   });
 
-  it("configures proxy headers and disables incompatible Tailscale exposure", async () => {
-    const result = await runTrustedProxyPrompt({
-      tailscaleMode: "serve",
-      textQueue: [
-        "18789",
-        "x-forwarded-user",
-        "x-forwarded-proto,x-forwarded-host",
-        "nick@example.com",
-        "10.0.1.10,192.168.1.5",
-      ],
-    });
+  it.each(["serve", "funnel"] as const)(
+    "configures proxy headers and disables incompatible Tailscale %s",
+    async (tailscaleMode) => {
+      const result = await runTrustedProxyPrompt({
+        bind: "lan",
+        tailscaleMode,
+        textQueue: [
+          "18789",
+          "x-forwarded-user",
+          "x-forwarded-proto,x-forwarded-host",
+          "nick@example.com",
+          "10.0.1.10,192.168.1.5",
+        ],
+      });
 
-    expect(result.config.gateway?.auth).toEqual({
-      mode: "trusted-proxy",
-      trustedProxy: {
-        userHeader: "x-forwarded-user",
-        requiredHeaders: ["x-forwarded-proto", "x-forwarded-host"],
-        allowUsers: ["nick@example.com"],
-      },
-    });
-    expect(result.config.gateway?.bind).toBe("loopback");
-    expect(result.config.gateway?.trustedProxies).toEqual(["10.0.1.10", "192.168.1.5"]);
-    expect(result.config.gateway?.tailscale).toEqual({ mode: "off" });
-  });
+      expect(result.config.gateway?.auth).toEqual({
+        mode: "trusted-proxy",
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          requiredHeaders: ["x-forwarded-proto", "x-forwarded-host"],
+          allowUsers: ["nick@example.com"],
+        },
+      });
+      expect(result.config.gateway?.bind).toBe("lan");
+      expect(result.config.gateway?.trustedProxies).toEqual(["10.0.1.10", "192.168.1.5"]);
+      expect(result.config.gateway?.tailscale).toEqual({ mode: "off" });
+    },
+  );
 
   it.each([
     [" 10.42.0.1 , \t2001:db8::/32 ", true],

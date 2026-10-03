@@ -8,7 +8,7 @@ import {
   disposePluginRegistryInstances,
   setActivePluginRegistry,
 } from "./runtime.js";
-import { startPluginServices } from "./services.js";
+import { startPluginServices } from "./services.test-support.js";
 
 const registries: ReturnType<typeof createTestPluginRegistry>["registry"][] = [];
 

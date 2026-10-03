@@ -2,6 +2,7 @@ import path from "node:path";
 import { vi } from "vitest";
 import { resolveAgentEntry } from "../agents/agent-scope-config.js";
 import * as configModule from "../config/config.js";
+import type { GatewayAuthMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -306,7 +307,7 @@ export function resetSetupApplyMocks(): void {
     }: {
       nextConfig: OpenClawConfig;
       quickstartGateway: {
-        authMode: "token" | "password";
+        authMode: GatewayAuthMode;
         bind: "loopback" | "lan";
         customBindHost?: string;
         port: number;

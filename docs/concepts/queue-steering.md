@@ -16,16 +16,16 @@ An older followup does not disable steering for later input. OpenClaw tries each
 
 ## Runtime boundary
 
-Steering does not interrupt a tool call that is already running. The OpenClaw runtime checks at tool-launch boundaries as well as model boundaries:
+Steering does not interrupt a tool call that is already running. An assistant message's tool calls are a committed plan until one of them starts executing:
 
 1. The assistant asks for tool calls.
-2. In sequential mode, OpenClaw checks immediately before each call starts, including after asynchronous resolution, validation, and pre-execution hooks.
+2. In sequential mode, OpenClaw launches the first executable call without checking steering. After a call from that assistant message has started, OpenClaw checks before each later call, including after asynchronous resolution, validation, and pre-execution hooks.
 3. A running call finishes. If a steer is waiting afterward, the unstarted sequential tail is skipped.
-4. In parallel mode, OpenClaw prepares calls first, then checks once immediately before launching the prepared calls. Calls that have crossed that checkpoint continue together.
+4. In parallel mode, OpenClaw prepares and launches calls together without a steering checkpoint. Waiting steering never skips a parallel batch.
 5. Every skipped call receives paired tool start/end events and a synthetic result (`Skipped to process an incoming message.`), in assistant source order. The result tells the model that the tool did not run, and the Control UI labels it **Skipped**.
-6. OpenClaw appends the exact drained steering message before the next LLM call.
+6. After either kind of batch settles, OpenClaw checks steering before stop hooks or the next model call. It appends the exact drained steering messages after the tool results, before the next LLM call.
 
-This keeps every requested tool call paired with a result while ensuring accepted steering is model-visible before any later tool can start.
+This keeps every requested tool call paired with a result without discarding a freshly requested plan before any tool executes.
 
 Internal updates, including subagent completion reports, also use this steering boundary. These updates can be hidden from the chat transcript and do not appear in the user message queue. A skipped tool therefore does not necessarily mean a user message is waiting; the agent processes the incoming update before deciding which tools to call next.
 
@@ -46,11 +46,12 @@ Once an OpenClaw turn has finished or handed off, new prompts wait for the next 
 
 ## Tool launch boundaries
 
-OpenClaw distinguishes started work from requested work:
+OpenClaw tracks whether a tool has actually started across the whole assistant message:
 
-- A sequential call that is already running completes. Later calls have not started, so OpenClaw returns synthetic skipped results for them and lets the model reconsider with the steer visible.
-- A parallel batch has one atomic launch checkpoint. A steer present before it suppresses all prepared calls; a steer arriving after it does not recall any of them.
-- Validation or policy outcomes finalized before the parallel checkpoint remain truthful. Only executable calls that did not start receive the steering skip result.
+- Before any tool in the assistant message has started, steering cannot skip a sequential call. Validation or policy rejection alone does not count as execution starting.
+- A sequential call that is already running completes. Waiting steering can skip the unstarted sequential tail and let the model reconsider with the steer visible.
+- Parallel batches never skip calls for steering. Prepared calls launch together, and steering is checked after the batch settles.
+- Streamed tool batches and any remaining calls at the end of the same assistant message share this started state. A later sequential batch can be skipped after an earlier call started; a later parallel batch still runs.
 - The transcript stays append-only and structurally paired: assistant tool calls, real or synthetic tool results, then the steering user message.
 
 A tool skipped for steering does not trigger a failure warning. A genuine tool

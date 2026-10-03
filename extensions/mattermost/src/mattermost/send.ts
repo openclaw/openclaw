@@ -16,7 +16,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { convertMarkdownTables, FormatCapabilityProfile } from "openclaw/plugin-sdk/text-chunking";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { getMattermostRuntime, getOptionalMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
@@ -79,21 +79,6 @@ export type MattermostSendResult = {
 
 const MATTERMOST_BOT_USER_CACHE_MAX_ENTRIES = 64;
 const MATTERMOST_TARGET_CACHE_MAX_ENTRIES = 1024;
-const MATTERMOST_FORMAT_PROFILE = FormatCapabilityProfile.define({
-  mechanism: "markdown",
-  chunk: { limit: 16_383, unit: "chars" },
-});
-
-function renderMattermostMarkdown(
-  markdown: string,
-  tableMode: Parameters<typeof convertMarkdownTables>[1],
-): string {
-  // Native tables stay byte-identical; only an explicit operator fallback uses conversion.
-  return tableMode === "off" && MATTERMOST_FORMAT_PROFILE.constructs.table === "native"
-    ? markdown
-    : convertMarkdownTables(markdown, tableMode);
-}
-
 const botUserCache = new Map<string, MattermostUser>();
 const userByNameCache = new Map<string, MattermostUser>();
 const channelByNameCache = new Map<string, string>();
@@ -400,7 +385,7 @@ export async function sendMessageMattermost(
       channel: "mattermost",
       accountId,
     });
-    message = renderMattermostMarkdown(message, tableMode);
+    message = convertMarkdownTables(message, tableMode);
   }
 
   if (!message && (!fileIds || fileIds.length === 0)) {

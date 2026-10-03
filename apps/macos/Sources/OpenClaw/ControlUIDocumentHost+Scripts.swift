@@ -37,16 +37,13 @@ extension ControlUIDocumentHost {
                 payload["token"] = NSNull()
                 payload["password"] = NSNull()
             }
+            // Released UI consumes shared fields; current UI uses the native signer.
+            payload["nativeConnectAuth"] = true
         }
         if auth.usesBrowserIdentity {
             // Explicit absence retires an earlier shared login at this browser origin.
             payload["token"] = NSNull()
             payload["password"] = NSNull()
-        }
-        if auth.usesNativeDevice {
-            // v2026.9.6 consumes the accepted shared fields above. Current UI
-            // discards them and uses the native signer, including on failure.
-            payload["nativeConnectAuth"] = true
         }
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let json = String(data: data, encoding: .utf8)

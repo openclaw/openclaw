@@ -1,6 +1,6 @@
 import type { WorkerToolSurface } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { createCoreCodingTools } from "../agents/core-coding-tools.js";
-import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identity.js";
+import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identity.types.js";
 import { projectEffectiveExecPolicy } from "../agents/session-permission-exec-mode.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SkillSnapshot } from "../skills/types.js";

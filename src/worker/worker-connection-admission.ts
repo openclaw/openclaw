@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { Value } from "typebox/value";
 import type { RawData } from "ws";
 import { GatewayWebSocketTlsPinError } from "../../packages/gateway-client/src/websocket-transport.js";
 import { WebSocket } from "../../packages/gateway-client/src/websocket.js";
+import { lazyCompile } from "../../packages/gateway-protocol/src/protocol-validator.js";
 import {
   WorkerAdmissionResponseFrameSchema,
   type WorkerConnectParams,
@@ -25,6 +25,9 @@ import {
   WorkerConnectionEndpointError,
 } from "./worker-connection-endpoint.js";
 import { closeInvalidWorkerFrame } from "./worker-connection-frames.js";
+
+const validateAdmissionResponse = lazyCompile(WorkerAdmissionResponseFrameSchema);
+const validateCloseReason = lazyCompile(WorkerProtocolCloseReasonSchema);
 
 const RETRYABLE_CLOSE_REASONS = new Set<WorkerProtocolCloseReason>([
   "gateway-shutdown",
@@ -54,7 +57,7 @@ function parseFrame(data: RawData): { ok: true; frame: unknown } | { ok: false }
 
 function parseCloseReason(data: Buffer): WorkerProtocolCloseReason | undefined {
   const reason = rawDataToString(data);
-  return Value.Check(WorkerProtocolCloseReasonSchema, reason) ? reason : undefined;
+  return validateCloseReason(reason) ? reason : undefined;
 }
 
 function matchesAdmission(connectParams: WorkerConnectParams, hello: WorkerHelloOk): boolean {
@@ -153,14 +156,6 @@ export function connectWorkerConnectionAttempt(
             new WorkerConnectionInterruptedError(`admission send failed: ${error.message}`),
           );
           socket.terminate();
-          return;
-        }
-        if (isActive() && admission === "pending") {
-          try {
-            connectionOptions.onAdmissionRequestSent?.();
-          } catch {
-            // Optional preparation observers do not control admission or retry policy.
-          }
         }
       });
     });
@@ -176,7 +171,7 @@ export function connectWorkerConnectionAttempt(
       }
       const frame = parsed.frame;
       if (admission === "pending") {
-        if (!Value.Check(WorkerAdmissionResponseFrameSchema, frame) || frame.id !== admissionId) {
+        if (!validateAdmissionResponse(frame) || frame.id !== admissionId) {
           closeInvalidWorkerFrame(socket);
           rejectAttempt(new WorkerAdmissionError("invalid-handshake", false));
           return;

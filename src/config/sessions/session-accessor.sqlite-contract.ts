@@ -1,5 +1,5 @@
 import type { SqliteWalHealth } from "../../infra/sqlite-wal-checkpoint.js";
-import type { SessionEntrySummary } from "./session-accessor.types.js";
+import type { SessionEntrySummary, TranscriptEvent } from "./session-accessor.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 export type {
   DeletedAgentSessionEntryPurgeParams,
@@ -26,6 +26,21 @@ export type SessionTranscriptContextVersion = {
   generation: string | null;
   rawSeq: number | null;
   updatedAt: number | null;
+};
+
+export type SessionTranscriptBoundedActiveContext = {
+  activeLeafEntryId: string | null;
+  version: SessionTranscriptContextVersion;
+  opaqueParents: Map<string, string | null>;
+  parents: Map<string, string | null>;
+  firstKeptRanges: Map<string, { startIndex: number; endIndex: number }>;
+  persistedSuffixStartSeq: number;
+  boundaryCount: number;
+  events: TranscriptEvent[];
+  serializedBytes: number;
+  totalEvents: number;
+  transcriptMutationAt: number | null;
+  truncated: boolean;
 };
 
 export type CanonicalSessionValidationResult = {

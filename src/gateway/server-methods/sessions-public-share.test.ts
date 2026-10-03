@@ -16,6 +16,7 @@ import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redact
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
 import * as sharingLifecycle from "../../sessions/session-lifecycle-admission.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -27,9 +28,10 @@ import { sessionSharingHandlers } from "./sessions-sharing.js";
 import { identifiedClient, sessionSharingTestContext } from "./sessions-sharing.test-support.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   resetSecretRedactionRegistryForTest();
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
 });
 
@@ -216,6 +218,7 @@ describe("world-readable session publication management", () => {
     async (method) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         await createSession();
+        await closeOpenClawAgentDatabasesAsync();
         const database = openOpenClawAgentDatabase(scope);
         const changeOwner = () => {
           // Foreign commits change fresh reader snapshots without publishing resident facts.
@@ -268,6 +271,7 @@ describe("world-readable session publication management", () => {
   it("sets visibility from the fresh row when the resident value would be a no-op", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await createSession();
+      await closeOpenClawAgentDatabasesAsync();
       const database = openOpenClawAgentDatabase(scope);
       const run = sharingLifecycle.runExclusiveSessionLifecycleMutation;
       vi.spyOn(sharingLifecycle, "runExclusiveSessionLifecycleMutation").mockImplementationOnce(

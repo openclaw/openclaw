@@ -74,6 +74,7 @@ const bunConfig = "test/vitest/vitest.unit-fast.config.ts";
 const unitConfig = "test/vitest/vitest.unit.config.ts";
 const unitSrcConfig = "test/vitest/vitest.unit-src.config.ts";
 const libraryTarget = "src/library.test.ts";
+const workerClosingWindowTarget = "src/worker/worker-connection-closing-window.test.ts";
 const bunTarget = nativeQualificationFixtures.first;
 const vitestBunTarget = "src/agents/sandbox/docker.execDockerRaw.enoent.test.ts";
 const nativeBunTarget = nativeQualificationFixtures.second;
@@ -86,6 +87,7 @@ const transcriptLifecycleTarget =
 const gatewayCoreConfig = "test/vitest/vitest.gateway-core.config.ts";
 const gatewayClientConfig = "test/vitest/vitest.gateway-client.config.ts";
 const gatewayClientTarget = "src/gateway/talk/handlers/client-native-control.test.ts";
+const gatewayWorkspaceHashTarget = "src/gateway/worker-environments/workspace-hash-memo.test.ts";
 const memoryConfig = "test/vitest/vitest.extension-memory.config.ts";
 const memoryTarget = "extensions/memory-lancedb/config.test.ts";
 const memoryIncludes = ["extensions/memory-lancedb", "extensions/memory-wiki"];
@@ -461,21 +463,46 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     "preserves Gateway config coverage and execution budgets under %s",
     async (policy) => {
       const configs = [gatewayCoreConfig, gatewayClientConfig];
-      const expected =
-        policy === "node"
-          ? [{ runtime: "node", configs, prefix: "" }]
-          : [
-              {
-                runtime: "node",
-                configs: policy === "dual" ? configs : [gatewayCoreConfig],
-                prefix: policy === "dual" ? "" : "node-subset:",
-              },
-              { runtime: "bun", configs: [gatewayClientConfig], prefix: "bun:" },
-            ];
       for (const includePatterns of [
         undefined,
         ["src/gateway/auth.test.ts", gatewayClientTarget],
+        [gatewayClientTarget],
+        [gatewayWorkspaceHashTarget],
+        [gatewayWorkspaceHashTarget, gatewayClientTarget],
+        [gatewayWorkspaceHashTarget, "src/gateway/auth.test.ts", gatewayClientTarget],
       ]) {
+        const qualifiedCore =
+          includePatterns?.length === 1 && includePatterns[0] === gatewayWorkspaceHashTarget;
+        const selectedCore =
+          !includePatterns || includePatterns.includes(gatewayWorkspaceHashTarget);
+        const expected =
+          policy === "node"
+            ? [{ runtime: "node", configs, prefix: "", includePatterns }]
+            : [
+                ...(policy === "dual"
+                  ? [{ runtime: "node", configs, prefix: "", includePatterns }]
+                  : qualifiedCore
+                    ? []
+                    : [
+                        {
+                          runtime: "node",
+                          configs: [gatewayCoreConfig],
+                          prefix: "node-subset:",
+                          includePatterns,
+                        },
+                      ]),
+                ...(qualifiedCore || (policy === "dual" && selectedCore)
+                  ? [
+                      {
+                        runtime: "bun",
+                        configs: [gatewayCoreConfig],
+                        prefix: "bun:",
+                        includePatterns: [gatewayWorkspaceHashTarget],
+                      },
+                    ]
+                  : []),
+                { runtime: "bun", configs: [gatewayClientConfig], prefix: "bun:", includePatterns },
+              ];
         const group = {
           configs,
           includePatterns,
@@ -528,7 +555,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
                   env.OPENCLAW_VITEST_INCLUDE_FILE
                     ? JSON.parse(readFileSync(env.OPENCLAW_VITEST_INCLUDE_FILE, "utf8"))
                     : undefined,
-                ).toEqual(includePatterns);
+                ).toEqual(expected[seen.length - 1]?.includePatterns);
                 await Promise.resolve();
                 active -= 1;
                 return 0;
@@ -553,6 +580,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     const configs = [gatewayCoreConfig, gatewayClientConfig];
     const group = {
       configs,
+      includePatterns: [gatewayWorkspaceHashTarget],
       shard_name: "gateway",
       env: { OPENCLAW_TEST_PROJECTS_PARALLEL: "2" },
     };
@@ -947,9 +975,10 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     { policy: "bun-compatible", config: unitSrcConfig, nodeFile: "src/audit/audit-config.test.ts" },
     { policy: "dual", config: unitSrcConfig, nodeFile: "src/audit/audit-config.test.ts" },
   ] as const)(
-    "admits library coverage while preserving $config siblings under $policy",
+    "admits qualified unit coverage while preserving $config siblings under $policy",
     async ({ policy, config, nodeFile }) => {
-      const includePatterns = [libraryTarget, nodeFile];
+      const bunFiles = [libraryTarget, workerClosingWindowTarget];
+      const includePatterns = [...bunFiles, nodeFile];
       const seen: Array<{ runtime: string | undefined; includes: string[] }> = [];
       await expect(
         runShardPlans(
@@ -969,12 +998,14 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       ).resolves.toBe(0);
       expect(seen).toEqual([
         { runtime: "node", includes: policy === "dual" ? includePatterns : [nodeFile] },
-        { runtime: "bun", includes: [libraryTarget] },
+        { runtime: "bun", includes: bunFiles },
       ]);
       expect(new Set(seen.flatMap(({ includes }) => includes))).toEqual(new Set(includePatterns));
-      expect(resolveCiTestRuntimeSelections({ targets: [libraryTarget] }, policy)).toEqual(
-        policy === "dual" ? [{ runtime: "node" }, { runtime: "bun" }] : [{ runtime: "bun" }],
-      );
+      for (const targets of [bunFiles, ...bunFiles.map((file) => [file])]) {
+        expect(resolveCiTestRuntimeSelections({ targets }, policy)).toEqual(
+          policy === "dual" ? [{ runtime: "node" }, { runtime: "bun" }] : [{ runtime: "bun" }],
+        );
+      }
       expect(resolveCiTestRuntimeSelections({ targets: [nodeFile] }, policy)).toEqual([
         { runtime: "node" },
       ]);
@@ -983,10 +1014,12 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         policy === "dual"
           ? { runtime: "node" }
           : { runtime: "node", includePatterns: expect.arrayContaining([nodeFile]) },
-        { runtime: "bun", includePatterns: [libraryTarget] },
+        { runtime: "bun", includePatterns: bunFiles },
       ]);
       if (policy === "bun-compatible") {
-        expect(full[0]?.includePatterns).not.toContain(libraryTarget);
+        for (const file of bunFiles) {
+          expect(full[0]?.includePatterns).not.toContain(file);
+        }
         expect(full[0]?.includePatterns).not.toContain(bunTarget);
         if (config === unitSrcConfig) {
           expect(full[0]?.includePatterns?.every((file) => file.startsWith("src/"))).toBe(true);
@@ -1126,11 +1159,93 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       config: "test/vitest/vitest.tooling.config.ts",
       dir: "",
       targets: [
+        "test/helpers/managed-handoff-isolation.test.ts",
+        "test/scripts-update-gateway-legacy.test.ts",
+        "test/scripts/bench-gateway-installed.test.ts",
         "test/scripts/oxlint-config.test.ts",
+        "test/scripts/pr-worktree-interruption.test.ts",
+        "test/scripts/pr-worktree-state.test.ts",
+        "test/scripts/pr-wrappers.test.ts",
+        "test/scripts/test-projects-empty-native.test.ts",
         "test/scripts/upgrade-survivor-timeout-diagnostics.test.ts",
+        "test/scripts/watch-pr-ci-dependencies.test.ts",
+        "test/scripts/watch-pr-ci.test.ts",
+        "test/scripts/windows-repair-worker-probe.test.ts",
+        "test/vitest-pr-exempt-retention.test.ts",
       ],
-      sibling: "test/scripts/oxlint-report-memory.test.ts",
-      glob: "test/scripts/*.test.ts",
+      sibling: "test/scripts/crabbox-wrapper.test.ts",
+      glob: "test/**/*.test.ts",
+    },
+    {
+      config: "test/vitest/vitest.tooling-isolated.config.ts",
+      dir: "",
+      targets: [
+        "src/cli/update-cli/update-command-legacy-finalize.test.ts",
+        "test/scripts/control-ui-i18n.test.ts",
+      ],
+      sibling: "test/scripts/vitest-fork-shutdown.test.ts",
+      glob: "**/*.test.ts",
+    },
+    {
+      config: "test/vitest/vitest.infra.config.ts",
+      dir: "",
+      targets: ["src/infra/update-managed-service-handoff-reclamation.test.ts"],
+      sibling: "src/infra/update-managed-service-handoff-recovery.test.ts",
+      glob: "**/*.test.ts",
+    },
+    {
+      config: "test/vitest/vitest.cli-process.config.ts",
+      dir: "",
+      targets: [
+        "src/cli/help-exit.process.test.ts",
+        "src/cli/update-cli/update-command-fresh-doctor-authority.test.ts",
+        "src/cli/update-cli/update-command-lease.test.ts",
+        "src/cli/update-cli/update-command-migrated.test.ts",
+      ],
+      sibling: "src/cli/update-cli/update-command-candidate-exit.test.ts",
+      glob: "**/*.test.ts",
+    },
+    {
+      config: "test/vitest/vitest.cli.config.ts",
+      dir: "src/cli",
+      targets: [
+        "src/cli/update-cli/update-command-mutable-signals.test.ts",
+        "src/cli/update-cli/update-command-rollback-executor.test.ts",
+      ],
+      sibling: "src/cli/update-cli/update-command-service-command.process.test.ts",
+      glob: "**/*.test.ts",
+    },
+    {
+      config: "test/vitest/vitest.commands.config.ts",
+      dir: "src/commands",
+      targets: [
+        "src/commands/doctor-config-preflight.process.test.ts",
+        "src/commands/doctor-lint.native-capture.test.ts",
+        "src/commands/doctor-tools-md-migration.test.ts",
+      ],
+      sibling: "src/commands/doctor-config-preflight.pristine.process.test.ts",
+      glob: "**/*.test.ts",
+    },
+    {
+      config: "test/vitest/vitest.extension-qa.config.ts",
+      dir: "extensions",
+      targets: ["extensions/qa-lab/src/multipass.runtime.test.ts"],
+      sibling: "extensions/qa-lab/src/suite-provider-selection.test.ts",
+      glob: "**/*.test.ts",
+    },
+    {
+      config: "test/vitest/vitest.gateway.config.ts",
+      dir: ".",
+      targets: [gatewayWorkspaceHashTarget],
+      sibling: "src/gateway/auth.test.ts",
+      glob: "**/*.test.ts",
+    },
+    {
+      config: "test/vitest/vitest.gateway-core.config.ts",
+      dir: "src/gateway",
+      targets: [gatewayWorkspaceHashTarget],
+      sibling: "src/gateway/auth.test.ts",
+      glob: "**/*.test.ts",
     },
   ])("admits only the qualified complete selections in $config", (row) => {
     for (const policy of ["node", "bun-compatible", "dual"] as const) {
@@ -1147,7 +1262,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
           {
             configs: [row.config],
             includePatterns: targets.map((target) =>
-              row.dir ? target.slice(row.dir.length + 1) : target,
+              row.dir && row.dir !== "." ? target.slice(row.dir.length + 1) : target,
             ),
           },
         ]) {

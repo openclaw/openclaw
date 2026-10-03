@@ -183,29 +183,23 @@ describe("resident Codex catalog restore bounds", () => {
     expect(snapshot.obsolete.size).toBe(20_001);
   });
 
-  it.each([
-    { field: "preview", limit: 500 },
-    { field: "rolloutPath", limit: 4_096 },
-  ] as const)(
-    "keeps the persisted $field within its native catalog bound",
-    async ({ field, limit }) => {
-      const valid = row("bounded", 100);
-      valid[field] = field === "rolloutPath" ? `/${"x".repeat(limit - 1)}` : "x".repeat(limit);
-      const accepted = await new CodexCatalogPersistence(
-        completeState([valid]),
-        () => {},
-      ).readSnapshot();
-      expect(accepted.complete).toBe(true);
-      expect(accepted.rows[0]?.[field]).toHaveLength(limit);
+  it("keeps the persisted rollout path within its native catalog bound", async () => {
+    const valid = row("bounded", 100);
+    valid.rolloutPath = `/${"x".repeat(4_095)}`;
+    const accepted = await new CodexCatalogPersistence(
+      completeState([valid]),
+      () => {},
+    ).readSnapshot();
+    expect(accepted.complete).toBe(true);
+    expect(accepted.rows[0]?.rolloutPath).toHaveLength(4_096);
 
-      const oversized = { ...valid, [field]: `${valid[field]}x` };
-      const rejected = await new CodexCatalogPersistence(
-        completeState([oversized]),
-        () => {},
-      ).readSnapshot();
-      expect(rejected.complete).toBe(false);
-      expect(rejected.rows).toEqual([]);
-      expect(rejected.obsolete).toEqual(new Set(["bounded", "complete"]));
-    },
-  );
+    const oversized = { ...valid, rolloutPath: `${valid.rolloutPath}x` };
+    const rejected = await new CodexCatalogPersistence(
+      completeState([oversized]),
+      () => {},
+    ).readSnapshot();
+    expect(rejected.complete).toBe(false);
+    expect(rejected.rows).toEqual([]);
+    expect(rejected.obsolete).toEqual(new Set(["bounded", "complete"]));
+  });
 });

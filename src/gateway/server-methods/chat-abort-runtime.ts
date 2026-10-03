@@ -15,7 +15,6 @@ import {
   killAllControlledSubagentRuns,
   resolveSubagentController,
 } from "../../agents/subagents/registry/subagent-control.js";
-import { SUBAGENT_KILL_TASK_ERROR } from "../../agents/subagents/registry/subagent-control.types.js";
 import {
   getCurrentSubagentRunOwner,
   subagentRuns,
@@ -37,7 +36,6 @@ import { abortQueuedChatTurnById } from "../chat-queued-turns.js";
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
-import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveSessionStoreKey } from "../session-utils.js";
 import type { WorkerInferenceCancellation } from "../worker-environments/inference-control-internal.js";
@@ -51,6 +49,10 @@ import {
   type ChatAbortRequester,
 } from "./chat-abort-authorization.js";
 import {
+  createQueuedCollectorPublication,
+  getQueuedCollectorCancellationRunId,
+} from "./chat-abort-queued-collector-publication.js";
+import {
   abortedPartialPersistenceError,
   captureAbortedPartial,
   deferAbortedPartialPersistence,
@@ -61,7 +63,6 @@ import {
   type ChatAbortSessionSnapshot,
 } from "./chat-aborted-partial.js";
 import { persistAbortedPartials } from "./chat-transcript-persistence.js";
-import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestContext } from "./types.js";
 
 export async function abortControlledSubagents(params: {
@@ -197,15 +198,19 @@ export function abortQueuedCollectorSession(
         } while (projection.needsMaterialization);
       }
       assertCurrent();
-      const agentId = resolveChatRunOwnerAgentId({
-        agentId: params.agentId,
+      const publication = createQueuedCollectorPublication({
+        context: params.context,
         sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        sessionId: params.sessionId,
         defaultAgentId: params.defaultAgentId,
+        projection,
+        canPublish: () =>
+          !sessionAbort ||
+          (sessionAbort.ok &&
+            !sessionAbort.value.result.unauthorized &&
+            sessionAbort.value.plan.canCascade),
       });
-      const captured = agentId
-        ? projection?.capture({ agentId, key: params.sessionKey })
-        : undefined;
-      let publicationRows: SessionRowReadView | undefined;
       await killSubagentRunAdmin(
         {
           cfg,
@@ -215,6 +220,7 @@ export function abortQueuedCollectorSession(
           expectedGeneration: entry.generation,
           expectedOwnerKey: entry.requesterSessionKey,
           onResult: (result) => {
+            publication.publishSnapshot(result, true);
             if (sessionAbort && !sessionAbort.ok) {
               outcome = sessionAbort;
               return;
@@ -242,32 +248,14 @@ export function abortQueuedCollectorSession(
               };
               return;
             }
-            const aborted =
-              result.found &&
-              result.killed &&
-              result.targetState?.state === "terminal" &&
-              result.targetState.task.status === "cancelled" &&
-              result.targetState.task.error === SUBAGENT_KILL_TASK_ERROR;
-            // Publish while the kill owner still holds the exact session incarnation,
-            // never after an awaited result can be overtaken by its replacement.
-            if (aborted) {
-              emitSessionsChanged(
-                params.context,
-                {
-                  sessionKey: params.sessionKey,
-                  agentId: params.agentId,
-                  sessionId: params.sessionId,
-                  reason: "abort",
-                },
-                { preparedPublication: true, sessionRows: publicationRows },
-              );
-            }
+            const cancelledRunId = getQueuedCollectorCancellationRunId(result);
+            const aborted = cancelledRunId !== undefined;
             outcome = {
               ok: true,
               value: {
                 aborted: aborted || selected?.result.aborted === true,
                 runIds: uniqueStrings([
-                  ...(aborted ? [result.runId] : []),
+                  ...(aborted ? [cancelledRunId] : []),
                   ...(selected?.result.runIds ?? []),
                 ]),
               },
@@ -276,31 +264,7 @@ export function abortQueuedCollectorSession(
         },
         {
           assertCurrent,
-          preparePublication: (publish) =>
-            publish(async (publishResult) => {
-              const publishPrepared = (read?: SessionRowReadView) => {
-                if (captured && !projection?.isCurrent(captured)) {
-                  throw new Error(
-                    "Queued collector session changed before cancellation publication; retry Stop.",
-                  );
-                }
-                publicationRows = read;
-                try {
-                  return publishResult();
-                } finally {
-                  publicationRows = undefined;
-                }
-              };
-              if (projection && agentId) {
-                return await withReadySessionRows(
-                  projection,
-                  () => [{ agentId, key: params.sessionKey }],
-                  publishPrepared,
-                  { includeAncestors: true },
-                );
-              }
-              return publishPrepared();
-            }),
+          preparePublication: publication,
           beforeSessionKill: () => {
             // Resolve Gateway owners under the kill runtime's session fence.
             // Signal them only after this collector's FIFO reservation is held.

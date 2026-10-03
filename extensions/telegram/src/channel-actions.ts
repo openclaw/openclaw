@@ -162,34 +162,19 @@ function describeTelegramMessageTool({
       schema: null,
     };
   }
-  const actions = new Set<ChannelMessageActionName>();
-  actions.add("read");
-  if (discovery.isEnabled("sendMessage")) {
-    actions.add("send");
-  }
-  if (discovery.pollEnabled) {
-    actions.add("poll");
-  }
-  if (discovery.isEnabled("reactions")) {
-    actions.add("react");
-    actions.add("emoji-list");
-  }
-  if (discovery.isEnabled("deleteMessage")) {
-    actions.add("delete");
-  }
-  if (discovery.isEnabled("editMessage")) {
-    actions.add("edit");
-  }
-  if (discovery.isEnabled("sticker", false)) {
-    actions.add("sticker");
-    actions.add("sticker-search");
-  }
-  if (discovery.isEnabled("createForumTopic")) {
-    actions.add("topic-create");
-  }
-  if (discovery.isEnabled("editForumTopic")) {
-    actions.add("topic-edit");
-  }
+  const sendEnabled = discovery.isEnabled("sendMessage");
+  const reactionsEnabled = discovery.isEnabled("reactions");
+  const actions: ChannelMessageActionName[] = [
+    "read",
+    ...(sendEnabled ? ["send" as const] : []),
+    ...(discovery.pollEnabled ? ["poll" as const] : []),
+    ...(reactionsEnabled ? (["react", "emoji-list"] as const) : []),
+    ...(discovery.isEnabled("deleteMessage") ? ["delete" as const] : []),
+    ...(discovery.isEnabled("editMessage") ? ["edit" as const] : []),
+    ...(discovery.isEnabled("sticker", false) ? (["sticker", "sticker-search"] as const) : []),
+    ...(discovery.isEnabled("createForumTopic") ? ["topic-create" as const] : []),
+    ...(discovery.isEnabled("editForumTopic") ? ["topic-edit" as const] : []),
+  ];
   const schema: ChannelMessageToolSchemaContribution[] = [];
   if (discovery.pollEnabled) {
     schema.push({
@@ -197,7 +182,7 @@ function describeTelegramMessageTool({
       visibility: "all-configured",
     });
   }
-  if (discovery.isEnabled("reactions")) {
+  if (reactionsEnabled) {
     schema.push({
       properties: createTelegramReactionEmojiSchema(),
       // The shared emoji parameter keeps react valid across channels; this
@@ -205,14 +190,14 @@ function describeTelegramMessageTool({
       actions: [],
     });
   }
-  if (discovery.isEnabled("sendMessage")) {
+  if (sendEnabled) {
     schema.push({
       properties: createTelegramRichSendExtraToolSchemas(),
       visibility: "all-configured",
     });
   }
   return {
-    actions: Array.from(actions),
+    actions,
     capabilities: discovery.buttonsEnabled ? ["presentation", "delivery-pin"] : ["delivery-pin"],
     schema,
   };

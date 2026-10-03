@@ -1,5 +1,6 @@
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -54,12 +55,11 @@ export function normalizeVoiceChannelResidencies(
 function normalizeDiscordUserIds(entries: string[] | undefined): Set<string> {
   const ids = new Set<string>();
   for (const entry of entries ?? []) {
-    const trimmed = entry.trim();
-    const withoutDiscordPrefix = trimmed.startsWith("discord:") ? trimmed.slice(8) : trimmed;
-    const withoutUserPrefix = withoutDiscordPrefix.startsWith("user:")
-      ? withoutDiscordPrefix.slice(5)
-      : withoutDiscordPrefix;
-    const id = withoutUserPrefix.trim();
+    const id = entry
+      .trim()
+      .replace(/^discord:/, "")
+      .replace(/^user:/, "")
+      .trim();
     if (id) {
       ids.add(id);
     }
@@ -79,7 +79,7 @@ export class DiscordVoiceFollowing {
   private readonly followUserIds: Set<string>;
   readonly followedUserChannels = new Map<string, VoiceChannelResidency>();
   readonly followedVoiceGuilds = new Set<string>();
-  private followUsersReconcileTimer: NodeJS.Timeout | null = null;
+  private readonly scheduler: PluginServiceSchedulerV1;
   private followUsersReconcileTask: Promise<void> | null = null;
   private followUsersReconcileGuildCursor = 0;
   private followUsersReconcileBotGuildCursor = 0;
@@ -88,12 +88,12 @@ export class DiscordVoiceFollowing {
 
   constructor(
     private readonly params: {
+      scheduler: PluginServiceSchedulerV1;
       allowedChannels: VoiceChannelResidency[] | null;
       autoJoinChannels: VoiceChannelResidency[];
       botUserId: () => string | undefined;
       client: Client;
       deleteRecoveryAttempt: (guildId: string) => void;
-      destroyed: () => boolean;
       discordConfig: DiscordAccountConfig;
       stopTransport: (guildId: string) => Promise<void>;
       getRecoveryAttempt: (guildId: string) => number | undefined;
@@ -112,6 +112,7 @@ export class DiscordVoiceFollowing {
       voiceEnabled: boolean;
     },
   ) {
+    this.scheduler = params.scheduler.scope();
     this.followUserIds =
       params.discordConfig.voice?.followUsersEnabled !== false
         ? normalizeDiscordUserIds(params.discordConfig.voice?.followUsers)
@@ -123,7 +124,21 @@ export class DiscordVoiceFollowing {
   }
 
   async startReconciliation(): Promise<void> {
-    this.ensureFollowUsersReconcileTimer();
+    if (this.followUserIds.size === 0 || this.scheduler.signal.aborted) {
+      return;
+    }
+    this.scheduler.schedule({
+      id: "follow-users",
+      mode: "earliest",
+      delayMs: FOLLOW_USERS_RECONCILE_INTERVAL_MS,
+      everyMs: FOLLOW_USERS_RECONCILE_INTERVAL_MS,
+      run: () =>
+        this.reconcileFollowedUsers("interval").catch((err: unknown) => {
+          logger.warn(
+            `discord voice: follow user reconciliation failed: ${formatErrorMessage(err)}`,
+          );
+        }),
+    });
     await this.reconcileFollowedUsers("startup");
   }
 
@@ -172,7 +187,7 @@ export class DiscordVoiceFollowing {
     channelId: string | undefined;
     userId: string;
   }): Promise<void> {
-    if (!this.params.voiceEnabled || this.params.destroyed()) {
+    if (!this.params.voiceEnabled || this.scheduler.signal.aborted) {
       return;
     }
     const { guildId, channelId, userId } = params;
@@ -184,32 +199,27 @@ export class DiscordVoiceFollowing {
     const existing = this.params.getSession(guildId);
     const wasFollowedVoiceSession =
       this.followedUserChannels.has(followKey) || this.followedVoiceGuilds.has(guildId);
-    if (!channelId) {
+    if (!channelId || !this.params.isAllowedVoiceChannel({ guildId, channelId })) {
       this.followedUserChannels.delete(followKey);
-      if (existing && wasFollowedVoiceSession && !this.hasFollowedUserInChannel(existing)) {
-        await this.handoffToAnotherFollowedUserOrLeave({
-          guildId,
-          userId,
-          existing,
-          reason: "disconnected",
-        });
-      } else if (!existing && wasFollowedVoiceSession && this.params.hasVoiceLifecycle(guildId)) {
-        await this.params.leave({ guildId });
+      if (channelId) {
+        logger.warn(
+          `discord voice: followed user joined non-allowed channel guild=${guildId} user=${userId} channel=${channelId}; ignoring`,
+        );
       }
-      return;
-    }
-    if (!this.params.isAllowedVoiceChannel({ guildId, channelId })) {
-      this.followedUserChannels.delete(followKey);
-      logger.warn(
-        `discord voice: followed user joined non-allowed channel guild=${guildId} user=${userId} channel=${channelId}; ignoring`,
-      );
       if (existing && wasFollowedVoiceSession && !this.hasFollowedUserInChannel(existing)) {
         await this.handoffToAnotherFollowedUserOrLeave({
           guildId,
           userId,
           existing,
-          reason: "joined non-allowed channel",
+          reason: channelId ? "joined non-allowed channel" : "disconnected",
         });
+      } else if (
+        !channelId &&
+        !existing &&
+        wasFollowedVoiceSession &&
+        this.params.hasVoiceLifecycle(guildId)
+      ) {
+        await this.params.leave({ guildId });
       }
       return;
     }
@@ -250,11 +260,9 @@ export class DiscordVoiceFollowing {
     this.followedVoiceGuilds.add(guildId);
   }
 
-  destroy(): void {
-    if (this.followUsersReconcileTimer) {
-      clearInterval(this.followUsersReconcileTimer);
-      this.followUsersReconcileTimer = null;
-    }
+  async destroy(): Promise<void> {
+    await this.scheduler.stop();
+    await this.followUsersReconcileTask;
     this.followedUserChannels.clear();
     this.followedVoiceGuilds.clear();
     this.followEventGenerations.clear();
@@ -295,23 +303,8 @@ export class DiscordVoiceFollowing {
     return Array.from(guildIds);
   }
 
-  private ensureFollowUsersReconcileTimer(): void {
-    if (this.followUserIds.size === 0 || this.params.destroyed()) {
-      return;
-    }
-    if (this.followUsersReconcileTimer) {
-      return;
-    }
-    this.followUsersReconcileTimer = setInterval(() => {
-      void this.reconcileFollowedUsers("interval").catch((err: unknown) => {
-        logger.warn(`discord voice: follow user reconciliation failed: ${formatErrorMessage(err)}`);
-      });
-    }, FOLLOW_USERS_RECONCILE_INTERVAL_MS);
-    this.followUsersReconcileTimer.unref?.();
-  }
-
   private async reconcileFollowedUsers(reason: string): Promise<void> {
-    if (this.followUserIds.size === 0 || this.params.destroyed()) {
+    if (this.followUserIds.size === 0 || this.scheduler.signal.aborted) {
       return;
     }
     if (this.followUsersReconcileTask) {
@@ -324,7 +317,7 @@ export class DiscordVoiceFollowing {
   }
 
   private async runFollowedUsersReconcile(reason: string): Promise<void> {
-    if (this.params.destroyed()) {
+    if (this.scheduler.signal.aborted) {
       return;
     }
     const guildIds = this.resolveFollowGuildIds();
@@ -358,7 +351,7 @@ export class DiscordVoiceFollowing {
           );
           return undefined;
         });
-        if (this.params.destroyed()) {
+        if (this.scheduler.signal.aborted) {
           return;
         }
         if (voiceState === "transient-error") {
@@ -372,7 +365,7 @@ export class DiscordVoiceFollowing {
         });
       }
       if (plan.checkBotVoiceState) {
-        if (this.params.destroyed()) {
+        if (this.scheduler.signal.aborted) {
           return;
         }
         await this.disconnectStaleFollowedBotVoiceState({ guildId: plan.guildId, reason });
@@ -401,10 +394,10 @@ export class DiscordVoiceFollowing {
         guildIds[(start + offset) % guildIds.length],
         "voice reconciliation guild index",
       );
-      const userLimit = this.resolveFollowUserReconcileUserLookupLimit(
-        followedUserIds.length,
-        remainingLookups,
-      );
+      let userLimit = Math.min(followedUserIds.length, remainingLookups);
+      if (this.params.botUserId() && followedUserIds.length > userLimit && remainingLookups > 1) {
+        userLimit = remainingLookups - 1;
+      }
       if (userLimit <= 0) {
         break;
       }
@@ -456,17 +449,6 @@ export class DiscordVoiceFollowing {
       assigned += 1;
     }
     this.followUsersReconcileBotGuildCursor = (start + scanned) % guildIds.length;
-  }
-
-  private resolveFollowUserReconcileUserLookupLimit(
-    followedUserCount: number,
-    remainingLookups: number,
-  ): number {
-    const userLimit = Math.min(followedUserCount, remainingLookups);
-    if (this.params.botUserId() && followedUserCount > userLimit && remainingLookups > 1) {
-      return remainingLookups - 1;
-    }
-    return userLimit;
   }
 
   private selectFollowUserReconcileUserIds(
@@ -552,7 +534,7 @@ export class DiscordVoiceFollowing {
     guildId: string;
     reason: string;
   }): Promise<void> {
-    if (this.params.destroyed()) {
+    if (this.scheduler.signal.aborted) {
       return;
     }
     const { guildId, reason } = params;
@@ -590,7 +572,7 @@ export class DiscordVoiceFollowing {
       );
       return undefined;
     });
-    if (this.params.destroyed() || botVoiceState === "transient-error") {
+    if (this.scheduler.signal.aborted || botVoiceState === "transient-error") {
       return;
     }
     const botChannelId = botVoiceState?.channel_id?.trim();

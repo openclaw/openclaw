@@ -45,19 +45,29 @@ type GatewayStartupStateDeps = {
 
 const DEFAULT_READINESS_CACHE_TTL_MS = 1_000;
 
-/** Create a startup checker that excludes downstream channel health. */
-export function createStartupChecker(deps: GatewayStartupStateDeps): StartupChecker {
+/** Startup waits for admission settlement; readiness retains its own agent policy. */
+export function createStartupChecker(
+  deps: GatewayStartupStateDeps,
+  getAgentDatabaseAdmissionRefusals?: () => readonly AgentDatabaseAdmissionRefusal[],
+): StartupChecker {
   return (): StartupResult => {
     const uptimeMs = Date.now() - deps.startedAt;
     if (deps.getGatewayDraining?.()) {
       return { ok: false, status: "draining", uptimeMs };
     }
-    if (deps.getStartupPending?.()) {
+    const pendingReason = deps.getStartupPending?.()
+      ? (deps.getStartupPendingReason?.() ?? "startup-sidecars")
+      : getAgentDatabaseAdmissionRefusals?.().some(
+            (refusal) => refusal.code === "agent-database-inspection-pending",
+          )
+        ? "agent-database-inspection"
+        : undefined;
+    if (pendingReason !== undefined) {
       return {
         ok: false,
         status: "starting",
         uptimeMs,
-        pendingReason: deps.getStartupPendingReason?.() ?? "startup-sidecars",
+        pendingReason,
       };
     }
     return { ok: true, status: "started", uptimeMs };
@@ -94,6 +104,7 @@ export function createReadinessChecker(
     getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
     getStateDatabaseFailure?: () => Error | undefined;
     getAgentDatabaseAdmissionRefusals?: () => readonly AgentDatabaseAdmissionRefusal[];
+    allowPendingAgentDatabases?: boolean;
     getPluginReloadStatus?: () => GatewayPluginReloadStatus | undefined;
     shouldSkipChannelReadiness?: () => boolean;
     cacheTtlMs?: number;
@@ -105,7 +116,9 @@ export function createReadinessChecker(
   let cachedAt = 0;
   let cachedState: Omit<ReadinessResult, "uptimeMs"> | null = null;
 
-  const readReadiness = (): ReadinessResult => {
+  const readReadiness = (
+    agentDatabases: readonly AgentDatabaseAdmissionRefusal[] | undefined,
+  ): ReadinessResult => {
     const startup = getStartup();
     const uptimeMs = startup.uptimeMs;
     const now = startedAt + uptimeMs;
@@ -125,13 +138,16 @@ export function createReadinessChecker(
         uptimeMs,
       };
     }
-    const agentDatabases = deps.getAgentDatabaseAdmissionRefusals?.();
-    if (agentDatabases?.length) {
+    const failedAgents = agentDatabases?.filter(
+      (refusal) =>
+        deps.allowPendingAgentDatabases === false ||
+        refusal.code !== "agent-database-inspection-pending",
+    );
+    if (failedAgents?.length) {
       cachedState = null;
       return {
         ready: false,
-        failing: agentDatabases.map(({ agentId }) => `agent-database:${agentId}`),
-        agentDatabases,
+        failing: failedAgents.map(({ agentId }) => `agent-database:${agentId}`),
         uptimeMs,
       };
     }
@@ -195,9 +211,14 @@ export function createReadinessChecker(
     return { ...cachedState, uptimeMs };
   };
   return () => {
-    const result = readReadiness();
+    const agentDatabases = deps.getAgentDatabaseAdmissionRefusals?.();
+    const result = readReadiness(agentDatabases);
     const getEventLoopHealth = deps.getEventLoopHealth;
     const eventLoop = getEventLoopHealth?.();
-    return eventLoop ? { ...result, eventLoop } : result;
+    return {
+      ...result,
+      ...(agentDatabases?.length ? { agentDatabases } : {}),
+      ...(eventLoop ? { eventLoop } : {}),
+    };
   };
 }

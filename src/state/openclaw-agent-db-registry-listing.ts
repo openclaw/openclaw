@@ -436,6 +436,7 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
       let cursor = memo;
       let invalidated = false;
       let referenceEntries = memo.entries;
+      const followedRegistrations = new Set<symbol>();
       const unchanged = (mutation: AgentDatabaseRegistryMutation | undefined) => {
         if (!mutation || !unchangedBy) {
           return false;
@@ -451,7 +452,10 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
         if (
           unchangedBy &&
           [...registry.pending.values()].some(
-            (pending) => pending.pathname === options.path && !unchanged(pending.mutation),
+            (pending) =>
+              pending.pathname === options.path &&
+              !followedRegistrations.has(pending.operation) &&
+              !unchanged(pending.mutation),
           )
         ) {
           throw new AgentDatabaseRegistryChangedError(
@@ -481,6 +485,10 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
         ) {
           invalidated = true;
           throw new Error("Agent registration cannot replace an invalidated registry read");
+        }
+        const operation = cursor.next?.transition?.operation;
+        if (operation) {
+          followedRegistrations.add(operation);
         }
         cursor = registry.memo;
       };

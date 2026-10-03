@@ -15,7 +15,8 @@ export async function runNodeWorkspaceWorker(
   command: "workspace.memory" | "workspace.skills",
   params: Record<string, unknown>,
   signal: AbortSignal,
-  onLine?: (line: string) => void,
+  onLine?: (line: string, reply?: (value: unknown) => Promise<void>) => void | Promise<void>,
+  beforeStart?: () => Promise<void>,
 ) {
   signal.throwIfAborted();
   const channel = await options.openDuplex({
@@ -29,21 +30,35 @@ export async function runNodeWorkspaceWorker(
   void channel.closed.catch(() => {});
   const decoder = new StringDecoder("utf8");
   let text = "";
+  let pending = Promise.resolve();
   const unsubscribe = channel.onMessage((message) => {
     signal.throwIfAborted();
     text += decoder.write(Buffer.from(message));
     if (onLine) {
       let newline: number;
       while ((newline = text.indexOf("\n")) >= 0) {
-        onLine(text.slice(0, newline));
+        const line = text.slice(0, newline);
+        pending = pending.then(() =>
+          onLine(line, async (value) => {
+            signal.throwIfAborted();
+            await channel.send(Buffer.from(`${JSON.stringify(value)}\n`));
+          }),
+        );
+        void pending.catch(() => {
+          channel.close();
+        });
         text = text.slice(newline + 1);
       }
     }
   });
   try {
+    // The admitted node owns cleanup before any source bytes are uploaded.
+    await beforeStart?.();
+    signal.throwIfAborted();
     // Wait until the caller has installed its output listener before starting IO.
     await channel.send(Buffer.from("start"));
     const result = asOptionalRecord(await channel.closed);
+    await pending;
     signal.throwIfAborted();
     const payload = asOptionalRecord(result?.payload);
     if (payload?.ok !== true) {

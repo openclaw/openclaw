@@ -23,6 +23,17 @@ export type LinkReaderPanelToggleDetail = {
   agentId?: string;
 };
 
+export const PLUGIN_PANEL_TOGGLE_EVENT = "openclaw:plugin-panel-toggle";
+
+export type PluginPanelToggleDetail = {
+  pluginId: string;
+  panelId: string;
+  sessionKey: string;
+  agentId?: string;
+  open: boolean;
+  dock?: "bottom" | "right";
+};
+
 export const UI_COMMAND_EVENT = "openclaw:ui-command";
 
 export type UiCommandDetail = UiCommandParams;

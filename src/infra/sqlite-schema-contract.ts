@@ -412,12 +412,9 @@ function groupCanonicalRows<Row, Key extends string | number>(
   const groups = new Map<Key, Row[]>();
   for (const row of rows) {
     const name = key(row);
-    const group = groups.get(name);
-    if (group) {
-      group.push(row);
-    } else {
-      groups.set(name, [row]);
-    }
+    const group = groups.get(name) ?? [];
+    group.push(row);
+    groups.set(name, group);
   }
   return groups;
 }

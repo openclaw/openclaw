@@ -1209,7 +1209,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       .filter((row) => row.task === "extension-file-shard")
       .flatMap((row) => row.includePatterns ?? []);
     expect(new Set(fileTargets).size).toBe(fileTargets.length);
-    const sourceOnlyFile = "extensions/device-pair/doctor-contract-api.test.ts";
+    const sourceOnlyFile = "extensions/diffs/src/store.cleanup.test.ts";
     expect(fileTargets).not.toContain(sourceOnlyFile);
     for (const file of [sourceOnlyFile, "extensions/plugin-entry.cli-laziness.test.ts"]) {
       const config = resolveExtensionTestConfig(file);

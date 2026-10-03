@@ -355,6 +355,7 @@ export async function reloadGatewayPlugins(
     assertCurrent();
     const startedServices = await withPluginRegistryPreparationScope(nextRegistry, () =>
       startPluginServices({
+        scheduler: runtime.scheduler,
         registry: nextRegistry,
         config: params.nextConfig,
         workspaceDir: pluginWorkspaceDir,
@@ -571,6 +572,7 @@ export async function reloadGatewayPlugins(
             await withPluginRegistryPreparationScope(restoredRegistry, async () => {
               await attempt(recoveryErrors, async () => {
                 await startPluginServices({
+                  scheduler: runtime.scheduler,
                   registry: restoredRegistry,
                   config: previousConfig,
                   workspaceDir: pluginWorkspaceDir,

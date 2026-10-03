@@ -102,6 +102,55 @@ struct StatusMenuSummariesTests {
         }
     }
 
+    @Test(arguments: ["unchanged", "reconnect", "replacement"])
+    func `session menu caches belong to their selected Gateway`(_ transition: String) async throws {
+        try await self.withFixture { fixture in
+            _ = try await fixture.control.request(method: "health")
+            await fixture.sessions.refresh()
+            #expect(fixture.sessions.rows.map(\.label) == ["Gateway A"])
+            if transition == "replacement" {
+                fixture.revision.setValue(2)
+            } else if transition == "reconnect" {
+                try await fixture.reconnect()
+            }
+
+            // The menu projects these values before refreshing over the network.
+            #expect((fixture.sessions.cachedSnapshot != nil) == (transition != "replacement"))
+            #expect(fixture.sessions.rows.map(\.label) == (transition == "replacement" ? [] : ["Gateway A"]))
+            _ = try await fixture.control.request(method: "health")
+            await fixture.sessions.refresh()
+            #expect(fixture.sessions.rows.map(\.label) == [transition == "replacement" ? "Gateway B" : "Gateway A"])
+            #expect(fixture.requests.value.filter { $0.method == "sessions.list" }.count ==
+                (transition == "replacement" ? 2 : 1))
+        }
+    }
+
+    @Test(arguments: ["unchanged", "reconnect", "replacement", "failed-replacement"])
+    func `session previews never reuse another Gateway history`(_ transition: String) async throws {
+        try await self.withFixture { fixture in
+            _ = try await fixture.control.request(method: "health")
+            let first = await SessionMenuPreviewLoader.load(sessionKey: "main", maxItems: 10, gateway: fixture.gateway)
+            #expect(first.items.map(\.text) == ["Gateway A"])
+            if transition.hasSuffix("replacement") {
+                fixture.revision.setValue(2)
+                fixture.previewFails.setValue(transition == "failed-replacement")
+            } else if transition == "reconnect" {
+                try await fixture.reconnect()
+            }
+
+            _ = try await fixture.control.request(method: "health")
+            let next = await SessionMenuPreviewLoader.load(sessionKey: "main", maxItems: 10, gateway: fixture.gateway)
+            let expected = transition == "failed-replacement" ? [] :
+                [transition == "replacement" ? "Gateway B" : "Gateway A"]
+            #expect(next.items.map(\.text) == expected)
+            if transition == "failed-replacement" {
+                #expect(next.status == .error("Preview unavailable"))
+            }
+            #expect(fixture.requests.value.filter { $0.method == "sessions.preview" }.count ==
+                (transition.hasSuffix("replacement") ? 2 : 1))
+        }
+    }
+
     @Test(arguments: [false, true])
     func `new Primary refreshes usage inside the previous Gateway cache window`(keepMenuOpen: Bool) async throws {
         try await self.withFixture { fixture in
@@ -224,17 +273,20 @@ private final class UsageGatewayFixture {
     let revision = LockIsolated<UInt64>(1)
     let requests = LockIsolated<[Request]>([])
     let coldUsage = LockIsolated(false)
+    let previewFails = LockIsolated(false)
     private let pendingCostResponses = LockIsolated<[String: [@Sendable () -> Void]]>(["A": [], "B": []])
     let session: GatewayTestWebSocketSession
     let gateway: GatewayConnection
     let control: ControlChannel
     let cron: CronJobsStore
     let summaries: StatusMenuSummaries
+    let sessions: StatusMenuSessions
 
     init(cronJobCount: Int) {
         let revision = self.revision
         let requests = self.requests
         let coldUsage = self.coldUsage
+        let previewFails = self.previewFails
         let pendingCostResponses = self.pendingCostResponses
         self.session = GatewayTestWebSocketSession(taskFactory: {
             let owner = revision.value == 1 ? "A" : "B"
@@ -277,6 +329,24 @@ private final class UsageGatewayFixture {
                     """#
                     let daily = owner == "A" ? #"[{"date":"2026-09-03",\#(totals)}]"# : "[]"
                     payload = #"{"updatedAt":1800000000000,"days":30,"daily":\#(daily),"totals":{\#(totals)}}"#
+                case "sessions.list":
+                    payload = #"""
+                    {"path":"/synthetic/\#(owner)/sessions.json","sessions":[
+                    {"key":"main","displayName":"Gateway \#(owner)","kind":"direct"}]}
+                    """#
+                case "sessions.preview":
+                    if previewFails.value {
+                        let response = #"""
+                        {"type":"res","id":"\#(id)","ok":false,
+                        "error":{"code":"UNAVAILABLE","message":"Synthetic preview failure"}}
+                        """#
+                        socket.emitReceiveSuccess(.data(Data(response.utf8)))
+                        return
+                    }
+                    payload = #"""
+                    {"ts":1800000000000,"previews":[{"key":"main","status":"ok",
+                    "items":[{"role":"assistant","text":"Gateway \#(owner)"}]}]}
+                    """#
                 case "node.list":
                     payload = #"{"nodes":[]}"#
                 case "cron.list":
@@ -328,6 +398,7 @@ private final class UsageGatewayFixture {
             currentEndpointRevision: { revision.value },
             sessionBox: WebSocketSessionBox(session: self.session))
         self.control = ControlChannel(gateway: self.gateway, endpointRevision: { revision.value })
+        self.sessions = StatusMenuSessions(control: self.control)
         self.cron = CronJobsStore(gateway: self.gateway, isPreview: true)
         self.summaries = StatusMenuSummaries(
             control: self.control,
@@ -357,7 +428,22 @@ private final class UsageGatewayFixture {
         responses.forEach { $0() }
     }
 
+    func reconnect() async throws {
+        let lease = try #require(await self.gateway.captureServerLease())
+        let deliveries = await self.gateway.subscribe()
+        let socket = try #require(self.session.latestTask())
+        socket.emitReceiveFailure()
+        for await delivery in deliveries {
+            guard case .disconnected = delivery.event, delivery.serverLease == lease else { continue }
+            #expect(!self.gateway.serverLeaseMatchesCurrentState(lease))
+            _ = try await self.gateway.acquireServerLease()
+            return
+        }
+        Issue.record("Gateway stream ended before the captured lease disconnected")
+    }
+
     func close() async {
+        self.sessions.cancelPreviewTasks()
         self.summaries.menuDidClose()
         await self.control.disconnect()
         self.releaseCostResponses(for: "A")

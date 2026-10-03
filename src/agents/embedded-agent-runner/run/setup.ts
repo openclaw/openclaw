@@ -149,25 +149,6 @@ export function buildBeforeModelResolveAttachments(
   }));
 }
 
-/** Builds structural model metadata for a harness that resolves its real model natively. */
-export function createNativeModelOwnedRuntimeModel(params: {
-  provider: string;
-  modelId: string;
-}): ProviderRuntimeModel {
-  return {
-    provider: params.provider,
-    id: params.modelId,
-    name: params.modelId,
-    baseUrl: "",
-    api: "openai-responses",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_TOKENS,
-    maxTokens: DEFAULT_CONTEXT_TOKENS,
-  };
-}
-
 /** Resolves only OpenClaw-owned context policy; native model owners keep that policy private. */
 export function resolveEmbeddedRuntimeModelPolicy(params: {
   cfg: OpenClawConfig | undefined;

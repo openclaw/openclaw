@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Browser } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ModelCatalogResult } from "../api/types.ts";
@@ -612,7 +613,13 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           await waitForControlUiRoute(page, { routeId: "appearance" });
           await page.locator('a[href="/settings/model-providers"]').first().click();
         }
-        await gateway.waitForRequest("models.list");
+        // Appearance can start a prepared-only read before navigation. Release the
+        // held catalog only after the Models page has admitted its own projection.
+        const routeCatalogRequests = async () =>
+          (await gateway.getRequests("models.list")).filter(
+            (request) => asNullableRecord(request.params)?.preparedOnly !== true,
+          );
+        await expect.poll(async () => (await routeCatalogRequests()).length).toBe(1);
         const publication = {
           target: {},
           scope: { agentId: "main" },
@@ -634,7 +641,7 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
         await expect.poll(() => preparedRow.isVisible()).toBe(true);
         await expect.poll(() => preparedRow.textContent()).toContain("Prepared model");
         expect(await preparedRow.isEnabled()).toBe(true);
-        expect(await gateway.getRequests("models.list")).toHaveLength(1);
+        expect(await routeCatalogRequests()).toHaveLength(1);
 
         await gateway.resolveDeferred("models.authStatus");
         await waitForControlUiRoute(page, { routeId: "model-providers" });
@@ -648,7 +655,7 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
 
         await gateway.deferNext("models.list");
         await gateway.emitGatewayEvent("chat.metadata.changed", {});
-        await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
+        await expect.poll(async () => (await routeCatalogRequests()).length).toBe(2);
         expect(await trigger.getAttribute("aria-expanded")).toBe("true");
         await gateway.resolveDeferred("models.list", {
           models: [prepared, added],

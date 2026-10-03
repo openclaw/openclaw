@@ -17,7 +17,8 @@ export function registerClickClackDiscussions(api: OpenClawPluginApi): void {
   const service = new ClickClackDiscussionService(api.runtime);
   api.registerService({
     id: "clickclack-discussion-session-events",
-    start: ({ gatewayEvents }) => service.bindGatewayEvents(gatewayEvents),
+    apiVersion: 2,
+    start: ({ gatewayEvents, scheduler }) => service.bindGatewayEvents(gatewayEvents, scheduler),
     stop: () => service.cleanup(),
   });
   api.registerTool((context) =>

@@ -670,6 +670,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   let exitResult: TuiResult = { exitReason: "exit" };
   const authChild = createTuiAuthChildOwner();
   let statusTimer: NodeJS.Timeout | null = null;
+  let statusIntervalMs = 0;
   let statusStartedAt: number | null = null;
   let lastActivityStatus = "idle";
   let invalidateSessionRunOwnership: () => void = () => undefined;
@@ -1009,7 +1010,6 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   let waitingTick = 0;
-  let waitingTimer: NodeJS.Timeout | null = null;
   let waitingPhrase: string | null = null;
 
   const updateBusyStatusMessage = () => {
@@ -1035,24 +1035,34 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     statusLoader.setMessage(`${state.activityStatus} • ${elapsed} | ${state.connectionStatus}`);
   };
 
-  const startStatusTimer = () => {
+  const stopStatusTimer = () => {
     if (statusTimer) {
-      return;
+      clearInterval(statusTimer);
     }
-    statusTimer = setInterval(() => {
-      if (!isTuiBusyActivityStatus(state.activityStatus)) {
-        return;
-      }
-      updateBusyStatusMessage();
-    }, 1000);
+    statusTimer = null;
+    statusIntervalMs = 0;
+    waitingPhrase = null;
   };
 
-  const stopStatusTimer = () => {
-    if (!statusTimer) {
+  const startStatusTimer = (waiting: boolean) => {
+    const intervalMs = waiting ? 120 : 1000;
+    if (statusIntervalMs === intervalMs) {
       return;
     }
-    clearInterval(statusTimer);
-    statusTimer = null;
+    stopStatusTimer();
+    if (waiting) {
+      const idx = Math.floor(Math.random() * defaultWaitingPhrases.length);
+      waitingPhrase = defaultWaitingPhrases[idx] ?? defaultWaitingPhrases[0] ?? "waiting";
+      waitingTick = 0;
+    }
+    statusIntervalMs = intervalMs;
+    statusTimer = setInterval(() => {
+      if (
+        waiting ? state.activityStatus === "waiting" : isTuiBusyActivityStatus(state.activityStatus)
+      ) {
+        updateBusyStatusMessage();
+      }
+    }, intervalMs);
   };
 
   const stopStatusTimeout = () => {
@@ -1063,39 +1073,8 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     state.statusTimeout = null;
   };
 
-  const startWaitingTimer = () => {
-    if (waitingTimer) {
-      return;
-    }
-
-    // Pick a phrase once per waiting session.
-    if (!waitingPhrase) {
-      const idx = Math.floor(Math.random() * defaultWaitingPhrases.length);
-      waitingPhrase = defaultWaitingPhrases[idx] ?? defaultWaitingPhrases[0] ?? "waiting";
-    }
-
-    waitingTick = 0;
-
-    waitingTimer = setInterval(() => {
-      if (state.activityStatus !== "waiting") {
-        return;
-      }
-      updateBusyStatusMessage();
-    }, 120);
-  };
-
-  const stopWaitingTimer = () => {
-    if (!waitingTimer) {
-      return;
-    }
-    clearInterval(waitingTimer);
-    waitingTimer = null;
-    waitingPhrase = null;
-  };
-
   const disposeStatus = () => {
     stopStatusTimer();
-    stopWaitingTimer();
     stopStatusTimeout();
     clearDynamicSlashCommandsRefreshTimer();
     dynamicSlashCommandsRequestId += 1;
@@ -1110,18 +1089,11 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
         statusStartedAt = Date.now();
       }
       ensureStatusLoader();
-      if (state.activityStatus === "waiting") {
-        stopStatusTimer();
-        startWaitingTimer();
-      } else {
-        stopWaitingTimer();
-        startStatusTimer();
-      }
+      startStatusTimer(state.activityStatus === "waiting");
       updateBusyStatusMessage();
     } else {
       statusStartedAt = null;
       stopStatusTimer();
-      stopWaitingTimer();
       statusLoader?.stop();
       statusLoader = null;
       ensureStatusText();

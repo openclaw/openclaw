@@ -8,7 +8,7 @@ import {
   createWorkerTranscriptCommitStore,
   type WorkerTranscriptCommitOutcome,
   type WorkerTranscriptCommitStore,
-} from "./transcript-commit-store.js";
+} from "./transcript-commit-ledger.js";
 
 const loadTranscriptCommitRuntime = createLazyRuntimeModule(
   () => import("./transcript-commit.runtime.js"),

@@ -54,7 +54,7 @@ describe("forced worker environment abandonment", () => {
       runId: "forced-run",
       owner: { kind: "worker", environmentId, ownerEpoch: 2 },
     });
-    store.markWorkspaceResultPending(claim);
+    await store.markWorkspaceResultPending(claim);
     const binding = claim;
     await store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
     expect(
@@ -95,7 +95,7 @@ describe("forced worker environment abandonment", () => {
       turnClaim: null,
       recoveryError: "Worker result abandoned by forced operator teardown",
     });
-    expect(store.listPendingWorkspaceResults()).toEqual([]);
+    expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
   });
 
   it("releases a pending reclaim claim when its workspace is already gone", async () => {
@@ -106,7 +106,7 @@ describe("forced worker environment abandonment", () => {
       ownerEpoch: active.activeOwnerEpoch,
       expectedGeneration: active.generation,
     });
-    const claim = store.claimReclaimWorkspaceResult({
+    const claim = await store.claimReclaimWorkspaceResult({
       ...REQUEST,
       claimId: "reclaim-forced-missing-workspace",
       runId: "reclaim-forced-missing-workspace",
@@ -127,7 +127,7 @@ describe("forced worker environment abandonment", () => {
       turnClaim: null,
       recoveryError: "Worker result abandoned by forced operator teardown",
     });
-    expect(store.listPendingWorkspaceResults()).toEqual([]);
+    expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(resolveWorkspace).toHaveBeenCalledOnce();
   });
 

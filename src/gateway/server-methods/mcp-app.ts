@@ -96,6 +96,17 @@ function resolveMcpAppSessionOwner(params: Record<string, unknown>, cfg: OpenCla
   return owner.agentId;
 }
 
+function resolveRequestedMcpAppView({ params, context, client }: GatewayRequestHandlerOptions) {
+  return resolveMcpAppActiveView({
+    sessionKey: requireString(params, "sessionKey"),
+    agentId: resolveMcpAppSessionOwner(params, context.getRuntimeConfig()),
+    viewId: requireString(params, "viewId"),
+    requesterId: resolveMcpAppRequesterId(client),
+    cfg: context.getRuntimeConfig(),
+    restore: false,
+  });
+}
+
 function operationHandler(
   buildOperation: (params: Record<string, unknown>) => McpAppOperation,
 ): GatewayRequestHandler {
@@ -180,16 +191,9 @@ function hostFileHandler(
   ) => Promise<unknown>,
 ): GatewayRequestHandler {
   return async (options) => {
-    const { params, context, client, respond } = options;
+    const { respond } = options;
     await handle(respond, async () => {
-      const active = await resolveMcpAppActiveView({
-        sessionKey: requireString(params, "sessionKey"),
-        agentId: resolveMcpAppSessionOwner(params, context.getRuntimeConfig()),
-        viewId: requireString(params, "viewId"),
-        requesterId: resolveMcpAppRequesterId(client),
-        cfg: context.getRuntimeConfig(),
-        restore: false,
-      });
+      const active = await resolveRequestedMcpAppView(options);
       return withMcpAppActiveView(active, "read", () => operation(options, active.view));
     });
   };
@@ -334,16 +338,9 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
     });
   },
   "mcp.app.updateModelContext": async (options) => {
-    const { respond, params, context, client } = options;
+    const { respond, params } = options;
     await handle(respond, async () => {
-      const active = await resolveMcpAppActiveView({
-        sessionKey: requireString(params, "sessionKey"),
-        agentId: resolveMcpAppSessionOwner(params, context.getRuntimeConfig()),
-        viewId: requireString(params, "viewId"),
-        requesterId: resolveMcpAppRequesterId(client),
-        cfg: context.getRuntimeConfig(),
-        restore: false,
-      });
+      const active = await resolveRequestedMcpAppView(options);
       return await withMcpAppActiveView(active, "read", async () => {
         await requireMcpAppInteraction(active.view);
         return updateMcpAppModelContext(active.runtime, active.view, params);
@@ -351,31 +348,17 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
     });
   },
   "mcp.app.modelContext": async (options) => {
-    const { respond, params, context, client } = options;
+    const { respond } = options;
     await handle(respond, async () => {
-      const active = await resolveMcpAppActiveView({
-        sessionKey: requireString(params, "sessionKey"),
-        agentId: resolveMcpAppSessionOwner(params, context.getRuntimeConfig()),
-        viewId: requireString(params, "viewId"),
-        requesterId: resolveMcpAppRequesterId(client),
-        cfg: context.getRuntimeConfig(),
-        restore: false,
-      });
+      const active = await resolveRequestedMcpAppView(options);
       await requireMcpAppInteraction(active.view);
       return { state: getMcpAppModelContext(active.runtime, active.view) };
     });
   },
   "mcp.app.removeModelContext": async (options) => {
-    const { respond, params, context, client } = options;
+    const { respond, params } = options;
     await handle(respond, async () => {
-      const active = await resolveMcpAppActiveView({
-        sessionKey: requireString(params, "sessionKey"),
-        agentId: resolveMcpAppSessionOwner(params, context.getRuntimeConfig()),
-        viewId: requireString(params, "viewId"),
-        requesterId: resolveMcpAppRequesterId(client),
-        cfg: context.getRuntimeConfig(),
-        restore: false,
-      });
+      const active = await resolveRequestedMcpAppView(options);
       await requireMcpAppInteraction(active.view);
       if (params.index !== undefined && typeof params.index !== "number") {
         throw new Error("index must be a number");

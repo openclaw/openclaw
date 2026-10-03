@@ -4,6 +4,7 @@ import type { HealthSummary } from "./health.js";
 import {
   buildStatusHealthRows,
   buildStatusHeartbeatValue,
+  buildStatusMemoryValue,
   buildStatusModelSelectionLines,
   buildStatusSecurityAuditLines,
 } from "./status.command-sections.js";
@@ -21,6 +22,20 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
+
+it("renders native provider health without legacy index counters", () => {
+  const value = buildStatusMemoryValue({
+    memory: {
+      agentId: "main",
+      provider: "records",
+      health: { status: "degraded", message: "warming" },
+    },
+    memoryPlugin: { enabled: true, slot: "records" },
+  });
+
+  expect(value).toBe("plugin records · degraded · warming");
+});
+
 const baseHealth: HealthSummary = {
   ok: true,
   ts: 0,

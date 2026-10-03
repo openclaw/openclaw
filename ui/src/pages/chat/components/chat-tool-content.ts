@@ -13,6 +13,7 @@ import type { DiffFilePaths } from "../../../lib/chat/tool-call-diff.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
   isToolCardError,
+  resolveToolCardDisplay,
   resolveToolCardOutcome,
   type ToolPreview,
 } from "../../../lib/chat/tool-cards.ts";
@@ -340,18 +341,19 @@ export function renderExpandedToolCardContent(
     sessionKey,
     agentId,
   };
+  const displayCard = resolveToolCardDisplay(originalCard);
   const unavailable = isLegacyToolOutputUnavailable(originalCard);
-  const outputText = formatToolOutput(originalCard);
+  const outputText = formatToolOutput(displayCard);
   const outputIsLong =
     Math.max(outputText?.length ?? 0, originalCard.outputText?.length ?? 0) >
     TOOL_OUTPUT_PREVIEW_CHARS;
   const card =
     outputIsLong && onOpenSidebar && !unavailable
       ? {
-          ...originalCard,
+          ...displayCard,
           outputText: truncateUtf16Safe(outputText ?? "", TOOL_OUTPUT_PREVIEW_CHARS),
         }
-      : { ...originalCard, outputText };
+      : { ...displayCard, outputText };
   const outputFooter = html`
     ${
       outputText !== originalCard.outputText &&

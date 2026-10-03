@@ -88,50 +88,13 @@ export type OpenAiCompatibleImageProviderOptions = {
   };
 };
 
-function resolveDefaultModel(model: string | undefined, fallback: string): string {
-  return normalizeOptionalString(model) ?? fallback;
-}
-
-function appendImagesPath(baseUrl: string, mode: OpenAiCompatibleImageRequestMode): string {
-  return `${baseUrl.replace(/\/+$/u, "")}/images/${mode === "edit" ? "edits" : "generations"}`;
-}
-
-function resolveRequestTimeoutMs(params: {
-  options: OpenAiCompatibleImageProviderOptions;
-  req: ImageGenerationRequest;
-  mode: OpenAiCompatibleImageRequestMode;
-}): number | undefined {
-  if (params.options.defaultTimeoutMs === undefined) {
-    return params.req.timeoutMs;
-  }
-  const label =
-    params.mode === "edit"
-      ? (params.options.failureLabels?.edit ?? `${params.options.label} image edit`)
-      : (params.options.failureLabels?.generate ?? `${params.options.label} image generation`);
-  const deadline = createProviderOperationDeadline({
-    timeoutMs: params.req.timeoutMs,
-    label,
-  });
-  return resolveProviderOperationTimeoutMs({
-    deadline,
-    defaultTimeoutMs: params.options.defaultTimeoutMs,
-  });
-}
-
-function resolveResponseMaxImages(params: {
-  count: number;
-  mode: OpenAiCompatibleImageRequestMode;
-  options: OpenAiCompatibleImageProviderOptions;
-}): number {
-  return params.options.capabilities[params.mode].maxCount ?? params.count;
-}
-
 /** Creates an image-generation provider backed by OpenAI-style image endpoints. */
 export function createOpenAiCompatibleImageGenerationProvider(
   options: OpenAiCompatibleImageProviderOptions,
 ): ImageGenerationProvider {
   const providerConfigKey = options.providerConfigKey ?? options.id;
-  const normalizeModel = options.normalizeModel ?? resolveDefaultModel;
+  const normalizeModel =
+    options.normalizeModel ?? ((model, fallback) => normalizeOptionalString(model) ?? fallback);
   const resolveCount = options.resolveCount ?? (({ req }) => req.count ?? 1);
 
   return {
@@ -149,6 +112,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
       // Reference images switch the request to edit mode; providers can still
       // disable edits or cap reference count through capabilities.
       const mode: OpenAiCompatibleImageRequestMode = inputImages.length > 0 ? "edit" : "generate";
+      const operation = `${options.label} image ${mode === "edit" ? "edit" : "generation"}`;
       const maxInputImages = options.capabilities.edit.maxInputImages;
       if (mode === "edit" && !options.capabilities.edit.enabled) {
         throw new Error(`${options.label} image editing is not supported.`);
@@ -212,11 +176,20 @@ export function createOpenAiCompatibleImageGenerationProvider(
         mode === "edit"
           ? options.buildEditRequest({ ...requestParams, mode })
           : options.buildGenerateRequest({ ...requestParams, mode });
-      const timeoutMs = resolveRequestTimeoutMs({ options, req, mode });
+      const timeoutMs =
+        options.defaultTimeoutMs === undefined
+          ? req.timeoutMs
+          : resolveProviderOperationTimeoutMs({
+              deadline: createProviderOperationDeadline({
+                timeoutMs: req.timeoutMs,
+                label: options.failureLabels?.[mode] ?? operation,
+              }),
+              defaultTimeoutMs: options.defaultTimeoutMs,
+            });
       // Multipart requests must let FormData set its own boundary header, while
       // JSON requests need an explicit content type after configured headers.
       const requestOptions = {
-        url: appendImagesPath(baseUrl, mode),
+        url: `${baseUrl.replace(/\/+$/u, "")}/images/${mode === "edit" ? "edits" : "generations"}`,
         headers: new Headers(headers),
         timeoutMs,
         fetchFn: fetch,
@@ -238,30 +211,20 @@ export function createOpenAiCompatibleImageGenerationProvider(
       try {
         await assertOkOrThrowHttpError(
           response,
-          mode === "edit"
-            ? (options.failureLabels?.edit ?? `${options.label} image edit failed`)
-            : (options.failureLabels?.generate ?? `${options.label} image generation failed`),
+          options.failureLabels?.[mode] ?? `${operation} failed`,
         );
         const payload = await readProviderJsonResponse(response, `${options.id}.image-generation`, {
           maxBytes: resolveInlineImageJsonResponseMaxBytes(
-            resolveResponseMaxImages({ count, mode, options }),
+            options.capabilities[mode].maxCount ?? count,
             resolveGeneratedMediaMaxBytes(req.cfg, "image"),
           ),
         });
         const images = parseOpenAiCompatibleImageResponse(payload, {
           ...options.response,
-          malformedResponseError:
-            mode === "edit"
-              ? `${options.label} image edit response malformed`
-              : `${options.label} image generation response malformed`,
+          malformedResponseError: `${operation} response malformed`,
         });
         if (images.length === 0) {
-          throw new Error(
-            options.emptyResponseError ??
-              (mode === "edit"
-                ? `${options.label} image edit response missing image data`
-                : `${options.label} image generation response missing image data`),
-          );
+          throw new Error(options.emptyResponseError ?? `${operation} response missing image data`);
         }
         return { images, model };
       } finally {

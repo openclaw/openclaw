@@ -44,41 +44,19 @@ export function inspectDiscordAccountTokenState<TBase extends object, TConfig>(p
   channelToken: unknown;
   resolveFallbackToken: () => { token: string; source: "env" | "config" | "none" };
 }): TBase & DiscordAccountTokenState & { config: TConfig } {
-  const accountToken = inspectDiscordConfiguredToken(params.accountToken);
-  if (accountToken) {
-    return { ...params.base, ...accountToken, configured: true, config: params.config };
+  const configuredToken =
+    inspectDiscordConfiguredToken(params.accountToken) ??
+    (params.hasAccountToken ? null : inspectDiscordConfiguredToken(params.channelToken));
+  if (configuredToken) {
+    return { ...params.base, ...configuredToken, configured: true, config: params.config };
   }
-  if (params.hasAccountToken) {
-    return {
-      ...params.base,
-      token: "",
-      tokenSource: "none",
-      tokenStatus: "missing",
-      configured: false,
-      config: params.config,
-    };
-  }
-  const channelToken = inspectDiscordConfiguredToken(params.channelToken);
-  if (channelToken) {
-    return { ...params.base, ...channelToken, configured: true, config: params.config };
-  }
-  const fallback = params.resolveFallbackToken();
-  if (fallback.token) {
-    return {
-      ...params.base,
-      token: fallback.token,
-      tokenSource: fallback.source,
-      tokenStatus: "available",
-      configured: true,
-      config: params.config,
-    };
-  }
+  const fallback = params.hasAccountToken ? undefined : params.resolveFallbackToken();
   return {
     ...params.base,
-    token: "",
-    tokenSource: "none",
-    tokenStatus: "missing",
-    configured: false,
+    token: fallback?.token || "",
+    tokenSource: fallback?.token ? fallback.source : "none",
+    tokenStatus: fallback?.token ? "available" : "missing",
+    configured: Boolean(fallback?.token),
     config: params.config,
   };
 }

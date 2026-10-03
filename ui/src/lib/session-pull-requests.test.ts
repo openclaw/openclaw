@@ -31,6 +31,53 @@ afterEach(() => {
 });
 
 describe("session pull request snapshot store", () => {
+  it("does not subscribe or retry without operator.read, then resumes after a scope upgrade", async () => {
+    vi.useFakeTimers();
+    const { harness, store, owner } = createStoreHarness();
+    const key = "agent:main:demo";
+    harness.setSnapshot({
+      ...harness.gateway.snapshot,
+      hello: createHello(["operator.sessions.read", "operator.sessions.write"]),
+    });
+    store.watch(owner, [key], { foreground: true });
+    await flushSync();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(harness.request).not.toHaveBeenCalled();
+    expect(await store.load({}, key)).toBeUndefined();
+
+    harness.setSnapshot({ ...harness.gateway.snapshot, hello: createHello() });
+    await flushSync();
+    expect(harness.request).toHaveBeenCalledWith(
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      { sessionKeys: [key] },
+      { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+    );
+    store.unwatch(owner);
+  });
+  it("retires a cached PR snapshot when operator.read is revoked", async () => {
+    const { harness, store, owner } = createStoreHarness();
+    const key = "agent:main:demo";
+    store.watch(owner, [key], { foreground: true });
+    await flushSync();
+    emitReadySnapshot(harness, key, [{ number: 42, state: "open" }]);
+    expect(store.get(key)?.pullRequests).toHaveLength(1);
+
+    harness.setSnapshot({
+      ...harness.gateway.snapshot,
+      hello: createHello(["operator.sessions.read", "operator.sessions.write"]),
+    });
+    await flushSync();
+    expect(store.get(key)).toBeUndefined();
+    expect(await store.load({}, key)).toBeUndefined();
+    expect(harness.request).toHaveBeenCalledTimes(1);
+
+    harness.setSnapshot({ ...harness.gateway.snapshot, hello: createHello() });
+    await flushSync();
+    expect(store.get(key)).toBeUndefined();
+    expect(harness.request).toHaveBeenCalledTimes(2);
+    store.unwatch(owner);
+  });
+
   it("coalesces refresh bursts while a subscription request is unsettled and keeps one trailing refresh", async () => {
     const harness = createGatewayHarness();
     const store = sessionPullRequestsForGateway(harness.gateway);

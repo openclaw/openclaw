@@ -10,7 +10,7 @@ import {
 import { tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { copyConfigResolutionFacts } from "../config/resolution-facts.js";

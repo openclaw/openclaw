@@ -266,6 +266,30 @@ export class LegacyMigrationSourceClaim<
     return claimed;
   }
 
+  /** Drain both receipt-retired names through the caller's safe reader before removing them. */
+  async removeRetiredSources(params: {
+    readSnapshot?: (sourcePath: string) => Promise<LegacyMigrationSourceIdentity>;
+    removeSource?: (sourcePath: string) => Promise<void> | void;
+  }): Promise<number> {
+    let removed = 0;
+    for (const claimed of [false, true]) {
+      if (!(await this.exists(claimed))) {
+        continue;
+      }
+      const sourcePath = claimed ? this.claimPath : this.sourcePath;
+      await (params.readSnapshot ?? this.params.readSnapshot)(sourcePath);
+      if (params.removeSource) {
+        await params.removeSource(sourcePath);
+      } else {
+        await this.params.stateRoot.remove(
+          claimed ? this.claimRelativePath : this.sourceRelativePath,
+        );
+      }
+      removed += 1;
+    }
+    return removed;
+  }
+
   async remove(
     params: {
       removeSource?: (sourcePath: string) => Promise<void> | void;

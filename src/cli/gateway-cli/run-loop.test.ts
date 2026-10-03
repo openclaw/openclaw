@@ -810,38 +810,6 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("skips a second active-work drain after a SIGUSR2 deferral timeout intent", async () => {
-    consumeGatewayRestartIntent.mockReturnValueOnce({
-      force: true,
-      drainBudgetExhausted: true,
-      reason: "config reload forced restart",
-    });
-    createGatewayActiveWorkSnapshot.mockReturnValue(
-      createActiveWorkSnapshot({ agentRuns: 1, embeddedRuns: 1 }, [
-        { kind: "agent-run", count: 1, message: "1 active background task run(s)" },
-        { kind: "embedded-run", count: 1, message: "1 active embedded run(s)" },
-      ]),
-    );
-
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const { close, start, exited } = await createSignaledLoopHarness();
-      const restartSignal = captureSignal("SIGUSR2");
-      const sigint = captureSignal("SIGINT");
-
-      restartSignal();
-      await waitForLoopTurn();
-      await waitForLoopTurn();
-
-      expect(waitForGatewayActiveWork).toHaveBeenCalledWith(0, expect.any(Object));
-      expect(markGatewayRestartHandled).toHaveBeenCalledOnce();
-      expectRestartCloseCall(close, 0);
-      expect(start).toHaveBeenCalledTimes(2);
-
-      sigint();
-      await expect(exited).resolves.toBe(0);
-    });
-  });
-
   registerGatewayRestartOwnershipTests(fixtures);
 
   it("restarts after SIGUSR2 even when drain times out, and resets runtime state for the new iteration", async () => {

@@ -1,10 +1,5 @@
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
-import type {
-  SessionTranscriptContextVersion,
-  SessionTranscriptWriteScope,
-  TranscriptEvent,
-} from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
 import {
@@ -15,28 +10,10 @@ import { resolveTranscriptMessageAppendParent } from "./session-accessor.sqlite-
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import { readWithCanonicalSessionAdmission } from "./session-canonical-key.js";
-
-export type SessionTranscriptMaintenanceRead =
-  | { operation: "previous"; beforeSeq: number }
-  | { operation: "identity"; eventId: string }
-  | { operation: "version" }
-  | {
-      operation: "suffix";
-      startSeq: number;
-      maxBytes: number;
-      maxEvents: number;
-      retainedCustomDataIds: readonly string[];
-    };
-
-export type SessionTranscriptMaintenanceFacts = {
-  kind: "transcript-maintenance";
-  previous?: TranscriptEvent;
-  seq?: number;
-  version?: SessionTranscriptContextVersion;
-  appendParentId?: string | null;
-  lifecycleRevision?: SessionTranscriptWriteScope["expectedLifecycleRevision"];
-  events?: TranscriptEvent[];
-};
+import type {
+  SessionTranscriptMaintenanceRead,
+  SessionTranscriptMaintenanceFacts,
+} from "./session-transcript-hydration.types.js";
 
 export function readSessionTranscriptMaintenance(
   database: OpenClawAgentReadOnlyDatabase,

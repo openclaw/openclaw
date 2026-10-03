@@ -139,7 +139,7 @@ describe("worker environment owner revocation", () => {
         status: () => "connected" as const,
         start: vi.fn(),
         stop: vi.fn(async () => {
-          expect(placements.listPendingWorkspaceResults()).toMatchObject([
+          expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
             { sessionId: SESSION_ID, recoveryRequestedAtMs: expect.any(Number) },
           ]);
         }),
@@ -155,7 +155,7 @@ describe("worker environment owner revocation", () => {
         .reconcileOnce();
 
       expect(tunnelManager.stop).toHaveBeenCalledTimes(owner === "recovery-only" ? 1 : 0);
-      expect(placements.listPendingWorkspaceResults()).toMatchObject([
+      expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
         {
           sessionId: SESSION_ID,
           recoveryRequestedAtMs: owner === "recovery-only" ? expect.any(Number) : null,

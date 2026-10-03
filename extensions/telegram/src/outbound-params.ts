@@ -10,16 +10,10 @@ export function parseTelegramReplyToMessageId(replyToId?: unknown): number | und
 }
 
 export function parseTelegramThreadId(threadId?: string | number | null): number | undefined {
-  if (threadId == null) {
-    return undefined;
-  }
-  if (typeof threadId === "number") {
+  if (typeof threadId !== "string") {
     return parseStrictInteger(threadId);
   }
   const trimmed = threadId.trim();
-  if (!trimmed) {
-    return undefined;
-  }
   const topicMatch = /^-?\d+:topic:(\d+)$/.exec(trimmed);
   if (topicMatch) {
     return parseStrictInteger(topicMatch[1]);

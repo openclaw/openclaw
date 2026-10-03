@@ -331,19 +331,18 @@ struct ChatViewModelAgentNavigationTests {
         defer { fixture.close() }
         let vm = fixture.viewModel
         vm.load()
-        try await waitUntil("Research activation acknowledged") {
-            let requestCount = await transport.mutationRequests.count
-            return await MainActor.run { requestCount == 1 && !vm.isLoading }
-        }
+        await vm.bootstrapTask?.value
+        #expect(await transport.mutationRequests.count == 1)
         vm.setSessionUnread(key: "global", unread: true, agentID: "research")
         try await waitUntil("Research manual unread mark accepted") { await transport.mutationRequests.count == 2 }
         vm.refresh()
-        try await waitUntil("Research refresh settled") { await MainActor.run { !vm.isLoading } }
+        await vm.bootstrapTask?.value
         #expect(await transport.mutationRequests.count == 2)
         #expect(vm.currentSessionEntry()?.unread == true)
 
         vm.switchSession(to: "global", agentID: "main")
-        try await waitUntil("Main activation acknowledged") { await transport.mutationRequests.count == 3 }
+        await vm.bootstrapTask?.value
+        #expect(await transport.mutationRequests.count == 3)
         let acknowledgements = await transport.mutationRequests.filter { $0.params["unread"]?.value as? Bool == false }
         #expect(acknowledgements.map { $0.params["agentId"]?.value as? String } == ["research", "main"])
         #expect(acknowledgements.allSatisfy { $0.params["key"]?.value as? String == "global" })
@@ -352,7 +351,7 @@ struct ChatViewModelAgentNavigationTests {
     }
 
     @Test(arguments: [false, true])
-    func `primary navigation selects its named global row without a placeholder`(hasHomeRow: Bool) async throws {
+    func `primary navigation selects its named global row without a placeholder`(hasHomeRow: Bool) async {
         let contract = "global|inbox|main"
         let transport = AgentNavigationTransport(
             catalogs: [.success(self.catalog(contract: contract))],
@@ -362,7 +361,7 @@ struct ChatViewModelAgentNavigationTests {
         defer { fixture.close() }
         let vm = fixture.viewModel
         vm.load()
-        try await waitUntil("canonical global row loaded") { await MainActor.run { !vm.isLoading } }
+        await vm.bootstrapTask?.value
         let sections = ChatSessionSidebarModel.sections(
             sessions: vm.sessions,
             currentSessionKey: vm.sessionKey,
@@ -395,7 +394,8 @@ struct ChatViewModelAgentNavigationTests {
         let vm = fixture.viewModel
         vm.switchSession(to: "global", agentID: "research")
         let research = OpenClawChatSessionTarget(sessionKey: "global", agentID: "research")
-        try await waitUntil("research history subscribed") { await transport.historyTargets.contains(research) }
+        await vm.bootstrapTask?.value
+        #expect(await transport.historyTargets.contains(research))
         #expect(await transport.subscriptionTargets.contains(research))
         vm.syncActiveAgentId("replacement-default")
         #expect(vm.selectedAgentID == "research")
@@ -408,7 +408,8 @@ struct ChatViewModelAgentNavigationTests {
 
         vm.switchSession(to: "global", agentID: "main")
         let main = OpenClawChatSessionTarget(sessionKey: "global", agentID: "main")
-        try await waitUntil("same-key main history subscribed") { await transport.historyTargets.contains(main) }
+        await vm.bootstrapTask?.value
+        #expect(await transport.historyTargets.contains(main))
         #expect(vm.input.isEmpty)
         vm.input = "main draft"
         vm.switchSession(to: "agent:research:global")
@@ -480,7 +481,7 @@ struct ChatViewModelAgentNavigationTests {
         defer { fixture.close() }
         let vm = fixture.viewModel
         vm.switchSession(to: "global", agentID: "research")
-        try await waitUntil("research bootstrap finishes") { await MainActor.run { !vm.isLoading } }
+        await vm.bootstrapTask?.value
         vm.pendingRuns = ["run-one", "run-two"]
         vm.abort()
         try await waitUntil("first abort begins") { await transport.abortTargets.count == 1 }
@@ -525,9 +526,8 @@ struct ChatViewModelAgentNavigationTests {
         #expect(vm.selectedAgentID == "research")
         #expect(vm.selectedAgent?.displayName == "Research")
         #expect(vm.selectedAgentMainSessionKey == selectedKey)
-        try await waitUntil("selected agent roster loads") {
-            await transport.listedAgentIDs.contains("research")
-        }
+        await vm.bootstrapTask?.value
+        #expect(await transport.listedAgentIDs.contains("research"))
         _ = await vm.fetchSessionList(search: "older", archived: true)
         #expect(await transport.listedAgentIDs.last == "research")
         vm.switchAgent(to: "research")

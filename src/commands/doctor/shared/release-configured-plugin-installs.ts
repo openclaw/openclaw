@@ -116,10 +116,7 @@ function collectConfiguredChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv
   });
 }
 
-function collectAgentHarnessRuntimePluginIds(
-  cfg: OpenClawConfig,
-  _env: NodeJS.ProcessEnv,
-): string[] {
+function collectAgentHarnessRuntimePluginIds(cfg: OpenClawConfig): string[] {
   return collectConfiguredAgentHarnessRuntimes(cfg)
     .map((runtime) => AGENT_HARNESS_RUNTIME_PLUGIN_IDS[runtime])
     .filter((pluginId): pluginId is string => Boolean(pluginId))
@@ -251,7 +248,7 @@ function collectReleaseConfiguredPluginIds(params: {
     ...collectMaterialPluginEntryIds(params.cfg),
     ...collectSlotPluginIds(params.cfg),
     ...collectConfiguredProviderPluginIds({ cfg: params.cfg, env }),
-    ...collectAgentHarnessRuntimePluginIds(params.cfg, env),
+    ...collectAgentHarnessRuntimePluginIds(params.cfg),
     ...collectWebSearchPluginIds(params.cfg, env),
     ...collectWebFetchPluginIds(params.cfg, env),
     ...collectSpeechPluginIds(params.cfg),

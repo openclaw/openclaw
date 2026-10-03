@@ -1,6 +1,9 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawPluginApi, PluginRuntime } from "openclaw/plugin-sdk/core";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import { registerSessionDiscussionProvider } from "openclaw/plugin-sdk/session-discussion";
 import { createSessionVisibilityChecker } from "openclaw/plugin-sdk/session-visibility";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -60,7 +63,12 @@ describe("ClickClack discussion registration lifecycle", () => {
       if (!service || !cleanup || !provider) {
         throw new Error("Expected the registered ClickClack discussion lifecycle");
       }
-      const context = { config, stateDir: "/unused", logger: api.logger };
+      const context = {
+        scheduler: createTestPluginServiceScheduler(),
+        config,
+        stateDir: "/unused",
+        logger: api.logger,
+      };
       const request = { sessionKey: "agent:main:discussion", agentId: "main" };
       try {
         await service.start(context);

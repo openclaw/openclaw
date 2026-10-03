@@ -345,45 +345,23 @@ const parseTelegramManagedSelectCallback = (
   return undefined;
 };
 
-const cloneInlineKeyboardButtons = (message: Message): TelegramCallbackButton[][] => {
-  const rows = (message as { reply_markup?: { inline_keyboard?: unknown } }).reply_markup
-    ?.inline_keyboard;
-  if (!Array.isArray(rows)) {
-    return [];
-  }
-  return rows
+const cloneInlineKeyboardButtons = (message: Message): TelegramCallbackButton[][] =>
+  (message.reply_markup?.inline_keyboard ?? [])
     .map((row) =>
-      Array.isArray(row)
-        ? row
-            .map((button): TelegramCallbackButton | null => {
-              const candidate = button as {
-                text?: unknown;
-                callback_data?: unknown;
-                style?: unknown;
-              };
-              if (
-                typeof candidate.text !== "string" ||
-                typeof candidate.callback_data !== "string"
-              ) {
-                return null;
-              }
-              const style =
-                candidate.style === "danger" ||
-                candidate.style === "success" ||
-                candidate.style === "primary"
-                  ? candidate.style
-                  : undefined;
-              return {
-                text: candidate.text,
-                callback_data: candidate.callback_data,
-                ...(style ? { style } : {}),
-              };
-            })
-            .filter((button): button is TelegramCallbackButton => button !== null)
-        : [],
+      row.flatMap((button) => {
+        if (!("callback_data" in button) || typeof button.callback_data !== "string") {
+          return [];
+        }
+        const style =
+          button.style === "danger" || button.style === "success" || button.style === "primary"
+            ? button.style
+            : undefined;
+        return [
+          { text: button.text, callback_data: button.callback_data, ...(style ? { style } : {}) },
+        ];
+      }),
     )
     .filter((row) => row.length > 0);
-};
 
 const stripMultiSelectPrefix = (text: string): string => text.replace(/^✅\s*/, "");
 const isSelectedMultiButton = (button: TelegramCallbackButton): boolean =>

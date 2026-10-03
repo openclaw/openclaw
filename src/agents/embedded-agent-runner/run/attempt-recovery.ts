@@ -339,6 +339,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     requested: currentAttemptReplaySafe ? requestedSelection : undefined,
   });
   const commonRecoveryInput = {
+    runInput,
     runParams: params,
     state: input.contextRecoveryState,
     contextEngine: input.contextEngine,

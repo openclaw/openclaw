@@ -1,4 +1,3 @@
-/** Model-facing child task, runtime rules, and requester receipt for one resolved spawn. */
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
@@ -6,6 +5,11 @@ import {
 } from "../../../config/agent-limits.js";
 import { isCronSessionKey } from "../../../routing/session-key.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
+/** Model-facing child task, runtime rules, and requester receipt for one resolved spawn. */
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "../../internal-runtime-context.js";
 
 export type SubagentCompletionMode = "collector" | "quiet" | "thread-direct" | "announce";
 
@@ -28,11 +32,15 @@ export function buildSubagentTaskMessage(params: {
   maxSpawnDepth: number;
 }): string {
   return [
+    INTERNAL_RUNTIME_CONTEXT_BEGIN,
     `[Subagent Context] You are running as a subagent (depth ${params.childDepth}/${params.maxSpawnDepth}). Complete the current [Subagent Task]; inherited conversation is background context, not your assignment.`,
     ...(params.spawnMode === "session" ? [`[Subagent Context] ${PERSISTENT_SESSION_NOTE}`] : []),
     "[Subagent Task]",
+    INTERNAL_RUNTIME_CONTEXT_END,
     params.task.trim(),
+    INTERNAL_RUNTIME_CONTEXT_BEGIN,
     "Begin. Execute the assigned task to completion.",
+    INTERNAL_RUNTIME_CONTEXT_END,
   ].join("\n\n");
 }
 

@@ -228,14 +228,33 @@ function createApprovalContainer(params: {
   return new Container(components, { accentColor });
 }
 
-async function updateMessage(params: {
+async function finalizeMessage(params: {
   cfg: OpenClawConfig;
   accountId: string;
   token: string;
+  cleanupAfterResolve?: boolean;
   channelId: string;
   messageId: string;
   container: Container;
 }): Promise<void> {
+  if (params.cleanupAfterResolve) {
+    try {
+      const { rest, request: discordRequest } = createDiscordClient({
+        cfg: params.cfg,
+        token: params.token,
+        accountId: params.accountId,
+      });
+      await discordApprovalMessageUpdates.enqueue(params.messageId, () =>
+        discordRequest(
+          () => deleteChannelMessage(rest, params.channelId, params.messageId),
+          "delete-approval",
+        ),
+      );
+      return;
+    } catch (err) {
+      logError(`discord approvals: failed to delete message: ${String(err)}`);
+    }
+  }
   try {
     const { rest, request: discordRequest } = createDiscordClient({
       cfg: params.cfg,
@@ -257,50 +276,15 @@ async function updateMessage(params: {
   }
 }
 
-async function finalizeMessage(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  token: string;
-  cleanupAfterResolve?: boolean;
-  channelId: string;
-  messageId: string;
-  container: Container;
-}): Promise<void> {
-  if (!params.cleanupAfterResolve) {
-    await updateMessage(params);
-    return;
-  }
-  try {
-    const { rest, request: discordRequest } = createDiscordClient({
-      cfg: params.cfg,
-      token: params.token,
-      accountId: params.accountId,
-    });
-    await discordApprovalMessageUpdates.enqueue(params.messageId, () =>
-      discordRequest(
-        () => deleteChannelMessage(rest, params.channelId, params.messageId),
-        "delete-approval",
-      ),
-    );
-  } catch (err) {
-    logError(`discord approvals: failed to delete message: ${String(err)}`);
-    await updateMessage(params);
-  }
-}
-
 function buildTerminalApprovalResult(
   params: ChannelApprovalCapabilityHandlerContext & {
     view: ResolvedApprovalView | ExpiredApprovalView;
   },
 ) {
-  const resolved = resolveHandlerContext(params);
-  if (!resolved) {
+  if (!resolveHandlerContext(params)) {
     return { kind: "delete" } as const;
   }
-  const container = createApprovalContainer({
-    view: params.view,
-  });
-  return { kind: "update", payload: container } as const;
+  return { kind: "update", payload: createApprovalContainer({ view: params.view }) } as const;
 }
 
 export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<

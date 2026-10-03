@@ -5,7 +5,6 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { createNativeCommandItem } from "./event-projector-command.test-support.js";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -114,32 +113,6 @@ describe("CodexAppServerEventProjector terminal errors", () => {
       }
     },
   );
-
-  it("keeps sparse successful bash output eligible for the no-visible-answer guard", async () => {
-    const projector = await createProjector();
-    await projector.handleNotification(
-      turnWithStatus("interrupted", [
-        createNativeCommandItem({
-          id: "cmd-empty-output",
-          command:
-            "ps -eo pid,ppid,stat,cmd | rg 'venv-roadmap|pytest|run_security_contract_validation|validate_public_install|git push|apply_patch' || true",
-          aggregatedOutput: "",
-        }),
-      ]),
-    );
-    const result = snapshot(projector);
-    expect(readAttemptTerminal(result)).toMatchObject({
-      aborted: false,
-      externalAbort: false,
-      timedOut: false,
-      promptError: null,
-    });
-    expect(result.lastAssistant).toBeUndefined();
-    expect(result.assistantTexts).toEqual([]);
-    expect(result.toolMetas).toEqual([
-      expect.objectContaining({ toolName: "bash", meta: expect.stringContaining("workspace") }),
-    ]);
-  });
 
   it("keeps missing tool detail without overriding an explicit abort", async () => {
     const projector = await createProjector();

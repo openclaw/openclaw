@@ -20,7 +20,6 @@ function getState() {
     kickoffRunId: undefined,
     resolveFinalReply,
     yieldEntered: false,
-    releaseYield: undefined,
   });
 }
 
@@ -49,15 +48,11 @@ function writeJson(res, statusCode, body) {
 export default {
   id: "qa-self-yield-followup-subagent",
   register(api) {
-    api.on("before_tool_call", async (event) => {
+    api.on("after_tool_call", (event) => {
       if (event.toolName !== "sessions_yield") {
         return;
       }
-      const state = getState();
-      state.yieldEntered = true;
-      await new Promise((resolve) => {
-        state.releaseYield = resolve;
-      });
+      getState().yieldEntered = true;
     });
 
     api.on("before_dispatch", async (event) => {
@@ -150,12 +145,10 @@ export default {
       gatewayRuntimeScopeSurface: "trusted-operator",
       async handler(_req, res) {
         const state = getState();
-        if (!state.followUpRunId || !state.releaseYield) {
+        if (!state.followUpRunId) {
           writeJson(res, 409, { ok: false, error: "follow-up was not queued" });
           return true;
         }
-        state.releaseYield();
-        state.releaseYield = undefined;
         const terminal = await api.runtime.subagent.waitForRun({
           runId: state.followUpRunId,
           timeoutMs: 90_000,

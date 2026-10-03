@@ -481,6 +481,7 @@ describe("agent runtime identity token", () => {
       sessionSpawnContext: withAgentRuntimeExecutionLineage(
         {
           requesterProfileId: " profile-vito ",
+          requesterSenderIsOwner: false,
           completionOwnerSessionKey: " agent:main:discord:direct:alice ",
           resolvedModel: { provider: "custom", model: "custom/model" },
           spawnModelAutoSelection: { model: "custom/custom/model", hasFallbackOrigin: true },
@@ -517,6 +518,7 @@ describe("agent runtime identity token", () => {
       executionIdentity: parentExecutionIdentity,
       sessionSpawnContext: {
         requesterProfileId: "profile-vito",
+        requesterSenderIsOwner: false,
         completionOwnerSessionKey: "agent:main:discord:direct:alice",
         resolvedModel: { provider: "custom", model: "custom/model" },
         spawnModelAutoSelection: { model: "custom/custom/model", hasFallbackOrigin: true },

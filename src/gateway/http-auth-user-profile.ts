@@ -208,7 +208,12 @@ async function prepareHttpProfile(
   }
   const display = authority.display;
   const operatorRolePolicy = cfg
-    ? resolveOperatorRolePolicyForAssignment(display.id, authority.role, cfg)
+    ? resolveOperatorRolePolicyForAssignment(
+        display.id,
+        authority.role,
+        cfg,
+        authority.githubLogin ?? null,
+      )
     : undefined;
   const operatorAccessAuthority = cfg
     ? resolveGatewayOperatorAccessAuthority(profileId, cfg)

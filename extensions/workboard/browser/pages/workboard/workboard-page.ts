@@ -23,7 +23,6 @@ import {
   type WorkboardUiState,
   WORKBOARD_CHANGED_EVENT,
 } from "../../lib/workboard/index.ts";
-import { invalidateWorkboardLiveRefresh } from "../../lib/workboard/live-refresh.ts";
 import { createWorkboardSessionResolver } from "../../lib/workboard/session-resolution.ts";
 import { matchesAgentScope } from "./agent-filter.ts";
 import { matchesBoardFilter, WORKBOARD_ALL_BOARDS_FILTER } from "./board-filter.ts";
@@ -470,20 +469,6 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
         requestUpdate();
       }
     });
-    const unsubscribeObserver = host.onEvent("session.observer", (payload) => {
-      if (disposed || !connected || !context.presented || !isRecord(payload)) {
-        return;
-      }
-      if (
-        sessionsBoard.snapshot?.sessions.some(
-          (session) =>
-            session.key === payload.sessionKey &&
-            (!host.agents.scopeId || session.agentId === host.agents.scopeId),
-        )
-      ) {
-        invalidateWorkboardLiveRefresh(workboard);
-      }
-    });
     document.addEventListener("visibilitychange", onVisibilityChange);
     update();
     return {
@@ -498,7 +483,6 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
         unsubscribeState();
         unsubscribeEvents();
         unsubscribeCron();
-        unsubscribeObserver();
         sessionsBoard.dispose();
         sessionResolver.dispose();
         document.removeEventListener("visibilitychange", onVisibilityChange);

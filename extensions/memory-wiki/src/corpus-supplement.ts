@@ -16,7 +16,7 @@ export function createWikiCorpusSupplement(params: {
     }) => {
       const appConfig = params.getAppConfig();
       const config = params.resolveConfig(input.agentId, appConfig);
-      return await searchMemoryWiki({
+      const results = await searchMemoryWiki({
         config,
         appConfig,
         agentId: config.agentId ?? input.agentId,
@@ -27,6 +27,7 @@ export function createWikiCorpusSupplement(params: {
         searchBackend: "local",
         searchCorpus: "wiki",
       });
+      return results.filter((result) => result.corpus === "wiki");
     },
     get: async (input: {
       lookup: string;
@@ -38,7 +39,7 @@ export function createWikiCorpusSupplement(params: {
     }) => {
       const appConfig = params.getAppConfig();
       const config = params.resolveConfig(input.agentId, appConfig);
-      return await getMemoryWikiPage({
+      const result = await getMemoryWikiPage({
         config,
         appConfig,
         agentId: config.agentId ?? input.agentId,
@@ -50,6 +51,7 @@ export function createWikiCorpusSupplement(params: {
         searchBackend: "local",
         searchCorpus: "wiki",
       });
+      return result?.corpus === "wiki" ? result : null;
     },
   };
 }

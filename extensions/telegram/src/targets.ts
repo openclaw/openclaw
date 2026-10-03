@@ -60,17 +60,8 @@ export function normalizeTelegramLookupTarget(raw: string): string | undefined {
   if (tmeMatch?.[1]) {
     return `@${tmeMatch[1]}`;
   }
-  if (stripped.startsWith("@")) {
-    const handle = stripped.slice(1);
-    if (!handle || !TELEGRAM_USERNAME_REGEX.test(handle)) {
-      return undefined;
-    }
-    return `@${handle}`;
-  }
-  if (TELEGRAM_USERNAME_REGEX.test(stripped)) {
-    return `@${stripped}`;
-  }
-  return undefined;
+  const handle = stripped.startsWith("@") ? stripped.slice(1) : stripped;
+  return TELEGRAM_USERNAME_REGEX.test(handle) ? `@${handle}` : undefined;
 }
 
 /**
@@ -84,9 +75,6 @@ export function normalizeTelegramLookupTarget(raw: string): string | undefined {
  */
 function resolveTelegramChatType(chatId: string): "direct" | "group" | "unknown" {
   const trimmed = chatId.trim();
-  if (!trimmed) {
-    return "unknown";
-  }
   if (isNumericTelegramChatId(trimmed)) {
     return trimmed.startsWith("-") ? "group" : "direct";
   }

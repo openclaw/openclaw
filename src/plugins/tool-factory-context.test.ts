@@ -219,6 +219,34 @@ describe("versioned plugin tool authority", () => {
     );
   });
 
+  it.each([
+    ["the memory slot owner's tools", "probe", true],
+    ["another plugin's tools", "records", false],
+  ])("checks memory audience currency only for %s", (_label, slotOwner, guarded) => {
+    const { entry, registry } = register(() => null);
+    registry.memoryCapabilities.push({
+      pluginId: slotOwner,
+      capability: {},
+      memorySlotSelected: true,
+    });
+    const assertMemoryAudienceCurrent = vi.fn(() => {
+      throw new Error("memory audience is no longer current");
+    });
+    const context = createPluginToolFactoryContext({
+      entry,
+      registry,
+      context: { assertMemoryAudienceCurrent },
+      assertInvocationCurrent: () => {},
+    });
+
+    if (guarded) {
+      expect(() => context.assertInvocationCurrent()).toThrow("no longer current");
+    } else {
+      expect(() => context.assertInvocationCurrent()).not.toThrow();
+      expect(assertMemoryAudienceCurrent).not.toHaveBeenCalled();
+    }
+  });
+
   it("allows metadata construction but rejects V2 effects without an admitted invocation", async () => {
     const effect = vi.fn();
     const { entry, registry } = register({

@@ -1,6 +1,3 @@
-/**
- * Baseten model catalog, compat metadata, and live row projection.
- */
 import {
   buildManifestModelProviderConfig,
   readManifestProviderDefaultModelRef,
@@ -11,8 +8,10 @@ import type {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   asNonArrayRecord,
+  asOptionalRecord,
   asPositiveSafeInteger,
   filterStringEntries,
+  normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
@@ -44,21 +43,15 @@ const BASE_COMPAT: ModelCompatConfig = {
   maxTokensField: "max_tokens",
 };
 
-/** Base URL for Baseten's OpenAI-compatible Model APIs. */
 export const BASETEN_BASE_URL = BASETEN_MANIFEST_CATALOG.baseUrl;
-/** Default Baseten model id used for onboarding. */
 export const BASETEN_DEFAULT_MODEL_ID = BASETEN_MANIFEST_CATALOG.defaultModel;
-/** Default Baseten model ref used for onboarding. */
 export const BASETEN_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(manifest, "baseten")!;
-/** Bundled fallback rows for all Baseten Model APIs available at release time. */
 export const BASETEN_MODEL_CATALOG = BASETEN_MANIFEST_CATALOG.models;
 
-/** Whether Baseten requires chat-template thinking control for this model. */
 export function usesBasetenChatTemplateThinking(modelId: string): boolean {
   return CHAT_TEMPLATE_THINKING_MODEL_IDS.has(modelId.trim().toLowerCase());
 }
 
-/** Complete OpenAI-compatible transport policy for one Baseten model. */
 export function buildBasetenModelCompat(modelId: string): ModelCompatConfig {
   return {
     ...BASE_COMPAT,
@@ -66,23 +59,12 @@ export function buildBasetenModelCompat(modelId: string): ModelCompatConfig {
   };
 }
 
-/** Builds the network-free fallback catalog. */
 export function buildStaticBasetenModels(): ModelDefinitionConfig[] {
   return buildManifestModelProviderConfig({
     providerId: "baseten",
     catalog: BASETEN_MANIFEST_CATALOG,
   }).models.map((model) => Object.assign(model, { compat: buildBasetenModelCompat(model.id) }));
 }
-
-type BasetenLiveModelRow = {
-  id?: unknown;
-  object?: unknown;
-  name?: unknown;
-  context_length?: unknown;
-  max_completion_tokens?: unknown;
-  pricing?: unknown;
-  supported_features?: unknown;
-};
 
 function readPerTokenPrice(value: unknown): number | undefined {
   if (typeof value !== "number" && (typeof value !== "string" || !value.trim())) {
@@ -109,13 +91,13 @@ function applyLiveReasoningEffortCompat(
 }
 
 function projectLiveModel(
-  row: BasetenLiveModelRow,
+  row: Record<string, unknown>,
   fallback: ModelDefinitionConfig | undefined,
 ): ModelDefinitionConfig | undefined {
   if (row.object !== undefined && row.object !== "model") {
     return undefined;
   }
-  const id = typeof row.id === "string" ? row.id.trim() : "";
+  const id = normalizeOptionalString(row.id);
   if (!id) {
     return undefined;
   }
@@ -134,8 +116,7 @@ function projectLiveModel(
 
   return {
     id,
-    name:
-      typeof row.name === "string" && row.name.trim() ? row.name.trim() : (fallback?.name ?? id),
+    name: normalizeOptionalString(row.name) ?? fallback?.name ?? id,
     reasoning: hasLiveFeatures
       ? features.has("reasoning") || supportsReasoningEffort
       : (fallback?.reasoning ?? false),
@@ -167,14 +148,12 @@ export function projectBasetenLiveModels(rows: readonly unknown[]): ModelDefinit
   const fallbacks = new Map(buildStaticBasetenModels().map((model) => [model.id, model]));
   const seen = new Set<string>();
   const models: ModelDefinitionConfig[] = [];
-  for (const row of rows) {
-    if (!row || typeof row !== "object" || Array.isArray(row)) {
+  for (const value of rows) {
+    const row = asOptionalRecord(value);
+    if (!row) {
       continue;
     }
-    const model = projectLiveModel(
-      row as BasetenLiveModelRow,
-      fallbacks.get(String((row as BasetenLiveModelRow).id)),
-    );
+    const model = projectLiveModel(row, fallbacks.get(String(row.id)));
     if (!model || seen.has(model.id)) {
       continue;
     }

@@ -45,7 +45,7 @@ import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-s
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
-import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
+import { preserveSessionLineage } from "../config/sessions/session-entry-lineage.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import {
   buildSessionCreationStamp,
@@ -1197,7 +1197,7 @@ export async function performGatewaySessionReset(params: {
             queueDebounceMs: currentEntry?.queueDebounceMs,
             queueCap: currentEntry?.queueCap,
             queueDrop: currentEntry?.queueDrop,
-            spawnedBy: currentEntry?.spawnedBy,
+            ...preserveSessionLineage(currentEntry),
             completionOwnerSessionKey: currentEntry?.completionOwnerSessionKey,
             inheritedToolPolicyVersion: currentEntry?.inheritedToolPolicyVersion,
             inheritedToolAllow: currentEntry?.inheritedToolAllow,
@@ -1219,14 +1219,7 @@ export async function performGatewaySessionReset(params: {
               : (preparedLifecycle?.worktree ?? currentEntry?.worktree),
             repositoryWorkspaceId:
               preparedLifecycle?.repositoryWorkspaceId ?? currentEntry?.repositoryWorkspaceId,
-            parentSessionKey: currentEntry?.parentSessionKey,
-            parentSessionId: currentEntry?.parentSessionId,
             ...creationStamp,
-            forkSource: currentEntry?.forkSource,
-            forkedFromParent: sessionEntryForkedFromParent(currentEntry) ? true : undefined,
-            spawnDepth: currentEntry?.spawnDepth,
-            subagentRole: currentEntry?.subagentRole,
-            subagentControlScope: currentEntry?.subagentControlScope,
             label: currentEntry?.label,
             autoLabel: currentEntry?.autoLabel,
             icon: currentEntry?.icon,

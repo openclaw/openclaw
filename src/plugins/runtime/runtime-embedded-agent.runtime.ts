@@ -14,9 +14,28 @@ import {
   isReplyPayloadTerminalContent,
 } from "../../auto-reply/reply-payload.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveSendableOutboundReplyParts } from "../../infra/outbound/reply-payload-parts.js";
+import {
+  delegateMemoryAudience,
+  isHostMemoryAudience,
+  type MemoryAudienceGrant,
+} from "../memory-audience.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import type { PluginRuntime } from "./types.js";
+
+// Admission preparation is the last step before close() owns the delegated grant.
+function prepareDelegatedRunAdmission<T>(
+  delegated: MemoryAudienceGrant | undefined,
+  prepare: () => T,
+): T {
+  try {
+    return prepare();
+  } catch (error) {
+    delegated?.release();
+    throw error;
+  }
+}
 
 export const runPluginEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] = async (
   params,
@@ -37,42 +56,66 @@ export const runPluginEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] 
   ) {
     throw new Error("Plugin embedded-agent execution cannot supply host run authority.");
   }
+  if (params.memoryAudience && !isHostMemoryAudience(params.memoryAudience)) {
+    throw new Error("Plugin embedded-agent memory audience must be host-minted.");
+  }
   params.abortSignal?.throwIfAborted();
+  const config = params.config ?? getRuntimeConfig();
+  // The child run owns its delegated grant: it binds the child's current incarnation
+  // and close() releases it, so a reset child cannot keep reading memory.
+  const delegated = params.memoryAudience
+    ? await delegateMemoryAudience(params.memoryAudience, {
+        sessionKey: params.sessionKey?.trim() ?? params.sessionTarget?.sessionKey ?? "",
+        storePath:
+          params.sessionTarget?.storePath ??
+          resolveSessionStorePathCore(config.session?.store, {
+            agentId: params.memoryAudience.agentId,
+          }),
+        detached: params.sessionPersistence === "detached",
+        assertCallerCurrent: () => params.abortSignal?.throwIfAborted(),
+      })
+    : undefined;
   const decisionOccurrenceId = randomUUID();
   let admittedRunContext: AdmittedRunContext | undefined;
-  const config = params.config ?? getRuntimeConfig();
-  const preparedRunAdmission = prepareAgentRunAdmission({
-    cfg: config,
-    operationalRunInstance: createOperationalRunInstanceRef(params.runId),
-    facts: {
-      runId: params.runId,
-      agentId: params.sessionTarget?.agentId ?? params.agentId ?? "main",
-      ingress: {
-        kind: "plugin",
-        boundary: "plugin-runtime",
-        rawSourceRef: pluginId,
-        state: "present",
+  const preparedRunAdmission = prepareDelegatedRunAdmission(delegated, () =>
+    prepareAgentRunAdmission({
+      cfg: config,
+      operationalRunInstance: createOperationalRunInstanceRef(params.runId),
+      facts: {
+        runId: params.runId,
+        agentId: params.sessionTarget?.agentId ?? params.agentId ?? "main",
+        ingress: {
+          kind: "plugin",
+          boundary: "plugin-runtime",
+          rawSourceRef: pluginId,
+          state: "present",
+        },
       },
-    },
-    onAdmitted: (context) => {
-      admittedRunContext = context;
-      const token = context.executionIdentityToken;
-      recordRuntimeActionDecision({
-        token,
-        family: "plugin",
-        operation: "run",
-        outcome: "allowed",
-        coverageState: "enforced",
-        reasonCode: "plugin_runtime_owner_admitted",
-        owner: "plugin-runtime",
-        decisionBoundary: "plugin.runtime.run-embedded-agent",
-        policyRefs: ["plugin:registered-owner", "run:admission"],
-        summary: "The registered plugin owner passed exact run admission.",
-        remediation: [],
-        discriminator: JSON.stringify([pluginId, params.runId, decisionOccurrenceId, "admission"]),
-      });
-    },
-  });
+      onAdmitted: (context) => {
+        admittedRunContext = context;
+        const token = context.executionIdentityToken;
+        recordRuntimeActionDecision({
+          token,
+          family: "plugin",
+          operation: "run",
+          outcome: "allowed",
+          coverageState: "enforced",
+          reasonCode: "plugin_runtime_owner_admitted",
+          owner: "plugin-runtime",
+          decisionBoundary: "plugin.runtime.run-embedded-agent",
+          policyRefs: ["plugin:registered-owner", "run:admission"],
+          summary: "The registered plugin owner passed exact run admission.",
+          remediation: [],
+          discriminator: JSON.stringify([
+            pluginId,
+            params.runId,
+            decisionOccurrenceId,
+            "admission",
+          ]),
+        });
+      },
+    }),
+  );
   let closed = false;
   let legacyReplyCustodyIndex = -1;
   let minimumReplyMessageIndex = 0;
@@ -81,6 +124,7 @@ export const runPluginEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] 
       closed = true;
       legacyReplyCustodyIndex = -1;
       preparedRunAdmission.close();
+      delegated?.release();
     }
   };
   // Abort owns authority revocation independently of core completion; the
@@ -115,7 +159,12 @@ export const runPluginEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] 
           : "missing";
       };
     }
-    const result = await runEmbeddedAgentCore({ ...runParams, config, preparedRunAdmission });
+    const result = await runEmbeddedAgentCore({
+      ...runParams,
+      memoryAudience: delegated?.audience,
+      config,
+      preparedRunAdmission,
+    });
     if (admittedRunContext && getAdmittedRunDelegatedAuthority(admittedRunContext)) {
       recordRuntimeActionDecision({
         token: admittedRunContext.executionIdentityToken,

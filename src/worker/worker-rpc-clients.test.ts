@@ -12,12 +12,19 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { WorkerConnectionStoppedError, WorkerFencedError } from "./worker-connection-contract.js";
+import type { WorkerConnectionFrameDispatcher } from "./worker-connection-frames.js";
 import type { WorkerConnection, WorkerConnectionState } from "./worker-connection.js";
 import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
 import { WorkerLiveEventClient } from "./worker-rpc-live-event-client.js";
 import { WorkerTranscriptCommitClient } from "./worker-rpc-transcript-client.js";
 
-type LiveResponse = Awaited<ReturnType<WorkerConnection["requestLiveEvent"]>>;
+type TranscriptRequest = typeof WorkerConnectionFrameDispatcher.prototype.request<"transcript">;
+type LiveRequest = typeof WorkerConnectionFrameDispatcher.prototype.request<"live-event">;
+type InferenceStartRequest =
+  typeof WorkerConnectionFrameDispatcher.prototype.request<"inference-start">;
+type InferenceCancelRequest =
+  typeof WorkerConnectionFrameDispatcher.prototype.request<"inference-cancel">;
+type LiveResponse = Awaited<ReturnType<LiveRequest>>;
 
 function successResponse<T>(payload: T) {
   return { type: "res", id: "response", ok: true, payload } as const;
@@ -51,24 +58,58 @@ function connectionHarness() {
   let state: WorkerConnectionState = { kind: "ready", hello: HELLO };
   const readyListeners = new Set<Parameters<WorkerConnection["onReady"]>[0]>();
   const terminalErrorListeners = new Set<Parameters<WorkerConnection["onTerminalError"]>[0]>();
-  const inferenceEventListeners = new Set<Parameters<WorkerConnection["onInferenceEvent"]>[0]>();
+  const inferenceEventListeners = new Set<
+    Parameters<WorkerConnection["rpc"]["onInferenceEvent"]>[0]
+  >();
   const inferenceTerminalListeners = new Set<
-    Parameters<WorkerConnection["onInferenceTerminal"]>[0]
+    Parameters<WorkerConnection["rpc"]["onInferenceTerminal"]>[0]
   >();
   const waitForReady = vi.fn<WorkerConnection["waitForReady"]>(async () => HELLO);
-  const requestTranscriptCommit = vi.fn<WorkerConnection["requestTranscriptCommit"]>();
-  const requestLiveEvent = vi.fn<WorkerConnection["requestLiveEvent"]>();
-  const requestInferenceStart = vi.fn<WorkerConnection["requestInferenceStart"]>();
-  const requestInferenceCancel = vi.fn<WorkerConnection["requestInferenceCancel"]>();
+  const requestTranscriptCommit = vi.fn<TranscriptRequest>();
+  const requestLiveEvent = vi.fn<LiveRequest>();
+  const requestInferenceStart = vi.fn<InferenceStartRequest>();
+  const requestInferenceCancel = vi.fn<InferenceCancelRequest>();
   const connection = {
     get state() {
       return state;
     },
     waitForReady,
-    requestTranscriptCommit,
-    requestLiveEvent,
-    requestInferenceStart,
-    requestInferenceCancel,
+    rpc: {
+      request: (
+        ...args:
+          | Parameters<TranscriptRequest>
+          | Parameters<LiveRequest>
+          | Parameters<InferenceStartRequest>
+          | Parameters<InferenceCancelRequest>
+      ) => {
+        switch (args[0]) {
+          case "transcript":
+            return requestTranscriptCommit(...args);
+          case "live-event":
+            return requestLiveEvent(...args);
+          case "inference-start":
+            return requestInferenceStart(...args);
+          case "inference-cancel":
+            return requestInferenceCancel(...args);
+          default:
+            throw new Error("Unexpected worker RPC in test");
+        }
+      },
+      onInferenceEvent: (listener: Parameters<WorkerConnection["rpc"]["onInferenceEvent"]>[0]) => {
+        inferenceEventListeners.add(listener);
+        return () => {
+          inferenceEventListeners.delete(listener);
+        };
+      },
+      onInferenceTerminal: (
+        listener: Parameters<WorkerConnection["rpc"]["onInferenceTerminal"]>[0],
+      ) => {
+        inferenceTerminalListeners.add(listener);
+        return () => {
+          inferenceTerminalListeners.delete(listener);
+        };
+      },
+    },
     onReady: (listener: Parameters<WorkerConnection["onReady"]>[0]) => {
       readyListeners.add(listener);
       return () => {
@@ -79,18 +120,6 @@ function connectionHarness() {
       terminalErrorListeners.add(listener);
       return () => {
         terminalErrorListeners.delete(listener);
-      };
-    },
-    onInferenceEvent: (listener: Parameters<WorkerConnection["onInferenceEvent"]>[0]) => {
-      inferenceEventListeners.add(listener);
-      return () => {
-        inferenceEventListeners.delete(listener);
-      };
-    },
-    onInferenceTerminal: (listener: Parameters<WorkerConnection["onInferenceTerminal"]>[0]) => {
-      inferenceTerminalListeners.add(listener);
-      return () => {
-        inferenceTerminalListeners.delete(listener);
       };
     },
   } as unknown as WorkerConnection;
@@ -198,12 +227,12 @@ describe("worker transcript commit client", () => {
     });
 
     expect(harness.requestTranscriptCommit).toHaveBeenCalledTimes(2);
-    expect(harness.requestTranscriptCommit.mock.calls[0]?.[0]).toMatchObject({
+    expect(harness.requestTranscriptCommit.mock.calls[0]?.[1]).toMatchObject({
       seq: 1,
       baseLeafId: null,
       messages: [messages[0]],
     });
-    expect(harness.requestTranscriptCommit.mock.calls[1]?.[0]).toMatchObject({
+    expect(harness.requestTranscriptCommit.mock.calls[1]?.[1]).toMatchObject({
       seq: 2,
       baseLeafId: "leaf-1",
       messages: [messages[1]],
@@ -238,6 +267,7 @@ describe("worker transcript commit client", () => {
       newLeafId: "leaf-1",
     });
     expect(harness.requestTranscriptCommit).toHaveBeenCalledWith(
+      "transcript",
       expect.objectContaining({ messages: [message] }),
     );
   });
@@ -248,7 +278,7 @@ describe("worker live-event client", () => {
     const harness = connectionHarness();
     const ready = createDeferred<WorkerHelloOk>();
     harness.waitForReady.mockReturnValue(ready.promise);
-    harness.requestLiveEvent.mockImplementation(async (request) =>
+    harness.requestLiveEvent.mockImplementation(async (_kind, request) =>
       request.lastAckedSeq > 0 ? resyncRequired() : successResponse({ ackedSeq: request.seq }),
     );
     const client = new WorkerLiveEventClient(harness.connection, {
@@ -263,7 +293,7 @@ describe("worker live-event client", () => {
 
       await expect(terminal).resolves.toBeUndefined();
       expect(
-        harness.requestLiveEvent.mock.calls.map(([{ seq, lastAckedSeq, event }]) => ({
+        harness.requestLiveEvent.mock.calls.map(([, { seq, lastAckedSeq, event }]) => ({
           seq,
           lastAckedSeq,
           event,
@@ -283,7 +313,7 @@ describe("worker live-event client", () => {
     const firstResponse = createDeferred<LiveResponse>();
     const secondResponse = createDeferred<LiveResponse>();
     const terminalResponse = createDeferred<LiveResponse>();
-    harness.requestLiveEvent.mockImplementation(async (request) => {
+    harness.requestLiveEvent.mockImplementation(async (_kind, request) => {
       return await (request.seq === 1
         ? firstResponse.promise
         : request.seq === 2
@@ -316,7 +346,7 @@ describe("worker live-event client", () => {
     harness.requestLiveEvent
       .mockImplementationOnce(async () => await previewResponse.promise)
       .mockImplementationOnce(async () => await firstTerminalResponse.promise)
-      .mockImplementationOnce(async (request) =>
+      .mockImplementationOnce(async (_kind, request) =>
         request.lastAckedSeq > 0 ? resyncRequired() : successResponse({ ackedSeq: 0 }),
       )
       .mockResolvedValueOnce(successResponse({ ackedSeq: 1 }));
@@ -338,7 +368,7 @@ describe("worker live-event client", () => {
     firstTerminalResponse.resolve(successResponse({ ackedSeq: 0 }));
 
     await expect(finishing).resolves.toBeUndefined();
-    expect(harness.requestLiveEvent.mock.calls.map((call) => call[0])).toEqual([
+    expect(harness.requestLiveEvent.mock.calls.map((call) => call[1])).toEqual([
       expect.objectContaining({ seq: 1, lastAckedSeq: 0, event: LIVE_EVENT }),
       expect.objectContaining({ seq: 2, lastAckedSeq: 0 }),
       expect.objectContaining({ seq: 2, lastAckedSeq: 2 }),
@@ -352,7 +382,7 @@ describe("worker live-event client", () => {
     const previewResponse = createDeferred<LiveResponse>();
     harness.requestLiveEvent
       .mockImplementationOnce(async () => await previewResponse.promise)
-      .mockImplementationOnce(async (request) =>
+      .mockImplementationOnce(async (_kind, request) =>
         request.lastAckedSeq > 0 ? resyncRequired() : successResponse({ ackedSeq: 0 }),
       )
       .mockResolvedValueOnce(successResponse({ ackedSeq: 1 }));
@@ -381,7 +411,7 @@ describe("worker live-event client", () => {
 
     await expect(client.emitTerminal("run-1", TERMINAL_EVENT)).resolves.toBeUndefined();
 
-    expect(harness.requestLiveEvent.mock.calls.map((call) => call[0])).toEqual([
+    expect(harness.requestLiveEvent.mock.calls.map((call) => call[1])).toEqual([
       expect.objectContaining({ seq: 1, lastAckedSeq: 0, event: LIVE_EVENT }),
       expect.objectContaining({ seq: 2, lastAckedSeq: 1 }),
       expect.objectContaining({ seq: 1, lastAckedSeq: 0 }),
@@ -407,8 +437,8 @@ describe("worker live-event client", () => {
     await expect(client.emitTerminal("run-1", TERMINAL_EVENT)).resolves.toBeUndefined();
 
     expect(harness.requestLiveEvent).toHaveBeenCalledTimes(3);
-    const first = harness.requestLiveEvent.mock.calls[0]?.[0];
-    const replay = harness.requestLiveEvent.mock.calls[1]?.[0];
+    const first = harness.requestLiveEvent.mock.calls[0]?.[1];
+    const replay = harness.requestLiveEvent.mock.calls[1]?.[1];
     expect(replay).toEqual(first);
     expect(replay?.event).not.toBe(event);
     expect(replay?.event).toEqual(LIVE_EVENT);
@@ -441,7 +471,7 @@ describe("worker live-event client", () => {
     await vi.waitFor(() => expect(harness.requestLiveEvent).toHaveBeenCalledTimes(4));
 
     await expect(client.emitTerminal("run-1", TERMINAL_EVENT)).resolves.toBeUndefined();
-    expect(harness.requestLiveEvent.mock.calls.map((call) => call[0])).toEqual([
+    expect(harness.requestLiveEvent.mock.calls.map((call) => call[1])).toEqual([
       expect.objectContaining({ seq: 6, lastAckedSeq: 5, event: LIVE_EVENT }),
       expect.objectContaining({ seq: 7, lastAckedSeq: 5, event: secondEvent }),
       expect.objectContaining({ seq: 1, lastAckedSeq: 0, event: LIVE_EVENT }),
@@ -457,7 +487,7 @@ describe("worker live-event client", () => {
     harness.requestLiveEvent
       .mockResolvedValueOnce(resyncResponse)
       .mockResolvedValueOnce(resyncResponse)
-      .mockImplementationOnce(async (request) =>
+      .mockImplementationOnce(async (_kind, request) =>
         request.lastAckedSeq > 0 ? resyncResponse : successResponse({ ackedSeq: 0 }),
       )
       .mockResolvedValueOnce(successResponse({ ackedSeq: 1 }));
@@ -477,7 +507,7 @@ describe("worker live-event client", () => {
     const harness = connectionHarness();
     const previewResponse = createDeferred<LiveResponse>();
     const terminalResponse = createDeferred<LiveResponse>();
-    harness.requestLiveEvent.mockImplementation(async (request) =>
+    harness.requestLiveEvent.mockImplementation(async (_kind, request) =>
       request.event.kind === "lifecycle" ? terminalResponse.promise : previewResponse.promise,
     );
     const client = new WorkerLiveEventClient(harness.connection, { runEpoch: 3 });
@@ -543,7 +573,7 @@ describe("worker inference proxy client", () => {
     const outcome = client.start(request, { onEvent, onStreamGap });
     request.modelRef.model = "caller-mutation";
     await vi.waitFor(() => expect(harness.requestInferenceStart).toHaveBeenCalledOnce());
-    expect(harness.requestInferenceStart.mock.calls[0]?.[0]).toEqual(INFERENCE_REQUEST);
+    expect(harness.requestInferenceStart.mock.calls[0]?.[1]).toEqual(INFERENCE_REQUEST);
     harness.emitInferenceEvent({
       type: "event",
       event: "worker.inference.event",
@@ -580,7 +610,7 @@ describe("worker inference proxy client", () => {
     const terminal = doneOutcome();
     harness.requestInferenceStart
       .mockResolvedValueOnce(successResponse({ status: "accepted" as const }))
-      .mockImplementationOnce(async (_params, beforeResolve) => {
+      .mockImplementationOnce(async (_kind, _params, beforeResolve) => {
         const response = successResponse({ status: "replayed" as const });
         beforeResolve?.(response);
         harness.emitInferenceTerminal({
@@ -608,8 +638,8 @@ describe("worker inference proxy client", () => {
     await vi.waitFor(() => expect(harness.requestInferenceStart).toHaveBeenCalledTimes(2));
 
     await expect(outcome).resolves.toEqual(terminal);
-    expect(harness.requestInferenceStart.mock.calls[1]?.[0]).toEqual(
-      harness.requestInferenceStart.mock.calls[0]?.[0],
+    expect(harness.requestInferenceStart.mock.calls[1]?.[1]).toEqual(
+      harness.requestInferenceStart.mock.calls[0]?.[1],
     );
     expect(onStreamGap).not.toHaveBeenCalled();
     client.dispose();

@@ -378,6 +378,37 @@ describe("media-generation runtime shared normalization", () => {
     ).toBeUndefined();
   });
 
+  it("keeps geometry tie-breaking independent of provider declaration order", () => {
+    for (const reverse of [false, true]) {
+      const ordered = <T>(values: T[]) => (reverse ? values.toReversed() : values);
+      expect(
+        resolveClosestAspectRatio({
+          requestedAspectRatio: "3:3",
+          supportedAspectRatios: ordered(["invalid", "2:2", "1:1"]),
+        }),
+      ).toBe("1:1");
+      expect(
+        resolveClosestSize({
+          requestedAspectRatio: "1:1",
+          supportedSizes: ordered(["invalid", "128x128", "64x64"]),
+        }),
+      ).toBe("64x64");
+      expect(
+        resolveClosestResolution({
+          requestedResolution: "480P",
+          supportedResolutions: ordered(["invalid", "360P", "600P"]),
+        }),
+      ).toBe("600P");
+      expect(
+        resolveClosestResolution({
+          requestedResolution: "medium",
+          supportedResolutions: ordered(["invalid", "small", "large"]),
+          order: ["small", "medium", "large"],
+        }),
+      ).toBe("small");
+    }
+  });
+
   it("clamps durations to the closest supported max", () => {
     expect(normalizeDurationToClosestMax(12, 8)).toBe(8);
     expect(normalizeDurationToClosestMax(6, 8)).toBe(6);

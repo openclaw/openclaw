@@ -2,9 +2,12 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-  normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeDiscordHandleKey, resolveDiscordDirectoryUserId } from "./directory-cache.js";
+import {
+  normalizeDiscordHandleKey,
+  normalizeDiscordSnowflake,
+  resolveDiscordDirectoryUserId,
+} from "./directory-cache.js";
 
 type DiscordMentionAliasesConfig = Record<string, string>;
 
@@ -13,22 +16,14 @@ const DISCORD_RESERVED_MENTIONS = new Set(["everyone", "here"]);
 const DISCORD_DISCRIMINATOR_SUFFIX = /#\d{4}$/;
 const DISCORD_BROADCAST_MENTION_PATTERN = /@(everyone|here)\b/;
 
-function normalizeSnowflake(value: string | number | bigint): string | null {
-  const text = normalizeOptionalStringifiedId(value) ?? "";
-  if (!/^\d+$/.test(text)) {
-    return null;
-  }
-  return text;
-}
-
 export function formatMention(params: {
   userId?: string | number | bigint | null;
   roleId?: string | number | bigint | null;
   channelId?: string | number | bigint | null;
 }): string {
-  const userId = params.userId == null ? null : normalizeSnowflake(params.userId);
-  const roleId = params.roleId == null ? null : normalizeSnowflake(params.roleId);
-  const channelId = params.channelId == null ? null : normalizeSnowflake(params.channelId);
+  const userId = params.userId == null ? null : normalizeDiscordSnowflake(params.userId);
+  const roleId = params.roleId == null ? null : normalizeDiscordSnowflake(params.roleId);
+  const channelId = params.channelId == null ? null : normalizeDiscordSnowflake(params.channelId);
   const mentions = [
     userId ? `<@${userId}>` : null,
     roleId ? `<@&${roleId}>` : null,
@@ -62,7 +57,7 @@ function resolveConfiguredMentionAlias(
         aliasWithoutDiscriminator !== alias &&
         aliasWithoutDiscriminator === key)
     ) {
-      const userId = normalizeSnowflake(rawUserId);
+      const userId = normalizeDiscordSnowflake(rawUserId);
       if (userId) {
         return userId;
       }

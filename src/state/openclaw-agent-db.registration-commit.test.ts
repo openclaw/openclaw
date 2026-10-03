@@ -97,6 +97,65 @@ describe("agent registration commit publication", () => {
     expect(after.assertCurrent).not.toThrow();
   });
 
+  it("retains its followed pending registration without admitting another registration", async () => {
+    const fixture = createFixture();
+    const snapshot = await registryListing
+      .prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env: fixture.env }, () => false)
+      .read();
+    const registration = registryListing.captureOpenClawAgentDatabaseRegistration({
+      agentId: fixture.target.agentId,
+      agentPath: fixture.target.path,
+      admission: fixture.admission,
+      onRegistryChange: snapshot.followRegistration,
+    });
+    const other = registryListing.captureOpenClawAgentDatabaseRegistration({
+      agentId: "other",
+      agentPath: `${fixture.target.path}.other`,
+      admission: fixture.admission,
+    });
+    try {
+      registration.begin();
+      expect(snapshot.assertCurrent).not.toThrow();
+      other.begin();
+      expect(snapshot.assertCurrent).toThrow("ownership is changing");
+      other.finish();
+      expect(snapshot.assertCurrent).not.toThrow();
+      registration.recordCommitted(fixture.receipt);
+      expect(snapshot.assertCurrent).not.toThrow();
+      registration.finish();
+      expect(snapshot.assertCurrent).not.toThrow();
+    } finally {
+      other.finish();
+      registration.finish();
+    }
+  });
+
+  it("rejects an owned registration commit whose transition was not followed", async () => {
+    const fixture = createFixture();
+    const snapshot = await registryListing
+      .prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env: fixture.env }, () => false)
+      .read();
+    let follow = true;
+    const registration = registryListing.captureOpenClawAgentDatabaseRegistration({
+      agentId: fixture.target.agentId,
+      agentPath: fixture.target.path,
+      admission: fixture.admission,
+      onRegistryChange: (change) => {
+        if (follow) {
+          snapshot.followRegistration(change);
+        }
+      },
+    });
+    try {
+      registration.begin();
+      follow = false;
+      registration.recordCommitted(fixture.receipt);
+      expect(snapshot.assertCurrent).toThrow("registry changed");
+    } finally {
+      registration.finish();
+    }
+  });
+
   it("clears its pending registration when a scoped admission throws an ordinary error", async () => {
     const fixture = createFixture();
     const assertCurrent = vi.fn(() => fixture.admission.assertCurrent());

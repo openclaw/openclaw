@@ -40,6 +40,12 @@ final class ScreenSnapshotService {
         format: OpenClawScreenSnapshotFormat?) async throws
         -> ScreenSnapshotResult
     {
+        guard AppLaunchRuntimePlan.current.allowsActivation ||
+            PermissionManager.screenRecordingPermissions.checkScreenRecordingPermission()
+        else {
+            throw ScreenSnapshotError.captureFailed(
+                "Screen Recording permission required; relaunch without --no-activate and retry")
+        }
         let format = format ?? .jpeg
         let normalized = Self.normalize(maxWidth: maxWidth, quality: quality, format: format)
 

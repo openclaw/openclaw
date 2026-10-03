@@ -14,11 +14,7 @@ export type TelegramCustomCommandIssue = {
 };
 
 export function normalizeTelegramCommandName(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  const withoutSlash = trimmed.startsWith("/") ? trimmed.slice(1) : trimmed;
+  const withoutSlash = value.trim().replace(/^\//, "");
   return (normalizeOptionalLowercaseString(withoutSlash) ?? "").replace(/-/g, "_");
 }
 
@@ -46,36 +42,17 @@ export function resolveTelegramCustomCommands(params: {
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
     const normalized = normalizeTelegramCommandName(entry?.command ?? "");
-    if (!normalized) {
-      issues.push({
-        index,
-        field: "command",
-        message: "Telegram custom command is missing a command name.",
-      });
-      continue;
-    }
-    if (!TELEGRAM_COMMAND_NAME_PATTERN.test(normalized)) {
-      issues.push({
-        index,
-        field: "command",
-        message: `Telegram custom command "/${normalized}" is invalid (use a-z, 0-9, underscore; max 32 chars).`,
-      });
-      continue;
-    }
-    if (checkReserved && reserved.has(normalized)) {
-      issues.push({
-        index,
-        field: "command",
-        message: `Telegram custom command "/${normalized}" conflicts with a native command.`,
-      });
-      continue;
-    }
-    if (checkDuplicates && seen.has(normalized)) {
-      issues.push({
-        index,
-        field: "command",
-        message: `Telegram custom command "/${normalized}" is duplicated.`,
-      });
+    const commandIssue = !normalized
+      ? "Telegram custom command is missing a command name."
+      : !TELEGRAM_COMMAND_NAME_PATTERN.test(normalized)
+        ? `Telegram custom command "/${normalized}" is invalid (use a-z, 0-9, underscore; max 32 chars).`
+        : checkReserved && reserved.has(normalized)
+          ? `Telegram custom command "/${normalized}" conflicts with a native command.`
+          : checkDuplicates && seen.has(normalized)
+            ? `Telegram custom command "/${normalized}" is duplicated.`
+            : undefined;
+    if (commandIssue) {
+      issues.push({ index, field: "command", message: commandIssue });
       continue;
     }
     const description = normalizeTelegramCommandDescription(entry?.description ?? "");

@@ -2,6 +2,7 @@ import { PassThrough } from "node:stream";
 import { VoiceOpcodes } from "discord-api-types/voice/v8";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import {
@@ -194,6 +195,7 @@ function buildVoiceTestHarness() {
     botUserId?: string,
   ) => {
     const manager = new managerModule.DiscordVoiceManager({
+      scheduler: createTestPluginServiceScheduler(),
       client: (clientOverride ?? createClient()) as never,
       cfg: cfgOverride,
       discordConfig,

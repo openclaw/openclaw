@@ -44,7 +44,7 @@ import type {
   WorkerTranscriptCommitInput,
   WorkerTranscriptCommitOutcome,
   WorkerTranscriptCommitStore,
-} from "./transcript-commit-store.js";
+} from "./transcript-commit-ledger.js";
 import type {
   WorkerTranscriptCommitApplication,
   WorkerTranscriptCommitterOptions,
@@ -276,15 +276,6 @@ export async function commitWorkerTranscript(
     seq: params.request.seq,
     requestHash: requestHash(params.request),
   };
-  params.assertCurrent();
-  const started = store.begin(input);
-  if (started.kind === "replay") {
-    return started.outcome;
-  }
-  if (started.kind === "rejected") {
-    return { ok: false, reason: "invalid-batch" };
-  }
-
   const config = options.getConfig();
   const target = withOwnedSessionTranscriptWriterFence({
     ...captureSessionTranscriptTargetBinding(params.sessionTarget),
@@ -302,8 +293,20 @@ export async function commitWorkerTranscript(
     }),
   }));
   const requestedBaseLeafId = params.request.baseLeafId;
+  params.assertCurrent();
+  const started = await store.begin(input, params.assertCurrent);
+  if (started.kind === "replay") {
+    params.assertCurrent();
+    return started.outcome;
+  }
+  if (started.kind === "rejected") {
+    params.assertCurrent();
+    return { ok: false, reason: "invalid-batch" };
+  }
+
   let entry: InternalSessionEntry | undefined;
   try {
+    params.assertCurrent();
     const databaseOptions = toDatabaseOptions(resolveSqliteTranscriptScope(target));
     const entryResult = isIncognitoSessionKey(target.sessionKey)
       ? { ok: true as const, value: loadSessionEntry(target) }
@@ -325,15 +328,18 @@ export async function commitWorkerTranscript(
   } catch (error) {
     // No transcript command has been dispatched while the initial entry read is pending.
     if (started.kind === "claimed") {
-      store.discardUncommitted(input);
+      await store.discardUncommitted(input);
     }
     throw error;
   }
   if (!entry || entry.sessionId !== sessionId) {
-    return store.complete({
-      ...input,
-      outcome: { ok: false, reason: "session-not-attached" },
-    });
+    return await store.complete(
+      {
+        ...input,
+        outcome: { ok: false, reason: "session-not-attached" },
+      },
+      params.assertCurrent,
+    );
   }
   let authorityFailure: { error: unknown } | undefined;
   let applied: ApplyTranscriptCommitResult;
@@ -361,23 +367,32 @@ export async function commitWorkerTranscript(
     // A callback refusal has rolled back the agent transaction. Free only
     // this invocation's fresh reservation; unknown commit outcomes must recover.
     if (started.kind === "claimed" && authorityFailure && authorityFailure.error === error) {
-      store.discardUncommitted(input);
+      await store.discardUncommitted(input);
     }
     throw error;
   }
   if (!applied.ok) {
-    return store.complete({ ...input, outcome: { ok: false, reason: applied.reason } });
+    return await store.complete(
+      { ...input, outcome: { ok: false, reason: applied.reason } },
+      params.assertCurrent,
+    );
   }
   const entryIds = applied.messages.map((message) => message.messageId);
   const newLeafId = entryIds.at(-1);
   if (entryIds.length !== messages.length || !newLeafId) {
-    return store.complete({
-      ...input,
-      outcome: { ok: false, reason: "invalid-batch" },
-    });
+    return await store.complete(
+      {
+        ...input,
+        outcome: { ok: false, reason: "invalid-batch" },
+      },
+      params.assertCurrent,
+    );
   }
-  return store.complete({
-    ...input,
-    outcome: { ok: true, result: { entryIds, newLeafId } },
-  });
+  return await store.complete(
+    {
+      ...input,
+      outcome: { ok: true, result: { entryIds, newLeafId } },
+    },
+    params.assertCurrent,
+  );
 }

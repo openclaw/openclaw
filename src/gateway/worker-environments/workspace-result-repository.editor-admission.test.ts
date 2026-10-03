@@ -104,7 +104,7 @@ describe("repository workspace editor admission", () => {
             : manifestWrites.mock.calls[0]![0].manifestRef,
         );
         if (authority === "revoked") {
-          expect(placements.listPendingWorkspaceResults(SESSION_ID)).toMatchObject([
+          expect(await placements.listPendingWorkspaceResultsAsync(SESSION_ID)).toMatchObject([
             {
               repositoryWorkspaceId: f.repository.workspaceId,
               stagedResultRef: expect.any(String),
@@ -113,7 +113,7 @@ describe("repository workspace editor admission", () => {
             },
           ]);
         } else {
-          expect(placements.listPendingWorkspaceResults(SESSION_ID)).toEqual([]);
+          expect(await placements.listPendingWorkspaceResultsAsync(SESSION_ID)).toEqual([]);
           expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
         }
         const checkpoint = await readArtifact(f.repository.workspaceId, "editor.txt");
@@ -260,7 +260,7 @@ describe("repository workspace editor admission", () => {
       expect(manifestWrites).toHaveBeenCalledOnce();
       expect(manifestWrites.mock.calls[0]![0].manifestRef).not.toBe(originalManifestRef);
       expect(placements.get(SESSION_ID)?.workspaceBaseManifestRef).toBe(originalManifestRef);
-      expect(placements.listPendingWorkspaceResults(SESSION_ID)).toMatchObject([
+      expect(await placements.listPendingWorkspaceResultsAsync(SESSION_ID)).toMatchObject([
         {
           repositoryWorkspaceId: f.repository.workspaceId,
           stagedResultRef: expect.any(String),

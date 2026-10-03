@@ -142,7 +142,7 @@ async function createBuildRecoveryHarness(
     get: () => environment,
     acquireTurnCredential: async (claim) => {
       if (options.pendingResult) {
-        placements.markWorkspaceResultPending(claim);
+        await placements.markWorkspaceResultPending(claim);
       }
       return credential();
     },
@@ -828,7 +828,7 @@ describe("worker turn launcher build recovery", () => {
     await expect(harness.execute()).rejects.toThrow(STALE_WORKER_BUILD_REASON);
     expect(harness.redispatchPlacement).not.toHaveBeenCalled();
     expect(harness.launchTurn).not.toHaveBeenCalled();
-    expect(placements.listPendingWorkspaceResults()).toEqual([
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([
       expect.objectContaining({ sessionId: SESSION_ID, recoveryRequestedAtMs: expect.any(Number) }),
     ]);
     expect(placements.get(SESSION_ID)).toMatchObject({

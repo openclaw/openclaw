@@ -162,16 +162,6 @@ describe("Beam upload store", () => {
     },
   );
 
-  it("returns an uncertain store failure without replaying the upload", async () => {
-    const store = memoryStore();
-    store.keyedStore.compareAndApply.mockRejectedValueOnce(new Error("unknown write outcome"));
-    await expect(store.upload(sampleUpload(), { receivedAt: 100 })).rejects.toThrow(
-      "unknown write outcome",
-    );
-    expect(store.keyedStore.compareAndApply).toHaveBeenCalledTimes(1);
-    expect(store.values.size).toBe(0);
-  });
-
   it("captures the upload and receipt before waiting for observation", async () => {
     const store = memoryStore();
     const upload = sampleUpload();

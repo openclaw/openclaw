@@ -195,6 +195,8 @@ export type CronAgentExecutionStarted = {
   agentId?: string;
   sessionId?: string;
   sessionKey?: string;
+  /** Invocation run id; every attempt registers its embedded handle under it. */
+  runId?: string;
   /** True when this runner belongs to a later candidate in the same fallback chain. */
   isFallback?: boolean;
   phase?: CronAgentExecutionPhase;

@@ -526,6 +526,10 @@ export function createAgentEventHandler({
     }
     clearPendingTerminalLifecycleError(evt.runId, evt.lifecycleGeneration);
     let terminalPersistence: Promise<void> | undefined;
+    // Completion retires the registration even when no visible terminal is published.
+    // The peeked head is still current in this synchronous frame; delivery-owned runs wait.
+    const finished =
+      chatLink && !replyDispatchOwnsCompletion ? chatRunState.registry.shift(evt.runId) : undefined;
 
     if (
       !replyDispatchOwnsCompletion &&
@@ -538,9 +542,6 @@ export function createAgentEventHandler({
           )))
     ) {
       if (!isAborted) {
-        // peek() (chatLink) and this shift() run in one synchronous frame, so
-        // the shifted head is exactly the peeked entry.
-        const finished = chatLink ? chatRunState.registry.shift(evt.runId) : undefined;
         const terminalSessionKey = finished?.sessionKey ?? sessionKey;
         const terminalRunId = finished?.clientRunId ?? eventRunId;
         const terminalAgentId = finished?.agentId ?? sessionAgentId;
@@ -591,8 +592,6 @@ export function createAgentEventHandler({
             },
           );
         }
-      } else if (chatLink) {
-        chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
       }
     }
 
@@ -601,9 +600,6 @@ export function createAgentEventHandler({
     // settles; lifecycle observers still receive the runtime's terminal below.
     if (!replyDispatchOwnsCompletion) {
       chatRunState.clearRun(clientRunId);
-      if (suppressRestartRecoveryProjection && chatLink) {
-        chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
-      }
       if (!evt.contextClaimId) {
         clearRunContextForEvent(evt);
       }
