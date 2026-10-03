@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../agents/test-helpers/fast-bash-tools.js";
 import "../../agents/test-helpers/fast-coding-tools.js";
+import { finalizeAgentToolAvailability } from "../../agents/agent-tool-availability.js";
 import { createOpenClawCodingToolsInternal } from "../../agents/agent-tools.js";
 import type { AnyAgentTool } from "../../agents/agent-tools.types.js";
 import { resolveNodeExecutionTarget } from "../../agents/bash-tools.exec-host-node-phases.js";
 import type { ExecuteNodeHostCommandParams } from "../../agents/bash-tools.exec-host-node.types.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
+import { createInstalledSkillTools } from "../../agents/tools/installed-skill-tools.js";
+import { createFixtureSkillEntry } from "../../skills/test-support/test-helpers.js";
 import { createWorkerPlacementTools } from "../../worker/worker-placement-tools.js";
 import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
 
@@ -40,6 +43,8 @@ function resolvedAuthority(
     modelRef: { provider: "openai", model: "gpt-test" },
     turn: turn(overrides),
     computerAvailable,
+    placement: { agentId: "main", sessionKey: "agent:main:cron:job:run:session" },
+    assertCurrent: () => {},
   });
 }
 
@@ -97,6 +102,51 @@ afterEach(() => {
 });
 
 describe("resolveWorkerToolAuthority", () => {
+  it("retains installed skill discovery and read authority across placement", async () => {
+    const skill = {
+      ...createFixtureSkillEntry("deployment-guide").skill,
+      readContent: "# Deployment guide\nUse the canary, then verify the rollback target.\n",
+    };
+    let current = true;
+    const resolved = resolveWorkerToolAuthority({
+      modelRef: { provider: "openai", model: "gpt-test" },
+      placement: { agentId: "main", sessionKey: "agent:main:worker-skills" },
+      turn: turn({
+        skillsSnapshot: { prompt: "", skills: [{ name: skill.name }], discoverySkills: [skill] },
+      }),
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("worker skill source authority closed");
+        }
+      },
+    });
+    expect(resolved.presentation.skills).toEqual([
+      {
+        name: skill.name,
+        description: skill.description,
+        location: skill.filePath,
+      },
+    ]);
+    const tools = createInstalledSkillTools(resolved.installedSkills);
+    finalizeAgentToolAvailability(tools);
+    const search = tools.find((tool) => tool.name === "skills_search")!;
+    const read = tools.find((tool) => tool.name === "skills_read")!;
+    expect((await search.execute("search", { query: "canary" })).details).toMatchObject({
+      skills: [{ name: skill.name }],
+    });
+    expect((await read.execute("read", { name: skill.name })).details).toEqual({
+      name: skill.name,
+      content: skill.readContent,
+    });
+    current = false;
+    await expect(read.execute("read-closed", { name: skill.name })).rejects.toThrow(
+      "source authority closed",
+    );
+    await expect(search.execute("search-closed", { query: "canary" })).rejects.toThrow(
+      "source authority closed",
+    );
+  });
+
   it.each([
     { name: "default", tools: {}, allowed: true },
     {

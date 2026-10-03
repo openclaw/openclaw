@@ -123,6 +123,12 @@ on the Gateway with the turn's live authority and tool hooks. Tool definitions
 carry their execution location, so new Gateway tools do not require a separate
 node allowlist.
 
+The model-facing tools use the same Code Mode or Tool Search presentation as
+local turns, including the Gateway's resolved model settings and limits. Code
+Mode runs on the node and calls each catalog tool at its declared execution
+location. Its catalog and pending cells belong to the current turn; a retained
+worker receives a fresh presentation on the next turn.
+
 Concurrent Gateway tool calls wait for the existing transport budget, so larger
 model tool batches do not lose calls. Cancellation and heartbeats remain independent.
 

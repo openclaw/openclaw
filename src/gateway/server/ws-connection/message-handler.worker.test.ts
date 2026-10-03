@@ -18,6 +18,7 @@ import { createNoisyPngBuffer } from "../../../../test/helpers/image-fixtures.js
 import { prepareSystemAgentRunAdmission } from "../../../agents/admitted-run-context.js";
 import { prepareCoreToolPolicy } from "../../../agents/prepared-tool-surface.js";
 import type { SessionPlacementTurnParams } from "../../../agents/session-placement-admission.js";
+import { createToolSurfacePresentationForTest } from "../../../agents/tool-surface-plan.test-support.js";
 import {
   beginGatewayRestartSignalAdmission,
   tryBeginGatewayRootWorkAdmission,
@@ -106,6 +107,7 @@ describe("dedicated worker websocket protocol", () => {
     };
     const surface = {
       generation: "surface",
+      presentation: createToolSurfacePresentationForTest(),
       tools: [{ id: "read", execution: "placement" as const, definition }],
       policy: prepareCoreToolPolicy({}),
     };

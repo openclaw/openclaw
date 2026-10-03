@@ -99,15 +99,13 @@ describe("worker session tool topology", () => {
         await release.promise;
         return snapshot;
       });
-      const pending = execute({
-        identity,
-        toolName: "presence",
-        request: {
-          toolCallId: "presence-read",
-          action: "person",
-          person: "me",
-          include: ["devices"],
-        },
+      const tool = getFixture()
+        .createTools()
+        .find((candidate) => candidate.name === "presence")!;
+      const pending = tool.execute("presence-read", {
+        action: "person",
+        person: "me",
+        include: ["devices"],
       });
       await entered.promise;
       if (authorityState === "run-ended") {
@@ -117,15 +115,17 @@ describe("worker session tool topology", () => {
       }
       release.resolve();
       if (authorityState === "run-ended") {
-        await expect(pending).rejects.toThrow("source worker run ended");
+        await expect(pending).rejects.toThrow(
+          /source worker run ended|agent tool caller authority is no longer/,
+        );
       } else if (authorityState === "operator-revoked") {
         await expect(pending).rejects.toThrow(/operator.*(revoked|no longer active)/);
       } else {
-        expect(JSON.parse((await pending).resultJson).details).toEqual(snapshot);
+        expect((await pending).details).toEqual(snapshot);
         await placements.authorizeWorkerTurnTools(sourceClaim, []);
-        await expect(
-          execute({ identity, toolName: "presence", request: { toolCallId: "revoked-presence" } }),
-        ).rejects.toThrow("Worker session tool authority changed");
+        await expect(tool.execute("revoked-presence", {})).rejects.toThrow(
+          "Worker tool authority changed",
+        );
       }
       expect(gatewayRequest).toHaveBeenCalledOnce();
     },
@@ -143,12 +143,11 @@ describe("worker session tool topology", () => {
         },
       ]),
     );
-    const result = await execute({
-      identity,
-      toolName: "presence",
-      request: { toolCallId: "blocked-presence" },
-    });
-    expect(result.resultJson).toContain("presence is disabled here");
+    const tool = getFixture()
+      .createTools()
+      .find((candidate) => candidate.name === "presence")!;
+    const result = await tool.execute("blocked-presence", {});
+    expect(result.details).toMatchObject({ reason: "presence is disabled here" });
     expect(gatewayRequest).not.toHaveBeenCalled();
   });
 
@@ -204,9 +203,11 @@ describe("worker session tool topology", () => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
     await placements.authorizeWorkerTurnTools(sourceClaim, ["skill_workshop"]);
     const update = vi.fn();
+    const beforeToolCall = vi.fn();
     const afterToolCall = vi.fn();
     initializeGlobalHookRunner(
       createMockPluginRegistry([
+        { hookName: "before_tool_call", matcher: ["skill_workshop"], handler: beforeToolCall },
         { hookName: "after_tool_call", matcher: ["skill_workshop"], handler: afterToolCall },
       ]),
     );
@@ -228,6 +229,7 @@ describe("worker session tool topology", () => {
     const first = await tool.execute("call-0", { action: "list" }, undefined, update);
     expect(await tool.execute("call-0", { action: "list" })).toEqual(first);
     expect(executeWorkshop).toHaveBeenCalledOnce();
+    expect(beforeToolCall).toHaveBeenCalledOnce();
     expect(afterToolCall).toHaveBeenCalledOnce();
     expect(update).toHaveBeenCalledOnce();
     await expect(tool.execute("call-0", { action: "read" })).rejects.toThrow("reused");
@@ -769,29 +771,26 @@ describe.each([
   const getFixture = installWorkerSessionToolTestFixture(fixtureMocks, source);
 
   it("requires the source's read authority before querying the roster", async () => {
-    const { placements, sourceClaim, setEntry, execute, identity } = getFixture();
+    const { placements, sourceClaim, setEntry, createTools } = getFixture();
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
     await placements.authorizeWorkerTurnTools(sourceClaim, ["presence"]);
     const snapshot = { status: "ok", people: [{ name: "Ada" }] };
     gatewayRequest.mockResolvedValueOnce(snapshot);
 
-    const pending = execute({
-      identity,
-      toolName: "presence",
-      request: { toolCallId: "source-presence", include: ["network", "location"] },
-    });
+    const tool = createTools().find((candidate) => candidate.name === "presence")!;
+    const pending = tool.execute("source-presence", { include: ["network", "location"] });
 
     if (source.deniedReason) {
       await expect(pending).rejects.toThrow(source.deniedReason);
       expect(gatewayRequest).not.toHaveBeenCalled();
     } else {
-      expect(JSON.parse((await pending).resultJson).details).toEqual(snapshot);
+      expect((await pending).details).toEqual(snapshot);
       expect(gatewayRequest).toHaveBeenCalledOnce();
       if (source.admissionSource === "operator-schedule") {
         getFixture().closeSourceRun();
-        await expect(
-          execute({ identity, toolName: "presence", request: { toolCallId: "closed-schedule" } }),
-        ).rejects.toThrow("worker turn authority changed");
+        await expect(tool.execute("closed-schedule", {})).rejects.toThrow(
+          "worker turn authority changed",
+        );
         expect(gatewayRequest).toHaveBeenCalledOnce();
       }
     }

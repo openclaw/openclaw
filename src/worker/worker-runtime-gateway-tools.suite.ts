@@ -9,6 +9,7 @@ import {
 import type { WorkerInferenceStartParams } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
 import {
@@ -39,53 +40,70 @@ type WorkerGatewayToolFixture = {
 };
 
 export function registerWorkerGatewayToolAvailabilityTests({ setup }: WorkerGatewayToolFixture) {
-  it("admits generic Gateway tools independently of the supervisor's placement authority", async () => {
-    const args = { url: "https://example.invalid/worker-tool-proof" };
-    const { gateway, launch } = await setup({
-      inferencePlans: [{ toolName: "web_fetch", toolCallId: "gateway-fetch", args }, "text"],
-    });
-    const surface = gateway.toolSurface();
-    const gatewayTool: WorkerToolSurface["tools"][number] = {
-      id: "web_fetch",
-      execution: "gateway",
-      definition: {
-        name: "web_fetch",
-        label: "Web fetch",
-        description: "Fetch a web page through the Gateway.",
-        parameters: {
-          type: "object",
-          properties: { url: { type: "string" } },
-          required: ["url"],
+  it.each([false, true])(
+    "admits and executes Gateway tools with Code Mode %s",
+    async (codeMode) => {
+      const args = { url: "https://example.invalid/worker-tool-proof" };
+      const { gateway, launch } = await setup({
+        inferencePlans: [
+          codeMode
+            ? {
+                toolName: "exec",
+                toolCallId: "gateway-fetch",
+                args: {
+                  title: "Fetch the fixture page",
+                  code: `return await web_fetch(${JSON.stringify(args)})`,
+                },
+              }
+            : { toolName: "web_fetch", toolCallId: "gateway-fetch", args },
+          "text",
+        ],
+      });
+      const surface = gateway.toolSurface();
+      surface.presentation = createToolSurfacePresentationForTest({
+        tools: { codeMode, toolSearch: false },
+      });
+      const gatewayTool: WorkerToolSurface["tools"][number] = {
+        id: "web_fetch",
+        execution: "gateway",
+        definition: {
+          name: "web_fetch",
+          label: "Web fetch",
+          description: "Fetch a web page through the Gateway.",
+          parameters: {
+            type: "object",
+            properties: { url: { type: "string" } },
+            required: ["url"],
+          },
         },
-      },
-    };
-    launch.assignment.toolAuthority.allowedToolNames = ["read"];
-    let tools = [...surface.tools, gatewayTool];
-    gateway.toolSurface = () => ({ ...surface, tools });
+      };
+      launch.assignment.toolAuthority.allowedToolNames = ["read"];
+      let tools = [...surface.tools, gatewayTool];
+      gateway.toolSurface = () => ({ ...surface, tools });
 
-    await expect(runWorkerDescriptor(launch)).rejects.toThrow(
-      "Worker tool surface exceeds launch authority: write",
-    );
-    expect(gateway.inferenceRequests).toHaveLength(0);
-    expect(gateway.gatewayToolRequests).toHaveLength(0);
+      await expect(runWorkerDescriptor(launch)).rejects.toThrow(
+        "Worker tool surface exceeds launch authority: write",
+      );
+      expect(gateway.inferenceRequests).toHaveLength(0);
+      expect(gateway.gatewayToolRequests).toHaveLength(0);
 
-    tools = [...surface.tools.filter((tool) => tool.definition.name === "read"), gatewayTool];
+      tools = [...surface.tools.filter((tool) => tool.definition.name === "read"), gatewayTool];
 
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
 
-    expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual([
-      "read",
-      "web_fetch",
-    ]);
-    expect(gateway.gatewayToolRequests).toEqual([
-      {
-        generation: surface.generation,
-        toolId: "web_fetch",
-        toolCallId: "gateway-fetch",
-        arguments: args,
-      },
-    ]);
-  });
+      expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual(
+        codeMode ? ["exec", "wait"] : ["read", "web_fetch"],
+      );
+      expect(gateway.gatewayToolRequests).toEqual([
+        {
+          generation: surface.generation,
+          toolId: "web_fetch",
+          toolCallId: codeMode ? expect.stringContaining("web_fetch") : "gateway-fetch",
+          arguments: args,
+        },
+      ]);
+    },
+  );
 
   it("rejects a Gateway without the admitted tool-surface capability before inference", async () => {
     const { gateway, launch } = await setup();

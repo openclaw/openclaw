@@ -9,6 +9,10 @@ import {
   type AdmittedRunContext,
 } from "../../agents/admitted-run-context.js";
 import { prepareCoreToolPolicy } from "../../agents/prepared-tool-surface.js";
+import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
+import { createAvailablePortalTools } from "../../agents/tools/portal-tool.js";
+import { createSessionsSendTool } from "../../agents/tools/sessions-send-tool.js";
+import { createSessionsSpawnTool } from "../../agents/tools/sessions-spawn-tool.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -140,6 +144,7 @@ vi.mock("../../agents/tools/scoped-session-access.js", () => ({
 }));
 
 vi.mock("../../agents/tools/in-process-gateway.js", () => ({
+  bindAgentToolGatewayRequest: () => (request: unknown) => sharedMocks.gatewayRequest(request),
   callAgentToolGatewayRequest: (request: unknown) => sharedMocks.gatewayRequest(request),
   callInProcessGatewayTool: (method: string, params: Record<string, unknown>) =>
     sharedMocks.gatewayRequest({ method, params }),
@@ -424,7 +429,19 @@ async function createWorkerSessionToolTestFixture(
       },
     } as never,
   };
-  const ownerExecute = createWorkerSessionToolExecutor(executorParams);
+  const toolOptions = { agentSessionKey: SOURCE.sessionKey, workerPlacement: true };
+  const ownerExecute = createWorkerSessionToolExecutor(executorParams, {
+    sessions_spawn: createSessionsSpawnTool(toolOptions),
+    sessions_send: createSessionsSendTool(toolOptions),
+    portal: createAvailablePortalTools({
+      sessionPortalTarget: {
+        agentId: SOURCE.agentId,
+        sessionKey: SOURCE.sessionKey,
+        environmentId: SOURCE.environmentId,
+        assertCurrent: () => {},
+      },
+    })[0]!,
+  });
   const toolRuntimes: ReturnType<typeof createWorkerGatewayToolRuntime>[] = [];
   function createToolRuntime(
     runtimeOptions: Pick<
@@ -448,6 +465,7 @@ async function createWorkerSessionToolTestFixture(
       },
       prepare: async () => ({
         policy: prepareCoreToolPolicy({}),
+        presentation: createToolSurfacePresentationForTest(),
         tools: createWorkerGatewayTools({
           ...executorParams,
           ...runtimeOptions,

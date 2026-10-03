@@ -333,7 +333,10 @@ describe("worker turn execution", () => {
         expect(allowed.includes("ls")).toBe(declared);
         expect(allowed).not.toContain("sessions_list");
         const authorized = authorize.mock.calls[0]?.[1];
-        expect(authorized).toEqual(expect.arrayContaining([...allowed, "sessions_list"]));
+        expect(authorized).toEqual(
+          expect.arrayContaining([...allowed, "sessions_list", "github_identity_status"]),
+        );
+        expect(authorized).not.toContain("github_publish");
         expect(authorize).toHaveBeenCalledExactlyOnceWith(
           request.turnClaim,
           authorized,

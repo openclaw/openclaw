@@ -10,7 +10,9 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { WORKER_PROTOCOL_MAX_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { bindAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
+import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
+import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js";
@@ -42,6 +44,7 @@ const policy: WorkerToolSurface["policy"] = {
 };
 const success = { content: [{ type: "text" as const, text: "done" }], details: { status: "ok" } };
 const sink = { send: () => {} };
+const presentation = createToolSurfacePresentationForTest();
 
 function tool(
   name = "remote",
@@ -58,7 +61,7 @@ function tool(
   return result;
 }
 
-function fixture(tools: AnyAgentTool[], prepare = async () => ({ tools, policy })) {
+function fixture(tools: AnyAgentTool[], prepare = async () => ({ tools, policy, presentation })) {
   let current = true;
   const controller = new AbortController();
   const prepareTools = vi.fn(prepare);
@@ -103,6 +106,14 @@ describe("worker Gateway tool runtime", () => {
   it("issues one finite surface and invokes only an issued Gateway handle with valid arguments", async () => {
     const execute = vi.fn(async () => success);
     const remote = tool("remote", execute);
+    remote.outputSchema = Type.Object({ status: Type.String() });
+    remote.catalogMode = "direct-only";
+    setPluginToolMeta(remote, {
+      pluginId: "fixture",
+      optional: true,
+      replaySafe: true,
+      trustedLocalMedia: true,
+    });
     bindAgentToolExecutionLocation(remote, {
       kind: "gateway",
       replay: true,
@@ -115,10 +126,14 @@ describe("worker Gateway tool runtime", () => {
     expect(Value.Check(WorkerToolSurfaceSchema, surface)).toBe(true);
     expect(await runtime.getSurface(identity)).toEqual(surface);
     expect(prepareTools).toHaveBeenCalledTimes(1);
+    expect(surface.tools[0]?.plugin).not.toHaveProperty("trustedLocalMedia");
+    expect(getPluginToolMeta(remote)?.trustedLocalMedia).toBe(true);
     expect(surface.tools[0]).toMatchObject({
       execution: "gateway",
       replay: true,
       timeout: { minimumMs: 1000 },
+      plugin: { pluginId: "fixture", optional: true, replaySafe: true },
+      definition: { outputSchema: remote.outputSchema, catalogMode: "direct-only" },
     });
     const invocation = request(surface);
     for (const invalid of [
@@ -168,6 +183,7 @@ describe("worker Gateway tool runtime", () => {
       const prepared = createDeferredCore<{
         tools: AnyAgentTool[];
         policy: WorkerToolSurface["policy"];
+        presentation: WorkerToolSurface["presentation"];
       }>();
       const f = fixture([], () => prepared.promise);
       const surface = f.runtime.getSurface(identity);
@@ -177,7 +193,7 @@ describe("worker Gateway tool runtime", () => {
       } else {
         f.controller.abort(new Error(expected));
       }
-      prepared.resolve({ tools: [tool()], policy });
+      prepared.resolve({ tools: [tool()], policy, presentation });
       await expect(surface).rejects.toThrow(expected);
       await expect(f.runtime.getSurface(identity)).rejects.toThrow(expected);
       expect(f.prepareTools).toHaveBeenCalledTimes(1);

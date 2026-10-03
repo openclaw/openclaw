@@ -143,13 +143,7 @@ async function runEmbeddedAttemptOwned(
     runOwnedAgentCleanup({ ...params, step, cleanup, log });
   const cleanupEmbeddedPrepResourcesAfterEarlyExit = async () => {
     if (toolSearchCatalogApplied) {
-      clearToolSearchCatalog({
-        sessionId: params.sessionId,
-        sessionKey: sandboxSessionKey,
-        agentId: sessionAgentId,
-        runId: params.runId,
-        catalogRef: toolSearchCatalogRef,
-      });
+      clearToolSearchCatalog({ catalogRef: toolSearchCatalogRef });
       toolSearchCatalogApplied = false;
     }
     try {

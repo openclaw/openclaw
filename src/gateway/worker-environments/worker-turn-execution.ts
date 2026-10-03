@@ -31,6 +31,7 @@ import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js"
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import { createWorkerPlacementTools } from "../../worker/worker-placement-tools.js";
+import { prepareGitHubPublicationAvailability } from "../github-publication-availability.js";
 import { requireCurrentWorkerTurnEnvironment, StaleWorkerBuildError } from "./admission.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
@@ -92,6 +93,11 @@ export async function executeWorkerTurn(
   input.abortSignal?.throwIfAborted();
   const turn = { ...input, config: preparedRuntime.snapshot.config };
   const modelRef = assertSupportedTurn(turn);
+  const model =
+    preparedRuntime.snapshot.findConfiguredRuntimeModel(modelRef.provider, modelRef.model) ??
+    preparedRuntime.snapshot.modelCatalog.entries.find(
+      (entry) => entry.provider === modelRef.provider && entry.id === modelRef.model,
+    );
   const { environment, bootstrapReceipt } = requireCurrentWorkerTurnEnvironment({
     environments: params.environments,
     placement,
@@ -101,14 +107,16 @@ export async function executeWorkerTurn(
   turn.abortSignal?.throwIfAborted();
   // Shared account refresh and repository lookup own their own lifetime. A
   // cancelled turn may stop waiting, but cannot consume a late binding.
-  const github = await raceNodeWorkerOperation(
-    prepareWorkerGitHubBinding({
-      sessionId: placement.sessionId,
-      sessionKey: placement.sessionKey,
-      agentId: placement.agentId,
-      assertCurrent: () =>
-        !turn.abortSignal?.aborted && params.placements.validateTurnClaim(params.turnClaim),
-    }),
+  const githubContext = {
+    ...placement,
+    assertCurrent: () =>
+      !turn.abortSignal?.aborted && params.placements.validateTurnClaim(params.turnClaim),
+  };
+  const [github, githubPublicationAvailable] = await raceNodeWorkerOperation(
+    Promise.all([
+      prepareWorkerGitHubBinding(githubContext),
+      prepareGitHubPublicationAvailability(githubContext),
+    ]),
     turn.abortSignal,
   );
   params.assertRunCurrent?.();
@@ -235,9 +243,14 @@ export async function executeWorkerTurn(
     policy: toolPolicy,
     exec,
     execUnavailable,
+    presentation,
+    installedSkills,
   } = resolveWorkerToolAuthority({
     modelRef,
+    model,
+    placement,
     turn,
+    assertCurrent: assertContextCurrent,
     computerAvailable: Boolean(computer),
   });
   const { operationalRunInstance, runtimeIdentity, assertActive, takeFinishingOutcome } =
@@ -315,15 +328,13 @@ export async function executeWorkerTurn(
       signal,
       prepare: async (identity) => {
         const placementTools = createWorkerPlacementTools({
+          ...turn,
+          ...placement,
           policy: toolPolicy,
           cwd: placement.remoteWorkspaceDir,
           containmentRoot: placement.remoteWorkspaceDir,
           execAuthority: execUnavailable ? undefined : exec,
-          permissionMode: turn.permissionMode,
-          agentId: placement.agentId,
-          sessionKey: placement.sessionKey,
           sessionId: turn.sessionId,
-          runId: turn.runId,
         });
         placementTools.push(...desktop.tools);
         const availablePlacementTools = new Set(placementTools.map((tool) => tool.name));
@@ -339,6 +350,8 @@ export async function executeWorkerTurn(
                   agentId: placement.agentId,
                   conversationCapabilityProfile: capabilityProfile,
                   preparedModelRuntime: preparedRuntime.snapshot,
+                  installedSkills,
+                  githubPublicationAvailable,
                   cronCreatorAuthorityUnavailableReason: undefined,
                   runSessionKey: placement.sessionKey,
                   sessionKey: turn.sandboxSessionKey ?? placement.sessionKey,
@@ -384,6 +397,7 @@ export async function executeWorkerTurn(
         assertToolSurfaceCurrent();
         return {
           policy: toolPolicy,
+          presentation,
           tools: tools.map((tool) =>
             copyAgentToolMetadata(tool, {
               ...tool,

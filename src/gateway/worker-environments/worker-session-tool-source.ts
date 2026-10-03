@@ -1,11 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
-import { PresenceQueryParamsSchema } from "../../../packages/gateway-protocol/src/schema/presence.js";
-import { SkillLibraryWorkshopSchema } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
-import {
-  buildBlockedToolResult,
-  runBeforeToolCallHook,
-} from "../../agents/agent-tools.before-tool-call.js";
+import { bindAgentToolSourceExecutionGuard } from "../../agents/agent-tool-source-execution-guard.js";
+import { rewrapToolWithBeforeToolCallHook } from "../../agents/agent-tools.before-tool-call.wrapper.js";
+import { runWithToolExecutionValidation } from "../../agents/agent-tools.execution-validation.js";
+import { getBeforeToolCallHookContext } from "../../agents/before-tool-call-metadata.js";
 import { runAgentHarnessAfterToolCallHook } from "../../agents/harness/hook-helpers.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { buildSubagentExecutionSessionSpawnContext } from "../../agents/subagents/spawn/subagent-spawn-execution-identity.js";
@@ -17,7 +15,6 @@ import {
   withAgentToolGatewayRuntimeIdentity,
 } from "../../agents/tools/in-process-gateway.js";
 import { SessionPortalToolSchema } from "../../agents/tools/portal-tool-contract.js";
-import { capturePresenceToolAuthority } from "../../agents/tools/presence-tool-authority.js";
 import { runWithScopedSessionAccess } from "../../agents/tools/scoped-session-access.js";
 import {
   PlacedSessionsSpawnSchema,
@@ -33,27 +30,12 @@ import {
 } from "./worker-session-tool-result.js";
 import type { WorkerSessionToolSource as ExactSource } from "./worker-session-tool-topology.js";
 
-type GenericWorkerToolRequest = Pick<
-  WorkerSessionToolRequest,
-  "identity" | "signal" | "onUpdate"
-> & {
+type WorkerToolRequest = Pick<WorkerSessionToolRequest, "identity" | "signal" | "onUpdate"> & {
   toolName: string;
-  tool: AnyAgentTool;
+  tool: AnyAgentTool | ((authority: WorkerSessionToolAuthority) => AnyAgentTool);
+  approvalMode?: "deny";
   request: { toolCallId: string; arguments: unknown };
 };
-type WorkerToolRequest = WorkerSessionToolRequest | GenericWorkerToolRequest;
-
-export function workerSessionToolArguments(request: WorkerToolRequest): Record<string, unknown> {
-  if ("tool" in request || request.toolName === "skill_workshop") {
-    const args = request.request.arguments;
-    if (!isRecord(args)) {
-      throw new Error("Worker tool arguments must be an object");
-    }
-    return args;
-  }
-  const { toolCallId: _toolCallId, ...args } = request.request;
-  return args;
-}
 
 export function prepareWorkerSessionToolRequest(
   binding: Pick<WorkerSessionToolRequest, "identity" | "signal" | "onUpdate">,
@@ -78,12 +60,6 @@ export function prepareWorkerSessionToolRequest(
     }
     return { ...binding, toolName, request: { ...raw, toolCallId } };
   }
-  if (toolName === "presence" && Value.Check(PresenceQueryParamsSchema, raw)) {
-    return { ...binding, toolName, request: { ...raw, toolCallId } };
-  }
-  if (toolName === "skill_workshop" && Value.Check(SkillLibraryWorkshopSchema, raw)) {
-    return { ...binding, toolName, request: { arguments: raw, toolCallId } };
-  }
   return undefined;
 }
 
@@ -100,22 +76,16 @@ export function createWorkerSessionToolSourceRunner(params: {
   resolveGatewayContext: GatewayContextResolver;
   placements: WorkerSessionPlacementStore;
 }) {
-  return async (
-    operation: {
-      source: Pick<ExactSource, "agentId" | "sessionId" | "sessionKey"> & {
-        turnClaim: WorkerSessionTurnClaim;
-      };
-    } & (
-      | { request: GenericWorkerToolRequest }
-      | {
-          request: WorkerSessionToolRequest;
-          execute: (
-            authority: WorkerSessionToolAuthority,
-            request: WorkerSessionToolRequest,
-          ) => Promise<AgentToolResult<unknown>>;
-        }
-    ),
-  ): Promise<AgentToolResult<unknown>> => {
+  return async (operation: {
+    source: Pick<ExactSource, "agentId" | "sessionId" | "sessionKey"> & {
+      turnClaim: WorkerSessionTurnClaim;
+    };
+    request: WorkerToolRequest;
+  }): Promise<AgentToolResult<unknown>> => {
+    const args = operation.request.request.arguments;
+    if (!isRecord(args)) {
+      throw new Error("Worker tool arguments must be an object");
+    }
     const capability = getWorkerTurnExecutionIdentityCapability(
       params.placements,
       operation.source.turnClaim,
@@ -132,7 +102,7 @@ export function createWorkerSessionToolSourceRunner(params: {
           operation.request.toolName,
         )
       ) {
-        throw new Error("Worker session tool authority changed");
+        throw new Error("Worker tool authority changed");
       }
     };
     return await runWithScopedSessionAccess({
@@ -155,13 +125,8 @@ export function createWorkerSessionToolSourceRunner(params: {
               ...(operation.request.signal ? { approvalSignals: [operation.request.signal] } : {}),
             },
             async () => {
-              const assertPresenceSourceCurrent =
-                operation.request.toolName === "presence"
-                  ? (owner.assertPresenceSourceCurrent ?? capturePresenceToolAuthority())
-                  : undefined;
               const assertSource = () => {
                 assertToolCurrent();
-                assertPresenceSourceCurrent?.();
                 const source = operation.source;
                 if (source.agentId !== owner.agentId || source.sessionKey !== owner.sessionKey) {
                   throw new Error("Worker source turn owner changed");
@@ -189,10 +154,8 @@ export function createWorkerSessionToolSourceRunner(params: {
                           ...owner.delegatedAuthority,
                           turnClaim: owner.turnClaim,
                         },
-                        ...(owner.executionIdentityToken
-                          ? { executionIdentity: owner.executionIdentityToken }
-                          : {}),
-                        ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
+                        executionIdentity: owner.executionIdentityToken,
+                        sessionSpawnContext,
                       },
                     ),
                   ),
@@ -200,65 +163,44 @@ export function createWorkerSessionToolSourceRunner(params: {
               };
               assertSource();
               const startedAt = Date.now();
-              let request = operation.request;
+              const request = operation.request;
               let result: AgentToolResult<unknown> | undefined;
               let errorMessage: string | undefined;
               try {
-                if (!("execute" in operation)) {
-                  const generic = operation.request;
-                  result = await generic.tool.execute(
-                    generic.request.toolCallId,
-                    generic.request.arguments,
-                    generic.signal,
-                    generic.onUpdate,
-                  );
-                  assertSource();
-                  return result;
-                }
-                request = operation.request;
-                const outcome = await runBeforeToolCallHook({
-                  toolName: request.toolName,
-                  params: workerSessionToolArguments(request),
-                  toolCallId: request.request.toolCallId,
-                  ctx: {
-                    agentId: operation.source.agentId,
+                const sourceTool =
+                  typeof request.tool === "function"
+                    ? request.tool({
+                        assertSource,
+                        callGateway,
+                        collectExecutionIdentity: owner.executionIdentityToken !== undefined,
+                      })
+                    : request.tool;
+                const tool = rewrapToolWithBeforeToolCallHook(
+                  bindAgentToolSourceExecutionGuard(sourceTool, assertSource),
+                  getBeforeToolCallHookContext(sourceTool) ?? {
+                    ...operation.source,
                     config: getRuntimeConfig(),
-                    sessionKey: operation.source.sessionKey,
-                    sessionId: operation.source.sessionId,
                     runId: request.identity.runId ?? undefined,
                   },
-                  signal: request.signal,
-                  approvalMode: "deny",
-                });
-                const adjusted = outcome.blocked
-                  ? undefined
-                  : prepareWorkerSessionToolRequest(
-                      request,
-                      request.toolName,
+                  request.approvalMode ? { approvalMode: request.approvalMode } : {},
+                );
+                result = await runWithToolExecutionValidation(
+                  request.request.toolCallId,
+                  (args) => {
+                    // Bound adapters validate and narrow rewrites at their protocol owner.
+                    if (typeof request.tool !== "function" && !Value.Check(tool.parameters, args)) {
+                      throw new Error(`Invalid ${request.toolName} arguments`);
+                    }
+                  },
+                  () =>
+                    tool.execute(
                       request.request.toolCallId,
-                      outcome.params,
-                    );
+                      request.request.arguments,
+                      request.signal,
+                      request.onUpdate,
+                    ),
+                );
                 assertSource();
-                if (adjusted) {
-                  request = adjusted;
-                  result = await operation.execute(
-                    {
-                      assertSource,
-                      callGateway,
-                      collectExecutionIdentity: owner.executionIdentityToken !== undefined,
-                    },
-                    request,
-                  );
-                } else {
-                  result = buildBlockedToolResult({
-                    reason: outcome.blocked
-                      ? outcome.reason
-                      : `Tool call blocked because before_tool_call returned invalid ${request.toolName} input.`,
-                    deniedReason: outcome.blocked ? outcome.deniedReason : undefined,
-                    toolCallId: request.request.toolCallId,
-                    runId: request.identity.runId ?? undefined,
-                  });
-                }
                 return result;
               } catch (error) {
                 errorMessage = errorResult(error).details.error;
@@ -271,7 +213,7 @@ export function createWorkerSessionToolSourceRunner(params: {
                   agentId: owner.agentId,
                   sessionKey: owner.sessionKey,
                   sessionId: operation.source.sessionId,
-                  startArgs: workerSessionToolArguments(request),
+                  startArgs: args,
                   result,
                   error: errorMessage,
                   startedAt,

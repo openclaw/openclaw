@@ -14,7 +14,7 @@ import {
 export function registerWorkerGatewayToolExecutionTests(
   getFixture: ReturnType<typeof installWorkerSessionToolTestFixture>,
 ) {
-  it.each(["rewrite", "deny", "revoke"] as const)(
+  it.each(["rewrite", "invalid-rewrite", "deny", "revoke"] as const)(
     "runs generic Gateway tools under worker authority through shared hooks (%s)",
     async (decision) => {
       const { setEntry, placements, sourceClaim, identity } = getFixture();
@@ -37,7 +37,7 @@ export function registerWorkerGatewayToolExecutionTests(
         }
         return decision === "deny"
           ? { block: true, blockReason: "generic tool disabled by policy" }
-          : { params: { value: "rewritten" } };
+          : { params: { value: decision === "invalid-rewrite" ? 3 : "rewritten" } };
       });
       const afterToolCall = vi.fn(() => {
         expect(getGatewayToolCallerIdentity()).toMatchObject(expectedCaller);
@@ -120,7 +120,11 @@ export function registerWorkerGatewayToolExecutionTests(
         );
       } else {
         expect(JSON.stringify(result)).toContain(
-          decision === "deny" ? "generic tool disabled by policy" : "Worker tool authority changed",
+          decision === "deny"
+            ? "generic tool disabled by policy"
+            : decision === "invalid-rewrite"
+              ? "Invalid worker_probe arguments"
+              : "Worker tool authority changed",
         );
       }
     },

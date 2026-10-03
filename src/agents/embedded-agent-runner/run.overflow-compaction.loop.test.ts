@@ -13,7 +13,6 @@ import {
 import { createSubscribedSessionHarness } from "../embedded-agent-subscribe.e2e-harness.js";
 import type { ExecSessionDefaults } from "../exec-defaults.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
-import type { SessionPlacementTurnParams } from "../session-placement-admission.js";
 import {
   createEmbeddedRunReplayState,
   type EmbeddedRunReplayState,
@@ -239,7 +238,13 @@ describe("embedded run retry dispatch", () => {
 
       const authority = resolveWorkerToolAuthority({
         modelRef: { provider: "openai", model: "gpt-5.6-luna" },
-        turn: result.preparedAttempt as unknown as SessionPlacementTurnParams,
+        turn: {
+          ...result.preparedAttempt,
+          model: result.preparedAttempt.model.id,
+          fastMode: false,
+        },
+        placement: { agentId: "main", sessionKey: "agent:main:session-1" },
+        assertCurrent: () => {},
       });
 
       expect(authority.exec).toEqual(expected);
