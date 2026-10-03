@@ -69,6 +69,7 @@ import type {
   GatewayRecoveryRuntime,
 } from "../server-instance-runtime.types.js";
 import type {
+  GatewayModelCatalogLoadParams,
   GatewayModelCatalogSnapshot,
   PreparedGatewayModelCatalog,
   PreparedGatewayModelCatalogReadResult,
@@ -254,18 +255,10 @@ type GatewayKernelContext = {
     sessionKey: string,
     client: GatewayClient | null,
   ) => Promise<PreparedSessionApprovalReplay>;
-  loadGatewayModelCatalog: (params?: {
-    agentId?: string;
-    agentDir?: string;
-    readOnly?: boolean;
-    workspaceDir?: string;
-  }) => Promise<ModelCatalogEntry[]>;
-  loadGatewayModelCatalogSnapshot: (params?: {
-    agentId?: string;
-    agentDir?: string;
-    readOnly?: boolean;
-    workspaceDir?: string;
-  }) => Promise<GatewayModelCatalogSnapshot>;
+  loadGatewayModelCatalog: (params?: GatewayModelCatalogLoadParams) => Promise<ModelCatalogEntry[]>;
+  loadGatewayModelCatalogSnapshot: (
+    params?: GatewayModelCatalogLoadParams,
+  ) => Promise<GatewayModelCatalogSnapshot>;
   readPreparedGatewayModelCatalog?: (params?: {
     agentId?: string;
     agentDir?: string;
