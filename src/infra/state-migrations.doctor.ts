@@ -1773,6 +1773,35 @@ export async function planLegacyStateMigrationsReadOnly(params: {
     const message = `Pending legacy state root is outside the copied state snapshot: ${pendingStateDirMigration.source}`;
     return refusedPlan({ code: "state-dir-source-outside-snapshot", message }, [message]);
   }
+  const unresolvedSteps = (
+    discovery: LegacyStateMigrationStep,
+    detection: LegacyStateMigrationStep,
+  ): LegacyStateMigrationStep[] => [
+    createStateSchemaMigrationStep({
+      stateDir: snapshot.stateDir,
+      env,
+      mode: params.mode,
+      requiredness: "conditional",
+    }),
+    pluginInstallIndexStep,
+    createConfigMachineStateStep({
+      config: configBefore.config,
+      configPath: snapshot.configPath,
+      configIncludedPaths: configBefore.configIncludedPaths,
+      stateDir: snapshot.stateDir,
+      env,
+    }),
+    discovery,
+    ...buildUnresolvedBlockedPreludeSteps(params.mode, invocationPurpose),
+    detection,
+    ...buildUnresolvedBlockedMigrationSteps({
+      mode: params.mode,
+      stateDir: snapshot.stateDir,
+      env,
+      skipAgentScopedMigrations: hasCustomAgentDirOverride(env),
+      pluginStateMigrationInventory,
+    }),
+  ];
   // Live Doctor honors the selected auth owner. Copied planning must refuse an
   // unbound source before discovery, not silently substitute the standard root.
   const outsideSharedAuthSources =
@@ -1812,21 +1841,7 @@ export async function planLegacyStateMigrationsReadOnly(params: {
         : []),
       ...outsideSharedAuthSources,
     ]);
-    const steps = [
-      createStateSchemaMigrationStep({
-        stateDir: snapshot.stateDir,
-        env,
-        mode: params.mode,
-        requiredness: "conditional",
-      }),
-      pluginInstallIndexStep,
-      createConfigMachineStateStep({
-        config: configBefore.config,
-        configPath: snapshot.configPath,
-        configIncludedPaths: configBefore.configIncludedPaths,
-        stateDir: snapshot.stateDir,
-        env,
-      }),
+    const steps = unresolvedSteps(
       createAgentTargetDiscoveryStep({
         configPath: snapshot.configPath,
         configIncludedPaths: configBefore.configIncludedPaths,
@@ -1834,16 +1849,8 @@ export async function planLegacyStateMigrationsReadOnly(params: {
         env,
         run: () => ({ changes: [], warnings: [] }),
       }),
-      ...buildUnresolvedBlockedPreludeSteps(params.mode, invocationPurpose),
       detectionStep,
-      ...buildUnresolvedBlockedMigrationSteps({
-        mode: params.mode,
-        stateDir: snapshot.stateDir,
-        env,
-        skipAgentScopedMigrations: hasCustomAgentDirOverride(env),
-        pluginStateMigrationInventory,
-      }),
-    ];
+    );
     return refusedPlan(
       refusal,
       [...configBefore.warnings, refusal.message],
@@ -1872,37 +1879,15 @@ export async function planLegacyStateMigrationsReadOnly(params: {
       ...discoveryStep.source,
       ...outsideSessionStoreEndpoints,
     ]);
-    const blockedSteps = [
-      createStateSchemaMigrationStep({
-        stateDir: snapshot.stateDir,
-        env,
-        mode: params.mode,
-        requiredness: "conditional",
-      }),
-      pluginInstallIndexStep,
-      createConfigMachineStateStep({
-        config: configBefore.config,
-        configPath: snapshot.configPath,
-        configIncludedPaths: configBefore.configIncludedPaths,
-        stateDir: snapshot.stateDir,
-        env,
-      }),
+    const blockedSteps = unresolvedSteps(
       discoveryStep,
-      ...buildUnresolvedBlockedPreludeSteps(params.mode, invocationPurpose),
       createMigrationDetectionStep({
         configPath: snapshot.configPath,
         configIncludedPaths: configBefore.configIncludedPaths,
         stateDir: snapshot.stateDir,
         run: () => ({ changes: [], warnings: [] }),
       }),
-      ...buildUnresolvedBlockedMigrationSteps({
-        mode: params.mode,
-        stateDir: snapshot.stateDir,
-        env,
-        skipAgentScopedMigrations: hasCustomAgentDirOverride(env),
-        pluginStateMigrationInventory,
-      }),
-    ];
+    );
     return refusedPlan(
       refusal,
       configBefore.warnings,

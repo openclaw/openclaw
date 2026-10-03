@@ -365,7 +365,6 @@ describe("outbound policy helpers", () => {
       preferPresentation: true,
     });
 
-    expect(applied.usedPresentation).toBe(true);
     expect(applied.presentation?.blocks.length).toBeGreaterThan(0);
     expect(applied.message).toBe("hello");
   });
@@ -391,7 +390,6 @@ describe("outbound policy helpers", () => {
     });
     expect(applied).toEqual({
       message: "[from ops] hello [cc]",
-      usedPresentation: false,
     });
   });
 

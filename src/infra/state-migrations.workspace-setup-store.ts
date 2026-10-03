@@ -213,29 +213,21 @@ function findMigrationAuthority(params: {
   ).rows;
   let bestPriority: number | null = null;
   for (const row of rows) {
-    if (!row.report_json) {
+    const report = safeParseJsonRecord(row.report_json);
+    if (
+      !report ||
+      report.workspaceKey !== params.source.workspaceKey ||
+      report.sourceKind !== params.source.kind ||
+      report.canonicalFingerprint !== params.fingerprint ||
+      report.authoritative !== true ||
+      typeof report.sourcePriority !== "number" ||
+      !Number.isSafeInteger(report.sourcePriority) ||
+      report.sourcePriority < 0
+    ) {
       continue;
     }
-    try {
-      const report = JSON.parse(row.report_json) as Record<string, unknown>;
-      if (
-        report.workspaceKey !== params.source.workspaceKey ||
-        report.sourceKind !== params.source.kind ||
-        report.canonicalFingerprint !== params.fingerprint ||
-        report.authoritative !== true ||
-        typeof report.sourcePriority !== "number" ||
-        !Number.isSafeInteger(report.sourcePriority) ||
-        report.sourcePriority < 0
-      ) {
-        continue;
-      }
-      bestPriority =
-        bestPriority === null
-          ? report.sourcePriority
-          : Math.min(bestPriority, report.sourcePriority);
-    } catch {
-      // Ignore unrelated or older migration reports without authority metadata.
-    }
+    bestPriority =
+      bestPriority === null ? report.sourcePriority : Math.min(bestPriority, report.sourcePriority);
   }
   return bestPriority === null ? null : { priority: bestPriority };
 }
