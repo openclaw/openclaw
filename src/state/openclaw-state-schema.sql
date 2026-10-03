@@ -1789,6 +1789,10 @@ CREATE TABLE IF NOT EXISTS meeting_transcript_utterances (
     ON DELETE CASCADE
 ) STRICT;
 
+CREATE INDEX IF NOT EXISTS idx_meeting_transcript_utterances_id
+  ON meeting_transcript_utterances(session_id, session_started_at, utterance_id)
+  WHERE utterance_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS meeting_transcript_summaries (
   session_id TEXT NOT NULL,
   session_started_at TEXT NOT NULL,

@@ -37,20 +37,6 @@ import {
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
 
-/** Capture retains published identity while category facts wait for worker reconciliation. */
-export function createSessionRowCapture(
-  lookup: (query: records.Lookup) => records.Row | undefined,
-  needsAcquisition: (row: records.Row) => boolean,
-  acquire: (row: records.Row) => records.Row | undefined,
-) {
-  return (query: records.Lookup) => {
-    const row = lookup(query);
-    return row && row.unresolvedDatabaseFacts !== "category" && needsAcquisition(row)
-      ? (acquire(row) ?? row)
-      : row;
-  };
-}
-
 /** Apply committed metadata before observers without reacquiring it from SQLite. */
 export function createSessionRowPublication(owner: {
   store: (path: string) => records.SessionRowStore | undefined;
@@ -466,8 +452,7 @@ export function readResidentSessionRow(
     includeLastMessage: Boolean(source),
     skipTranscriptUsageFallback: true,
     includeSwarmChildren: true,
-    storeChildSessionLinksByKey:
-      source || prepared ? undefined : new Map([[row.key, params.links]]),
+    childLinks: source || prepared ? undefined : params.links,
   });
   if (!source) {
     inputs.derivedTitle = deriveSessionTitle(row.entry, undefined, inputs.displayName);
