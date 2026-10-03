@@ -672,9 +672,9 @@ public enum ChatSessionSidebarModel {
         _ session: OpenClawChatSessionEntry,
         mainSessionKey: String) -> Bool
     {
+        // The Gateway drains active work before archive commit; keep only client-side identity guards.
         ChatPayloadDecoding.trimmedNonEmptyString(session.sessionId) != nil &&
-            self.canDeleteSession(key: session.key, mainSessionKey: mainSessionKey) &&
-            !self.isRunning(session) && session.hasActiveSubagentRun != true
+            self.canDeleteSession(key: session.key, mainSessionKey: mainSessionKey)
     }
 
     public static func isSessionInActiveAgentScope(
