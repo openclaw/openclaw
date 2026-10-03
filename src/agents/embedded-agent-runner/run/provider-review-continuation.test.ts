@@ -586,107 +586,85 @@ describe("explicit direct Responses continuation", () => {
     },
   );
 
-  it.each(["in-place", "replacement"] as const)(
-    "rejects additional user input from a %s payload hook before dispatch",
-    async (mode) => {
-      const f = await fixture("sse");
-      const stream = await f.stream(model, context, {
+  it.each([
+    ["extra in-place input", "payload added user input"],
+    ["extra replacement input", "payload added user input"],
+    ["replacement identity", "changed its next user input"],
+    ["reorder", "changed its next user input"],
+    ["replace-carrier", "changed its next user input"],
+    ["mutate-carrier", "changed its next user input"],
+    ["model", "changed the reviewed runtime or model"],
+  ])("rejects unreviewed payload changes before dispatch: %s", async (change, error) => {
+    const f = await fixture("sse");
+    const hasCarrier = ["reorder", "replace-carrier", "mutate-carrier"].includes(change);
+    const messages: Context["messages"] = hasCarrier
+      ? [
+          ...context.messages,
+          { role: "user", content: "Runtime context", timestamp: 3, runtimeContextCarrier: true },
+        ]
+      : context.messages;
+    const stream = await f.stream(
+      model,
+      { ...context, messages },
+      {
         ...f.options,
         onPayload: (payload: unknown) => {
           if (!isRecord(payload) || !Array.isArray(payload.input)) {
-            throw new Error("Fixture expected a Responses input array");
+            throw new Error("Fixture expected Responses input");
           }
-          const extraInput = [
-            { role: "user", content: [{ type: "input_text", text: "Extra unreviewed input" }] },
-            { role: "user", content: [{ type: "input_text", text: "Trailing input" }] },
-          ];
-          if (mode === "in-place") {
-            payload.input.push(...extraInput);
-            return undefined;
+          if (change === "model") {
+            return { ...payload, model: "other-model" };
           }
-          return { ...payload, input: [...payload.input, ...extraInput] };
+          if (change.startsWith("extra")) {
+            const extra = [
+              { role: "user", content: [{ type: "input_text", text: "Extra unreviewed input" }] },
+              { role: "user", content: [{ type: "input_text", text: "Trailing input" }] },
+            ];
+            if (change === "extra in-place input") {
+              payload.input.push(...extra);
+              return undefined;
+            }
+            return { ...payload, input: [...payload.input, ...extra] };
+          }
+          if (change === "replacement identity") {
+            return {
+              ...payload,
+              input: [
+                ...payload.input.slice(0, -1),
+                { role: "user", content: [{ type: "input_text", text: steer }] },
+              ],
+            };
+          }
+          if (change === "reorder") {
+            [payload.input[0], payload.input[1]] = [payload.input[1], payload.input[0]];
+          } else {
+            const carrier = payload.input.at(-1);
+            if (
+              !isRecord(carrier) ||
+              !Array.isArray(carrier.content) ||
+              !isRecord(carrier.content[0])
+            ) {
+              throw new Error("Fixture expected a runtime-context carrier");
+            }
+            if (change === "mutate-carrier") {
+              carrier.content[0].text = "Unreviewed input";
+            } else {
+              payload.input[payload.input.length - 1] = {
+                role: "user",
+                content: [{ type: "input_text", text: "Unreviewed input" }],
+              };
+            }
+          }
+          return payload;
         },
-      });
-      const result = await stream.result();
-      expect(result.stopReason).toBe("error");
-      expect(result.errorMessage).toContain("payload added user input");
-      expect(f.requests).toHaveLength(0);
-      expect(store.entry?.providerReview?.id).toBe("review-1");
-    },
-  );
-
-  it("rejects a replacement user input without the acknowledged source identity", async () => {
-    const f = await fixture("sse");
-    const stream = await f.stream(model, context, {
-      ...f.options,
-      onPayload: (payload: unknown) => {
-        if (!isRecord(payload) || !Array.isArray(payload.input)) {
-          throw new Error("Fixture expected Responses input");
-        }
-        return {
-          ...payload,
-          input: [
-            ...payload.input.slice(0, -1),
-            { role: "user", content: [{ type: "input_text", text: steer }] },
-          ],
-        };
       },
-    });
+    );
     const result = await stream.result();
     expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain("changed its next user input");
+    expect(result.errorMessage).toContain(error);
     expect(f.requests).toHaveLength(0);
     expect(store.entry?.providerReview?.id).toBe("review-1");
   });
-
-  it.each(["reorder", "replace-carrier", "mutate-carrier"] as const)(
-    "rejects a payload hook that changes the acknowledged turn's tail: %s",
-    async (change) => {
-      const f = await fixture("sse");
-      const messages: Context["messages"] = [
-        ...context.messages,
-        { role: "user", content: "Runtime context", timestamp: 3, runtimeContextCarrier: true },
-      ];
-      const stream = await f.stream(
-        model,
-        { ...context, messages },
-        {
-          ...f.options,
-          onPayload: (payload: unknown) => {
-            if (!isRecord(payload) || !Array.isArray(payload.input)) {
-              throw new Error("Fixture expected Responses input");
-            }
-            if (change === "reorder") {
-              [payload.input[0], payload.input[1]] = [payload.input[1], payload.input[0]];
-            } else {
-              const carrier = payload.input.at(-1);
-              if (
-                !isRecord(carrier) ||
-                !Array.isArray(carrier.content) ||
-                !isRecord(carrier.content[0])
-              ) {
-                throw new Error("Fixture expected a runtime-context carrier");
-              }
-              if (change === "mutate-carrier") {
-                carrier.content[0].text = "Unreviewed input";
-              } else {
-                payload.input[payload.input.length - 1] = {
-                  role: "user",
-                  content: [{ type: "input_text", text: "Unreviewed input" }],
-                };
-              }
-            }
-            return payload;
-          },
-        },
-      );
-      const result = await stream.result();
-      expect(result.stopReason).toBe("error");
-      expect(result.errorMessage).toContain("changed its next user input");
-      expect(f.requests).toHaveLength(0);
-      expect(store.entry?.providerReview?.id).toBe("review-1");
-    },
-  );
 
   it("preserves effective settings, tools, and history transforms while keeping the exact steer", async () => {
     const f = await fixture("sse");
@@ -725,22 +703,6 @@ describe("explicit direct Responses continuation", () => {
       ],
     });
     expect(store.entry?.providerReview).toBeUndefined();
-  });
-
-  it("rejects a payload hook that changes the reviewed model before dispatch", async () => {
-    const f = await fixture("sse");
-    const stream = await f.stream(model, context, {
-      ...f.options,
-      onPayload: (payload: unknown) => ({
-        ...(payload as Record<string, unknown>),
-        model: "other-model",
-      }),
-    });
-    const result = await stream.result();
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain("changed the reviewed runtime or model");
-    expect(f.requests).toHaveLength(0);
-    expect(store.entry?.providerReview?.id).toBe("review-1");
   });
 
   it("rejects malformed existing metadata and unsupported API-key routes before dispatch", async () => {

@@ -569,31 +569,29 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         forceKillTimer.unref?.();
       };
 
-      const waitOutcome = Promise.allSettled([
-        (async (): Promise<RunExit> => {
-          const result = await adapter.wait();
-          const terminalReason = forcedReason;
-          settleResult(adapter);
+      const waitPromise = (async (): Promise<RunExit> => {
+        const result = await adapter.wait();
+        const terminalReason = forcedReason;
+        settleResult(adapter);
 
-          const reason: TerminationReason =
-            terminalReason ?? (result.signal != null ? ("signal" as const) : ("exit" as const));
-          const exit: RunExit = {
-            reason,
-            exitCode: result.code,
-            exitSignal: result.signal,
-            oomScoreWrapperSelected: adapter.oomScoreWrapperSelected === true,
-            durationMs: Date.now() - startedAtMs,
-            ...captured,
-            timedOut: isTimeoutReason(reason),
-            noOutputTimedOut: terminalReason === "no-output-timeout",
-          };
-          return exit;
-        })().finally(() => {
-          if (!resultSettled) {
-            settleResult(adapter);
-          }
-        }),
-      ]);
+        const reason: TerminationReason =
+          terminalReason ?? (result.signal != null ? ("signal" as const) : ("exit" as const));
+        return {
+          reason,
+          exitCode: result.code,
+          exitSignal: result.signal,
+          oomScoreWrapperSelected: adapter.oomScoreWrapperSelected === true,
+          durationMs: Date.now() - startedAtMs,
+          ...captured,
+          timedOut: isTimeoutReason(reason),
+          noOutputTimedOut: terminalReason === "no-output-timeout",
+        };
+      })().finally(() => {
+        if (!resultSettled) {
+          settleResult(adapter);
+        }
+      });
+      void waitPromise.catch(() => undefined);
 
       const managedRun: ManagedRun = {
         activity: Object.freeze({
@@ -613,13 +611,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         pid: adapter.pid,
         startedAtMs,
         stdin: adapter.stdin,
-        wait: async () => {
-          const [outcome] = await waitOutcome;
-          if (outcome.status === "rejected") {
-            throw outcome.reason;
-          }
-          return outcome.value;
-        },
+        wait: () => waitPromise,
         ...(adapter.waitForExtinction && { waitForExtinction: () => cleanup.promise }),
         cancel: (reason = "manual-cancel") => {
           requestCancel(reason);

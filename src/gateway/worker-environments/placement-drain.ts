@@ -3,9 +3,11 @@ import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   assertRecordShape,
+  isCurrentPlacementTurnClaim,
   normalizeEpoch,
   required,
   type WorkerSessionPlacementRecord,
+  type WorkerSessionTurnClaim,
 } from "./placement-record.js";
 import { getRequired, query, transitionValues } from "./placement-row-codec.js";
 import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
@@ -19,8 +21,11 @@ export function drainWorkerSessionPlacement(
     environmentId: string;
     ownerEpoch: number;
     expectedGeneration: number;
+    expectedUpdatedAtMs?: number;
     workspaceBaseManifestRef?: string;
     allowPendingWorkspaceResult?: boolean;
+    requireUnclaimed?: true;
+    expectedTurnClaim?: WorkerSessionTurnClaim;
   },
   nowMs: number,
 ): WorkerSessionPlacementRecord {
@@ -36,8 +41,20 @@ export function drainWorkerSessionPlacement(
   ) {
     throw new Error(`Cannot drain stale worker placement for session ${sessionId}`);
   }
+  if (
+    input.expectedUpdatedAtMs !== undefined &&
+    current.updatedAtMs !== input.expectedUpdatedAtMs
+  ) {
+    throw new Error(`Cannot drain changed worker placement activity for session ${sessionId}`);
+  }
   if (!input.allowPendingWorkspaceResult && hasWorkerWorkspacePendingResult(db, sessionId)) {
     throw new Error(`Cannot drain session ${sessionId} with a pending cloud workspace result`);
+  }
+  if (input.requireUnclaimed && current.turnClaim) {
+    throw new Error(`Cannot drain session ${sessionId} during an active turn`);
+  }
+  if (input.expectedTurnClaim && !isCurrentPlacementTurnClaim(current, input.expectedTurnClaim)) {
+    throw new Error(`Cannot drain stale worker turn for session ${sessionId}`);
   }
   // Draining closes new admission first. The already-admitted worker may
   // finish under its old claim before reconciliation advances ownership.

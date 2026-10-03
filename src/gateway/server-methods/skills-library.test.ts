@@ -326,7 +326,7 @@ describe("skill library retained support files", () => {
         details: { code: "SKILL_LIBRARY_NOT_FOUND" },
       }),
     ]);
-    mutateSkillLibrary(actor(alice.id), {
+    await mutateSkillLibrary(actor(alice.id), {
       skillId: saved.entry.skillId,
       expectedRevision: saved.entry.revision,
       action: "share",

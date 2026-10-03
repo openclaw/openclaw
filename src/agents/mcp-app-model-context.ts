@@ -102,12 +102,7 @@ export function updateMcpAppModelContext(
   const serialized = JSON.stringify(next);
   const views = contexts.get(runtime) ?? new Map<object, Snapshot>();
   const previous = views.get(view);
-  const previousData = previous && {
-    ...(previous.content ? { content: previous.content } : {}),
-    ...(previous.structuredContent !== undefined
-      ? { structuredContent: previous.structuredContent }
-      : {}),
-  };
+  const { updateId: _updateId, leased: _leased, ...previousData } = previous ?? {};
   const updateId =
     previous && JSON.stringify(previousData) === serialized ? previous.updateId : randomUUID();
   const totalBytes =
@@ -136,7 +131,10 @@ export function removeMcpAppModelContextItem(
   index?: number,
 ): McpAppModelContextState {
   const state = getMcpAppModelContext(runtime, view);
-  if (!state || state.updateId !== updateId) {
+  if (!state) {
+    return null;
+  }
+  if (state.updateId !== updateId) {
     throw new Error("MCP App context changed; refresh before removing it");
   }
   if (index === undefined) {

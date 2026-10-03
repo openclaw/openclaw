@@ -6,6 +6,7 @@ import { createChatSendGoalCommitGuard } from "../../gateway/server-methods/chat
 import { loadSessionEntry as loadGatewaySessionEntry } from "../../gateway/session-utils.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -16,12 +17,15 @@ import {
   withSessionPendingInputPersistence,
 } from "./session-accessor.pending-inputs.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
-import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { replaceSessionEntry, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { resetSessionEntryLifecycle } from "./session-accessor.sqlite-lifecycle.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { readCommittedTranscriptMessageSequence } from "./session-accessor.sqlite-transcript-sequences.js";
 import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-turn.js";
 import type { SessionTranscriptTurnPersistOptions } from "./session-accessor.types.js";
+import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
+import * as transcriptReconcile from "./session-transcript-reconcile.js";
 
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
   kickSessionEntryMaintenanceAfterWrite() {},
@@ -127,31 +131,51 @@ it.each(["fresh", "replay"])(
   },
 );
 
-it("publishes an acknowledged turn exactly once after a lost worker reply", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
-    const committed = vi.fn();
-    const lostReply = vi.fn();
-    delivery.afterCommit = (type) => {
-      if (type === "session.turn.commit") {
-        lostReply();
-        throw new Error("worker reply lost after COMMIT");
+it.each(["turn", "reset"] as const)(
+  "publishes an acknowledged %s exactly once after a lost worker reply",
+  async (operation) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = fixture();
+      const committed = vi.fn();
+      const lostReply = vi.fn();
+      delivery.afterCommit = (type) => {
+        if (type === (operation === "turn" ? "session.turn.commit" : "session.lifecycle.reset")) {
+          lostReply();
+          throw new Error("worker reply lost after COMMIT");
+        }
+      };
+      if (operation === "turn") {
+        const result = await appendExpectedSessionTranscriptTurn(f.scope, {
+          expectedSessionId: f.scope.sessionId,
+          sessionFile: "synthetic-session.jsonl",
+          messages: [
+            { eventId: "acknowledged-turn", message: { role: "user", content: "committed" } },
+          ],
+          onMessageCommitted: committed,
+        });
+        expect(result.appendedMessages).toMatchObject([
+          { messageId: "acknowledged-turn", appended: true },
+        ]);
+        expect(f.events().filter((event) => event.id === "acknowledged-turn")).toHaveLength(1);
+      } else {
+        const buildNextEntry = vi.fn(() => ({ sessionId: "acknowledged-reset", updatedAt: 2 }));
+        const result = await resetSessionEntryLifecycle({
+          ...f.scope,
+          target: f.target,
+          resetBoundary: { context: "clear", reason: "new", cwd: "/synthetic/workspace" },
+          buildNextEntry,
+          afterEntryMutation: committed,
+        });
+        expect(result.nextEntry.sessionId).toBe("acknowledged-reset");
+        expect(f.read()?.sessionId).toBe("acknowledged-reset");
+        expect(f.events().filter((event) => event.type === "reset")).toHaveLength(1);
+        expect(buildNextEntry).toHaveBeenCalledOnce();
       }
-    };
-    const result = await appendExpectedSessionTranscriptTurn(f.scope, {
-      expectedSessionId: f.scope.sessionId,
-      sessionFile: "synthetic-session.jsonl",
-      messages: [{ eventId: "acknowledged-turn", message: { role: "user", content: "committed" } }],
-      onMessageCommitted: committed,
+      expect(lostReply).toHaveBeenCalledOnce();
+      expect(committed).toHaveBeenCalledOnce();
     });
-    expect(result.appendedMessages).toMatchObject([
-      { messageId: "acknowledged-turn", appended: true },
-    ]);
-    expect(f.events().filter((event) => event.id === "acknowledged-turn")).toHaveLength(1);
-    expect(lostReply).toHaveBeenCalledOnce();
-    expect(committed).toHaveBeenCalledOnce();
-  });
-});
+  },
+);
 
 it("rolls back the turn and its pending-input custody after an idempotency conflict", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -194,122 +218,189 @@ it("rolls back the turn and its pending-input custody after an idempotency confl
   });
 });
 
-it("refuses revoked authority at the turn COMMIT grant", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
-    let current = true;
-    const refusal = new Error("compound authority revoked");
-    const assertCurrent = () => {
-      if (!current) {
-        throw refusal;
+it.each([
+  { operation: "turn", stage: "commit" },
+  { operation: "reset", stage: "transaction" },
+  { operation: "reset", stage: "commit" },
+] as const)(
+  "refuses revoked authority at the $operation $stage grant",
+  async ({ operation, stage }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = fixture();
+      const before = f.read();
+      let current = true;
+      let resetPrepared = false;
+      const refusal = new Error("compound authority revoked");
+      const assertCurrent = () => {
+        if (!current) {
+          throw refusal;
+        }
+      };
+      const pending =
+        operation === "turn"
+          ? await stageSessionPendingInput(f.scope, {
+              runId: "revoked-turn",
+              message: {
+                role: "user",
+                content: "must remain queued",
+                timestamp: 1,
+                idempotencyKey: "revoked:user",
+              },
+              assertCurrent,
+            })
+          : undefined;
+      if (operation === "turn") {
+        expect(pending).toBeDefined();
       }
-    };
-    const pending = await stageSessionPendingInput(f.scope, {
-      runId: "revoked-turn",
-      message: {
-        role: "user",
-        content: "must remain queued",
-        timestamp: 1,
-        idempotencyKey: "revoked:user",
-      },
-      assertCurrent,
-    });
-    expect(pending).toBeDefined();
-    const createAdmission = admission.createSqliteWorkerOperationAdmission;
-    let finalGrant = false;
-    vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (callback, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            finalGrant = true;
-            expect(pending!.state).toBe("queued");
-            current = false;
-          }
-          callback(request, grant);
-        }, attachment),
-    );
-    const committed = vi.fn();
-    try {
-      const work = pending!.run(() =>
-        appendExpectedSessionTranscriptTurn(f.scope, {
-          expectedSessionId: f.scope.sessionId,
-          sessionFile: "synthetic-session.jsonl",
-          messages: [{ message: pending!.message }],
-          onMessageCommitted: committed,
-        }),
+      const createAdmission = admission.createSqliteWorkerOperationAdmission;
+      let finalGrant = false;
+      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
+        (callback, attachment) =>
+          createAdmission((request, grant) => {
+            if (request.stage === stage && (operation === "turn" || resetPrepared)) {
+              finalGrant = true;
+              if (pending) {
+                expect(pending.state).toBe("queued");
+              }
+              current = false;
+            }
+            callback(request, grant);
+          }, attachment),
       );
-      await expect(work).rejects.toBe(refusal);
-      expect(finalGrant).toBe(true);
-      expect(committed).not.toHaveBeenCalled();
-      expect(pending!.state).toBe("queued");
-      expect(f.read()?.sessionId).toBe("original");
-      expect(f.events()).toEqual([]);
-    } finally {
-      pending!.finish("interrupted");
-    }
-  });
-});
+      const committed = vi.fn();
+      try {
+        const work =
+          operation === "turn"
+            ? pending!.run(() =>
+                appendExpectedSessionTranscriptTurn(f.scope, {
+                  expectedSessionId: f.scope.sessionId,
+                  sessionFile: "synthetic-session.jsonl",
+                  messages: [{ message: pending!.message }],
+                  onMessageCommitted: committed,
+                }),
+              )
+            : resetSessionEntryLifecycle({
+                ...f.scope,
+                target: f.target,
+                commitGuard: assertCurrent,
+                resetBoundary: { context: "clear", reason: "new", cwd: "/synthetic/workspace" },
+                buildNextEntry() {
+                  resetPrepared = true;
+                  return { sessionId: "revoked-reset", updatedAt: 2 };
+                },
+                afterEntryMutation: committed,
+              });
+        await expect(work).rejects.toBe(refusal);
+        expect(finalGrant).toBe(true);
+        expect(committed).not.toHaveBeenCalled();
+        if (pending) {
+          expect(pending.state).toBe("queued");
+        }
+        expect(f.read()).toEqual(before);
+        expect(f.events()).toEqual([]);
+      } finally {
+        pending?.finish("interrupted");
+      }
+    });
+  },
+);
 
-it("joins concurrent turn completions in physical FIFO order", async ({ signal }) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const order: string[] = [];
-    const first = appendExpectedSessionTranscriptTurn(f.scope, {
-      expectedSessionId: f.scope.sessionId,
-      sessionFile: "synthetic-session.jsonl",
-      messages: [{ eventId: "first-turn", message: { role: "user", content: "first" } }],
-      onMessageCommitted(_message, accept) {
-        order.push("turn:callback");
-        accept(async () => {
-          entered.resolve();
-          await release.promise;
-          order.push("turn:completion");
-        });
-      },
-    });
-    let second: Promise<unknown> | undefined;
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(entered.promise, first, "turn skipped completion"),
-        signal,
-      );
-      second = appendExpectedSessionTranscriptTurn(f.scope, {
+it.for(["turn", "reset"] as const)(
+  "joins a turn completion and concurrent %s in physical FIFO order",
+  async (operation, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = fixture();
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const order: string[] = [];
+      const stopIdentity = onSessionIdentityMutation((change) => {
+        if (change.kind === "reset" && change.current.sessionId === "fifo-reset") {
+          order.push("reset:identity");
+        }
+      });
+      const first = appendExpectedSessionTranscriptTurn(f.scope, {
         expectedSessionId: f.scope.sessionId,
         sessionFile: "synthetic-session.jsonl",
-        messages: [
-          {
-            eventId: "second-turn",
-            message: { role: "user", content: "second" },
-            shouldAppend() {
-              order.push("second:prepare");
-              return true;
-            },
-          },
-        ],
-        onMessageCommitted() {
-          order.push("second:callback");
+        messages: [{ eventId: "first-turn", message: { role: "user", content: "first" } }],
+        onMessageCommitted(_message, accept) {
+          order.push("turn:callback");
+          accept(async () => {
+            entered.resolve();
+            await release.promise;
+            order.push("turn:completion");
+          });
         },
       });
-      expect(order).toEqual(["turn:callback"]);
-      release.resolve();
-      await withinTest(Promise.all([first, second]), signal);
-      expect(order).toEqual([
-        "turn:callback",
-        "turn:completion",
-        "second:prepare",
-        "second:callback",
-      ]);
-      expect(f.events()).toContainEqual(
-        expect.objectContaining({ type: "message", id: "second-turn", parentId: "first-turn" }),
-      );
-    } finally {
-      release.resolve();
-      await Promise.allSettled([first, second]);
-    }
-  });
-});
+      let second: Promise<unknown> | undefined;
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(entered.promise, first, "turn skipped completion"),
+          signal,
+        );
+        second =
+          operation === "turn"
+            ? appendExpectedSessionTranscriptTurn(f.scope, {
+                expectedSessionId: f.scope.sessionId,
+                sessionFile: "synthetic-session.jsonl",
+                messages: [
+                  {
+                    eventId: "second-turn",
+                    message: { role: "user", content: "second" },
+                    shouldAppend() {
+                      order.push("second:prepare");
+                      return true;
+                    },
+                  },
+                ],
+                onMessageCommitted() {
+                  order.push("second:callback");
+                },
+              })
+            : resetSessionEntryLifecycle({
+                ...f.scope,
+                target: f.target,
+                resetBoundary: {
+                  context: "preserve-tail",
+                  reason: "reset",
+                  cwd: "/synthetic/workspace",
+                },
+                buildNextEntry({ currentEntry }) {
+                  order.push(`reset:build:${currentEntry?.sessionId}`);
+                  return { sessionId: "fifo-reset", updatedAt: 2 };
+                },
+                afterEntryMutation() {
+                  order.push("reset:after");
+                },
+              });
+        expect(order).toEqual(["turn:callback"]);
+        release.resolve();
+        await withinTest(Promise.all([first, second]), signal);
+        expect(order).toEqual(
+          operation === "turn"
+            ? ["turn:callback", "turn:completion", "second:prepare", "second:callback"]
+            : [
+                "turn:callback",
+                "turn:completion",
+                "reset:build:original",
+                "reset:identity",
+                "reset:after",
+              ],
+        );
+        expect(f.events()).toContainEqual(
+          expect.objectContaining(
+            operation === "turn"
+              ? { type: "message", id: "second-turn", parentId: "first-turn" }
+              : { type: "reset", parentId: "first-turn" },
+          ),
+        );
+      } finally {
+        release.resolve();
+        await Promise.allSettled([first, second]);
+        stopIdentity();
+      }
+    });
+  },
+);
 
 function fixture() {
   const database = openOpenClawAgentDatabase({ agentId: "main" });
@@ -323,11 +414,195 @@ function fixture() {
   return {
     database,
     scope,
+    target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
     read: () => readExactSessionEntryRow(database, scope.sessionKey)?.entry,
     events: () =>
       readTranscriptEventRows(database, scope.sessionId).map((row) => JSON.parse(row.eventJson)),
   };
 }
+
+it("commits a reset with zero host SQL", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const committed = vi.fn();
+    const sql = observeHostDataSql();
+    try {
+      const result = await resetSessionEntryLifecycle({
+        ...f.scope,
+        target: f.target,
+        resetBoundary: { context: "clear", reason: "new", cwd: "/synthetic/workspace" },
+        buildNextEntry: () => ({ sessionId: "host-sql-reset", updatedAt: 2 }),
+        afterEntryMutation: committed,
+      });
+      expect(result).toMatchObject({
+        previousSessionId: "original",
+        nextEntry: { sessionId: "host-sql-reset" },
+        archivedTranscripts: [],
+      });
+      expect(sql.queries.length, `T1 reset host SQL observations: ${sql.queries.length}`).toBe(0);
+      expect(committed).toHaveBeenCalledOnce();
+    } finally {
+      sql.restore();
+    }
+    expect(f.read()?.sessionId).toBe("host-sql-reset");
+    expect(f.events().filter((event) => event.type === "reset")).toHaveLength(1);
+  });
+});
+
+it("reconciles a dirty reset transcript through the host owner after commit", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    await appendExpectedSessionTranscriptTurn(f.scope, {
+      expectedSessionId: f.scope.sessionId,
+      sessionFile: "synthetic-session.jsonl",
+      messages: [
+        { eventId: "dirty-reset-seed", message: { role: "user", content: "Retained history" } },
+      ],
+    });
+    f.database.db
+      .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
+      .run(f.scope.sessionId);
+    const projection = () =>
+      f.database.db
+        .prepare(
+          "SELECT needs_rebuild, indexed_seq, leaf_event_id FROM session_transcript_index_state WHERE session_id = ?",
+        )
+        .get(f.scope.sessionId);
+    expect(projection()).toMatchObject({ needs_rebuild: 1 });
+    const reconcile = vi.spyOn(transcriptReconcile, "startSessionTranscriptIndexReconcile");
+    const databaseOptions = { agentId: f.scope.agentId, path: f.database.path };
+    try {
+      await resetSessionEntryLifecycle({
+        ...f.scope,
+        target: f.target,
+        resetBoundary: {
+          context: "clear",
+          reason: "new",
+          cwd: "/synthetic/workspace",
+          boundaryId: "dirty-reset-boundary",
+        },
+        buildNextEntry: () => ({ sessionId: "dirty-reset-successor", updatedAt: 2 }),
+      });
+      expect(reconcile).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          ...databaseOptions,
+          preferredSessionId: "original",
+        }),
+      );
+    } finally {
+      await transcriptReconcile.waitForSessionTranscriptIndexReconcile(databaseOptions);
+    }
+    expect(projection()).toEqual({
+      needs_rebuild: 0,
+      indexed_seq: 2,
+      leaf_event_id: "dirty-reset-boundary",
+    });
+    expect(f.read()?.sessionId).toBe("dirty-reset-successor");
+  });
+});
+
+it("preserves reset conflict identity and does not overwrite a concurrent entry", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const concurrent = { sessionId: "original", updatedAt: 2, label: "concurrent writer" };
+    const replaceAfterSelection = vi.fn(() => replaceSessionEntrySync(f.scope, concurrent));
+    delivery.afterCommit = (type) => {
+      if (type === "session.entry.patch.prepare") {
+        replaceAfterSelection();
+      }
+    };
+    const buildNextEntry = vi.fn<
+      Parameters<typeof resetSessionEntryLifecycle>[0]["buildNextEntry"]
+    >(({ currentEntry }) => {
+      expect(currentEntry?.label).toBe("initial");
+      return { sessionId: "rejected-reset", updatedAt: 3 };
+    });
+    const committed = vi.fn();
+    const work = resetSessionEntryLifecycle({
+      ...f.scope,
+      target: f.target,
+      buildNextEntry,
+      afterEntryMutation: committed,
+    });
+    await expect(work).rejects.toBeInstanceOf(SqliteSessionMutationConflictError);
+    await expect(work).rejects.toMatchObject({ operationLabel: "reset" });
+    expect(replaceAfterSelection).toHaveBeenCalledOnce();
+    expect(buildNextEntry).toHaveBeenCalledOnce();
+    expect(committed).not.toHaveBeenCalled();
+    expect(f.read()).toMatchObject(concurrent);
+    expect(f.events()).toEqual([]);
+  });
+});
+
+it("rolls collaboration cleanup back with a refused reset and clears only the committed target", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const siblingKey = "agent:main:compound-sibling";
+    await replaceSessionEntry(
+      { ...f.scope, sessionKey: siblingKey },
+      { sessionId: "sibling", updatedAt: 1 },
+    );
+    for (const key of [f.scope.sessionKey, siblingKey]) {
+      f.database.db
+        .prepare(
+          "INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (?, ?, ?, ?)",
+        )
+        .run(key, "synthetic-member", "synthetic-owner", 1);
+      f.database.db
+        .prepare(
+          "INSERT INTO session_suggestions (id, session_key, author_id, text, created_at, state) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .run(`suggestion:${key}`, key, "synthetic-member", "Synthetic suggestion", 1, "pending");
+      f.database.db
+        .prepare(
+          "INSERT INTO session_reactions (session_key, session_id, message_id, emoji, identity_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          key,
+          key === siblingKey ? "sibling" : "original",
+          "synthetic-message",
+          "👍",
+          "synthetic-member",
+          1,
+        );
+    }
+    const collaboration = (key: string) =>
+      ["session_members", "session_suggestions", "session_reactions"].map((table) =>
+        f.database.db.prepare(`SELECT * FROM ${table} WHERE session_key = ?`).all(key),
+      );
+    const before = collaboration(f.scope.sessionKey);
+    const siblingBefore = collaboration(siblingKey);
+    const entryBefore = f.read();
+    const committed = vi.fn();
+    const reset = () =>
+      resetSessionEntryLifecycle({
+        ...f.scope,
+        target: f.target,
+        resetBoundary: { context: "clear", reason: "new", cwd: "/synthetic/workspace" },
+        buildNextEntry: () => ({ sessionId: "collaboration-reset", updatedAt: 2 }),
+        afterEntryMutation: committed,
+      });
+    // Refuse the final collaboration deletion after earlier tables have already changed.
+    f.database.db.exec(`CREATE TRIGGER reject_reset_reactions BEFORE DELETE ON session_reactions
+      BEGIN SELECT RAISE(ABORT, 'synthetic reset collaboration refusal'); END;`);
+    try {
+      await expect(reset()).rejects.toThrow("synthetic reset collaboration refusal");
+      expect(collaboration(f.scope.sessionKey)).toEqual(before);
+      expect(collaboration(siblingKey)).toEqual(siblingBefore);
+      expect(f.read()).toEqual(entryBefore);
+      expect(f.events()).toEqual([]);
+      expect(committed).not.toHaveBeenCalled();
+    } finally {
+      f.database.db.exec("DROP TRIGGER reject_reset_reactions");
+    }
+    await reset();
+    expect(collaboration(f.scope.sessionKey)).toEqual([[], [], []]);
+    expect(collaboration(siblingKey)).toEqual(siblingBefore);
+    expect(f.read()?.sessionId).toBe("collaboration-reset");
+    expect(f.events().filter((event) => event.type === "reset")).toHaveLength(1);
+    expect(committed).toHaveBeenCalledOnce();
+  });
+});
 
 it("preserves worker custody refusal identity so callers cannot fall back to another dispatch", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

@@ -846,7 +846,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     expect(dir).toContain(path.join("credentials", "github", "personal"));
     expect((await fs.stat(dir)).mode & 0o077).toBe(0);
     expect(await listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
-    expect(readSecretStoreExecEnvironment({ includeSecretSentinels: true })).toEqual({});
+    expect(await readSecretStoreExecEnvironment({ includeSecretSentinels: true })).toEqual({});
     expect(listGitHubOAuthRecords()).toEqual([]);
     expect(listGitHubDeviceAuthorizationRecords()).toEqual([]);
     await purgeExpiredSecretStoreEntries();

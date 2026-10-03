@@ -6,8 +6,8 @@ import {
   PostMessageTransport,
 } from "@modelcontextprotocol/ext-apps/app-bridge";
 import { isMcpAppViewExpiredError } from "@openclaw/gateway-protocol";
-import { LitElement, css, html, nothing, type PropertyValues } from "lit";
-import { property } from "lit/decorators.js";
+import { LitElement, html, nothing, type PropertyValues } from "lit";
+import { property, state } from "lit/decorators.js";
 import { createRef, ref } from "lit/directives/ref.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { navigateMcpAppLink } from "../app/mcp-app-routing.ts";
@@ -30,6 +30,7 @@ import {
   type McpAppHostSandboxCsp,
 } from "./mcp-app-security.ts";
 import { collectMcpAppStyleVariables } from "./mcp-app-theme.ts";
+import { mcpAppViewStyles } from "./mcp-app-view-styles.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
 
 registerMcpAppEnglish();
@@ -95,8 +96,8 @@ function hostContext(
   element: Element | undefined,
   height: number,
   fillContainer: boolean,
-  displayMode: "inline" | "fullscreen" = "inline",
-  availableDisplayModes: Array<"inline" | "fullscreen"> = ["inline", "fullscreen"],
+  displayMode: "inline" | "fullscreen",
+  availableDisplayModes: Array<"inline" | "fullscreen">,
 ): HostContext {
   const rect = element?.getBoundingClientRect();
   const touch = navigator.maxTouchPoints > 0 || window.matchMedia?.("(pointer: coarse)").matches;
@@ -131,53 +132,7 @@ function hostContext(
 }
 
 export class McpAppView extends LitElement {
-  static override styles = css`
-    :host {
-      display: block;
-      width: 100%;
-    }
-    .mount {
-      width: 100%;
-      min-height: 160px;
-    }
-    .mount:empty {
-      min-height: 0;
-    }
-    :host([fill-container]),
-    :host([fill-container]) .mount {
-      height: 100%;
-      min-height: 0;
-    }
-    iframe {
-      display: block;
-      width: 100%;
-      border: 0;
-      background: var(--board-surface, transparent);
-    }
-    :host([display-mode="fullscreen"]) {
-      position: fixed;
-      inset: 0;
-      z-index: 1000;
-      background: var(--bg);
-      padding-top: 40px;
-      margin: 0;
-      border: 0;
-      box-sizing: border-box;
-    }
-    :host([display-mode="fullscreen"]) .mount {
-      height: calc(100dvh - 40px);
-    }
-    .exit-fullscreen {
-      position: absolute;
-      top: 4px;
-      right: 8px;
-    }
-    .error {
-      padding: 14px;
-      color: var(--danger, #dc2626);
-      font-size: 13px;
-    }
-  `;
+  static override styles = mcpAppViewStyles;
 
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext;
@@ -187,8 +142,12 @@ export class McpAppView extends LitElement {
   @property({ attribute: false }) viewId = "";
   @property({ type: Number }) height = 600;
   @property({ type: Boolean, attribute: "fill-container", reflect: true }) fillContainer = false;
+  @property({ attribute: false }) surface: "conversation" | "board" = "conversation";
   @property() override title = "";
   @property({ attribute: false }) deepLink: string | undefined;
+  @property({ attribute: false }) onRelaunch: (() => void) | undefined;
+  @property({ type: Boolean }) relaunching = false;
+  @state() private inactive: "ended" | "reconstructed" | null = null;
   @property({ attribute: "display-mode", reflect: true }) displayMode: "inline" | "fullscreen" =
     "inline";
   protected readonly i18nController = new I18nController(this);
@@ -209,6 +168,7 @@ export class McpAppView extends LitElement {
       ] as const,
     task: async ([client, sessionKey, viewId, agentId, connectionRevision, hello], { signal }) => {
       await this.teardownResources(this.resources);
+      this.inactive = null;
       if (!sessionKey || !viewId) {
         return null;
       }
@@ -269,7 +229,13 @@ export class McpAppView extends LitElement {
         ? binding.client.request(method, requestParams, { signal })
         : binding.client.request(method, requestParams));
     } catch (error) {
-      if (isMcpAppViewExpiredError(error)) {
+      if (
+        isMcpAppViewExpiredError(error) &&
+        this.viewId === binding.viewId &&
+        this.sessionKey === binding.sessionKey &&
+        this.context?.gateway.snapshot.client === binding.client
+      ) {
+        this.inactive = "ended";
         this.dispatchEvent(
           new CustomEvent(MCP_APP_VIEW_EXPIRED_EVENT, { bubbles: true, composed: true }),
         );
@@ -392,6 +358,7 @@ export class McpAppView extends LitElement {
       )) as McpAppViewPayload;
       const mount = this.mount.value;
       signal.throwIfAborted();
+      this.inactive = payload.messageSupported === false ? "reconstructed" : null;
       if (!mount) {
         throw new Error(t("mcpApp.errors.mountUnavailable"));
       }
@@ -511,24 +478,27 @@ export class McpAppView extends LitElement {
       createdResources.bridge = bridge;
       const request = (method: string, params: Record<string, unknown>) =>
         this.request(binding, method, params);
-      const refreshModelContext = async () => {
-        const generation = ++contextGeneration;
-        try {
-          const response = (await request("mcp.app.modelContext", {})) as {
-            state: McpAppContextState;
-          };
-          if (createdResources.disposed || generation !== contextGeneration) {
-            return;
-          }
-          modelContext = response.state;
-        } catch {
-          if (createdResources.disposed || generation !== contextGeneration) {
-            return;
-          }
-          modelContext = null;
+      const refreshModelContext = (clearedUpdateId?: string) => {
+        if (clearedUpdateId && modelContext && modelContext.updateId !== clearedUpdateId) {
+          return undefined;
         }
-        bridge.setHostContext(buildHostContext());
-        publishContext();
+        const generation = ++contextGeneration;
+        const publish = (nextContext: McpAppContextState) => {
+          if (createdResources.disposed || generation !== contextGeneration) {
+            return;
+          }
+          modelContext = nextContext;
+          bridge.setHostContext(buildHostContext());
+          publishContext();
+        };
+        if (clearedUpdateId) {
+          publish(null);
+          return undefined;
+        }
+        return request("mcp.app.modelContext", {})
+          .then((response) => (response as { state: McpAppContextState }).state)
+          .catch(() => null)
+          .then(publish);
       };
       const handleRequestTeardown = () => {
         void this.teardown();
@@ -571,8 +541,8 @@ export class McpAppView extends LitElement {
           this.addResourceCleanup(createdResources, cleanup);
         },
         dispatchEvent: (event) => this.dispatchEvent(event),
-        onModelContextChanged: () => {
-          void refreshModelContext().catch(() => undefined);
+        onModelContextChanged: (clearedUpdateId) => {
+          void refreshModelContext(clearedUpdateId)?.catch(() => undefined);
         },
         onConversationInputRequested: () => {
           this.displayMode = "inline";
@@ -643,6 +613,7 @@ export class McpAppView extends LitElement {
       signal.throwIfAborted();
       const updateHostContext = () => bridge.setHostContext(buildHostContext());
       createdResources.updateHostContext = updateHostContext;
+      updateHostContext();
       publishContext();
       startNotifications();
       const hostContextCleanup = this.context?.theme.subscribe(updateHostContext);
@@ -674,12 +645,11 @@ export class McpAppView extends LitElement {
   }
 
   override render() {
-    const error = this.setupTask.status === TaskStatus.ERROR ? this.setupTask.error : null;
-    const errorText = error
-      ? t("mcpApp.unavailable", {
-          error: formatUiError(error, t("mcpApp.errors.requestFailed")),
-        })
-      : null;
+    const error =
+      this.inactive !== "ended" && this.setupTask.status === TaskStatus.ERROR
+        ? this.setupTask.error
+        : null;
+    const relaunch = this.inactive === "ended" && this.onRelaunch;
     return html`${
         this.displayMode === "fullscreen"
           ? html`<button
@@ -692,8 +662,16 @@ export class McpAppView extends LitElement {
             </button>`
           : nothing
       }
+      ${
+        this.inactive && this.surface === "conversation"
+          ? html`<div class="inactive" role="status">
+              <span>${t(relaunch ? "mcpApp.sessionEnded" : "mcpApp.reconstructed")}</span>
+              ${relaunch ? html`<button type="button" ?disabled=${this.relaunching} @click=${relaunch}>${t("mcpApp.relaunch")}</button>` : nothing}
+            </div>`
+          : nothing
+      }
       <div ${ref(this.mount)} class="mount"></div>
-      ${errorText ? html`<div class="error">${errorText}</div>` : nothing}`;
+      ${error ? html`<div class="error">${t("mcpApp.unavailable", { error: formatUiError(error, t("mcpApp.errors.requestFailed")) })}</div>` : nothing}`;
   }
 }
 

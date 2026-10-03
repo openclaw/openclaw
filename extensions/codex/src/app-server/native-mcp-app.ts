@@ -38,14 +38,6 @@ import { getCodexAppServerTurnRouter } from "./turn-router.js";
 const CODEX_APPS_MCP_SERVER = "codex_apps";
 const toolCallMetadataSchema = z.record(z.string(), z.json());
 
-function readMcpAppResourceUri(item: CodexThreadItem): string | undefined {
-  const appContext = asOptionalRecord(item.appContext);
-  const uri =
-    normalizeOptionalString(appContext?.resourceUri) ??
-    normalizeOptionalString(item.mcpAppResourceUri);
-  return uri?.startsWith("ui://") ? uri : undefined;
-}
-
 function readMcpToolResult(item: CodexThreadItem): ToolCallResult | undefined {
   const result = asOptionalRecord(item.result);
   if (!result || !Array.isArray(result.content)) {
@@ -321,10 +313,13 @@ export function createCodexNativeMcpAppResultDetailsPreparer(params: {
   return async (item) => {
     const serverName = normalizeOptionalString(item.server);
     const toolName = normalizeOptionalString(item.tool);
-    const uiResourceUri = readMcpAppResourceUri(item);
-    const connectorId = normalizeOptionalString(asOptionalRecord(item.appContext)?.connectorId);
+    const appContext = asOptionalRecord(item.appContext);
+    const uiResourceUri =
+      normalizeOptionalString(appContext?.resourceUri) ??
+      normalizeOptionalString(item.mcpAppResourceUri);
+    const connectorId = normalizeOptionalString(appContext?.connectorId);
     const toolResult = readMcpToolResult(item);
-    if (!serverName || !toolName || !uiResourceUri || !toolResult) {
+    if (!serverName || !toolName || !uiResourceUri?.startsWith("ui://") || !toolResult) {
       return undefined;
     }
     if (serverName === CODEX_APPS_MCP_SERVER && !connectorId) {

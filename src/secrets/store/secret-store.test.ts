@@ -91,7 +91,7 @@ describe("secret store", () => {
     expect(countStoredRows(database, name)).toBe(0);
     expect(consumeGitHubSetupHandoff({ name, database })).toBeUndefined();
     expect(consumeGitHubSetupHandoff({ name: "DEPLOY_TOKEN", database })).toBeUndefined();
-    expect(readSecretStoreValue({ scope: team, name: "DEPLOY_TOKEN", database })).toEqual({
+    expect(await readSecretStoreValue({ scope: team, name: "DEPLOY_TOKEN", database })).toEqual({
       ok: true,
       value: "unrelated-value",
     });
@@ -114,13 +114,15 @@ describe("secret store", () => {
     );
 
     expect(write.name).toMatch(/^GATEWAY_REMOTE_TOKEN_[0-9A-F]{16}$/);
-    expect(readSecretStoreValue({ scope: team, name: "GATEWAY_REMOTE_TOKEN", database })).toEqual({
+    expect(
+      await readSecretStoreValue({ scope: team, name: "GATEWAY_REMOTE_TOKEN", database }),
+    ).toEqual({
       ok: true,
       value: "owned-elsewhere",
     });
   });
 
-  it("rotates a key into a new entry and leaves its previous entry for other users", () => {
+  it("rotates a key into a new entry and leaves its previous entry for other users", async () => {
     const database = createDatabaseOptions();
     const save = (value: string) =>
       writeSecretStoreEntryForConfigRefInDatabase(
@@ -132,7 +134,7 @@ describe("secret store", () => {
     const second = save("new-key");
 
     expect(second).not.toBe(first);
-    expect(readSecretStoreValue({ scope: team, name: first, database })).toEqual({
+    expect(await readSecretStoreValue({ scope: team, name: first, database })).toEqual({
       ok: true,
       value: "old-key",
     });
@@ -161,11 +163,13 @@ describe("secret store", () => {
     );
 
     // A config key still holding the old name keeps resolving to nothing.
-    expect(readSecretStoreValue({ scope: team, name: "GATEWAY_REMOTE_TOKEN", database })).toEqual({
+    expect(
+      await readSecretStoreValue({ scope: team, name: "GATEWAY_REMOTE_TOKEN", database }),
+    ).toEqual({
       ok: false,
       error: expect.objectContaining({ code: "SECRET_STORE_NOT_FOUND" }),
     });
-    expect(readSecretStoreValue({ scope: team, name: write.name, database })).toEqual({
+    expect(await readSecretStoreValue({ scope: team, name: write.name, database })).toEqual({
       ok: true,
       value: "from-chat",
     });
@@ -226,13 +230,13 @@ describe("secret store", () => {
     expect((await listSecretStoreEntries({ scope: team, database }))[0]).not.toHaveProperty(
       "valuePreview",
     );
-    expect(readSecretStoreValue({ scope: team, name: "SERVICE_API_KEY", database })).toEqual({
+    expect(await readSecretStoreValue({ scope: team, name: "SERVICE_API_KEY", database })).toEqual({
       ok: true,
       value: "stored-super-secret",
     });
     expect(isSecretValueRegisteredForRedaction("stored-super-secret")).toBe(true);
     expect(
-      readSecretStoreExecEnvironment({ includeSecretSentinels: true, database })
+      (await readSecretStoreExecEnvironment({ includeSecretSentinels: true, database }))
         .secretEgressBindings,
     ).toEqual([
       expect.objectContaining({
@@ -241,7 +245,7 @@ describe("secret store", () => {
       }),
     ]);
     expect(
-      readSecretStoreExecEnvironment({
+      await readSecretStoreExecEnvironment({
         includeSecretSentinels: true,
         excludeNames: ["SERVICE_API_KEY"],
         database,
@@ -262,7 +266,7 @@ describe("secret store", () => {
       updatedBy: "test",
       database,
     });
-    const environment = readSecretStoreExecEnvironment({
+    const environment = await readSecretStoreExecEnvironment({
       includeSecretSentinels: true,
       database,
     });
@@ -273,7 +277,9 @@ describe("secret store", () => {
     expect(environment.secretEgressBindings).toEqual([
       { name: "SERVICE_API_KEY", sentinel, allowedHosts: ["api.example.com"] },
     ]);
-    expect(readSecretStoreExecEnvironment({ includeSecretSentinels: false, database })).toEqual({});
+    expect(
+      await readSecretStoreExecEnvironment({ includeSecretSentinels: false, database }),
+    ).toEqual({});
   });
 
   it("soft-deletes idempotently and purges after the 30-day retention", async () => {
@@ -385,14 +391,14 @@ describe("secret store", () => {
         (entry) => entry.name,
       ),
     ).toEqual(["UNRELATED_SECRET"]);
-    const execEnvironment = readSecretStoreExecEnvironment({
+    const execEnvironment = await readSecretStoreExecEnvironment({
       includeSecretSentinels: true,
       database,
     });
     for (const name of [setupName, deviceName, oauthName]) {
       expect(execEnvironment.secretSentinels ?? {}).not.toHaveProperty(name);
       expect(execEnvironment.env ?? {}).not.toHaveProperty(name);
-      expect(readSecretStoreValue({ scope: team, name, database })).toMatchObject({
+      expect(await readSecretStoreValue({ scope: team, name, database })).toMatchObject({
         ok: false,
         error: { code: "SECRET_STORE_INVALID_NAME" },
       });
@@ -843,7 +849,7 @@ describe("secret store", () => {
       updatedBy: null,
       database,
     });
-    const stored = readSecretStoreValue({ scope: team, name: "EMPTY_ENV", database });
+    const stored = await readSecretStoreValue({ scope: team, name: "EMPTY_ENV", database });
     expect(stored.ok && stored.value).toBe("");
   });
 
@@ -860,7 +866,9 @@ describe("secret store", () => {
     before.close();
 
     expect(await listSecretStoreEntries({ scope: team, database })).toEqual([]);
-    expect(readSecretStoreValue({ scope: team, name: "MISSING_SECRET", database })).toMatchObject({
+    expect(
+      await readSecretStoreValue({ scope: team, name: "MISSING_SECRET", database }),
+    ).toMatchObject({
       ok: false,
       error: { code: "SECRET_STORE_NOT_FOUND" },
     });

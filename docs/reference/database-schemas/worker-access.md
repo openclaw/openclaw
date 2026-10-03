@@ -255,6 +255,18 @@ or `withOpenClawAgentDatabaseReadOnly` alone, does not move execution off thread
 `readWithCanonicalSessionAdmission` validates session reads on the executing
 thread; invoke it inside the worker's admitted reader.
 
+Gateway Claw package cleanup reads install and package ownership through the
+read-only worker without reconciling unrelated MCP, cron, or workspace state.
+The existing pending deletion journal freezes install identity: ordinary install
+writers refuse changes. Retry-status publication atomically supersedes the old
+journal operation, making the changed record and revocation of delayed Gateway
+effects visible together. Final removal retires owned rows together with journal completion. Package dependency reads
+and status claims run in workers under the existing artifact lease keys; transaction
+and commit admission retain the original lease and requester through settlement.
+The Gateway still checks the current deletion journal, config, cancellation, and
+lease authority immediately before effects. Stored formats, schemas, and update
+migrations are unchanged by this worker cutover.
+
 Reply initialization and audited admission validators can reserve their exact
 session keys in the shared store queue. Unrelated sessions proceed while a holder
 awaits another queue; overlapping keys retain FIFO order. Creation hooks, parent
@@ -315,8 +327,20 @@ observers, then identity and message-completion callbacks settle within the same
 physical writer FIFO. Lost replies reconcile through the existing entry-patch
 transfer and native COMMIT receipt; uncertain outcomes never replay. Opaque
 released SDK callbacks and dependent callback batches retain their synchronous
-transaction visibility, and process-held incognito retains its existing owner. Reset remains a separate
-cutover. This changes no schema, durability, retention, or update behavior.
+transaction visibility, and process-held incognito retains its existing owner.
+
+Single-entry durable resets use the same executor and receipt owner. The host
+builds the replacement once outside the SQL transaction; the worker rereads the
+selected rows, appends the reset boundary, clears generation-bound collaboration,
+and writes the entry in one synchronous transaction. Current caller grants run
+at transaction and commit admission. Committed progress and identity notifications
+precede the reset callback, and accepted callbacks settle inside the physical
+writer FIFO. Lost replies use the acknowledged candidate without repeating the
+builder or SQL; uncertain outcomes remain fenced. Bundled reply initialization
+uses a typed upsert descriptor while its projection and opaque transaction
+callbacks retain their existing owner. Native-binding settlement and incognito
+activation remain separate cutovers. These changes require no schema, durability,
+retention, configuration, or update migration.
 
 Channel setup awaits a fresh policy read after the agent-selection prompt.
 Deferred plugin migration rows are read by the shared-state worker, and setup
@@ -602,11 +626,29 @@ library writes publish that revision before observers and preserve it on rollbac
 Copied durable session pins retain their existing revision access. The released
 synchronous skill-command and harness tool-surface SDKs retain their native
 metadata reader; Gateway status, embedded skill preparation, and sandbox
-synchronization use prepared reads. Import, upload, mutation, and
-authoring mutation guards remain for the next cutover. Schemas, quotas, retention,
-publication security checks, and update behavior are unchanged.
+synchronization use prepared reads. Import, upload, and mutations use typed
+shared-state writer commands. Files publish before their SQL references; failed
+SQL retains immutable unreferenced revision files, as before. Transactions reread
+revision CAS, quota, expiry, and profile ownership, with live host grants at
+transaction and commit. Native receipts publish the existing selection authority
+revision within the writer FIFO, including after lost replies; unknown outcomes
+never replay. Database close joins accepted mutations. Workspace authoring guards
+retain their existing owner. Schemas, quotas, retention, publication security checks,
+and update behavior are unchanged.
 
 ## Carry facts, publish after commit
+
+Personal model-account success and failover-failure bookkeeping use typed reductions
+in the existing `authProfiles` shared-state worker. The host captures the physical
+store before provider probes or writer admission; the synchronous transaction
+rereads current usage and refuses changed credentials. Both host and worker use
+the same usage reducers, and provider observations retain their credential and
+block-generation checks. Transaction and commit grants recheck live host authority
+without caller-thread SQL. Acknowledged usage returns to the selected turn only;
+personal credentials and selection never enter shared rotation. Post-run success
+remains nonblocking, while maintenance close joins accepted bookkeeping. OAuth
+refresh, selection, and released SDK updater callbacks retain their existing
+owners. Schemas, credential bytes, retention, and update behavior are unchanged.
 
 Message-tool-only completion records use the canonical per-agent writer. The
 host captures the original store and run facts before waiting; configured-store
@@ -713,6 +755,17 @@ known committed receipts, while unknown outcomes block further effects without
 authorizing inverse file changes or replay. Provider shutdown joins handoff before
 revoking the original environment. Schemas, retention, durability, and update
 behavior are unchanged.
+
+Placement transitions, drain/reconcile, and terminal-result failures also use
+that placement writer. The worker rereads the exact state, generation, environment,
+epoch, and claim before mutation; reclaim's claim-free drain remains a
+transaction-local predicate. Activation and environment demand still commit
+atomically, and their acknowledged facts publish through the existing owners
+before observers. Lifecycle barriers and terminal recovery join accepted writes.
+Unknown outcomes retain recovery custody without replaying a mutation or
+authorizing inverse filesystem effects. Native prepared-environment binding and
+placement moves remain separate work. Schemas, stored bytes, retention, durability,
+released SDK contracts, and update behavior are unchanged.
 
 Workspace reconciliation journal reads use the shared-state reader, and journal
 creation, cleanup, orphan pruning, and manifest acceptance use the existing
@@ -1476,10 +1529,14 @@ existing reader. Store-bound questions retain authority through persistence and
 publish only an acknowledged safe answer. Reset hides their public entries
 immediately while accepted work settles privately. Runtime refresh follows the
 commit; failed refresh never invites replay of a saved answer. The released
-synchronous question SDK methods retain their contracts. Runtime value and exec
-environment reads, hidden GitHub operations, and the CLI allowed-host setter
-remain with their existing owners. Schemas, retention, stored bytes, and update
-behavior are unchanged.
+synchronous question SDK methods retain their contracts. Exact values and coherent
+exec-environment snapshots use bounded commands in that same read worker. The host
+captures the physical store before yielding, registers returned secrets with its
+redaction owner, and seals exec sentinels with its process-local key. Each exec
+call rechecks its existing source authority after awaiting the run's shared
+snapshot; generic SecretRef callers retain their current activation guards.
+Hidden GitHub operations and the CLI allowed-host setter remain with their existing
+owners. Schemas, retention, stored bytes, and update behavior are unchanged.
 
 Placement change reporting reads its before/after snapshots in the shared-state
 read worker using the placement store's row codec. It transfers only session

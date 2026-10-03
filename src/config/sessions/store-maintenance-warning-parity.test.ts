@@ -1,4 +1,5 @@
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
+import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { applyFileBackedSessionStoreMaintenance } from "./store-maintenance-operations.js";
 import type { SessionEntry } from "./types.js";
 
@@ -12,7 +13,7 @@ function createMaintenanceArtifacts() {
   };
 }
 
-it("uses enforcement preservation when predicting active-session eviction", async () => {
+it("leaves warn-mode rows unchanged and protects admitted work during enforcement", async () => {
   const now = Date.now();
   const createStore = (): Record<string, SessionEntry> => ({
     archived: { sessionId: "archived", updatedAt: now - 2, archivedAt: now },
@@ -30,28 +31,35 @@ it("uses enforcement preservation when predicting active-session eviction", asyn
   };
   const shared = {
     storePath: "/tmp/openclaw-sessions/warn-enforce-parity.json",
-    activeSessionKey: "active",
     log: { warn: () => {}, info: () => {} },
     artifacts: createMaintenanceArtifacts(),
   };
-  const onWarn = vi.fn();
-
-  await applyFileBackedSessionStoreMaintenance({
-    ...shared,
-    store: createStore(),
-    maintenanceConfig,
-    onWarn,
+  const admission = await beginSessionWorkAdmission({
+    scope: shared.storePath,
+    identities: ["active"],
+    assertAllowed: () => {},
   });
+  try {
+    const warnedStore = createStore();
+    await applyFileBackedSessionStoreMaintenance({
+      ...shared,
+      store: warnedStore,
+      maintenanceConfig,
+    });
+    expect(warnedStore).toEqual(createStore());
 
-  const enforcedStore = createStore();
-  await applyFileBackedSessionStoreMaintenance({
-    ...shared,
-    store: enforcedStore,
-    maintenanceConfig: { ...maintenanceConfig, mode: "enforce" },
-  });
+    const enforcedStore = createStore();
+    await applyFileBackedSessionStoreMaintenance({
+      ...shared,
+      store: enforcedStore,
+      maintenanceConfig: { ...maintenanceConfig, mode: "enforce" },
+    });
 
-  expect(onWarn).not.toHaveBeenCalled();
-  expect(enforcedStore).toHaveProperty("archived");
-  expect(enforcedStore).toHaveProperty("active");
-  expect(enforcedStore.recent?.archivedAt).toEqual(expect.any(Number));
+    expect(enforcedStore).toHaveProperty("archived");
+    expect(enforcedStore).toHaveProperty("active");
+    expect(enforcedStore.active?.archivedAt).toBeUndefined();
+    expect(enforcedStore.recent?.archivedAt).toEqual(expect.any(Number));
+  } finally {
+    admission.release();
+  }
 });

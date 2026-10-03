@@ -321,7 +321,7 @@ export async function dispatchInitialWorkerPlacement(params: {
     },
     { to: "active", patch: { activeOwnerEpoch: OWNER_EPOCH } },
   ] as const) {
-    placement = params.placements.transition({
+    placement = await params.placements.transition({
       sessionId: params.identity.sessionId,
       from: placement.state,
       expectedGeneration: placement.generation,
@@ -365,19 +365,19 @@ export async function seedReclaimedPlacement() {
   if (active?.state !== "active") {
     throw new Error("expected active placement to reclaim");
   }
-  const draining = placements.startDrain({
+  const draining = await placements.startDrain({
     sessionId: SESSION_ID,
     environmentId: active.environmentId,
     ownerEpoch: active.activeOwnerEpoch,
     expectedGeneration: active.generation,
   });
-  const reconciling = placements.startReconcile({
+  const reconciling = await placements.startReconcile({
     sessionId: SESSION_ID,
     environmentId: active.environmentId,
     ownerEpoch: active.activeOwnerEpoch,
     expectedGeneration: draining.generation,
   });
-  const reclaimed = placements.transition({
+  const reclaimed = await placements.transition({
     sessionId: SESSION_ID,
     from: "reconciling",
     to: "reclaimed",

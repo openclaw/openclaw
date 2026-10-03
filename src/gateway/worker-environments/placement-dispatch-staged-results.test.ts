@@ -65,7 +65,7 @@ describe("worker placement result recovery", () => {
       if (interruption === "failed capture") {
         await expect(original.service.reclaim(REQUEST)).rejects.toThrow("workspace conflict");
       } else {
-        placementStore.startDrain({
+        await placementStore.startDrain({
           sessionId: active.sessionId,
           environmentId: active.environmentId,
           ownerEpoch: active.activeOwnerEpoch,
@@ -584,9 +584,9 @@ describe("worker placement result recovery", () => {
           ownerEpoch: active.activeOwnerEpoch,
         },
       };
-      const drain = () => {
+      const drain = async () => {
         expect(
-          placementStore.startDrain({
+          await placementStore.startDrain({
             sessionId: active.sessionId,
             environmentId: active.environmentId,
             ownerEpoch: active.activeOwnerEpoch,
@@ -595,14 +595,14 @@ describe("worker placement result recovery", () => {
         ).toMatchObject({ state: "draining" });
       };
       if (placementState === "draining-reclaim" || placementState === "accepted-reclaim") {
-        drain();
+        await drain();
       }
       const claim =
         placementState === "draining" || preservesNode
           ? await placementStore.claimTurn(claimInput)
           : await placementStore.claimReclaimWorkspaceResult(claimInput);
       if (placementState === "draining") {
-        drain();
+        await drain();
       }
       const staged = await stagePendingResult({
         store: placementStore,

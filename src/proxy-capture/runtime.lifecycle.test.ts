@@ -26,7 +26,6 @@ import {
   captureHttpExchangeAsync,
   finalizeDebugProxyCapture,
   initializeDebugProxyCapture,
-  prepareHttpCapture,
   type DebugProxyCaptureRuntimeDeps,
 } from "./runtime.js";
 import {
@@ -514,19 +513,20 @@ describe("capture admission generation", () => {
       const deps = { getStore };
       const recordings = stores.map((store) => vi.spyOn(store, "recordEvent"));
       const streams = stores.map((_, index) => pendingResponse([Buffer.from(`database-${index}`)]));
-      const admissions = settings.map((value, index) => {
-        selected = stores[index]!;
-        return prepareHttpCapture(value, deps)!;
-      });
       try {
-        for (const [index, capture] of admissions.entries()) {
-          capture({
-            url: "https://example.test/identity",
-            method: "POST",
-            flowId: `database-${index}`,
-            requestBody: `request-${index}`,
-            response: streams[index]!.response,
-          });
+        for (const [index, value] of settings.entries()) {
+          selected = stores[index]!;
+          captureHttpExchange(
+            {
+              url: "https://example.test/identity",
+              method: "POST",
+              flowId: `database-${index}`,
+              requestBody: `request-${index}`,
+              response: streams[index]!.response,
+            },
+            value,
+            deps,
+          );
         }
         await Promise.all(streams.map((stream) => stream.pending));
         expect(
@@ -563,11 +563,15 @@ describe("capture admission generation", () => {
             dataText: `database-${index}`,
           });
           const recorded = recordings[index]!.mock.calls.length;
-          admissions[index]!({
-            url: "https://example.test/delayed",
-            method: "GET",
-            response: new Response("late"),
-          });
+          captureHttpExchange(
+            {
+              url: "https://example.test/delayed",
+              method: "GET",
+              response: new Response("late"),
+            },
+            settings[index],
+            deps,
+          );
           expect(recordings[index]).toHaveBeenCalledTimes(recorded);
           if (index === first) {
             expect(stores[second]!.isClosed).toBe(false);
@@ -619,7 +623,6 @@ describe("capture admission generation", () => {
         flowId: "fixture",
         payload: "frame",
       };
-      const delayed = prepareHttpCapture(resolved(), deps)!;
       captureWsEvent(frame, resolved(), deps);
       finalizeDebugProxyCapture(resolved(), deps);
       captureWsEvent(frame, resolved(), deps);
@@ -630,12 +633,6 @@ describe("capture admission generation", () => {
       vi.stubEnv("OPENCLAW_DEBUG_PROXY_SESSION_ID", settings.sessionId);
       captureWsEvent(frame, resolved(), deps);
       expect(getStore).toHaveBeenCalledTimes(2);
-      expect(record).toHaveBeenCalledTimes(2);
-      delayed({
-        url: "https://example.test/delayed",
-        method: "GET",
-        response: new Response("late"),
-      });
       expect(record).toHaveBeenCalledTimes(2);
       finalizeDebugProxyCapture(resolved(), deps);
 
@@ -652,7 +649,7 @@ describe("capture admission generation", () => {
     const runtimeUrl = resolveRuntimeWorkerUrl(proxyCaptureNativeProcessEntrypoints.runtime);
     const script = `
       import assert from "node:assert/strict";
-      import { initializeDebugProxyCapture, finalizeDebugProxyCapture, prepareHttpCapture } from ${JSON.stringify(runtimeUrl.href)};
+      import { initializeDebugProxyCapture, finalizeDebugProxyCapture } from ${JSON.stringify(runtimeUrl.href)};
       let store, acquired = 0, recorded = 0, complete;
       const getStore = () => { acquired++; return store; };
       const target = { fetch: () => new Promise(resolve => complete = resolve) };
@@ -665,11 +662,10 @@ describe("capture admission generation", () => {
         const refs = [new WeakRef(settings), new WeakRef(store), new WeakRef(persist)];
         const deps = { getStore, persistEventPayload: persist, fetchTarget: target };
         initializeDebugProxyCapture("fixture", settings, deps);
-        const capture = prepareHttpCapture(settings, deps);
         const late = target.fetch("https://example.test/delayed");
         finalizeDebugProxyCapture(settings, deps);
         store = undefined;
-        return { refs, capture, late };
+        return { refs, late };
       }
       const retired = retire();
       for (let i = 0; i < 30; i++) {
@@ -681,7 +677,6 @@ describe("capture admission generation", () => {
       const response = new Response("late");
       complete(response);
       assert.equal(await retired.late, response);
-      retired.capture({ url: "https://example.test/delayed", method: "GET", response });
       assert.equal(acquired, 1);
       assert.equal(recorded, 0);
       process.stdout.write(JSON.stringify(released));

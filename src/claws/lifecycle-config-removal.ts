@@ -15,6 +15,7 @@ import {
   deleteAgentConfigEntry,
 } from "../gateway/server-methods/agents-config-mutations.js";
 import { withAgentExecApprovalsRemoved } from "../infra/exec-approvals.js";
+import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { readAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import type {
@@ -27,11 +28,8 @@ import {
 } from "../state/openclaw-state-db.js";
 import { digestClawValue } from "./digest.js";
 import { deletionEffects, type ClawCleanupTargets } from "./lifecycle-delete-support.js";
-import {
-  readClawInstallRecordFromDatabase,
-  updateClawInstallRecordStatus,
-  type PersistedClawInstall,
-} from "./provenance.js";
+import { readClawInstallRecordFromDatabase } from "./provenance-read.kernel.js";
+import { updateClawInstallRecordStatus, type PersistedClawInstall } from "./provenance.js";
 
 type ClawAgentConfigRemovalParams = {
   agentId: string;
@@ -206,7 +204,9 @@ export async function withClawAgentConfigRemoval<T>(
         if (database) {
           check(database);
         } else {
-          runOpenClawStateWriteTransaction(check, stateOptions);
+          const current = openOpenClawStateDatabase(stateOptions);
+          // Worker admission can hold the writer lock while waiting for this read-only authority check.
+          runSqliteDeferredTransactionSync(current.db, () => check(current));
         }
       };
       try {
@@ -262,6 +262,7 @@ export async function withClawAgentConfigRemoval<T>(
             updateClawInstallRecordStatus(params.agentId, "partial", {
               ...stateOptions,
               database,
+              deletionOperation: deletion,
             });
           }, stateOptions);
         }

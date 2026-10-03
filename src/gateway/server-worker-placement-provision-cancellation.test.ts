@@ -440,20 +440,20 @@ describe("dispatch Stop before provider allocation", () => {
           ownerEpoch: 1,
           executionMode: "remote-exec",
         });
-        const draining = placements.startDrain({
+        const draining = await placements.startDrain({
           sessionId: REQUEST.sessionId,
           environmentId: "old-environment",
           ownerEpoch: 1,
           expectedGeneration: active.generation,
         });
-        placements.startReconcile({
+        await placements.startReconcile({
           sessionId: REQUEST.sessionId,
           environmentId: "old-environment",
           ownerEpoch: 1,
           expectedGeneration: draining.generation,
         });
         const current = placements.get(REQUEST.sessionId)!;
-        placements.transition({
+        await placements.transition({
           sessionId: REQUEST.sessionId,
           from: "reconciling",
           to: "reclaimed",
@@ -577,9 +577,9 @@ describe("dispatch Stop before provider allocation", () => {
               ? pause(() =>
                   options.runActivationBarrier({
                     ...request,
-                    activate: () => {
+                    activate: (assertCurrent?: () => void) => {
                       events.push("phase-started");
-                      return request.activate();
+                      return request.activate(assertCurrent);
                     },
                   }),
                 )
@@ -704,7 +704,7 @@ describe("dispatch Stop before provider allocation", () => {
       const environment = await support.seedBootstrapping("environment-refused-recovery");
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
       const requested = await placements.startDispatch(REQUEST);
-      placements.transition({
+      await placements.transition({
         sessionId: REQUEST.sessionId,
         from: "requested",
         to: "provisioning",
@@ -875,7 +875,7 @@ describe("dispatch Stop before provider allocation", () => {
       const requested = await placements.startDispatch(REQUEST);
       const key = `session-dispatch:${REQUEST.sessionId}:${requested.generation}`;
       const intent = deriveEnvironmentIntent(key);
-      placements.transition({
+      await placements.transition({
         sessionId: REQUEST.sessionId,
         from: "requested",
         to: "provisioning",

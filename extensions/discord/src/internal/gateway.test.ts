@@ -66,7 +66,7 @@ class TestGatewayPlugin extends GatewayPlugin {
   urls: string[] = [];
 
   constructor(options: ConstructorParameters<typeof GatewayPlugin>[0] = {}) {
-    super({ autoInteractions: false, url: "wss://gateway.example.test", ...options });
+    super({ url: "wss://gateway.example.test", ...options });
   }
 
   override connect(resume = false): void {
@@ -99,8 +99,8 @@ describe("GatewayPlugin", () => {
     sharedGatewayIdentifyLimiter.reset();
   });
 
-  it("does not auto-handle interactions when autoInteractions is disabled", async () => {
-    const gateway = new GatewayPlugin({ autoInteractions: false });
+  it("hands each interaction to the registered dispatcher once", async () => {
+    const gateway = new GatewayPlugin({});
     const handleInteraction = vi.fn(async () => {});
     const dispatchGatewayEvent = vi.fn(async () => {
       await handleInteraction();
@@ -124,7 +124,7 @@ describe("GatewayPlugin", () => {
   });
 
   it("emits async dispatch failures as gateway errors", async () => {
-    const gateway = new GatewayPlugin({ autoInteractions: false });
+    const gateway = new GatewayPlugin({});
     const error = new Error("listener failed");
     (gateway as unknown as { client: unknown }).client = {
       dispatchGatewayEvent: async () => {
@@ -297,7 +297,7 @@ describe("GatewayPlugin", () => {
   });
 
   it("passes the raw MESSAGE_CREATE envelope to durable ingress", async () => {
-    const gateway = new GatewayPlugin({ autoInteractions: false });
+    const gateway = new GatewayPlugin({});
     const dispatchGatewayEvent = vi.fn(async (_eventValue: string, _dataValue: unknown) => {});
     (gateway as unknown as { client: unknown }).client = {
       dispatchGatewayEvent,
@@ -336,7 +336,7 @@ describe("GatewayPlugin", () => {
   });
 
   it("tracks the live voice roster across guild snapshots and voice updates", async () => {
-    const gateway = new GatewayPlugin({ autoInteractions: false });
+    const gateway = new GatewayPlugin({});
     (gateway as unknown as { client: unknown }).client = {
       dispatchGatewayEvent: vi.fn(async () => {}),
       getPlugin: vi.fn(() => undefined),
@@ -424,7 +424,7 @@ describe("GatewayPlugin", () => {
   });
 
   it("keeps newly memberless voice updates unknown through the voice listener", async () => {
-    const gateway = new GatewayPlugin({ autoInteractions: false });
+    const gateway = new GatewayPlugin({});
     const client = {
       dispatchGatewayEvent: vi.fn(async () => {}),
       getPlugin: vi.fn((id: string) => (id === "gateway" ? gateway : undefined)),
@@ -456,7 +456,7 @@ describe("GatewayPlugin", () => {
   });
 
   it("clears cached voice states when a fresh gateway session becomes ready", async () => {
-    const gateway = new GatewayPlugin({ autoInteractions: false });
+    const gateway = new GatewayPlugin({});
     (gateway as unknown as { client: unknown }).client = {
       dispatchGatewayEvent: vi.fn(async () => {}),
       getPlugin: vi.fn(() => undefined),
@@ -481,7 +481,7 @@ describe("GatewayPlugin", () => {
   });
 
   it("marks successful gateway resumes connected", async () => {
-    const gateway = new GatewayPlugin({ autoInteractions: false });
+    const gateway = new GatewayPlugin({});
     (gateway as unknown as { client: unknown }).client = {
       dispatchGatewayEvent: vi.fn(async () => {}),
     };
@@ -508,7 +508,7 @@ describe("GatewayPlugin", () => {
   it("queues outbound gateway events when the connection window is exhausted", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
-    const gateway = new GatewayPlugin({ autoInteractions: false });
+    const gateway = new GatewayPlugin({});
     const send = attachOpenSocket(gateway);
 
     for (let index = 0; index < 120; index += 1) {
@@ -542,7 +542,7 @@ describe("GatewayPlugin", () => {
   it("drops the oldest queued events and warns once per saturation episode", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
-    const gateway = new GatewayPlugin({ autoInteractions: false });
+    const gateway = new GatewayPlugin({});
     const send = attachOpenSocket(gateway);
     const warningSpy = vi.fn();
     gateway.emitter.on("warning", warningSpy);
@@ -575,7 +575,7 @@ describe("GatewayPlugin", () => {
   it("sends critical gateway events immediately even when regular sends are queued", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
-    const gateway = new GatewayPlugin({ autoInteractions: false });
+    const gateway = new GatewayPlugin({});
     const send = attachOpenSocket(gateway);
 
     for (let index = 0; index < 120; index += 1) {
@@ -599,7 +599,7 @@ describe("GatewayPlugin", () => {
   });
 
   it("rejects gateway payloads that exceed Discord's size limit", () => {
-    const gateway = new GatewayPlugin({ autoInteractions: false });
+    const gateway = new GatewayPlugin({});
     const send = attachOpenSocket(gateway);
 
     expect(() =>
@@ -833,7 +833,6 @@ describe("GatewayPlugin", () => {
   it("includes close code details when reconnect attempts are exhausted", async () => {
     vi.useFakeTimers();
     const gateway = new TestGatewayPlugin({
-      autoInteractions: false,
       reconnect: { maxAttempts: 0 },
       url: "wss://gateway.example.test",
     });
@@ -963,7 +962,7 @@ describe("GatewayPlugin", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     const first = new GatewayPlugin(
-      { autoInteractions: false, shard: [0, 2] },
+      { shard: [0, 2] },
       {
         url: "wss://gateway.discord.gg/",
         shards: 2,
@@ -971,7 +970,7 @@ describe("GatewayPlugin", () => {
       },
     );
     const second = new GatewayPlugin(
-      { autoInteractions: false, shard: [1, 2] },
+      { shard: [1, 2] },
       {
         url: "wss://gateway.discord.gg/",
         shards: 2,

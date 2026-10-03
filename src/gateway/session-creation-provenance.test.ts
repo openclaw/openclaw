@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   attachGatewayLocalUserIngress,
   prepareGatewayLocalUserIngress,
-} from "../local-user-ingress.js";
+} from "./local-user-ingress.js";
 import { resolveAgentRunSessionCreation } from "./session-creation-provenance.js";
 
 function resolveWithIngress(

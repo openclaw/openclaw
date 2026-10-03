@@ -423,7 +423,7 @@ it.each([
     claimId: `claim-reconcile-${scenario.ownerKind}`,
     runId: `run-reconcile-${scenario.ownerKind}`,
   });
-  const draining = store.startDrain({
+  const draining = await store.startDrain({
     sessionId: active.sessionId,
     environmentId: active.environmentId,
     ownerEpoch: active.activeOwnerEpoch,
@@ -436,9 +436,9 @@ it.each([
     expectedGeneration: draining.generation,
   };
 
-  expect(() =>
+  await expect(
     store.startReconcile({ ...reconcileInput, ownerEpoch: active.activeOwnerEpoch + 1 }),
-  ).toThrow("Cannot reconcile stale worker placement");
+  ).rejects.toThrow("Cannot reconcile stale worker placement");
   expect(store.get(active.sessionId)).toMatchObject({
     state: "draining",
     turnClaim: { claimId: claim.claimId, owner: scenario.ownerKind },
@@ -451,19 +451,19 @@ it.each([
       : reconcileInput;
   if (scenario.ownerKind === "local") {
     const preserved = store.get(active.sessionId);
-    expect(() => store.startReconcile(reconcileInput)).toThrow("local turn is active");
+    await expect(store.startReconcile(reconcileInput)).rejects.toThrow("local turn is active");
     expect(store.get(active.sessionId)).toEqual(preserved);
     expect(store.validateTurnClaim(claim)).toBe(true);
     expect(closed).not.toHaveBeenCalled();
   }
 
-  expect(store.startReconcile(authorizedReconcileInput)).toMatchObject({
+  expect(await store.startReconcile(authorizedReconcileInput)).toMatchObject({
     state: "reconciling",
     turnClaim: null,
   });
   expect(store.validateTurnClaim(claim)).toBe(false);
   expect(closed).toHaveBeenCalledExactlyOnceWith(claim);
-  expect(() => store.startReconcile(authorizedReconcileInput)).toThrow(
+  await expect(store.startReconcile(authorizedReconcileInput)).rejects.toThrow(
     "Cannot reconcile stale worker placement",
   );
   await expect(store.releaseTurn(claim)).rejects.toThrow("turn claim changed before release");

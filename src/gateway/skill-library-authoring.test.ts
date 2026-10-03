@@ -6,9 +6,9 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createLibrarySkillWorkshopTool } from "../agents/tools/skill-workshop-tool-library.js";
 import { listSkillLibrary, readSkillLibrary, saveSkillLibrary } from "../skills/library/service.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
   libraryAuthority,
   type SkillLibraryRequestOwner,
@@ -19,8 +19,8 @@ import {
 } from "./skill-library-authoring.js";
 
 const temps = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
     vi.unstubAllEnvs();
     cleanup();
   }),

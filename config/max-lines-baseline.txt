@@ -287,7 +287,6 @@ src/agents/sessions/extensions/runner.ts
 src/agents/sessions/extensions/types.ts
 src/agents/sessions/model-registry.ts
 src/agents/sessions/package-manager.ts
-src/agents/sessions/resource-loader.ts
 src/agents/subagents/announce/subagent-announce-delivery.test.ts
 src/agents/subagents/announce/subagent-announce.format.e2e.test.ts
 src/agents/subagents/registry/subagent-control.test.ts

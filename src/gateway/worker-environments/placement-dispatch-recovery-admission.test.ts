@@ -102,7 +102,7 @@ describe("placement recovery session admission with persisted placements", () =>
         throw new Error("Stop fixture was not active");
       }
       harness.markEnvironmentOwnerEpoch(2);
-      placements.startDrain({
+      await placements.startDrain({
         sessionId: active.sessionId,
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
@@ -150,7 +150,7 @@ describe("placement recovery session admission with persisted placements", () =>
     async (mode) => {
       const placements = createStore();
       const requested = await placements.startDispatch(REQUEST);
-      placements.fail({
+      await placements.fail({
         sessionId: REQUEST.sessionId,
         expectedGeneration: requested.generation,
         recoveryError: "previous attempt",
@@ -410,7 +410,7 @@ describe("placement recovery session admission with persisted placements", () =>
         sessionId,
         sessionKey: `agent:main:${sessionId}`,
       });
-      placements.fail({
+      await placements.fail({
         sessionId,
         expectedGeneration: placement.generation,
         recoveryError: "finished fixture",
@@ -520,7 +520,7 @@ describe("placement recovery session admission with persisted placements", () =>
       sessionId: "idle",
       sessionKey: "agent:main:idle",
     });
-    placements.fail({
+    await placements.fail({
       sessionId: idle.sessionId,
       expectedGeneration: idle.generation,
       recoveryError: "finished fixture",
@@ -560,14 +560,14 @@ describe("placement recovery session admission with persisted placements", () =>
       sessionId: "cloud",
       sessionKey: "agent:main:cloud",
     });
-    const provisioning = placements.transition({
+    const provisioning = await placements.transition({
       sessionId: "cloud",
       from: "requested",
       to: "provisioning",
       expectedGeneration: requested.generation,
       patch: { environmentId: "cloud-environment" },
     });
-    placements.fail({
+    await placements.fail({
       sessionId: "cloud",
       expectedGeneration: provisioning.generation,
       recoveryError: "provider teardown required",

@@ -329,7 +329,7 @@ describe("worker turn launcher terminal results", () => {
           throw new Error("expected pending workspace result");
         }
         expect(pending).toMatchObject({ sessionId: SESSION_ID, runId });
-        placements.failWorkspaceResultAndReleaseTurn(pending, reconciliationError);
+        await placements.failWorkspaceResultAndReleaseTurn(pending, reconciliationError);
       });
       const provider = createWorkerSessionTurnPlacementProvider({
         environments,
@@ -501,7 +501,7 @@ describe("worker turn launcher terminal results", () => {
       if (!pending) {
         throw new Error("expected pending workspace result");
       }
-      placements.failWorkspaceResultAndReleaseTurn(pending, tunnelFailure);
+      await placements.failWorkspaceResultAndReleaseTurn(pending, tunnelFailure);
     });
     const stopCleanup = vi.fn(async () => ({
       ...LOCAL_PLACEMENT,

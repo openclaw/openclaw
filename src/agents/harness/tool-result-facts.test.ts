@@ -49,32 +49,28 @@ describe("recordAgentHarnessToolResultTelemetry", () => {
     ).toEqual(["same.png", "array.png", "attached.png"]);
   });
 
-  it("preserves structured image artifacts without marking them as voice", () => {
-    const telemetry = createTelemetry();
-    recordTelemetry({
-      toolName: "image_generate",
-      result: textToolResult("Generated image.", { media: { mediaUrl: "/tmp/generated.png" } }),
-      telemetry,
-    });
-
-    expect(telemetry.toolMediaUrls).toEqual(["/tmp/generated.png"]);
-    expect(telemetry.toolAudioAsVoice).toBe(false);
-  });
-
-  it("preserves audio-as-voice metadata from unowned tts results", () => {
-    const telemetry = createTelemetry();
-    recordTelemetry({
+  it.each([
+    { toolName: "image_generate", media: { mediaUrl: "/tmp/generated.png" }, voice: false },
+    {
       toolName: "tts",
-      result: textToolResult("(spoken) hello", {
-        media: { mediaUrl: "/tmp/reply.opus", audioAsVoice: true, trustedLocalMedia: true },
-      }),
-      telemetry,
-    });
+      media: { mediaUrl: "/tmp/reply.opus", audioAsVoice: true, trustedLocalMedia: true },
+      voice: true,
+    },
+  ])(
+    "preserves $toolName media and voice metadata without unowned auto-delivery",
+    ({ toolName, media, voice }) => {
+      const telemetry = createTelemetry();
+      recordTelemetry({
+        toolName,
+        result: textToolResult("Generated media.", { media }),
+        telemetry,
+      });
 
-    expect(telemetry.toolMediaUrls).toEqual(["/tmp/reply.opus"]);
-    expect(telemetry.toolAutoDeliveryMediaUrls).toEqual([]);
-    expect(telemetry.toolAudioAsVoice).toBe(true);
-  });
+      expect(telemetry.toolMediaUrls).toEqual([media.mediaUrl]);
+      expect(telemetry.toolAutoDeliveryMediaUrls).toEqual([]);
+      expect(telemetry.toolAudioAsVoice).toBe(voice);
+    },
+  );
 
   it("records messaging tool side effects", () => {
     const telemetry = createTelemetry();

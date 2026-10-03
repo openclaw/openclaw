@@ -136,7 +136,10 @@ describe("Doctor Gateway token store repair", () => {
     ]);
     await runGatewayAuth(fixture.ctx);
     expect(note).toHaveBeenCalledWith(expect.stringContaining(tokenRef.id), "Gateway auth");
-    expect(readSecretStoreValue(fixture.entry)).toEqual({ ok: true, value: REDACTED_SENTINEL });
+    expect(await readSecretStoreValue(fixture.entry)).toEqual({
+      ok: true,
+      value: REDACTED_SENTINEL,
+    });
     expect(fixture.backups()).toEqual([]);
   });
 
@@ -150,7 +153,7 @@ describe("Doctor Gateway token store repair", () => {
     async ({ kind, options }) => {
       const fixture = await createFixture(REDACTED_SENTINEL, options, kind);
       await runGatewayAuth(fixture.ctx);
-      const repaired = readSecretStoreValue(fixture.entry);
+      const repaired = await readSecretStoreValue(fixture.entry);
       expect(repaired).toEqual({ ok: true, value: expect.stringMatching(/^[a-f0-9]{48}$/u) });
       expect(fixture.ctx.cfg.gateway?.auth?.token).toEqual(tokenRef);
       expect(await detectGatewayAuthHealth(fixture.ctx)).toEqual([]);
@@ -160,7 +163,7 @@ describe("Doctor Gateway token store repair", () => {
           ...(kind === "secret" ? { allowedHosts: ["gateway.example.test"] } : {}),
         }),
       ]);
-      const execEnvironment = readSecretStoreExecEnvironment({
+      const execEnvironment = await readSecretStoreExecEnvironment({
         includeSecretSentinels: false,
         database: fixture.entry.database,
       });
@@ -169,7 +172,7 @@ describe("Doctor Gateway token store repair", () => {
       );
       const backup = expectDefined(fixture.backups()[0], "verified Gateway token backup");
       expect(fixture.backups()).toHaveLength(1);
-      expect(readSecretStoreValue({ ...fixture.entry, database: { path: backup } })).toEqual({
+      expect(await readSecretStoreValue({ ...fixture.entry, database: { path: backup } })).toEqual({
         ok: true,
         value: REDACTED_SENTINEL,
       });
@@ -187,7 +190,7 @@ describe("Doctor Gateway token store repair", () => {
       ),
       "Gateway auth",
     );
-    expect(readSecretStoreValue(fixture.entry)).toEqual({
+    expect(await readSecretStoreValue(fixture.entry)).toEqual({
       ok: true,
       value: "synthetic-healthy-token",
     });
@@ -200,7 +203,10 @@ describe("Doctor Gateway token store repair", () => {
       new Error("synthetic disk full"),
     );
     await runGatewayAuth(fixture.ctx);
-    expect(readSecretStoreValue(fixture.entry)).toEqual({ ok: true, value: REDACTED_SENTINEL });
+    expect(await readSecretStoreValue(fixture.entry)).toEqual({
+      ok: true,
+      value: REDACTED_SENTINEL,
+    });
     expect(fixture.ctx.updateWarnings).toContainEqual(
       expect.stringContaining("synthetic disk full"),
     );
@@ -223,7 +229,7 @@ describe("Doctor Gateway token store repair", () => {
       },
     );
     await runGatewayAuth(fixture.ctx);
-    expect(readSecretStoreValue(fixture.entry)).toEqual({
+    expect(await readSecretStoreValue(fixture.entry)).toEqual({
       ok: true,
       value: "synthetic-concurrent-replacement",
     });
@@ -246,10 +252,12 @@ describe("Doctor Gateway token store repair", () => {
     );
     await runGatewayAuth(fixture.ctx);
     expect(
-      readSecretStoreExecEnvironment({
-        includeSecretSentinels: false,
-        database: fixture.entry.database,
-      }).env?.[tokenRef.id],
+      (
+        await readSecretStoreExecEnvironment({
+          includeSecretSentinels: false,
+          database: fixture.entry.database,
+        })
+      ).env?.[tokenRef.id],
     ).toMatch(/^[a-f0-9]{48}$/u);
   });
 });

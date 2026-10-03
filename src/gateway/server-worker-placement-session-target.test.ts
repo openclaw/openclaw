@@ -108,7 +108,7 @@ test.each([
         ...identity,
         executionMode: "worker-turn",
       });
-      const captured = placements.transition({
+      const captured = await placements.transition({
         sessionId: identity.sessionId,
         from: "requested",
         to: "provisioning",
@@ -324,12 +324,12 @@ test("rejects stale repository selection and refreshes the accepted checkpoint a
     });
     const reclaimed = await barriers.runReclaimBarrier({
       ...REQUEST,
-      begin: () => {
+      begin: async () => {
         const current = placements.get(REQUEST.sessionId);
         if (current?.state !== "active") {
           throw new Error("Expected active placement before reclaim");
         }
-        const result = placements.startDrain({
+        const result = await placements.startDrain({
           sessionId: current.sessionId,
           environmentId: current.environmentId,
           ownerEpoch: current.activeOwnerEpoch,
@@ -345,13 +345,13 @@ test("rejects stale repository selection and refreshes the accepted checkpoint a
         if (current.state !== "draining") {
           throw new Error("Expected a newly drained placement");
         }
-        const reconciling = placements.startReconcile({
+        const reconciling = await placements.startReconcile({
           sessionId: current.sessionId,
           environmentId: current.environmentId,
           ownerEpoch: current.activeOwnerEpoch,
           expectedGeneration: current.generation,
         });
-        const result = placements.transition({
+        const result = await placements.transition({
           sessionId: current.sessionId,
           from: "reconciling",
           to: "reclaimed",

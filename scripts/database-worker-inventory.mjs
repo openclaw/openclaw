@@ -194,6 +194,9 @@ const reviewedOperations = new Map([
       {
         tier: "W",
         operations: [
+          "assertNoRunningWorkerSessionToolOperations",
+          "closeWorkerTurnToolAdmission",
+          "clearWorkerTurnToolState",
           "createPlacementSessionToolOperationKernel.hasToolAuthority",
           "createPlacementSessionToolOperationKernel.settleWorkerSessionToolOperation",
           "createPlacementSessionToolOperationKernel.authorize",
@@ -203,7 +206,18 @@ const reviewedOperations = new Map([
           "createPlacementSessionToolOperationKernel.recover",
         ],
         evidence:
-          "Factory only constructed by placement-session-tool-operations.worker.ts:27; shared native transaction helpers stay T1",
+          "Factory runs in placement-session-tool-operations.worker.ts; claim, reconcile and terminal-failure cleanup now only run through placement-turn-claims.worker.ts",
+      },
+    ],
+  ],
+  [
+    "src/gateway/worker-environments/placement-pending-failure.ts",
+    [
+      {
+        tier: "W",
+        operations: ["createPlacementPendingFailureOps.failWorkspaceResultAndReleaseTurn"],
+        evidence:
+          "Only placementTurns.failResult in placement-turn-claims.worker.ts constructs the terminal-failure kernel; all runtime callers await its worker facade",
       },
     ],
   ],
@@ -376,6 +390,25 @@ const reviewedOperations = new Map([
         tier: "T2",
         operations: ["sweepSessionStateWatchNotices"],
         evidence: "Restart sweep only called by server-startup-observers.ts:58",
+      },
+    ],
+  ],
+  [
+    "src/skills/library/store.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "ensureSkillLibrarySchema",
+          "requireSelectedSkillLibraryUpload",
+          "selectSkillLibraryRow",
+          "selectSkillLibraryRevision",
+          "selectSkillLibraryRevisionMetadata",
+          "assertSkillLibraryNameAvailable",
+          "recordSkillLibraryEvent",
+        ],
+        evidence:
+          "Library row, revision, upload, and mutation kernels run only through the shared-state reader/writer; the SDK metadata batch remains in selection-read.kernel.ts",
       },
     ],
   ],
@@ -553,6 +586,7 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/skills/library/import.kernel.ts", // Upload commands execute only in the shared-state writer.
   "src/skills/library/service.kernel.ts", // Library catalog and revision reads use the shared-state read registry.
   "src/config/sessions/conversation-delivery-store.kernel.ts", // Agent execution registry writes and session transcript worker reads only.
   "extensions/memory-core/src/memory-entry-origin-reads.ts", // Memory search worker origin-read commands only.
@@ -647,7 +681,7 @@ const workerModules = new Set([
 
   "src/secrets/store/secret-store-config-ref.kernel.ts", // Config-ref writes are called only by the shared-state worker runtime.
   "src/secrets/store/secret-store-expiry.kernel.ts", // Expiry SQL uses shared-state worker dispatch; host captures cutoffs only.
-  "src/secrets/store/secret-store-metadata.kernel.ts", // Metadata listing only runs through stateReadRegistry in the shared-state reader.
+  "src/secrets/store/secret-store-metadata.kernel.ts", // Metadata, exec environment, and exact values only run through stateReadRegistry in the shared-state reader.
 
   "src/sessions/session-upstream-links.kernel.ts", // openclaw-state.worker.ts dispatches sessionUpstream.listWatched; host imports only the codec.
 

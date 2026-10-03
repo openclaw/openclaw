@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
 import { resolveCliCommandPathPolicy } from "../command-path-policy.js";
 import { shouldEagerRegisterSubcommands } from "../command-registration-policy.js";
@@ -20,12 +19,6 @@ import { getSubCliEntriesCore } from "./subcli-descriptors.js";
 export type SubCliRegistrationContext = {
   purpose?: "runtime" | "completion";
 };
-
-type PluginCliModule = typeof import("../../plugins/cli.js");
-
-const pluginCliLoader = createLazyImportLoader<PluginCliModule>(
-  () => import("../../plugins/cli.js"),
-);
 
 function shouldRegisterGatewayRunOnly(name: string, argv: string[]): boolean {
   if (name !== "gateway") {
@@ -61,12 +54,12 @@ async function registerSubCliWithPluginCommands(
     !invocation.hasHelpOrVersion &&
     resolveCliCommandPathPolicy(invocation.commandPath).loadPlugins !== "never";
   if (pluginCliPosition === "before" && shouldRegisterPluginCommands) {
-    const { registerPluginCliCommandsFromValidatedConfig } = await pluginCliLoader.load();
+    const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
     await registerPluginCliCommandsFromValidatedConfig(program);
   }
   await registerSubCli();
   if (pluginCliPosition === "after" && shouldRegisterPluginCommands) {
-    const { registerPluginCliCommandsFromValidatedConfig } = await pluginCliLoader.load();
+    const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
     await registerPluginCliCommandsFromValidatedConfig(program);
   }
 }

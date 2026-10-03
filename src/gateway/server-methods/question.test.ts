@@ -503,7 +503,7 @@ it.each(["replacement", "abort"] as const)(
             )[0],
           ).toBe(true);
           expect(
-            readSecretStoreValue({ scope: { kind: "team" }, name: "SERVICE_API_KEY" }),
+            await readSecretStoreValue({ scope: { kind: "team" }, name: "SERVICE_API_KEY" }),
           ).toEqual({
             ok: true,
             value: "test-secret-current-requester",
@@ -702,7 +702,9 @@ it("settles the SQLite commit before a second answer races its deferred refresh"
           answers: { answers: { secret_value: ["test-secret-late-overwrite"] } },
         }),
       );
-      expect(readSecretStoreValue({ scope: { kind: "team" }, name: "SERVICE_API_KEY" })).toEqual({
+      expect(
+        await readSecretStoreValue({ scope: { kind: "team" }, name: "SERVICE_API_KEY" }),
+      ).toEqual({
         ok: true,
         value: firstValue,
       });
@@ -762,7 +764,9 @@ it("keeps a committed answer terminal and reports refresh failure without inviti
         })
       )[0],
     ).toBe(false);
-    expect(readSecretStoreValue({ scope: { kind: "team" }, name: "SERVICE_API_KEY" })).toEqual({
+    expect(
+      await readSecretStoreValue({ scope: { kind: "team" }, name: "SERVICE_API_KEY" }),
+    ).toEqual({
       ok: true,
       value,
     });
@@ -896,7 +900,7 @@ it.each([
       expect(await listSecretStoreEntries({ scope: entry.scope })).toMatchObject([
         { name: entry.name, kind: "secret", allowedHosts: override ?? shown },
       ]);
-      expect(readSecretStoreValue({ scope: entry.scope, name: entry.name })).toEqual({
+      expect(await readSecretStoreValue({ scope: entry.scope, name: entry.name })).toEqual({
         ok: true,
         value,
       });

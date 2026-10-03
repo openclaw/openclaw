@@ -142,27 +142,27 @@ export function createHarness(
     acceptWorkspaceResult: (...args) => placementStore.acceptWorkspaceResult(...args),
     completeWorkspaceResultAndReleaseTurn: (...args) =>
       placementStore.completeWorkspaceResultAndReleaseTurn(...args),
-    failWorkspaceResultAndReleaseTurn: (pending, error) => {
+    failWorkspaceResultAndReleaseTurn: (pending, error, assertCurrent) => {
       const current = placementStore.get(pending.sessionId);
       if (current?.state === "active") {
         log.push("placement:draining");
       }
       log.push("placement:reconciling", "placement:failed");
-      return placementStore.failWorkspaceResultAndReleaseTurn(pending, error);
+      return placementStore.failWorkspaceResultAndReleaseTurn(pending, error, assertCurrent);
     },
     startDispatch: (params, dispatchOptions) => {
       log.push("placement:requested");
       return placementStore.startDispatch(params, dispatchOptions);
     },
-    transition: (params) => {
+    transition: (params, assertCurrent) => {
       log.push(`placement:${params.to}`);
-      return placementStore.transition(params);
+      return placementStore.transition(params, assertCurrent);
     },
-    fail: (params) => {
+    fail: (params, assertCurrent) => {
       log.push("placement:failed");
-      return placementStore.fail(params);
+      return placementStore.fail(params, assertCurrent);
     },
-    startDrain: (params) => {
+    startDrain: (params, assertCurrent) => {
       log.push("placement:draining");
       if (options.claimOnDrain && !placementStore.get(params.sessionId)?.turnClaim) {
         createPlacementTurnClaimFixtureOps(database).claimTurn({
@@ -178,15 +178,15 @@ export function createHarness(
           },
         });
       }
-      return placementStore.startDrain(params);
+      return placementStore.startDrain(params, assertCurrent);
     },
     startWorkspaceResultDrain: (...args) => {
       log.push("placement:draining");
       return placementStore.startWorkspaceResultDrain(...args);
     },
-    startReconcile: (params) => {
+    startReconcile: (params, assertCurrent) => {
       log.push("placement:reconciling");
-      return placementStore.startReconcile(params);
+      return placementStore.startReconcile(params, assertCurrent);
     },
     adoptActive: (params) => {
       log.push("placement:adopted");
@@ -520,7 +520,7 @@ export function createHarness(
           run: async () => {
             authorize?.();
             beforeDrain?.();
-            const placement = begin();
+            const placement = await begin(authorize);
             return placement.state === "reclaimed"
               ? placement
               : await reclaim(
@@ -657,7 +657,7 @@ export const createRecoveryService = (
     resolveMoveDestination: async () => undefined,
     runReclaimPreparation,
     runReclaimBarrier: async ({ begin, reclaim }) =>
-      await reclaim({ kind: "local", path: "/gateway/workspace" }, begin()),
+      await reclaim({ kind: "local", path: "/gateway/workspace" }, await begin()),
     runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
     ...createWorkerWorkspaceRecoveryFixture({
       resolveWorkspace: async () => ({ kind: "local", path: "/gateway/workspace" }),

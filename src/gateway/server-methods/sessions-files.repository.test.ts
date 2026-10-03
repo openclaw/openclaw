@@ -278,7 +278,7 @@ async function withCheckpointAcceptance(failCapture = false) {
     ],
     ["starting", "active", { activeOwnerEpoch: identity.generation }],
   ] as const) {
-    placement = placements.transition({
+    placement = await placements.transition({
       sessionId: identity.sessionId,
       from,
       to,

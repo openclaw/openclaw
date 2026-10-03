@@ -94,7 +94,7 @@ describe("worker turn launcher claim admission", () => {
             },
             { to: "active", patch: { activeOwnerEpoch: OWNER_EPOCH } },
           ] as const) {
-            placement = placements.transition({
+            placement = await placements.transition({
               sessionId: SESSION_ID,
               from: placement.state,
               to,
@@ -113,7 +113,7 @@ describe("worker turn launcher claim admission", () => {
             owner: placementTurnOwner(placement),
           });
           await assertRejected();
-          const draining = placements.startDrain({
+          const draining = await placements.startDrain({
             sessionId: SESSION_ID,
             environmentId: ENVIRONMENT_ID,
             ownerEpoch: OWNER_EPOCH,
@@ -122,14 +122,14 @@ describe("worker turn launcher claim admission", () => {
           await assertRejected();
           expect(placements.validateTurnClaim(workerClaim)).toBe(true);
           await placements.releaseTurn(workerClaim);
-          const reconciling = placements.startReconcile({
+          const reconciling = await placements.startReconcile({
             sessionId: SESSION_ID,
             environmentId: ENVIRONMENT_ID,
             ownerEpoch: OWNER_EPOCH,
             expectedGeneration: draining.generation,
           });
           await assertRejected();
-          placements.transition({
+          await placements.transition({
             sessionId: SESSION_ID,
             from: "reconciling",
             to: "reclaimed",
@@ -137,7 +137,10 @@ describe("worker turn launcher claim admission", () => {
           });
           await assertRejected();
           await placements.startDispatch({ ...sessionTarget, executionMode });
-          placements.fail({ sessionId: SESSION_ID, recoveryError: "fixture dispatch failed" });
+          await placements.fail({
+            sessionId: SESSION_ID,
+            recoveryError: "fixture dispatch failed",
+          });
           await assertRejected();
         });
       } finally {
@@ -629,14 +632,14 @@ describe("worker turn launcher claim admission", () => {
           if (active?.state !== "active") {
             throw new Error("expected active placement before drain race");
           }
-          expect(() =>
+          await expect(
             placements.startDrain({
               sessionId: active.sessionId,
               environmentId: active.environmentId,
               ownerEpoch: active.activeOwnerEpoch,
               expectedGeneration: active.generation,
             }),
-          ).toThrow("pending cloud workspace result");
+          ).rejects.toThrow("pending cloud workspace result");
           commandFinished.resolve({
             stdout: JSON.stringify({
               status: "completed",
@@ -654,7 +657,7 @@ describe("worker turn launcher claim admission", () => {
           if (completedPlacement?.state !== "active") {
             throw new Error("expected active placement after worker completion");
           }
-          placements.startDrain({
+          await placements.startDrain({
             sessionId: completedPlacement.sessionId,
             environmentId: completedPlacement.environmentId,
             ownerEpoch: completedPlacement.activeOwnerEpoch,

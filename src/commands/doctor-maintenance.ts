@@ -250,12 +250,13 @@ export async function beginDoctorMaintenance(
             : {}),
         }),
       );
-      if (health.waitOutcome === "still-starting") {
-        const warning = renderRestartDiagnostics(health).join(" ");
-        warn(warning);
+      if (health.outcome === "starting") {
+        warn(
+          `Warning: Doctor repair complete; Gateway is still starting — check \`${formatCliCommand("openclaw gateway status", state.env)}\` in a minute.`,
+        );
         return;
       }
-      if (!health.healthy) {
+      if (health.outcome !== "ready") {
         throw doctorGatewayMaintenanceError({
           env,
           phase: "gateway-restoration",

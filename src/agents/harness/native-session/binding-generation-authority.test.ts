@@ -36,59 +36,44 @@ describe("native session binding generation authority", () => {
     storePath = path.join(fixture.stateDir, "sessions.json");
   });
 
-  it("fences an already-readable binding when its admitted session generation rotates", async () => {
-    await upsertSessionEntryCore(scope(), { sessionId: target.sessionId, updatedAt: 1 });
-    const resolved = await resolveNativeSessionBindingWithAuthority({
-      target,
-      storePath,
-      readBinding: () => binding,
-      createSupersededError,
-    });
-    expect(resolved.binding).toEqual(binding);
-
-    await patchSessionEntryCore(scope(), () => ({ sessionId: "session-successor" }));
-    await expect(resolved.authority.withCurrent(() => undefined)).rejects.toThrow(
-      "Session generation is no longer current",
-    );
-  });
-
-  it("rejects an already-readable binding owned by a stale admitted session", async () => {
-    await upsertSessionEntryCore(scope(), { sessionId: "session-current", updatedAt: 1 });
-    await expect(
-      resolveNativeSessionBindingWithAuthority({
-        target: { ...target, sessionId: "session-stale" },
+  it.each(["current", "stale", "ephemeral"] as const)(
+    "fences a %s readable binding",
+    async (state) => {
+      let active = true;
+      await upsertSessionEntryCore(
+        state === "ephemeral" ? { ...scope(), sessionKey: "agent:main:other" } : scope(),
+        { sessionId: state === "ephemeral" ? "session-other" : target.sessionId, updatedAt: 1 },
+      );
+      const pending = resolveNativeSessionBindingWithAuthority({
+        target: state === "stale" ? { ...target, sessionId: "session-stale" } : target,
         storePath,
         readBinding: () => binding,
         createSupersededError,
-      }),
-    ).rejects.toThrow("Session generation is no longer current");
-  });
-
-  it("preserves caller authority for a scoped session with no durable row", async () => {
-    let active = true;
-    await upsertSessionEntryCore(
-      { ...scope(), sessionKey: "agent:main:other" },
-      { sessionId: "session-other", updatedAt: 1 },
-    );
-    const resolved = await resolveNativeSessionBindingWithAuthority({
-      target,
-      storePath,
-      readBinding: () => binding,
-      createSupersededError,
-      assertCurrent: () => {
-        if (!active) {
-          throw new Error("caller authority closed");
-        }
-      },
-    });
-    expect(resolved.binding).toEqual(binding);
-    await expect(resolved.authority.withCurrent(() => undefined)).resolves.toBeUndefined();
-
-    active = false;
-    await expect(resolved.authority.withCurrent(() => undefined)).rejects.toThrow(
-      "caller authority closed",
-    );
-  });
+        assertCurrent: () => {
+          if (!active) {
+            throw new Error("caller authority closed");
+          }
+        },
+      });
+      if (state === "stale") {
+        await expect(pending).rejects.toThrow("Session generation is no longer current");
+        return;
+      }
+      const resolved = await pending;
+      expect(resolved.binding).toEqual(binding);
+      await expect(resolved.authority.withCurrent(() => undefined)).resolves.toBeUndefined();
+      if (state === "ephemeral") {
+        active = false;
+      } else {
+        await patchSessionEntryCore(scope(), () => ({ sessionId: "session-successor" }));
+      }
+      await expect(resolved.authority.withCurrent(() => undefined)).rejects.toThrow(
+        state === "ephemeral"
+          ? "caller authority closed"
+          : "Session generation is no longer current",
+      );
+    },
+  );
 
   it("does not bridge two generations when the host rotates during a predecessor wait", async () => {
     const previous = { ...target, sessionId: "previous" };

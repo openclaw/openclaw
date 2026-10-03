@@ -1,6 +1,5 @@
 // Command startup policy tests cover which CLI commands require startup side effects.
-import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { cliCommandCatalog } from "./command-catalog.js";
 import { resolveCliStartupPolicy } from "./command-startup-policy.js";
 
@@ -152,37 +151,6 @@ describe("command-startup-policy", () => {
           entry.commandPath.join(" "),
         ).toBe(expectedSkip);
       }
-    }
-  });
-
-  it("skips when-suppressed guards only for suppressed output", async () => {
-    vi.resetModules();
-    try {
-      vi.doMock("./command-path-policy.js", () => ({
-        resolveCliCommandPathPolicy: () => ({
-          configGuard: "when-suppressed",
-          loadPlugins: "never",
-          pluginRegistry: { scope: "all" },
-          ownsProtocolStdout: false,
-          hideBanner: false,
-          ensureCliPath: true,
-          networkProxy: "default",
-        }),
-      }));
-      const { resolveCliStartupPolicy: resolveWithSuppressedGuard } = await importFreshModule<
-        typeof import("./command-startup-policy.js")
-      >(import.meta.url, "./command-startup-policy.js?when-suppressed");
-
-      expect(
-        resolveWithSuppressedGuard({ commandPath: ["test"], jsonOutputMode: false })
-          .skipConfigGuard,
-      ).toBe(false);
-      expect(
-        resolveWithSuppressedGuard({ commandPath: ["test"], jsonOutputMode: true }).skipConfigGuard,
-      ).toBe(true);
-    } finally {
-      vi.doUnmock("./command-path-policy.js");
-      vi.resetModules();
     }
   });
 

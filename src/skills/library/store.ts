@@ -25,9 +25,8 @@ import {
   selectResolvedUserProfileMetadataById,
   userProfilesDb,
 } from "../../state/user-profiles-internal.js";
+import { SkillLibraryError } from "../skill-library-error.js";
 import { managedSkillCommandName } from "./command-name.js";
-import { SkillLibraryError } from "./errors.js";
-import { stageSkillLibraryAuthorityChange } from "./store-authority.js";
 
 export type SkillLibraryAuthority = {
   /** Host-authenticated profile only. Neither session attribution nor model arguments qualify. */
@@ -54,7 +53,10 @@ export type SkillLibraryDatabase = Pick<
 export const skillLibraryDb = (db: DatabaseSync) => getNodeSqliteKysely<SkillLibraryDatabase>(db);
 const ensured = new WeakSet<DatabaseSync>();
 
-export function ensureSkillLibrarySchema(options: OpenClawStateDatabaseOptions): void {
+export function ensureSkillLibrarySchema(
+  options: OpenClawStateDatabaseOptions,
+  admit: (stage: "transaction" | "commit") => void,
+): void {
   const { db } = openOpenClawStateDatabase(options);
   if (ensured.has(db)) {
     return;
@@ -68,7 +70,9 @@ export function ensureSkillLibrarySchema(options: OpenClawStateDatabaseOptions):
   }
   runOpenClawStateWriteTransaction(
     ({ db: transactionDb }) => {
+      admit("transaction");
       transactionDb.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(start, end)); // sqlite-allow-raw -- canonical first-use additive DDL.
+      admit("commit");
     },
     options,
     { operationLabel: "skills.library.schema" },
@@ -156,11 +160,14 @@ function requireSelectedSkillLibraryUpload<
 ) {
   const actor = requireSkillLibraryProfile(db, authority);
   const upload = executeSqliteQueryTakeFirstSync(db, query.where("upload_id", "=", uploadId));
-  if (
-    !upload ||
-    upload.expires_at <= Date.now() ||
-    selectSkillLibraryOwner(db, upload.owner_profile_id)?.id !== actor
-  ) {
+  const owner = upload && selectSkillLibraryOwner(db, upload.owner_profile_id)?.id;
+  if (upload) {
+    authority.profileDependencies?.add(upload.owner_profile_id);
+  }
+  if (owner) {
+    authority.profileDependencies?.add(owner);
+  }
+  if (!upload || upload.expires_at <= Date.now() || owner !== actor) {
     throw new SkillLibraryError(
       "NOT_FOUND",
       "Upload not found for your profile, or expired. Start a new import.",
@@ -376,7 +383,6 @@ export function recordSkillLibraryEvent(
   action: string,
   actorProfileId: string,
 ) {
-  stageSkillLibraryAuthorityChange(db);
   executeSqliteQuerySync(
     db,
     skillLibraryDb(db).insertInto("skill_library_events").values({

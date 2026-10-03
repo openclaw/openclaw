@@ -17,9 +17,9 @@ import {
   resolveSkillManifestMetadata,
 } from "../loading/frontmatter.js";
 import { materializeSkill } from "../loading/skill-materializer.js";
+import { SkillLibraryError } from "../skill-library-error.js";
 import type { SkillEntry } from "../types.js";
 import { readSkillLibraryManifestTree, skillLibraryRevisionDir } from "./bundle.js";
-import { SkillLibraryError } from "./errors.js";
 import {
   readSkillLibrarySelectionDescriptions,
   readSkillLibrarySelectionManifests,

@@ -1,5 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { coerceErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   WorkerProviderError,
   type WorkerLeaseStatus,
@@ -12,7 +12,7 @@ import { ensureManagedCrabboxBinary } from "./crabbox-managed-binary.js";
 import {
   type CrabboxCommandRunner,
   type LeaseCommandContext,
-  runCrabboxCommand,
+  runCrabboxCommandWithCoordinatorRetry,
   stopCrabboxLease,
 } from "./crabbox-worker-command.js";
 import { createCrabboxHeartbeatManager } from "./crabbox-worker-heartbeat.js";
@@ -104,7 +104,7 @@ export function createCrabboxWorkerProvider(
   const openclawRoot = dependencies.openclawRoot ?? process.cwd();
   const heartbeats = createCrabboxHeartbeatManager({
     run: (context, signal) =>
-      runCrabboxCommand({
+      runCrabboxCommandWithCoordinatorRetry({
         action: "heartbeat",
         args: [
           "heartbeat",
@@ -118,12 +118,14 @@ export function createCrabboxWorkerProvider(
         ],
         binary: context.binary,
         runCommand,
+        sleep,
         signal,
         timeoutMs: context.heartbeatTimeoutMs,
       }),
     warn,
   });
-  const binaries = new Map<string, string>();
+  const providerAbort = new AbortController();
+  const binaries = new Map<string, Promise<string>>();
   let defaultCandidate: string | undefined;
   const resolveBinary = async (explicit?: string, signal?: AbortSignal): Promise<string> => {
     signal?.throwIfAborted();
@@ -135,13 +137,47 @@ export function createCrabboxWorkerProvider(
         pathEnv: dependencies.pathEnv ?? process.env.PATH,
         platform: dependencies.platform,
       }));
-    const existing = binaries.get(candidate);
-    if (existing) {
-      return existing;
+    // Completed acquisition remains usable by lease cleanup after provider disposal.
+    let resolution = binaries.get(candidate);
+    if (!resolution) {
+      providerAbort.signal.throwIfAborted();
+      // Acquisition belongs to the provider; cancelling one waiter cannot cancel discovery.
+      resolution = ensureManagedCrabboxBinary({
+        binary: candidate,
+        runCommand,
+        signal: providerAbort.signal,
+      })
+        .then(({ binary }) => {
+          providerAbort.signal.throwIfAborted();
+          return binary;
+        })
+        .catch((error: unknown) => {
+          binaries.delete(candidate);
+          throw error;
+        });
+      binaries.set(candidate, resolution);
     }
-    const { binary } = await ensureManagedCrabboxBinary({ binary: candidate, runCommand, signal });
-    binaries.set(candidate, binary);
-    return binary;
+    let onAbort: (() => void) | undefined;
+    try {
+      const binary = signal
+        ? await Promise.race([
+            resolution,
+            new Promise<never>((_resolve, reject) => {
+              onAbort = () => reject(toErrorObject(signal.reason, "Crabbox acquisition aborted"));
+              signal.addEventListener("abort", onAbort, { once: true });
+              if (signal.aborted) {
+                onAbort();
+              }
+            }),
+          ])
+        : await resolution;
+      signal?.throwIfAborted();
+      return binary;
+    } finally {
+      if (onAbort) {
+        signal?.removeEventListener("abort", onAbort);
+      }
+    }
   };
   const machineOptions = createCrabboxMachineOptionsResolver({
     resolveBinary,
@@ -154,7 +190,6 @@ export function createCrabboxWorkerProvider(
     warn,
     policy: dependencies.warmImagePolicy,
   });
-  const maintenanceAbort = new AbortController();
   let maintenanceInFlight: Promise<void> | undefined;
   const resolveMaintenanceBinaries = (
     profiles: readonly Parameters<typeof parseCrabboxProfile>[0][],
@@ -162,7 +197,7 @@ export function createCrabboxWorkerProvider(
   ) => resolveCrabboxCheckpointBinaries({ profiles, signal, resolveBinary, warn });
   const snapshots = createCrabboxSnapshotActions({
     manager: warmImages,
-    signal: maintenanceAbort.signal,
+    signal: providerAbort.signal,
     resolveBinaries: resolveMaintenanceBinaries,
   });
   const stopLease = async (context: LeaseCommandContext): Promise<void> => {
@@ -172,6 +207,7 @@ export function createCrabboxWorkerProvider(
       ...context,
       runCommand,
       warn,
+      sleep,
     });
     await warmImages.release(context);
   };
@@ -284,6 +320,7 @@ export function createCrabboxWorkerProvider(
           ...context,
           id: leaseId,
           runCommand,
+          sleep,
           timeoutMs: remainingProvisionTimeout(
             deadline,
             resolveCrabboxLifecycleTimeoutMs(parsed.provider),
@@ -310,6 +347,7 @@ export function createCrabboxWorkerProvider(
         profile: parsed,
         runCommand,
         stopLease,
+        sleep,
         signal: preparationSignal,
       };
       if (isNonRunnableState(inspected.state)) {
@@ -569,20 +607,21 @@ export function createCrabboxWorkerProvider(
     // Disposable worker desktops may resize only when the RFB server negotiates support.
     allowsDesktopResize: true,
     async dispose() {
-      maintenanceAbort.abort();
+      providerAbort.abort();
       await Promise.all([
         heartbeats.dispose(),
         maintenanceInFlight?.catch(() => {}),
         snapshots.settle(),
+        Promise.allSettled(binaries.values()),
       ]);
     },
     images: snapshots.images,
     maintain(context) {
       context.assertCurrent();
-      maintenanceAbort.signal.throwIfAborted();
+      providerAbort.signal.throwIfAborted();
       return (maintenanceInFlight ??= Promise.resolve()
         .then(async () => {
-          const signal = AbortSignal.any([context.signal, maintenanceAbort.signal]);
+          const signal = AbortSignal.any([context.signal, providerAbort.signal]);
           const assertCurrent = () => {
             signal.throwIfAborted();
             context.assertCurrent();
@@ -665,6 +704,7 @@ export function createCrabboxWorkerProvider(
       const inspected = await inspectWithContext({
         ...context,
         runCommand,
+        sleep,
       });
       if (!inspected || isNonRunnableState(inspected.state)) {
         await heartbeats.stop(context.id);
