@@ -136,7 +136,9 @@ function buildApprovalActionDescriptors(
   return decisions
     .filter((descriptor) => allowedDecisions.includes(descriptor.decision))
     .map((descriptor) => ({
-      ...descriptor,
+      decision: descriptor.decision,
+      label: descriptor.label,
+      style: descriptor.style,
       command: buildExecApprovalCommandText({
         approvalCommandId,
         decision: descriptor.decision,
@@ -165,7 +167,10 @@ export function buildTypedApprovalActionDescriptors(
   }
   return buildApprovalActionDescriptors(approvalId, resolveAllowedDecisions(params)).map(
     (descriptor) => ({
-      ...descriptor,
+      decision: descriptor.decision,
+      label: descriptor.label,
+      style: descriptor.style,
+      command: descriptor.command,
       action: {
         type: "approval",
         approvalId,
