@@ -31,12 +31,17 @@ import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
   cancelAskUserPromptDelivery,
+  isAskUserPromptPending,
   normalizeAskUserParams,
+  readAskUserPromptSignal,
   reserveAskUserPromptDelivery,
   settleAskUserPromptDelivery,
   waitForAskUserPromptReady,
 } from "./tools/ask-user-tool.js";
-import { sendQuestionToolPrompt } from "./tools/question-prompt-send.js";
+import {
+  createChannelQuestionPromptDelivery,
+  sendQuestionToolPrompt,
+} from "./tools/question-prompt-send.js";
 import { normalizeSecretsRequestParams } from "./tools/secrets-tool.js";
 
 const TRACE_REQUIRED_PARAM_GROUPS = {
@@ -52,18 +57,20 @@ function reserveQuestionPromptDelivery(
   runId: string,
   agentId: string | undefined,
   args: unknown,
-) {
+): { questionId: string; threadId?: string } | undefined {
   try {
-    const { questions, timeoutSeconds } =
+    const normalized =
       toolName === "secrets" ? normalizeSecretsRequestParams(args) : normalizeAskUserParams(args);
-    return reserveAskUserPromptDelivery({
+    const reservation = reserveAskUserPromptDelivery({
       toolCallId,
       sessionKey,
       runId,
       agentId,
-      questions,
-      timeoutSeconds,
+      questions: normalized.questions,
+      timeoutSeconds: normalized.timeoutSeconds,
     });
+    const threadId = "threadId" in normalized ? normalized.threadId : undefined;
+    return reservation && threadId ? { ...reservation, threadId } : reservation;
   } catch {
     // Argument validation owns malformed calls; do not deliver an unusable prompt first.
     return undefined;
@@ -550,6 +557,18 @@ export function handleToolExecutionStart(
     const publishPrompt = ctx.params.onToolResult;
     if (questionPromptReservation && publishPrompt) {
       const questionId = questionPromptReservation.questionId;
+      const { threadId } = questionPromptReservation;
+      // The reply pipeline posts only to the inbound thread, so a chosen thread goes direct.
+      const threadDelivery =
+        threadId && ctx.params.config
+          ? createChannelQuestionPromptDelivery({
+              cfg: ctx.params.config,
+              channel: ctx.params.messageChannel,
+              to: ctx.params.currentMessagingTarget ?? ctx.params.currentChannelId,
+              accountId: ctx.params.currentAccountId,
+              threadId: ctx.params.currentThreadId,
+            })
+          : undefined;
       void waitForAskUserPromptReady(questionId)
         .then(async (questions) => {
           if (!questions) {
@@ -560,7 +579,16 @@ export function handleToolExecutionStart(
             questionId,
             questions,
             config: ctx.params.config,
-            send: publishPrompt,
+            send: threadDelivery
+              ? async (payload, options) => {
+                  // The reply pipeline's publication guards do not cover a direct send.
+                  if (!(await isAskUserPromptPending(questionId)) || options?.signal?.aborted) {
+                    return;
+                  }
+                  await threadDelivery.send(payload, options);
+                }
+              : publishPrompt,
+            ...(threadDelivery ? { threadId, signal: readAskUserPromptSignal(questionId) } : {}),
           });
         })
         .then(

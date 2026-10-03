@@ -17,12 +17,25 @@ const MAX_ASK_USER_TIMEOUT_SECONDS = 3600;
 export type NormalizedAskUserParams = {
   questions: QuestionRequestQuestion[];
   timeoutSeconds: number;
+  threadId?: string;
 };
 
 /** Validates and canonicalizes model-authored ask_user arguments. */
 export function normalizeAskUserParams(value: unknown): NormalizedAskUserParams {
   if (!Value.Check(AskUserToolSchema, value)) {
     throw new ToolInputError("ask_user arguments do not match the model-facing question contract");
+  }
+  const threadId = value.threadId?.trim();
+  if (value.threadId !== undefined && !threadId) {
+    throw new ToolInputError("threadId must be a non-empty string");
+  }
+  // Typed replies in another thread never reach this session, so a moved prompt
+  // must be answerable with its buttons alone.
+  const buttonsOnly = threadId !== undefined;
+  if (buttonsOnly && (value.questions.length > 1 || value.questions[0]?.multiSelect === true)) {
+    throw new ToolInputError(
+      "threadId supports only one single-select question; ask multi-question or multi-select prompts without threadId",
+    );
   }
   const questions: QuestionRequestQuestion[] = value.questions.map((question) => ({
     questionId: question.id.trim(),
@@ -33,7 +46,7 @@ export function normalizeAskUserParams(value: unknown): NormalizedAskUserParams 
       ...(option.description?.trim() ? { description: option.description.trim() } : {}),
     })),
     ...(question.multiSelect === true ? { multiSelect: true } : {}),
-    isOther: true,
+    isOther: !buttonsOnly,
   }));
 
   if (!questions.every((question) => Value.Check(QuestionRequestQuestionSchema, question))) {
@@ -54,7 +67,11 @@ export function normalizeAskUserParams(value: unknown): NormalizedAskUserParams 
     throw new ToolInputError(semanticError);
   }
 
-  return { questions, timeoutSeconds: normalizeQuestionTimeoutSeconds(value.timeoutSeconds) };
+  return {
+    questions,
+    timeoutSeconds: normalizeQuestionTimeoutSeconds(value.timeoutSeconds),
+    ...(threadId ? { threadId } : {}),
+  };
 }
 
 /** Shared human-question wait contract, including credential entry and harness watchdogs. */
@@ -112,6 +129,13 @@ export const AskUserToolSchema = Type.Object(
       Type.Integer({
         description:
           "Maximum human wait in seconds; default 900, clamped 30-3600. Earlier run cancellation or overall run timeout still applies.",
+      }),
+    ),
+    threadId: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description:
+          "Thread to post the question in (Slack: the thread's root message ts). Default: the thread of the message that started this turn, or top level when that message was not in a thread. Set it when the conversation you are asking about is in a different thread. Typed replies in that thread are not seen, so the question is answered with its buttons only: one question, no multiSelect, no custom answer.",
       }),
     ),
   },

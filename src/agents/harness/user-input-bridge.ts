@@ -12,6 +12,7 @@ export type AgentHarnessUserInputPromptOptions = {
   formatText?: (text: string) => string;
   secretWarning?: string;
   otherLabel?: string;
+  replyGuidance?: string;
   presentation?: MessagePresentation;
 };
 
@@ -81,6 +82,7 @@ function buildAgentHarnessQuestionPresentation(params: {
   questionId: string;
   questions: readonly AgentHarnessUserInputQuestion[];
   formatText?: (text: string) => string;
+  replyGuidance?: string;
 }): MessagePresentation | undefined {
   // Button taps resolve atomically, so multi-question and multi-select records
   // remain text-only until partial answer state has one shared owner.
@@ -101,7 +103,7 @@ function buildAgentHarnessQuestionPresentation(params: {
         `- ${formatText(option.label)}${option.description ? `: ${formatText(option.description)}` : ""}`,
     ),
     "",
-    questionReplyGuidance(params.questions),
+    params.replyGuidance ?? questionReplyGuidance(params.questions),
   ].join("\n");
   return {
     blocks: [
@@ -153,6 +155,7 @@ export function buildAgentHarnessQuestionPromptPayload(params: {
     buildAgentHarnessQuestionPresentation({
       ...params,
       formatText: params.options?.formatText,
+      replyGuidance: params.options?.replyGuidance,
     });
   const [question] = params.questions;
   const candidateOptionValues =
@@ -168,7 +171,7 @@ export function buildAgentHarnessQuestionPromptPayload(params: {
       ? candidateOptionValues
       : undefined;
   return markReplyPayloadForSourceSuppressionDelivery({
-    text: `${prompt}\n\n${questionReplyGuidance(params.questions)}`,
+    text: `${prompt}\n\n${params.options?.replyGuidance ?? questionReplyGuidance(params.questions)}`,
     ...(presentation ? { presentation, presentationTextMode: "fallback" as const } : {}),
     // Native callbacks need Gateway option order even when presentation controls are reordered.
     channelData: {

@@ -21,7 +21,7 @@ export type QuestionPromptToolName = "ask_user" | "secrets";
 /** Publishes one prompt into the originating conversation. */
 export type QuestionPromptSend = (
   payload: ReplyPayload,
-  options?: { signal?: AbortSignal },
+  options?: { signal?: AbortSignal; threadId?: string },
 ) => void | Promise<void>;
 
 /** A run's own way to show a question prompt, plus the channel it would appear in. */
@@ -52,7 +52,7 @@ export function createChannelQuestionPromptDelivery(params: {
         channel,
         to,
         accountId: params.accountId,
-        threadId: params.threadId ?? undefined,
+        threadId: options?.threadId ?? params.threadId ?? undefined,
         payloads: [payload],
         bestEffort: false,
         durability: "required",
@@ -93,11 +93,19 @@ export async function sendQuestionToolPrompt(params: {
   config?: OpenClawConfig;
   send: QuestionPromptSend;
   signal?: AbortSignal;
+  threadId?: string;
 }): Promise<void> {
   const { questionId, questions } = params;
+  const sendOptions =
+    params.signal || params.threadId
+      ? {
+          ...(params.signal ? { signal: params.signal } : {}),
+          ...(params.threadId ? { threadId: params.threadId } : {}),
+        }
+      : undefined;
   const send: QuestionPromptSend = (payload) =>
     runWithQuestionChannelDeliveries([questionId], () =>
-      params.signal ? params.send(payload, { signal: params.signal }) : params.send(payload),
+      sendOptions ? params.send(payload, sendOptions) : params.send(payload),
     );
   if (params.toolName === "secrets") {
     const binding = questions[0]?.secretStore;
@@ -122,7 +130,11 @@ export async function sendQuestionToolPrompt(params: {
       questions: questions.map(({ questionId: id, ...question }) =>
         Object.assign(question, { id }),
       ),
-      options: { intro: "Question for you:" },
+      options: {
+        intro: "Question for you:",
+        // Typed replies in a moved thread never reach the asking session.
+        ...(params.threadId ? { replyGuidance: "Answer with the buttons below." } : {}),
+      },
     }),
   );
 }

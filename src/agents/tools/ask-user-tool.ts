@@ -53,6 +53,7 @@ type AskUserQuestionState = {
   expiresAtMs: number;
   phase: AskUserQuestionPhase;
   claim?: ReturnType<typeof registerPendingAgentQuestion>;
+  promptSignal?: AbortSignal;
   waiters: Set<() => void>;
 };
 
@@ -335,6 +336,11 @@ export async function isAskUserPromptPending(
   return false;
 }
 
+/** Ends with the question's publication lifetime, for subscribers that send the prompt directly. */
+export function readAskUserPromptSignal(questionId: string): AbortSignal | undefined {
+  return askUserQuestions.get(questionId)?.promptSignal;
+}
+
 /** Releases a tool-start reservation when policy rejects execution. */
 export function cancelAskUserPromptDelivery(
   toolCallId: string,
@@ -526,6 +532,7 @@ export function createAskUserTool(params: {
         normalized.timeoutSeconds,
         reserved,
       );
+      state.promptSignal = prompt.signal;
       let registered = false;
       const cancelPendingQuestion = createGatewayQuestionCanceller({
         gatewayCall,
@@ -641,6 +648,7 @@ export function createAskUserTool(params: {
                 questions: normalized.questions,
                 send: publishOwnPrompt,
                 signal: prompt.signal,
+                threadId: normalized.threadId,
               }),
             );
           }
