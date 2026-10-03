@@ -119,6 +119,7 @@ struct ChatSessionSidebar: View {
                 self.batchBar
                 self.connectionFooter
             }
+            .background(.bar)
         }
         .dropDestination(for: ChatSidebarDrag.self) { items, _ in
             guard items.count == 1, let item = items.first else { return false }
