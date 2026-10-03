@@ -24,6 +24,7 @@ import {
   resolveSubagentSessionAttachmentRootDir,
   SANDBOX_SUBAGENT_ATTACHMENTS_MOUNT,
 } from "../subagents/subagent-attachment-paths.js";
+import type { WorkspaceStateGuard } from "../workspace-state-store.worker-contract.js";
 import { createSandboxBackend, getSandboxBackendWorkdirResolver } from "./backend.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
@@ -55,6 +56,7 @@ async function syncSandboxSkillsToWorkspace(params: {
   rawSessionKey: string;
   execOverrides?: ExecPolicyOverrides;
   skillsSnapshot?: SkillSnapshot;
+  assertCurrent?: () => void;
 }): Promise<{ eligibility?: SkillEligibilityContext; skillUsagePaths?: SkillUsagePath[] }> {
   try {
     const [syncWorkspaceSkills, { getRemoteSkillEligibility }, { resolveNodeExecEligibility }] =
@@ -63,7 +65,9 @@ async function syncSandboxSkillsToWorkspace(params: {
         import("../../skills/runtime/remote.js"),
         import("../exec-defaults.js"),
       ]);
+    params.assertCurrent?.();
     await prepareRemoteSkillConnections();
+    params.assertCurrent?.();
     const nodeSkills = resolveNodeExecEligibility({
       cfg: params.config,
       sessionKey: params.rawSessionKey,
@@ -83,9 +87,12 @@ async function syncSandboxSkillsToWorkspace(params: {
       agentId: params.agentId,
       eligibility,
       skillsSnapshot: params.skillsSnapshot,
+      assertCurrent: params.assertCurrent,
     });
+    params.assertCurrent?.();
     return { eligibility, skillUsagePaths };
   } catch (error) {
+    params.assertCurrent?.();
     const message = error instanceof Error ? error.message : JSON.stringify(error);
     defaultRuntime.error?.(`Sandbox skill sync failed: ${message}`);
     if (params.skillsSnapshot?.librarySelections?.length) {
@@ -98,6 +105,7 @@ async function syncSandboxSkillsToWorkspace(params: {
 async function ensureSandboxWorkspaceLayout(
   params: ResolveSandboxContextParams,
   selected: Awaited<ReturnType<typeof prepareSandboxWorkspaceSelection>>,
+  guard?: WorkspaceStateGuard,
 ): Promise<{
   agentWorkspaceDir: string;
   scopeKey: string;
@@ -127,10 +135,12 @@ async function ensureSandboxWorkspaceLayout(
       agentWorkspaceDir,
       params.config?.agents?.defaults?.skipBootstrap,
       params.config?.agents?.defaults?.skipOptionalBootstrapFiles,
+      guard,
     );
   } else {
     await fs.mkdir(workspaceDir, { recursive: true });
   }
+  params.assertCurrent?.();
   const syncedSkills = await syncSandboxSkillsToWorkspace({
     sourceWorkspaceDir: agentWorkspaceDir,
     targetWorkspaceDir: cfg.workspaceAccess === "rw" ? skillsWorkspaceDir : sandboxWorkspaceDir,
@@ -139,6 +149,7 @@ async function ensureSandboxWorkspaceLayout(
     rawSessionKey,
     execOverrides: params.execOverrides,
     skillsSnapshot: params.skillsSnapshot,
+    assertCurrent: params.assertCurrent,
   });
 
   return {
@@ -289,8 +300,10 @@ async function prepareSandboxWorkspaceSelection(
 async function resolveProvisionedSandboxContext(
   params: ResolveSandboxContextParams,
   resolved: ResolvedSandboxSession,
+  guard?: WorkspaceStateGuard,
 ): Promise<SandboxContext> {
   const selected = await prepareSandboxWorkspaceSelection(params, resolved);
+  params.assertCurrent?.();
   const { rawSessionKey, runtime, cfg, localWorkspace } = selected;
   const config = params.config;
   const allowGitHub =
@@ -319,7 +332,9 @@ async function resolveProvisionedSandboxContext(
       })()
     : undefined;
   if (cfg.prune.idleHours !== 0 || cfg.prune.maxAgeDays !== 0) {
-    await (await import("./prune.js")).maybePruneSandboxes();
+    await (
+      await import("./prune.js")
+    ).maybePruneSandboxes(undefined, params.assertCurrent, guard?.assertHost);
   }
 
   const {
@@ -329,7 +344,7 @@ async function resolveProvisionedSandboxContext(
     skillUsagePaths,
     skillsWorkspaceDir,
     workspaceDir,
-  } = await ensureSandboxWorkspaceLayout(params, selected);
+  } = await ensureSandboxWorkspaceLayout(params, selected, guard);
   localWorkspace?.assertCurrent();
 
   const docker = await resolveSandboxDockerUser({
@@ -406,12 +421,14 @@ async function resolveProvisionedSandboxContext(
       },
       readAdmittedRunOperatorAuthority(params.admittedRunContext),
       githubIdentity,
+      guard,
     );
   };
 
   const backend = localWorkspace
     ? await localWorkspace.provision(provisionBackend)
     : await provisionBackend();
+  params.assertCurrent?.();
 
   const resolvedBrowserConfig = resolvedCfg.browser.enabled
     ? resolveBrowserConfig(params.config?.browser, params.config)
@@ -427,9 +444,12 @@ async function resolveProvisionedSandboxContext(
           params.config ?? (await import("../../config/config.js")).getRuntimeConfig();
         let browserAuth = resolveBrowserControlAuth(cfgForAuth);
         try {
+          params.assertCurrent?.();
           const ensured = await ensureBrowserControlAuth({ cfg: cfgForAuth });
+          params.assertCurrent?.();
           browserAuth = ensured.auth;
         } catch (error) {
+          params.assertCurrent?.();
           const message = error instanceof Error ? error.message : JSON.stringify(error);
           defaultRuntime.error?.(`Sandbox browser auth ensure failed: ${message}`);
         }
@@ -451,7 +471,7 @@ async function resolveProvisionedSandboxContext(
           bridgeAuth,
           ssrfPolicy: resolvedBrowserConfig?.ssrfPolicy,
           withWorkspace: localWorkspace?.provision,
-          assertCurrent: localWorkspace?.assertCurrent,
+          assertCurrent: localWorkspace?.assertCurrent ?? params.assertCurrent,
         })
       : null;
 
@@ -515,7 +535,10 @@ export async function resolveSandboxContext(
   // registry, and filesystem-bridge setup so model fallback never retries it.
   try {
     assertSandboxSessionSecretOwnerAvailable(params.config, resolved);
-    const context = await resolveProvisionedSandboxContext(ownedParams, resolved);
+    const context = await resolveProvisionedSandboxContext(ownedParams, resolved, {
+      assertHost: assertStateOwner,
+      beforeLegacyApply: assertCurrent,
+    });
     assertStateOwner();
     return context;
   } catch (error) {
