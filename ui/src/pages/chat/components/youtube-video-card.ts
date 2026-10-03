@@ -33,6 +33,8 @@ class YouTubeVideoCard extends OpenClawLitElement {
     }
     .stage {
       position: relative;
+      width: 100%;
+      min-width: 0;
       min-height: 200px;
       aspect-ratio: 16 / 9;
       background: var(--surface);

@@ -116,9 +116,16 @@ suite.define(() => {
         await card.evaluate((element: HTMLElement) => {
           element.style.width = "190px";
         });
-        await card
-          .getByRole("link", { name: "Open Synthetic trailer on YouTube", exact: true })
-          .waitFor();
+        const narrowPreview = card.getByRole("link", {
+          name: "Open Synthetic trailer on YouTube",
+          exact: true,
+        });
+        await narrowPreview.waitFor();
+        const cardBounds = await card.boundingBox();
+        const previewBounds = await narrowPreview.boundingBox();
+        expect(previewBounds!.x + previewBounds!.width).toBeLessThanOrEqual(
+          cardBounds!.x + cardBounds!.width,
+        );
         expect(await card.locator("iframe").count()).toBe(0);
         const [external] = await Promise.all([context.waitForEvent("page"), watch.click()]);
         await external.getByText("External video page", { exact: true }).waitFor();
