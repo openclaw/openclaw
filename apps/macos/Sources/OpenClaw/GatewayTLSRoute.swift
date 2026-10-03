@@ -121,20 +121,9 @@ struct GatewayTLSRoute: Equatable, Sendable {
     }
 }
 
-actor GatewayTLSRepairCoordinator {
-    static let shared = GatewayTLSRepairCoordinator()
-
-    /// Node-mode callers keep Keychain work off the main actor.
-    func repair(
-        route: GatewayTLSRoute?,
-        url: URL,
-        failure: GatewayTLSValidationFailure) -> Bool
-    {
-        Self.repairOnCurrentExecutor(route: route, url: url, failure: failure)
-    }
-
-    /// Connection-owned recovery must not yield between its lifetime check and
-    /// mutation. The store's conditional update owns cross-connection CAS.
+enum GatewayTLSRepairCoordinator {
+    /// Keep lifecycle-owner validation and repair on the same executor. The store's
+    /// conditional update owns cross-connection CAS, not a separate actor hop.
     nonisolated static func repairOnCurrentExecutor(
         route: GatewayTLSRoute?,
         url: URL,

@@ -104,36 +104,39 @@ private final class RenewalConnectionFixture: @unchecked Sendable {
             supportsSharedEndpointRecovery: false,
             activationBindingKeyProvider: { nil },
             sessionProvider: { route in
-                guard let route else { return nil }
-                let pinning = GatewayTLSPinningSession(params: route.params)
-                let session = GatewayTestWebSocketSession(taskFactory: {
-                    GatewayTestWebSocketTask(sendHook: { socket, message, index in
-                        guard index > 0,
-                              let method = GatewayWebSocketTestSupport.requestMethod(from: message),
-                              let id = GatewayWebSocketTestSupport.requestID(from: message)
-                        else { return }
-                        self.requests.withValue { $0.append(method) }
-                        socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
-                    }, receiveHook: { socket, index in
-                        if index == 0 {
-                            await self.beforeTrust?()
-                            let trust = try RenewalCertificates.trust(
-                                certificate: self.certificate, root: self.root,
-                                trusted: self.trusted, expired: self.expired,
-                                verificationDate: self.verificationDate)
-                            guard pinning.validateServerTrust(trust, for: self.url) else {
-                                let failure = try #require(pinning.consumeLastTLSFailure())
-                                self.failures.withValue { $0.append(failure) }
-                                throw GatewayTLSValidationError(failure: failure, context: "renewal fixture")
-                            }
-                            return .data(GatewayWebSocketTestSupport.connectChallengeData())
-                        }
-                        return .data(GatewayWebSocketTestSupport.connectOkData(
-                            id: socket.snapshotConnectRequestID() ?? "connect"))
-                    })
-                })
-                return WebSocketSessionBox(session: session)
+                route.map { self.sessionBox(route: $0) }
             })
+    }
+
+    func sessionBox(route: GatewayTLSRoute) -> WebSocketSessionBox {
+        let pinning = GatewayTLSPinningSession(params: route.params)
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { socket, message, index in
+                guard index > 0,
+                      let method = GatewayWebSocketTestSupport.requestMethod(from: message),
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                self.requests.withValue { $0.append(method) }
+                socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+            }, receiveHook: { socket, index in
+                if index == 0 {
+                    await self.beforeTrust?()
+                    let trust = try RenewalCertificates.trust(
+                        certificate: self.certificate, root: self.root,
+                        trusted: self.trusted, expired: self.expired,
+                        verificationDate: self.verificationDate)
+                    guard pinning.validateServerTrust(trust, for: self.url) else {
+                        let failure = try #require(pinning.consumeLastTLSFailure())
+                        self.failures.withValue { $0.append(failure) }
+                        throw GatewayTLSValidationError(failure: failure, context: "renewal fixture")
+                    }
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: socket.snapshotConnectRequestID() ?? "connect"))
+            })
+        })
+        return WebSocketSessionBox(session: session)
     }
 
     func learnOriginalCertificate(legacy: Bool = false) throws {
@@ -451,6 +454,86 @@ struct GatewayCertificateRenewalTests {
             } catch { result = .failure(error) }
             await connection.shutdown()
             try result.get()
+        }
+    }
+
+    @Test(arguments: [
+        "current", "revoked", "refreshed", "credentials", "revoked-after-failure",
+        "cancel-after-failure", "same-renewal-after-failure", "other-pin-after-failure",
+    ])
+    @MainActor
+    func `companion renewal writes only for its current connection attempt`(scenario: String) async throws {
+        let entered = AsyncTestGate()
+        let release = AsyncTestGate()
+        let endpointRead = AsyncTestGate()
+        let endpointRelease = AsyncTestGate()
+        let fixture = RenewalConnectionFixture(
+            url: try #require(URL(string: "wss://gateway.example.com")),
+            beforeTrust: { entered.open(); await release.wait() })
+        try fixture.learnOriginalCertificate()
+        let endpoint = fixture.endpoint()
+        let tls = try #require(endpoint.tls)
+        let session = GatewayNodeSession()
+        let suite = "NodeRenewalTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let coordinator = MacNodeModeCoordinator(
+            session: session,
+            runtime: MacNodeRuntime(computerControlEnabled: { false }),
+            endpointProvider: {
+                if scenario.hasSuffix("after-failure") {
+                    endpointRead.open()
+                    await endpointRelease.wait()
+                }
+                return fixture.endpoint()
+            },
+            presenceReporter: MacNodePresenceReporter(reportingEnabled: false),
+            desktopAvailability: MacDesktopAvailabilityCoordinator(defaults: defaults),
+            channelStatus: MacNodeChannelStatusStore(),
+            notificationCenter: NotificationCenter(),
+            initialPaused: false,
+            initialComputerControlEnabled: false,
+            initialComputerControlProvider: .peekaboo)
+        let attempt = Task {
+            try await coordinator.connectForTesting(
+                endpoint: endpoint,
+                sessionBox: fixture.sessionBox(route: tls))
+        }
+        await entered.wait()
+        switch scenario {
+        case "revoked": coordinator.enqueueRouteInvalidationForTesting()
+        case "refreshed": coordinator.refreshForTesting(isPaused: false, computerControlEnabled: false)
+        case "credentials": fixture.token.withValue { $0 = "superseding-node-token" }
+        default: break
+        }
+        release.open()
+        if scenario.hasSuffix("after-failure") {
+            await endpointRead.wait()
+            switch scenario {
+            case "cancel-after-failure": attempt.cancel()
+            case "same-renewal-after-failure":
+                GatewayTLSStore.saveFingerprint(
+                    RenewalCertificates.fingerprint(RenewalCertificates.renewed), stableID: fixture.storeKey)
+            case "other-pin-after-failure":
+                GatewayTLSStore.saveFingerprint("newer-node-pin", stableID: fixture.storeKey)
+            default: coordinator.enqueueRouteInvalidationForTesting()
+            }
+            endpointRelease.open()
+        }
+        let result = await attempt.result
+        await coordinator.stopAndWait()
+        if scenario == "current" || scenario == "same-renewal-after-failure" {
+            #expect(try result.get() == false)
+            #expect(GatewayTLSStore.loadFingerprint(stableID: fixture.storeKey) ==
+                RenewalCertificates.fingerprint(RenewalCertificates.renewed))
+        } else {
+            if case .success = result { Issue.record("retired node attempt repaired TLS") }
+            #expect(GatewayTLSStore.loadFingerprint(stableID: fixture.storeKey) ==
+                (scenario == "other-pin-after-failure"
+                    ? "newer-node-pin" : RenewalCertificates.fingerprint(RenewalCertificates.old)))
+        }
+        if scenario != "revoked" {
+            #expect(fixture.failures.value.first?.systemTrustOk == true)
         }
     }
 

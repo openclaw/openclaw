@@ -1355,7 +1355,7 @@ struct MacNodeModeCoordinatorTests {
         #expect(!route.permitsTrustedPinReplacement(url: url, failure: failure))
     }
 
-    @Test(.gatewayTLSStoreIsolated) func `stale repair cannot replace a newer stored pin`() async throws {
+    @Test(.gatewayTLSStoreIsolated) func `stale repair cannot replace a newer stored pin`() throws {
         let url = try #require(URL(string: "wss://gateway.example.ts.net"))
         let storeKey = "test-stale-repair"
         GatewayTLSStore.saveFingerprint("old", stableID: storeKey)
@@ -1382,11 +1382,11 @@ struct MacNodeModeCoordinatorTests {
             systemTrustOk: true,
             port: 443)
 
-        let firstRepaired = await GatewayTLSRepairCoordinator.shared.repair(
+        let firstRepaired = GatewayTLSRepairCoordinator.repairOnCurrentExecutor(
             route: route,
             url: url,
             failure: firstFailure)
-        let staleRepaired = await GatewayTLSRepairCoordinator.shared.repair(
+        let staleRepaired = GatewayTLSRepairCoordinator.repairOnCurrentExecutor(
             route: route,
             url: url,
             failure: staleFailure)
