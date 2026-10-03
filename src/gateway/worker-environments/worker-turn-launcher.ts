@@ -329,53 +329,23 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             );
           }
         };
-        if (placement.executionMode === "remote-exec") {
-          try {
-            turnClaim = await options.placements.claimTurn(
-              {
-                ...identity,
-                claimId: randomUUID(),
-                runId: claim.runId,
-                owner: placementTurnOwner(placement),
-              },
-              assertClaimCurrent,
-            );
-          } catch (error) {
-            if (error instanceof WorkerRuntimeRefreshInFlightError) {
-              const refreshed = readRoutablePlacement(
-                "Cloud worker placement disappeared during runtime refresh admission",
-                error,
-              );
-              if (refreshed.state === "local") {
-                return await runLocalTurn();
-              }
-              routablePlacement = refreshed;
-              continue;
-            }
-            if (
-              !(error instanceof ActiveTurnClaimError) ||
-              !(await hasPendingWorkspaceResultToSettle(identity.sessionId, claim.runId))
-            ) {
-              throw error;
-            }
-            await waitForPendingWorkerResult({
-              placements: options.placements,
-              sessionId: identity.sessionId,
-              ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
-            });
-            const refreshed = readRoutablePlacement(
-              "Cloud worker placement disappeared after workspace reconciliation",
-              error,
-            );
-            if (refreshed.state === "local") {
-              return await runLocalTurn();
-            }
-            routablePlacement = refreshed;
-            continue;
-          }
-        } else {
-          let admitted: Awaited<ReturnType<typeof claimWorkerTurn>>;
-          try {
+        const remoteExec = placement.executionMode === "remote-exec";
+        let admitted: Awaited<ReturnType<typeof claimWorkerTurn>>;
+        try {
+          if (remoteExec) {
+            admitted = {
+              placement,
+              turnClaim: await options.placements.claimTurn(
+                {
+                  ...identity,
+                  claimId: randomUUID(),
+                  runId: claim.runId,
+                  owner: placementTurnOwner(placement),
+                },
+                assertClaimCurrent,
+              ),
+            };
+          } else {
             admitted = await claimWorkerTurn({
               placements: options.placements,
               identity,
@@ -390,34 +360,47 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
               },
               ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
             });
-          } catch (error) {
-            if (!(error instanceof WorkerRuntimeRefreshInFlightError)) {
+          }
+        } catch (error) {
+          const refreshing = error instanceof WorkerRuntimeRefreshInFlightError;
+          if (!refreshing) {
+            if (
+              !remoteExec ||
+              !(error instanceof ActiveTurnClaimError) ||
+              !(await hasPendingWorkspaceResultToSettle(identity.sessionId, claim.runId))
+            ) {
               throw error;
             }
-            const refreshed = readRoutablePlacement(
-              "Cloud worker placement disappeared during runtime refresh admission",
-              error,
-            );
-            if (refreshed.state === "local") {
-              return await runLocalTurn();
-            }
-            routablePlacement = refreshed;
-            continue;
+            await waitForPendingWorkerResult({
+              placements: options.placements,
+              sessionId: identity.sessionId,
+              ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
+            });
           }
-          if (!admitted) {
-            const refreshed = readRoutablePlacement(
-              "Cloud worker placement disappeared after workspace reconciliation",
-            );
-            if (refreshed.state === "local") {
-              return await runLocalTurn();
-            }
-            routablePlacement = refreshed;
-            continue;
+          const refreshed = readRoutablePlacement(
+            refreshing
+              ? "Cloud worker placement disappeared during runtime refresh admission"
+              : "Cloud worker placement disappeared after workspace reconciliation",
+            error,
+          );
+          if (refreshed.state === "local") {
+            return await runLocalTurn();
           }
-          placement = admitted.placement;
-          turnClaim = admitted.turnClaim;
+          routablePlacement = refreshed;
+          continue;
         }
-        const remoteExec = placement.executionMode === "remote-exec";
+        if (!admitted) {
+          const refreshed = readRoutablePlacement(
+            "Cloud worker placement disappeared after workspace reconciliation",
+          );
+          if (refreshed.state === "local") {
+            return await runLocalTurn();
+          }
+          routablePlacement = refreshed;
+          continue;
+        }
+        placement = admitted.placement;
+        turnClaim = admitted.turnClaim;
         let activeWorkerTurn: ActiveWorkerTurn | undefined;
         let handedOff = false;
         let terminalReceiptRequired = false;

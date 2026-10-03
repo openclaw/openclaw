@@ -58,19 +58,9 @@ export function drainWorkerSessionPlacement(
     values.turn_claim_owner_epoch = turnClaim.ownerEpoch;
   }
   assertRecordShape({
+    ...current,
     state: "draining",
-    executionMode: current.executionMode,
-    environmentId,
-    activeOwnerEpoch: ownerEpoch,
     workspaceBaseManifestRef: values.workspace_base_manifest_ref,
-    remoteWorkspaceDir: values.remote_workspace_dir,
-    workerBundleHash: values.worker_bundle_hash,
-    lastTranscriptAckCursor: values.last_transcript_ack_cursor,
-    lastLiveEventAckCursor: values.last_live_event_ack_cursor,
-    recoveryError: values.recovery_error,
-    terminalReason: values.terminal_reason,
-    terminalAtMs: values.terminal_at_ms,
-    turnClaim,
   });
   const result = executeSqliteQuerySync(
     db,

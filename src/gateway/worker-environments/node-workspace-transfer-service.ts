@@ -41,7 +41,7 @@ type DownloadCapability = {
   token: string;
   manifestRef: string;
   expiresAtMs: number;
-  isAuthorized?: () => boolean;
+  isAuthorized: () => boolean;
   signal?: AbortSignal;
 };
 
@@ -51,7 +51,7 @@ type UploadOperation = {
   baseManifestRef: string;
   expiresAtMs: number;
   state: "ready" | "receiving" | "completed";
-  isAuthorized?: () => boolean;
+  isAuthorized: () => boolean;
   uploaded?: NodeWorkspaceTransferUpload;
   abortController: AbortController;
   receiving?: { result: Promise<{ manifestRef: string }>; signal: AbortSignal };
@@ -184,11 +184,11 @@ export function createNodeWorkspaceTransferService(options: {
   const mintDownload = (
     context: TransferContext,
     manifestRef: string,
-    isAuthorized?: () => boolean,
+    isAuthorized: () => boolean,
     signal?: AbortSignal,
   ): string => {
     signal?.throwIfAborted();
-    if (!isCurrentContext(context) || isAuthorized?.() === false) {
+    if (!isCurrentContext(context) || !isAuthorized()) {
       throw new Error("Node workspace transfer owner is no longer current");
     }
     const token = generateSecureToken({ bytes: 32, redact: true });
@@ -197,7 +197,7 @@ export function createNodeWorkspaceTransferService(options: {
       token,
       manifestRef,
       expiresAtMs: now() + TRANSFER_TIMEOUT_MS,
-      ...(isAuthorized ? { isAuthorized } : {}),
+      isAuthorized,
       ...(signal ? { signal } : {}),
     });
     return token;
@@ -220,12 +220,13 @@ export function createNodeWorkspaceTransferService(options: {
     if (!isCurrentContext(context) || capability.expiresAtMs <= now()) {
       return false;
     }
+    // Exact object membership binds the capability to this live context's owner.
     return capability.direction === "download"
       ? context.downloads.get(capability.token) === capability &&
           !capability.signal?.aborted &&
-          capability.isAuthorized?.() !== false
+          capability.isAuthorized()
       : context.upload === capability &&
-          capability.isAuthorized?.() !== false &&
+          capability.isAuthorized() &&
           !capability.abortController.signal.aborted &&
           (capability.state === "receiving" || capability.state === "completed");
   };
@@ -394,7 +395,7 @@ export function createNodeWorkspaceTransferService(options: {
         !context ||
         !operation ||
         operation.state !== "completed" ||
-        operation.isAuthorized?.() === false ||
+        !operation.isAuthorized() ||
         operation.abortController.signal.aborted ||
         operation.baseManifestRef !== baseManifestRef ||
         !operation.uploaded ||
@@ -480,7 +481,7 @@ export function createNodeWorkspaceTransferService(options: {
         !isCurrentContext(context) ||
         upload.token !== params.token ||
         upload.state !== "ready" ||
-        upload.isAuthorized?.() === false ||
+        !upload.isAuthorized() ||
         upload.expiresAtMs <= now() ||
         params.route.kind !== "reconcile" ||
         params.route.environmentId !== context.environmentId ||

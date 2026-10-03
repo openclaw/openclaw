@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { waitForPidFile } from "../../../test/helpers/process-wait.js";
-import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
@@ -20,7 +24,6 @@ import {
   sshResetNonce,
   startConnectedTunnel,
   success,
-  waitForFast,
   workspaceSetup,
 } from "./tunnel.test-support.js";
 import { rsyncArgvPort, sshArgvPort } from "./worker-ssh-argv.test-support.js";
@@ -487,7 +490,29 @@ describe("worker tunnel manager", () => {
           }
         },
       );
-      const manager = createWorkerTunnelManager({ runner: fake.runner });
+      const resetDispatched = createDeferred<void>();
+      const manager = createWorkerTunnelManager({
+        runner: {
+          ...fake.runner,
+          async run(argv, options) {
+            const operation = fake.runner.run(argv, options);
+            if (
+              receiverWorkspace !== undefined &&
+              receiverRelative !== undefined &&
+              argv[0] === "ssh" &&
+              sshArgvPort(argv) === 22 &&
+              sshResetNonce(argv, {
+                workspace: receiverWorkspace,
+                canonicalHome: canonicalRemoteHome,
+                remoteRelative: receiverRelative,
+              })
+            ) {
+              resetDispatched.resolve();
+            }
+            return await operation;
+          },
+        },
+      });
       const handle = await manager.start({
         bundleHash: BUNDLE_HASH,
         environmentId: "worker:convergent-sync",
@@ -512,27 +537,20 @@ describe("worker tunnel manager", () => {
             syncSettled = true;
           },
         );
-        await Promise.race([
-          waitForFast(
-            () => {
-              expect(
-                fake.runs.map((entry) => [
-                  entry.argv[0],
-                  entry.argv[0] === "ssh" ? sshArgvPort(entry.argv) : rsyncArgvPort(entry.argv),
-                ]),
-              ).toContainEqual(["ssh", 22]);
-            },
-            { timeout: 10_000 },
+        await withinTest(
+          awaitGateBeforeSettlement(
+            resetDispatched.promise,
+            syncing,
+            "workspace sync settled before fallback reset",
           ),
-          syncing.then(
-            () => {
-              throw new Error("workspace sync settled before fallback reset");
-            },
-            (error: unknown) => {
-              throw error;
-            },
-          ),
-        ]);
+          signal,
+        );
+        expect(
+          fake.runs.map((entry) => [
+            entry.argv[0],
+            entry.argv[0] === "ssh" ? sshArgvPort(entry.argv) : rsyncArgvPort(entry.argv),
+          ]),
+        ).toContainEqual(["ssh", 22]);
         const primaryTransfers = fake.runs.filter(
           (entry) =>
             entry.argv[0] === "rsync" && entry.argv.some((arg) => arg.startsWith("--files-from=")),
