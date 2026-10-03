@@ -2,6 +2,9 @@ import { isProxy } from "node:util/types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { copyPreparedModelVisibleToolText } from "../../logging/redact-internal.js";
 
+// Only this owner admits frozen descendants whose strings own their backing storage.
+const ownedTranscriptGraphs = new WeakSet<object>();
+
 /** Preserve ordinary transcript objects while admitting their JSON storage shape. */
 export function normalizeTranscriptJsonValue(
   value: unknown,
@@ -18,7 +21,7 @@ export function normalizeTranscriptJsonValue(
     if (isRecord(value) && isRecord(normalized)) {
       copyPreparedModelVisibleToolText(value, normalized);
     }
-    return normalized;
+    return normalizePlainJson(normalized, false, false);
   }
   return normalizePlainJson(value, preserveSource);
 }
@@ -69,8 +72,12 @@ function requiresNativeJson(value: unknown, ancestors: Set<object>): boolean {
   }
 }
 
-function normalizePlainJson(value: unknown, preserveSource: boolean): unknown {
+function normalizePlainJson(value: unknown, preserveSource: boolean, copyStrings = true): unknown {
   if (value === null || typeof value !== "object") {
+    if (copyStrings && typeof value === "string") {
+      // A small slice can otherwise pin an entire tool output. Preserve lone surrogates.
+      return Buffer.from(value, "utf16le").toString("utf16le");
+    }
     return typeof value === "number"
       ? Number.isFinite(value)
         ? value || 0
@@ -78,6 +85,9 @@ function normalizePlainJson(value: unknown, preserveSource: boolean): unknown {
       : typeof value === "symbol"
         ? undefined
         : value;
+  }
+  if (ownedTranscriptGraphs.has(value)) {
+    return value;
   }
   const array = Array.isArray(value);
   const keys = Object.keys(value);
@@ -88,9 +98,18 @@ function normalizePlainJson(value: unknown, preserveSource: boolean): unknown {
     const member = array ? String(index) : keys[index]!;
     const descriptor = Object.getOwnPropertyDescriptor(value, member);
     const current: unknown = descriptor?.value;
-    const next = normalizePlainJson(current, preserveSource);
+    const next = normalizePlainJson(current, preserveSource, copyStrings);
     const retained = array && next === undefined ? null : next;
-    if (Object.is(current, retained) && (retained !== undefined || !descriptor)) {
+    if (retained && typeof retained === "object") {
+      Object.freeze(retained);
+      ownedTranscriptGraphs.add(retained);
+    }
+    // Equal string contents do not imply equal backing-store ownership.
+    if (
+      !(copyStrings && typeof current === "string") &&
+      Object.is(current, retained) &&
+      (retained !== undefined || !descriptor)
+    ) {
       continue;
     }
     if (
@@ -110,7 +129,7 @@ function normalizePlainJson(value: unknown, preserveSource: boolean): unknown {
       });
     }
   }
-  if (normalized !== value && isRecord(value) && isRecord(normalized)) {
+  if (isRecord(value) && isRecord(normalized)) {
     copyPreparedModelVisibleToolText(value, normalized);
   }
   return normalized;
