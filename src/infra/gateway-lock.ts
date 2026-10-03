@@ -394,6 +394,7 @@ async function assertHistoricalGatewayOwnerStopped(
   paths: ReturnType<typeof resolveGatewayLockPaths>,
   opts: GatewayLockOptions,
   ownedProjection?: GatewayStateProjection,
+  onContention?: (lockPath: string) => void,
 ): Promise<void> {
   for (const lockPath of [paths.stateLockPath, paths.configLockPath]) {
     if (lockPath === paths.stateLockPath && ownedProjection) {
@@ -419,6 +420,7 @@ async function assertHistoricalGatewayOwnerStopped(
       { trustUnknownCmdlineOwner: false },
     );
     if (owner !== "dead") {
+      onContention?.(lockPath);
       throw new GatewayStateOwnerContentionError(
         path.join(paths.stateDir, "state", "openclaw.sqlite"),
       );
@@ -487,6 +489,10 @@ export async function acquireGatewayLock(
     borrowedOwner = tryBorrowGatewayStateOwner(databasePath);
   }
   let waited = false;
+  // The contended lock file, so a timeout can name it instead of leaving the
+  // operator to guess between the state lock, the config lock and the owner
+  // projection.
+  let contendedLockPath: string | undefined;
   let projection: GatewayStateProjection | undefined;
   let stateOwner: ReturnType<typeof acquireGatewayStateOwner>;
   try {
@@ -499,24 +505,37 @@ export async function acquireGatewayLock(
         now,
         sleep: opts.sleep,
         acquire: async () => {
-          const owner = acquireGatewayStateOwner({
-            databasePath,
-            payload,
-            projectionPath: paths.stateLockPath,
-            getProjection: () => projection,
-          });
+          // Each poll attempt reports its own contention. Keeping the previous
+          // attempt's path would name the wrong file when a config lock blocks one
+          // attempt and a state database owner blocks the next.
+          contendedLockPath = undefined;
+          let owner: ReturnType<typeof acquireGatewayStateOwner> | undefined;
           try {
+            owner = acquireGatewayStateOwner({
+              databasePath,
+              payload,
+              projectionPath: paths.stateLockPath,
+              getProjection: () => projection,
+            });
             if (previousOwner) {
               projection = previousOwner.retainProjection();
             }
-            await assertHistoricalGatewayOwnerStopped(paths, opts, projection);
+            await assertHistoricalGatewayOwnerStopped(paths, opts, projection, (contended) => {
+              contendedLockPath = contended;
+            });
             await previousOwner?.release();
             owner.assertCurrent();
             return owner;
           } catch (error) {
+            // The state lock is the maintenance owner projection, so a busy
+            // state database is this file's contention. A lock-file scan in this
+            // same attempt already named a more specific file; keep it.
+            if (error instanceof GatewayStateOwnerContentionError) {
+              contendedLockPath ??= paths.stateLockPath;
+            }
             projection?.release();
             projection = undefined;
-            owner.release();
+            owner?.release();
             throw error;
           }
         },
@@ -538,7 +557,11 @@ export async function acquireGatewayLock(
       waited && role === "gateway"
         ? `; waited ${Math.round(now() - startedAt)}ms for Gateway state ownership`
         : "";
-    const message = `failed to acquire gateway state ownership${waitHint}`;
+    // Name a lock file even when the failure was not a contention this loop could
+    // attribute to one. The state lock is where ownership lives, so it stays the
+    // right file to point at when no attempt narrowed the cause down further.
+    const lockPath = contendedLockPath ?? paths.stateLockPath;
+    const message = `failed to acquire gateway state ownership${waitHint} at ${lockPath}`;
     const detail =
       error instanceof GatewayStateOwnerContentionError
         ? `${message}: ${error.message}. Stop the Gateway or wait for the current OpenClaw operation to finish, then retry.`

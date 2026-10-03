@@ -37,8 +37,10 @@ During startup or restart, the Gateway waits up to five minutes for another Open
 - A live owner blocks another startup before either process binds its port. If the wait expires, startup reports:
 
   ```text
-  GatewayLockError("failed to acquire gateway state ownership; waited <ms>ms for Gateway state ownership")
+  GatewayLockError("failed to acquire gateway state ownership; waited <ms>ms for Gateway state ownership at <lockPath>")
   ```
+
+  `<lockPath>` is the lock file that blocked the last attempt. When no attempt could attribute the failure to a specific file, it is the state lock, because that is where ownership lives. Failures that are not contention — an unwritable lock directory, for example — still name it.
 
 ### Socket bind
 
