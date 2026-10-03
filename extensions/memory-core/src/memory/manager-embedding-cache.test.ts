@@ -4,7 +4,6 @@ import {
   requireNodeSqlite,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
-import { observeMainThreadSql } from "../../../../src/test-utils/main-thread-sql-spies.test-support.js";
 import {
   collectMemoryCachedEmbeddings,
   loadMemoryEmbeddingCache,
@@ -350,7 +349,9 @@ describe("memory embedding cache", () => {
         WHEN (SELECT COUNT(*) FROM memory_embedding_cache) >= ${maxEntries}
         BEGIN SELECT RAISE(ABORT, 'cache overflow'); END;`);
       db.exec("BEGIN IMMEDIATE");
-      const observer = observeMainThreadSql();
+      const executions = (["get", "all", "run", "iterate"] as const).map((method) =>
+        vi.spyOn(StatementSync.prototype, method),
+      );
       let queries: string[];
       try {
         upsertMemoryEmbeddingCache({
@@ -366,13 +367,15 @@ describe("memory embedding cache", () => {
           ],
           now: 2,
         });
-        queries = observer.calls.flatMap(({ mock }) =>
+        queries = executions.flatMap(({ mock }) =>
           mock.contexts.flatMap((statement) =>
             statement instanceof StatementSync ? [statement.sourceSQL] : [],
           ),
         );
       } finally {
-        observer.restore();
+        for (const execution of executions) {
+          execution.mockRestore();
+        }
       }
       expect(readCache()).toEqual([
         ...before.slice(1 + evicted),
