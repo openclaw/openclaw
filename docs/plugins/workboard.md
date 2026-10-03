@@ -142,13 +142,18 @@ column is removed, the board applies its rules again. Tile tooltips distinguish
 
 Facts update live from session changes, with automatic board rereads at most once
 every five seconds. Later events keep invalidating facts without delaying that
-reread. The board reuses unchanged facts across boards. Unavailable pull-request
-information is retried on a read after one minute. An inline warning names the
+reread. The board reuses unchanged facts across boards until a session change
+invalidates them, and concurrent reads share one facts refresh per board.
+Session visibility and people filters remain specific to each caller.
+Reads use prepared Gateway facts without waiting for Git or pull-request requests.
+Missing pull-request facts refresh in the background and announce a board change
+when ready. An inline warning names the
 reason when facts or pull-request information are unavailable, including on an
 empty board. A failed facts read keeps the last known facts and placement;
 sessions with no known facts use the fallback column with reason
-`facts-unavailable`. Opening the board reads its current state; unviewed boards
-do no background work.
+`facts-unavailable`. A session whose available facts match no rule also uses that
+reason while its pull-request facts are unknown. Opening a board starts any needed
+background refresh; unchanged sessions do not refresh merely because time passed.
 
 When the Control UI host supports a session dock, **Board agent** opens a
 conversation beside the board. Its first use creates and saves a dedicated
