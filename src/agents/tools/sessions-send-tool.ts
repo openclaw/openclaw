@@ -71,6 +71,7 @@ import {
   notifySessionsSendSession,
   resolveConfiguredAgentMainSessionKey,
 } from "./sessions-send-tool.delivery.js";
+import { readSessionsSendMessage, readSessionsSendMode } from "./sessions-send-tool.input.js";
 import { SessionsSendToolSchema, SessionsSendOutputSchema } from "./sessions-send-tool.schema.js";
 import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
 
@@ -94,20 +95,8 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       const params = isRecord(args) ? args : {};
       const promptedAt = Date.now();
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
-      const message = readToolStringParam(params, "message", { required: true, trim: false });
-      if (!message.trim()) {
-        throw new ToolInputError("message required");
-      }
-      const mode = readToolStringParam(params, "mode");
-      if (
-        mode !== undefined &&
-        mode !== "notify" &&
-        mode !== "steer" &&
-        mode !== "followup" &&
-        mode !== "resume"
-      ) {
-        throw new ToolInputError("mode must be notify, steer, followup, or resume");
-      }
+      const message = readSessionsSendMessage(params);
+      const mode = readSessionsSendMode(params);
       const resumeCaller =
         mode === undefined || mode === "resume" ? captureSessionsSendResumeCaller() : undefined;
       if (mode === "resume" && !resumeCaller) {

@@ -472,33 +472,32 @@ describe("createVoiceCallRuntime lifecycle", () => {
       throw new Error("expected per-call realtime registration resolver");
     }
     expect(runtime.config.agentId).toBe("operator");
+    const outboundContact = {
+      direction: "outbound" as const,
+      from: "+15550001111",
+      to: "+15550002222",
+    };
     expect(() =>
       resolveCallRegistration({
+        ...outboundContact,
         callId: "unowned",
         sessionKey: "agent:operator:voice:unowned",
-        direction: "outbound",
-        from: "+15550001111",
-        to: "+15550002222",
       }),
     ).toThrow("no recorded agent owner");
     expect(mocks.resolveConfiguredRealtimeVoiceProvider).not.toHaveBeenCalled();
     const defaultRegistration = resolveCallRegistration({
+      ...outboundContact,
       callId: "call-default",
       agentId: "operator",
-      direction: "outbound",
-      from: "+15550001111",
-      to: "+15550002222",
     });
     expect(defaultRegistration.agentId).toBe("operator");
     expect(defaultRegistration.instructions).toContain("- Name: Main Voice");
     expect(defaultRegistration.instructions.match(/Agent context:/g)).toHaveLength(1);
 
     const supportRegistration = resolveCallRegistration({
+      ...outboundContact,
       callId: "call-support",
       agentId: "support",
-      direction: "outbound",
-      from: "+15550001111",
-      to: "+15550002222",
     });
     expect(supportRegistration.agentId).toBe("support");
     expect(supportRegistration.instructions.match(/Agent context:/g)).toHaveLength(1);
@@ -506,11 +505,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(supportRegistration.instructions).not.toContain("Main Voice");
 
     const unknownRegistration = resolveCallRegistration({
+      ...outboundContact,
       callId: "call-unknown",
       agentId: "unknown",
-      direction: "outbound",
-      from: "+15550001111",
-      to: "+15550002222",
     });
     expect(unknownRegistration.instructions).not.toContain("Configured identity:");
     expect(unknownRegistration.instructions.match(/Agent context:/g)).toHaveLength(1);

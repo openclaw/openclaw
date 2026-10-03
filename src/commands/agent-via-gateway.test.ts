@@ -23,7 +23,13 @@ import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-ha
 import { createDeferredCore } from "../shared/deferred.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { agentCliCommand, agentViaGatewayTesting } from "./agent-via-gateway.js";
-import { createLocalGatewayLockOptions } from "./agent-via-gateway.test-support.js";
+import {
+  createExplicitSystemAgentConfig,
+  createGatewayClosedError,
+  createGatewayNormalCloseError,
+  createGatewayTimeoutError,
+  createLocalGatewayLockOptions,
+} from "./agent-via-gateway.test-support.js";
 import type { agentCommand as AgentCommand } from "./agent.js";
 
 const loadConfig = vi.hoisted(() => vi.fn());
@@ -240,50 +246,6 @@ async function waitForGatewayCall(expectedCalls = 1) {
 function mockMessages(mock: unknown): string[] {
   const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls ?? [];
   return calls.map(([message]) => String(message));
-}
-
-function createGatewayTimeoutError() {
-  const err = new Error("gateway timeout after 90000ms");
-  err.name = "GatewayTransportError";
-  return Object.assign(err, {
-    kind: "timeout",
-    timeoutMs: 90_000,
-    connectionDetails: {
-      url: "ws://127.0.0.1:18789",
-      urlSource: "local loopback",
-      message: "Gateway target: ws://127.0.0.1:18789",
-    },
-  });
-}
-
-function createGatewayClosedError() {
-  const err = new Error("gateway closed (1006 abnormal closure): no close reason");
-  err.name = "GatewayTransportError";
-  return Object.assign(err, {
-    kind: "closed",
-    code: 1006,
-    reason: "no close reason",
-    connectionDetails: {
-      url: "ws://127.0.0.1:18789",
-      urlSource: "local loopback",
-      message: "Gateway target: ws://127.0.0.1:18789",
-    },
-  });
-}
-
-function createGatewayNormalCloseError() {
-  const err = new Error("gateway closed (1000 normal closure): no close reason");
-  err.name = "GatewayTransportError";
-  return Object.assign(err, {
-    kind: "closed",
-    code: 1000,
-    reason: "no close reason",
-    connectionDetails: {
-      url: "ws://127.0.0.1:18789",
-      urlSource: "local loopback",
-      message: "Gateway target: ws://127.0.0.1:18789",
-    },
-  });
 }
 
 vi.mock("../config/gateway-dispatch-config.js", () => ({
@@ -1199,13 +1161,7 @@ describe("agentCliCommand", () => {
         expect(params.agentId).toBeUndefined();
         expect(params.sessionKey).toBe("agent:ops:incident-42");
       },
-      {
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "ops" } },
-          entries: { ops: {}, main: {} },
-        },
-      },
+      createExplicitSystemAgentConfig("ops", ["ops", "main"]),
     );
   });
 
@@ -1281,13 +1237,7 @@ describe("agentCliCommand", () => {
         expect(params.agentId).toBeUndefined();
         expect(params.sessionKey).toBe("global");
       },
-      {
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "ops" } },
-          entries: { ops: {}, main: {} },
-        },
-      },
+      createExplicitSystemAgentConfig("ops", ["ops", "main"]),
     );
   });
 
@@ -1331,13 +1281,7 @@ describe("agentCliCommand", () => {
         expect(params.agentId).toBeUndefined();
         expect(params.sessionKey).toBe("unknown");
       },
-      {
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "ops" } },
-          entries: { ops: {}, main: {} },
-        },
-      },
+      createExplicitSystemAgentConfig("ops", ["ops", "main"]),
     );
   });
 

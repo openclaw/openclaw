@@ -22,6 +22,7 @@ import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { collectFeishuDoctorAgentIds } from "./doctor-agent-roster.js";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract.js";
 import { collectFeishuWebhookNotes } from "./webhook-route.js";
 
@@ -206,29 +207,6 @@ function isFeishuSessionEntry(key: string, value: unknown): boolean {
   );
 }
 
-function collectConfiguredAgentIds(cfg: unknown): string[] {
-  const agents = isRecord(cfg) && isRecord(cfg.agents) ? cfg.agents : undefined;
-  if (isRecord(agents?.entries)) {
-    const ids = Object.keys(agents.entries).map(normalizeAgentId);
-    return [...new Set(ids.length > 0 ? ids : ["main"])].toSorted();
-  }
-  // Blocked include migrations can leave a raw roster in Doctor's repair candidate.
-  const entries =
-    Object.prototype.propertyIsEnumerable.call(agents ?? {}, "list") && Array.isArray(agents?.list)
-      ? agents.list.filter(isRecord)
-      : [];
-  const chosen = entries.find((entry) => entry.default === true) ?? entries[0];
-  const ids = new Set([
-    normalizeAgentId(typeof chosen?.id === "string" && chosen.id.trim() ? chosen.id : "main"),
-  ]);
-  for (const entry of entries) {
-    if (typeof entry.id === "string" && entry.id.trim()) {
-      ids.add(normalizeAgentId(entry.id));
-    }
-  }
-  return [...ids].toSorted();
-}
-
 function collectFeishuSessionTargets(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -244,7 +222,7 @@ function collectFeishuSessionTargets(params: {
     });
   };
 
-  for (const agentId of collectConfiguredAgentIds(params.cfg)) {
+  for (const agentId of collectFeishuDoctorAgentIds(params.cfg)) {
     addTarget({
       agentId,
       storePath: resolveStorePath(params.cfg.session?.store, { agentId, env: params.env }),

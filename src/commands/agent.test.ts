@@ -52,7 +52,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getBootEchoContextForSession } from "../gateway/boot-echo-guard.js";
 import { runBootOnce } from "../gateway/boot.js";
 import { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
-import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
 import { withTempHomeCore as withTempHomeBase } from "../plugin-sdk/test-helpers/temp-home.js";
 import { loadEnabledClaudeBundleCommands } from "../plugins/bundle-commands.js";
 import { resolveProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
@@ -80,6 +79,7 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 import { getAgentAttemptExecutionMocks } from "./agent-command-state.test-mocks.js";
 import {
   createDefaultAgentResult,
+  createOutboundSessionRouteFixture,
   expectOwnedCommandSession,
   readSessionStore,
   useRealCommandSessionPersistence,
@@ -390,27 +390,6 @@ function installThinkingTestProviders(channels: Parameters<typeof createTestRegi
     }),
   );
   setActivePluginRegistry(registry);
-}
-
-function createOutboundSessionRouteFixture(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  channel: string;
-  accountId?: string | null;
-  peer: { kind: "direct" | "group" | "channel"; id: string };
-  chatType: "direct" | "group" | "channel";
-  from: string;
-  to: string;
-}) {
-  const baseSessionKey = buildOutboundBaseSessionKey(params);
-  return {
-    sessionKey: baseSessionKey,
-    baseSessionKey,
-    peer: params.peer,
-    chatType: params.chatType,
-    from: params.from,
-    to: params.to,
-  };
 }
 
 beforeEach(() => {

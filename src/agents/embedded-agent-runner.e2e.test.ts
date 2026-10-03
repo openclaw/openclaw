@@ -194,21 +194,13 @@ let sessionStorePath: string;
 let sessionCounter = 0;
 let runCounter = 0;
 
-const createEmbeddedAgentRunnerOpenAiConfig = (
-  modelIds: string[],
-): ReturnType<typeof createBaseEmbeddedAgentRunnerOpenAiConfig> => {
+const createEmbeddedAgentRunnerOpenAiConfig = (modelIds: string[]) => {
   const config = createBaseEmbeddedAgentRunnerOpenAiConfig(modelIds);
-  return {
-    ...config,
-    agents: {
-      ...config.agents,
-      defaults: {
-        ...config.agents?.defaults,
-        sessionStore: { agentId: "main" },
-      },
-    },
-    session: { store: sessionStorePath },
-  };
+  config.agents ??= {};
+  config.agents.defaults ??= {};
+  config.agents.defaults.sessionStore = { agentId: "main" };
+  config.session = { store: sessionStorePath };
+  return config;
 };
 
 beforeAll(async () => {

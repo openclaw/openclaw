@@ -631,10 +631,8 @@ describe("resolveModel", () => {
     });
     mockMinimalModelDiscovery("openai", "gpt-5.5");
 
-    const first = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, {
-      agentId: "worker",
-      runtimeHooks: createRuntimeHooks(),
-    });
+    const options = { agentId: "worker", runtimeHooks: createRuntimeHooks() };
+    const first = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, options);
     saveAuthProfileStore(
       {
         version: 1,
@@ -643,10 +641,7 @@ describe("resolveModel", () => {
       defaultAgentDir,
       { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
-    const second = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, {
-      agentId: "worker",
-      runtimeHooks: createRuntimeHooks(),
-    });
+    const second = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, options);
 
     expectResolvedModel(first);
     expectResolvedModel(second);
