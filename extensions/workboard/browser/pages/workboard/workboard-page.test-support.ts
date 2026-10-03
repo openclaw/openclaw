@@ -24,7 +24,7 @@ export function mountPage(
   Object.assign(fixture.host.agents, { rows: [], defaultId: null });
   let agents: AgentsListResult["agents"] = [{ id: "main" }, { id: "writer" }];
   let cards = [createWorkboardCard({ title: "Initial card" })];
-  const request = vi.fn(async (method: string, _params?: unknown): Promise<unknown> => {
+  const request = vi.fn(async (method: string, params?: unknown): Promise<unknown> => {
     if (method === "agents.list") {
       return {
         defaultId: "main",
@@ -35,6 +35,9 @@ export function mountPage(
     }
     if (method === "workboard.cards.list") {
       return { cards };
+    }
+    if (method === "workboard.boards.upsert") {
+      return { board: { ...(params as Record<string, unknown>), createdAt: 1, updatedAt: 1 } };
     }
     return {};
   });
@@ -51,7 +54,8 @@ export function mountPage(
     params.boardId ? { boardId: params.boardId } : {},
     params.presented ?? true,
   );
-  const mounted = createWorkboardPage(workboard)(container, context);
+  const registerBoardNavigation = vi.fn();
+  const mounted = createWorkboardPage(workboard, registerBoardNavigation)(container, context);
   cleanup.push(() => {
     mounted?.dispose?.();
     workboard.dispose();
@@ -61,6 +65,7 @@ export function mountPage(
     workboard,
     container,
     request,
+    registerBoardNavigation,
     cards(next: typeof cards) {
       cards = next;
     },

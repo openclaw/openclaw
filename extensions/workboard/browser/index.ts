@@ -3,7 +3,7 @@ import { WorkboardCatalog } from "./catalog.ts";
 import { bindWorkboardHost } from "./host.ts";
 import { workboardBoardLabel } from "./lib/workboard/board-presentation.ts";
 import { createWorkboardCapability } from "./lib/workboard/capability.ts";
-import { WORKBOARD_CHANGED_EVENT } from "./lib/workboard/types.ts";
+import { WORKBOARD_CHANGED_EVENT, type WorkboardBoardSummary } from "./lib/workboard/types.ts";
 import { createWorkboardPage, workboardPageTarget } from "./pages/workboard/workboard-page.ts";
 import { createWorkboardSessionAccessory } from "./session-accessory.ts";
 import { createWorkboardWidget } from "./widgets.ts";
@@ -17,7 +17,31 @@ export default defineControlUiPlugin({
     const unbind = bindWorkboardHost(host);
     const workboard = createWorkboardCapability();
     const client = host;
-    const navigation = new Map<string, { signature: string; dispose: () => void }>();
+    const navigation = new Map<string, { signature: string; order: number; dispose: () => void }>();
+    const registerBoardNavigation = (
+      board: Pick<WorkboardBoardSummary, "id" | "name" | "icon" | "color">,
+      order = navigation.get(board.id)?.order ?? 20 + navigation.size,
+    ) => {
+      const label = workboardBoardLabel(board);
+      const signature = JSON.stringify([label, board.icon, board.color, order]);
+      if (navigation.get(board.id)?.signature === signature) {
+        return;
+      }
+      navigation.get(board.id)?.dispose();
+      navigation.set(board.id, {
+        signature,
+        order,
+        dispose: host.ui.registerNavigation({
+          id: `board-${board.id}`,
+          parent: "workboard",
+          label,
+          page: workboardPageTarget(board.id),
+          icon: board.icon,
+          order,
+          defaultVisible: false,
+        }),
+      });
+    };
     const catalog = new WorkboardCatalog(({ boards }) => {
       const currentIds = new Set(boards.map((board) => board.id));
       for (const [id, entry] of navigation) {
@@ -26,31 +50,15 @@ export default defineControlUiPlugin({
           navigation.delete(id);
         }
       }
-      for (const board of boards) {
-        const label = workboardBoardLabel(board);
-        const signature = JSON.stringify([label, board.icon, board.color]);
-        if (navigation.get(board.id)?.signature === signature) {
-          continue;
-        }
-        navigation.get(board.id)?.dispose();
-        navigation.set(board.id, {
-          signature,
-          dispose: host.ui.registerNavigation({
-            id: `board-${board.id}`,
-            label,
-            page: workboardPageTarget(board.id),
-            icon: board.icon,
-            order: 20,
-            defaultVisible: false,
-          }),
-        });
+      for (const [index, board] of boards.entries()) {
+        registerBoardNavigation(board, 20 + index);
       }
     }, workboard);
     const registrations = [
       host.ui.registerPage({
         id: "workboard",
         label: "Workboard",
-        mount: createWorkboardPage(workboard),
+        mount: createWorkboardPage(workboard, registerBoardNavigation),
       }),
       host.ui.registerNavigation({
         id: "workboard",
