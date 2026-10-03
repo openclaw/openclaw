@@ -3,7 +3,6 @@ import { performance } from "node:perf_hooks";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import type { LookupFn } from "../src/infra/net/ssrf.js";
 import * as cliArgs from "./lib/arg-utils.mts";
-import { CliArgumentError } from "./lib/error-format.mts";
 import { writeReportArtifact } from "./lib/report-cli-helpers.mts";
 
 type BenchmarkCaseId = (typeof ALL_CASE_IDS)[number];
@@ -56,6 +55,10 @@ const ALL_CASE_IDS = [
 ] as const;
 
 const SPLIT_VALUE_FLAG_OPTIONS = { allowInline: false, rejectShortOptions: true } as const;
+
+class CliArgumentError extends Error {
+  override name = "CliArgumentError";
+}
 
 const ARTICLE_HTML = `<!doctype html>
 <html lang="en">

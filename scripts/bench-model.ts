@@ -2,7 +2,7 @@
 import { pathToFileURL } from "node:url";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
-import { CliArgumentError, reportCliError } from "./lib/error-format.mts";
+import { CliArgumentError } from "./lib/error-format.mts";
 import { parseStrictIntegerOption } from "./lib/strict-integer-option.ts";
 
 type CliOptions = {
@@ -203,5 +203,13 @@ export const testing = {
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  main().catch(reportCliError);
+  main().catch((err: unknown) => {
+    if (err instanceof CliArgumentError) {
+      console.error(err.message);
+      process.exitCode = 1;
+      return;
+    }
+    console.error(err instanceof Error ? err.stack : String(err));
+    process.exitCode = 1;
+  });
 }

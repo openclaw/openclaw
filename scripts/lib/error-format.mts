@@ -2,17 +2,6 @@ export class CliArgumentError extends Error {
   override name = "CliArgumentError";
 }
 
-export function reportCliError(error: unknown): void {
-  console.error(
-    error instanceof CliArgumentError
-      ? error.message
-      : error instanceof Error
-        ? error.stack
-        : String(error),
-  );
-  process.exitCode = 1;
-}
-
 /** Return a readable message for Error and non-Error thrown values. */
 export function formatErrorMessage(error: unknown): string {
   if (error instanceof Error) {
