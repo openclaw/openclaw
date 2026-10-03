@@ -19,6 +19,7 @@ import { formatErrorMessage } from "./errors.js";
 import { resolveUserPath } from "./home-dir.js";
 import { pathMayExistSync } from "./path-existence.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
+import { markLegacyMigrationSourceRemoved } from "./state-migrations.receipts.js";
 import {
   type LegacyMigrationSourceClaim,
   legacyMigrationSourceOrClaimMayExist as sourceOrClaimMayExist,
@@ -29,11 +30,7 @@ import {
   archiveWorkspaceSetupSource,
   createLegacySourceClaim,
 } from "./state-migrations.workspace-setup-files.js";
-import {
-  markLegacyMigrationSourceRemoved,
-  readReceipt,
-  type MigrationReceipt,
-} from "./state-migrations.workspace-setup-receipts.js";
+import { readReceipt, type MigrationReceipt } from "./state-migrations.workspace-setup-receipts.js";
 import {
   canonicalCoversParsedSource,
   importAndRecordReceipt,
@@ -81,15 +78,15 @@ function listOrphanAttestationSources(params: {
         continue;
       }
       // Preserve a path-shaped detection so Doctor reports the unsafe directory.
-      sources.push({
-        ...createLegacySource({
+      sources.push(
+        createLegacySource({
           kind: "attestation",
           rootDir: stateDir,
           sourcePath: attestationDir,
           workspaceKey: "unreadable-attestation-directory",
           priority,
         }),
-      });
+      );
       continue;
     }
     for (const entry of entries) {
@@ -125,36 +122,27 @@ function addLegacyWorkspaceSources(params: {
     env: params.env,
     homedir: params.homedir,
   });
-  for (const [priority, sourcePath] of paths.setupStatePaths.entries()) {
-    if (sourceOrClaimMayExist(sourcePath)) {
-      params.add(
-        createLegacySource({
-          kind: "setup",
-          rootDir: sourcePath.endsWith(LEGACY_WORKSPACE_STATE_CURRENT_FILENAME)
-            ? path.dirname(sourcePath)
-            : path.dirname(path.dirname(sourcePath)),
-          sourcePath,
-          workspaceKey: identity.workspaceKey,
-          workspaceDir: identity.workspacePath,
-          workspaceAliasPath: paths.workspacePath,
-          priority,
-        }),
-      );
-    }
-  }
-  for (const [priority, sourcePath] of paths.stateDirAttestationPaths.entries()) {
-    if (sourceOrClaimMayExist(sourcePath)) {
-      params.add(
-        createLegacySource({
-          kind: "attestation",
-          rootDir: path.dirname(path.dirname(sourcePath)),
-          sourcePath,
-          workspaceKey: identity.workspaceKey,
-          workspaceDir: identity.workspacePath,
-          workspaceAliasPath: paths.workspacePath,
-          priority,
-        }),
-      );
+  for (const [kind, sourcePaths] of [
+    ["setup", paths.setupStatePaths],
+    ["attestation", paths.stateDirAttestationPaths],
+  ] as const) {
+    for (const [priority, sourcePath] of sourcePaths.entries()) {
+      if (sourceOrClaimMayExist(sourcePath)) {
+        params.add(
+          createLegacySource({
+            kind,
+            rootDir:
+              kind === "setup" && sourcePath.endsWith(LEGACY_WORKSPACE_STATE_CURRENT_FILENAME)
+                ? path.dirname(sourcePath)
+                : path.dirname(path.dirname(sourcePath)),
+            sourcePath,
+            workspaceKey: identity.workspaceKey,
+            workspaceDir: identity.workspacePath,
+            workspaceAliasPath: paths.workspacePath,
+            priority,
+          }),
+        );
+      }
     }
   }
   for (const [index, sourcePath] of paths.siblingAttestationPaths.entries()) {

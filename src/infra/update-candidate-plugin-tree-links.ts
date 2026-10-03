@@ -217,14 +217,13 @@ export async function verifyUpdateCandidatePluginTree(
     ) {
       throw new Error("Copied plugin host link does not target the update");
     }
-    params.onCodeLink?.(captureUpdateCandidatePluginCodeLink(file, stat, link!));
-    return;
+  } else if (stat.isSymbolicLink()) {
+    assertUpdateCandidatePluginLinkTarget(file, path.resolve(path.dirname(file), link!), params);
   }
   // Inspect the entry before traversal, including standalone module aliases;
   // following a copied root link can otherwise accept an entirely live tree.
-  if (stat.isSymbolicLink()) {
-    assertUpdateCandidatePluginLinkTarget(file, path.resolve(path.dirname(file), link!), params);
-    params.onCodeLink?.(captureUpdateCandidatePluginCodeLink(file, stat, link!));
+  if (link !== undefined) {
+    params.onCodeLink?.(captureUpdateCandidatePluginCodeLink(file, stat, link));
     return;
   }
   if (stat.isDirectory()) {

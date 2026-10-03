@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
+import { pruneMapToMaxSize } from "./map-size.js";
 
 const NODE_RUNTIME_PROBE_TIMEOUT_MS = 5_000;
 const NODE_RUNTIME_CACHE_MAX_ENTRIES = 16;
@@ -91,12 +92,6 @@ export function resolveNodeRuntimeExecutable(options?: {
   }
 
   resolvedNodeRuntimeExecutables.set(cacheKey, resolved ?? null);
-  while (resolvedNodeRuntimeExecutables.size > NODE_RUNTIME_CACHE_MAX_ENTRIES) {
-    const oldest = resolvedNodeRuntimeExecutables.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    resolvedNodeRuntimeExecutables.delete(oldest);
-  }
+  pruneMapToMaxSize(resolvedNodeRuntimeExecutables, NODE_RUNTIME_CACHE_MAX_ENTRIES);
   return resolved;
 }

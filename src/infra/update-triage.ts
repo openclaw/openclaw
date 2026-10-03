@@ -29,8 +29,7 @@ export type UpdateTriageTarget = {
 };
 
 type UpdateTriageResult =
-  | { status: "completed"; hint: string }
-  | { status: "failed"; hint: string }
+  | { status: "completed" | "failed"; hint: string }
   | { status: "cancelled" };
 
 type UpdateTriageInvocation = {
