@@ -1,10 +1,9 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   QuestionAnswerUnconfirmedError,
   QuestionDispatchRefusedError,
 } from "../../agents/harness/gateway-question-dispatch.js";
 import { claimPendingAgentQuestionAnswerFromCaller } from "../../agents/harness/gateway-question.js";
-import { readQuestionErrorReason } from "../../agents/tools/gateway-question-lifecycle.js";
+import { readQuestionRejection } from "../../agents/tools/gateway-question-lifecycle.js";
 import { logVerbose } from "../../globals.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -81,6 +80,11 @@ export async function runReplyQuestionInput(
       caller,
       assertSourceCurrent,
       sourceRecorder: followupRun.userTurnTranscriptRecorder,
+      onAnswerProcessed: () => {
+        if (state) {
+          state.questionInputHandled = true;
+        }
+      },
     });
     if (!claimed) {
       return { handled: false };
@@ -99,11 +103,9 @@ export async function runReplyQuestionInput(
         }),
       };
     }
+    const rejection = readQuestionRejection(error);
     // Validation precedes commitment: keep the question open and explain how to retry.
-    if (
-      asNullableRecord(error)?.gatewayCode === "INVALID_REQUEST" &&
-      readQuestionErrorReason(error) === "QUESTION_INVALID_ANSWER"
-    ) {
+    if (rejection?.code === "INVALID_REQUEST" && rejection.reason === "QUESTION_INVALID_ANSWER") {
       const detail = error instanceof Error ? error.message.trim() : "";
       if (state) {
         state.admission = { status: "skipped", reason: "question-response-rejected" };

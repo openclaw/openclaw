@@ -29,7 +29,7 @@ import { type AnyAgentTool, ToolInputError, textResult } from "./common.js";
 import {
   createGatewayQuestionCanceller,
   createQuestionPromptLifetime,
-  readQuestionErrorReason,
+  readQuestionRejection,
   type GatewayQuestionCall,
 } from "./gateway-question-lifecycle.js";
 import { type QuestionPromptDelivery, sendQuestionToolPrompt } from "./question-prompt-send.js";
@@ -700,7 +700,7 @@ export function createAskUserTool(params: {
         signal?.throwIfAborted();
         return await finishWait(result);
       } catch (error) {
-        if (registered || readQuestionErrorReason(error) !== "QUESTION_ID_IN_USE") {
+        if (registered || readQuestionRejection(error)?.reason !== "QUESTION_ID_IN_USE") {
           const answered = await cancelPendingQuestion(
             signal?.aborted ? "run-abort" : registered ? "tool-error" : "registration-failed",
           );
