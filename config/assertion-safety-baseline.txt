@@ -2660,7 +2660,6 @@ src/secrets/audit.ts	1
 src/secrets/channel-contract-api.ts	1
 src/secrets/configure.ts	2
 src/secrets/egress-proxy/stream-substitution.ts	2
-src/secrets/legacy-secretref-env-marker.ts	1
 src/secrets/plan.ts	2
 src/secrets/private-plan-file.ts	1
 src/secrets/resolve.ts	1
