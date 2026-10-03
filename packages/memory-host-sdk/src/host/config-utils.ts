@@ -2,13 +2,11 @@ import path from "node:path";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import {
   listAgentEntries,
-  tryResolveRawLegacyDefaultAgentId,
-} from "../../../../src/agents/agent-roster.js";
-import {
   resolveDefaultAgentWorkspaceDir,
   resolveStateDir,
   resolveUserPath,
   tryResolveLegacyDataOwner,
+  tryResolveRawLegacyDefaultAgentId,
 } from "./openclaw-runtime-paths.js";
 import type { MemoryExtraPath } from "./types.js";
 export { normalizeAgentId };

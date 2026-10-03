@@ -81,6 +81,8 @@ Global and thread entrypoint tools accept `{}`. File entrypoints declare extensi
 
 App resource metadata can declare supported and preferred display modes. Apps must inspect the actual host capabilities before using an extension: a standalone channel window does not have every capability of a connected Control UI conversation. Do not infer file, messaging, or model-context authority from a successful MCP connection alone.
 
+When an App asks to send a message to the assistant, review its preview and choose **Send** or **Cancel** in the App pane's confirmation strip.
+
 File saves follow the extension protocol’s optional `ifMatch` precondition. Sending the ETag from the last read prevents a stale save from replacing a newer edit; omitting `ifMatch` performs an unconditional save (last writer wins). App authors should send the ETag when protecting concurrent edits. Both forms still require a writable read, the host-issued file URI, and current session and requester authority.
 
 Native Codex Apps borrow the conversation’s existing MCP connection and retain

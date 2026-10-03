@@ -3472,40 +3472,28 @@ export const en: TranslationMap & {
       label: "Session reset",
       description: "The earlier conversation was cleared.",
     },
-    outboxRecoveryTitle: "{count} saved messages to review",
-    outboxRecoveryTitleOne: "1 saved message to review",
-    outboxRecoveryDraftTitle: "{count} saved drafts",
-    outboxRecoveryDraftTitleOne: "1 saved draft",
-    outboxRecoveryFailedTitle: "Saved messages could not be loaded",
-    outboxRecoveryDescription:
-      "These messages were saved in this browser. Review them before sending, or delete copies you don’t need. Nothing is sent automatically.",
-    outboxRecoveryDraftDescription:
-      "We found unfinished messages saved in this browser. Review them here or delete them. Nothing is sent automatically.",
-    outboxRecoveryDraftDescriptionOne:
-      "We found an unfinished message saved in this browser. Review it here or delete it. Nothing is sent automatically.",
     outboxRecoveryReviewTitle: "Review in this chat?",
-    outboxRecoveryConfirm:
-      "Add this saved copy to “{chat}” for review? Nothing will be sent. Check the original chat before retrying a message that may already have arrived.",
-    outboxRecoveryRestore: "Review in this chat",
+    outboxRecoveryConfirm: "Add this saved copy to “{chat}” for review? Nothing will be sent.",
+    outboxRecoveryRestore: "Restore",
     outboxRecoveryConflict:
       "Keep or clear the draft and pending messages in this chat first, or open another non-Incognito chat. Your saved copy is unchanged.",
     outboxRecoveryStorageFailed:
       "We could not access your saved messages. Reload to try again. Do not clear browser site data if you want to keep them.",
     outboxRecoveryFull:
       "There are more saved messages than we can show. Review or delete the copies below to make room. The remaining messages are still saved in this browser.",
-    outboxRecoveryDraft: "Draft · Not sent",
-    outboxRecoveryQueued: "Saved message · Review before sending",
-    outboxRecoverySource: "From: {chat}",
-    outboxRecoveryUnknownSource: "Original chat unavailable",
+    outboxRecoveryDraft: "Draft",
+    outboxRecoveryQueued: "Unsent",
+    outboxRecoverySource: "from {chat}",
     outboxRecoveryUpdated: "Last updated {time}",
     outboxRecoveryGoal: "Includes an unsent goal change",
     outboxRecoveryReply: "Reply to: {text}",
     outboxRecoveryAttachments: "Attachments: {files}",
+    outboxRecoveryUnconfirmedLabel: "may have been sent",
     outboxRecoveryUnconfirmed:
       "Delivery unconfirmed. This message may already have been sent. Check the original chat before sending it again.",
     outboxRecoveryAttachmentMissing:
       "An attachment could not be loaded. Review the message and reattach the file before sending.",
-    outboxRecoveryDelete: "Delete saved copy",
+    outboxRecoveryDelete: "Delete",
     outboxRecoveryDeleteTitle: "Delete this saved copy?",
     outboxRecoveryDeleteConfirm:
       "This removes the draft and any saved messages or attachments shown with it from this browser. It cannot be undone. Messages already sent to a chat will not be deleted.",

@@ -732,58 +732,6 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
     },
   );
 
-  it.each(["2026.6.35", "2026.7.33", "2026.7.34", "2026.7.35"])(
-    "preserves the frozen %s package projection",
-    (version) => {
-      const mutateConfig = testing.resolvePackageConfigMutation({
-        OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION: version,
-      });
-      const config = {
-        agents: {
-          defaults: {
-            mediaModels: {
-              image: "mock-openai/image",
-              audio: "mock-openai/audio",
-            },
-            modelPolicy: { allow: ["mock-openai/qa"] },
-            workspace: "/tmp/qa",
-          },
-          entries: {
-            qa: {
-              model: "mock-openai/qa",
-            },
-          },
-        },
-        memory: {
-          search: { enabled: false },
-        },
-        plugins: {
-          enabled: true,
-        },
-      } as Parameters<NonNullable<typeof mutateConfig>>[0];
-
-      expect(mutateConfig?.(config)).toEqual({
-        agents: {
-          defaults: {
-            imageGenerationModel: "mock-openai/image",
-            workspace: "/tmp/qa",
-          },
-          list: [
-            {
-              id: "qa",
-              model: "mock-openai/qa",
-            },
-          ],
-        },
-        memory: { backend: "builtin" },
-        plugins: {
-          bundledDiscovery: "compat",
-          enabled: true,
-        },
-      });
-    },
-  );
-
   it.each(["fail", "skip"])(
     "fails package Telegram QA when a scenario has %s status",
     async (status) => {

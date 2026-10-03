@@ -4,6 +4,7 @@ import type {
   BoardWidgetPutParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js";
 import { readBoardHtml } from "../../boards/board-store.test-support.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/system-events.js";
@@ -137,7 +138,16 @@ describe("board gateway methods", () => {
     );
     const preparedRead = vi.spyOn(store, "getSnapshotWithHtmlViewMetadata");
     const documentRead = vi.spyOn(store, "useWidgetDocument");
-    const first = await get();
+    const host = observeHostDataSql();
+    let first: BoardSnapshot;
+    try {
+      first = await get();
+      expect(
+        host.queries.filter((sql) => /\bfrom\s+"?board_(?:tabs|widgets)"?\b/iu.test(sql)),
+      ).toEqual([]);
+    } finally {
+      host.restore();
+    }
     expect(ensureSandboxHostPort).toHaveBeenCalledOnce();
     expect(preparedRead).toHaveBeenCalledOnce();
     expect(documentRead).not.toHaveBeenCalled();
@@ -239,12 +249,20 @@ describe("board gateway methods", () => {
       expect.objectContaining({ allowedAppToolNames: new Set(), readOnly: true }),
     );
     await grant(widget);
-    await appView(widget);
-    const interactive = vi.mocked(mcpApp.mintFromTranscript).mock.calls.at(-1)?.[0];
-    expect(interactive).toEqual(
-      expect.objectContaining({ allowedAppToolNames: new Set(), readOnly: false }),
-    );
-    expect(interactive?.authorizeAppInteraction).toBeTypeOf("function");
+    const host = observeHostDataSql();
+    try {
+      expect((await appView(widget)).mock.calls[0]?.[0]).toBe(true);
+      const interactive = vi.mocked(mcpApp.mintFromTranscript).mock.calls.at(-1)?.[0];
+      expect(interactive).toEqual(
+        expect.objectContaining({ allowedAppToolNames: new Set(), readOnly: false }),
+      );
+      expect(await interactive?.authorizeAppInteraction?.()).toBe(true);
+      expect(
+        host.queries.filter((sql) => /\bfrom\s+"?board_(?:tabs|widgets)"?\b/iu.test(sql)),
+      ).toEqual([]);
+    } finally {
+      host.restore();
+    }
   });
 
   it.each([{ sessionKey: "global", agentId: "work" }])(

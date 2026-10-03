@@ -249,8 +249,8 @@ function mockConversationBinding(channel: string, agentId = "codex", parentRoom?
   );
 }
 
-function createRelayHandle() {
-  return { dispose: vi.fn(), notifyStarted: vi.fn() };
+function createRelayHandle(disposal: Promise<void> = Promise.resolve()) {
+  return { dispose: vi.fn(() => disposal), notifyStarted: vi.fn() };
 }
 
 function spawn(
@@ -1362,7 +1362,7 @@ describe("spawnAcpDirect", () => {
 
   it("implicitly streams mode=run ACP spawns for subagent requester sessions", async () => {
     const context = configureHeartbeatParent("agent:main:subagent:parent");
-    const firstHandle = createRelayHandle();
+    const firstHandle = createRelayHandle(new Promise<void>(() => {}));
     const secondHandle = createRelayHandle();
     hoisted.startAcpSpawnParentStreamRelayMock
       .mockReset()

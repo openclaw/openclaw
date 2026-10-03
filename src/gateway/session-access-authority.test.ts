@@ -69,7 +69,7 @@ function hold<T extends { release: () => void }>(value: T): T {
 
 function fixture(scopes = ["operator.write"], creator = "someone-else") {
   const grant = new AbortController();
-  let entry: SessionEntry | undefined = {
+  let entry: SessionEntry = {
     sessionId: "session-1",
     lifecycleRevision: "incarnation-1",
     updatedAt: 1,
@@ -113,8 +113,8 @@ function fixture(scopes = ["operator.write"], creator = "someone-else") {
     client,
     context,
     projection,
-    setEntry(next: SessionEntry | undefined) {
-      entry = next;
+    setVisibility(visibility: SessionEntry["visibility"]) {
+      entry = { ...entry, updatedAt: 2, visibility };
     },
     prepare: async () =>
       hold(
@@ -620,41 +620,37 @@ describe("session resource admission", () => {
     expect(viewer.signal.aborted).toBe(true);
   });
 
-  it.each(["sandboxRequired", "sandboxed"] as const)(
-    "retires the original actor when its %s policy changes, even if later restored",
-    async (field) => {
-      const test = fixture();
-      const authority = await test.prepare();
-      const viewer = hold(authority.retain());
-      const resource = hold(authority.retainSession());
-      mocks[field] = true;
-      expect(() => viewer.assertCurrent()).toThrow("current tool policy");
-      mocks[field] = false;
-      expect(() => viewer.assertCurrent()).toThrow();
-      expect(() => resource.assertCurrent()).not.toThrow();
-    },
-  );
-
-  it("rechecks sharing and effective tool policy on retained viewer use", async () => {
+  it.each<"sandboxRequired" | "sandboxed" | "toolAllowed" | "sharing">([
+    "sandboxRequired",
+    "sandboxed",
+    "toolAllowed",
+    "sharing",
+  ])("retires a viewer when its %s policy changes, even if later restored", async (field) => {
     const test = fixture();
     const authority = await test.prepare();
     const viewer = hold(authority.retain());
-    mocks.toolAllowed = false;
-    expect(() => viewer.assertCurrent()).toThrow("tool denied");
-    mocks.toolAllowed = true;
+    const resource = hold(authority.retainSession());
+    if (field === "sharing") {
+      test.setVisibility("draft");
+      sessionChanges.emit({ agentId: "main", sessionKey: key });
+    } else {
+      mocks[field] = field !== "toolAllowed";
+    }
+    expect(viewer.signal.aborted).toBe(field === "sharing");
+    expect(() => viewer.assertCurrent()).toThrow(
+      field === "sharing"
+        ? "Session access changed"
+        : field === "toolAllowed"
+          ? "tool denied"
+          : "current tool policy",
+    );
+    if (field === "sharing") {
+      test.setVisibility("shared");
+    } else {
+      mocks[field] = field === "toolAllowed";
+    }
     expect(() => viewer.assertCurrent()).toThrow();
-    const other = fixture();
-    const otherAuthority = await other.prepare();
-    const otherViewer = hold(otherAuthority.retain());
-    other.setEntry({
-      sessionId: "session-1",
-      lifecycleRevision: "incarnation-1",
-      updatedAt: 2,
-      createdActor: { type: "human", source: "profile", id: "someone-else" },
-      visibility: "draft",
-    });
-    sessionChanges.emit({ agentId: "main", sessionKey: key });
-    expect(otherViewer.signal.aborted).toBe(true);
+    expect(() => resource.assertCurrent()).not.toThrow();
   });
 
   it("rejects a renewed ingress grant that changes while profile preparation awaits", async () => {

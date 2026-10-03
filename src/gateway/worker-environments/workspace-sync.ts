@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
@@ -105,29 +106,11 @@ export function createWorkerWorkspaceActions(
   ): Promise<PreparedWorkerSsh> => {
     signal?.throwIfAborted();
     const operation = withTimeout(options.waitForPrepared(), timeoutMs, { message });
-    if (!signal) {
-      return await operation;
-    }
-    return await new Promise<PreparedWorkerSsh>((resolve, reject) => {
-      const onAbort = () => {
-        try {
-          signal.throwIfAborted();
-        } catch (error) {
-          reject(
-            error instanceof Error
-              ? error
-              : new Error("Worker workspace command aborted", { cause: error }),
-          );
-        }
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-      if (signal.aborted) {
-        onAbort();
-      }
-      void operation.then(resolve, reject).finally(() => {
-        signal.removeEventListener("abort", onAbort);
-      });
-    });
+    return await racePromiseWithAbortSignal(operation, signal, (abortedSignal) =>
+      abortedSignal.reason instanceof Error
+        ? abortedSignal.reason
+        : new Error("Worker workspace command aborted", { cause: abortedSignal.reason }),
+    );
   };
 
   const runTask = (argv: string[], opts: CommandOptions) => track(options.runner.run(argv, opts));

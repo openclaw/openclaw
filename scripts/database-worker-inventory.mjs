@@ -393,6 +393,12 @@ const reviewedOperations = new Map([
         evidence:
           "Only activation at placement-transitions.worker.ts:58 reaches this initializer; native placement-store.ts:325 passes provisioning, not active; the placement update stays T1",
       },
+      {
+        tier: "W",
+        operations: ["ensureLocal"],
+        evidence:
+          "placement-dispatch-store.worker.ts:38 and placement-turn-claims.ts:112 claim path; claims only invoked at placement-turn-claims.worker.ts:160,175,345. Native placement-store.ts:75,76 selects clear/wait/validate methods that do not claim.",
+      },
     ],
   ],
   [
@@ -419,6 +425,12 @@ const reviewedOperations = new Map([
         evidence:
           "Only openclaw-state-read.worker.ts:489 serves approval history; the native compatibility operation map has no history operation",
       },
+      {
+        tier: "W",
+        operations: ["insertOperatorApprovalInDatabase", "listPendingOperatorApprovalsInDatabase"],
+        evidence:
+          "exec-approval-manager.ts:125 insert and operator-approval-session-events.ts:194 pending supply no native guard; operator-approval-store.ts:138,173 selects worker dispatch to operator-approval-store.operations.ts:57,65 via state/openclaw-state-worker-registry.ts:119. Other approval operations retain native compatibility.",
+      },
     ],
   ],
   [
@@ -429,6 +441,15 @@ const reviewedOperations = new Map([
         operations: ["closeOrphanedOperatorApprovals", "pruneTerminalOperatorApprovals"],
         evidence:
           "Boot calls only in server-aux-handlers.ts:105,109; remaining transitions retain native SDK compatibility",
+      },
+      {
+        tier: "W",
+        operations: [
+          "expireDueOperatorApprovalsInDatabase",
+          "consumeOperatorApprovalAllowOnceInDatabase",
+        ],
+        evidence:
+          "operator-approval-session-events.ts:178 expiry and exec-approval-manager.ts:644 consume supply no native guard; operator-approval-store.ts:173 -> operator-approval-store.operations.ts:85,89 worker dispatch. Expiry also runs from worker-only pending kernel at operator-approval-store.kernel.ts:233.",
       },
     ],
   ],
@@ -678,9 +699,16 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["readUserPreferences", "writeUserPreferences"],
+        operations: [
+          "readUserPreferences",
+          "writeUserPreferences",
+          "deleteUserPreference",
+          "selectUserPreferenceValues",
+          "readPreferenceKeys",
+          "mergeUserPreferences",
+        ],
         evidence:
-          "Facades submit userPreferences.read/write at user-preferences.ts:53,75; state-worker-runtime.ts:124 dispatches to user-preferences.worker.ts:52,74; other helpers retain their existing tiers",
+          "Preference read/write dispatch at user-preferences.worker.ts:52,74; merge/GitHub helpers only in user-profile-writes.worker.ts:325,375,432 and openclaw-state-read.worker.ts:616; private key scans serve these worker writers",
       },
     ],
   ],
@@ -707,6 +735,1133 @@ const reviewedOperations = new Map([
         operations: ["prepareAgentDeletionPathFence"],
         evidence:
           "Pre-open registration/schema/lease admission at openclaw-agent-db-registry.ts:79, schema.ts:519 and lease.ts:161,495,699; runtime journal mutation/fence reads stay T1",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-archive-read.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "readTranscriptArchivePresenceInWorker",
+          "readTranscriptArchiveFinalInWorker",
+          "readTranscriptArchivePageInWorker",
+        ],
+        evidence:
+          "Only session-transcript.worker.ts:230 (presence) and session-accessor.sqlite-archive.worker.ts:483,491 (page/final) call these readers; shared archive listing remains T1.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-canonical-inventory.ts",
+    [
+      {
+        tier: "T3",
+        operations: [
+          "listCanonicalSessionRepairFacts",
+          "loadCanonicalSessionRepairEntries",
+          "scanDoctorSessionEntriesStrict",
+          "scanDoctorSessionEntriesTolerant",
+        ],
+        evidence:
+          "Doctor callers only: commands/doctor-session-canonical-candidates.ts:94; doctor-session-canonical-keys.ts:132; doctor-state-integrity.ts:1280; doctor-session-title-repair.ts:118; doctor-session-delivery-state.ts:112; doctor/shared/codex-route-session-repair.ts:551,552.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-entry-list.read.ts",
+    [
+      {
+        tier: "W",
+        operations: ["listSqliteSessionEntriesFromDatabase"],
+        binding: "rows",
+        evidence:
+          "Only session-entry-read-runtime.ts:458,488 produces cronRetention/expiredCronRuns through withSessionStoreReaderInWorker; session-entry-read.worker.ts:166 calls listSessionEntriesReadOnly. Other native list callers omit both selectors; only the rows initializer is worker-only.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-generation-copy.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["copySqliteSessionGenerationRows"],
+        evidence:
+          "Doctor cross-store repair: legacy-main-session-migration-operations.ts:324 is gated by doctor-fix at :550; session-accessor.sqlite-canonical-repair.ts:504 is called by commands/doctor-session-canonical-keys.ts:454. Gateway agents.create detect mode does not copy.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-import.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["importSqliteSessionRowsInTransaction", "importSqliteSessionRowsBatch"],
+        evidence:
+          "Legacy session migration: commands/doctor-session-sqlite-import.ts:84 and doctor-session-sqlite-active.ts:73; Doctor retained recovery at doctor-session-sqlite-retained.ts:197 -> infra/deferred-plugin-session-sources.ts:541,590 -> deferred-plugin-session-verification.ts:92 -> deferred-plugin-session-empty.ts:78.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-node-artifacts.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["deleteSessionMembersForRepair"],
+        evidence:
+          "Only commands/doctor-session-canonical-keys.ts:311 and session-accessor.sqlite-canonical-repair.ts:513 call this member cleanup; the latter is Doctor repair via doctor-session-canonical-keys.ts:454.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-pending-inputs-repair.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["copySessionInputCompletionsForRepair"],
+        binding: "existing",
+        evidence:
+          "node-artifacts.ts:151 is shared, but entry-store.ts:372 runtime alias moves pass the same database and return at pending-inputs-repair.ts:130. The existing initializer is cross-database Doctor repair only, via canonical-repair.ts:514,521 and legacy-main-session-migration-operations.ts:343.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-status.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["readSessionEntriesByStatus"],
+        evidence:
+          "gateway/server-startup-session-migration.ts:103 and startup main-session recovery via agents/main-session-recovery/main-session-restart-recovery-runtime.ts:270 -> :94 -> main-session-restart-recovery-store.ts:207. Runtime expected-target retry takes :200 and skips enumeration; other direct reader is session-entry-read.worker.ts:306.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-transcript-write.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["replaceTranscriptEvents"],
+        evidence:
+          "Only production invocations are developer benchmarks scripts/bench-agent-database-holds.ts:142 and scripts/bench-session-history.ts:383; remaining references are internal reexports and excluded test helpers. Synchronous replacement is separately retained.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-canonical-key-read.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["isCanonicalSqliteSessionMainKeyCurrent"],
+        evidence:
+          "Only startup-migration.ts:287 calls it, through gateway/server-startup-session-migration.ts:201 and server-startup-plugins.ts:99 or deferred boot admission at server-agent-database-startup.ts:112.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-canonical-key.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["setCanonicalSqliteSessionMainKey"],
+        evidence:
+          "Only startup-migration.ts:291 boot admission and commands/doctor-session-canonical-keys.ts:438,518 repair call this setter; other canonical-key runtime operations stay T1.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-canonical-validation.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "seedCanonicalSessionValidation",
+          "readPendingCanonicalSessionValidationBatch",
+          "compareAndCertifyCanonicalSessionValidationBatch",
+        ],
+        evidence:
+          "Only session-accessor.sqlite-mutation-worker.runtime.ts:375,280,381 calls these operations in the mutation-worker message handler. Shared host readiness hasPendingCanonicalSessionValidation stays T1.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-cold-storage-backup.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["embedSessionColdArchivesInSnapshot"],
+        evidence:
+          "infra/backup-sqlite-snapshot.ts:292 via backup-create.ts:320,332,352; snapshot/openclaw-snapshot-copy.ts:72 via local-repository.ts:148 and git-backup.ts:310. Roots are commands/backup.ts:52, backup-sqlite.ts:80, backup-git.ts:131, Doctor/update backup and developer reliability scripts; SQL targets a temporary snapshot.",
+      },
+    ],
+  ],
+  [
+    "src/gateway/config-revision-token.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["loadOrCreateConfigRevisionKey", "loadGatewayConfigRevisionKey"],
+        evidence:
+          "Gateway construction at server-kernel-request-runtime.ts:48; local-request-context.ts:107 also initializes it via agents/agent-command-local.ts:61 for standalone commands/boot. Existing Gateway scopes return before local allocation at local-request-context.ts:237. Request hashing captures the key and performs no SQL.",
+      },
+    ],
+  ],
+  [
+    "src/gateway/github-personal-publication-store.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["requirePersonalGitHubPublicationConfirmation"],
+        evidence:
+          "Only github-publication-runtime.ts:18 during construction by server-worker-placement-startup.ts:90, reached from server-runtime-state-prepare.ts:181. Periodic reconcilePublications never calls the fence.",
+      },
+    ],
+  ],
+  [
+    "src/gateway/operator-approval-standing-grants.ts",
+    [
+      {
+        tier: "W",
+        operations: ["listCronStandingGrantsInDatabase"],
+        evidence:
+          "Only state/openclaw-state-read.worker.ts:495; server-methods/exec-approval.ts:462 -> operator-approval-store.ts:273 uses readApprovalStore -> executeExistingOpenClawStateRead at :248 even when a guard exists.",
+      },
+    ],
+  ],
+  [
+    "src/gateway/operator-approval-store.rows.ts",
+    [
+      {
+        tier: "W",
+        operations: ["hasApprovalLocatorNamespaceConflict"],
+        evidence:
+          "Only operator-approval-store.kernel.ts:98 insert calls it. Sole facade caller exec-approval-manager.ts:125 passes assertCurrent but no native guard, so operator-approval-store.ts:173 dispatches the registered worker operation.",
+      },
+    ],
+  ],
+  [
+    "src/gateway/worker-environments/placement-move-intent.ts",
+    [
+      {
+        tier: "W",
+        operations: ["readWorkerPlacementMovesReadOnly"],
+        evidence:
+          "Only placement-dispatch-store.worker.ts:69, placement-turn-claims.worker.ts:72 and placement-read-projection.ts:85 call the batch reader; projection itself is only called by state/openclaw-state-read.worker.ts:670. Native getPlacementMove uses another reader.",
+      },
+    ],
+  ],
+  [
+    "src/gateway/worker-environments/placement-workspace-reservation.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: ["assertSessionWorkspaceUnreserved"],
+        evidence:
+          "placement-dispatch-store.worker.ts:39 and placement-turn-claims.ts:93 claim path; claims only invoked at placement-turn-claims.worker.ts:160,175,345. Native placement-store.ts:75,76 selects clear/wait/validate methods.",
+      },
+    ],
+  ],
+  [
+    "extensions/memory-core/src/memory-session-tombstones.ts",
+    [
+      {
+        tier: "W",
+        operations: ["recordMemorySessionTombstonesInDatabase"],
+        evidence:
+          "memory-entry-origins.worker.ts:76 -> memory-forget-kernel.ts:40 is the only production writer; manager-cpu-entrypoints.ts:38 registers the worker backend. The separate hasMemorySessionTombstone host reader stays T1.",
+      },
+    ],
+  ],
+  [
+    "extensions/memory-core/src/memory/manager-status-state.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["collectMemoryStorageStatus"],
+        evidence:
+          "Only manager.ts:546 calls the storage query, gated by sourceInspections populated through inspectSources at manager.ts:182. Explicit diagnostic callers are cli-status.runtime.ts:218, cli-index-search.runtime.ts:73,214, and src/commands/status.scan.shared.ts:474; ordinary Gateway status does not request inspection.",
+      },
+    ],
+  ],
+  [
+    "src/agents/harness/native-hook-relay-bridge-query.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["readNativeHookRelayBridgeRow"],
+        evidence:
+          "Native Node one-shot CLI: src/cli/native-hook-relay-cli.ts:98 -> native-hook-relay-client.ts:39 -> native-hook-relay-client-store.ts:20 -> native-hook-relay-client-read.ts:22. Gateway reads/mutations use native-hook-relay-store.worker.ts:11,35,44,53 through store.kernel.ts:48; Bun CLI uses its client worker.",
+      },
+    ],
+  ],
+  [
+    "src/agents/plugin-model-catalog.kernel.ts",
+    [
+      {
+        tier: "T2",
+        operations: [
+          "replacePluginModelCatalogEntriesInDatabase",
+          "replacePluginModelCatalogEntriesInDatabase.upsertCacheEntry",
+        ],
+        evidence:
+          "Native replacement is Doctor import only: src/commands/doctor-plugin-model-catalog.ts:103 -> plugin-model-catalog.ts:495,517 -> :162. The other caller is plugin-model-catalog.worker.ts:94; readPluginModelCatalogEntries remains T1.",
+      },
+    ],
+  ],
+  [
+    "src/agents/sandbox/registry.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "removeRegistryRowInDatabase",
+          "insertSandboxRegistryRowIfMissingInDatabase",
+          "readRegistryRows",
+        ],
+        evidence:
+          "Removal is only registry-write.worker.ts:15 -> writeSandboxRegistryInDatabase (:88,101,112,127); import only registry-import.worker.ts:17. List helpers (:348,357,366) are called only at src/state/openclaw-state-read-registry.ts:75,86,90 through openclaw-state-read.worker.ts:679. Native shared insert/row readers stay T1.",
+      },
+    ],
+  ],
+  [
+    "src/agents/subagents/registry/subagent-registry.store.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "conflictingSubagentRunVersions",
+          "upsertSubagentRunRowInDatabase",
+          "deleteSubagentRunRowInDatabase",
+          "writeSubagentRunValuesInDatabase",
+        ],
+        evidence:
+          "Only subagent-registry.store.worker.ts:46,62 and completion/subagent-completion-admission.worker.ts:90,126,182 invoke the conflict/upsert/write kernels. Delete/upsert in completion/subagent-completion-mutation.kernel.ts:235,237 is reached only by admission.worker.ts:188; no native writer caller remains.",
+      },
+    ],
+  ],
+  [
+    "src/agents/subagents/registry/subagent-registry.store.sqlite.ts",
+    [
+      {
+        tier: "W",
+        operations: ["readSubagentRunRow", "readSubagentSessionListRows"],
+        evidence:
+          "Row reads are only completion/subagent-completion-admission.worker.ts:94,155 or its mutation kernel at :246,274,293,412,523,562,576 (admission.worker.ts:188). Session-list loader at store.sqlite.ts:409 is called only by src/state/openclaw-state-read.worker.ts:196; other native registry readers remain T1.",
+      },
+      {
+        tier: "T2",
+        operations: ["hasSubagentSessionOwnerInDatabase"],
+        evidence:
+          "Only subagent-session-reconciliation.ts:255 invokes the ownership query, through server-startup-session-migration.ts:130. Callers are server-startup-plugins.ts:99 and server-agent-database-startup.ts:112; the latter is the one-time deferred boot-inspection continuation in src/state/agent-database-startup.ts:235,290,322, not request/timer maintenance.",
+      },
+    ],
+  ],
+  [
+    "src/agents/workspace-alias-rebind.ts",
+    [
+      {
+        tier: "T2",
+        operations: [
+          "readWorkspaceMoveState",
+          "detectRepointedWorkspaceAlias",
+          "rebindRepointedWorkspaceAlias",
+        ],
+        evidence:
+          "Only src/commands/doctor-workspace-alias.ts:67,107,131 invokes detect/rebind; readWorkspaceMoveState is private at :166,282. Doctor health/lint reaches detection via src/flows/doctor-health-contributions-final.ts:269 and doctor-health-contribution-runners.workspace.ts:77; repair is installed by src/commands/doctor-config-flow.ts:83,93.",
+      },
+    ],
+  ],
+  [
+    "src/agents/worktrees/registry-read.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "listLiveRegistryWorktreeIdsInDatabase",
+          "getRegistryWorktreeProvisionedChunkInDatabase",
+        ],
+        evidence:
+          "Only worktrees/dispatch.worker.ts:31,39 calls these kernels; src/state/openclaw-state-worker-registry.ts:149 registers the handlers. Shared native worktree getters/list/provisioned-data readers remain T1.",
+      },
+    ],
+  ],
+  [
+    "src/agents/worktrees/registry.ts",
+    [
+      {
+        tier: "T2",
+        operations: [
+          "listRegistryWorktreesForMigration",
+          "rewriteRegistryWorktreePathsForMigration",
+        ],
+        evidence:
+          "Only migration discovery src/infra/state-migrations.doctor-discovery.ts:78 and Doctor repair src/config/sessions/worktree-workspace-migration.ts:116 call the list; the latter requires doctor-fix mode and is invoked at src/commands/doctor-session-worktree-workspace.ts:30. Rewrite is called only by state-migrations.doctor.ts:1362, reached through Doctor/startup migration owner at :2488,2509,2717.",
+      },
+      {
+        tier: "T3",
+        operations: ["listLegacyRegistryWorktreesForMigration", "discardLegacyRegistryWorktrees"],
+        evidence:
+          "Legacy list is only src/infra/state-migrations.doctor-discovery.ts:52 under doctorOnlyStateMigrations === true (:51); discard is only state-migrations.doctor.ts:1360 under isDoctor (:1359). Ordinary runtime worktree readers and mutations remain T1.",
+      },
+    ],
+  ],
+  [
+    "src/agents/worktrees/run-lease-owner.ts",
+    [
+      {
+        tier: "W",
+        operations: ["readWorktreeRunLeaseStateInDatabase"],
+        evidence:
+          "Only src/state/openclaw-state-read-registry.ts:96 calls this reader, dispatched in openclaw-state-read.worker.ts:679. Host worktrees/registry-read.ts:71 uses the existing read worker; live lease/custody helpers retain their native tiers.",
+      },
+    ],
+  ],
+  [
+    "src/agents/worktrees/run-lease-store.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: ["admitWorktreeRunLeaseInDatabase"],
+        evidence:
+          "Only worktrees/dispatch.worker.ts:50 registers admission through run-lease-store.worker.ts:6; src/state/openclaw-state-worker-registry.ts:149 loads the handler. Shared release/lease cleanup remain T1.",
+      },
+    ],
+  ],
+  [
+    "src/plugin-state/plugin-state-store.kernel.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["selectPluginStateEntriesInKeyRange"],
+        evidence:
+          "Native raw-row inspection only: src/infra/state-migrations.plugin-doctor-context.ts:416 -> plugin-state-store.sqlite.ts:394. Other callers are plugin-state.worker.ts:104 -> plugin-state-store.reads.ts:111 and plugin-state.worker.ts:173 -> plugin-state-store.journal.ts:122; public key-range facade is asynchronous at plugin-state-store.ts:580.",
+      },
+      {
+        tier: "W",
+        operations: ["allocatePluginStateNamespaceCreatedAt"],
+        evidence:
+          "Only plugin-state-store.journal.ts:202 calls allocation, and only plugin-state.worker.ts:173 calls that journal kernel; host facade plugin-state-store.ts:555 dispatches registerPluginStateJournalInWorker.",
+      },
+    ],
+  ],
+  [
+    "src/plugin-state/plugin-state-store.retention.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["readPluginStateRetention"],
+        evidence:
+          "Only migration/Doctor batch creates retention: src/infra/state-migrations.plugin-doctor-context.ts:409 -> plugin-state-store.ts:597 -> plugin-state-store.sqlite.ts:133,139. The conditional retention refresh at plugin-state-store.retention.ts:228 shares that batch; native ordinary registration (:107) and worker registration (plugin-state.worker.ts:190) omit retention.",
+      },
+    ],
+  ],
+  [
+    "src/plugin-state/plugin-state-store.sqlite.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["pluginStateDeleteEntriesIfUnchanged"],
+        evidence:
+          "Only src/infra/state-migrations.plugin-doctor-context.ts:466 calls exact-row deletion, after repair-authority validation at :464. Context creation is limited to state-migrations.plugin-doctor.ts:200,325; no runtime keyed-store method exposes this repair operation.",
+      },
+    ],
+  ],
+  [
+    "packages/memory-host-sdk/src/host/memory-recall-metadata.ts",
+    [
+      {
+        tier: "W",
+        operations: ["readCuratedCandidateBatch"],
+        evidence:
+          "extensions/memory-core/src/memory/manager-search.worker.ts:160,161 → curated readers → memory-recall-metadata.ts:162; SDK barrels only re-export.",
+      },
+    ],
+  ],
+  [
+    "src/acp/runtime/session-meta-doctor.ts",
+    [
+      {
+        tier: "T3",
+        operations: [
+          "repairAcpSessionMetaKeysForDoctor",
+          "inspectAcpSessionClaimsForDoctor",
+          "updateAcpSessionIdentityForDoctor",
+        ],
+        evidence:
+          "Doctor repair: src/commands/doctor-session-transcripts.ts:318. Plugin Doctor context: src/infra/state-migrations.plugin-doctor-context.ts:403,463, constructed by state-migrations.plugin-doctor.ts:200,325.",
+      },
+    ],
+  ],
+  [
+    "src/acp/runtime/session-meta-keys.ts",
+    [
+      {
+        tier: "W",
+        operations: ["selectAcpSessionRows"],
+        evidence:
+          "src/acp/runtime/session-meta-list.ts:21 submits acpSessions.list → src/state/openclaw-state-read.worker.ts:264.",
+      },
+    ],
+  ],
+  [
+    "src/claws/cron.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["persistPendingRef", "updateRef", "deleteClawCronRef", "upsertClawCronRef"],
+        evidence:
+          "CLI add/update/remove only: src/cli/claws-cli.ts:115,152,181 → add.ts:585, update-apply.ts:541 and lifecycle-state.ts:555,557 → cron.ts/cron-update.ts.",
+      },
+    ],
+  ],
+  [
+    "src/claws/lifecycle-config-removal.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["withClawAgentConfigRemoval"],
+        evidence:
+          "src/cli/claws-cli.runtime.ts:562 invokes removal → src/claws/lifecycle-state.ts:489 (sole caller).",
+      },
+    ],
+  ],
+  [
+    "src/claws/lifecycle-delete-support.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["releaseClawRemoveRows"],
+        evidence:
+          "src/cli/claws-cli.runtime.ts:562 invokes removal → src/claws/lifecycle-state.ts:650 (sole caller).",
+      },
+    ],
+  ],
+  [
+    "src/claws/mcp.ts",
+    [
+      {
+        tier: "T3",
+        operations: [
+          "persistPendingRef",
+          "updateRef",
+          "deleteClawMcpServerRef",
+          "upsertClawMcpServerRef",
+        ],
+        evidence:
+          "CLI add/update/remove only: src/cli/claws-cli.ts:115,152,181 → add.ts:568,570, update-apply.ts:410 and lifecycle-state.ts:506 → mcp.ts/mcp-update.ts/lifecycle-mcp-removal.ts.",
+      },
+    ],
+  ],
+  [
+    "src/claws/package-status.kernel.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["updateClawPackageRefStatusInDatabase"],
+        evidence:
+          "CLI add: src/claws/add.ts:264 → packages.ts:316,395,567,579,656 → provenance.ts:488; worker sibling provenance-write.worker.ts:81.",
+      },
+    ],
+  ],
+  [
+    "src/claws/package-update-provenance.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["replaceClawPackageRefExpected"],
+        evidence:
+          "CLI update: src/cli/claws-update-cli.runtime.ts:175 → src/claws/update-apply.ts:300,322 → package-update.ts:59,98,99,182,183,228,234,254.",
+      },
+    ],
+  ],
+  [
+    "src/claws/provenance-read.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: ["readClawOrphanWorkspaceInDatabase"],
+        evidence:
+          "Only src/state/openclaw-state-read.worker.ts:232 and src/claws/provenance-write.worker.ts:48 execute the reader.",
+      },
+    ],
+  ],
+  [
+    "src/claws/workspace.ts",
+    [
+      {
+        tier: "T3",
+        operations: [
+          "persistWorkspaceFile",
+          "readWorkspaceFile",
+          "updateWorkspaceFileStatus",
+          "upsertClawWorkspaceFile",
+          "deleteClawWorkspaceFileRecord",
+        ],
+        evidence:
+          "CLI add: src/claws/add.ts:509,511 → workspace.ts:376,408,417,419,427,432; CLI update: update-apply.ts:398 → workspace-update.ts:115,121,171,173,177.",
+      },
+    ],
+  ],
+  [
+    "src/cron/scratch-read.kernel.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["readScratchStateFromDatabase", "readHeartbeatMonitorScratchFromDatabase"],
+        evidence:
+          "Doctor-only native reads: src/commands/doctor-heartbeat-scratch-migration.ts:516,567,588 and doctor-heartbeat-task-migration.ts:94,411 → scratch-store.ts:33,42,52. Worker sibling src/cron/store/read-command.ts:54.",
+      },
+    ],
+  ],
+  [
+    "src/cron/scratch-store.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["deleteCronJobScratch"],
+        evidence:
+          "Sole native caller src/commands/doctor-heartbeat-scratch-migration.ts:625: revision-guarded migration compensation.",
+      },
+    ],
+  ],
+  [
+    "src/cron/scratch-write.kernel.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["writeCronJobScratchInDatabase", "writeCronJobScratchForMaintenance"],
+        evidence:
+          "Doctor migration/compensation at src/commands/doctor-heartbeat-scratch-migration.ts:570,617; worker sibling src/cron/store/scratch.worker.ts:28.",
+      },
+    ],
+  ],
+  [
+    "src/infra/deferred-plugin-session-sources.ts",
+    [
+      {
+        tier: "T2",
+        operations: [
+          "rebuildDeferredPluginSessionSourceIndex",
+          "recordDeferredPluginSessionImport",
+        ],
+        evidence:
+          "Doctor retained-source recovery/import: src/commands/doctor-session-sqlite-retained.ts:197 and doctor-session-sqlite.ts:376,1039.",
+      },
+    ],
+  ],
+  [
+    "src/infra/delivery-queue-sqlite-bound.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["terminalizeBoundDeliveryQueueEntry", "pruneOrdinaryDeliveryReceipts"],
+        evidence:
+          "Native migration: src/infra/outbound/delivery-queue-migration.ts:308; schema backfill: src/state/openclaw-state-db-delivery-queue-backfill.ts:93. Other terminalization/pruning callers are delivery-queue.worker.ts:117,316,387,457 and session-delivery-queue.worker.ts:264.",
+      },
+    ],
+  ],
+  [
+    "src/infra/delivery-queue-sqlite-namespace.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: ["commitStagedDeliveryQueueEntryOnceAcrossNamespacesInDatabase"],
+        evidence:
+          "src/infra/outbound/delivery-queue-enqueue.worker.ts:95; registered dispatch src/infra/delivery-queue.worker.ts:445.",
+      },
+      {
+        tier: "T2",
+        operations: ["loadPendingDeliveryQueueRow"],
+        evidence:
+          "Native replace/move: src/infra/delivery-queue-sqlite-namespace.ts:34,49 → outbound/delivery-queue-migration.ts:169,205,235,289,349,367,435. Other callers are enqueue/delivery workers.",
+      },
+    ],
+  ],
+  [
+    "src/infra/delivery-queue-sqlite-namespace.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["replacePendingDeliveryQueueEntry", "movePendingDeliveryQueueEntryNamespace"],
+        evidence:
+          "Sole native callers src/infra/outbound/delivery-queue-migration.ts:169,205,235,289,349,367,435; Doctor entry src/commands/doctor-outbound-delivery.ts:137,162.",
+      },
+    ],
+  ],
+  [
+    "src/infra/delivery-queue-sqlite.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "expireStagingAndLoadDeliveryQueueEntriesInDatabase",
+          "expireStagingAndLoadDeliveryQueueEntriesInDatabase.read",
+          "countFailedDeliveryQueueEntriesInDatabase",
+        ],
+        evidence:
+          "Expiry snapshot: src/infra/delivery-queue.worker.ts:487 → outbound/delivery-queue-media-staging.kernel.ts:74. Failed count: delivery-queue.worker.ts:455.",
+      },
+      {
+        tier: "T2",
+        operations: ["loadDeliveryQueueEntriesInDatabase", "deleteDeliveryQueueEntryInDatabase"],
+        evidence:
+          "Native loads/deletes are Doctor migration: src/commands/doctor-outbound-delivery.ts:47,48,52,137,162 and src/infra/outbound/delivery-queue-migration.ts:289,349,435,506,528,551. Remaining calls use queue workers.",
+      },
+    ],
+  ],
+  [
+    "src/infra/device-identity-store.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["repairInvalidStoredDeviceIdentity"],
+        evidence:
+          "src/infra/state-migrations.device-identity.ts:475 enforces doctorOnlyStateMigrations, then :494 → state-migrations.device-identity-repair.ts:64.",
+      },
+    ],
+  ],
+  [
+    "src/infra/exec-approvals-sqlite.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["deleteExecApprovalsConfigRow"],
+        evidence:
+          "src/cli/exec-policy-cli.ts:405 → src/infra/exec-approvals-store.ts:431 restores an absent row after CLI config-write failure.",
+      },
+    ],
+  ],
+  [
+    "src/infra/exec-approvals-store.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["restoreExecApprovalsSnapshotLocked"],
+        evidence:
+          "Only src/cli/exec-policy-cli.ts:405 restores the snapshot after CLI config-write failure.",
+      },
+    ],
+  ],
+  [
+    "src/infra/package-update-activation-journal.ts",
+    [
+      {
+        tier: "T3",
+        operations: [
+          "openPackageActivationJournal.withDatabase.validate",
+          "openPackageActivationJournal.readRow",
+          "openPackageActivationJournal.transition",
+          "openPackageActivationJournal.replaceCompleted",
+          "createPackageActivationJournal",
+          "createPackageActivationJournal.verifyPrivate",
+        ],
+        evidence:
+          "CLI admission/status: src/cli/update-cli/update-command-run.ts:208, status.ts:240. Guarded swap: update-command-package.ts:542,645 → src/infra/package-update-swap.ts:342,356 → package-update-activation-prepare.ts:189,298; standalone recovery package-update-activation-sealed.ts:39,62,63.",
+      },
+    ],
+  ],
+  [
+    "src/infra/package-update-activation-status.ts",
+    [
+      {
+        tier: "T3",
+        operations: [
+          "readReleasedPackageActivationReceipt.validate",
+          "readReleasedPackageActivationReceipt",
+        ],
+        evidence:
+          "CLI status src/cli/update-cli/status.ts:240 → src/infra/package-update-activation.ts:144; CLI preflight update-command-run.ts:208 → activation.ts:79,40.",
+      },
+    ],
+  ],
+  [
+    "src/infra/restart-handoff.ts",
+    [
+      {
+        tier: "T3",
+        operations: [
+          "consumeGatewayRestartHandoffSync",
+          "consumeGatewayRestartHandoffSync.removeCurrent",
+        ],
+        evidence:
+          "Only CLI gateway-cli/register-restart-handoff.ts:61 calls consumeGatewayRestartHandoffSync and its private removeCurrent helper; shared row reader also runs at Gateway boot and remains T1.",
+      },
+    ],
+  ],
+  [
+    "src/infra/restart-intent.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["writeGatewayRestartIntentForTargetSync"],
+        evidence:
+          "CLI lifecycle src/cli/daemon-cli/lifecycle-restart-intent.ts:68,75, lifecycle-unmanaged.ts:131; update stop src/daemon/launchd-stop.ts:219,271; QA suite-runtime-gateway.ts:262. Gateway system-agent uses host.request (operations-execute.ts:601,608), not daemon lifecycle.",
+      },
+    ],
+  ],
+  [
+    "src/infra/restart-sentinel-store.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["writeRestartSentinelRowIfRevisionSync"],
+        evidence:
+          "src/infra/restart-sentinel.worker.ts:74,150 plus generated one-shot child in src/infra/update-managed-service-handoff.ts:101,439,1639,1649.",
+      },
+      {
+        tier: "W",
+        operations: ["deleteRestartSentinelRowSync"],
+        evidence:
+          "Only src/infra/restart-sentinel.worker.ts:79; worker registration src/state/openclaw-state-worker-registry.ts:110.",
+      },
+    ],
+  ],
+  [
+    "src/infra/session-sqlite-transcript-verification.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["verifyTranscriptEvents", "verifyCanonicalSessionTranscriptSources"],
+        evidence:
+          "Doctor readers/import verification: src/commands/doctor-session-sqlite-missing-index.ts:80, doctor-session-sqlite-active.ts:60, doctor-session-sqlite-import.ts:302, doctor-session-sqlite-verification.ts:303; retained recovery doctor-session-sqlite-retained.ts:197.",
+      },
+    ],
+  ],
+  [
+    "src/infra/sqlite-audit-record-store.ts",
+    [
+      {
+        tier: "T2",
+        operations: [
+          "createSqliteAuditRecordStore.upsert",
+          "createSqliteAuditRecordStore.registerLegacyMany",
+        ],
+        evidence:
+          "Legacy migration only: src/infra/state-migrations.audit-recovery.ts:561 and state-migrations.audit-logs.ts:435,470,561; Doctor steps state-migrations.doctor.ts:1436,1457.",
+      },
+    ],
+  ],
+  [
+    "src/infra/sqlite-audit-record.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: ["createSqliteAuditRecordKernel.deleteRecord"],
+        evidence:
+          "src/config/config-journal-snapshot.worker.ts:11 → config-journal-snapshot.kernel.ts:38,43. Native greeting callbacks (src/system-agent/greeting.ts:424,554) never return delete, retaining their SQL T1.",
+      },
+      {
+        tier: "T2",
+        operations: ["createSqliteAuditRecordKernel.entries"],
+        evidence:
+          "Migration readers src/infra/state-migrations.audit-checkpoints.ts:53,146, audit-recovery.ts:577, audit-logs.ts:416,436; CLI backup via backup-create.ts:350,360 → audit-backup.ts:113,141; worker diagnostics openclaw-state-read.worker.ts:401.",
+      },
+    ],
+  ],
+  [
+    "src/infra/update-candidate-state.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["collectRegisteredPaths"],
+        evidence:
+          "CLI backup src/cli/update-cli/update-command-database-backup.ts:104 → src/infra/update-database-backup.ts:387; baseline update-command-initialization-run.ts:224 → update-recovery-baseline-capture.ts:343; worker inventory modes update-candidate-state.worker.ts:49,68,73.",
+      },
+      {
+        tier: "W",
+        operations: ["snapshotUpdateCandidateState.transform"],
+        evidence:
+          "Snapshot sole executor src/infra/update-candidate-state.worker.ts:63 (isolated candidate child).",
+      },
+    ],
+  ],
+  [
+    "src/infra/update-run-ledger.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["createUpdateRun"],
+        binding: "active",
+        evidence:
+          "active initializer requires stale-run opt-in only from src/cli/update-cli/update-command-run.ts:304,310,313; guard src/infra/update-run-ledger.ts:127 excludes Gateway/campaign callers. Repairs: update-repair-command.ts:141; interruption: update-command-mutable-signals.ts:158.",
+      },
+      {
+        tier: "T3",
+        operations: ["reconcilePackageOwnerRefusal", "finishInterruptedUpdateBeforeActivation"],
+        evidence:
+          "active initializer requires stale-run opt-in only from src/cli/update-cli/update-command-run.ts:304,310,313; guard src/infra/update-run-ledger.ts:127 excludes Gateway/campaign callers. Repairs: update-repair-command.ts:141; interruption: update-command-mutable-signals.ts:158.",
+      },
+    ],
+  ],
+  [
+    "src/node-host/node-worker-lineage-completion.ts",
+    [
+      {
+        tier: "W",
+        operations: ["recordCompletion"],
+        evidence:
+          "Detached anchor spawned at src/process/supervisor/service-child-relay.ts:167; only service-child-group-anchor.ts:229,273 calls completion. W denotes the isolated supervisor subprocess.",
+      },
+    ],
+  ],
+  [
+    "src/pairing/pairing-store-sqlite.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["updateChannelPairingStateSnapshot"],
+        evidence:
+          "Only src/infra/state-migrations.channel-pairing.ts:314,348 invokes the snapshot transaction; registered by state-migrations.doctor.ts:1527.",
+      },
+    ],
+  ],
+  [
+    "src/secrets/store/secret-store-hidden-github.ts",
+    [
+      {
+        tier: "W",
+        operations: ["writePersonalGitHubSecret"],
+        evidence:
+          "Counted expression is null DELETE only: src/state/user-github-connections.ts:260 → user-profiles-merge.ts:58 → user-profile-writes.worker.ts:325,375,432. Other value callers pass JSON strings.",
+      },
+    ],
+  ],
+  [
+    "src/skills/workshop/store-sqlite-record.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["readStoredProposalInDatabase", "updateProposal"],
+        evidence:
+          "Doctor native read/update src/commands/doctor-skill-workshop-sqlite.ts:333,349; other callers use src/skills/workshop/store.worker.ts:68,129,149,167,182,188.",
+      },
+      {
+        tier: "W",
+        operations: ["insertProposal"],
+        evidence:
+          "Only src/skills/workshop/store-proposal.kernel.ts:73,168 inserts; sole executors store.worker.ts:139,157.",
+      },
+    ],
+  ],
+  [
+    "src/state/agent-deletion-journal.read.ts",
+    [
+      {
+        tier: "W",
+        operations: ["readAgentDeletionJournalStatusInDatabase"],
+        evidence:
+          "src/state/openclaw-state-read-registry.ts:65 under read worker :679; other executor src/state/openclaw-agent-execution.worker.ts:190.",
+      },
+    ],
+  ],
+  [
+    "src/state/agent-provenance.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: ["listAgentProvenanceInDatabase"],
+        evidence:
+          "src/state/agent-provenance.ts:114 submits agentProvenance.list → openclaw-state-worker-runtime.ts:277.",
+      },
+    ],
+  ],
+  [
+    "src/state/config-machine-state-write.ts",
+    [
+      {
+        tier: "W",
+        operations: ["deleteConfigMachineState"],
+        evidence:
+          "src/state/onboarding-recommendations.ts:77 submits clear → worker registry :171 → onboarding-recommendations.kernel.ts:178.",
+      },
+      {
+        tier: "T2",
+        operations: ["importConfigMachineState"],
+        evidence:
+          "Only migrations src/infra/state-migrations.config-machine-state.ts:71 and state-migrations.update-check.ts:66; Doctor roots doctor-config-preflight.cron.ts:27 and state-migrations.doctor.ts:910,1394.",
+      },
+    ],
+  ],
+  [
+    "src/state/openclaw-agent-canonical-validation-receipt.ts",
+    [
+      {
+        tier: "W",
+        operations: ["recordOpenClawAgentCanonicalValidation"],
+        evidence:
+          "src/config/sessions/session-accessor.sqlite-mutation-worker.runtime.ts:392; loaded only by archive.worker.ts:523,594.",
+      },
+    ],
+  ],
+  [
+    "src/state/openclaw-agent-db-path-repair.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["repairOpenClawAgentDatabasePathAliases"],
+        evidence:
+          "src/commands/doctor-agent-database-paths.ts:24 under Doctor repair; registered health runner src/flows/doctor-health-contribution-runners.state.ts:122.",
+      },
+    ],
+  ],
+  [
+    "src/state/openclaw-agent-db-registry.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["unregisterOpenClawAgentDatabases"],
+        evidence:
+          "Plural unregister: CLI claw removal src/claws/lifecycle-delete-support.ts:519 → cli/claws-cli.runtime.ts:562; CLI agent deletion src/commands/agents.commands.delete.ts:450 → cli/program/register.agent.ts:183.",
+      },
+    ],
+  ],
+  [
+    "src/state/openclaw-state-ownership-operations.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["claimOwnershipRow", "claimOpenClawStateOwnership"],
+        evidence:
+          "Only src/cli/program/register.database.ts:56 invokes claim; its private claimOwnershipRow calls remain within this CLI operation.",
+      },
+    ],
+  ],
+  [
+    "src/state/openclaw-state-snapshot-sanitizer.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["sanitizeOpenClawGlobalStateSnapshot"],
+        evidence:
+          "CLI SQLite/git backups: src/snapshot/local-repository.ts:148, git-backup.ts:310 → openclaw-snapshot-copy.ts:68; archive/Doctor backup via src/infra/backup-create.ts:320,332,352 → backup-sqlite-snapshot.ts:287; developer reliability scripts also use the provider.",
+      },
+    ],
+  ],
+  [
+    "src/state/user-model-accounts.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["renameUserProfileAuthLinks"],
+        evidence:
+          "Only src/commands/doctor-auth-flat-profiles.ts:1727 (Doctor alias migration), invoked by doctor/repair-sequencing.ts:189 and doctor/auth-profile-repair.ts:45.",
+      },
+      {
+        tier: "W",
+        operations: ["mergeUserModelAccounts"],
+        evidence:
+          "Only src/state/user-profiles-merge.ts:57, executed by user-profile-writes.worker.ts:325,375,432.",
+      },
+    ],
+  ],
+  [
+    "src/state/user-profile-events.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["publishUserProfileAuthorityChange"],
+        evidence:
+          "Native calls only user-profiles-owner-migration.ts:68 and user-profiles-tailscale-migration.ts:98 from src/commands/doctor/repair-sequencing.ts:353,354; remaining calls run in profile/preferences/channel-identity workers.",
+      },
+    ],
+  ],
+  [
+    "src/state/user-profile-github-identity.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "resolveUserProfileGitHubAttributionInDatabase",
+          "prepareUserProfileGitHubMerge",
+          "readGitHubIdentityBinding",
+          "applyVerifiedGitHubIdentity",
+          "applyVerifiedGitHubIdentity.writeIdentity",
+        ],
+        evidence:
+          "Read dispatcher src/state/openclaw-state-read.worker.ts:577; mutations user-profile-writes.worker.ts:424,432 and merges :325,375. ensureEmail path user-profiles.worker.ts:61; private writeIdentity only from applyVerifiedGitHubIdentity.",
+      },
+    ],
+  ],
+  [
+    "src/state/user-profiles-internal.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "insertUserProfile",
+          "selectUserProfileEmailAlias",
+          "setUserProfileEmailBinding",
+          "readProfileAvatarInDatabase",
+        ],
+        evidence:
+          "Creation/link/merge/sync calls flow through src/state/user-profiles.worker.ts:61,69,71 and user-profile-writes.worker.ts:325,350,359,375,430; identity/avatar reads dispatch only from openclaw-state-read.worker.ts:577,604,631.",
+      },
+    ],
+  ],
+  [
+    "src/state/user-profiles-merge.ts",
+    [
+      {
+        tier: "W",
+        operations: ["mergeUserProfiles"],
+        evidence:
+          "Only src/state/user-profile-writes.worker.ts:325,375,432 executes mergeUserProfiles.",
+      },
+    ],
+  ],
+  [
+    "src/state/user-profiles-owner.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["readGatewayOwnerProfileRows"],
+        evidence:
+          "Native reader only user-profiles-owner-migration.ts:25,52 → src/commands/doctor/shared/preview-warnings.ts:683 and doctor/repair-sequencing.ts:354; other caller is user-profiles.worker.ts:78.",
+      },
+      {
+        tier: "W",
+        operations: ["ensureGatewayOwnerProfileRow"],
+        evidence:
+          "src/state/user-profiles.ts:320 invokes ensureGatewayOwnerProfileRow; sole executor user-profiles.worker.ts:78.",
+      },
+    ],
+  ],
+  [
+    "src/state/user-profiles.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "ensureProfileForProviderIdentity.selectExistingIdentity",
+          "ensureProfileForProviderIdentity",
+          "adoptDisplayNameIfEmpty",
+        ],
+        evidence:
+          "Sole executor src/state/user-profiles.worker.ts:69 → ensureProfileForTailscaleIdentity → user-profiles.ts:339,345.",
+      },
+    ],
+  ],
+  [
+    "src/trajectory/runtime-store.sqlite.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["loadSqliteTrajectoryRuntimeEventRowsSync"],
+        binding: "countRow",
+        evidence:
+          "Only CLI export supplies maxEventCount: src/cli/program/register.status-health-sessions.ts:431 → commands/export-trajectory.ts:158 → trajectory/command-export.ts:80 → trajectory/export.ts:415,420. Keep polling/payload expressions T1.",
+      },
+    ],
+  ],
+  [
+    "src/transcripts/store-read.ts",
+    [
+      {
+        tier: "W",
+        operations: ["readLatestTranscriptEntry"],
+        evidence:
+          "src/transcripts/store.ts:250 submits transcripts.latest → src/state/openclaw-state-worker-runtime.ts:188 → src/transcripts/store-worker-read.ts:94; other reference is ReturnType only.",
       },
     ],
   ],
@@ -1122,7 +2277,7 @@ function render(rows) {
     "",
     "The warm `sessions.list` baseline used 5,000 rows, 50 viewers, and 350 calls: **zero host Kysely reads**, **3.07538 ms CPU per call**, and **3.12680 ms amortized wall time per call**. The original per-request store scan was already gone, so this lane does not claim another warm-list database cutover or speedup. These numbers do not cover projection hydration, dirty-row refresh, archived-row materialization, or membership reads.",
     "",
-    "The history cutover leaves selected/current session entries, pending-input/receipt reads, the retained transcript-session key, and lazy subagent source/run-input visibility reads as native work. Ordinary full pages were already worker-backed; raw cursor delta reads now share that worker. Process-held incognito database lifetime and the existing CLI-import history path remain explicit migration gaps. Incognito data cannot be reopened by a durable path in another isolate; this is remaining owner/lifetime work, not a new synchronous exception. A failed durable worker read never selects that local path.",
+    "The history cutover leaves selected/current session entries, pending-input/receipt reads, the retained transcript-session key, and lazy subagent source/run-input visibility reads as native work. Ordinary full pages and raw cursor deltas use the history worker. Bound Claude CLI history now uses its temporary merge index: cold preparation scans bounded source windows, and page/anchor requests project only selected messages. Process-held incognito database custody remains migration work because its database cannot be reopened by a durable path in another isolate. Its CLI-history adapter supplies bounded pages from the existing native owner to a request-scoped, memory-only worker index; ownership checks consume committed in-memory facts without additional native revision queries. A failed durable worker read never selects that local path.",
     "",
     "Durable session reaction summaries and target-message reads use the admitted history worker; reaction writes use the canonical SQLite worker broker with live transaction and commit admission. Process-held incognito reads and writes retain their sole native owner because their database cannot be reopened by path. The synchronous reaction kernel is shared by those admitted worker and incognito paths; no new broker capability or native fallback is added. Reaction mirroring reads durable source conversation bindings through the history worker, including a final read after account/config preparation and immediately before dispatch; synchronous handoff guards retain live reactor, session, and config checks. The conversation registry remains T1 because other synchronous callers are outside this cutover. Schemas, stored bytes, retention, and update behavior are unchanged.",
     "",

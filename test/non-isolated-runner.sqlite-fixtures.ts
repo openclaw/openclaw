@@ -51,6 +51,7 @@ import { afterAll, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts"))}, () => ({
+  resolveRuntimeWorkerThreadExecArgv: () => [],
   resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/shared-state.worker.js"),
 }));
 import { isSqliteWorkerStoreAvailable } from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-store.ts"))};
@@ -130,6 +131,7 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
   Worker: edge.forbidden,
 }));
 vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts"))}, () => ({
+  resolveRuntimeWorkerThreadExecArgv: () => [],
   resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/shared-state.worker.js"),
 }));
 vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-store.ts"))}, () => ({
@@ -298,6 +300,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, expect, it, vi } from "vitest";
 vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts"))}, () => ({
+  resolveRuntimeWorkerThreadExecArgv: () => [],
   resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/shared-state.worker.js"),
 }));
 import { resolveGlobalSingleton } from ${JSON.stringify(import.meta.resolve("../src/shared/global-singleton.ts"))};
@@ -534,6 +537,7 @@ function subagentRetirementFixtureFiles(): Record<string, string> {
     "10-c-subagent-registry.test.ts": `
 import { expect, it, vi } from "vitest";
 vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts"))}, () => ({
+  resolveRuntimeWorkerThreadExecArgv: () => [],
   resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/shared-state.worker.js"),
 }));
 import ${JSON.stringify(import.meta.resolve("../src/agents/subagents/registry/subagent-registry.ts"))};

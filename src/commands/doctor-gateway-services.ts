@@ -44,6 +44,7 @@ import { formatInstallOwnerMessage, readInstallOwner } from "../infra/install-ow
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { sleep } from "../utils/sleep.js";
 import { resolveGatewayDaemonRuntime } from "./daemon-runtime.js";
 import {
   preserveGatewayAuthTokenForService,
@@ -109,9 +110,7 @@ async function confirmLegacyLaunchdServiceUnloaded(serviceTarget: string): Promi
     if (delayMs <= 0) {
       break;
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, delayMs);
-    });
+    await sleep(delayMs);
   }
   return false;
 }

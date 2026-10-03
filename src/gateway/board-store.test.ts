@@ -1,11 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readBoardHtml } from "../boards/board-store.test-support.js";
 import { buildWidgetDocument } from "../canvas/wrap.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
+import * as admission from "../infra/sqlite-worker-operation-admission.js";
+import { invalidateRegisteredAgentDatabasesMemo } from "../state/openclaw-agent-db-registry-listing.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -273,6 +276,49 @@ it("reopens separate boards and progress cards in a shared database owned by ano
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 
+  const { invoke } = createBoardHarness(undefined, {}, boardStore, { getRuntimeConfig: () => cfg });
+  const create = admission.createSqliteWorkerOperationAdmission;
+  const resolverSql: string[] = [];
+  const stages = new Set<string>();
+  const interception = vi
+    .spyOn(admission, "createSqliteWorkerOperationAdmission")
+    .mockImplementation((admit, attachment) =>
+      create((request, grant) => {
+        if (request.stage !== "transaction" && request.stage !== "commit") {
+          admit(request, grant);
+          return;
+        }
+        stages.add(request.stage);
+        invalidateRegisteredAgentDatabasesMemo({});
+        const host = observeHostDataSql();
+        try {
+          admit(request, grant);
+        } finally {
+          resolverSql.push(
+            ...host.queries.filter((sql) =>
+              /\bfrom\s+"?(?:agent_databases|schema_meta)"?\b/iu.test(sql),
+            ),
+          );
+          host.restore();
+        }
+      }, attachment),
+    );
+  try {
+    for (const agentId of ["alpha", "beta"]) {
+      const response = await invoke("board.get", { sessionKey: `agent:${agentId}:main` });
+      expect(response).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          widgets: [expect.objectContaining({ name: agentId, revision: 1 })],
+        }),
+      );
+    }
+    expect(stages).toEqual(new Set(["transaction", "commit"]));
+    expect(resolverSql).toEqual([]);
+  } finally {
+    interception.mockRestore();
+  }
+
   for (const agentId of ["alpha", "beta"]) {
     const sessionKey = `agent:${agentId}:main`;
     expect((await boardStore.getSnapshot({ sessionKey })).widgets).toEqual([
@@ -283,6 +329,32 @@ it("reopens separate boards and progress cards in a shared database owned by ano
       markdown: `${agentId} progress`,
       revision: 1,
     });
+  }
+
+  for (const stage of ["transaction", "commit"] as const) {
+    const replacement = { ...cfg, session: { store: path.join(stateDir, "replacement.sqlite") } };
+    const revoked = vi
+      .spyOn(admission, "createSqliteWorkerOperationAdmission")
+      .mockImplementation((admit, attachment) =>
+        create((request, grant) => {
+          if (request.stage === stage) {
+            setRuntimeConfigSnapshot(replacement, replacement);
+          }
+          admit(request, grant);
+        }, attachment),
+      );
+    try {
+      const response = await invoke("board.get", { sessionKey: "agent:beta:main" });
+      expect(response).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ message: expect.stringContaining("board session changed") }),
+      );
+      expect(fs.existsSync(replacement.session.store)).toBe(false);
+    } finally {
+      revoked.mockRestore();
+      setRuntimeConfigSnapshot(cfg, cfg);
+    }
   }
 });
 

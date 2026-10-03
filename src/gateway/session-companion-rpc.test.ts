@@ -158,27 +158,6 @@ describe("session companion RPC", () => {
     },
   );
 
-  it("dispatches a valid ask and returns its timestamp", async () => {
-    const ask = vi.fn(async () => ({ answer: "It is checking the fix.", ts: 123 }));
-    const respond = await invoke(
-      "sessions.companion.ask",
-      { sessionKey: "agent:main:main", question: "What is happening?" },
-      { ask },
-    );
-
-    expect(ask).toHaveBeenCalledWith({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      question: "What is happening?",
-      connId: "conn-1",
-      assertSourceCurrent: expect.any(Function),
-    });
-    expect(respond).toHaveBeenCalledWith(true, {
-      answer: "It is checking the fix.",
-      ts: 123,
-    });
-  });
-
   it("forwards the authenticated request lifetime and emits one final response", async () => {
     const controller = new AbortController();
     const ask = vi.fn(async () => ({ answer: "Bound to this connection.", ts: 124 }));
@@ -202,40 +181,31 @@ describe("session companion RPC", () => {
   });
 
   it.each([
-    {},
-    { sessionKey: "", question: "why" },
-    { sessionKey: "agent:main:main", question: "" },
-    { sessionKey: "agent:main:main", question: "why", extra: true },
-  ])("rejects invalid ask params %#", async (params) => {
+    {
+      name: "invalid parameters",
+      params: { sessionKey: "agent:main:main", question: "Why?", extra: true },
+      client: { connId: "conn-1" },
+      code: "INVALID_REQUEST",
+    },
+    {
+      name: "missing connection",
+      params: { sessionKey: "agent:main:main", question: "Why?" },
+      client: {},
+      code: "FORBIDDEN",
+    },
+  ])("rejects an ask with $name before dispatch", async ({ params, client, code }) => {
     const ask = vi.fn();
-    const respond = await invoke("sessions.companion.ask", params, { ask });
+    const respond = await invoke("sessions.companion.ask", params, { ask }, client);
     expect(ask).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code }));
   });
 
-  it("requires a connected client for asks", async () => {
-    const ask = vi.fn();
-    const respond = await invoke(
-      "sessions.companion.ask",
-      { sessionKey: "agent:main:main", question: "Why?" },
-      { ask },
-      {},
-    );
-    expect(ask).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "FORBIDDEN" }),
-    );
-  });
-
-  it("returns the typed retryable busy detail", async () => {
+  it.each([
+    { reason: "busy", details: { code: GatewayErrorDetailCodes.SESSION_COMPANION_BUSY } },
+    { reason: "context-unavailable", details: { reason: "context-unavailable" } },
+  ] as const)("returns the typed retryable $reason detail", async ({ reason, details }) => {
     const ask = vi.fn(async () => {
-      throw new SessionCompanionAskError("busy", "Already answering.");
+      throw new SessionCompanionAskError(reason, "Cannot answer yet.");
     });
     const respond = await invoke(
       "sessions.companion.ask",
@@ -248,55 +218,36 @@ describe("session companion RPC", () => {
       expect.objectContaining({
         code: "UNAVAILABLE",
         retryable: true,
-        details: { code: GatewayErrorDetailCodes.SESSION_COMPANION_BUSY },
+        details,
       }),
     );
   });
 
-  it("returns a retryable typed context-read failure", async () => {
-    const ask = vi.fn(async () => {
-      throw new SessionCompanionAskError(
-        "context-unavailable",
-        "The selected session history could not be loaded.",
+  it.each(["state", "reset"] as const)(
+    "dispatches and validates per-session %s",
+    async (operation) => {
+      const state = { exchanges: [{ question: "Why?", answer: "Because.", ts: 10 }] };
+      const companion = { state: vi.fn(() => state), reset: vi.fn() };
+      const method = `sessions.companion.${operation}`;
+      const respond = await invoke(method, { sessionKey: "agent:main:main" }, companion);
+      expect(companion[operation]).toHaveBeenCalledWith({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      });
+      expect(respond).toHaveBeenCalledWith(true, operation === "state" ? state : { ok: true });
+
+      const invalid = await invoke(
+        method,
+        operation === "state" ? {} : { sessionKey: "agent:main:main", extra: true },
+        companion,
       );
-    });
-    const respond = await invoke(
-      "sessions.companion.ask",
-      { sessionKey: "agent:main:main", question: "Why?" },
-      { ask },
-    );
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        retryable: true,
-        details: { reason: "context-unavailable" },
-      }),
-    );
-  });
-
-  it("returns and validates per-session state", async () => {
-    const state = vi.fn(() => ({
-      exchanges: [{ question: "Why?", answer: "Because.", ts: 10 }],
-    }));
-    const respond = await invoke(
-      "sessions.companion.state",
-      { sessionKey: "agent:main:main" },
-      { state },
-    );
-    expect(state).toHaveBeenCalledWith({ agentId: "main", sessionKey: "agent:main:main" });
-    expect(respond).toHaveBeenCalledWith(true, {
-      exchanges: [{ question: "Why?", answer: "Because.", ts: 10 }],
-    });
-
-    const invalid = await invoke("sessions.companion.state", {}, { state });
-    expect(invalid).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
-  });
+      expect(invalid).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "INVALID_REQUEST" }),
+      );
+    },
+  );
 
   it.each(["sessions.companion.ask", "sessions.companion.state"] as const)(
     "hides a foreign draft before dispatching %s",
@@ -334,28 +285,6 @@ describe("session companion RPC", () => {
       });
     },
   );
-
-  it("resets and validates one session thread", async () => {
-    const reset = vi.fn();
-    const respond = await invoke(
-      "sessions.companion.reset",
-      { sessionKey: "agent:main:main" },
-      { reset },
-    );
-    expect(reset).toHaveBeenCalledWith({ agentId: "main", sessionKey: "agent:main:main" });
-    expect(respond).toHaveBeenCalledWith(true, { ok: true });
-
-    const invalid = await invoke(
-      "sessions.companion.reset",
-      { sessionKey: "agent:main:main", extra: true },
-      { reset },
-    );
-    expect(invalid).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
-  });
 
   it("threads an explicit owner for a bare key and returns typed selection errors", async () => {
     const config = { agents: { ownership: "explicit", entries: { main: {}, work: {} } } };

@@ -8,6 +8,7 @@
 // but WKWebView (macOS/iOS apps) and plain-HTTP LAN origins never register a
 // service worker, so reloading against the freshly served index.html is the
 // only recovery path there.
+import { raceWithTimeout, sleepWithAbort } from "@openclaw/retry";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { getSafeSessionStorage } from "../local-storage.ts";
@@ -160,9 +161,7 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
     // Sample once per target so reconnecting owners join the same wait instead of postponing it.
     const delayMs = Math.floor(Math.random() * BUILD_RELOAD_JITTER_MS);
     if (delayMs > 0) {
-      attempt.ready = new Promise<void>((resolve) => {
-        setTimeout(resolve, delayMs);
-      });
+      attempt.ready = sleepWithAbort(delayMs);
     }
   }
   attempt.active += 1;
@@ -209,26 +208,6 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
 const REACHABLE_WAIT_TIMEOUT_MS = 30_000;
 const REACHABLE_WAIT_INTERVAL_MS = 1_000;
 
-/**
- * Keeps the advertised bound local instead of trusting the probe to time out:
- * the default probe aborts itself, but a caller-supplied one need not, and a
- * probe that never settles would strand the caller's pending UI forever.
- */
-async function probeWithinDeadline(
-  probe: () => Promise<boolean>,
-  remainingMs: number,
-): Promise<boolean> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<boolean>((resolve) => {
-    timer = setTimeout(() => resolve(false), remainingMs);
-  });
-  try {
-    return await Promise.race([probe(), expired]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 type ReachableReloadDeps = StaleChunkReloadDeps & {
   timeoutMs?: number;
   intervalMs?: number;
@@ -259,9 +238,10 @@ async function waitForReachableControlUiDocument(
       return false;
     }
     // timeoutMs: 0 remains one request; bound caller-supplied probes as well.
-    const reachable = await probeWithinDeadline(
+    const reachable = await raceWithTimeout(
       probe,
       remaining > 0 ? remaining : DOCUMENT_PROBE_TIMEOUT_MS,
+      () => false,
     );
     if (!isCurrent()) {
       return false;

@@ -939,11 +939,8 @@ describe("truncateOversizedToolResultsInMessages", () => {
       makeAssistantMessage("running exec"),
       makeToolResult(freshOutput, "fresh_exec"),
       runtimeContextMessage,
-    ] as AgentMessage[]) as AgentMessage[];
-    const providerCarrier = providerMessages.at(-1) as
-      | (AgentMessage & { runtimeContextCarrier?: boolean })
-      | undefined;
-    expect(providerCarrier?.runtimeContextCarrier).toBe(true);
+    ] as AgentMessage[]);
+    expect(providerMessages.at(-1)).toMatchObject({ role: "user", runtimeContext: {} });
 
     const second = truncateOversizedToolResultsInMessages(
       providerMessages,
@@ -1055,11 +1052,8 @@ describe("truncateOversizedToolResultsInMessages", () => {
       ...history,
       makeToolResult(freshOutput, "fresh_hard_cap"),
       runtimeContextMessage,
-    ] as AgentMessage[]) as AgentMessage[];
-    expect(
-      (providerMessages.at(-1) as { runtimeContextCarrier?: boolean } | undefined)
-        ?.runtimeContextCarrier,
-    ).toBe(true);
+    ] as AgentMessage[]);
+    expect(providerMessages.at(-1)).toMatchObject({ role: "user", runtimeContext: {} });
     const second = truncateOversizedToolResultsInMessages(
       providerMessages,
       1_000_000,

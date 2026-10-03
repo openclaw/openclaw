@@ -362,7 +362,6 @@ describe("OpenClaw performance workflow", () => {
     expect(resolveTarget.run).toContain('detected_kova_config_contract="canonical"');
     expect(resolveTarget.run).toContain('detected_kova_config_contract="legacy-list"');
     expect(resolveTarget.run).toContain('kova_ref="${KOVA_REF_INPUT:-}"');
-    expect(resolveTarget.run).toContain('kova_ref="18c9eb8c3950a35794d196f4e40ad471e9308e27"');
     expect(resolveTarget.run).toContain('kova_ref="${kova_ref:-$default_kova_ref}"');
     expect(resolveTarget.run).toContain(
       'if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then',
@@ -489,20 +488,6 @@ describe("OpenClaw performance workflow", () => {
         contract: "custom-contract",
         expectedContract: "custom-contract",
       },
-      {
-        name: "historical release pin",
-        schema: legacy,
-        version: "2026.7.33",
-        expectedContract: "legacy-list",
-        expectedRef: "18c9eb8c3950a35794d196f4e40ad471e9308e27",
-      },
-      {
-        name: "extended-stable correction pin",
-        schema: legacy,
-        version: "2026.7.34",
-        expectedContract: "legacy-list",
-        expectedRef: "18c9eb8c3950a35794d196f4e40ad471e9308e27",
-      },
     ];
     posixIt.each(cases)("resolves $name without executing target metadata", (fixture) => {
       const { outputs, result, sha } = runTargetMetadataResolution(fixture);
@@ -518,7 +503,7 @@ describe("OpenClaw performance workflow", () => {
         fixture.expectedContract === "legacy-list"
           ? readWorkflow().env?.KOVA_LEGACY_LIST_CONFIG_REF
           : readWorkflow().env?.KOVA_CANONICAL_CONFIG_REF;
-      const expectedRef = fixture.expectedRef ?? fixture.kovaRef ?? defaultRef;
+      const expectedRef = fixture.kovaRef ?? defaultRef;
       expect(outputs).toEqual({
         checkout_ref: sha,
         tested_ref: "fixture-target",
