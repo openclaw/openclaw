@@ -1,31 +1,48 @@
-/**
- * Seam coverage for native compaction: a backend record streamed as JSONL must
- * reach the no-output watchdog through the ordinary event handlers. Nothing here
- * injects a `compactionActive` getter, so the wiring in `executeCliProcess` is
- * the only thing that carries the flag from the stream to the plugin watchdog
- * and into the recorded timeout context.
- */
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { waitForDiagnosticEventsDrained } from "../../infra/diagnostic-events.js";
+import {
+  BLOCKED_TOOL_CALL_ABORT_FLOOR_MS as WORK_GRACE_MS,
+  closeDiagnosticEmbeddedRunOwner,
+  createDiagnosticEmbeddedRunOwner,
+  getDiagnosticSessionActivitySnapshot,
+  markDiagnosticEmbeddedRunStarted,
+  resolveRunStaleThresholdMs,
+} from "../../logging/diagnostic-run-activity.js";
+import {
+  logSessionStateChange,
+  startGatewayDiagnosticHeartbeat,
+} from "../../logging/diagnostic.js";
+import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
 import type { CliBackendParseJsonlLifecycleEvent } from "../../plugins/cli-backend.types.js";
-import type { getProcessSupervisor } from "../../process/supervisor/index.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
+import { defaultCliWatchdogClock } from "./execute-plugin-watchdog.js";
 import { waitUntilAborted } from "./execute-plugin.test-support.js";
 import { executePreparedCliRun } from "./execute.js";
 import {
   createManagedRun,
+  setCliRunnerExecuteTestDeps,
   supervisorSpawnMock,
   wrapPreparedCliRunWithTestAdmission,
 } from "./execute.test-support.js";
 
-type SupervisorSpawnInput = Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+const NO_OUTPUT_MS = 180_000;
+const HEARTBEAT_MS = 30_000;
+const STUCK_SESSION_MS = 360_000;
+const START = { type: "system", subtype: "status", status: "compacting" };
+const RESULT = { type: "result", subtype: "success", result: "compaction survived" };
+const TOOL = {
+  type: "assistant",
+  message: {
+    role: "assistant",
+    content: [{ type: "tool_use", id: "tool", name: "Bash", input: { command: "true" } }],
+  },
+};
+const execute = wrapPreparedCliRunWithTestAdmission(executePreparedCliRun);
+const owners: ReturnType<typeof createDiagnosticEmbeddedRunOwner>[] = [];
 
-const NO_OUTPUT_TIMEOUT_MS = 1_000;
-const COMPACTION_START = { type: "system", subtype: "status", status: "compacting" };
-const COMPACTION_END = { compact_result: "success" };
-const COMPACTION_FAILED = { compact_result: "failed" };
-
-/** Mirrors the shape a CLI backend plugin projects from its own native records. */
+// Backend records enter the real parser-to-watchdog and parser-to-diagnostics paths.
 const parseJsonlLifecycleEvent: CliBackendParseJsonlLifecycleEvent = (line) => {
   if (!line.includes("compacting") && !line.includes("compact_result")) {
     return null;
@@ -34,23 +51,24 @@ const parseJsonlLifecycleEvent: CliBackendParseJsonlLifecycleEvent = (line) => {
   if (record.compact_result === "success" || record.compact_result === "failed") {
     return { kind: "compaction", phase: "end", completed: record.compact_result === "success" };
   }
-  if (record.type === "system" && record.subtype === "status") {
-    return record.status === "compacting" ? { kind: "compaction", phase: "start" } : null;
-  }
-  return null;
+  return record.type === "system" && record.subtype === "status" && record.status === "compacting"
+    ? { kind: "compaction", phase: "start" }
+    : null;
 };
 
-function buildCompactionRunContext(runId: string) {
+function contextFor(runId: string, noOutputMs = NO_OUTPUT_MS, timeoutMs = 3_600_000) {
   const context = buildPreparedCliRunContext({
     runId,
+    sessionId: runId,
+    sessionKey: `agent:main:${runId}`,
+    agentId: "main",
+    model: "fixture-model",
     config: { plugins: { enabled: false } },
-    timeoutMs: 1_800_000,
+    timeoutMs,
     backend: {
       command: process.execPath,
       sessionMode: "none",
-      reliability: {
-        watchdog: { fresh: { minMs: NO_OUTPUT_TIMEOUT_MS, maxMs: NO_OUTPUT_TIMEOUT_MS } },
-      },
+      reliability: { watchdog: { fresh: { minMs: noOutputMs, maxMs: noOutputMs } } },
     },
   });
   context.backendResolved.bundleMcp = false;
@@ -58,104 +76,229 @@ function buildCompactionRunContext(runId: string) {
   return context;
 }
 
-function useWatchdogTimers() {
+function diagnostics(context: ReturnType<typeof contextFor>) {
+  const recoverStuckSession = vi.fn();
+  startGatewayDiagnosticHeartbeat(
+    createTestGatewayScheduler("fake-timers"),
+    { diagnostics: { enabled: true } },
+    { recoverStuckSession },
+  );
+  const owner = createDiagnosticEmbeddedRunOwner(context.params);
+  owners.push(owner);
+  context.params.diagnosticOwner = owner;
+  logSessionStateChange({ ...context.params, state: "processing" });
+  markDiagnosticEmbeddedRunStarted({ ...context.params, owner });
+  return recoverStuckSession;
+}
+
+beforeEach(() => {
   vi.useFakeTimers({
     toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
   });
-}
-
+  vi.setSystemTime(Date.parse("2026-09-24T00:00:00Z"));
+});
 afterEach(() => {
+  for (const owner of owners.splice(0)) {
+    closeDiagnosticEmbeddedRunOwner(owner);
+  }
   supervisorSpawnMock.mockReset();
+  setCliRunnerExecuteTestDeps({ watchdogClock: defaultCliWatchdogClock });
+  resetDiagnosticStateForTest();
   vi.useRealTimers();
 });
 
-it("defers the no-output watchdog while a streamed compaction record is active", async () => {
-  useWatchdogTimers();
-  const context = buildCompactionRunContext("compaction-seam-defer");
-  const compactionStarted = createDeferred();
-  const compactionFinished = createDeferred();
+it.each(["success", "failed"])(
+  "releases both liveness allowances after compaction %s",
+  async (phase) => {
+    const context = contextFor(`compaction-${phase}`);
+    const recover = diagnostics(context);
+    const started = createDeferred<number>();
+    const release = createDeferred();
+    const ended = createDeferred<number>();
+    const finish = createDeferred();
+    context.executionTarget = {
+      kind: "plugin",
+      async *execute() {
+        yield START;
+        started.resolve(Date.now());
+        await release.promise;
+        yield { compact_result: phase };
+        ended.resolve(Date.now());
+        await finish.promise;
+        yield RESULT;
+      },
+    };
+    const run = execute(context);
+    try {
+      const startedAt = await started.promise;
+      // Beyond the reported 180,444ms silence and the ordinary 180s watchdog.
+      await vi.advanceTimersByTimeAsync(240_000);
+      expect(recover).not.toHaveBeenCalled();
+      expect(getDiagnosticSessionActivitySnapshot(context.params)).toMatchObject({
+        activeBackendLivenessDeadlineAtMs: startedAt + WORK_GRACE_MS,
+        lastProgressAgeMs: 240_000,
+      });
+      release.resolve();
+      const clearedAt = await ended.promise;
+      expect(getDiagnosticSessionActivitySnapshot(context.params)).toMatchObject({
+        activeBackendLivenessDeadlineAtMs: clearedAt + NO_OUTPUT_MS,
+      });
+      finish.resolve();
+      await expect(run).resolves.toMatchObject({ text: RESULT.result });
+      await waitForDiagnosticEventsDrained();
+      expect(
+        getDiagnosticSessionActivitySnapshot(context.params).activeBackendLivenessDeadlineAtMs,
+      ).toBeUndefined();
+    } finally {
+      release.resolve();
+      finish.resolve();
+      await Promise.allSettled([run]);
+    }
+  },
+);
+
+it.each(["success", "failed"])(
+  "re-arms the no-output watchdog after compaction %s",
+  async (phase) => {
+    const context = contextFor(`rearm-${phase}`, 1_000);
+    const ended = createDeferred();
+    context.executionTarget = {
+      kind: "plugin",
+      async *execute(execution) {
+        yield START;
+        yield { compact_result: phase };
+        ended.resolve();
+        await waitUntilAborted(execution);
+        yield RESULT;
+      },
+    };
+    const rejection = expect(execute(context)).rejects.toThrow("produced no output");
+    await ended.promise;
+    await vi.advanceTimersByTimeAsync(2_000);
+    await rejection;
+  },
+);
+
+it("requests diagnostics recovery when compaction never ends", async () => {
+  const context = contextFor("compaction-stuck");
+  const recover = diagnostics(context);
+  // Silence only the competing watchdog so recovery is observed at its own heartbeat.
+  setCliRunnerExecuteTestDeps({
+    watchdogClock: { now: () => Date.now(), setTimeout: () => () => {} },
+  });
+  const started = createDeferred();
+  const finish = createDeferred();
   context.executionTarget = {
     kind: "plugin",
     async *execute() {
-      yield COMPACTION_START;
-      compactionStarted.resolve();
-      await compactionFinished.promise;
-      yield COMPACTION_END;
-      yield { type: "result", subtype: "success", result: "compaction survived" };
+      yield START;
+      started.resolve();
+      await finish.promise;
+      yield RESULT;
     },
   };
-  let settled = false;
-  const run = wrapPreparedCliRunWithTestAdmission(executePreparedCliRun)(context).finally(() => {
-    settled = true;
-  });
+  const run = execute(context);
   try {
-    await compactionStarted.promise;
-    await vi.advanceTimersByTimeAsync(NO_OUTPUT_TIMEOUT_MS * 30);
-    expect(settled).toBe(false);
-
-    compactionFinished.resolve();
-    await expect(run).resolves.toMatchObject({ text: "compaction survived" });
+    await started.promise;
+    await vi.advanceTimersByTimeAsync(WORK_GRACE_MS - HEARTBEAT_MS);
+    expect(recover).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2 * HEARTBEAT_MS);
+    expect(recover).toHaveBeenCalled();
+    expect(recover.mock.calls[0]?.[0]).toMatchObject({
+      sessionId: context.params.sessionId,
+      sessionKey: context.params.sessionKey,
+      allowActiveAbort: true,
+    });
+    expect(STUCK_SESSION_MS).toBeLessThan(WORK_GRACE_MS);
   } finally {
-    compactionFinished.resolve();
+    finish.resolve();
     await Promise.allSettled([run]);
   }
 });
 
-it("re-arms the no-output watchdog once the streamed compaction record ends", async () => {
-  useWatchdogTimers();
-  const context = buildCompactionRunContext("compaction-seam-rearm");
-  const compactionEnded = createDeferred();
+it.each([false, true])(
+  "bounds compaction silence from the last record (parsed tool: %s)",
+  async (withTool) => {
+    const context = contextFor(`quiet-clock-${withTool}`);
+    diagnostics(context);
+    const started = createDeferred<number>();
+    const ping = createDeferred();
+    const pinged = createDeferred();
+    context.executionTarget = {
+      kind: "plugin",
+      async *execute(execution) {
+        yield START;
+        if (withTool) {
+          yield TOOL;
+        }
+        started.resolve(Date.now());
+        await ping.promise;
+        yield { type: "stream_event", event: { type: "ping" } };
+        pinged.resolve();
+        await waitUntilAborted(execution);
+        yield RESULT;
+      },
+    };
+    let settled = false;
+    const run = execute(context).finally(() => {
+      settled = true;
+    });
+    const rejection = expect(run).rejects.toMatchObject({
+      name: "FailoverError",
+      cliTimeout: { mode: "no-output", compactionActive: true, activeToolCount: withTool ? 1 : 0 },
+    });
+    const startedAt = await started.promise;
+    if (withTool) {
+      await vi.advanceTimersByTimeAsync(0);
+      await waitForDiagnosticEventsDrained();
+      const snapshot = getDiagnosticSessionActivitySnapshot(context.params);
+      expect(snapshot).toMatchObject({
+        activeWorkKind: "tool_call",
+        activeBackendLivenessDeadlineAtMs: startedAt + WORK_GRACE_MS,
+      });
+      expect(
+        resolveRunStaleThresholdMs(snapshot, snapshot.lastProgressAgeMs ?? 0, STUCK_SESSION_MS),
+      ).toBe(WORK_GRACE_MS);
+    }
+    await vi.advanceTimersByTimeAsync(WORK_GRACE_MS - 60_000);
+    expect(settled).toBe(false);
+    ping.resolve();
+    await pinged.promise;
+    await vi.advanceTimersByTimeAsync(62_000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(WORK_GRACE_MS - 64_000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(settled).toBe(true);
+    await rejection;
+  },
+);
+
+it("keeps the overall deadline authoritative during compaction", async () => {
+  const context = contextFor("compaction-overall", 100, 150);
+  const started = createDeferred();
   context.executionTarget = {
     kind: "plugin",
     async *execute(execution) {
-      yield COMPACTION_START;
-      yield COMPACTION_END;
-      compactionEnded.resolve();
-      // The turn goes silent with nothing outstanding; a finished compaction
-      // must not grant permanent immunity from the ordinary watchdog.
+      yield START;
+      started.resolve();
       await waitUntilAborted(execution);
-      yield { type: "result", subtype: "success", result: "unreachable" };
+      yield RESULT;
     },
   };
-  const run = wrapPreparedCliRunWithTestAdmission(executePreparedCliRun)(context);
-  const rejection = expect(run).rejects.toThrow("produced no output");
-
-  await compactionEnded.promise;
-  await vi.advanceTimersByTimeAsync(NO_OUTPUT_TIMEOUT_MS * 2);
-
-  await rejection;
-});
-
-it("re-arms the no-output watchdog when the streamed compaction record fails", async () => {
-  useWatchdogTimers();
-  const context = buildCompactionRunContext("compaction-seam-rearm-failed");
-  const compactionEnded = createDeferred();
-  context.executionTarget = {
-    kind: "plugin",
-    async *execute(execution) {
-      yield COMPACTION_START;
-      yield COMPACTION_FAILED;
-      compactionEnded.resolve();
-      // A compaction that ends in failure still ends. Treating only a
-      // successful result as an end would latch the defer on forever.
-      await waitUntilAborted(execution);
-      yield { type: "result", subtype: "success", result: "unreachable" };
-    },
-  };
-  const run = wrapPreparedCliRunWithTestAdmission(executePreparedCliRun)(context);
-  const rejection = expect(run).rejects.toThrow("produced no output");
-
-  await compactionEnded.promise;
-  await vi.advanceTimersByTimeAsync(NO_OUTPUT_TIMEOUT_MS * 2);
-
+  const rejection = expect(execute(context)).rejects.toMatchObject({
+    name: "FailoverError",
+    cliTimeout: { mode: "overall" },
+  });
+  await started.promise;
+  await vi.advanceTimersByTimeAsync(150);
   await rejection;
 });
 
 it("records streamed compaction on a supervised no-output timeout", async () => {
-  const context = buildCompactionRunContext("compaction-seam-supervised");
-  const stdout = `${JSON.stringify(COMPACTION_START)}\n`;
-  supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
-    const input = args[0] as SupervisorSpawnInput;
+  const context = contextFor("compaction-supervised", 1_000);
+  const stdout = `${JSON.stringify(START)}\n`;
+  supervisorSpawnMock.mockImplementationOnce(async (input) => {
     input.onStdout?.(stdout);
     return createManagedRun({
       reason: "no-output-timeout",
@@ -168,12 +311,7 @@ it("records streamed compaction on a supervised no-output timeout", async () => 
       noOutputTimedOut: true,
     });
   });
-
-  // The supervisor owns this watchdog and has already killed the child, so the
-  // run still fails; the recorded context must not claim the CLI was idle.
-  await expect(
-    wrapPreparedCliRunWithTestAdmission(executePreparedCliRun)(context),
-  ).rejects.toMatchObject({
+  await expect(execute(context)).rejects.toMatchObject({
     name: "FailoverError",
     cliTimeout: { mode: "no-output", compactionActive: true },
   });
