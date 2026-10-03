@@ -2,11 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import { recordSessionCreated } from "./session-created.js";
 import {
+  recordSessionCompacted,
   recordSessionGoalChanged,
   recordSessionHumanDirectMessage,
   recordSessionStateEventAsync,
   recordSessionStateEvent,
+  recordSubagentSpawned,
 } from "./session-state-events.js";
 import type { SessionStateEventRow, SessionStateNotice } from "./session-state-events.kernel.js";
 
@@ -145,9 +148,9 @@ function synchronousSibling() {
   return recordSessionStateEvent({
     sessionKey: "agent:main:sibling",
     agentId: "main",
-    kind: "compacted",
+    kind: "adopted",
     actorType: "system",
-    summary: "session compacted",
+    summary: "session adopted",
   });
 }
 
@@ -231,6 +234,7 @@ describe("Session signal worker reconciliation", () => {
 
   it("retains committed notices and pruning before producer settlement", async () => {
     const recorded = createDeferred<Recorded>();
+    const recordStarted = createDeferred();
     const pruning = createDeferred();
     const pruneStarted = createDeferred();
     edge.execute.mockImplementation(async (command) => {
@@ -240,12 +244,14 @@ describe("Session signal worker reconciliation", () => {
         return pruning.promise;
       }
       edge.phases.push("record");
+      recordStarted.resolve();
       return recorded.promise;
     });
     let returned = false;
     const pending = goalChange().then(() => {
       returned = true;
     });
+    await recordStarted.promise;
     expect(edge.notice).not.toHaveBeenCalled();
     expect(returned).toBe(false);
     expect(edge.execute).toHaveBeenCalledWith({
@@ -320,8 +326,14 @@ describe("Session signal worker reconciliation", () => {
   it.each([false, true])("releases a pending prune reservation after failure=%s", async (fail) => {
     const pruning = createDeferred();
     const pruneStarted = createDeferred();
+    const nextPruneStarted = createDeferred();
+    let prunes = 0;
     edge.execute.mockImplementation(async (command) => {
       if (command.type === "sessionState.prune") {
+        if (++prunes === 2) {
+          nextPruneStarted.resolve();
+          return;
+        }
         pruneStarted.resolve();
         return pruning.promise;
       }
@@ -342,6 +354,49 @@ describe("Session signal worker reconciliation", () => {
       vi.mocked(Date.now).mockReturnValue(now);
     }
     synchronousSibling();
-    expect(edge.nativePrune).toHaveBeenCalledExactlyOnceWith(expect.anything(), now);
+    await nextPruneStarted.promise;
+    await edge.run.mock.results.at(-1)!.value;
+    expect(edge.nativePrune).not.toHaveBeenCalled();
+    expect(
+      edge.execute.mock.calls.filter(([command]) => command.type === "sessionState.prune"),
+    ).toHaveLength(2);
+  });
+
+  it.each([
+    [
+      "creation",
+      () =>
+        recordSessionCreated(
+          {},
+          {
+            sessionKey: "agent:main:main",
+            entry: { sessionId: "created", updatedAt: 1, createdActor: { type: "system" } },
+          },
+        ),
+    ],
+    [
+      "compaction",
+      () => recordSessionCompacted({ sessionKey: "agent:main:child", operationId: "compact" }),
+    ],
+    [
+      "spawn",
+      () =>
+        recordSubagentSpawned({
+          childSessionKey: "agent:main:child",
+          childRunId: "spawn",
+          requesterSessionKey: "agent:main:main",
+          agentId: "main",
+        }),
+    ],
+  ] as const)("settles %s once after an unknown signal outcome", async (_name, record) => {
+    edge.execute.mockRejectedValueOnce(
+      Object.assign(new Error("Synthetic lost signal reply"), {
+        code: "outcome-unknown",
+      }),
+    );
+    await expect(record()).resolves.toBeUndefined();
+    expect(edge.execute).toHaveBeenCalledTimes(1);
+    expect(edge.nativeTransaction).not.toHaveBeenCalled();
+    expect(edge.notice).not.toHaveBeenCalled();
   });
 });

@@ -41,30 +41,49 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
     });
   });
 
-  it("does not restart over a non-listening captured process when lease inspection fails", async () => {
-    await withPreparedGatewayTask(async ({ env, stdout }) => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      let attempted = false;
-      readGatewayOwnerLease.mockImplementation(() => {
-        if (attempted || schtasksCalls.some(([action]) => action === "/End")) {
-          throw Object.assign(new Error("disk I/O error"), { errcode: 1546 });
+  it.each(["still alive", "unverified"])(
+    "refuses lease-read recovery for a captured process that is %s",
+    async (state) => {
+      await withPreparedGatewayTask(async ({ env, stdout }) => {
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        let attempted = false;
+        let reads = 0;
+        readGatewayOwnerLease.mockImplementation(() => {
+          const unavailable =
+            state === "unverified"
+              ? ++reads > 1
+              : attempted || schtasksCalls.some(([action]) => action === "/End");
+          if (unavailable) {
+            throw Object.assign(new Error("disk I/O error"), { errcode: 1546 });
+          }
+          return state === "unverified"
+            ? { ...GATEWAY_OWNER, state: "unknown", startedAt: null }
+            : GATEWAY_OWNER;
+        });
+        if (state === "unverified") {
+          mockWindowsTaskkillSuccess();
+        } else {
+          spawnSync.mockImplementation((exe, args) => {
+            if (args?.includes("-EncodedCommand")) {
+              return scheduledTaskProbeResult();
+            }
+            attempted ||= exe.endsWith("taskkill.exe");
+            return spawnSyncResult(
+              exe.endsWith("tasklist.exe") ? '"node.exe","4242","Console","1","1 K"' : "",
+            );
+          });
         }
-        return GATEWAY_OWNER;
-      });
-      spawnSync.mockImplementation((exe, args) => {
-        if (args?.includes("-EncodedCommand")) {
-          return scheduledTaskProbeResult();
-        }
-        attempted ||= exe.endsWith("taskkill.exe");
-        return spawnSyncResult(
-          exe.endsWith("tasklist.exe") ? '"node.exe","4242","Console","1","1 K"' : "",
+        await expect(restartScheduledTask({ env, stdout })).rejects.toThrow(
+          state === "unverified" ? "disk I/O error" : "state writer",
         );
+        expect(schtasksCalls.some(([action]) => action === "/Run")).toBe(false);
+        if (state === "unverified") {
+          expect(schtasksCalls.some(([action]) => action === "/End")).toBe(false);
+          expect(spawnSync.mock.calls.some(([exe]) => exe.endsWith("taskkill.exe"))).toBe(false);
+        }
       });
-
-      await expect(restartScheduledTask({ env, stdout })).rejects.toThrow("state writer");
-      expect(schtasksCalls.some(([action]) => action === "/Run")).toBe(false);
-    });
-  });
+    },
+  );
 
   it.each([false, true])(
     "stops pre-existing children without adopting a replacement (published owner=%s)",
@@ -124,24 +143,6 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
     },
   );
 
-  it("does not recover a failed lease read without a verified captured process", async () => {
-    await withPreparedGatewayTask(async ({ env, stdout }) => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      let reads = 0;
-      readGatewayOwnerLease.mockImplementation(() => {
-        if (++reads > 1) {
-          throw Object.assign(new Error("disk I/O error"), { errcode: 1546 });
-        }
-        return { ...GATEWAY_OWNER, state: "unknown", startedAt: null };
-      });
-      mockWindowsTaskkillSuccess();
-
-      await expect(restartScheduledTask({ env, stdout })).rejects.toThrow("disk I/O error");
-      expect(schtasksCalls.some(([action]) => action === "/End" || action === "/Run")).toBe(false);
-      expect(spawnSync.mock.calls.some(([exe]) => exe.endsWith("taskkill.exe"))).toBe(false);
-    });
-  });
-
   it("preserves a reused legacy PID before native task termination", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
@@ -167,41 +168,6 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
       expect(schtasksCalls.some(([action]) => action === "/End" || action === "/Run")).toBe(false);
       expect(spawnSync.mock.calls.some(([exe]) => exe.endsWith("taskkill.exe"))).toBe(false);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("replacement"));
-    });
-  });
-
-  it("restores a gracefully stopped Gateway when lease inspection remains locked", async () => {
-    await withPreparedGatewayTask(async ({ env, stdout }) => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      readGatewayOwnerLease.mockReturnValue(GATEWAY_OWNER);
-      mockWindowsTaskkillSuccess();
-      callGatewayCli.mockImplementation(async (options) => {
-        options.assertDispatchCurrent();
-        readGatewayOwnerLease.mockImplementation(() => {
-          throw Object.assign(new Error("disk I/O error"), { errcode: 1546 });
-        });
-        spawnSync.mockImplementation((exe, args) =>
-          args?.includes("-EncodedCommand")
-            ? scheduledTaskProbeResult()
-            : spawnSyncResult(exe.endsWith("tasklist.exe") ? "No tasks" : ""),
-        );
-        return { ok: true, pid: GATEWAY_OWNER.pid, status: "scheduled" };
-      });
-      const warn = vi.fn();
-
-      await expect(restartScheduledTask({ env, stdout, warn })).resolves.toEqual({
-        outcome: "completed",
-        restartRecovery: "sqlite-owner-read",
-        taskSettlement: {
-          status: "settled",
-          taskName: "OpenClaw Gateway",
-          lastRunResult: "0",
-          ended: false,
-        },
-      });
-
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("SQLite"));
-      expect(schtasksCalls).toContainEqual(["/Run", "/TN", "OpenClaw Gateway"]);
     });
   });
 
@@ -268,37 +234,6 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
     },
   );
 
-  it("waits for the task to settle after its Gateway exits gracefully", async () => {
-    await withPreparedGatewayTask(async ({ env, stdout }) => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      readGatewayOwnerLease.mockReturnValue(GATEWAY_OWNER);
-      mockWindowsTaskkillSuccess();
-      let stoppedAt = 0;
-      callGatewayCli.mockImplementation(async (options) => {
-        options.assertDispatchCurrent();
-        stoppedAt = Date.now();
-        readGatewayOwnerLease.mockReturnValue(undefined);
-        spawnSync.mockImplementation((exe, args) =>
-          spawnSyncResult(
-            args?.includes("-EncodedCommand")
-              ? scheduledTaskProbeResult(Date.now() - stoppedAt < 500 ? 4 : undefined).stdout
-              : exe.endsWith("tasklist.exe")
-                ? "No tasks"
-                : "",
-          ),
-        );
-        return { ok: true, pid: GATEWAY_OWNER.pid, status: "scheduled" };
-      });
-
-      await restartScheduledTask({ env, stdout });
-
-      expect(Date.now() - stoppedAt).toBeGreaterThanOrEqual(500);
-      expect(schtasksCalls.some(([action]) => action === "/End")).toBe(false);
-      expect(spawnSync.mock.calls.some(([exe]) => exe.endsWith("taskkill.exe"))).toBe(false);
-      expect(schtasksCalls).toContainEqual(["/Run", "/TN", "OpenClaw Gateway"]);
-    });
-  });
-
   it.each([
     { name: "stop", control: stopScheduledTask },
     { name: "restart", control: restartScheduledTask },
@@ -364,37 +299,20 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
     });
   });
 
-  it("reconciles a lost stop reply and records the completed graceful stop", async () => {
+  it.each([
+    { name: "stop", control: stopScheduledTask },
+    { name: "restart", control: restartScheduledTask },
+    { name: "stop after lost reply", control: stopScheduledTask, lostReply: true },
+  ])("$name requests graceful exit before ending the task", async ({ control, lostReply }) => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       mockWindowsTaskkillSuccess();
       readGatewayOwnerLease.mockReturnValue(GATEWAY_OWNER);
       const onMutation = vi.fn();
       callGatewayCli.mockImplementation(async (options) => {
-        options.assertDispatchCurrent();
-        readGatewayOwnerLease.mockReturnValue(undefined);
-        spawnSync.mockImplementation((exe) =>
-          spawnSyncResult(
-            exe.endsWith("tasklist.exe") ? "No tasks" : scheduledTaskProbeResult().stdout,
-          ),
-        );
-        throw new Error("connection closed after dispatch");
-      });
-      await stopScheduledTask({ env, stdout, onMutation });
-      expect(schtasksCalls.some(([action]) => action === "/End")).toBe(false);
-      expect(onMutation).toHaveBeenCalledExactlyOnceWith({ mode: "schtasks-stop" });
-    });
-  });
-
-  it.each([
-    { name: "stop", control: stopScheduledTask },
-    { name: "restart", control: restartScheduledTask },
-  ])("$name requests graceful exit before ending the task", async ({ control }) => {
-    await withPreparedGatewayTask(async ({ env, stdout }) => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      mockWindowsTaskkillSuccess();
-      readGatewayOwnerLease.mockReturnValue(GATEWAY_OWNER);
-      callGatewayCli.mockImplementation(async () => {
+        if (lostReply) {
+          options.assertDispatchCurrent();
+        }
         expect(schtasksCalls.some(([action]) => action === "/End")).toBe(false);
         readGatewayOwnerLease.mockReturnValue(undefined);
         spawnSync.mockImplementation((exe) =>
@@ -402,10 +320,16 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
             exe.endsWith("tasklist.exe") ? "No tasks" : scheduledTaskProbeResult().stdout,
           ),
         );
+        if (lostReply) {
+          throw new Error("connection closed after dispatch");
+        }
         return { ok: true, pid: GATEWAY_OWNER.pid, status: "scheduled", timeoutMs: 330_000 };
       });
 
-      await control({ env, stdout });
+      await control({ env, stdout, onMutation });
+      if (lostReply) {
+        expect(onMutation).toHaveBeenCalledExactlyOnceWith({ mode: "schtasks-stop" });
+      }
 
       expect(callGatewayCli).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -423,25 +347,49 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
     });
   });
 
-  it.each([1546, 4618, 4874])(
-    "retries a post-termination SQLite sharing error (%s)",
-    async (errcode) => {
+  it.each([
+    { mode: "graceful", errcode: 1546, exhausted: true },
+    { mode: "native", errcode: 1546, exhausted: false },
+    { mode: "native", errcode: 4618, exhausted: false },
+    { mode: "native", errcode: 4874, exhausted: false },
+    { mode: "native", errcode: 1546, exhausted: true },
+  ])(
+    "recovers SQLite sharing error $errcode after $mode stop (exhausted=$exhausted)",
+    async ({ mode, errcode, exhausted }) => {
       await withPreparedGatewayTask(async ({ env, stdout }) => {
         vi.spyOn(process, "platform", "get").mockReturnValue("win32");
         mockWindowsTaskkillSuccess();
+        const warn = vi.fn();
         let failed = false;
+        const failRead = () => {
+          failed = true;
+          throw Object.assign(new Error("disk I/O error"), {
+            errcode,
+            ...(exhausted ? {} : { code: "ERR_SQLITE_ERROR" }),
+          });
+        };
         readGatewayOwnerLease.mockImplementation(() => {
-          if (!failed && spawnSync.mock.calls.some(([exe]) => exe.endsWith("taskkill.exe"))) {
-            failed = true;
-            throw Object.assign(new Error("disk I/O error"), { code: "ERR_SQLITE_ERROR", errcode });
+          const stopped = spawnSync.mock.calls.some(([exe]) => exe.endsWith("taskkill.exe"));
+          if (stopped && (exhausted || !failed)) {
+            failRead();
           }
-          return spawnSync.mock.calls.some(([exe]) => exe.endsWith("taskkill.exe"))
-            ? undefined
-            : GATEWAY_OWNER;
+          return stopped ? undefined : GATEWAY_OWNER;
         });
-
-        await expect(restartScheduledTask({ env, stdout })).resolves.toEqual({
+        if (mode === "graceful") {
+          callGatewayCli.mockImplementation(async (options) => {
+            options.assertDispatchCurrent();
+            readGatewayOwnerLease.mockImplementation(failRead);
+            spawnSync.mockImplementation((exe, args) =>
+              args?.includes("-EncodedCommand")
+                ? scheduledTaskProbeResult()
+                : spawnSyncResult(exe.endsWith("tasklist.exe") ? "No tasks" : ""),
+            );
+            return { ok: true, pid: GATEWAY_OWNER.pid, status: "scheduled" };
+          });
+        }
+        await expect(restartScheduledTask({ env, stdout, warn })).resolves.toEqual({
           outcome: "completed",
+          ...(exhausted ? { restartRecovery: "sqlite-owner-read" } : {}),
           taskSettlement: {
             status: "settled",
             taskName: "OpenClaw Gateway",
@@ -450,37 +398,11 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
           },
         });
         expect(failed).toBe(true);
+        if (exhausted) {
+          expect(warn).toHaveBeenCalledWith(expect.stringContaining("SQLite"));
+        }
         expect(schtasksCalls).toContainEqual(["/Run", "/TN", "OpenClaw Gateway"]);
       });
     },
   );
-
-  it("still restarts with a warning when post-termination sharing errors exhaust the retry budget", async () => {
-    await withPreparedGatewayTask(async ({ env, stdout }) => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      mockWindowsTaskkillSuccess();
-      const warn = vi.fn();
-      readGatewayOwnerLease.mockImplementation(() => {
-        if (spawnSync.mock.calls.some(([exe]) => exe.endsWith("taskkill.exe"))) {
-          throw Object.assign(new Error("disk I/O error"), { errcode: 1546 });
-        }
-        return spawnSync.mock.calls.some(([exe]) => exe.endsWith("taskkill.exe"))
-          ? undefined
-          : GATEWAY_OWNER;
-      });
-
-      await expect(restartScheduledTask({ env, stdout, warn })).resolves.toEqual({
-        outcome: "completed",
-        restartRecovery: "sqlite-owner-read",
-        taskSettlement: {
-          status: "settled",
-          taskName: "OpenClaw Gateway",
-          lastRunResult: "0",
-          ended: false,
-        },
-      });
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("SQLite"));
-      expect(schtasksCalls).toContainEqual(["/Run", "/TN", "OpenClaw Gateway"]);
-    });
-  });
 });

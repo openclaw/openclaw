@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
@@ -275,6 +276,13 @@ it.each([1, 3])(
   "replans policy conflicts without write quiet, bounded at three attempts (%s)",
   async (conflicts) => {
     const { request, scope, storePath, updatedAt } = createStore();
+    const foregroundTurn = new AsyncLocalStorage<string>();
+    const timerContexts = new Set<string | undefined>();
+    const setTimer = globalThis.setTimeout;
+    vi.spyOn(globalThis, "setTimeout").mockImplementation((...args) => {
+      timerContexts.add(foregroundTurn.getStore());
+      return setTimer(...args);
+    });
     const victimKey = "agent:main:replan-victim";
     runOpenClawAgentWriteTransaction((owner) => {
       writeSessionEntry(owner, victimKey, { sessionId: "victim", updatedAt: updatedAt - 2_000 });
@@ -298,7 +306,7 @@ it.each([1, 3])(
       }
       return run(params);
     });
-    kickSessionEntryMaintenanceAfterWrite(request);
+    foregroundTurn.run("completed-turn", () => kickSessionEntryMaintenanceAfterWrite(request));
     await yieldToEventLoop();
     expect(rejections).toBe(conflicts);
     expect(plans).toHaveBeenCalledTimes(conflicts === 1 ? 2 : 3);
@@ -310,13 +318,14 @@ it.each([1, 3])(
       expect(loadSessionEntry({ sessionKey: victimKey, storePath })?.archivedAt).toBeUndefined();
       await vi.advanceTimersByTimeAsync(30 * 60 * 1_000);
       expect(plans).toHaveBeenCalledTimes(3);
-      kickSessionEntryMaintenanceAfterWrite(request);
+      foregroundTurn.run("later-turn", () => kickSessionEntryMaintenanceAfterWrite(request));
       await vi.advanceTimersByTimeAsync(1_000);
       await yieldToEventLoop();
     }
     expect(loadSessionEntry({ sessionKey: victimKey, storePath })?.archiveReason).toBe(
       "age-retention",
     );
+    expect(timerContexts).toEqual(new Set([undefined]));
   },
 );
 

@@ -12,6 +12,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { WORKER_PUBLIC_INGRESS_PATH } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
 import {
   resetAgentRunRegistryForTest,
   validateAgentRunDelegatedAuthority,
@@ -115,6 +116,7 @@ describe("worker computer connection lifetime", () => {
           ok: true,
           result: {
             generation: "surface",
+            presentation: createToolSurfacePresentationForTest(),
             tools: [
               {
                 id: "send",

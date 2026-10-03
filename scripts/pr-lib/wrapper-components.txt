@@ -779,6 +779,9 @@ src/infra/gateway-owner-lease.read.ts
 src/infra/gateway-owner-lease.ts
 src/infra/gateway-lock-payload.ts
 src/infra/gateway-state-owner-directory.ts
+src/infra/gateway-state-owner-heartbeat.runtime.ts
+src/infra/gateway-state-owner-heartbeat.ts
+src/infra/gateway-state-owner-heartbeat.worker.ts
 src/infra/gateway-state-owner-record.ts
 src/infra/gateway-state-owner.ts
 src/infra/gateway-process-argv.ts
@@ -845,6 +848,7 @@ src/infra/openclaw-exec-env.ts
 src/infra/openclaw-process-census.ts
 src/infra/openclaw-root.fs.runtime.ts
 src/infra/openclaw-root.ts
+src/infra/package-update-activation-immutable-recovery-schema.ts
 src/infra/package-update-activation-immutable.ts
 src/infra/package-update-activation-paths.ts
 src/infra/package-update-activation-schema.ts
@@ -974,6 +978,7 @@ src/infra/update-failure-facts.ts
 src/infra/update-failure-public-codes.ts
 src/infra/update-failure-public-identifiers.ts
 src/infra/update-immutable-install-schema.ts
+src/infra/update-immutable-protection-schema.ts
 src/infra/update-managed-service-handoff-boot.ts
 src/infra/update-managed-service-handoff-cancellation.ts
 src/infra/update-managed-service-handoff-children.ts
@@ -1082,6 +1087,8 @@ src/plugin-sdk/file-lock.ts
 src/plugin-sdk/keyed-async-queue.ts
 src/plugin-sdk/message-tool-delivery-hints.ts
 src/plugin-state/plugin-blob-store.types.ts
+src/plugin-state/plugin-state-error-cause.ts
+src/plugin-state/plugin-state-error.ts
 src/plugin-state/plugin-state-worker-contract.ts
 src/plugins/activation-planner.ts
 src/plugins/activation-source-config.ts
@@ -1103,6 +1110,7 @@ src/plugins/command-execution-lock.ts
 src/plugins/compat/agent-list-runtime-projection-records.ts
 src/plugins/compat/deprecation-marking.ts
 src/plugins/compat/media-legacy-projection.ts
+src/plugins/compat/mention-inbox-record.ts
 src/plugins/compat/plugin-sdk-subpath-records.ts
 src/plugins/compat/registry-records.ts
 src/plugins/compat/registry.ts
@@ -1403,6 +1411,8 @@ src/sessions/session-diff-revisions.ts
 src/sessions/session-diff.runtime.ts
 src/sessions/session-key-utils.ts
 src/sessions/session-row-changes.ts
+src/sessions/session-state-events.ambient-read.ts
+src/sessions/session-state-events.prune.ts
 src/sessions/transcript-events.ts
 src/sessions/user-turn-transcript-admission.ts
 src/secrets/store/secret-store-validation-error.ts
@@ -1631,7 +1641,6 @@ src/utils/utf8-truncate.ts
 src/utils/zod-parse.ts
 src/version.ts
 src/worker/protocol-record.ts
-src/worker/tool-authority.ts
 test/helpers/temp-dir.ts
 test/test-home-context.mts
 test/test-home-policy.mts

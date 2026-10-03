@@ -12,7 +12,6 @@ import { Value } from "typebox/value";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { validateWorkerComputerParams } from "../../packages/gateway-protocol/src/index.js";
-import { PresenceQueryParamsSchema } from "../../packages/gateway-protocol/src/schema/presence.js";
 import {
   type WorkerConnectRequestFrame,
   WorkerConnectRequestFrameSchema,
@@ -32,7 +31,6 @@ import {
   validateWorkerGatewayToolInvokeParams,
   type WorkerGatewayToolInvokeParams,
   type WorkerToolSurface,
-  WorkerToolSurfaceSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import {
   type WorkerInferenceCancelRequestFrame,
@@ -60,22 +58,9 @@ import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.
 import { listRunningSessions, waitForExecScope } from "../agents/bash-process-registry.js";
 import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
 import { hasModelFallbackStop } from "../agents/failover-error.js";
-import {
-  prepareCoreToolPolicy,
-  projectAgentToolDefinition,
-} from "../agents/prepared-tool-surface.js";
+import { prepareCoreToolPolicy } from "../agents/prepared-tool-surface.js";
 import * as agentSessionSdk from "../agents/sessions/sdk.js";
-import {
-  SessionPortalToolSchema,
-  SESSION_PORTAL_TOOL_DESCRIPTION,
-} from "../agents/tools/portal-tool-contract.js";
-import { PRESENCE_TOOL_DESCRIPTION } from "../agents/tools/presence-tool-contract.js";
-import {
-  PlacedSessionsSendSchema,
-  PlacedSessionsSpawnSchema,
-  PLACED_SESSIONS_SEND_DESCRIPTION,
-  PLACED_SESSIONS_SPAWN_DESCRIPTION,
-} from "../agents/tools/sessions-placement-tool-contract.js";
+import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as boundaryFileRead from "../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -83,7 +68,6 @@ import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js
 import { runExec } from "../process/exec.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { prepareSkillBundle } from "../skills/library/bundle.js";
-import { createWorkerComputerTool } from "./computer-runtime.js";
 import * as workerTranscriptRuntime from "./embedded-agent-transcript.runtime.js";
 import {
   buildWorkerConnectParams,
@@ -96,7 +80,6 @@ import {
   WorkerConnectionStoppedError,
 } from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
-import { createWorkerPlacementTools } from "./worker-placement-tools.js";
 import {
   buildWorkerProcessTurn,
   parseWorkerProcessMessage,
@@ -115,6 +98,7 @@ import {
 } from "./worker-runtime-gateway-tools.suite.js";
 import { registerWorkerPermissionTests } from "./worker-runtime-permissions.suite.js";
 import { registerWorkerReplayWindowTests } from "./worker-runtime-replay.suite.js";
+import { createWorkerToolSurfaceForTest } from "./worker-tool-surface.test-support.js";
 import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
 
 const browserRuntimeMocks = vi.hoisted(() => ({
@@ -952,100 +936,12 @@ async function setup(options?: FakeGatewayOptions): Promise<{
   const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-worker-workspace-"));
   tempDirs.push(workspaceDir);
   const launch = descriptor(gateway.socketPath, workspaceDir);
-  gateway.toolSurface = () => {
-    const assignment = launch.assignment;
-    const policy = prepareCoreToolPolicy({
+  gateway.toolSurface = () =>
+    createWorkerToolSurfaceForTest({
+      assignment: launch.assignment,
       config: gateway.config,
-      agentId: assignment.agentId,
-      modelProvider: assignment.modelRef.provider,
-      modelId: assignment.modelRef.model,
-      ...(assignment.permissionMode
-        ? {
-            sessionPermissionPolicy: {
-              mode: assignment.permissionMode,
-              root: assignment.workspaceDir,
-            },
-          }
-        : {}),
+      sessionId: SESSION_ID,
     });
-    const definitions = new Map(
-      createWorkerPlacementTools({
-        policy,
-        cwd: assignment.workspaceDir,
-        containmentRoot: assignment.workerContainmentRoot ?? assignment.workspaceDir,
-        execAuthority: assignment.toolAuthority.exec,
-        permissionMode: assignment.permissionMode,
-        agentId: assignment.agentId,
-        sessionKey: `worker:${SESSION_ID}`,
-        sessionId: SESSION_ID,
-        runId: assignment.runId,
-      }).map((tool) => [tool.name, projectAgentToolDefinition(tool)]),
-    );
-    if (assignment.browser) {
-      definitions.set("browser", {
-        name: "browser",
-        label: "Browser",
-        description: "Control the attached worker browser.",
-        parameters: Type.Object({}),
-        executionMode: undefined,
-      });
-    }
-    if (assignment.computer) {
-      definitions.set(
-        "computer",
-        projectAgentToolDefinition(
-          createWorkerComputerTool({
-            descriptor: assignment.computer,
-            runId: assignment.runId,
-            requestComputer: async () => {
-              throw new Error("Definition preparation cannot invoke the desktop");
-            },
-            registerRunCleanup: () => {},
-          }),
-        ),
-      );
-    }
-    const gatewayDefinitions = [
-      ["sessions_spawn", PlacedSessionsSpawnSchema, PLACED_SESSIONS_SPAWN_DESCRIPTION],
-      ["sessions_send", PlacedSessionsSendSchema, PLACED_SESSIONS_SEND_DESCRIPTION],
-      ["portal", SessionPortalToolSchema, SESSION_PORTAL_TOOL_DESCRIPTION],
-      ["presence", PresenceQueryParamsSchema, PRESENCE_TOOL_DESCRIPTION],
-    ] as const;
-    for (const [name, parameters, description] of gatewayDefinitions) {
-      definitions.set(name, {
-        name,
-        label: name,
-        description,
-        parameters,
-        executionMode: undefined,
-      });
-    }
-    const surface = {
-      generation: "runtime-surface",
-      policy,
-      tools: assignment.toolAuthority.allowedToolNames.flatMap((name) => {
-        const definition = definitions.get(name);
-        if (!definition) {
-          return [];
-        }
-        const gatewayTool = gatewayDefinitions.some(([toolName]) => toolName === name);
-        return [
-          {
-            id: name,
-            definition,
-            execution: gatewayTool ? "gateway" : "placement",
-            ...(name === "sessions_spawn" || name === "sessions_send"
-              ? { replay: true as const }
-              : {}),
-          },
-        ];
-      }),
-    };
-    if (!Value.Check(WorkerToolSurfaceSchema, surface)) {
-      throw new Error("Invalid test tool surface");
-    }
-    return surface;
-  };
   return { gateway, workspaceDir, launch };
 }
 
@@ -1692,7 +1588,12 @@ describe("worker runtime", () => {
       } else {
         start.mockResolvedValue({
           type: "worker-hello-ok",
-          toolSurface: { generation: "surface", tools: [], policy: prepareCoreToolPolicy({}) },
+          toolSurface: {
+            generation: "surface",
+            presentation: createToolSurfacePresentationForTest(),
+            tools: [],
+            policy: prepareCoreToolPolicy({}),
+          },
           environmentId: launch.admission.environmentId,
           sessionId: SESSION_ID,
           ownerEpoch: OWNER_EPOCH,

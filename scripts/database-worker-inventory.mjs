@@ -21,6 +21,22 @@ const excluded =
   /(?:^|\/)(?:__tests__|__fixtures__|test|tests|test-utils|test-helpers|test-support|test-fixtures|test-harness|fixtures|e2e)(?:\/|$)|(?:^|[/.-])(?:test|spec|e2e|test-support|test-helpers|test-fixtures|test-harness|test-runtime)(?:[.-])/;
 const reviewed = new Map([
   [
+    "src/gateway/mention-inbox-store.ts",
+    {
+      priority: 3,
+      evidence:
+        "Worker-backed bundled callers; deprecated 2026.9.8 synchronous Mention Inbox SDK kernel until next SDK major",
+    },
+  ],
+  [
+    "src/gateway/mention-inbox.native.ts",
+    {
+      priority: 3,
+      evidence:
+        "Deprecated 2026.9.8 synchronous Mention Inbox SDK transaction; removal at next SDK major",
+    },
+  ],
+  [
     "src/state/user-profiles.ts",
     { priority: 1, evidence: "Profile creation; write-coordination cutover owned separately" },
   ],
@@ -156,6 +172,42 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/config/sessions/session-accessor.sqlite-reset.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["readResetInventory", "previewSessionStoreReset"],
+        evidence:
+          "Only cleanup-utils.ts:620,628,641 reaches full-store reset from reset.ts:154 and onboard-helpers.ts:254, including CLI dev bootstrap; Gateway session reset is separate",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-archive-store-kernel.ts",
+    [
+      {
+        tier: "T3",
+        operations: [
+          "readSessionTranscriptArchiveResetInventory",
+          "deleteAllSessionTranscriptArchivesInTransaction",
+        ],
+        evidence:
+          "Only offline full-store reset calls these at session-accessor.sqlite-reset.ts:65,239 via commands/cleanup-utils.ts; other archive operations retain native lifecycle callers",
+      },
+    ],
+  ],
+  [
+    "src/infra/update-managed-service-handoff-database-recovery.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["recoverManagedUpdateLeaseJournal.read"],
+        evidence:
+          "Explicit update recover CLI -> recoverImmutableUpdate -> withImmutableUpdateOwner({ recover: true }) only; ordinary lease and Gateway readers never call this cold-journal admission",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-canonical-repair.ts",
     [
       {
@@ -264,7 +316,13 @@ const reviewedOperations = new Map([
           "createPlacementWorkspaceJournalOps.abortWorkspaceReconciliation",
         ],
         evidence:
-          "state-read.worker.ts:648,659 and placement-workspace-journal.worker.ts:30; host acceptance/drain cleanup stays T1",
+          "Read dispatch at state-read.worker.ts:653 and journal mutation factory at placement-workspace-journal.worker.ts:30",
+      },
+      {
+        tier: "W",
+        operations: ["clearWorkerWorkspaceReconciliation"],
+        evidence:
+          "Acceptance at placement-turn-claims.worker.ts:190, journal abort via placement-workspace-journal.worker.ts:30 and manifest drain via placement-transitions.worker.ts:82; native move drain supplies no manifest and skips cleanup",
       },
     ],
   ],
@@ -328,6 +386,13 @@ const reviewedOperations = new Map([
         operations: ["readWorkerPlacementChangeSnapshotInDatabase"],
         evidence: "Reporting snapshot only called by openclaw-state-read.worker.ts:644",
       },
+      {
+        tier: "W",
+        operations: ["updateTransition"],
+        binding: "activated",
+        evidence:
+          "Only activation at placement-transitions.worker.ts:58 reaches this initializer; native placement-store.ts:325 passes provisioning, not active; the placement update stays T1",
+      },
     ],
   ],
   [
@@ -346,6 +411,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/gateway/operator-approval-store.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: ["listTerminalOperatorApprovalsInDatabase"],
+        evidence:
+          "Only openclaw-state-read.worker.ts:489 serves approval history; the native compatibility operation map has no history operation",
+      },
+    ],
+  ],
+  [
     "src/gateway/operator-approval-store.transitions.ts",
     [
       {
@@ -353,6 +429,46 @@ const reviewedOperations = new Map([
         operations: ["closeOrphanedOperatorApprovals", "pruneTerminalOperatorApprovals"],
         evidence:
           "Boot calls only in server-aux-handlers.ts:105,109; remaining transitions retain native SDK compatibility",
+      },
+    ],
+  ],
+  [
+    "src/infra/push-web-store.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "findBoundWebPushSubscriptionByEndpointInDatabase",
+          "listWebPushSubscriptionsInDatabase",
+          "hasBoundWebPushSubscriptionsInDatabase",
+          "listBoundWebPushSubscriptionsInDatabase",
+          "prepareWebPushApprovalDeliveriesInDatabase",
+          "listWebPushApprovalDeliveryTargetsInDatabase",
+          "deleteWebPushApprovalDeliveryTargetsInDatabase",
+          "listTerminalWebPushApprovalDeliveryIdsInDatabase",
+          "deleteWebPushSubscriptionIfCurrentInDatabase",
+        ],
+        evidence:
+          "Only push-web-store.worker.ts:14,20,22,24,28,32,36,40,62 calls these operations; native preferences/upsert/delete-bound and their shared schema helper stay T1",
+      },
+    ],
+  ],
+  [
+    "src/node-host/node-worker-prepared-workspace-store.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "selectRow",
+          "write",
+          "list",
+          "register",
+          "bind",
+          "completeMutation",
+          "retire",
+        ],
+        evidence:
+          "List/mutations run only in node-worker-journal.worker.ts:14,19,26,31,36; selectRow/write are mutation-only helpers; native findSync at node-worker-prepared-workspace-store.ts:31 reaches only find, which stays T1",
       },
     ],
   ],
@@ -366,7 +482,17 @@ const reviewedOperations = new Map([
           "isSessionStateUpstreamCurrentInDatabase",
         ],
         evidence:
-          "session-state-events.worker.ts:146,147 and session-upstream-links.worker.ts:18,25; shared event/prune and child-spawn seed sites stay T1",
+          "session-state-events.worker.ts and session-upstream-links.worker.ts; event/head SQL retains native adopted-event callers",
+      },
+      {
+        tier: "W",
+        operations: [
+          "upsertSeedCursor",
+          "pruneSessionStateEventsInDatabase",
+          "pruneSessionStateEventsInDatabase.stampPrunedWatermarks",
+        ],
+        evidence:
+          "Seed cursors run through sessionState.record/registerWatch; periodic and restart pruning dispatch sessionState.prune; adopted-event/native-binding producers remain native",
       },
       {
         tier: "W",

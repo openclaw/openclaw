@@ -83,12 +83,27 @@ suite.define(() => {
         await save.click();
         const request = await gateway.waitForRequest(method);
         expect(request.params).toMatchObject({ action: "edit", objective: corrected });
+        const committed = { ...goal, objective: corrected, updatedAt: now + 1 };
+        // The real Gateway commits before ACK; later reads must see the same Goal.
+        await gateway.setSessionsListResponse({
+          sessions: [{ ...(await gateway.getSessionRow("agent:main:main")), goal: committed }],
+        });
         await gateway.resolveDeferred(method, {
           status: "updated",
           goalId: goal.id,
-          goal: { ...goal, objective: corrected, updatedAt: now + 1 },
+          goal: committed,
         });
         await expect.poll(() => save.count()).toBe(0);
+        // Release the Goal refresh after the ACK to exercise the losing read order.
+        const lists = (await gateway.getRequests("sessions.list")).length;
+        await gateway.deferNext("sessions.list");
+        await gateway.emitGatewayEvent("sessions.changed", {
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          reason: "goal",
+        });
+        await gateway.waitForRequest("sessions.list", { after: lists });
+        await gateway.resolveDeferred("sessions.list");
         await expect
           .poll(() => page.locator(".agent-chat__goal-objective").textContent())
           .toBe(corrected);

@@ -28,6 +28,10 @@ import {
   beginSessionWorkAdmission,
   isSessionWorkAdmissionActive,
 } from "../sessions/session-lifecycle-admission.js";
+import {
+  getSessionStateVersion,
+  listSessionStateEventsSince,
+} from "../sessions/session-state-events.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { embeddedRunMock, onceMessage, agentDiscoveryMock, rpcReq } from "./test-helpers.js";
 import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
@@ -39,6 +43,7 @@ import {
   directSessionReq,
   expectNoSessionQueueCleanup,
 } from "./test/server-sessions.test-helpers.js";
+import { loseSessionSignalAcknowledgement } from "./test/session-signal-failure.test-support.js";
 import { registerWorkerInferenceSessionControl } from "./worker-environments/inference-control-internal.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
@@ -179,13 +184,19 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
   // Prepare the lazy handler before arming the RPC and event observers.
   await import("./server-methods/sessions-compact.js");
   await rpcReq(ws, "sessions.subscribe", {});
+  const signalVersion = await getSessionStateVersion(sessionScope.sessionKey, "main");
+  const signal = loseSessionSignalAcknowledgement();
   const [startEvent, endEvent, compacted] = await Promise.all([
     onceMessage(ws, (message) => isCompactOperationEvent(message, "start")),
     onceMessage(ws, (message) => isCompactOperationEvent(message, "end")),
     rpcReq(ws, "sessions.compact", { key: "main" }),
-  ]);
+  ]).finally(signal.restore);
 
   expectMainCompactionResult(compacted, true);
+  expect(signal.attempts()).toBe(1);
+  expect(
+    (await listSessionStateEventsSince(sessionScope.sessionKey, "main", signalVersion)).events,
+  ).toMatchObject([{ kind: "compacted", sessionId: sessionScope.sessionId }]);
   const startPayload = startEvent.payload as { operationId?: string };
   const endPayload = endEvent.payload as { operationId?: string };
   expect(startPayload).toMatchObject({
@@ -829,8 +840,13 @@ test("sessions.compact maxLines trims SQLite transcript rows without creating a 
     },
   });
   const { ws } = await openClient();
-  const compacted = await rpcReq(ws, "sessions.compact", { key: "main", maxLines: 3 });
+  const signalVersion = await getSessionStateVersion(scope.sessionKey, "main");
+  const signal = loseSessionSignalAcknowledgement();
+  const compacted = await rpcReq(ws, "sessions.compact", { key: "main", maxLines: 3 }).finally(
+    signal.restore,
+  );
   expectMainCompactionResult(compacted, true);
+  expect(signal.attempts()).toBe(1);
   expect(compacted.payload?.kept).toBe(3);
 
   const retained = await loadTranscriptEvents(scope);
@@ -854,6 +870,10 @@ test("sessions.compact maxLines trims SQLite transcript rows without creating a 
 
   expect(embeddedRunMock.abortCalls).toEqual([]);
   expect(embeddedRunMock.waitCalls).toEqual([]);
+
+  expect(
+    (await listSessionStateEventsSince(scope.sessionKey, "main", signalVersion)).events,
+  ).toMatchObject([{ kind: "compacted", sessionId: scope.sessionId }]);
 
   ws.close();
 });

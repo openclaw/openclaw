@@ -464,7 +464,7 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
       "Session changed before native confirmation. Retry.",
     );
   }
-  recordSessionCreated(cfg, { agentId, sessionKey, entry: committed.sessionEntry });
+  await recordSessionCreated(cfg, { agentId, sessionKey, entry: committed.sessionEntry });
   emitSessionsChanged(context, { agentId, sessionKey, reason: "create" });
   return resolveSessionNativeRuntimeRestriction({
     operation: "send",

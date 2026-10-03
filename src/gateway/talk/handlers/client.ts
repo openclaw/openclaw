@@ -31,7 +31,7 @@ import {
   resolveClientVoiceSessionOrigin,
   resolveOpenClientVoiceSessionId,
 } from "../../../talk/client-voice-session.js";
-import { resolveSandboxedSessionCreation } from "../../operator-role-policy.js";
+import { resolveSandboxedSessionCreation } from "../../operator-session-run.js";
 import type { GatewayRequestHandlers } from "../../server-methods/types.js";
 import { defineValidatedGatewayHandler } from "../../server-methods/validation.js";
 import { SessionMutationAuthorizationChangedError } from "../../session-mutation-authorization-error.js";

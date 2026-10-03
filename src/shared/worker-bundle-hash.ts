@@ -9,6 +9,7 @@ export const WORKER_BUNDLE_FILE_TOOL_PLANNING_PATH = "file-tool-planning.worker.
 export const WORKER_BUNDLE_RSYNC_RECEIVER_PATH = "workspace-rsync-receiver.mjs";
 export const WORKER_BUNDLE_SQLITE_STORE_PATH = "sqlite-store.worker.mjs";
 export const WORKER_BUNDLE_ARTIFACT_PATHS = [
+  "code-mode-node.worker.mjs",
   WORKER_BUNDLE_FILE_TOOL_PLANNING_PATH,
   WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH,
   WORKER_BUNDLE_IMAGE_PROCESSOR_PATH,

@@ -134,7 +134,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     }
     const persistedInitialEntry = persistence.entry;
     if (creatingSession) {
-      recordSessionCreated(params.cfg, {
+      await recordSessionCreated(params.cfg, {
         sessionKey: sessionState.sessionKey,
         agentId: params.agentId,
         entry: persistedInitialEntry,

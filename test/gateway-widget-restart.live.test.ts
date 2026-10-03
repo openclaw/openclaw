@@ -100,6 +100,7 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
             defaults: {
               workspace: instance.state.workspaceDir,
               model: { primary: MODEL_REF },
+              modelPolicy: { allow: [MODEL_REF] },
               models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },
               thinkingDefault: "low",
               heartbeat: { every: "0m" },

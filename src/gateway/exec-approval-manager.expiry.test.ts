@@ -1,5 +1,3 @@
-// Focused coverage for timer-driven approval expiry publication; the main
-// exec-approval-manager suite sits at the max-lines cap.
 import fs from "node:fs";
 import { copyFile, rename, stat } from "node:fs/promises";
 import os from "node:os";
@@ -15,7 +13,6 @@ import {
   createTestApprovalManager,
   createApprovalScheduler,
   createPreparedTestApprovalManager,
-  installTestApprovalClock,
 } from "./exec-approval-manager.test-support.js";
 import * as operatorApprovalStore from "./operator-approval-store.js";
 
@@ -127,48 +124,6 @@ describe("ExecApprovalManager timeout expiry publication", () => {
     },
   );
 
-  it("publishes timer-driven timeout expiry through onExpired", async () => {
-    const timers = scheduled.wakes;
-    vi.spyOn(Date, "now").mockReturnValue(1_000);
-    installTestApprovalClock();
-    const expirations: Array<{ recordId: string; status: string; requestCommand?: string }> = [];
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-expired-"));
-    tempDirs.push(dir);
-    const manager = new ExecApprovalManager({
-      scheduler: scheduled.scheduler,
-      approvalKind: "exec",
-      persistence: {
-        runtimeEpoch: "runtime-a",
-        databaseOptions: { path: path.join(dir, "s.sqlite") },
-      },
-      resolveAllowedDecisions: () => ["allow-once", "deny"],
-      onExpired: (record, liveRecord) =>
-        expirations.push({
-          recordId: record.id,
-          status: record.status,
-          requestCommand: liveRecord.request.command,
-        }),
-    });
-    const record = manager.create({ command: "echo expired" }, 60_000, "approval-on-expired");
-    const decisionPromise = (await manager.register(record, 60_000)).decision;
-    vi.mocked(Date.now).mockReturnValue(record.expiresAtMs);
-
-    const deadlines = timers.filter(({ delayMs }) => delayMs !== 15_000);
-    expect(deadlines).toHaveLength(1);
-    const timer = deadlines[0];
-    if (!timer || typeof timer.run !== "function") {
-      throw new Error("expected timer callback");
-    }
-    await timer.run();
-
-    await expect(decisionPromise).resolves.toBeNull();
-    // The gateway clock owns expiry: reviewer surfaces get the terminal fact
-    // (with the live request for the event payload) instead of inferring it.
-    expect(expirations).toEqual([
-      { recordId: record.id, status: "expired", requestCommand: "echo expired" },
-    ]);
-  });
-
   async function prepareExpiry(testContext: TestContext) {
     const refused = createDeferredCore<unknown>();
     const onExpired = vi.fn();
@@ -238,6 +193,7 @@ describe("ExecApprovalManager timeout expiry publication", () => {
         onExpired,
         onLifecycle,
       } = await prepareExpiry(testContext);
+      expect(deadlines()).toHaveLength(1);
       const releaseCapacity = code !== "unavailable" ? holdWorkerInputCapacity() : undefined;
       if (code === "unavailable") {
         vi.mocked(operatorApprovalStore.forceDenyOperatorApproval).mockRejectedValueOnce(
@@ -270,7 +226,10 @@ describe("ExecApprovalManager timeout expiry publication", () => {
       await expect(Promise.race([decision, retryFailure.promise])).resolves.toBeNull();
       await observation;
       expect(handoff).toHaveBeenCalledExactlyOnceWith(null);
-      expect(onExpired).toHaveBeenCalledTimes(1);
+      expect(onExpired).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ id: record.id, status: "expired" }),
+        expect.objectContaining({ request: { command: "echo expiry" } }),
+      );
       expect(onLifecycle.mock.calls.filter(([event]) => event.phase === "terminal")).toHaveLength(
         1,
       );
@@ -432,6 +391,14 @@ describe("ExecApprovalManager timeout expiry publication", () => {
           fixture.onLifecycle.mock.calls.filter(([event]) => event.phase === "terminal"),
         ).toHaveLength(1);
         expect(deadlines()[1]?.cancelled).toBe(true);
+        if (operation === "cancel") {
+          expect(outcome).toMatchObject({ value: { outcome: "denied" } });
+          expect(await manager.getSnapshot(record.id)).toMatchObject({
+            status: "cancelled",
+            terminalReason: "run-aborted",
+          });
+          expect(manager.consumeAskFallback(record.id)).toBe(false);
+        }
       }
       if (operation === "cancel") {
         expect(record.approvalAuthority?.()).toBe(false);
@@ -569,27 +536,4 @@ describe("ExecApprovalManager timeout expiry publication", () => {
       });
     },
   );
-
-  it("rejects ask-fallback replay of a run-aborted cancellation", async (testContext) => {
-    const manager = createTestApprovalManager(testContext);
-    const record = manager.create({ command: "echo ok" }, 60_000, "approval-cancelled");
-    const decisionPromise = (await manager.register(record, 60_000)).decision;
-
-    // Dispatch fencing / run abort ends decision-less like a timeout, but its
-    // authority closed deliberately — replay must not re-admit through it.
-    const denied = await manager.forceDenyDetailed(
-      "approval-cancelled",
-      "run-aborted",
-      { kind: "system", id: "worker-dispatch" },
-      "cancelled",
-    );
-    expect(denied.outcome).toBe("denied");
-    await expect(decisionPromise).resolves.toBeNull();
-
-    expect(await manager.getSnapshot("approval-cancelled")).toMatchObject({
-      status: "cancelled",
-      terminalReason: "run-aborted",
-    });
-    expect(manager.consumeAskFallback("approval-cancelled")).toBe(false);
-  });
 });

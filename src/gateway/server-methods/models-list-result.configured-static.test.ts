@@ -95,7 +95,7 @@ describe("models.list configured static entries", () => {
     );
   });
 
-  it("reports direct API completion for a Codex-selected utility model with an API key", async () => {
+  it("projects utility runtimes for API, subscription, unavailable, and disabled selections", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "utility-runtime-api-key-", env: WITHOUT_OPENAI_ENV_AUTH },
       async (state) => {
@@ -138,10 +138,9 @@ describe("models.list configured static entries", () => {
             catalog: [catalogEntry("gpt-5.5", "openai-responses")],
           }),
         );
-        expect(result.defaultModels?.utilityRuntime).toEqual({
-          id: "openclaw",
-          kind: "api",
-          label: "OpenClaw Default",
+        expect(result.defaultModels).toEqual({
+          automaticUtilityModel: "openai/gpt-5.6-luna",
+          utilityRuntime: { id: "openclaw", kind: "api", label: "OpenClaw Default" },
         });
         // The same real registration must also respect native, missing, and exhausted auth.
         const pinnedConfig: OpenClawConfig = {
@@ -166,6 +165,7 @@ describe("models.list configured static entries", () => {
         for (const [name, authStore, expected] of [
           ["subscription", subscription, { id: "codex", kind: "harness", label: "OpenAI Codex" }],
           ["missing", { version: 1, profiles: {} }, undefined],
+          ["disabled", subscription, undefined],
           [
             "exhausted",
             {
@@ -176,7 +176,13 @@ describe("models.list configured static entries", () => {
           ],
         ] as const) {
           const projected = await listModels({
-            cfg: pinnedConfig,
+            cfg:
+              name === "disabled"
+                ? {
+                    ...pinnedConfig,
+                    agents: { defaults: { ...pinnedConfig.agents?.defaults, utilityModel: "" } },
+                  }
+                : pinnedConfig,
             agentDir: state.agentDir(),
             workspaceDir: state.workspaceDir,
             view: "configured",
@@ -185,7 +191,10 @@ describe("models.list configured static entries", () => {
             preparedAuthStore: authStore,
             catalog: [catalogEntry("gpt-5.5", "openai-chatgpt-responses")],
           });
-          expect(projected.defaultModels?.utilityRuntime, name).toEqual(expected);
+          expect(projected.defaultModels, name).toEqual({
+            automaticUtilityModel: "openai/gpt-5.6-luna",
+            ...(expected ? { utilityRuntime: expected } : {}),
+          });
         }
       },
     );
@@ -357,75 +366,55 @@ describe("models.list configured static entries", () => {
     );
   });
 
-  it("waits for the complete configured catalog when explicit refresh exceeds the browse deadline", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const catalog = [
-      { ...catalogEntry("gpt-5.6-luna", "openai-responses"), name: "Refreshed Luna" },
-      { ...catalogEntry("gpt-5.6-sol", "openai-responses"), name: "Refreshed Sol" },
-    ];
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.6-luna" },
-          models: { "openai/gpt-5.6-luna": {}, "openai/gpt-5.6-sol": {} },
+  it.each([true, false])(
+    "uses the correct configured catalog past the browse deadline (refresh=%s)",
+    async (refresh) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const catalog = [
+        {
+          ...catalogEntry("gpt-5.6-luna", "openai-responses"),
+          name: `${refresh ? "Refreshed" : "Published"} Luna`,
         },
-      },
-    } as OpenClawConfig;
-
-    const result = listModels({
-      catalog,
-      catalogLoadDelayMs: 800,
-      preparedCatalog: catalog.slice(0, 1),
-      publishedCatalog: catalog.slice(0, 1),
-      cfg: config,
-      refresh: true,
-      view: "configured",
-    });
-
-    let settled = false;
-    void result.then(() => {
-      settled = true;
-    });
-    await vi.advanceTimersByTimeAsync(750);
-    expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(50);
-
-    expect((await result).models.map(({ id, name }) => ({ id, name }))).toEqual([
-      { id: "gpt-5.6-luna", name: "Refreshed Luna" },
-      { id: "gpt-5.6-sol", name: "Refreshed Sol" },
-    ]);
-  });
-
-  it("keeps the published configured catalog when an implicit load exceeds the browse deadline", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const publishedCatalog = [
-      { ...catalogEntry("gpt-5.6-luna", "openai-responses"), name: "Published Luna" },
-      { ...catalogEntry("gpt-5.6-sol", "openai-responses"), name: "Published Sol" },
-    ];
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.6-luna" },
-          models: { "openai/gpt-5.6-luna": {}, "openai/gpt-5.6-sol": {} },
+        {
+          ...catalogEntry("gpt-5.6-sol", "openai-responses"),
+          name: `${refresh ? "Refreshed" : "Published"} Sol`,
         },
-      },
-    } as OpenClawConfig;
+      ];
+      const config = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-luna" },
+            models: { "openai/gpt-5.6-luna": {}, "openai/gpt-5.6-sol": {} },
+          },
+        },
+      } as OpenClawConfig;
 
-    const result = listModels({
-      catalog: [],
-      catalogLoadDelayMs: 800,
-      publishedCatalog,
-      cfg: config,
-      view: "configured",
-    });
+      const result = listModels({
+        catalog: refresh ? catalog : [],
+        catalogLoadDelayMs: 800,
+        preparedCatalog: refresh ? catalog.slice(0, 1) : undefined,
+        publishedCatalog: refresh ? catalog.slice(0, 1) : catalog,
+        cfg: config,
+        refresh,
+        view: "configured",
+      });
 
-    await vi.advanceTimersByTimeAsync(750);
+      let settled = false;
+      void result.then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(750);
+      if (refresh) {
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(50);
+      }
 
-    expect((await result).models.map(({ id, name }) => ({ id, name }))).toEqual([
-      { id: "gpt-5.6-luna", name: "Published Luna" },
-      { id: "gpt-5.6-sol", name: "Published Sol" },
-    ]);
-  });
+      expect((await result).models.map(({ id, name }) => ({ id, name }))).toEqual([
+        { id: "gpt-5.6-luna", name: `${refresh ? "Refreshed" : "Published"} Luna` },
+        { id: "gpt-5.6-sol", name: `${refresh ? "Refreshed" : "Published"} Sol` },
+      ]);
+    },
+  );
 
   it("projects a configured runtime model from prepared static facts", async () => {
     const config = {
@@ -467,37 +456,6 @@ describe("models.list configured static entries", () => {
       ],
     });
   });
-
-  it.each([
-    ["openai/gpt-5.6-sol", { id: "openclaw", kind: "api", label: "OpenClaw Default" }],
-    ["", undefined],
-  ])(
-    "reports the route of the utility model in effect (utilityModel=%j)",
-    async (utilityModel, route) => {
-      const result = await listModels({
-        catalog: [],
-        staticEntries: [catalogEntry("gpt-5.6-sol", "openai-responses")],
-        cfg: {
-          models: {
-            providers: {
-              openai: {
-                api: "openai-responses",
-                baseUrl: "https://api.openai.com/v1",
-                apiKey: "synthetic-key",
-                models: [],
-              },
-            },
-          },
-          agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" }, utilityModel } },
-        } as OpenClawConfig,
-        view: "configured",
-      });
-      expect(result.defaultModels).toEqual({
-        automaticUtilityModel: "openai/gpt-5.6-luna",
-        ...(route ? { utilityRuntime: route } : {}),
-      });
-    },
-  );
 
   it("projects agent aliases onto inherited default and fallback catalog rows", async () => {
     await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {

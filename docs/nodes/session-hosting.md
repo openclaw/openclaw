@@ -116,10 +116,30 @@ mixed Gateway/node versions: update either side first, and older node hosts
 continue to use status polling. A newer node advertises `workerHost.statusWait: 1`
 only to a Gateway that announces the capability. Reconnects renegotiate support.
 
-Worker tools newer than a node's installed OpenClaw, such as `presence`, are
-offered only when the node's supervisor declares support. Older nodes keep
-hosting OpenClaw worker turns without those tools. Update OpenClaw on the node
-and restart it to enable them.
+Hosted turns use the same prepared tool surface and agent/session policy as
+Gateway-local turns. Workspace file and process tools execute on the node;
+Gateway-owned tools, including web search, memory, and session discovery, execute
+on the Gateway with the turn's live authority and tool hooks. Tool definitions
+carry their execution location, so new Gateway tools do not require a separate
+node allowlist.
+
+The model-facing tools use the same Code Mode or Tool Search presentation as
+local turns, including the Gateway's resolved model settings and limits. Code
+Mode runs on the node and calls each catalog tool at its declared execution
+location. Its catalog and pending cells belong to the current turn; a retained
+worker receives a fresh presentation on the next turn.
+Node workers use `tool_call` for Tool Search, including when directory mode is configured.
+
+Concurrent Gateway tool calls wait for the existing transport budget, so larger
+model tool batches do not lose calls. Cancellation and heartbeats remain independent.
+
+Placement-local tools are offered only when the node declares their capability.
+Unavailable placement or transport capabilities are recorded in the Gateway log.
+Update OpenClaw on the node and restart it to enable newer local tools. Gateway
+operations use the matching downloaded worker bundle and do not depend on the
+installed supervisor recognizing their tool names. Updated nodes continue
+advertising the Gateway tools expected by older Gateways, preserving those
+tools when the node is updated first.
 
 This setting enables supervised session turns on the paired device, including
 Gateway-owned workspace transfer and result reconciliation. The Gateway prepares
@@ -134,8 +154,9 @@ response, including when a warm worker process is reused. A retained process rec
 the current turn's catalog and generation, so a turn does not need a separate
 discovery request. This uses the existing
 build-bound worker tool capability: the worker and Gateway must run the same
-bundle. If the complete admission response exceeds the control-frame limit, the
-turn fails explicitly instead of receiving a truncated catalog. The catalog grants
+bundle. The authenticated admission response uses the same negotiated payload budget
+as worker inference, so a complete tool catalog is not capped by the smaller
+control-frame limit. Oversized catalogs fail explicitly instead of being truncated. The catalog grants
 no execution authority; every Gateway tool call still checks the live turn claim.
 
 Worker reply attachments inside the assigned workspace are copied through the

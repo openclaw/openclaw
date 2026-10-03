@@ -3,9 +3,13 @@ import { SKILL_RESOURCE_PROTOCOL_FEATURE } from "../../../packages/gateway-proto
 import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { readRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
-import { bindAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
+import {
+  copyAgentToolMetadata,
+  getAgentToolExecutionLocation,
+} from "../../agents/agent-tool-metadata.js";
 import { createOpenClawCodingToolsInternal } from "../../agents/agent-tools.js";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
+import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { recordModelFallbackStop } from "../../agents/failover-error.js";
 import {
   loadManifestModelCatalog,
@@ -13,8 +17,6 @@ import {
 } from "../../agents/model-catalog.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import type { AnyAgentTool } from "../../agents/tools/common.js";
-import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { createLibrarySkillWorkshopTool } from "../../agents/tools/skill-workshop-tool-library.js";
 import { buildProactiveSubagentOrchestrationSection } from "../../agents/ultra-orchestration.js";
 import { resolveProviderThinkingLevel } from "../../auto-reply/thinking.js";
@@ -23,13 +25,13 @@ import {
   prepareActiveNodeContext,
 } from "../../infra/active-node-context.js";
 import { registerAgentRunDelegatedAuthorityClosedHandler } from "../../infra/agent-run-registry.js";
+import { logInfo } from "../../logger.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js";
-import { createWorkerBrowserToolDefinition } from "../../worker/browser-runtime.js";
-import { createWorkerComputerTool } from "../../worker/computer-runtime.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import { createWorkerPlacementTools } from "../../worker/worker-placement-tools.js";
+import { prepareGitHubPublicationAvailability } from "../github-publication-availability.js";
 import { requireCurrentWorkerTurnEnvironment, StaleWorkerBuildError } from "./admission.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
@@ -42,6 +44,7 @@ import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js
 import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js";
 import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
 import { createWorkerReplyMedia } from "./worker-reply-media.js";
+import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
 import { releaseClaimIfOwned, waitForTurnOperation } from "./worker-turn-admission.js";
 import {
   WorkerTurnExecutionError,
@@ -90,6 +93,11 @@ export async function executeWorkerTurn(
   input.abortSignal?.throwIfAborted();
   const turn = { ...input, config: preparedRuntime.snapshot.config };
   const modelRef = assertSupportedTurn(turn);
+  const model =
+    preparedRuntime.snapshot.findConfiguredRuntimeModel(modelRef.provider, modelRef.model) ??
+    preparedRuntime.snapshot.modelCatalog.entries.find(
+      (entry) => entry.provider === modelRef.provider && entry.id === modelRef.model,
+    );
   const { environment, bootstrapReceipt } = requireCurrentWorkerTurnEnvironment({
     environments: params.environments,
     placement,
@@ -99,14 +107,16 @@ export async function executeWorkerTurn(
   turn.abortSignal?.throwIfAborted();
   // Shared account refresh and repository lookup own their own lifetime. A
   // cancelled turn may stop waiting, but cannot consume a late binding.
-  const github = await raceNodeWorkerOperation(
-    prepareWorkerGitHubBinding({
-      sessionId: placement.sessionId,
-      sessionKey: placement.sessionKey,
-      agentId: placement.agentId,
-      assertCurrent: () =>
-        !turn.abortSignal?.aborted && params.placements.validateTurnClaim(params.turnClaim),
-    }),
+  const githubContext = {
+    ...placement,
+    assertCurrent: () =>
+      !turn.abortSignal?.aborted && params.placements.validateTurnClaim(params.turnClaim),
+  };
+  const [github, githubPublicationAvailable] = await raceNodeWorkerOperation(
+    Promise.all([
+      prepareWorkerGitHubBinding(githubContext),
+      prepareGitHubPublicationAvailability(githubContext),
+    ]),
     turn.abortSignal,
   );
   params.assertRunCurrent?.();
@@ -221,31 +231,28 @@ export async function executeWorkerTurn(
     agentRuntime: "openclaw",
     level: turn.thinkLevel,
   });
-  const {
-    browser,
-    computer,
-    preparedComputer,
-    toolAuthority,
-    capabilityProfile,
-    policy: toolPolicy,
-  } = await prepareWorkerDesktopLaunchPlan({
+  const desktop = await prepareWorkerDesktopLaunchPlan({
     desktop: environment.desktop,
     protocolFeatures: bootstrapReceipt.protocolFeatures,
     prepareComputer: () => params.environments.prepareComputer?.(params.turnClaim),
-    modelRef,
-    turn: {
-      ...turn,
-      workspaceDir: placement.remoteWorkspaceDir,
-      cwd: placement.remoteWorkspaceDir,
-    },
-    portalAvailable,
-    launchToolNames,
+    turn,
   });
-  await params.placements.authorizeWorkerTurnTools(
-    params.turnClaim,
-    toolAuthority.allowedToolNames,
-    assertTurnInputCurrent,
-  );
+  const { browser, computer, preparedComputer } = desktop;
+  const {
+    capabilityProfile,
+    policy: toolPolicy,
+    exec,
+    execUnavailable,
+    presentation,
+    installedSkills,
+  } = resolveWorkerToolAuthority({
+    modelRef,
+    model,
+    placement,
+    turn,
+    assertCurrent: assertContextCurrent,
+    computerAvailable: Boolean(computer),
+  });
   const { operationalRunInstance, runtimeIdentity, assertActive, takeFinishingOutcome } =
     await prepareWorkerAgentRuntimeIdentity({
       ...params,
@@ -262,10 +269,7 @@ export async function executeWorkerTurn(
       },
       assertSourceCurrent,
     });
-  preparedComputer?.bind(operationalRunInstance, {
-    authority: runtimeIdentity.approvalAuthority,
-    assertCurrent: assertActive,
-  });
+  assertActive();
   const authority = runtimeIdentity.approvalAuthority;
   const authorityAbort = new AbortController();
   const signal = turn.abortSignal
@@ -316,112 +320,92 @@ export async function executeWorkerTurn(
     if (!bootstrapReceipt.protocolFeatures.includes(WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE)) {
       throw new StaleWorkerBuildError();
     }
-    let skillWorkshop: AnyAgentTool | undefined;
-    if (turn.skillLibraryAuthoring && toolAuthority.allowedToolNames.includes("skill_workshop")) {
-      const assertSkillAuthority = () => {
-        if (
-          !isAuthorized() ||
-          !params.placements.isWorkerTurnToolAuthorized(params.turnClaim, "skill_workshop")
-        ) {
-          throw new Error("Worker personal authoring authority closed.");
-        }
-      };
-      const capability = turn.skillLibraryAuthoring;
-      skillWorkshop = createLibrarySkillWorkshopTool({
-        ...capability,
-        defaultTarget: "personal",
-        invoke: (invocation) =>
-          withGatewayToolCallerIdentity(
-            {
-              agentId: placement.agentId,
-              sessionKey: placement.sessionKey,
-              operationalRunInstance,
-              approvalAuthority: runtimeIdentity.approvalAuthority,
-              receiptAuthority: () => {
-                assertSkillAuthority();
-                return true;
-              },
-              workerTurnClaim: params.turnClaim,
-            },
-            () => capability.invoke(invocation),
-          ),
-      });
-    }
+    const skillWorkshop = turn.skillLibraryAuthoring
+      ? createLibrarySkillWorkshopTool({ ...turn.skillLibraryAuthoring, defaultTarget: "personal" })
+      : undefined;
     toolRuntime = createWorkerGatewayToolRuntime({
       assertCurrent: assertToolSurfaceCurrent,
       signal,
       prepare: async (identity) => {
-        const gatewayTools = await params.environments.createGatewayTools?.({
-          identity,
-          skillWorkshop,
-        });
-        if (!gatewayTools) {
-          throw new Error("Gateway tool surface is unavailable");
-        }
-        assertToolSurfaceCurrent();
-        const placementOnly = async (): Promise<never> => {
-          throw new Error("This tool executes at the placement");
-        };
         const placementTools = createWorkerPlacementTools({
+          ...turn,
+          ...placement,
           policy: toolPolicy,
           cwd: placement.remoteWorkspaceDir,
           containmentRoot: placement.remoteWorkspaceDir,
-          execAuthority: toolAuthority.exec,
-          permissionMode: turn.permissionMode,
-          agentId: placement.agentId,
-          sessionKey: placement.sessionKey,
+          execAuthority: execUnavailable ? undefined : exec,
           sessionId: turn.sessionId,
-          runId: turn.runId,
         });
-        if (browser) {
-          placementTools.push({
-            ...createWorkerBrowserToolDefinition(browser),
-            execute: placementOnly,
-          });
-        }
-        if (computer) {
-          placementTools.push(
-            createWorkerComputerTool({
-              descriptor: computer,
-              requestComputer: placementOnly,
-              runId: turn.runId,
-              registerRunCleanup: () => undefined,
-            }),
-          );
-        }
-        placementTools.forEach((tool) =>
-          bindAgentToolExecutionLocation(tool, { kind: "placement" }),
+        placementTools.push(...desktop.tools);
+        const availablePlacementTools = new Set(placementTools.map((tool) => tool.name));
+        const tools = await withPluginRuntimeGenerationScope(preparedRuntime.snapshot, () =>
+          params.environments.createGatewayTools?.({
+            identity,
+            skillWorkshop,
+            portalAvailable,
+            prepareTools: (adapters) => {
+              const prepared = createOpenClawCodingToolsInternal(
+                {
+                  ...turn,
+                  agentId: placement.agentId,
+                  conversationCapabilityProfile: capabilityProfile,
+                  preparedModelRuntime: preparedRuntime.snapshot,
+                  installedSkills,
+                  githubPublicationAvailable,
+                  cronCreatorAuthorityUnavailableReason: undefined,
+                  runSessionKey: placement.sessionKey,
+                  sessionKey: turn.sandboxSessionKey ?? placement.sessionKey,
+                  policyAgentId: turn.sandboxAgentId ?? turn.agentId,
+                  operationalRunInstance,
+                  sessionPermissionPolicy: turn.permissionMode
+                    ? { mode: turn.permissionMode, root: turn.workspaceDir }
+                    : undefined,
+                  modelProvider: modelRef.provider,
+                  modelId: modelRef.model,
+                  modelContextWindowTokens: toolPolicy.modelContextWindowTokens,
+                  runtimeToolAllowlist: turn.toolsAllow,
+                  skillWorkshop: undefined,
+                  computerTransport: null,
+                },
+                undefined,
+                undefined,
+                { tools: [...placementTools, ...adapters], policy: toolPolicy },
+              );
+              if (turn.disableTools || turn.modelRun || turn.promptMode === "none") {
+                return [];
+              }
+              return applyEmbeddedAttemptToolsAllow(prepared, turn.toolsAllow).filter((tool) => {
+                const location = getAgentToolExecutionLocation(tool);
+                const reason =
+                  location.kind === "gateway"
+                    ? location.unavailableReason
+                    : !availablePlacementTools.has(tool.name) ||
+                        !launchToolNames.includes(tool.name)
+                      ? "the placement has no available execution capability"
+                      : undefined;
+                if (reason) {
+                  logInfo(`Worker tool ${tool.name} withheld: ${reason}.`);
+                }
+                return !reason;
+              });
+            },
+          }),
         );
-        const tools = [...placementTools, ...gatewayTools].filter((tool) =>
-          toolAuthority.allowedToolNames.some((name) => name === tool.name),
-        );
+        if (!tools) {
+          throw new Error("Gateway tool surface is unavailable");
+        }
+        assertToolSurfaceCurrent();
         return {
           policy: toolPolicy,
-          tools: createOpenClawCodingToolsInternal(
-            {
-              ...turn,
-              agentId: placement.agentId,
-              conversationCapabilityProfile: capabilityProfile,
-              cronCreatorAuthorityUnavailableReason: undefined,
-              runSessionKey: placement.sessionKey,
-              sessionKey: turn.sandboxSessionKey ?? placement.sessionKey,
-              policyAgentId: turn.sandboxAgentId ?? turn.agentId,
-              operationalRunInstance,
-              workspaceDir: placement.remoteWorkspaceDir,
-              cwd: placement.remoteWorkspaceDir,
-              sessionPermissionPolicy: turn.permissionMode
-                ? { mode: turn.permissionMode, root: placement.remoteWorkspaceDir }
-                : undefined,
-              modelProvider: modelRef.provider,
-              modelId: modelRef.model,
-              modelContextWindowTokens: toolPolicy.modelContextWindowTokens,
-              runtimeToolAllowlist: [...toolAuthority.allowedToolNames],
-              wrapBeforeToolCallHook: false,
-              skillWorkshop: undefined,
-            },
-            undefined,
-            undefined,
-            { tools, policy: toolPolicy },
+          presentation,
+          tools: tools.map((tool) =>
+            copyAgentToolMetadata(tool, {
+              ...tool,
+              execute: (...args) =>
+                withPluginRuntimeGenerationScope(preparedRuntime.snapshot, () =>
+                  tool.execute(...args),
+                ),
+            }),
           ),
         };
       },
@@ -437,6 +421,26 @@ export async function executeWorkerTurn(
       toolSurface: toolRuntime,
       prepareReplyMedia,
     });
+    const surface = await toolRuntime.getSurface({
+      ...toolIdentity,
+      credentialHash: credential.deliveryId,
+      bundleHash: bootstrapReceipt.bundleHash,
+      rpcSetVersion: credential.rpcSetVersion,
+      protocolFeatures: bootstrapReceipt.protocolFeatures,
+      credentialExpiresAtMs: credential.expiresAtMs,
+    });
+    const allowedToolNames = surface.tools.map((tool) => tool.definition.name);
+    await params.placements.authorizeWorkerTurnTools(
+      params.turnClaim,
+      allowedToolNames,
+      assertTurnInputCurrent,
+    );
+    if (allowedToolNames.includes("computer")) {
+      preparedComputer?.bind(operationalRunInstance, {
+        authority: runtimeIdentity.approvalAuthority,
+        assertCurrent: assertActive,
+      });
+    }
     const media = await prepareWorkerTurnMedia({
       turn,
       history,
@@ -492,7 +496,7 @@ export async function executeWorkerTurn(
       buildActiveNodeContextText(requesterProfileId),
       ...buildProactiveSubagentOrchestrationSection({
         enabled: turn.thinkLevel === "ultra",
-        hasSessionsSpawn: toolAuthority.allowedToolNames.includes("sessions_spawn"),
+        hasSessionsSpawn: allowedToolNames.includes("sessions_spawn"),
       }),
     ]
       .filter(Boolean)
@@ -541,9 +545,14 @@ export async function executeWorkerTurn(
               ackedSeq: placement.lastLiveEventAckCursor ?? 0,
               nextSeq: (placement.lastLiveEventAckCursor ?? 0) + 1,
             },
-            toolAuthority,
-            ...(browser ? { browser } : {}),
-            ...(computer ? { computer } : {}),
+            toolAuthority: {
+              exec,
+              allowedToolNames: surface.tools
+                .filter((tool) => tool.execution === "placement")
+                .map((tool) => tool.definition.name),
+            },
+            ...(browser && allowedToolNames.includes("browser") ? { browser } : {}),
+            ...(computer && allowedToolNames.includes("computer") ? { computer } : {}),
           },
         }),
     });

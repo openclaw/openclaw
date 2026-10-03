@@ -88,6 +88,8 @@ export type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOption
     createGatewayTools?: (params: {
       identity: WorkerConnectionIdentity;
       skillWorkshop?: AnyAgentTool;
+      portalAvailable?: boolean;
+      prepareTools?: (adapters: AnyAgentTool[]) => AnyAgentTool[];
     }) => Promise<AnyAgentTool[]>;
   };
 

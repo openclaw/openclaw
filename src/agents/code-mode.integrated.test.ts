@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { codeModeFailureCode } from "./code-mode-errors.js";
 import * as worker from "./code-mode-executor.js";
-import { addClientToolsToCodeModeCatalog, applyCodeModeCatalog } from "./code-mode.js";
+import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   resetCodeModeTestState,
   pluginToolWithExecute,
@@ -14,6 +14,7 @@ import {
   runUntilCompleted,
   testing,
 } from "./code-mode.test-support.js";
+import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 import { jsonResult } from "./tools/common.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -120,7 +121,8 @@ describe("Code Mode guest execution", () => {
     const plugin = pluginTool("shared_action", "Plugin action");
     const { ctx, tools: codeModeTools } = createGuestHarness([plugin]);
     const client = pluginTool("shared_action", "Client action");
-    addClientToolsToCodeModeCatalog({
+    addClientToolsToToolCatalog({
+      enabled: true,
       tools: [client as never],
       ...ctx,
     });

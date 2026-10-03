@@ -919,7 +919,6 @@ extensions/telegram/src/bot-handlers.callback-router.ts	1
 extensions/telegram/src/bot-handlers.inbound-authorization.ts	1
 extensions/telegram/src/bot-handlers.inbound-media.ts	2
 extensions/telegram/src/bot-handlers.inbound-pipeline.ts	2
-extensions/telegram/src/bot-handlers.message-context.ts	1
 extensions/telegram/src/bot-info-cache.ts	1
 extensions/telegram/src/bot-info.ts	1
 extensions/telegram/src/bot-message-context.body.ts	1
@@ -1389,7 +1388,6 @@ src/agents/embedded-agent-runner/run/stream-wrapper.ts	1
 src/agents/embedded-agent-runner/run/terminal-preparation.ts	1
 src/agents/embedded-agent-runner/run/terminal-resolution.ts	1
 src/agents/embedded-agent-runner/run/tool-activity-heartbeat.ts	2
-src/agents/embedded-agent-runner/session-prompt-state.ts	2
 src/agents/embedded-agent-runner/stream-resolution.ts	2
 src/agents/embedded-agent-runner/thinking-replay-repair.ts	1
 src/agents/embedded-agent-runner/thinking.ts	19
@@ -1539,7 +1537,7 @@ src/agents/tool-images.ts	2
 src/agents/tool-policy-shared.ts	1
 src/agents/tool-result-error.ts	3
 src/agents/tool-schema-hints.ts	1
-src/agents/tool-search-catalog.ts	4
+src/agents/tool-search-catalog.ts	3
 src/agents/tool-search-directory.ts	1
 src/agents/tool-search-runtime.ts	4
 src/agents/tool-search-transcript.ts	1
@@ -1601,7 +1599,7 @@ src/agents/transcript-redact.ts	2
 src/agents/transport-message-transform.ts	2
 src/agents/utils/frontmatter.ts	2
 src/agents/workspace-legacy-state.ts	2
-src/agents/workspace.ts	5
+src/agents/workspace.ts	4
 src/agents/worktrees/run-lease.ts	1
 src/audit/execution-identity-admission.ts	3
 src/audit/execution-identity-context-build.ts	3
@@ -1967,7 +1965,6 @@ src/config/model-input-normalization.ts	2
 src/config/model-input.ts	1
 src/config/mutate.ts	2
 src/config/official-external-channel-secret-schema.ts	3
-src/config/plugin-auto-enable.apply.ts	1
 src/config/plugin-auto-enable.shared.ts	1
 src/config/plugin-install-record-map.ts	1
 src/config/plugins-allowlist.ts	1
@@ -2083,7 +2080,6 @@ src/gateway/chat-display-projection.history.ts	1
 src/gateway/chat-display-projection.sanitize.ts	5
 src/gateway/chat-sanitize.ts	3
 src/gateway/cli-session-history.claude.ts	5
-src/gateway/cli-session-history.merge.ts	6
 src/gateway/control-ui-plugin-auth-cookie.ts	1
 src/gateway/control-ui-session-pr-subscriptions.ts	2
 src/gateway/control-ui.ts	1

@@ -47,6 +47,7 @@ function hasWorkerEntry(config: TsdownConfig, name: string, source: string): boo
 
 const workerBuildTargets = [
   ["worker", "worker/worker", "src/worker/worker-deploy-entry.ts"],
+  ["code-mode-node", "worker/code-mode-node.worker", "src/agents/code-mode-node.worker.ts"],
   [
     "file-tool-planning",
     "worker/file-tool-planning.worker",

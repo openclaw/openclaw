@@ -484,66 +484,63 @@ describe("Gateway dispatch run ownership", () => {
       status: "timeout",
       stopReason: "timeout",
     },
+    {
+      name: "silent reply",
+      meta: { terminalReply: { disposition: "silent" as const } },
+      status: "ok",
+      stopReason: undefined,
+    },
+    {
+      name: "empty reply",
+      meta: { terminalReply: { disposition: "empty" as const } },
+      status: "ok",
+      stopReason: undefined,
+    },
   ])(
     "passes canonical $name rather than wire status to the completion owner",
     async ({ meta, status, stopReason }) => {
       const { owner, dispatch } = createFollowupDispatch();
-      mocks.agentCommand.mockResolvedValueOnce({ payloads: [], meta });
+      mocks.agentCommand.mockResolvedValueOnce({
+        payloads: [{ text: "payload is not canonical", mediaUrl: null }],
+        meta,
+      });
       try {
         await dispatch();
-        await expect(owner.take()).resolves.toMatchObject({
-          status,
-          ...(stopReason ? { stopReason } : {}),
-        });
+        const result = await owner.take();
+        expect(result).toMatchObject({ status, ...(stopReason ? { stopReason } : {}) });
+        if (meta.terminalReply) {
+          expect(result?.terminalReply).toEqual(meta.terminalReply);
+          expect(result?.replyText).toBeUndefined();
+        }
       } finally {
         owner.close();
       }
     },
   );
 
-  it("does not invoke a followup after its admitted registration was replaced", async () => {
-    const { f, owner, dispatch } = createFollowupDispatch();
-    const successor = { ...f.entry, controller: new AbortController() };
-    f.context.chatAbortControllers.set(f.runId, successor);
-    try {
-      await expect(dispatch()).rejects.toThrow("lost its Gateway registration");
-      expect(mocks.agentCommand).not.toHaveBeenCalled();
-      expect(f.context.chatAbortControllers.get(f.runId)).toBe(successor);
-      await expect(owner.take()).rejects.toThrow("lost its Gateway registration");
-    } finally {
-      owner.close();
-    }
-  });
-
-  it("settles an admitted followup that fails before physical activation", async () => {
-    const { f, owner, dispatch } = createFollowupDispatch();
-    try {
-      await dispatch(f.runId, f.entry, () => {
-        throw new Error("activation denied");
-      });
-      expect(mocks.agentCommand).not.toHaveBeenCalled();
-      await expect(owner.take()).resolves.toMatchObject({
-        status: "error",
-        error: "activation denied",
-      });
-    } finally {
-      owner.close();
-    }
-  });
-
-  it.each(["silent", "empty"] as const)(
-    "does not invent reply text for a canonical %s reply",
-    async (disposition) => {
-      const { owner, dispatch } = createFollowupDispatch();
-      mocks.agentCommand.mockResolvedValueOnce({
-        payloads: [{ text: "payload is not canonical", mediaUrl: null }],
-        meta: { terminalReply: { disposition } },
-      });
+  it.each(["replaced", "denied"] as const)(
+    "settles an admitted followup without invoking it when activation is %s",
+    async (outcome) => {
+      const { f, owner, dispatch } = createFollowupDispatch();
+      const successor = { ...f.entry, controller: new AbortController() };
+      if (outcome === "replaced") {
+        f.context.chatAbortControllers.set(f.runId, successor);
+      }
       try {
-        await dispatch();
-        const result = await owner.take();
-        expect(result?.terminalReply).toEqual({ disposition });
-        expect(result?.replyText).toBeUndefined();
+        if (outcome === "replaced") {
+          await expect(dispatch()).rejects.toThrow("lost its Gateway registration");
+          expect(f.context.chatAbortControllers.get(f.runId)).toBe(successor);
+          await expect(owner.take()).rejects.toThrow("lost its Gateway registration");
+        } else {
+          await dispatch(undefined, undefined, () => {
+            throw new Error("activation denied");
+          });
+          await expect(owner.take()).resolves.toMatchObject({
+            status: "error",
+            error: "activation denied",
+          });
+        }
+        expect(mocks.agentCommand).not.toHaveBeenCalled();
       } finally {
         owner.close();
       }

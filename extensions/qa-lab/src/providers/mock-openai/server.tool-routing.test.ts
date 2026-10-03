@@ -117,7 +117,7 @@ it.each([
 );
 
 it.each(["sessions_spawn", "ls"])(
-  "routes %s runtime fixtures with happy and failing inputs",
+  "routes %s runtime fixtures without mistaking instruction arguments for fixture targets",
   async (toolName) => {
     const config =
       toolName === "ls" ? (readQaScenarioExecutionConfig("runtime-tool-fs-list") ?? {}) : {};
@@ -148,6 +148,8 @@ it.each(["sessions_spawn", "ls"])(
           ];
     const turn = await startTurn("", {
       ...(toolName === "sessions_spawn" ? { model: "gpt-5.6-luna" } : {}),
+      instructions:
+        "Available deferred-schema tools:\n- skill_workshop: Omit target for Workshop proposals. Set target=personal only for personal library operations.",
       tools: (toolName === "ls" ? ["ls", "read"] : [toolName]).map((name) => ({
         type: "function",
         name,

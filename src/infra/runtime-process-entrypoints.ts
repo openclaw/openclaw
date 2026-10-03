@@ -69,6 +69,9 @@ export const runtimeProcessEntrypoints = {
   databaseVerify: runtimeProcessEntrypoint("state/openclaw-database-verify.worker"),
   stateOwnership: runtimeProcessEntrypoint("state/openclaw-state-ownership.worker"),
   stateLeaseHeartbeat: runtimeProcessEntrypoint("state/openclaw-state-lease-heartbeat.worker"),
+  gatewayStateOwnerHeartbeat: runtimeProcessEntrypoint(
+    "infra/gateway-state-owner-heartbeat.worker",
+  ),
   sessionTranscriptArchive: runtimeProcessEntrypoint(
     "config/sessions/session-accessor.sqlite-archive.worker",
   ),

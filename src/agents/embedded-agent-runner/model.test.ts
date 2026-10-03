@@ -9,7 +9,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { discoverAuthStorage, discoverModels } from "../agent-model-discovery.js";
+import { discoverAuthStorageFacts, discoverModels } from "../agent-model-discovery.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -181,7 +181,7 @@ vi.mock("../prepared-model-runtime.js", async () => {
     if (current) {
       return current;
     }
-    const authStorage = discovery.discoverAuthStorage(input.agentDir);
+    const { authStorage } = discovery.discoverAuthStorageFacts(input.agentDir);
     const modelRegistry = discovery.discoverModels(authStorage, input.agentDir, {
       ...(input.config ? { config: input.config } : {}),
       ...(workspaceDir ? { workspaceDir } : {}),
@@ -223,7 +223,7 @@ vi.mock("../prepared-model-runtime.js", async () => {
 });
 
 vi.mock("../agent-model-discovery.js", () => ({
-  discoverAuthStorage: vi.fn(() => ({ mocked: true })),
+  discoverAuthStorageFacts: vi.fn(() => ({ authStorage: { mocked: true } })),
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
 }));
 
@@ -277,7 +277,7 @@ beforeEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
   resetMockDiscoverModels(discoverModels);
   vi.mocked(discoverModels).mockClear();
-  vi.mocked(discoverAuthStorage).mockClear();
+  vi.mocked(discoverAuthStorageFacts).mockClear();
   resolveBundledStaticCatalogModelMock.mockReset();
   resolveBundledProviderStaticCatalogModelMock.mockReset();
   resolveManifestModelCatalogProviderAliasMetadataMock.mockReset();
@@ -645,7 +645,7 @@ describe("resolveModel", () => {
 
     expectResolvedModel(first);
     expectResolvedModel(second);
-    expect(discoverAuthStorage).toHaveBeenCalledTimes(1);
+    expect(discoverAuthStorageFacts).toHaveBeenCalledTimes(1);
     expect(discoverModels).toHaveBeenCalledTimes(1);
   });
 
@@ -716,7 +716,7 @@ describe("resolveModel", () => {
 
     expectResolvedModel(first);
     expectResolvedModel(second);
-    expect(discoverAuthStorage).toHaveBeenCalledTimes(1);
+    expect(discoverAuthStorageFacts).toHaveBeenCalledTimes(1);
     expect(discoverModels).toHaveBeenCalledTimes(1);
   });
 
@@ -858,7 +858,7 @@ describe("resolveModel", () => {
       workspaceDir: undefined,
       metadataSnapshot,
     });
-    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverAuthStorageFacts).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
   });
 
@@ -913,7 +913,7 @@ describe("resolveModel", () => {
     );
     expect(prepareProviderDynamicModel).toHaveBeenCalled();
     expect(runProviderDynamicModel).toHaveBeenCalled();
-    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverAuthStorageFacts).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
   });
 
@@ -1011,7 +1011,7 @@ describe("resolveModel", () => {
         },
       ],
     ]);
-    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverAuthStorageFacts).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
   });
 
@@ -1059,7 +1059,7 @@ describe("resolveModel", () => {
       args: ["--port", "18080"],
       healthUrl: "http://127.0.0.1:18080/health",
     });
-    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverAuthStorageFacts).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
   });
 

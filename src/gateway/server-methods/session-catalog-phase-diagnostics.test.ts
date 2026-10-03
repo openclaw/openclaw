@@ -224,33 +224,34 @@ describe("registered catalog list phase diagnostics", () => {
     expect(JSON.stringify(phases)).not.toContain(privateText);
   });
 
-  it("avoids CPU sampling without a trusted consumer", async () => {
-    onInternalDiagnosticEvent((event) => {
-      if (event.type === "diagnostic.phase.completed") {
-        phases.push(event);
+  it.each(["untrusted", "unavailable"] as const)(
+    "delivers with %s CPU sampling",
+    async (sampling) => {
+      if (sampling === "untrusted") {
+        onInternalDiagnosticEvent((event) => {
+          if (event.type === "diagnostic.phase.completed") {
+            phases.push(event);
+          }
+        });
+      } else {
+        observe();
+        threadCpuUsage.mockImplementation(() => {
+          throw new Error(privateText);
+        });
       }
-    });
-    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider(privateText) }];
-    const call = startCall("sessions.catalog.list", {}, config);
-    await call.completion;
-    await waitForDiagnosticEventsDrained();
-    expect(call.respond).toHaveBeenCalledWith(true, expect.anything());
-    expect(threadCpuUsage).not.toHaveBeenCalled();
-    expect(phases).toEqual([]);
-  });
-
-  it("keeps elapsed observations and successful delivery when CPU sampling fails", async () => {
-    observe();
-    threadCpuUsage.mockImplementation(() => {
-      throw new Error(privateText);
-    });
-    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider(privateText) }];
-    const call = startCall("sessions.catalog.list", {}, config);
-    await call.completion;
-    await waitForDiagnosticEventsDrained();
-    expect(call.respond).toHaveBeenCalledWith(true, expect.anything());
-    expect(phases).toHaveLength(3);
-    expect(phases.every((event) => event.details === undefined)).toBe(true);
-    expect(JSON.stringify(phases)).not.toContain(privateText);
-  });
+      hoisted.activeRegistry.sessionCatalogs = [{ provider: provider(privateText) }];
+      const call = startCall("sessions.catalog.list", {}, config);
+      await call.completion;
+      await waitForDiagnosticEventsDrained();
+      expect(call.respond).toHaveBeenCalledWith(true, expect.anything());
+      if (sampling === "untrusted") {
+        expect(threadCpuUsage).not.toHaveBeenCalled();
+        expect(phases).toEqual([]);
+      } else {
+        expect(phases).toHaveLength(3);
+        expect(phases.every((event) => event.details === undefined)).toBe(true);
+        expect(JSON.stringify(phases)).not.toContain(privateText);
+      }
+    },
+  );
 });

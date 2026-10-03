@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   openOpenClawStateDatabase,
@@ -6,7 +7,6 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
-import { MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS } from "./placement-session-tool-operations.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
@@ -512,7 +512,7 @@ describe("worker session placement gate", () => {
     const claim = await preclaim("run-worker-tool-capacity");
     const binding = bindingFor(claim);
     await store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
-    for (let index = 0; index < MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS; index += 1) {
+    for (let index = 0; index < WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS; index += 1) {
       expect(
         await store.beginWorkerSessionToolOperation({
           claim: binding,

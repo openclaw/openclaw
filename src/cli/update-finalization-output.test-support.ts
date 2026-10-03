@@ -67,14 +67,16 @@ const recoveryClockUrls = new Map([
   [sourceUrl("./daemon-cli/restart-health-probe.ts"), recoveryClockUrl],
 ]);
 const doctorSource = `
-import { intro, note, outro } from ${JSON.stringify(pathToFileURL(require.resolve("@clack/prompts")).href)};
-import { retainUpdateDoctorProcesses } from ${JSON.stringify(sourceUrl("../infra/update-doctor-process-custody.ts"))};
-import { withCommandProcessScope } from ${JSON.stringify(sourceUrl("../process/exec-spawn.ts"))};
 export async function doctorCommand() {
   if (process.argv.includes('--lint')) {
     console.log(JSON.stringify({ ok: true, checksRun: 1, checksSkipped: 0, findings: [] }));
     return;
   }
+  const [{ intro, note, outro }, { retainUpdateDoctorProcesses }, { withCommandProcessScope }] = await Promise.all([
+    import(${JSON.stringify(pathToFileURL(require.resolve("@clack/prompts")).href)}),
+    import(${JSON.stringify(sourceUrl("../infra/update-doctor-process-custody.ts"))}),
+    import(${JSON.stringify(sourceUrl("../process/exec-spawn.ts"))}),
+  ]);
   using custody = await retainUpdateDoctorProcesses();
   const run = async () => {
   if (process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION !== '0') {

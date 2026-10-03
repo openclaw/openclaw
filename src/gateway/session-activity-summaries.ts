@@ -41,6 +41,7 @@ import {
   type SessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { readActivitySummarySource } from "./session-activity-summary-source.js";
 import {
   activitySummaryScope,
@@ -526,6 +527,7 @@ export function createSessionActivitySummaries(deps: {
   };
   const pump = () => {
     pumpJob?.cancel();
+    pumpJob = undefined;
     if (disposed || deps.scheduler.signal.aborted) {
       return;
     }
@@ -542,16 +544,18 @@ export function createSessionActivitySummaries(deps: {
       });
       if (index < 0) {
         if (Number.isFinite(earliest)) {
-          pumpJob = deps.scheduler.schedule({
-            id: "session-activity-summary-pump",
-            atMs: earliest,
-            run: async () => {
-              pump();
-              while (running.size > 0) {
-                await Promise.all(running);
-              }
-            },
-          });
+          pumpJob = runInDetachedAsyncContext(() =>
+            deps.scheduler.schedule({
+              id: "session-activity-summary-pump",
+              atMs: earliest,
+              run: async () => {
+                pump();
+                while (running.size > 0) {
+                  await Promise.all(running);
+                }
+              },
+            }),
+          );
         }
         return;
       }
@@ -663,6 +667,7 @@ export function createSessionActivitySummaries(deps: {
     async dispose() {
       disposed = true;
       pumpJob?.cancel();
+      pumpJob = undefined;
       modelBackoffs.clear();
       unsubscribeIdentity();
       for (const state of states.values()) {

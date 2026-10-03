@@ -487,7 +487,7 @@ export async function persistAgentSessionPhase(params: {
 
   const { isNewSession, rotatedSessionId, usableRequestedSessionId, freshness } = patchBuild;
   if (createdNewEntry && sessionEntry) {
-    recordSessionCreated(params.cfg, {
+    await recordSessionCreated(params.cfg, {
       sessionKey: params.canonicalSessionKey,
       agentId: params.sessionAgentId,
       entry: sessionEntry,

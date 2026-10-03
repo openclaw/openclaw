@@ -4,8 +4,7 @@ import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identi
 import { projectEffectiveExecPolicy } from "../agents/session-permission-exec-mode.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SkillSnapshot } from "../skills/types.js";
-import type { WorkerLaunchPlan } from "./launch-descriptor.js";
-import type { WorkerToolAuthority } from "./tool-authority.js";
+import type { WorkerLaunchPlan, WorkerToolAuthority } from "./launch-descriptor.js";
 
 export const WORKER_TOOL_CONFIG = { plugins: { enabled: false } } satisfies OpenClawConfig;
 
