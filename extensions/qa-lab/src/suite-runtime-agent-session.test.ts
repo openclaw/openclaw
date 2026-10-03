@@ -511,6 +511,56 @@ describe("qa suite runtime agent session helpers", () => {
     });
   });
 
+  it("anchors a cutoff on the visible assistant reply where a serialized probe splits a tool call", async () => {
+    const tempRoot = await makeTempDir("qa-session-transcript-reply-anchor-");
+    const sessionKey = "agent:qa:reply-anchor";
+    const sessionId = "session-reply-anchor";
+    const marker = "PARENT_DONE:9f1";
+    const transcript = await createQaTranscript({ tempRoot, sessionKey, sessionId });
+    for (const message of [
+      { role: "user", content: `reply with exactly ${marker}` },
+      { role: "assistant", content: marker },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: `${marker} is out; delivering the completion now` },
+          { type: "toolCall", id: "send-1", name: "message", arguments: {} },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "send-1",
+        toolName: "message",
+        content: [{ type: "text", text: "sent" }],
+        isError: false,
+        timestamp: 500,
+      },
+    ]) {
+      await transcript.append(message);
+    }
+    const transcriptEnv = { gateway: { tempRoot } } as never;
+
+    const anchors = await readSessionTranscriptSummary(transcriptEnv, sessionKey, {
+      assistantReplyText: marker,
+      probeText: marker,
+    });
+    // The serialized probe lands on the later event that only quotes the marker,
+    // and that event is the one carrying the invocation.
+    expect(Number.isInteger(anchors.assistantReplyStartLine)).toBe(true);
+    expect(anchors.probeTextEndLine).toBeGreaterThan(Number(anchors.assistantReplyStartLine));
+
+    await expect(
+      readSessionTranscriptSummary(transcriptEnv, sessionKey, {
+        afterEventCursor: anchors.assistantReplyStartLine,
+      }),
+    ).resolves.toMatchObject({ successfulToolCallCounts: { message: 1 } });
+    await expect(
+      readSessionTranscriptSummary(transcriptEnv, sessionKey, {
+        afterEventCursor: anchors.probeTextEndLine,
+      }),
+    ).resolves.toMatchObject({ successfulToolCallCounts: {} });
+  });
+
   it("counts Code Mode nested tool activity as the target tool's completed result", async () => {
     const tempRoot = await makeTempDir("qa-session-transcript-nested-tool-");
     const sessionKey = "agent:qa:nested-tool";
