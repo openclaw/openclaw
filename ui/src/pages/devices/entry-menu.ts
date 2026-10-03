@@ -96,19 +96,19 @@ export function renderDeviceEntryMenu(
       >
         ${icons.moreHorizontal}
       </button>
-      ${actions
-        .filter((action) => action.visible)
-        .map(
-          (action) => html`
-            <wa-dropdown-item
-              value=${action.value}
-              ?disabled=${action.pairing && !props.canManagePairing}
-              title=${action.pairing && !props.canManagePairing ? t("devices.readOnly.pairingRequired") : nothing}
-              variant=${action.value === "remove" ? "danger" : nothing}
-              >${t(action.labelKey)}</wa-dropdown-item
-            >
-          `,
-        )}
+      ${actions.map((action) =>
+        action.visible
+          ? html`
+              <wa-dropdown-item
+                value=${action.value}
+                ?disabled=${action.pairing && !props.canManagePairing}
+                title=${action.pairing && !props.canManagePairing ? t("devices.readOnly.pairingRequired") : nothing}
+                variant=${action.value === "remove" ? "danger" : nothing}
+                >${t(action.labelKey)}</wa-dropdown-item
+              >
+            `
+          : nothing,
+      )}
     </wa-dropdown>
   `;
 }
