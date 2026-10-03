@@ -58,6 +58,9 @@ export function resolveMediaGeometryOverrides<TResolution extends string>(params
     });
     if (normalizedSize && normalizedSize !== size) {
       normalization.size = { requested: size, applied: normalizedSize };
+    } else if (!normalizedSize && params.reportUnrecognizedOverrides) {
+      // Video-only sentinel values must remain visible when another provider rejects them.
+      ignoredOverrides.push({ key: "size", value: size });
     }
     size = normalizedSize;
   }

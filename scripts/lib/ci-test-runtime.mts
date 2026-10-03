@@ -247,6 +247,9 @@ const runtimePartitions = new Map<
         // Preserve native Node process and SQLite lifecycle semantics for this benchmark.
         "test/scripts/bench-session-history.test.ts",
         "test/scripts/update-restart-module-outcome.test.ts",
+        // The suite drives providers through shared module-level harness state under
+        // isolate:false, which the Bun forks pool can leak between shard files.
+        "src/video-generation/runtime.test.ts",
       ]),
     },
   ],
