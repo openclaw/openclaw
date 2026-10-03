@@ -70,7 +70,7 @@ describe("secret store redaction integrity", () => {
         message: expect.stringContaining(name),
       }),
     );
-    expect(readSecretStoreValue({ scope, name, database })).toEqual({
+    expect(await readSecretStoreValue({ scope, name, database })).toEqual({
       ok: true,
       value: entry.value,
     });
@@ -86,7 +86,7 @@ describe("secret store redaction integrity", () => {
       expectedValue: "__OPENCLAW_REDACTED__",
     });
     expect(await repair.rollback()).toBe(true);
-    expect(readSecretStoreValue({ scope, name, database })).toEqual({
+    expect(await readSecretStoreValue({ scope, name, database })).toEqual({
       ok: true,
       value: "__OPENCLAW_REDACTED__",
     });
@@ -94,7 +94,7 @@ describe("secret store redaction integrity", () => {
     await expect(
       writeSecretStoreEntryWithRollback({ ...entry, expectedValue: "__OPENCLAW_REDACTED__" }),
     ).rejects.toThrow(expect.objectContaining({ code: "SECRET_STORE_VALUE_CHANGED" }));
-    expect(readSecretStoreValue({ scope, name, database })).toEqual({
+    expect(await readSecretStoreValue({ scope, name, database })).toEqual({
       ok: true,
       value: "synthetic-concurrent-token",
     });
@@ -121,7 +121,9 @@ describe("secret store redaction integrity", () => {
       value: "synthetic-mode",
       kind: "env",
     });
-    expect(readSecretStoreExecEnvironment({ includeSecretSentinels: true, database })).toEqual({
+    expect(
+      await readSecretStoreExecEnvironment({ includeSecretSentinels: true, database }),
+    ).toEqual({
       env: { SERVICE_MODE: "synthetic-mode" },
     });
   });

@@ -8,7 +8,6 @@ import {
   mergeSkillLibrarySupportFiles,
   type SkillLibraryAuthoringCapability,
 } from "../skills/library/authoring.js";
-import { SkillLibraryError } from "../skills/library/errors.js";
 import {
   listSkillLibrary,
   resolveSkillLibraryPresentation,
@@ -17,6 +16,7 @@ import {
   mutateSkillLibrary,
 } from "../skills/library/service.js";
 import { resolveSkillLibraryActor } from "../skills/library/store.js";
+import { SkillLibraryError } from "../skills/skill-library-error.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { selectResolvedUserProfileMetadataById } from "../state/user-profiles-internal.js";
 import {

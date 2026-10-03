@@ -13,8 +13,8 @@ import { provisionGatewayTokenStoreRef } from "./auth-token-store-ref.js";
 const STORE_SCOPE = { kind: "team" } as const;
 const STORE_NAME = "OPENCLAW_GATEWAY_TOKEN";
 
-function readStored(): string | undefined {
-  const result = readSecretStoreValue({ scope: STORE_SCOPE, name: STORE_NAME });
+async function readStored(): Promise<string | undefined> {
+  const result = await readSecretStoreValue({ scope: STORE_SCOPE, name: STORE_NAME });
   return result.ok ? result.value : undefined;
 }
 
@@ -40,7 +40,7 @@ describe("provisionGatewayTokenStoreRef", () => {
       id: STORE_NAME,
     });
     expect(result.token.length).toBeGreaterThan(8);
-    expect(readStored()).toBe(result.token);
+    expect(await readStored()).toBe(result.token);
   });
 
   it.each(["already-paired-token", REDACTED_SENTINEL])(
@@ -71,7 +71,7 @@ describe("provisionGatewayTokenStoreRef", () => {
         expect((await provisionGatewayTokenStoreRef({ config: {} })).token).toBe(token);
       }
 
-      expect(readStored()).toBe(token);
+      expect(await readStored()).toBe(token);
     },
   );
 
@@ -87,7 +87,7 @@ describe("provisionGatewayTokenStoreRef", () => {
     const result = await provisionGatewayTokenStoreRef({ config: {}, token: "operator-token" });
 
     expect(result.token).toBe("operator-token");
-    expect(readStored()).toBe("operator-token");
+    expect(await readStored()).toBe("operator-token");
   });
 
   it("honors a configured store provider alias", async () => {

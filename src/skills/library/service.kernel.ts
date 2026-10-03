@@ -7,7 +7,7 @@ import {
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { selectHasMultipleSessionSharingIdentities } from "../../state/user-profile-identity.read.js";
-import { SkillLibraryError } from "./errors.js";
+import { SkillLibraryError } from "../skill-library-error.js";
 import type { SkillLibraryWorkerAuthority } from "./read.contract.js";
 import { skillLibraryReceipt } from "./receipt.js";
 import {

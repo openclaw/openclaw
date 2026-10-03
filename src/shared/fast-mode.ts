@@ -24,18 +24,6 @@ type FastModeConfig = {
   };
 };
 
-function resolveFastModeModelParams(params: {
-  cfg: FastModeConfig | undefined;
-  provider?: string;
-  model?: string;
-}): Record<string, unknown> | undefined {
-  const models = params.cfg?.agents?.defaults?.models;
-  if (!models) {
-    return undefined;
-  }
-  return models[modelKey(params.provider ?? "", params.model ?? "")]?.params;
-}
-
 function normalizeFastModeAutoOnSeconds(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
@@ -46,7 +34,11 @@ export function resolveFastModeModelAutoOnSeconds(params: {
   model?: string;
   modelParamSources?: readonly (Record<string, unknown> | undefined)[];
 }): number {
-  for (const modelParams of params.modelParamSources ?? [resolveFastModeModelParams(params)]) {
+  const sources = params.modelParamSources ?? [
+    params.cfg?.agents?.defaults?.models?.[modelKey(params.provider ?? "", params.model ?? "")]
+      ?.params,
+  ];
+  for (const modelParams of sources) {
     const seconds =
       normalizeFastModeAutoOnSeconds(modelParams?.fastAutoOnSeconds) ??
       normalizeFastModeAutoOnSeconds(modelParams?.fast_auto_on_seconds) ??

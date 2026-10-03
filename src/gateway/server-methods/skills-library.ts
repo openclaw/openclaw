@@ -13,7 +13,6 @@ import {
   type SkillLibrarySelection,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { SkillLibraryError } from "../../skills/library/errors.js";
 import { importSkillLibrary, uploadSkillLibrary } from "../../skills/library/import.js";
 import {
   assertPreparedSkillLibrarySelection,
@@ -26,6 +25,7 @@ import {
 } from "../../skills/library/service.js";
 import { captureSkillLibraryAccess } from "../../skills/library/store-access.js";
 import type { SkillLibraryAuthority } from "../../skills/library/store.js";
+import { SkillLibraryError } from "../../skills/skill-library-error.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import {
   authorizeSessionSharingTarget,

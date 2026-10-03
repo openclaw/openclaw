@@ -102,7 +102,9 @@ export function createWorkboardSessionsBoardTools(params: {
       parameters: strictObject({ boardId: boardIdField }),
       execute: async (_toolCallId, rawParams) => {
         const record = asNonArrayRecord(rawParams);
-        return jsonResult(await service().read(await resolveBoardId(record)));
+        return jsonResult(
+          await service().read(await resolveBoardId(record), undefined, params.caller),
+        );
       },
     },
     {

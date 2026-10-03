@@ -6,12 +6,12 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
 const mocks = vi.hoisted(() => ({
-  readLocalFileSafely: vi.fn(),
+  openLocalFileSafely: vi.fn(),
 }));
 
 vi.mock("../infra/fs-safe.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/fs-safe.js")>()),
-  readLocalFileSafely: mocks.readLocalFileSafely,
+  openLocalFileSafely: mocks.openLocalFileSafely,
 }));
 
 type StoreModule = typeof import("./store.js");
@@ -63,7 +63,7 @@ describe("media store outside-workspace mapping", () => {
     await fs.writeFile(sourcePath, "hello");
     const { FsSafeError } = await import("../infra/fs-safe.js");
     const sourceError = new FsSafeError("outside-workspace", "file is outside workspace root");
-    mocks.readLocalFileSafely.mockRejectedValueOnce(sourceError);
+    mocks.openLocalFileSafely.mockRejectedValueOnce(sourceError);
 
     await expectOutsideWorkspaceStoreFailure(sourcePath, sourceError);
   });

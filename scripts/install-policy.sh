@@ -1,6 +1,62 @@
 #!/bin/bash
 # Shared by both installer profiles; only function definitions belong here.
 
+node_binary_has_safe_sqlite() {
+    local node_bin="$1"
+    "$node_bin" -e '
+        const { DatabaseSync } = require("node:sqlite");
+        const db = new DatabaseSync(":memory:");
+        try {
+            const value = db.prepare("SELECT sqlite_version() AS version").get()?.version;
+            const match = typeof value === "string" ? /^(\d+)\.(\d+)\.(\d+)$/.exec(value) : null;
+            const major = Number(match?.[1]);
+            const minor = Number(match?.[2]);
+            const patch = Number(match?.[3]);
+            const safe =
+                major > 3 ||
+                (major === 3 &&
+                    (minor > 51 ||
+                        (minor === 51 && patch >= 3) ||
+                        (minor === 50 && patch >= 7) ||
+                        (minor === 44 && patch >= 6)));
+            const text = "a\u0000b\u0000";
+            const bytes = Buffer.from(text, "utf8");
+            const json = JSON.stringify({ value: text });
+            db.exec("CREATE TABLE probe (text_value TEXT, blob_value BLOB, json_value TEXT)");
+            db.prepare("INSERT INTO probe VALUES (?, ?, ?)").run(text, bytes, json);
+            const row = db.prepare("SELECT text_value, blob_value, json_value FROM probe").get();
+            const textSafe = typeof row?.text_value === "string" && row.text_value.length === text.length && Buffer.from(row.text_value, "utf8").equals(bytes);
+            const blobSafe = row?.blob_value instanceof Uint8Array && Buffer.from(row.blob_value).equals(bytes);
+            const jsonSafe = row?.json_value === json && JSON.parse(row.json_value).value === text;
+            if (!textSafe) {
+                console.error("Node " + process.versions.node + ": node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix");
+            } else if (!blobSafe || !jsonSafe) {
+                console.error("Node " + process.versions.node + ": node:sqlite NUL round-trip capability probe failed; use 24.16+/26.1+ or a build with the fix");
+            } else if (!safe) {
+                console.error("Node " + process.versions.node + ": SQLite " + value + " is not WAL-reset-safe");
+            }
+            if (!safe || !textSafe || !blobSafe || !jsonSafe) process.exitCode = 1;
+        } finally {
+            db.close();
+        }
+    ' --no-warnings >/dev/null
+}
+
+node_binary_sqlite_version() {
+    local node_bin="$1"
+    local version
+    version="$("$node_bin" -e '
+        const { DatabaseSync } = require("node:sqlite");
+        const db = new DatabaseSync(":memory:");
+        try {
+            process.stdout.write(String(db.prepare("SELECT sqlite_version() AS version").get()?.version ?? "unknown"));
+        } finally {
+            db.close();
+        }
+    ' 2>/dev/null || true)"
+    printf '%s\n' "${version:-unavailable}"
+}
+
 resolve_npm_config_path() {
     local raw="$1"
     if [[ -z "$raw" || "$raw" == "null" || "$raw" == "undefined" ]]; then

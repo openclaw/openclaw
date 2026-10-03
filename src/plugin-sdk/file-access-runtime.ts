@@ -73,3 +73,7 @@ export {
 export { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 export { readFileRangeAsync } from "../config/sessions/file-range.js";
 export { createStagedInputPathMatcher } from "../media/staged-inputs.js";
+export {
+  createBoundedRemoteFileReader,
+  type RemoteWorkspaceFileReader,
+} from "../media/remote-workspace-file.js";

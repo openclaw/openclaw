@@ -26,6 +26,7 @@ import {
   isTimeoutErrorMessage,
 } from "../failover/classify.js";
 import { isReasoningConstraintErrorMessage } from "../failover/context-overflow-tables.js";
+import { resolveExecutionApprovalFailureMessage } from "../failover/message-patterns.js";
 import type { PreparedProviderFailoverOwner } from "../failover/provider-patterns.js";
 import {
   AUTH_INVALID_TOKEN_USER_TEXT,
@@ -305,6 +306,10 @@ export function formatUserFacingAssistantErrorText(
   opts?: AssistantErrorTextOptions,
 ): string {
   const rawError = msg.errorMessage?.trim();
+  const approvalMessage = resolveExecutionApprovalFailureMessage(rawError);
+  if (approvalMessage) {
+    return `⚠️ ${approvalMessage}`;
+  }
   const facts = classifyAssistantErrorFacts(msg, opts);
   const friendlyError = formatAssistantErrorText(msg, opts, facts);
   const rawPassthrough = isRawAssistantErrorPassthrough({ friendlyError, rawError });

@@ -314,14 +314,14 @@ export async function collectClawStateHealthFindings(
   }
   let database: OpenClawStateDatabase | undefined;
   try {
-    database = await openExistingOpenClawStateDatabaseReadOnly(options);
+    database = await openExistingOpenClawStateDatabaseReadOnly({
+      ...options,
+      requireCanonicalSchema: true,
+    });
     if (!database) {
       return [];
     }
     const orphanedRefs = orphanedAgentIds({ ...options, database, readOnly: true });
-    if (!tableExists(database.db, "claw_installs")) {
-      return orphanedRefs.map(orphanedReferenceFinding);
-    }
     let sourceMcpServers = options.sourceMcpServers ?? {};
     if (hasClawMcpServerRefs(database.db) && !options.sourceMcpServers) {
       const listed = await (options.listMcpServers ?? listConfiguredMcpServers)();

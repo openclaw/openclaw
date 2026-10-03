@@ -104,13 +104,16 @@ describe("prepareEmbeddedAttemptStream", () => {
     mocks.runBeforeFinalizeHook.mockResolvedValue({ action: "continue" });
   });
 
-  it("passes exact run-local media trust to the subscription", () => {
+  it("preserves transcript routing and run-local media trust at the subscription", () => {
     const trustedLocalMediaToolNames = new Set(["plugin_media"]);
-
-    prepareCatalogExecutor([], { trustedLocalMediaToolNames });
-
+    const sessionKey = "agent:main:internal-session-effects:companion-run";
+    prepareCatalogExecutor([], {
+      trustedLocalMediaToolNames,
+      sessionKey,
+      sandboxSessionKey: "agent:main:main",
+    });
     expect(mocks.subscribe).toHaveBeenCalledWith(
-      expect.objectContaining({ trustedLocalMediaToolNames }),
+      expect.objectContaining({ trustedLocalMediaToolNames, sessionKey }),
     );
   });
 
@@ -549,19 +552,6 @@ describe("prepareEmbeddedAttemptStream", () => {
         prepared.subscription.unsubscribe();
       }
     }
-  });
-
-  it("routes live events to the transcript session instead of the sandbox authority session", () => {
-    prepareCatalogExecutor([], {
-      sessionKey: "agent:main:internal-session-effects:companion-run",
-      sandboxSessionKey: "agent:main:main",
-    });
-
-    expect(mocks.subscribe).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:internal-session-effects:companion-run",
-      }),
-    );
   });
 
   it.each(["rejected", "accepted", "canonical failure", "thrown"] as const)(

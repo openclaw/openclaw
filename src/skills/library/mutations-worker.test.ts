@@ -5,8 +5,8 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { SkillLibraryError } from "../skill-library-error.js";
 import { prepareSkillLibraryBundle, skillLibraryRevisionDir } from "./bundle.js";
-import { SkillLibraryError } from "./errors.js";
 import { uploadSkillLibrary } from "./import.js";
 import {
   listSkillLibrary,

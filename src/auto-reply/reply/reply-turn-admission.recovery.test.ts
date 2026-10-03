@@ -282,7 +282,7 @@ it("keeps new input and followups behind a concurrent recovery winner", async ()
         expect(isCompetingSessionWorkAdmissionActive(f.storePath, [sessionKey, sessionId])).toBe(
           false,
         );
-        return runExclusiveSessionLifecycleMutation({
+        return runExclusiveSessionLifecycleMutation("recover", {
           ...f.scope,
           run: () =>
             f.write({

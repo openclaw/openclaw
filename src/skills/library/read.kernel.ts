@@ -7,7 +7,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
-import { SkillLibraryError } from "./errors.js";
+import { SkillLibraryError } from "../skill-library-error.js";
 import type {
   SkillLibraryReadInput,
   SkillLibraryReadOutput,

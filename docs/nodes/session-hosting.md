@@ -132,6 +132,13 @@ bundle. If the complete admission response exceeds the control-frame limit, the
 turn fails explicitly instead of receiving a truncated catalog. The catalog grants
 no execution authority; every Gateway tool call still checks the live turn claim.
 
+Worker reply attachments inside the assigned workspace are copied through the
+node transport before workspace reconciliation. Relative and absolute `MEDIA:`
+paths use the worker's bytes, including completed live replies. Raw paths outside
+that workspace produce a remote-file attachment error; allowed managed media
+references and HTTP URLs retain their existing delivery policy. Final chat
+completion still waits for reconciliation and includes any conflict summary.
+
 By default, each node has one worker slot per available CPU core. Configure the slot count with
 `nodeHost.workerRuns.capacity`. Launches beyond capacity wait up to 10 seconds
 for a durable slot. A slot occupied only by an idle worker can be reclaimed for

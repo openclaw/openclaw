@@ -17,7 +17,7 @@ const roots: string[] = [];
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
 beforeEach(() => {
-  storeMocks.readValue.mockReset().mockReturnValue({
+  storeMocks.readValue.mockReset().mockResolvedValue({
     ok: false,
     error: {
       code: "SECRET_STORE_NOT_FOUND",
@@ -75,13 +75,13 @@ describe("store SecretRef runtime degradation", () => {
         loadablePluginOrigins: new Map(),
       } as const;
 
-      storeMocks.readValue.mockReturnValue({ ok: true, value: "previous-secret" });
+      storeMocks.readValue.mockResolvedValue({ ok: true, value: "previous-secret" });
       const active = await prepareSecretsRuntimeSnapshot(runtimeOptions);
       const { activateSecretsRuntimeSnapshot } = await import("./runtime.js");
       activateSecretsRuntimeSnapshot(active);
       expect(active.config.skills?.entries?.service?.apiKey).toBe("previous-secret");
 
-      storeMocks.readValue.mockReturnValue(
+      storeMocks.readValue.mockResolvedValue(
         failure === "redacted"
           ? { ok: true, value: "__OPENCLAW_REDACTED__" }
           : {

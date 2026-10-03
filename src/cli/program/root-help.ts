@@ -18,7 +18,8 @@ export type RootHelpRenderOptions = Pick<PluginLoadOptions, "pluginSdkResolution
   includePluginDescriptors?: boolean;
 };
 
-async function buildRootHelpProgram(renderOptions?: RootHelpRenderOptions): Promise<Command> {
+/** Render root help text without registering command runtimes. */
+export async function renderRootHelpText(renderOptions?: RootHelpRenderOptions): Promise<string> {
   const program = new Command();
   const pluginDescriptors =
     renderOptions?.includePluginDescriptors === true || renderOptions?.config
@@ -47,12 +48,6 @@ async function buildRootHelpProgram(renderOptions?: RootHelpRenderOptions): Prom
     ]),
   );
 
-  return program;
-}
-
-/** Render root help text for tests, docs, and command output. */
-export async function renderRootHelpText(renderOptions?: RootHelpRenderOptions): Promise<string> {
-  const program = await buildRootHelpProgram(renderOptions);
   let output = "";
   program.configureOutput({ writeOut: (chunk) => (output += formatProgramHelpOutput(chunk)) });
   program.outputHelp();

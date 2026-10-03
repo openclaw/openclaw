@@ -284,7 +284,12 @@ export function detectChangedScope(changedPaths) {
       runMacos = true;
     }
 
-    if (IOS_BUILD_RE.test(path) || isAppleBuildInput || isNativeProtocolInput) {
+    if (
+      IOS_BUILD_RE.test(path) ||
+      path === "scripts/ci-xcodebuild.py" ||
+      isAppleBuildInput ||
+      isNativeProtocolInput
+    ) {
       runIosBuild = true;
     }
 

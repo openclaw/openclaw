@@ -7,7 +7,7 @@ import type { WorkerSessionTurnClaim } from "../gateway/worker-environments/plac
 import type { WorkerSessionPlacementStore } from "../gateway/worker-environments/placement-store.js";
 import {
   bindWorkerTurnOwner,
-  bindWorkerTurnToolSurface,
+  bindWorkerTurnCapabilities,
 } from "../gateway/worker-environments/placement-turn-claim-events.js";
 import { createWorkerGatewayToolRuntime } from "../gateway/worker-environments/worker-gateway-tool-runtime.js";
 import { resolveWorkerTurnTranscriptTarget } from "../gateway/worker-environments/worker-turn-transcript-target.js";
@@ -64,10 +64,8 @@ export async function bindWorkerFixtureTurnSource(
     throw error;
   }
   let assignment: WorkerLaunchPlan["assignment"];
-  bindWorkerTurnToolSurface(
-    store,
-    claim,
-    createWorkerGatewayToolRuntime({
+  bindWorkerTurnCapabilities(store, claim, {
+    toolSurface: createWorkerGatewayToolRuntime({
       assertCurrent: assertSourceCurrent,
       signal: lifetime.signal,
       prepare: async () => {
@@ -103,7 +101,7 @@ export async function bindWorkerFixtureTurnSource(
         return { tools, policy };
       },
     }),
-  );
+  });
   return {
     operationalRunInstance,
     setToolAssignment(value: WorkerLaunchPlan["assignment"]) {

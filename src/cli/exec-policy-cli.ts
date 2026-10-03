@@ -129,33 +129,28 @@ function resolveExecPolicyInput(params: {
   askFallback?: string;
 }): ExecPolicyResolved {
   const resolved: ExecPolicyResolved = {};
-  if (params.host !== undefined) {
-    const host = normalizeExecTarget(params.host);
-    if (!host) {
-      throw new Error(`Invalid exec host: ${sanitizeExecPolicyMessage(params.host)}`);
+  const parse = <T extends string>(
+    value: string,
+    normalize: (value: string) => T | null,
+    label: string,
+  ): T => {
+    const parsed = normalize(value);
+    if (!parsed) {
+      throw new Error(`Invalid exec ${label}: ${sanitizeExecPolicyMessage(value)}`);
     }
-    resolved.host = host;
+    return parsed;
+  };
+  if (params.host !== undefined) {
+    resolved.host = parse(params.host, normalizeExecTarget, "host");
   }
   if (params.security !== undefined) {
-    const security = normalizeExecSecurity(params.security);
-    if (!security) {
-      throw new Error(`Invalid exec security: ${sanitizeExecPolicyMessage(params.security)}`);
-    }
-    resolved.security = security;
+    resolved.security = parse(params.security, normalizeExecSecurity, "security");
   }
   if (params.ask !== undefined) {
-    const ask = normalizeExecAsk(params.ask);
-    if (!ask) {
-      throw new Error(`Invalid exec ask mode: ${sanitizeExecPolicyMessage(params.ask)}`);
-    }
-    resolved.ask = ask;
+    resolved.ask = parse(params.ask, normalizeExecAsk, "ask mode");
   }
   if (params.askFallback !== undefined) {
-    const askFallback = normalizeExecSecurity(params.askFallback);
-    if (!askFallback) {
-      throw new Error(`Invalid exec askFallback: ${sanitizeExecPolicyMessage(params.askFallback)}`);
-    }
-    resolved.askFallback = askFallback;
+    resolved.askFallback = parse(params.askFallback, normalizeExecSecurity, "askFallback");
   }
   return resolved;
 }

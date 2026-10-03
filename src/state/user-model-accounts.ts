@@ -344,9 +344,11 @@ export function updateUserModelAuthProfile(
   authProfileId: string,
   update: (profile: UserModelAuthProfile) => boolean,
   options: OpenClawStateDatabaseOptions = {},
+  admit?: (stage: "transaction" | "commit") => void,
 ): boolean {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
+      admit?.("transaction");
       const owner = credentialOwner(db, authProfileId);
       const current = owner ? readProfile(db, owner, authProfileId) : undefined;
       if (!owner || !current) {
@@ -360,6 +362,7 @@ export function updateUserModelAuthProfile(
         throw new Error("A personal model account refresh cannot change its provider.");
       }
       writeProfile(db, owner, authProfileId, current);
+      admit?.("commit");
       return true;
     },
     options,

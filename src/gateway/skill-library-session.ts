@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { seedSkillLibrarySelection } from "../skills/library/selection.js";
-import type { TrustedSessionCreation } from "./server-methods/session-creation-provenance.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
+import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 
 /** Selection is prepared from this request's real principal, never reconstructed from provenance. */
 export async function prepareSkillLibrarySessionCreation(

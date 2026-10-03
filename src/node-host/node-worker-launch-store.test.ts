@@ -123,8 +123,9 @@ describe("node worker launch admitted schema", () => {
     try {
       const pending = kernel.get("schema-launch")!;
       const measure = (receipt: typeof pending) => {
-        // Warm after any lazy DDL has committed and invalidated transactional facts.
+        // Warm outside the transaction after lazy DDL invalidates transactional facts.
         expect(kernel.get(receipt.launchId)).toEqual(receipt);
+        expect(readNodeWorkerLaunchReceipt(db, receipt.launchId)).toEqual(receipt);
         const reads = trackSqliteStatementExecutions(
           db,
           ["schema", "dataVersion", "launch"],
@@ -146,9 +147,8 @@ describe("node worker launch admitted schema", () => {
             expect(kernel.listNonterminal()).toEqual([receipt]);
             expect(readNodeWorkerLaunchReceipt(db, receipt.launchId)).toEqual(receipt);
           }
-          // Kernel admission keeps its two independent freshness checks; each launch
-          // operation consumes one more, rather than one per optional companion join.
-          expect(reads.counts).toEqual({ schema: 0, dataVersion: 21, launch: 9 });
+          // Each launch read probes freshness once, not once per optional companion join.
+          expect(reads.counts).toEqual({ schema: 0, dataVersion: 9, launch: 9 });
           expect(reads.rowCounts.launch).toBe(9);
         } finally {
           reads.restore();
