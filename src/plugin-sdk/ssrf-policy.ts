@@ -91,8 +91,10 @@ export async function assertHttpUrlTargetsPrivateNetwork(
     errorMessage?: string;
   } = {},
 ): Promise<void> {
-  const parsed = URL.parse(url);
-  if (!parsed) {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
     // URL parser errors retain rejected input. Keep only stable classification.
     const err = new TypeError("Invalid URL") as TypeError & { code: string };
     err.code = "ERR_INVALID_URL";
@@ -181,10 +183,15 @@ export function isHttpsUrlAllowedByHostnameSuffixAllowlist(
   url: string,
   allowlist: readonly string[],
 ): boolean {
-  const parsed = URL.parse(url);
-  return (
-    parsed?.protocol === "https:" && isHostnameAllowedBySuffixAllowlist(parsed.hostname, allowlist)
-  );
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:") {
+      return false;
+    }
+    return isHostnameAllowedBySuffixAllowlist(parsed.hostname, allowlist);
+  } catch {
+    return false;
+  }
 }
 
 /**

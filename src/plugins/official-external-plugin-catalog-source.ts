@@ -31,24 +31,25 @@ const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_SOURCE_REF = "public-claw
 
 const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_NPM_SOURCE_REF = "public-npm";
 
-export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_PROFILE_CONFIG = {
-  feeds: {
-    [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE]: {
-      url: DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL,
-      feedId: DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_ID,
+export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_PROFILE_CONFIG: OfficialExternalPluginCatalogProfileConfig =
+  {
+    feeds: {
+      [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE]: {
+        url: DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL,
+        feedId: DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_ID,
+      },
     },
-  },
-  sources: {
-    [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_SOURCE_REF]: {
-      type: "clawhub",
-      baseUrl: "https://clawhub.ai",
+    sources: {
+      [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_SOURCE_REF]: {
+        type: "clawhub",
+        baseUrl: "https://clawhub.ai",
+      },
+      [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_NPM_SOURCE_REF]: {
+        type: "npm",
+        registry: "https://registry.npmjs.org/",
+      },
     },
-    [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_NPM_SOURCE_REF]: {
-      type: "npm",
-      registry: "https://registry.npmjs.org/",
-    },
-  },
-} satisfies OfficialExternalPluginCatalogProfileConfig;
+  };
 
 const ISO_CALENDAR_DATE_PREFIX_RE = /^(\d{4})-(\d{2})-(\d{2})/u;
 
@@ -119,9 +120,18 @@ export function isOfficialExternalPluginCatalogFeed(
 }
 
 export function parseOfficialExternalPluginCatalogEntries(
-  feed: OfficialExternalPluginCatalogFeed,
+  raw: unknown,
 ): OfficialExternalPluginCatalogEntry[] {
-  return feed.entries.filter((entry) => isRecord(entry));
+  const entries = Array.isArray(raw)
+    ? raw
+    : isOfficialExternalPluginCatalogFeed(raw)
+      ? raw.entries
+      : isRecord(raw) && !("schemaVersion" in raw)
+        ? (raw.entries ?? raw.packages ?? raw.plugins)
+        : undefined;
+  return Array.isArray(entries)
+    ? entries.filter((entry): entry is OfficialExternalPluginCatalogEntry => isRecord(entry))
+    : [];
 }
 
 export function resolveOfficialExternalPluginCatalogProfileConfig(
@@ -129,13 +139,17 @@ export function resolveOfficialExternalPluginCatalogProfileConfig(
 ): Required<OfficialExternalPluginCatalogProfileConfig> {
   const configuredDefaultFeed =
     config?.feeds?.[DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE];
+  const defaultFeed = DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_PROFILE_CONFIG.feeds?.[
+    DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE
+  ] ?? {
+    url: DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL,
+    feedId: DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_ID,
+  };
   return {
     feeds: {
       ...config?.feeds,
       [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE]: {
-        ...DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_PROFILE_CONFIG.feeds[
-          DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE
-        ],
+        ...defaultFeed,
         ...configuredDefaultFeed,
       },
     },

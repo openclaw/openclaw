@@ -132,10 +132,18 @@ export function buildOAuthCallbackOriginResolver(
   }
   return (originHeader) => {
     const value = Array.isArray(originHeader) ? originHeader[0] : originHeader;
-    const parsed = value ? URL.parse(value) : null;
-    return parsed?.protocol === "https:" && normalized.has(parsed.host.toLowerCase())
-      ? parsed.origin
-      : undefined;
+    if (!value) {
+      return undefined;
+    }
+    try {
+      const parsed = new URL(value);
+      if (parsed.protocol !== "https:") {
+        return undefined;
+      }
+      return normalized.has(parsed.host.toLowerCase()) ? parsed.origin : undefined;
+    } catch {
+      return undefined;
+    }
   };
 }
 
@@ -255,8 +263,12 @@ export async function waitForLocalOAuthCallback(params: {
 }
 
 function isHttpOrigin(value: string): boolean {
-  const url = URL.parse(value);
-  return (url?.protocol === "http:" || url?.protocol === "https:") && url.origin === value;
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:") && url.origin === value;
+  } catch {
+    return false;
+  }
 }
 
 type ResolveApiKeyForProvider =
@@ -297,7 +309,11 @@ export async function resolveApiKeyForProvider(
   params.signal?.throwIfAborted();
   const runtimeAuth = await loadRuntimeModelAuthModule();
   params.signal?.throwIfAborted();
-  return runtimeAuth.resolveProviderRuntimeApiKey(params);
+  const resolveApiKeyForProviderLocal =
+    typeof runtimeAuth.resolveProviderRuntimeApiKey === "function"
+      ? runtimeAuth.resolveProviderRuntimeApiKey
+      : (await import("../agents/model-auth.js")).resolveApiKeyForProviderCore;
+  return resolveApiKeyForProviderLocal(params);
 }
 
 /**

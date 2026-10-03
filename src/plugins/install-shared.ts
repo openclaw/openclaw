@@ -338,7 +338,8 @@ export async function installPluginDirectoryIntoExtensions(params: {
   version?: string;
   extensions: string[];
   setup?: import("./manifest.js").PluginManifestSetup;
-  targetDir: string;
+  targetDir?: string;
+  extensionsDir?: string;
   logger: PluginInstallLogger;
   timeoutMs: number;
   workTimeoutMs?: number | null;
@@ -348,14 +349,28 @@ export async function installPluginDirectoryIntoExtensions(params: {
   hasDeps: boolean;
   sourceHardlinks?: "package-manager" | "reject";
   depsLogMessage: string;
+  afterCopy?: (installedDir: string) => Promise<void>;
   afterInstall?: (
     installedDir: string,
   ) => Promise<Extract<InstallPluginResult, { ok: false }> | null>;
+  nameEncoder?: (pluginId: string) => string;
   onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   beforePersistentApply?: () => void;
 }): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
-  const { targetDir } = params;
+  let targetDir = params.targetDir;
+  if (!targetDir) {
+    const targetDirResult = await resolvePluginInstallTarget({
+      runtime,
+      pluginId: params.pluginId,
+      extensionsDir: params.extensionsDir,
+      nameEncoder: params.nameEncoder,
+    });
+    if (!targetDirResult.ok) {
+      return targetDirResult;
+    }
+    targetDir = targetDirResult.targetDir;
+  }
   const availability = await ensureInstallTargetAvailableForMode({
     runtime,
     targetPath: targetDir,
@@ -382,6 +397,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
     omitOpenClawHostDependency: true,
     sourceHardlinks: params.sourceHardlinks ?? "reject",
     depsLogMessage: params.depsLogMessage,
+    afterCopy: params.afterCopy,
     beforePersistentApply: params.beforePersistentApply,
     afterInstall: async (installedDir: string) => {
       const postInstallResult = await params.afterInstall?.(installedDir);
