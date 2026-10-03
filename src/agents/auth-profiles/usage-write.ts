@@ -7,6 +7,7 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
@@ -52,6 +53,7 @@ import type {
   AuthProfileUsageReceipt,
   AuthProfileUsageResult,
 } from "./usage-kernel.js";
+import { reserveAuthProfileUsagePreparation } from "./usage-lifecycle.js";
 import type { PersonalAuthProfileUsageReduction } from "./usage-reduction.js";
 
 /** Capture every possible physical owner before choosing inherited ownership asynchronously. */
@@ -108,6 +110,7 @@ export async function withAuthProfileUsage<T>(
       ...new Set([context.admission.databasePath, legacyPath, ...(localPath ? [localPath] : [])]),
     ].map((databasePath) => [databasePath, credentialToken(databasePath)]),
   );
+  let preparation: ReturnType<typeof reserveAuthProfileUsagePreparation> | undefined;
   let committed: AuthProfileUsageReceipt | undefined;
   let failure: { error: unknown } | undefined;
   try {
@@ -136,6 +139,13 @@ export async function withAuthProfileUsage<T>(
         executions.set(databasePath, { ok: false, error });
       }
     }
+    preparation = reserveAuthProfileUsagePreparation([
+      context.admission.identity.canonicalPath,
+      ...[...readers.keys()].map(
+        (pathname) => readDatabasePathIdentitySync(pathname).canonicalPath,
+      ),
+    ]);
+    await preparation.ready;
     const ownership = await resolveSharedAuthStoreOwnershipAsync(context);
     const sharedPath = resolveSharedAuthStorePath(env);
     const main = Boolean(mode) || !selectedDir || localPath === sharedPath;
@@ -216,10 +226,12 @@ export async function withAuthProfileUsage<T>(
     };
     assertCurrent();
     const providerAliases = resolveProviderAuthAliasMap({ env });
-    return await consume({
+    let recordingStarted = false;
+    const operation = consume({
       observed,
       inherited,
       async record(reduction, providerKey) {
+        recordingStarted = true;
         const input: AuthProfileUsageInput = structuredClone({
           profileId,
           reduction,
@@ -365,32 +377,41 @@ export async function withAuthProfileUsage<T>(
         }
       },
     });
+    // Provider probes plan outside the preparation FIFO; ready writes retain their position.
+    if (!recordingStarted) {
+      preparation.release();
+    }
+    return await operation;
   } catch (error) {
     failure = { error };
     throw error;
   } finally {
-    const released = await Promise.allSettled([
-      ...[...readers.values()].map((reader) => reader.dispose()),
-      ...[...executions.values()].flatMap((execution) =>
-        execution.ok ? [execution.value.release()] : [],
-      ),
-    ]);
-    const failures = released.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (failures.length) {
-      if (committed) {
-        reportCommittedInlineAuthFailure(
-          "auth usage committed before owner cleanup failed",
-          failures,
-        );
-      } else {
-        throw new AggregateError(
-          [...(failure ? [failure.error] : []), ...failures],
-          "Auth usage read owner cleanup failed",
-          { cause: failure?.error ?? failures[0] },
-        );
+    try {
+      const released = await Promise.allSettled([
+        ...[...readers.values()].map((reader) => reader.dispose()),
+        ...[...executions.values()].flatMap((execution) =>
+          execution.ok ? [execution.value.release()] : [],
+        ),
+      ]);
+      const failures = released.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (failures.length) {
+        if (committed) {
+          reportCommittedInlineAuthFailure(
+            "auth usage committed before owner cleanup failed",
+            failures,
+          );
+        } else {
+          throw new AggregateError(
+            [...(failure ? [failure.error] : []), ...failures],
+            "Auth usage read owner cleanup failed",
+            { cause: failure?.error ?? failures[0] },
+          );
+        }
       }
+    } finally {
+      preparation?.release();
     }
   }
 }

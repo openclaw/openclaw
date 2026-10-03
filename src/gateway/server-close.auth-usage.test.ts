@@ -5,6 +5,7 @@ import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { markAuthProfileSuccess } from "../agents/auth-profiles/profiles.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import { markAuthProfileFailure } from "../agents/auth-profiles/usage.js";
 import { markEmbeddedRunAuthProfileSuccess } from "../agents/embedded-agent-runner/run/auth-profile-success.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -20,6 +21,7 @@ it("settles accepted auth bookkeeping across the close prelude and refuses new u
   const releaseRecording = createDeferred();
   const preludeEntered = createDeferred();
   let closing: Promise<void> | undefined;
+  let queuedFailure: Promise<void> | undefined;
   let restoreRecording: (() => void) | undefined;
   try {
     const port = await fixture.reservePort();
@@ -65,6 +67,10 @@ it("settles accepted auth bookkeeping across the close prelude and refuses new u
       }),
     );
     await withinTest(recordingEntered.promise, signal);
+    queuedFailure = inGateway(() =>
+      markAuthProfileFailure({ store, profileId, reason: "timeout" }),
+    );
+    void queuedFailure.catch(() => undefined);
     kernel.scheduler.signal.addEventListener("abort", () => preludeEntered.resolve(), {
       once: true,
     });
@@ -81,6 +87,7 @@ it("settles accepted auth bookkeeping across the close prelude and refuses new u
 
     releaseRecording.resolve();
     await withinTest(closing, signal);
+    await queuedFailure;
     expect(shared.isOpen).toBe(false);
     const database = new DatabaseSync(resolveOpenClawStateSqlitePath(fixture.state.env), {
       readOnly: true,
@@ -93,7 +100,13 @@ it("settles accepted auth bookkeeping across the close prelude and refuses new u
         .get();
       expect(JSON.parse(String(row?.value_json))).toMatchObject({
         lastGood: { fixture: profileId },
-        usageStats: { [profileId]: { lastUsed: expect.any(Number), errorCount: 0 } },
+        usageStats: {
+          [profileId]: {
+            lastUsed: expect.any(Number),
+            errorCount: 1,
+            failureCounts: { timeout: 1 },
+          },
+        },
       });
     } finally {
       database.close();
@@ -101,6 +114,7 @@ it("settles accepted auth bookkeeping across the close prelude and refuses new u
   } finally {
     releaseRecording.resolve();
     await closing?.catch(() => {});
+    await queuedFailure?.catch(() => {});
     restoreRecording?.();
     await fixture.cleanup();
   }

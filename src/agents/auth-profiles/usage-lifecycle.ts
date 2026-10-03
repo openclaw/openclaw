@@ -3,6 +3,7 @@ import {
   type LegacyPluginSdkResourceHost,
 } from "../../plugins/legacy-sdk-resource-host.js";
 import { AsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 
@@ -12,18 +13,39 @@ type UsageWork = {
   settled?: Promise<void>;
 };
 
-const owners = resolveGlobalSingleton(
-  Symbol.for("openclaw.authProfileUsageWork"),
-  () => new WeakMap<LegacyPluginSdkResourceHost, UsageWork>(),
-);
+const state = resolveGlobalSingleton(Symbol.for("openclaw.authProfileUsageWork"), () => ({
+  owners: new WeakMap<LegacyPluginSdkResourceHost, UsageWork>(),
+  preparations: new Map<string, Promise<void>>(),
+}));
 
 function usageWork(host: LegacyPluginSdkResourceHost): UsageWork {
-  let owner = owners.get(host);
+  let owner = state.owners.get(host);
   if (!owner) {
     owner = { work: new AsyncWorkScope(), closing: false };
-    owners.set(host, owner);
+    state.owners.set(host, owner);
   }
   return owner;
+}
+
+/** Reserve overlapping physical stores before asynchronous reads can reorder ready writes. */
+export function reserveAuthProfileUsagePreparation(databasePaths: readonly string[]) {
+  const paths = [...new Set(databasePaths)];
+  const ready = Promise.all(paths.map((path) => state.preparations.get(path))).then(() => {});
+  const completion = createDeferredCore();
+  for (const path of paths) {
+    state.preparations.set(path, completion.promise);
+  }
+  return {
+    ready,
+    release() {
+      completion.resolve();
+      for (const path of paths) {
+        if (state.preparations.get(path) === completion.promise) {
+          state.preparations.delete(path);
+        }
+      }
+    },
+  };
 }
 
 /** Own preparation and persistence together before the auth writer can yield. */

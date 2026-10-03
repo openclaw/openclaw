@@ -646,7 +646,7 @@ export async function markAuthProfileSuccess(params: {
 }): Promise<void> {
   const { store, provider, profileId, agentDir } = params;
   const providerKey = resolveProviderIdForAuth(provider);
-  const profile = store.profiles[profileId];
+  const profile = structuredClone(store.profiles[profileId]);
   if (
     !profile ||
     profile.setup?.replacement ||
