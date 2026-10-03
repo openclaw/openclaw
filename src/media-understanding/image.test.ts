@@ -227,6 +227,57 @@ describe("describeImageWithModelCore", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("adds an x-opencode-session routing header for OpenCode image requests", async () => {
+    // OpenCode endpoints reject completions without a routing identity (#160441).
+    mockImageModel({
+      provider: "opencode-go",
+      id: "qwen3.8-max",
+      api: "openai-completions",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+    });
+    completeMock.mockResolvedValue(
+      imageCompletion("openai-completions", "opencode-go", "qwen3.8-max", "opencode ok"),
+    );
+
+    const result = await describeImageWithModelCore({
+      ...imageRequestDefaults(),
+      provider: "opencode-go",
+      model: "qwen3.8-max",
+      prompt: "Describe the image.",
+    });
+
+    expect(result).toEqual({ text: "opencode ok", model: "qwen3.8-max" });
+    const completeCall = expectDefined(completeMock.mock.calls[0], "complete call 0");
+    const headers = requireRecord(
+      requireRecord(completeCall[2], "stream options").headers,
+      "stream option headers",
+    );
+    expect(headers["x-opencode-session"]).toMatch(/\S/);
+  });
+
+  it("does not add an x-opencode-session header for non-OpenCode image requests", async () => {
+    mockImageModel({
+      provider: "openai",
+      id: "gpt-5.2",
+      api: "openai-completions",
+      baseUrl: "https://api.openai.com/v1",
+    });
+    completeMock.mockResolvedValue(
+      imageCompletion("openai-completions", "openai", "gpt-5.2", "openai ok"),
+    );
+
+    const result = await describeImageWithModelCore({
+      ...imageRequestDefaults(),
+      provider: "openai",
+      model: "gpt-5.2",
+      prompt: "Describe the image.",
+    });
+
+    expect(result).toEqual({ text: "openai ok", model: "gpt-5.2" });
+    const completeCall = expectDefined(completeMock.mock.calls[0], "complete call 0");
+    expect(requireRecord(completeCall[2], "stream options").headers).toBeUndefined();
+  });
+
   it("describes images keyless when amazon-bedrock resolves aws-sdk auth", async () => {
     getApiKeyForModelMock.mockResolvedValueOnce({
       [API_KEY_FIELD]: "",

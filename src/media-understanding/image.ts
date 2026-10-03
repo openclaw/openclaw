@@ -1,3 +1,4 @@
+import { prepareHeadersForSimpleCompletion } from "@openclaw/ai/transports";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -518,7 +519,14 @@ async function describeImagesWithModelInternal(
       assertResourcesOpen?.();
       const payloadHandler = composeImageDescriptionPayloadHandlers(onPayload, options.onPayload);
       const timeoutMs = configuredTimeoutMs;
-      const headers = buildImageRequestHeaders(requestModel);
+      // Image descriptions are standalone completions with no durable session, but
+      // OpenCode endpoints still require an x-opencode-session routing identity
+      // (issue #160441). The helper leaves other providers' headers untouched.
+      const providerHeaders = buildImageRequestHeaders(requestModel);
+      const headers = prepareHeadersForSimpleCompletion(
+        requestModel,
+        providerHeaders ? { headers: providerHeaders } : undefined,
+      );
       const streamOptions = {
         apiKey,
         maxTokens,
