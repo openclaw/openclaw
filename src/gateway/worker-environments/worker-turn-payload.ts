@@ -34,10 +34,10 @@ import type { SessionPlacementTurnParams } from "../../agents/session-placement-
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { capturePresenceToolAuthority } from "../../agents/tools/presence-tool-authority.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
-import type { ReplyPayload } from "../../auto-reply/types.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { SpawnResult } from "../../process/exec.js";
+import type { ReplyPayload } from "../../shared/reply-payload.types.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import {
   windowWorkerReplayMessages,

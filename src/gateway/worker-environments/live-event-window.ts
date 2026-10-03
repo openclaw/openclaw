@@ -5,7 +5,7 @@ import {
   type WorkerLiveTrajectoryRecorder,
 } from "./live-event-projection.js";
 import type { WorkerTurnTranscriptSource } from "./placement-turn-claim-events.js";
-import type { WorkerReplyMediaPreparer } from "./worker-reply-media.js";
+import type { WorkerReplyMediaPreparer } from "./worker-reply-media.types.js";
 import type { WorkerTurnLiveEventOwner } from "./worker-turn-run-owner.js";
 
 export type PendingLiveEvent = {

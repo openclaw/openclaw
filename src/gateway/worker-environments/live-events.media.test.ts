@@ -72,7 +72,7 @@ describe("worker live reply media", () => {
   it.each([false, true])(
     "prepares buffered reply media before publishing and fences revoked readers (%s)",
     async (revoke) => {
-      const started = createDeferredCore<void>();
+      const started = createDeferredCore();
       const prepared = createDeferredCore<ReplyPayload>();
       const reader = vi
         .spyOn(turnCapabilities, "captureWorkerReplyMedia")
