@@ -12,7 +12,7 @@ import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 export type { MentionCommittedInput } from "./mention-inbox-input.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 
-export type MentionNotification = {
+type MentionNotification = {
   id: string;
   recipientProfileId: string;
   sessionKey: string;
