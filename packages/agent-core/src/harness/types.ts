@@ -1,4 +1,4 @@
-import type { ImageContent, TextContent } from "@openclaw/llm-core";
+import type { AssistantMessage, ImageContent, TextContent } from "@openclaw/llm-core";
 import type { AgentMessage } from "../types.js";
 
 export { err, ok } from "@openclaw/normalization-core/result";
@@ -19,6 +19,16 @@ export class CompactionError extends Error {
 /** Internal typed signal for a completed summary response with no usable text. */
 export class InvalidSummaryOutputError extends CompactionError {
   constructor(message: string) {
+    super("summarization_failed", message);
+  }
+}
+
+/** The provider failed the summary request; hosts classify the failed response, not this text. */
+export class SummaryProviderError extends CompactionError {
+  constructor(
+    message: string,
+    readonly response: AssistantMessage,
+  ) {
     super("summarization_failed", message);
   }
 }

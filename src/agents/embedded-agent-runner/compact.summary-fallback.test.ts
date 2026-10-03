@@ -15,7 +15,7 @@ import { compactEmbeddedAgentSession } from "./compact.queued.js";
 
 // Real queued compaction, native delegate, AgentSession, and SQLite transcript; only the
 // provider is a local OpenAI-compatible endpoint whose summary requests stall, fail, or answer.
-type SummaryMode = "stall" | "provider-timeout" | "error" | "ok";
+type SummaryMode = "stall" | "provider-timeout" | "bare-408" | "server-error" | "error" | "ok";
 type SessionTarget = { agentId: string; sessionId: string; sessionKey: string; storePath: string };
 type Fixture = { state: OpenClawTestState; config: OpenClawConfig; target: SessionTarget };
 
@@ -42,6 +42,16 @@ beforeAll(async () => {
       if (mode === "provider-timeout") {
         res.writeHead(408, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: { message: "upstream request timed out" } }));
+        return;
+      }
+      if (mode === "bare-408") {
+        res.writeHead(408);
+        res.end();
+        return;
+      }
+      if (mode === "server-error") {
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "Internal Server Error" } }));
         return;
       }
       if (mode === "error") {
@@ -211,10 +221,10 @@ function openSession(fixture: Fixture) {
 }
 
 describe("automatic compaction summary failure", () => {
-  it("commits a deterministic reduction after a summary timeout", async () => {
+  it("commits a deterministic reduction after a bodyless 408 summary timeout", async () => {
     await withSession(async (fixture) => {
       const seeded = appendToolTurns(fixture, 0, 8);
-      summaryMode = "provider-timeout";
+      summaryMode = "bare-408";
       const result = await compactSession(fixture);
 
       expect(result).toMatchObject({ ok: true, compacted: true });
@@ -276,7 +286,7 @@ describe("automatic compaction summary failure", () => {
     await withSession(
       async (fixture) => {
         appendToolTurns(fixture, 0, 8);
-        summaryMode = "provider-timeout";
+        summaryMode = "bare-408";
 
         expect(await compactSession(fixture)).toMatchObject({ ok: true, compacted: true });
         expect(summaryRequests.length).toBeGreaterThan(0);
@@ -300,6 +310,8 @@ describe("automatic compaction summary failure", () => {
       stop: false,
     },
     { failure: "a non-timeout summary error", mode: "error", trigger: "budget", stop: false },
+    // Wrapped summary text reads "…failed: 500 Internal Server Error"; it is not a timeout.
+    { failure: "a fast 500 summary error", mode: "server-error", trigger: "budget", stop: false },
   ] as const)("keeps $failure as a failed compaction", async ({ mode, trigger, stop }) => {
     await withSession(async (fixture) => {
       appendToolTurns(fixture, 0, 8);

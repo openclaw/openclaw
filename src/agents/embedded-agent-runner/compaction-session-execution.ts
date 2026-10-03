@@ -2,6 +2,7 @@ import {
   preserveCompactionReplayWindow,
   resolveCompactionReplayEligibility,
 } from "@openclaw/ai/transports";
+import { SummaryProviderError } from "../../../packages/agent-core/src/harness/types.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
@@ -28,6 +29,7 @@ import {
 } from "../agent-settings.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import { pickFallbackThinkingLevel } from "../embedded-agent-helpers.js";
+import { classifyAssistantFailoverReason } from "../embedded-agent-helpers/assistant-message-failures.js";
 import { resolveFailoverReasonFromError } from "../failover-error.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
@@ -531,9 +533,21 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                 safeguardCancellation: getCompactionSafeguardRuntime(sessionManager)?.cancellation,
                 abortSignal: params.abortSignal,
               });
-              // Classify the underlying error: safeguard display reasons mention "guard".
+              // Classify the structured failure, not display text: wrapped summary text turns
+              // a fast 500 into "timeout", and safeguard reasons mention "guard".
+              let providerFailure: unknown = failure.error;
+              while (
+                providerFailure instanceof Error &&
+                !(providerFailure instanceof SummaryProviderError)
+              ) {
+                providerFailure = providerFailure.cause;
+              }
+              const failureReason =
+                providerFailure instanceof SummaryProviderError
+                  ? classifyAssistantFailoverReason(providerFailure.response, { provider })
+                  : resolveFailoverReasonFromError(failure.error, provider);
               // Other summary failures are fast and keep their owners' outcomes.
-              if (resolveFailoverReasonFromError(failure.error, provider) !== "timeout") {
+              if (failureReason !== "timeout") {
                 throw error;
               }
               // The timed-out request consumed the delegated window too. Rearm it

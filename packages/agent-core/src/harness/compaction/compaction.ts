@@ -104,24 +104,43 @@ export const SUMMARY_TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fi
 const TURN_CONTEXT_PREFIX = "\n\n---\n\n**Turn Context (split turn):**\n\n";
 const MAX_LATEST_USER_REQUEST_CHARS = 800;
 const LATEST_USER_REQUEST_TRUNCATED_MARKER = "\n[... latest user request truncated ...]\n";
+const MAX_REQUIRED_ASK_CONTEXT_CHARS = 2_000;
+const REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER = "\n[... split-turn ask context truncated ...]\n";
 
-function extractLatestUserRequest(messages: AgentMessage[]): string | undefined {
-  let source = "";
+function latestUserText(messages: AgentMessage[]): string {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message?.role === "user") {
-      source = getCompactionContent(message.content).text.trim();
+      const source = getCompactionContent(message.content).text.trim();
       if (source) {
-        break;
+        return source;
       }
     }
   }
+  return "";
+}
+
+function extractLatestUserRequest(messages: AgentMessage[]): string | undefined {
+  const source = latestUserText(messages);
   if (!source || source.length <= MAX_LATEST_USER_REQUEST_CHARS) {
     return source || undefined;
   }
   const contentBudget = MAX_LATEST_USER_REQUEST_CHARS - LATEST_USER_REQUEST_TRUNCATED_MARKER.length;
   const headBudget = Math.floor(contentBudget / 2);
   return `${truncateUtf16Safe(source, headBudget)}${LATEST_USER_REQUEST_TRUNCATED_MARKER}${sliceUtf16Safe(source, -(contentBudget - headBudget))}`;
+}
+
+/** Bounds a split turn's source ask; the safeguard summary and the no-summary reduction share it. */
+export function formatRequiredAskContext(rawAsk: string): string {
+  const source = rawAsk.trim();
+  if (source.length <= MAX_REQUIRED_ASK_CONTEXT_CHARS) {
+    return source;
+  }
+  const contentBudget =
+    MAX_REQUIRED_ASK_CONTEXT_CHARS - REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER.length;
+  const headBudget = Math.floor(contentBudget / 2);
+  const tailBudget = contentBudget - headBudget;
+  return `${truncateUtf16Safe(source, headBudget)}${REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER}${sliceUtf16Safe(source, -tailBudget)}`;
 }
 
 export function capCompactionSummary(
@@ -950,8 +969,8 @@ export function compactWithoutSummary(
   const droppedCount =
     preparation.messagesToSummarize.length + preparation.turnPrefixMessages.length;
   const sourceAsk = preparation.isSplitTurn
-    ? extractLatestUserRequest(preparation.turnPrefixMessages)
-    : undefined;
+    ? formatRequiredAskContext(latestUserText(preparation.turnPrefixMessages))
+    : "";
   // The notice and the already-bounded split-turn source ask are required; only the
   // carried summary shrinks to fit.
   const requiredContext =
