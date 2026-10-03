@@ -8,6 +8,11 @@
   min-width: 0;
 }
 
+.usage-page .settings-section__actions:has(.usage-query-hint) {
+  min-width: 0;
+  flex-shrink: 1;
+}
+
 /* Escape-hatch padding for dashboard content inside a .settings-group;
    matches the .settings-row inline padding. */
 .usage-panel {
