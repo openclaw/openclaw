@@ -677,6 +677,7 @@ export class McpAppView extends LitElement {
       signal.throwIfAborted();
       const updateHostContext = () => bridge.setHostContext(buildHostContext());
       createdResources.updateHostContext = updateHostContext;
+      updateHostContext();
       publishContext();
       startNotifications();
       const hostContextCleanup = this.context?.theme.subscribe(updateHostContext);

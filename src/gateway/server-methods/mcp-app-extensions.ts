@@ -137,7 +137,7 @@ async function launch(
       toolResult: result,
       allowedAppToolNames,
       requesterId: active.requesterId,
-      displayMode: "fullscreen",
+      displayMode: tool.appExtensions?.preferredModelDisplayMode,
       prepareToolCall: retained.prepareToolCall,
       uploadResources: await uploadFor(active, tool.serverName, retained.assertCurrent),
       ...extra,

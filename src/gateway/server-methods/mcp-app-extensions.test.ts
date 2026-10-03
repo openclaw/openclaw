@@ -186,6 +186,19 @@ describe("registered MCP App extensions", () => {
     );
     expect(mocks.dispose).toHaveBeenCalledOnce();
   });
+  it.each(["global", "file"] as const)(
+    "honors tool display preference for %s launches",
+    async (entrypointType) => {
+      catalog.tools[0]!.appExtensions!.preferredModelDisplayMode = "inline";
+      await invoke("mcp.app.launch", {
+        serverName: "demo",
+        toolName: "show",
+        entrypointType,
+        ...(entrypointType === "file" ? { filePath: "part.stl" } : {}),
+      });
+      expect(mocks.fetch).toHaveBeenCalledWith(expect.objectContaining({ displayMode: "inline" }));
+    },
+  );
   it.each(["upload", "view", "missing view"])(
     "releases launch authority when %s preparation fails",
     async (failure) => {

@@ -17,6 +17,7 @@ import {
 const bridgeMocks = vi.hoisted(() => ({
   instances: [] as Array<Record<string, unknown>>,
   transports: [] as Array<Record<string, unknown>>,
+  appModes: undefined as string[] | undefined,
 }));
 
 // This constructor seam is a complete factory, and the unit-mock-registry
@@ -34,7 +35,7 @@ vi.mock("@modelcontextprotocol/ext-apps/app-bridge", async (importOriginal) => {
       structuredContent?: Record<string, unknown>;
     }) => Promise<Record<string, never>>;
     onsizechange?: (params: { height?: number }) => void;
-    getAppCapabilities = () => ({});
+    getAppCapabilities = () => ({ availableDisplayModes: bridgeMocks.appModes });
     setHostContext = vi.fn();
     teardownResource = vi.fn(async () => ({}));
     sendSandboxResourceReady = vi.fn(async () => undefined);
@@ -98,6 +99,7 @@ describe("mcp-app-view localization", () => {
   afterEach(async () => {
     bridgeMocks.instances.length = 0;
     bridgeMocks.transports.length = 0;
+    bridgeMocks.appModes = undefined;
     document.body.replaceChildren();
     delete (document as unknown as Record<string, unknown>).activeElement;
     delete document.documentElement.dataset.themeMode;
@@ -112,6 +114,7 @@ describe("mcp-app-view localization", () => {
     viewId: string,
     messageSupported = true,
     updateModelContextSupported = messageSupported,
+    payload: Record<string, unknown> = {},
   ) {
     vi.spyOn(HTMLIFrameElement.prototype, "contentWindow", "get").mockReturnValue(window);
     const messageListeners: EventListenerOrEventListenerObject[] = [];
@@ -137,6 +140,7 @@ describe("mcp-app-view localization", () => {
         messageSupported,
         updateModelContextSupported,
         state: null,
+        ...payload,
       }),
     );
     const view = document.createElement(MCP_APP_VIEW_ELEMENT_NAME) as McpAppViewElement;
@@ -199,6 +203,9 @@ describe("mcp-app-view localization", () => {
           structuredContent?: Record<string, unknown>;
         }) => Promise<Record<string, never>>;
         onsizechange?: (params: { height?: number }) => void;
+        onrequestdisplaymode?: (params: {
+          mode: "inline" | "fullscreen";
+        }) => Promise<{ mode: string }>;
         setHostContext: ReturnType<typeof vi.fn>;
         teardownResource: ReturnType<typeof vi.fn>;
         emit(type: string): void;
@@ -214,6 +221,24 @@ describe("mcp-app-view localization", () => {
       view,
     };
   }
+
+  it("keeps resource display hints within the initialized App capabilities", async () => {
+    bridgeMocks.appModes = ["inline"];
+    const { view, bridge, gatewayEventsReady } = await mountBridge("view-modes", true, true, {
+      displayModes: {
+        availableDisplayModes: ["inline", "fullscreen"],
+        preferredDisplayMode: "fullscreen",
+      },
+    });
+    await gatewayEventsReady;
+    expect(view.displayMode).toBe("inline");
+    await expect(bridge.onrequestdisplaymode?.({ mode: "fullscreen" })).resolves.toEqual({
+      mode: "inline",
+    });
+    expect(bridge.setHostContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({ availableDisplayModes: ["inline"], displayMode: "inline" }),
+    );
+  });
 
   it("reveals questions and approvals only for its conversation without replacing the App frame", async () => {
     const { view, frame, gatewayListeners, gatewayEventsReady, gatewayEventsStopped } =

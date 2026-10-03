@@ -302,7 +302,7 @@ export function negotiateMcpAppDisplayModes(
     resource?.availableDisplayModes ??
     (resource?.preferredDisplayMode ? [resource.preferredDisplayMode] : appModes);
   const available = (["inline", "fullscreen"] as const).filter(
-    (mode) => !hints || hints.includes(mode),
+    (mode) => (!hints || hints.includes(mode)) && (!appModes || appModes.includes(mode)),
   );
   if (!available.length) {
     throw new Error("MCP App supports no available host display mode");
