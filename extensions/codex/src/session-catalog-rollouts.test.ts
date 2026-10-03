@@ -145,6 +145,43 @@ describe("resident catalog rollout currency", () => {
     },
   );
 
+  it("replaces the watched inode after an interrupted first scan and directory replacement", async () => {
+    const f = await fixture(meta());
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const watchers: ControlledWatcher[] = [];
+    vi.spyOn(nodeFs, "watch").mockImplementation(() => {
+      const watcher = new ControlledWatcher();
+      watchers.push(watcher);
+      return watcher;
+    });
+    const error = Object.assign(new Error("first file stat denied"), { code: "EACCES" });
+    const originalStat = fs.lstat;
+    const stat = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      if (args[0] === f.file) {
+        throw error;
+      }
+      return originalStat(...args);
+    });
+    await expect(scanCodexCatalogRollouts(f.root, new Set())).rejects.toBe(error);
+    expect(watchers).toHaveLength(1);
+    stat.mockRestore();
+    await fs.rename(f.day, path.join(f.root, "old-day"));
+    await fs.mkdir(f.day);
+    const replacement = meta("replacement-thread");
+    await fs.writeFile(f.file, replacement);
+    expect((await scanCodexCatalogRollouts(f.root, new Set())).files.get(f.file)?.size).toBe(
+      Buffer.byteLength(replacement),
+    );
+    expect(watchers[0]?.close).toHaveBeenCalledOnce();
+    expect(watchers).toHaveLength(2);
+    const appended = line("event_msg", { type: "user_message", message: "New inode append" });
+    await fs.appendFile(f.file, appended);
+    watchers[1]!.emit("change", "change", path.basename(f.file));
+    expect((await scanCodexCatalogRollouts(f.root, new Set())).files.get(f.file)?.size).toBe(
+      Buffer.byteLength(replacement + appended),
+    );
+  });
+
   it.each(["error", "change"])(
     "retries a cached batch from file stats after a watcher %s during its yield",
     async (event) => {

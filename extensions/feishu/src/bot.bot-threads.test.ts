@@ -216,32 +216,38 @@ describe("Feishu bot-owned thread mentions", () => {
   });
 
   it.each([
-    { name: "group admission", update: { groupPolicy: "disabled" as const } },
-    { name: "sender admission", update: { groupSenderAllowFrom: ["ou-other"] } },
-    { name: "mention requirement", update: { requireMentionInBotThreads: true } },
-    { name: "bot app", update: { appId: "cli_changed" } },
-  ])("rechecks current $name after fetching bot-owned thread roots", async ({ name, update }) => {
-    const lookupStarted = createDeferred<void>();
-    const releaseLookup = createDeferred<void>();
-    mockGetMessageFeishu.mockImplementationOnce(async () => {
-      lookupStarted.resolve();
-      await releaseLookup.promise;
-      return root;
-    });
-    const cfg = config({ groupPolicy: "open" });
-    const pending = dispatchMessage({
-      cfg,
-      event: event(`msg-owned-current-${name}`, {
-        root_id: "om_bot_root",
-        thread_id: "omt_bot_topic",
-      }),
-    });
-    await lookupStarted.promise;
-    currentRuntimeConfig = createFeishuTestConfig({ ...cfg.channels?.feishu, ...update });
-    releaseLookup.resolve();
-    await pending;
+    { name: "group admission", update: { groupPolicy: "disabled" as const }, expected: false },
+    { name: "sender admission", update: { groupSenderAllowFrom: ["ou-other"] }, expected: false },
+    { name: "mention requirement", update: { requireMentionInBotThreads: true }, expected: false },
+    { name: "bot app", update: { appId: "cli_changed" }, expected: false },
+    { name: "unrelated config", update: { textChunkLimit: 2000 }, expected: true },
+  ])(
+    "rechecks current $name after fetching bot-owned thread roots",
+    async ({ name, update, expected }) => {
+      const lookupStarted = createDeferred<void>();
+      const releaseLookup = createDeferred<void>();
+      mockGetMessageFeishu.mockImplementationOnce(async () => {
+        lookupStarted.resolve();
+        await releaseLookup.promise;
+        return root;
+      });
+      const cfg = config({ groupPolicy: "open" });
+      const pending = dispatchMessage({
+        cfg,
+        event: event(`msg-owned-current-${name}`, {
+          root_id: "om_bot_root",
+          thread_id: "omt_bot_topic",
+        }),
+      });
+      await lookupStarted.promise;
+      currentRuntimeConfig = createFeishuTestConfig({ ...cfg.channels?.feishu, ...update });
+      releaseLookup.resolve();
+      await pending;
 
-    expect(mockDispatchReply).not.toHaveBeenCalled();
-    expect(mockResolveAgentRoute).not.toHaveBeenCalled();
-  });
+      expect(mockDispatchReply).toHaveBeenCalledTimes(expected ? 1 : 0);
+      if (!expected) {
+        expect(mockResolveAgentRoute).not.toHaveBeenCalled();
+      }
+    },
+  );
 });

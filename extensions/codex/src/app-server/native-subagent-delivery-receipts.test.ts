@@ -52,15 +52,20 @@ describe("native subagent delivery receipts", () => {
     },
   );
 
-  it("acknowledges a distinct successor after a received predecessor", () => {
-    const receipts = new CodexNativeSubagentDeliveryReceipts();
-    receipts.record("first-run", ["child-thread"], "first result");
-    expect(receipts.observe(completedWaitReceipt("first result", "initial"))).toEqual([
-      "first-run",
-    ]);
-    receipts.record("second-run", ["child-thread"], "second result");
-    expect(receipts.observe(completedWaitReceipt("second result"))).toEqual(["second-run"]);
-  });
+  it.each([false, true])(
+    "acknowledges a distinct successor after a resolved predecessor (received=%s)",
+    (received) => {
+      const receipts = new CodexNativeSubagentDeliveryReceipts();
+      receipts.record("first-run", ["child-thread"], "first result");
+      if (received) {
+        expect(receipts.observe(completedWaitReceipt("first result", "initial"))).toEqual([
+          "first-run",
+        ]);
+      }
+      receipts.record("second-run", ["child-thread"], "second result");
+      expect(receipts.observe(completedWaitReceipt("second result"))).toEqual(["second-run"]);
+    },
+  );
 
   it("remembers accepted native renderings", () => {
     const receipts = new CodexNativeSubagentDeliveryReceipts();

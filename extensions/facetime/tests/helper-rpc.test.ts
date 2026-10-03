@@ -2,7 +2,10 @@ import { createHmac } from "node:crypto";
 import { once } from "node:events";
 import net from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { FaceTimeHelperUnavailableError } from "../src/helper-results.js";
+import {
+  FaceTimeHelperActionError,
+  FaceTimeHelperUnavailableError,
+} from "../src/helper-results.js";
 import { FaceTimeHelperSocketServer } from "../src/helper-rpc.js";
 
 const TEST_HELPER_AUTH_TOKEN = "a".repeat(64);
@@ -321,6 +324,21 @@ describe("FaceTime helper RPC", () => {
         }),
       ],
     });
+  });
+
+  it("distinguishes definitive helper rejection from transport failure", async () => {
+    const { rpc, client } = await startConnectedHelper();
+
+    const received = readHelperPayload(client);
+    const actionPromise = rpc.startCall(
+      { handle: "owner@example.com", mode: "audio" },
+      "dial-2",
+      "2026-07-20T17:52:00.000Z",
+    );
+    const payload = await received;
+    sendHelperPayload(client, { transactionId: payload.transactionId, error: "cannot dial" });
+
+    await expect(actionPromise).rejects.toBeInstanceOf(FaceTimeHelperActionError);
   });
 
   it("preserves helper-declared ambiguous dial outcomes", async () => {

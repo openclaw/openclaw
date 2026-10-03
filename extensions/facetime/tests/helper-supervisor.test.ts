@@ -93,6 +93,29 @@ describe("FaceTime helper supervisor", () => {
     expect(run).toHaveBeenCalledTimes(2);
   });
 
+  it("reports an injection that never authenticates instead of waiting forever", async () => {
+    const runCommandWithTimeout = vi
+      .fn<SupervisorParams["runCommandWithTimeout"]>()
+      .mockResolvedValue(completed);
+    const { supervisor } = createSupervisor({
+      runCommandWithTimeout,
+      targetAvailable: (target) => target === "FaceTime",
+    });
+
+    supervisor.start();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(supervisor.status()).toContainEqual(
+      expect.objectContaining({
+        target: "FaceTime",
+        connected: false,
+        injecting: false,
+        retryScheduled: true,
+        lastError: "FaceTime helper injection completed but no authenticated connection arrived",
+      }),
+    );
+  });
+
   it("waits for a stale helper process to exit before reinjecting", async () => {
     let processAlive = true;
     const { supervisor, run } = createSupervisor({
