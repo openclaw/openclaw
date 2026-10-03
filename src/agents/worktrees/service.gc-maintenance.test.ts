@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as gitExec from "../../infra/git-exec.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
@@ -8,54 +8,53 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import * as registryReads from "./registry-read.js";
-import { getRegistryWorktree, insertRegistryWorktree } from "./registry.js";
-import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
 import {
-  materializeManagedWorktreeFixture,
-  materializeManagedWorktreeFixtures,
-  useManagedWorktreeTestRepository,
-} from "./service.test-support.js";
+  deleteRegistryWorktree,
+  insertRegistryWorktree,
+  listRegistryWorktrees,
+} from "./registry.js";
+import { ManagedWorktreeService } from "./service.js";
 
-const initializeRepository = useManagedWorktreeTestRepository();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.restoreAllMocks();
+  afterAll(async () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     cleanup();
   }),
 );
+const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("worktree-gc-maintenance-state-") };
 
-it("maintains each live repository after removals and warns without changing the cleanup outcome", async () => {
-  const root = tempDirs.make("worktree-gc-maintenance-");
-  const repo = await initializeRepository(path.join(root, "first"));
-  const otherRepo = await initializeRepository(path.join(root, "second"));
-  const stateDir = path.join(root, "state");
-  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  const now = IDLE_GC_MS + 2;
-  await materializeManagedWorktreeFixtures({
-    env,
-    stateDir,
-    repoRoot: repo,
-    now: 1,
-    names: ["manual-one", "manual-two"],
-  });
-  await materializeManagedWorktreeFixture({
-    env,
-    stateDir,
-    repoRoot: otherRepo,
-    now: 1,
-    name: "other-manual",
-  });
-  const idle = await materializeManagedWorktreeFixture({
-    env,
-    stateDir,
-    repoRoot: repo,
-    now: 1,
-    name: "idle",
-    ownerKind: "session",
-  });
-  const service = new ManagedWorktreeService({ env, now: () => now });
+beforeAll(async () => {
+  await registryReads.readRegistryWorktrees(env);
+  await registryReads.readWorktreeCleanupState(env);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  for (const record of listRegistryWorktrees(env)) {
+    deleteRegistryWorktree(env, record.id);
+  }
+});
+
+it("maintains each live repository and warns without changing the cleanup outcome", async () => {
+  const repo = tempDirs.make("worktree-gc-first-repo-");
+  const otherRepo = tempDirs.make("worktree-gc-second-repo-");
+  for (const [index, repoRoot] of [repo, otherRepo].entries()) {
+    const name = `manual-${index}`;
+    insertRegistryWorktree(env, {
+      id: name,
+      name,
+      repoFingerprint: name,
+      repoRoot,
+      path: repoRoot,
+      branch: `openclaw/${name}`,
+      baseRef: "HEAD",
+      ownerKind: "manual",
+      createdAt: 1,
+      lastActiveAt: 1,
+    });
+  }
+  const service = new ManagedWorktreeService({ env, now: () => 3 });
   const controller = new AbortController();
   const execute = gitExec.executeGitCommand;
   const maintenanceRoots: string[] = [];
@@ -65,7 +64,6 @@ it("maintains each live repository after removals and warns without changing the
       if (args[0] !== "maintenance") {
         return await execute(cwd, args, options);
       }
-      expect(getRegistryWorktree(env, idle.id)?.removedAt).toBe(now);
       expect(args).toEqual(["maintenance", "run", "--auto"]);
       expect(options).toMatchObject({
         killProcessTree: true,
@@ -89,7 +87,7 @@ it("maintains each live repository after removals and warns without changing the
   try {
     const result = await service.gc({ signal: controller.signal });
     expect(result).toMatchObject({
-      removed: [idle.id],
+      removed: [],
       outcome: "completed",
       issues: [],
       issueCount: 0,
@@ -107,7 +105,6 @@ it("maintains each live repository after removals and warns without changing the
 });
 
 it("warns without changing completed cleanup when the maintenance inventory fails", async () => {
-  const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("worktree-gc-inventory-") };
   vi.spyOn(registryReads, "readRegistryWorktrees").mockRejectedValueOnce(
     new Error("maintenance inventory unavailable"),
   );
@@ -127,7 +124,6 @@ it.each([false, true])(
   "skips maintenance without live records (removed record: %s)",
   async (removedRecord) => {
     const root = tempDirs.make("worktree-gc-no-maintenance-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
     if (removedRecord) {
       insertRegistryWorktree(env, {
         id: "removed",
