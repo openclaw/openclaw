@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { sleepWithAbort } from "@openclaw/retry";
 import { resolveStateDir } from "../config/paths.js";
 import { backupFleetCell, restoreFleetCell } from "./backup.runtime.js";
 import {
@@ -167,7 +166,12 @@ export function createFleetService(options: FleetServiceOptions = {}) {
     options.generateAttemptId ?? (() => crypto.randomBytes(16).toString("hex"));
   const getuid = options.getuid ?? (() => process.getuid?.());
   const getgid = options.getgid ?? (() => process.getgid?.());
-  const sleep = options.sleep ?? sleepWithAbort;
+  const sleep =
+    options.sleep ??
+    ((ms: number) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }));
   const selinuxEnabled = options.selinuxEnabled ?? detectHostSelinux;
   const updateImage = options.updateImage ?? updateFleetCellImage;
   const probePort = options.probePort ?? probeLoopbackPort;
