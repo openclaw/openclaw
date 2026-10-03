@@ -28,12 +28,13 @@ struct ChatSidebarSelection {
 @MainActor @Observable
 final class ChatSessionSidebarBatch {
     enum Action: Equatable {
-        case unread(Bool), category(String?), archived(Bool), delete
+        case unread(Bool), category(String?), newGroup(String), archived(Bool), delete
 
         var patch: [String: AnyCodable] {
             switch self {
             case let .unread(value): ["unread": .init(value)]
             case let .category(value): ["category": value.map(AnyCodable.init) ?? .init(NSNull())]
+            case let .newGroup(name): ["category": .init(name)]
             case let .archived(value): ["archived": .init(value)]
             case .delete: [:]
             }
@@ -70,6 +71,8 @@ final class ChatSessionSidebarBatch {
     var selection = ChatSidebarSelection()
     var errors: [String: String] = [:]
     var notices: [String] = []
+    var archiveUndo: ChatSidebarArchiveReceipt?
+    var pendingArchives: [String: UUID] = [:]
     var running = false
     var pendingDelete: [OpenClawChatSessionEntry] = []
     private(set) var sidebarEntries: [String] = []
@@ -84,11 +87,14 @@ final class ChatSessionSidebarBatch {
 
     func reset(clearConnection: Bool = true) {
         self.selection = .init()
-        self.errors = [:]
-        self.notices = []
         self.running = false
         self.pendingDelete = []
         if clearConnection {
+            // ui/src/components/session-organizer-operations.runtime.ts:202 keeps outcomes across query navigation.
+            self.errors = [:]
+            self.notices = []
+            self.archiveUndo = nil
+            self.pendingArchives = [:]
             self.pinRevision += 1
             self.writingPins = false
             self.pinRefreshPending = false
@@ -197,17 +203,22 @@ final class ChatSessionSidebarBatch {
     static func allows(
         _ action: Action,
         rows: [OpenClawChatSessionEntry],
-        connection: OpenClawSessionMenuConnection) -> Bool
+        connection: OpenClawSessionMenuConnection,
+        method: String = "sessions.patchMany") -> Bool
     {
+        if case .newGroup = action {
+            return connection.allows("sessions.groups.list", scope: "operator.read") &&
+                connection.allows("sessions.groups.put") && connection.allows("sessions.patchMany")
+        }
         if action == .delete {
             return connection.allows(
                 "sessions.delete",
                 scope: rows.allSatisfy(\.isArchived) ? "operator.write" : "operator.admin")
         }
-        if connection.allows("sessions.patchMany") { return true }
+        if connection.allows(method) { return true }
         // ui/src/lib/session-method-access.ts:32,81 preflights the entire scoped batch.
         if case .archived = action {
-            return connection.allows("sessions.patchMany", scope: "operator.sessions.write") &&
+            return connection.allows(method, scope: "operator.sessions.write") &&
                 rows.allSatisfy { $0.sharingRole == .owner || $0.sharingRole == .admin }
         }
         return false
@@ -219,12 +230,16 @@ final class ChatSessionSidebarBatch {
         mainKey: String,
         connection: OpenClawSessionMenuConnection) async -> [OpenClawChatSessionEntry]
     {
+        guard connection.isCurrent(), !Task.isCancelled else { return [] }
         let scope = self.scope
         self.errors = [:]
         self.notices = []
         guard Self.allows(action, rows: rows, connection: connection) else {
             self.fail(rows, String(localized: "This connection cannot change every selected thread."))
             return []
+        }
+        if case let .newGroup(name) = action {
+            guard await self.createGroup(named: name, rows: rows, connection: connection) else { return [] }
         }
         let rows = rows.filter {
             switch action {
@@ -268,47 +283,96 @@ final class ChatSessionSidebarBatch {
                     }
                 }
             guard self.scope == scope else { return [] }
-            self.errors = result.errorsByKey
+            self.errors.merge(result.errorsByKey) { _, latest in latest }
             return rows.filter { result.succeededKeys.contains(OpenClawChatSessionSidebarData.identity($0)) }
         }
-        return await self.patch(rows, fields: action.patch, connection: connection)
+        // ui/src/components/session-organizer-operations.runtime.ts:202 ties archive outcomes to the connection.
+        let pending = action == .archived(true) ? rows.compactMap { row in
+            self.beginArchive(row).map { (row, $0) }
+        } : []
+        defer { for (row, token) in pending {
+            self.finishArchive(row, token: token)
+        } }
+        let successful = await self.patch(
+            action == .archived(true) ? pending.map(\.0) : rows,
+            fields: action.patch,
+            connection: connection,
+            current: action == .archived(true) ? connection.isCurrent : nil)
+        if action == .archived(true) { self.offerArchiveUndo(successful, connection: connection) }
+        return successful
+    }
+
+    private func createGroup(
+        named name: String,
+        rows: [OpenClawChatSessionEntry],
+        connection: OpenClawSessionMenuConnection) async -> Bool
+    {
+        let scope = self.scope
+        // ui/src/components/session-organizer-operations.runtime.ts:472: capture identities before
+        // catalog creation; paging must not invalidate rows that the Gateway can still guard.
+        guard rows.allSatisfy({ ChatPayloadDecoding.trimmedNonEmptyString($0.sessionId) != nil }) else {
+            self.fail(rows, String(localized: "Refresh these threads and try again."))
+            return false
+        }
+        do {
+            let current: OpenClawChatSessionGroupsResponse = try await connection.read("sessions.groups.list")
+            guard self.scope == scope else { return false }
+            if !current.groups.contains(where: { $0.name == name }) {
+                // ui/src/components/session-organizer-catalog.ts:32 leaves sectionOrder untouched.
+                let _: OpenClawChatSessionGroupsMutationResponse = try await connection.read("sessions.groups.put", [
+                    "names": .init(current.groups.map(\.name) + [name]),
+                ])
+                guard self.scope == scope else { return false }
+            }
+            return true
+        } catch {
+            guard self.scope == scope, connection.isCurrent(), !Task.isCancelled else { return false }
+            self.fail(rows, error.localizedDescription)
+            return false
+        }
     }
 
     func patch(
         _ rows: [OpenClawChatSessionEntry],
         fields: [String: AnyCodable],
-        connection: OpenClawSessionMenuConnection) async -> [OpenClawChatSessionEntry]
+        connection: OpenClawSessionMenuConnection,
+        current: (() -> Bool)? = nil) async -> [OpenClawChatSessionEntry]
     {
         struct Response: Decodable { let outcomes: [Outcome] }
         let scope = self.scope
+        let isCurrent = current ?? { self.scope == scope }
         var successful: [OpenClawChatSessionEntry] = []
-        self.errors = [:]
+        var errors: [String: String] = [:]
         // ui/src/components/session-organizer-batch-mutations.ts:129 and sessions-patch.ts:9:
         // sequential chunks retain earlier successes when a later request fails.
         for offset in stride(from: 0, to: rows.count, by: 100) {
-            guard scope == self.scope else { return [] }
+            guard isCurrent() else { return [] }
             let chunk = Array(rows[offset..<min(offset + 100, rows.count)])
             do {
                 let data = try await connection.request(OpenClawChatGatewayRequests.sidebarBatchPatch(
                     chunk,
                     patch: fields))
                 let response = try JSONDecoder().decode(Response.self, from: data)
-                guard scope == self.scope else { return [] }
+                guard isCurrent() else { return [] }
                 guard response.outcomes.map(\.key) == chunk.map(\.key) else {
                     throw CocoaError(.coderReadCorrupt)
                 }
                 for (row, outcome) in zip(chunk, response.outcomes) {
                     if outcome.ok { successful.append(row) } else {
-                        self.errors[OpenClawChatSessionSidebarData.identity(row)] = outcome.error?
+                        errors[OpenClawChatSessionSidebarData.identity(row)] = outcome.error?
                             .message ?? String(localized: "The thread operation failed.")
                     }
                 }
             } catch {
-                guard scope == self.scope else { return [] }
-                self.fail(Array(rows[offset...]), error.localizedDescription)
+                guard isCurrent() else { return [] }
+                for row in rows[offset...] {
+                    errors[OpenClawChatSessionSidebarData.identity(row)] = error.localizedDescription
+                }
                 break
             }
         }
+        // Preserve failures published by other operations after this one began.
+        self.errors.merge(errors) { _, latest in latest }
         return successful
     }
 

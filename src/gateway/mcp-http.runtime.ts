@@ -203,13 +203,6 @@ type ResolvedNodeScope = {
   policyResolved?: CachedScopedTools;
 };
 
-async function resolveNodeScope(
-  input: CapturedMcpLoopbackScope,
-  mode: LoopbackToolsAllowMode,
-): Promise<ResolvedNodeScope> {
-  return resolvePairedComputerNodeScope(await resolveNodeExecScope(input, mode), mode);
-}
-
 async function resolvePairedComputerNodeScope(
   params: CapturedMcpLoopbackScope,
   mode: LoopbackToolsAllowMode,
@@ -359,15 +352,16 @@ function constructMcpLoopbackTools(
   };
 }
 
-/** Resolves loopback-visible tools from the exact names carried by a minted grant. */
-export async function resolveMcpLoopbackScopedTools(params: McpLoopbackScopeParams): Promise<{
-  agentId: string | undefined;
-  workspaceDir?: string;
-  tools: McpLoopbackTool[];
-}> {
-  const resolved = await resolveNodeScope(captureMcpLoopbackScope(params), "exact");
+async function resolveMcpLoopbackCatalog(
+  params: McpLoopbackScopeParams,
+  mode: LoopbackToolsAllowMode,
+): Promise<CachedScopedTools> {
+  const resolved = await resolvePairedComputerNodeScope(
+    await resolveNodeExecScope(captureMcpLoopbackScope(params), mode),
+    mode,
+  );
   for (;;) {
-    const tools = await resolveMcpLoopbackTools(resolved.params, "exact", resolved.policyResolved);
+    const tools = await resolveMcpLoopbackTools(resolved.params, mode, resolved.policyResolved);
     resolved.params.assertCurrent();
     if (isMcpCatalogSessionCurrent(tools, resolved.params)) {
       return tools;
@@ -375,19 +369,21 @@ export async function resolveMcpLoopbackScopedTools(params: McpLoopbackScopePara
   }
 }
 
+/** Resolves loopback-visible tools from the exact names carried by a minted grant. */
+export function resolveMcpLoopbackScopedTools(params: McpLoopbackScopeParams): Promise<{
+  agentId: string | undefined;
+  workspaceDir?: string;
+  tools: McpLoopbackTool[];
+}> {
+  return resolveMcpLoopbackCatalog(params, "exact");
+}
+
 /** Materializes runtime policy expressions against the concrete loopback catalog. */
-export async function resolveMcpLoopbackPolicyTools(params: McpLoopbackScopeParams): Promise<{
+export function resolveMcpLoopbackPolicyTools(params: McpLoopbackScopeParams): Promise<{
   agentId: string | undefined;
   tools: McpLoopbackTool[];
 }> {
-  const resolved = await resolveNodeScope(captureMcpLoopbackScope(params), "policy");
-  for (;;) {
-    const tools = await resolveMcpLoopbackTools(resolved.params, "policy", resolved.policyResolved);
-    resolved.params.assertCurrent();
-    if (isMcpCatalogSessionCurrent(tools, resolved.params)) {
-      return tools;
-    }
-  }
+  return resolveMcpLoopbackCatalog(params, "policy");
 }
 
 /**

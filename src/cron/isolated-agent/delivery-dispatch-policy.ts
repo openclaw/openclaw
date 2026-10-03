@@ -87,9 +87,7 @@ const PERMANENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
 
 const STALE_CRON_DELIVERY_MAX_START_DELAY_MS = 3 * 60 * 60_000;
 
-const deliveryLoggerRuntimeLoader = createLazyImportLoader(
-  () => import("./delivery-logger.runtime.js"),
-);
+const deliveryLoggerRuntimeLoader = createLazyImportLoader(() => import("../../logger.js"));
 const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runtime.js"));
 const deliverySubagentRegistryRuntimeLoader = createLazyImportLoader(
   () => import("./delivery-subagent-registry.runtime.js"),

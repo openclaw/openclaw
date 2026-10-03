@@ -21,7 +21,7 @@ const PROVIDER_AUTH_LOCK_OPTIONS = {
 
 type StoreRollback = {
   profileId: string;
-  rollback: () => boolean;
+  rollback: () => Promise<boolean>;
 };
 
 export type ProviderAuthPersistenceReceipt = {
@@ -86,17 +86,17 @@ function buildStoredCredential(profile: ProviderAuthProfile, ref: SecretRef) {
   );
 }
 
-function rollbackStoreWrites(
+async function rollbackStoreWrites(
   writes: readonly StoreRollback[],
   retainProfileIds: ReadonlySet<string>,
-): void {
+): Promise<void> {
   const errors: unknown[] = [];
   for (const write of writes.toReversed()) {
     if (retainProfileIds.has(write.profileId)) {
       continue;
     }
     try {
-      if (!write.rollback()) {
+      if (!(await write.rollback())) {
         errors.push(
           new Error(
             `Protected credential rollback lost ownership for profile "${write.profileId}".`,
@@ -115,42 +115,35 @@ function rollbackStoreWrites(
   }
 }
 
-function materializeProviderAuthProfiles(params: {
+async function materializeProviderAuthProfiles(params: {
   profiles: readonly ProviderAuthProfile[];
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): {
+  beforeWrite?: () => void;
+}): Promise<{
   profiles: ProviderAuthProfile[];
-  rollback: (retainProfileIds?: ReadonlySet<string>) => void;
-} {
+  rollback: (retainProfileIds?: ReadonlySet<string>) => Promise<void>;
+}> {
   const database = { env: params.env };
   const writes: StoreRollback[] = [];
-  let outcome: "pending" | "rolled-back" | "rollback-failed" = "pending";
-  let rollbackFailure: Error | undefined;
+  let rollbackPromise: Promise<void> | undefined;
   const rollback = (retainProfileIds: ReadonlySet<string> = new Set()) => {
-    if (outcome === "rolled-back") {
-      return;
-    }
-    if (outcome === "rollback-failed") {
-      if (rollbackFailure) {
-        throw rollbackFailure;
+    rollbackPromise ??= (async () => {
+      try {
+        await rollbackStoreWrites(writes, retainProfileIds);
+      } catch (error) {
+        throw toErrorObject(error, "Protected credential rollback failed");
       }
-      throw new Error("Provider auth rollback failed without a recorded error.");
-    }
-    try {
-      rollbackStoreWrites(writes, retainProfileIds);
-      outcome = "rolled-back";
-    } catch (error) {
-      rollbackFailure = toErrorObject(error, "Protected credential rollback failed");
-      outcome = "rollback-failed";
-      throw rollbackFailure;
-    }
+    })();
+    return rollbackPromise;
   };
 
   try {
-    const profiles = params.profiles.map((profile): ProviderAuthProfile => {
+    const profiles: ProviderAuthProfile[] = [];
+    for (const profile of params.profiles) {
       if (!profile.secretStorage) {
-        return profile;
+        profiles.push(profile);
+        continue;
       }
       const name = resolveStoreName(profile);
       const credential = profile.credential;
@@ -166,15 +159,16 @@ function materializeProviderAuthProfiles(params: {
         );
       }
       registerSecretValueForRedaction(value);
-      let write: ReturnType<typeof writeSecretStoreEntryWithRollback>;
+      let write: Awaited<ReturnType<typeof writeSecretStoreEntryWithRollback>>;
       try {
-        write = writeSecretStoreEntryWithRollback({
+        write = await writeSecretStoreEntryWithRollback({
           scope: STORE_SCOPE,
           name,
           value,
           kind: "secret",
           updatedBy: "provider-auth",
           database,
+          assertCurrent: params.beforeWrite,
         });
       } catch (error) {
         throw new Error(
@@ -191,15 +185,15 @@ function materializeProviderAuthProfiles(params: {
         id: name,
       };
       const { secretStorage: _secretStorage, ...persistentProfile } = profile;
-      return {
+      profiles.push({
         ...persistentProfile,
         credential: buildStoredCredential(profile, ref),
-      };
-    });
+      });
+    }
     return { profiles, rollback };
   } catch (error) {
     try {
-      rollback();
+      await rollback();
     } catch (rollbackError) {
       // oxlint-disable-next-line preserve-caught-error -- AggregateError.errors retains rollbackError; cause remains the initiating persistence failure.
       throw new AggregateError(
@@ -309,15 +303,16 @@ async function stageProviderAuthProfilesForPersistence(params: {
   stateDir?: string;
   beforeWrite?: () => void;
 }): Promise<ProviderAuthProtectedProfilesReceipt> {
-  const env = resolvePersistenceEnv(params);
+  const env = { ...resolvePersistenceEnv(params) };
   const locks = await acquireProviderAuthLocks(params.profiles, env);
-  let prepared: ReturnType<typeof materializeProviderAuthProfiles>;
+  let prepared: Awaited<ReturnType<typeof materializeProviderAuthProfiles>>;
   try {
     params.beforeWrite?.();
-    prepared = materializeProviderAuthProfiles({
+    prepared = await materializeProviderAuthProfiles({
       profiles: params.profiles,
       config: params.config,
       env,
+      beforeWrite: params.beforeWrite,
     });
   } catch (error) {
     return await throwAfterStageFailure({ error, locks });
@@ -325,26 +320,21 @@ async function stageProviderAuthProfilesForPersistence(params: {
 
   let outcome: "pending" | "committed" | "rolled-back" | "rollback-failed" = "pending";
   let rollbackFailure: Error | undefined;
-  let released = false;
-  let releaseFailure: Error | undefined;
-  const release = async () => {
-    if (released) {
-      if (releaseFailure) {
-        throw releaseFailure;
-      }
-      return;
-    }
-    released = true;
-    try {
-      await releaseProviderAuthLocks(locks);
-    } catch (error) {
-      releaseFailure = toErrorObject(error, "Provider auth persistence lock release failed");
-      throw releaseFailure;
-    }
+  let rollbackPromise: Promise<void> | undefined;
+  let releasePromise: Promise<void> | undefined;
+  const release = () => {
+    releasePromise ??= releaseProviderAuthLocks(locks).catch((error: unknown) => {
+      throw toErrorObject(error, "Provider auth persistence lock release failed");
+    });
+    return releasePromise;
   };
-  return {
+  const receipt: ProviderAuthProtectedProfilesReceipt = {
     profiles: prepared.profiles,
     commit: async () => {
+      // A concurrent commit cannot release locks while compensation is still running.
+      if (rollbackPromise) {
+        await rollbackPromise.catch(() => undefined);
+      }
       if (outcome === "rolled-back") {
         throw new Error("Cannot commit rolled-back provider auth persistence.");
       }
@@ -368,7 +358,7 @@ async function stageProviderAuthProfilesForPersistence(params: {
       if (outcome === "pending") {
         let rollbackError: unknown;
         try {
-          prepared.rollback(retainProfileIds);
+          await prepared.rollback(retainProfileIds);
         } catch (error) {
           rollbackError = error;
         }
@@ -399,6 +389,9 @@ async function stageProviderAuthProfilesForPersistence(params: {
       await release();
     },
   };
+  const rollbackOnce = receipt.rollback;
+  receipt.rollback = (retainProfileIds) => (rollbackPromise ??= rollbackOnce(retainProfileIds));
+  return receipt;
 }
 
 async function stageProviderAuthProfileBatchCore(
@@ -433,9 +426,13 @@ async function stageProviderAuthProfileBatchCore(
 
   let outcome: "pending" | "committed" | "rolled-back" | "rollback-failed" = "pending";
   let rollbackFailure: Error | undefined;
-  return {
+  let rollbackPromise: Promise<void> | undefined;
+  const receipt: ProviderAuthPersistenceReceipt = {
     profiles: prepared.profiles,
     commit: async () => {
+      if (rollbackPromise) {
+        await rollbackPromise.catch(() => undefined);
+      }
       if (outcome === "rolled-back") {
         throw new Error("Cannot commit rolled-back provider auth persistence.");
       }
@@ -496,6 +493,9 @@ async function stageProviderAuthProfileBatchCore(
       await prepared.rollback();
     },
   };
+  const rollbackOnce = receipt.rollback;
+  receipt.rollback = () => (rollbackPromise ??= rollbackOnce());
+  return receipt;
 }
 
 /** Stages provider auth until its owning config publication commits or rolls back. */

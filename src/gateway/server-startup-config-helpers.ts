@@ -84,18 +84,6 @@ function assertValidGatewayStartupConfigSnapshot(
   });
 }
 
-function withRuntimeConfig(
-  snapshot: ConfigFileSnapshot,
-  runtimeConfig: OpenClawConfig,
-): ConfigFileSnapshot {
-  copyConfigResolutionFacts(snapshot.sourceConfig, runtimeConfig);
-  return {
-    ...snapshot,
-    runtimeConfig,
-    config: runtimeConfig,
-  };
-}
-
 /** Load and validate the config snapshot, applying runtime-only plugin auto-enable changes. */
 export async function loadGatewayStartupConfigSnapshot(params: {
   minimalTestGateway: boolean;
@@ -152,8 +140,9 @@ export async function loadGatewayStartupConfigSnapshot(params: {
     runtimeConfig: configSnapshot.runtimeConfig,
     activationConfig: autoEnable.config,
   });
+  copyConfigResolutionFacts(configSnapshot.sourceConfig, runtimeConfig);
   return {
-    snapshot: withRuntimeConfig(configSnapshot, runtimeConfig),
+    snapshot: { ...configSnapshot, runtimeConfig, config: runtimeConfig },
     ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
   };
 }

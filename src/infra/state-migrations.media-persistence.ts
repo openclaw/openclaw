@@ -56,7 +56,7 @@ import {
   clearNodeSqliteKyselyCacheForDatabase,
   enableNodeSqliteKyselyStatementCache,
 } from "./kysely-sync.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, readSqliteDataVersion } from "./node-sqlite.js";
 import { repairDoctorSqliteIndexCorruption } from "./sqlite-index-recovery.js";
 import { repairCanonicalSqliteIndexes } from "./sqlite-index-schema.js";
 import { runSqliteIntegrityOperationInWorker } from "./sqlite-integrity-operation.js";
@@ -71,8 +71,6 @@ import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import { createMigrationDatabaseHandle } from "./state-migrations.agent-database.js";
 import { recoverMisplacedAgentDatabaseCopies } from "./state-migrations.agent-owner-recovery.js";
 import {
-  mediaSourceDriftMessage,
-  readMediaSourceVersion,
   scanTranscriptRows,
   scanTrajectoryRows,
 } from "./state-migrations.media-persistence-database.js";
@@ -276,7 +274,7 @@ async function migrateAgentDatabase(params: {
       }
     }
 
-    const sourceVersion = readMediaSourceVersion(database, legacyTextStorage);
+    const sourceVersion = readSqliteDataVersion(database);
     const changedLegacySessions = new Set<string>();
     params.beforeTransaction?.();
     const owner = createMigrationDatabaseHandle(database, params.agentId, params.pathname);
@@ -284,11 +282,8 @@ async function migrateAgentDatabase(params: {
       database,
       () => {
         assertMediaSchemaMigration();
-        const currentSourceVersion = readMediaSourceVersion(database, legacyTextStorage);
-        if (currentSourceVersion.dataVersion !== sourceVersion.dataVersion) {
-          throw new Error(
-            mediaSourceDriftMessage(params.pathname, sourceVersion, currentSourceVersion),
-          );
+        if (readSqliteDataVersion(database) !== sourceVersion) {
+          throw new Error(`${params.pathname} source changed before migration transaction`);
         }
         const rewrittenSessions = scanTranscriptRows({
           database,

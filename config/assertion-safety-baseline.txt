@@ -971,7 +971,6 @@ extensions/telegram/src/telegram-ingress-supersede.ts	7
 extensions/telegram/src/telegram-ingress-worker.runtime.ts	3
 extensions/telegram/src/thread-bindings-store.ts	1
 extensions/telegram/src/topic-name-cache.ts	1
-extensions/telegram/src/update-offset-store.ts	1
 extensions/telegram/src/webhook.ts	1
 extensions/tencent/stream.ts	1
 extensions/tlon/src/channel.runtime.ts	3
@@ -2087,7 +2086,7 @@ src/gateway/chat-display-projection.core.ts	5
 src/gateway/chat-display-projection.history.ts	1
 src/gateway/chat-display-projection.sanitize.ts	5
 src/gateway/chat-sanitize.ts	3
-src/gateway/cli-session-history.claude.ts	6
+src/gateway/cli-session-history.claude.ts	5
 src/gateway/cli-session-history.merge.ts	6
 src/gateway/control-ui-plugin-auth-cookie.ts	1
 src/gateway/control-ui-session-pr-subscriptions.ts	2
@@ -2114,12 +2113,12 @@ src/gateway/openai-agent-run-usage.ts	1
 src/gateway/operator-approval-snapshot.ts	4
 src/gateway/plugin-activation-runtime-config.ts	2
 src/gateway/probe.ts	2
-src/gateway/restart-trace.ts	3
+src/gateway/restart-trace.ts	2
 src/gateway/secret-input-paths.ts	1
 src/gateway/server-broadcast.ts	1
 src/gateway/server-channels.ts	1
 src/gateway/server-chat-state.ts	1
-src/gateway/server-chat.ts	4
+src/gateway/server-chat.ts	3
 src/gateway/server-core-runtime.ts	1
 src/gateway/server-cron-reconciled.ts	1
 src/gateway/server-cron.ts	1
@@ -2178,7 +2177,6 @@ src/gateway/server-methods/task-suggestions.ts	5
 src/gateway/server-methods/web.ts	1
 src/gateway/server-node-events.ts	1
 src/gateway/server-plugin-in-process-dispatch.ts	3
-src/gateway/server-plugin-subagent-runtime.ts	1
 src/gateway/server-plugins-node-runtime.ts	1
 src/gateway/server-plugins.ts	2
 src/gateway/server-reload-restart.ts	2
@@ -2355,7 +2353,7 @@ src/infra/sqlite-files.ts	1
 src/infra/sqlite-index-schema.ts	2
 src/infra/sqlite-integrity.ts	2
 src/infra/sqlite-readonly-location.ts	3
-src/infra/sqlite-schema-contract.ts	8
+src/infra/sqlite-schema-contract.ts	7
 src/infra/sqlite-snapshot.ts	2
 src/infra/sqlite-strict.ts	6
 src/infra/sqlite-wal.ts	3

@@ -1,9 +1,10 @@
 import Foundation
 import OpenClawProtocol
+import SwiftUI
 import Testing
 @testable import OpenClawChatUI
 
-private actor SidebarQueryTransport: OpenClawChatSidebarTransport {
+actor SidebarQueryTransport: OpenClawChatSidebarTransport {
     func loadSidebarAgentAvatar(_: String) async -> Data? {
         nil
     }
@@ -54,6 +55,18 @@ private actor SidebarQueryTransport: OpenClawChatSidebarTransport {
 
     func replyUsing(_ responder: @escaping @Sendable (OpenClawChatGatewayRequest) throws -> Data) {
         self.responder = responder
+    }
+
+    nonisolated func scoped(toAgentID _: String) -> (any OpenClawChatTransport)? {
+        self
+    }
+
+    func acquireSessionSettingsRouteLease() async -> OpenClawChatSessionSettingsRouteLease? {
+        OpenClawChatSessionSettingsRouteLease { key, agentID, patch in
+            let response = try await self.send(OpenClawChatGatewayRequests.patchSessionSettings(
+                sessionKey: key, agentID: agentID, model: patch.model))
+            return try JSONDecoder().decode(OpenClawChatModelPatchResult.self, from: response)
+        }
     }
 
     func requestHistory(sessionKey _: String) async throws -> OpenClawChatHistoryPayload {
@@ -153,7 +166,7 @@ struct ChatSessionSidebarQueryTests {
         #expect(await transport.requests.allSatisfy { ($0.params["limit"]?.value as? Int ?? 0) <= 100 })
     }
 
-    private func owner(
+    func owner(
         _ transport: SidebarQueryTransport,
         query: OpenClawChatSidebarQuery = .init(agentID: "main")) -> OpenClawChatSessionSidebarData
     {
@@ -162,15 +175,15 @@ struct ChatSessionSidebarQueryTests {
         return owner
     }
 
-    private func row(_ name: String, label: String = "Work", updatedAt: Int = 10) -> String {
+    func row(_ name: String, label: String = "Work", updatedAt: Int = 10) -> String {
         #"{"key":"agent:main:\#(name)","sessionId":"\#(name)","label":"\#(label)","updatedAt":\#(updatedAt)}"#
     }
 
-    private func page(_ rows: [String], paging: String = #""hasMore":false,"nextOffset":null"#) -> Data {
+    func page(_ rows: [String], paging: String = #""hasMore":false,"nextOffset":null"#) -> Data {
         Data(#"{"count":\#(rows.count),"sessions":[\#(rows.joined(separator: ","))],\#(paging)}"#.utf8)
     }
 
-    private func load(
+    func load(
         _ owner: OpenClawChatSessionSidebarData,
         _ transport: SidebarQueryTransport,
         _ data: Data,

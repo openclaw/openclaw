@@ -287,17 +287,19 @@ export const AWS_SECRET_ACCESS_KEY_MATCHER = Object.freeze({
 // the colon may include line breaks, as in the generic rule, so YAML explicit keys and indented
 // continuations stay covered. One forward pass classifies every key, so the cost is linear in the text
 // regardless of line length or key count.
-const BARE_PASS_KEY_PATTERN = String.raw`(?<![A-Za-z0-9])(pass|${CONFIG_COLON_ASSIGNMENT_SECRET_KEYS})\s*:\s*`;
-const BARE_PASS_VALUE_PATTERN = String.raw`[^\s#"'\x60<>]+`;
+const BARE_PASS_KEY_RE = new RegExp(
+  String.raw`(?<![A-Za-z0-9])(pass|${CONFIG_COLON_ASSIGNMENT_SECRET_KEYS})\s*:\s*`,
+  "gi",
+);
+const BARE_PASS_VALUE_RE = /[^\s#"'\x60<>]+/y;
 const ASCII_WORD_CHAR_RE = /[A-Za-z0-9]/;
 const INLINE_WHITESPACE_RE = /[ \t\r\n]/;
 
 function* matchBarePassAssignments(text: string): Iterable<RedactMatch> {
-  const keys = [...text.matchAll(new RegExp(BARE_PASS_KEY_PATTERN, "gi"))];
+  const keys = [...text.matchAll(BARE_PASS_KEY_RE)];
   if (keys.length === 0) {
     return;
   }
-  const valueRe = new RegExp(BARE_PASS_VALUE_PATTERN, "y");
   let next = 0;
   let assignmentSeen = false;
   for (let index = 0; index < text.length; index++) {
@@ -320,8 +322,8 @@ function* matchBarePassAssignments(text: string): Iterable<RedactMatch> {
         assignmentSeen = true;
         let end = index + key[0].length;
         if (!owned) {
-          valueRe.lastIndex = end;
-          const value = valueRe.exec(text)?.[0];
+          BARE_PASS_VALUE_RE.lastIndex = end;
+          const value = BARE_PASS_VALUE_RE.exec(text)?.[0];
           if (value) {
             end += value.length;
             yield { match: text.slice(index, end), groups: [value], input: text, offset: index };
