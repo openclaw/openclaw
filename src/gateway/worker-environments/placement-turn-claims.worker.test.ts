@@ -10,6 +10,7 @@ import {
 } from "../../agents/session-placement-forced-terminal-settlement.js";
 import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   openOpenClawStateDatabase,
@@ -21,9 +22,13 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
-import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
+import {
+  advancePlacementFixtureToActive,
+  seedAttachedPlacementEnvironment,
+} from "./placement-test-fixtures.js";
 import { ActiveTurnClaimError, createPlacementTurnClaimOps } from "./placement-turn-claims.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
+import { createWorkerEnvironmentStore } from "./store.js";
 import { executeLocalTurn } from "./worker-turn-admission.js";
 
 let database: OpenClawStateDatabase;
@@ -71,6 +76,229 @@ async function workerClaim(name: string) {
     },
   });
 }
+
+function losePlacementReply(sessionId: string, outcome: "committed" | "unknown") {
+  if (outcome === "unknown") {
+    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
+    vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
+      (admit, attachment) => {
+        const admission = createAdmission(admit, attachment);
+        return {
+          ...admission,
+          get committed() {
+            return undefined;
+          },
+          get settlement() {
+            return { kind: "unknown" as const };
+          },
+        };
+      },
+    );
+  }
+  const receive = brokerReply.receiveSqliteWorkerReply;
+  let corrupted = 0;
+  vi.spyOn(brokerReply, "receiveSqliteWorkerReply").mockImplementation((slot, reply, owner) => {
+    if (slot.current?.request.type === "execute" && reply.ok && !reply.transfer && !reply.input) {
+      const value: unknown = deserialize(reply.value);
+      if (isRecord(value) && isRecord(value.placement) && value.placement.sessionId === sessionId) {
+        corrupted += 1;
+        return receive(slot, { ...reply, value: new Uint8Array([0]) }, owner);
+      }
+    }
+    return receive(slot, reply, owner);
+  });
+  return () => corrupted;
+}
+
+it("transitions, drains and settles terminal placement failure without caller-thread SQL", async () => {
+  const identity = input("transition-boundary");
+  const environmentId = "transition-boundary-environment";
+  const environments = await createWorkerEnvironmentStore({ database });
+  seedAttachedPlacementEnvironment(database, {
+    environmentId,
+    sessionId: identity.sessionId,
+    ownerEpoch: 7,
+  });
+  const observedActivation: Array<number | null | undefined> = [];
+  const stop = sessionChanges.subscribe((change) => {
+    if ("all" in change && change.scope === "worker-environments") {
+      observedActivation.push(environments.get(environmentId)?.lastActivatedAtMs);
+    }
+  });
+  const queries = observeHostDataSql();
+  try {
+    const active = await advancePlacementFixtureToActive(placements, database, identity, {
+      environmentId,
+      seedEnvironment: false,
+    });
+    const draining = await placements.startDrain({
+      sessionId: active.sessionId,
+      environmentId,
+      ownerEpoch: 7,
+      expectedGeneration: active.generation,
+      requireUnclaimed: true,
+    });
+    const reconciling = await placements.startReconcile({
+      sessionId: active.sessionId,
+      environmentId,
+      ownerEpoch: 7,
+      expectedGeneration: draining.generation,
+    });
+    const reclaimed = await placements.transition({
+      sessionId: active.sessionId,
+      from: "reconciling",
+      to: "reclaimed",
+      expectedGeneration: reconciling.generation,
+    });
+    expect(reclaimed.state).toBe("reclaimed");
+    const redispatched = await placements.startDispatch(identity);
+    const failed = await placements.fail({
+      sessionId: active.sessionId,
+      expectedGeneration: redispatched.generation,
+      recoveryError: "synthetic terminal failure",
+    });
+    const updated = await placements.fail({
+      sessionId: active.sessionId,
+      expectedGeneration: failed.generation,
+      recoveryError: "synthetic cleanup failure",
+    });
+    expect(updated).toMatchObject({
+      state: "failed",
+      generation: failed.generation,
+      terminalReason: "synthetic terminal failure",
+      recoveryError: "synthetic cleanup failure",
+    });
+    expect(queries.queries).toEqual([]);
+    expect(observedActivation).toEqual([1_000]);
+  } finally {
+    stop();
+    queries.restore();
+  }
+});
+
+it.each(["delivered", "committed", "unknown"] as const)(
+  "settles %s terminal-result failure before observers without caller-thread SQL",
+  async (outcome) => {
+    const claim = await workerClaim(`terminal-failure-boundary-${outcome}`);
+    await placements.markWorkspaceResultPending(claim);
+    const [pending] = await placements.listPendingWorkspaceResultsAsync(claim.sessionId);
+    const authority = await placements.prepareTurnClaimAuthority(claim);
+    const closed: Array<{ claimId: string; current: boolean; pending: boolean }> = [];
+    const stop = placements.registerTurnClaimClosedHandler((released) => {
+      closed.push({
+        claimId: released.claimId,
+        current: authority.isCurrent(),
+        pending: placements.validateWorkspaceResultClaim(claim),
+      });
+    });
+    const corrupted =
+      outcome === "delivered" ? undefined : losePlacementReply(claim.sessionId, outcome);
+    const queries = observeHostDataSql();
+    try {
+      const failed = placements.failWorkspaceResultAndReleaseTurn(
+        pending!,
+        "synthetic terminal result failure",
+      );
+      if (outcome === "unknown") {
+        await expect(failed).rejects.toThrow();
+        expect(closed).toEqual([]);
+        expect(authority.isCurrent()).toBe(false);
+      } else {
+        await expect(failed).resolves.toMatchObject({
+          state: "failed",
+          generation: claim.placementGeneration + 3,
+          turnClaim: null,
+        });
+        expect(closed).toEqual([{ claimId: claim.claimId, current: false, pending: false }]);
+      }
+      if (corrupted) {
+        expect(corrupted()).toBe(1);
+      }
+      expect(queries.queries).toEqual([]);
+    } finally {
+      stop();
+      authority.release();
+      queries.restore();
+    }
+    expect(await placements.listPendingWorkspaceResultsAsync(claim.sessionId)).toEqual([]);
+  },
+);
+
+it.each(["transaction", "commit"] as const)(
+  "refuses a transition when caller authority ends at %s admission",
+  async (stage) => {
+    const requested = await placements.startDispatch(input(`transition-revoked-${stage}`));
+    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
+    let revoked = false;
+    vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
+      (admit, attachment) =>
+        createAdmission((request, grant) => {
+          if (request.stage === stage) {
+            revoked = true;
+          }
+          admit(request, grant);
+        }, attachment),
+    );
+    await expect(
+      placements.transition(
+        {
+          sessionId: requested.sessionId,
+          from: "requested",
+          to: "provisioning",
+          expectedGeneration: requested.generation,
+          patch: { environmentId: "revoked-transition-environment" },
+        },
+        () => {
+          if (revoked) {
+            throw new Error("transition caller revoked");
+          }
+        },
+      ),
+    ).rejects.toThrow("transition caller revoked");
+    expect(placements.get(requested.sessionId)).toMatchObject({
+      state: "requested",
+      generation: requested.generation,
+    });
+  },
+);
+
+it("checks claim-free reclaim, activity and the exact terminal turn inside drain admission", async () => {
+  const previous = await workerClaim("drain-claim-currentness");
+  const binding = {
+    sessionId: previous.sessionId,
+    environmentId: previous.owner.environmentId!,
+    ownerEpoch: previous.owner.ownerEpoch!,
+    expectedGeneration: previous.placementGeneration,
+  };
+  await expect(placements.startDrain({ ...binding, requireUnclaimed: true })).rejects.toThrow(
+    "during an active turn",
+  );
+  await placements.releaseTurn(previous);
+  const later = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
+  const successor = await later.claimTurn({
+    ...input("drain-claim-currentness"),
+    claimId: "drain-successor",
+    runId: "drain-successor-run",
+    owner: previous.owner,
+  });
+  await expect(placements.startDrain({ ...binding, expectedTurnClaim: previous })).rejects.toThrow(
+    "stale worker turn",
+  );
+  await expect(
+    placements.startDrain({ ...binding, expectedTurnClaim: successor, expectedUpdatedAtMs: 1_000 }),
+  ).rejects.toThrow("changed worker placement activity");
+  expect(placements.get(previous.sessionId)).toMatchObject({
+    state: "active",
+    generation: previous.placementGeneration,
+    turnClaim: { claimId: successor.claimId },
+  });
+  const drained = await placements.startDrain({
+    ...binding,
+    expectedTurnClaim: successor,
+    expectedUpdatedAtMs: 2_000,
+  });
+  await placements.startReconcile({ ...binding, expectedGeneration: drained.generation });
+});
 
 it("persists monotonic ACKs and their terminal fence through the gate without host SQLite", async () => {
   const claim = await workerClaim("ack-cursors");
@@ -144,46 +372,14 @@ it.each(["committed", "unknown"] as const)(
   "preserves %s ACK custody after losing the worker reply",
   async (outcome) => {
     const claim = await workerClaim(`ack-reply-${outcome}`);
-    if (outcome === "unknown") {
-      const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
-        (admit, attachment) => {
-          const admission = createAdmission(admit, attachment);
-          return {
-            ...admission,
-            get committed() {
-              return undefined;
-            },
-            get settlement() {
-              return { kind: "unknown" as const };
-            },
-          };
-        },
-      );
-    }
-    const receive = brokerReply.receiveSqliteWorkerReply;
-    let corrupted = 0;
-    vi.spyOn(brokerReply, "receiveSqliteWorkerReply").mockImplementation((slot, reply, owner) => {
-      if (slot.current?.request.type === "execute" && reply.ok && !reply.transfer && !reply.input) {
-        const value: unknown = deserialize(reply.value);
-        if (
-          isRecord(value) &&
-          isRecord(value.placement) &&
-          value.placement.sessionId === claim.sessionId
-        ) {
-          corrupted += 1;
-          return receive(slot, { ...reply, value: new Uint8Array([0]) }, owner);
-        }
-      }
-      return receive(slot, reply, owner);
-    });
+    const corrupted = losePlacementReply(claim.sessionId, outcome);
     const ack = placements.updateAckCursors({ claim, liveEvent: 1 });
     if (outcome === "committed") {
       await expect(ack).resolves.toMatchObject({ lastLiveEventAckCursor: 1 });
     } else {
       await expect(ack).rejects.toThrow();
     }
-    expect(corrupted).toBe(1);
+    expect(corrupted()).toBe(1);
     expect(placements.get(claim.sessionId)?.lastLiveEventAckCursor).toBe(1);
     expect(await placements.listPendingWorkspaceResultsAsync(claim.sessionId)).toMatchObject([
       { claimId: claim.claimId, gatewayInstanceId: placements.workspaceResultInstanceId() },

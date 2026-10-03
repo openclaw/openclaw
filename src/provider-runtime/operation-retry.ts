@@ -1,3 +1,7 @@
+import {
+  asOptionalObjectRecord,
+  readStringField,
+} from "@openclaw/normalization-core/record-coerce";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage, readErrorCause, readErrorName } from "../infra/errors.js";
 import { hasRetryableConnectionErrorCode } from "../infra/retryable-network-errors.js";
@@ -69,14 +73,6 @@ function readErrorStatus(error: unknown): number | undefined {
   return undefined;
 }
 
-function readErrorCode(error: unknown): string | undefined {
-  if (typeof error !== "object" || error === null) {
-    return undefined;
-  }
-  const code = (error as { code?: unknown }).code;
-  return typeof code === "string" ? code : undefined;
-}
-
 // Provider reads get one bounded retry for negative DNS responses. Gateway
 // waits exclude ENOTFOUND because their configured gateway address needs repair.
 const PROVIDER_RETRYABLE_DNS_ERROR_CODE_RE = /\bENOTFOUND\b/i;
@@ -89,7 +85,7 @@ function hasTransientNetworkOrTimeoutSignal(error: unknown, message: string): bo
   if (hasProviderRetryableNetworkCode(message)) {
     return true;
   }
-  const code = readErrorCode(error);
+  const code = readStringField(asOptionalObjectRecord(error), "code");
   if (code && hasProviderRetryableNetworkCode(code)) {
     return true;
   }

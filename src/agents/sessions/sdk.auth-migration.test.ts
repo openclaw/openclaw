@@ -129,6 +129,7 @@ describe("SDK migration guard endpoint context", () => {
           const { session } = await createAgentSession({
             agentDir,
             model,
+            thinkingLevel: "medium",
             resourceLoader: createResourceLoader(),
             settingsManager: SettingsManager.inMemory(),
             sessionManager: SessionManager.inMemory(),
@@ -490,6 +491,7 @@ describe("SDK installation ownership", () => {
           const options = {
             cwd: state.workspaceDir,
             model: testModel,
+            thinkingLevel: "medium" as const,
             resourceLoader: createResourceLoader(),
             settingsManager: SettingsManager.inMemory(),
             authStorage: AuthStorage.inMemory(),
@@ -635,6 +637,7 @@ describe("SDK installation ownership", () => {
                 ...(selection === "option" ? { agentDir } : {}),
                 cwd: state.workspaceDir,
                 model: testModel,
+                thinkingLevel: "medium" as const,
                 resourceLoader: createResourceLoader(),
                 settingsManager: SettingsManager.inMemory(),
               });
@@ -680,6 +683,7 @@ describe("SDK installation ownership", () => {
             const { session } = await createAgentSession({
               cwd: state.workspaceDir,
               model: testModel,
+              thinkingLevel: "medium" as const,
               resourceLoader: createResourceLoader(),
               settingsManager: SettingsManager.inMemory(),
               modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),

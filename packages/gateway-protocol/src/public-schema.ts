@@ -420,6 +420,8 @@ export {
   ChannelsStatusResultSchema,
   ChannelsPairingListParamsSchema,
   ChannelsPairingListResultSchema,
+  ChannelsPairingCliListResultSchema,
+  ChannelsPairingCodeApproveResultSchema,
   ChannelsPairingApproveParamsSchema,
   ChannelsPairingApproveResultSchema,
   ChannelsPairingDismissParamsSchema,

@@ -84,7 +84,7 @@ it("refreshes 50 connected mention views without rereading unchanged session tar
 
       // Keyless invalidation also covers in-place runtime configuration updates.
       exactRowReads = 0;
-      await f.inbox.invalidate();
+      await f.inbox.invalidateAsync();
       expect(exactRowReads).toBe(1);
     },
     {},

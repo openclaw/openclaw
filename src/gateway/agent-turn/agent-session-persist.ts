@@ -40,9 +40,9 @@ import {
 } from "../server-methods/agent-expected-session.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { AgentSessionPatchBuild } from "../server-methods/agent-session-patch.js";
-import type { TrustedSessionCreation } from "../server-methods/session-creation-provenance.js";
 import type { GatewayOperatorRoleActor } from "../server-methods/shared-types.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
+import type { TrustedSessionCreation } from "../session-creation-provenance.js";
 import { createClosedSessionTranscriptSource } from "../session-end-transcript-reader.js";
 import {
   emitGatewaySessionEndPluginHook,

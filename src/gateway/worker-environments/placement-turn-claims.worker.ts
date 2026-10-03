@@ -9,6 +9,7 @@ import type {
 } from "../../state/worker-operation-registry.js";
 import { drainWorkerSessionPlacement } from "./placement-drain.js";
 import { readWorkerPlacementMovesReadOnly } from "./placement-move-intent.js";
+import { createPlacementPendingFailureOps } from "./placement-pending-failure.js";
 import {
   advanceCursor,
   normalizeEpoch,
@@ -19,6 +20,7 @@ import {
 } from "./placement-record.js";
 import { find, getRequired, query } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import { createPlacementTransitionOps } from "./placement-transitions.worker.js";
 import { createPlacementTurnClaimOps } from "./placement-turn-claims.js";
 import type {
   PlacementAckCursorInput,
@@ -44,7 +46,11 @@ function operation<
     nowMs?: number;
     gatewayInstanceId?: string;
     sessionEntryCurrentSource?: SessionEntryCurrentSource;
-  } & ({ claim: { sessionId: string } } | { pending: WorkerWorkspacePendingResult }),
+  } & (
+    | { claim: { sessionId: string } }
+    | { pending: WorkerWorkspacePendingResult }
+    | { sessionId: string }
+  ),
 >(
   type: string,
   execute: (runtime: PlacementStoreRuntime, input: Input) => PlacementTurnClaimReceipt,
@@ -54,7 +60,12 @@ function operation<
     const database = open();
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
-        const sessionId = "claim" in input ? input.claim.sessionId : input.pending.sessionId;
+        const sessionId =
+          "claim" in input
+            ? input.claim.sessionId
+            : "pending" in input
+              ? input.pending.sessionId
+              : input.sessionId;
         const move = () =>
           type === "placementTurns.updateWorkspaceBaseManifest" ||
           type === "placementTurns.completeResult"
@@ -93,6 +104,53 @@ function operation<
 }
 
 export const placementTurnClaimOperations = {
+  "placementTurns.transition": operation(
+    "placementTurns.transition",
+    (
+      runtime,
+      input: Parameters<ReturnType<typeof createPlacementTransitionOps>["transition"]>[0] & {
+        nowMs?: number;
+      },
+    ) => createPlacementTransitionOps(runtime).transition(input),
+  ),
+  "placementTurns.startDrain": operation(
+    "placementTurns.startDrain",
+    (
+      runtime,
+      input: Parameters<ReturnType<typeof createPlacementTransitionOps>["startDrain"]>[0] & {
+        nowMs?: number;
+      },
+    ) => createPlacementTransitionOps(runtime).startDrain(input),
+  ),
+  "placementTurns.startReconcile": operation(
+    "placementTurns.startReconcile",
+    (
+      runtime,
+      input: Parameters<ReturnType<typeof createPlacementTransitionOps>["startReconcile"]>[0] & {
+        nowMs?: number;
+      },
+    ) => createPlacementTransitionOps(runtime).startReconcile(input),
+  ),
+  "placementTurns.fail": operation(
+    "placementTurns.fail",
+    (
+      runtime,
+      input: Parameters<ReturnType<typeof createPlacementTransitionOps>["fail"]>[0] & {
+        nowMs?: number;
+      },
+    ) => createPlacementTransitionOps(runtime).fail(input),
+  ),
+  "placementTurns.failResult": operation(
+    "placementTurns.failResult",
+    (
+      runtime,
+      input: { pending: WorkerWorkspacePendingResult; recoveryError: string; nowMs?: number },
+    ) =>
+      createPlacementPendingFailureOps(runtime).failWorkspaceResultAndReleaseTurn(
+        input.pending,
+        input.recoveryError,
+      ),
+  ),
   "placementTurns.claimReclaimResult": operation(
     "placementTurns.claimReclaimResult",
     (

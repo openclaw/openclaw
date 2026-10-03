@@ -232,7 +232,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         agentId,
       });
     let assertBindingCurrent: (() => void) | undefined;
-    return await runExclusiveSessionLifecycleMutation({
+    return await runExclusiveSessionLifecycleMutation("placement-reclaim", {
       scope: target.storePath,
       identities: lifecycleIdentities,
       prepare: async (lifecycle) => {
@@ -282,8 +282,13 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         // Eligibility ends at this operation's drain, unlike caller authority during teardown.
         beforeDrain?.();
         resolved.assertCurrent(getRuntimeConfig());
-        const placement = begin();
-        const reclaimedPlacement = await reclaim(resolved.workspace, placement, authorize);
+        const assertDrainCurrent = () => {
+          assertBindingCurrent?.();
+          resolved.assertCurrent(getRuntimeConfig());
+        };
+        const placement = await begin(assertDrainCurrent);
+        assertDrainCurrent();
+        const reclaimedPlacement = await reclaim(resolved.workspace, placement, assertDrainCurrent);
         params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });
         return reclaimedPlacement;
       },
@@ -325,7 +330,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         // fence before provider cleanup or the failed-to-local transition becomes durable.
         authorize?.();
       };
-      return await runExclusiveSessionLifecycleMutation({
+      return await runExclusiveSessionLifecycleMutation("placement-failed-reclaim", {
         scope: target.storePath,
         identities: lifecycleIdentities,
         prepare: async (lifecycle) => {

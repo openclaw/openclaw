@@ -11,6 +11,8 @@ import { testing } from "../../scripts/bench-gateway-startup.ts";
 import {
   classifyGatewayReadyLog,
   collectOutputLines,
+  collectTraceLine,
+  createGatewayBenchEnv,
   waitForInitialProbe,
 } from "../../scripts/lib/gateway-bench-runtime.ts";
 import { isStartupTraceDuration } from "../../scripts/lib/gateway-startup-trace-ranking.js";
@@ -344,11 +346,7 @@ server.listen(port, "127.0.0.1", () => {
   });
 
   it("does not disable local-check policy in the child gateway environment", () => {
-    const env = testing.sanitizedEnv("/tmp/openclaw-bench", "/tmp/openclaw-bench/config.json", {
-      config: {},
-      id: "default",
-      name: "gateway default",
-    });
+    const env = createGatewayBenchEnv("/tmp/openclaw-bench", "/tmp/openclaw-bench/config.json", {});
 
     expect(env.OPENCLAW_LOCAL_CHECK).toBeUndefined();
     expect(env.OPENCLAW_GATEWAY_STARTUP_TRACE).toBe("1");
@@ -360,11 +358,9 @@ server.listen(port, "127.0.0.1", () => {
       throw new Error("expected combined incident benchmark case");
     }
 
-    const env = testing.sanitizedEnv(
-      "/tmp/openclaw-bench",
-      "/tmp/openclaw-bench/config.json",
-      benchCase,
-    );
+    const env = createGatewayBenchEnv("/tmp/openclaw-bench", "/tmp/openclaw-bench/config.json", {
+      caseEnv: benchCase.env,
+    });
 
     expect(env.OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK).toBe("1");
     expect(env.OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS).toBeUndefined();
@@ -405,7 +401,7 @@ server.listen(port, "127.0.0.1", () => {
     }
     const trace: Record<string, number> = {};
     for (const line of lines) {
-      testing.collectStartupTrace(line, trace);
+      collectTraceLine(line, "startup trace", trace);
     }
 
     expect(carry).toBe("");
@@ -581,8 +577,9 @@ server.listen(port, "127.0.0.1", () => {
   it("collects Count-suffixed startup trace metrics", () => {
     const startupTrace: Record<string, number> = {};
 
-    testing.collectStartupTrace(
+    collectTraceLine(
       "[gateway] startup trace: sidecars.acp.runtime-ready ready=1 readyCount=1 backend=acpx",
+      "startup trace",
       startupTrace,
     );
 

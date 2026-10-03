@@ -3,7 +3,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withInstallationTarget } from "../infra/installation-target-context.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
-import { writeSecretStoreEntry } from "../secrets/store/secret-store.js";
+import * as secretStore from "../secrets/store/secret-store.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { createRunExit } from "./bash-tools.exec-runtime.test-support.js";
@@ -134,7 +135,11 @@ const EGRESS_ENV = {
 const tempDirs = createTempDirTracker();
 async function writeEntries(entries: StoreEntry[]) {
   for (const entry of entries) {
-    await writeSecretStoreEntry({ scope: { kind: "team" }, ...entry, updatedBy: "test" });
+    await secretStore.writeSecretStoreEntry({
+      scope: { kind: "team" },
+      ...entry,
+      updatedBy: "test",
+    });
   }
 }
 
@@ -240,7 +245,7 @@ describe("exec store environment", () => {
     mocks.proxyBindings.length = 0;
   });
 
-  it("applies store env on every call to a lazy exec instance", async () => {
+  it("reuses a lazy exec instance's store snapshot and refreshes it for a new run", async () => {
     await writeEntries([
       { name: "AWS_REGION", value: "us-west-2", kind: "env" },
       { name: "INTERNAL_VALUE", value: "not-for-subprocesses", kind: "secret" },
@@ -248,12 +253,67 @@ describe("exec store environment", () => {
     const tool = createLazyExecTool({ host: "gateway", security: "full", ask: "off" });
 
     await tool.execute("code-mode-first", { command: "echo one", yieldMs: 120_000 });
+    await writeEntries([{ name: "AWS_REGION", value: "eu-west-1", kind: "env" }]);
     await tool.execute("code-mode-nested", { command: "echo two", yieldMs: 120_000 });
 
     expect(mocks.gatewayParams).toHaveLength(2);
     for (const params of mocks.gatewayParams) {
       expect(params.env.AWS_REGION).toBe("us-west-2");
       expect(params.env).not.toHaveProperty("INTERNAL_VALUE");
+    }
+    const nextRun = createLazyExecTool({ host: "gateway", security: "full", ask: "off" });
+    await nextRun.execute("code-mode-next-run", { command: "echo three", yieldMs: 120_000 });
+    expect(mocks.gatewayParams.at(-1)?.env.AWS_REGION).toBe("eu-west-1");
+  });
+
+  it("refuses a cancelled exec after its store read without cancelling the run's shared snapshot", async () => {
+    await writeEntries([{ name: "AWS_REGION", value: "us-west-2", kind: "env" }]);
+    const replyReady = createDeferredCore();
+    const releaseReply = createDeferredCore();
+    const readStore = secretStore.readSecretStoreExecEnvironment;
+    const read = vi
+      .spyOn(secretStore, "readSecretStoreExecEnvironment")
+      .mockImplementationOnce(async (params) => {
+        const environment = await readStore(params);
+        replyReady.resolve();
+        await releaseReply.promise;
+        return environment;
+      });
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    const controller = new AbortController();
+    const execution = tool
+      .execute("cancelled-store-read", { command: "echo cancelled" }, controller.signal)
+      .then(
+        (value) => ({ status: "completed" as const, value }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
+      );
+    void execution.then((outcome) => {
+      replyReady.reject(
+        outcome.status === "rejected"
+          ? outcome.error
+          : new Error("Exec completed before the store reply"),
+      );
+    });
+    try {
+      await replyReady.promise;
+      controller.abort(new Error("synthetic exec cancellation"));
+      releaseReply.resolve();
+      expect(await execution).toMatchObject({
+        status: "rejected",
+        error: expect.objectContaining({ message: "synthetic exec cancellation" }),
+      });
+      expect(mocks.gatewayParams).toEqual([]);
+      expect(mocks.spawnInputs).toEqual([]);
+
+      const later = await tool.execute("shared-store-read", { command: "echo later" });
+      expect(later.details).toMatchObject({ status: "completed", exitCode: 0 });
+      expect(mocks.spawnInputs).toHaveLength(1);
+      expect(mocks.spawnInputs[0]?.env?.AWS_REGION).toBe("us-west-2");
+      expect(read).toHaveBeenCalledOnce();
+    } finally {
+      releaseReply.resolve();
+      await execution;
+      read.mockRestore();
     }
   });
 

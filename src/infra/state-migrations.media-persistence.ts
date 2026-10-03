@@ -56,13 +56,14 @@ import {
   clearNodeSqliteKyselyCacheForDatabase,
   enableNodeSqliteKyselyStatementCache,
 } from "./kysely-sync.js";
-import { openNodeSqliteDatabase, readSqliteDataVersion } from "./node-sqlite.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { repairDoctorSqliteIndexCorruption } from "./sqlite-index-recovery.js";
 import { repairCanonicalSqliteIndexes } from "./sqlite-index-schema.js";
 import { runSqliteIntegrityOperationInWorker } from "./sqlite-integrity-operation.js";
 import { assertSqliteIntegrity, isTerminalSqliteIntegrityError } from "./sqlite-integrity.js";
 import { configureSqliteMaintenanceCache } from "./sqlite-maintenance-cache.js";
 import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
+import { readSqliteDataVersion } from "./sqlite-schema-facts.js";
 import {
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,

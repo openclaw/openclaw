@@ -2600,7 +2600,7 @@ describe("gateway server chat", () => {
     try {
       await writeStoredMainSession({});
       const mutationStarted = createDeferred();
-      const mutation = runExclusiveSessionLifecycleMutation({
+      const mutation = runExclusiveSessionLifecycleMutation("patch", {
         scope: storePath,
         identities: ["sess-main"],
         run: async () => {
@@ -2711,7 +2711,7 @@ describe("gateway server chat", () => {
     try {
       await writeStoredMainSession({});
       const mutationStarted = createDeferred();
-      const mutation = runExclusiveSessionLifecycleMutation({
+      const mutation = runExclusiveSessionLifecycleMutation("patch", {
         scope: storePath,
         identities: ["sess-main"],
         run: async () => {
@@ -2782,7 +2782,7 @@ describe("gateway server chat", () => {
       const seededSessionId = seededSession.entry?.sessionId;
       expect(seededSessionId).toBe("sess-main");
       const mutationStarted = createDeferred();
-      mutation = runExclusiveSessionLifecycleMutation({
+      mutation = runExclusiveSessionLifecycleMutation("delete", {
         scope: seededSession.storePath,
         identities: [seededSession.canonicalKey, seededSessionId],
         run: async () => {
@@ -2871,7 +2871,7 @@ describe("gateway server chat", () => {
         sessionId: "sess-before-reset",
       });
       const mutationStarted = createDeferred();
-      const mutation = runExclusiveSessionLifecycleMutation({
+      const mutation = runExclusiveSessionLifecycleMutation("reset", {
         scope: storePath,
         identities: ["agent:main:main", "sess-before-reset"],
         run: async () => {
@@ -2927,7 +2927,7 @@ describe("gateway server chat", () => {
     try {
       await writeStoredMainSession({});
       const mutationStarted = createDeferred();
-      const mutation = runExclusiveSessionLifecycleMutation({
+      const mutation = runExclusiveSessionLifecycleMutation("patch", {
         scope: storePath,
         identities: ["sess-main"],
         run: async () => {
@@ -2985,7 +2985,7 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 
       const terminalMutationStarted = createDeferred();
-      const terminalMutation = runExclusiveSessionLifecycleMutation({
+      const terminalMutation = runExclusiveSessionLifecycleMutation("patch", {
         scope: storePath,
         identities: ["sess-main"],
         run: async () => {
@@ -3687,7 +3687,7 @@ describe("gateway server chat", () => {
     try {
       await writeStoredMainSession(makeDoneSessionEntry());
       const mutationStarted = createDeferred();
-      mutation = runExclusiveSessionLifecycleMutation({
+      mutation = runExclusiveSessionLifecycleMutation("patch", {
         scope: storePath,
         identities: ["agent:main:main", "sess-main"],
         run: async () => {

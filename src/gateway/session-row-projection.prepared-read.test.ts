@@ -452,7 +452,7 @@ it.for([false, true])("keeps exact reads independent of bulk %s", async (categor
         );
       }
       holdBulk = true;
-      bulkRow.placement = placements.transition({
+      bulkRow.placement = await placements.transition({
         sessionId: bulkRow.sessionId,
         from: "requested",
         to: "provisioning",
@@ -475,7 +475,7 @@ it.for([false, true])("keeps exact reads independent of bulk %s", async (categor
           { sessionId: exactRow.sessionId, updatedAt: 2, label: "Fresh exact description" },
         );
       }
-      exactRow.placement = placements.transition({
+      exactRow.placement = await placements.transition({
         sessionId: exactRow.sessionId,
         from: "requested",
         to: "provisioning",

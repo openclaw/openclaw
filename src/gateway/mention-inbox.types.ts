@@ -61,7 +61,11 @@ export type MentionInbox = {
     ids: readonly string[],
     publish: (result: Result<MentionsListResult, ErrorShape>) => undefined,
   ) => Promise<void>;
-  recordCommittedInput: (input: MentionCommittedInput) => Promise<void>;
-  invalidate: (sessionKey?: string) => Promise<void>;
+  /** @deprecated Await recordCommittedInputAsync. Removed in the next Plugin SDK major. */
+  recordCommittedInput: (input: MentionCommittedInput) => void;
+  /** @deprecated Await invalidateAsync. Removed in the next Plugin SDK major. */
+  invalidate: (sessionKey?: string) => void;
+  recordCommittedInputAsync: (input: MentionCommittedInput) => Promise<void>;
+  invalidateAsync: (sessionKey?: string) => Promise<void>;
   dispose: () => Promise<void>;
 };

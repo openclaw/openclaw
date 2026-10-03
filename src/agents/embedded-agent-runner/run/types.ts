@@ -77,7 +77,7 @@ export type EmbeddedAttemptClientToolCallSlot = {
   completed: boolean;
 };
 
-type EmbeddedRunAttemptBase = Omit<
+export type EmbeddedRunAttemptBase = Omit<
   RunEmbeddedAgentParams,
   | "provider"
   | "model"

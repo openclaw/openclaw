@@ -28,6 +28,7 @@ import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
 import { collectReplyMediaEntries } from "../infra/outbound/reply-media-entries.js";
 import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
+import { WEBCHAT_LOCAL_MEDIA_MAX_BYTES } from "../media/configured-max-bytes.js";
 import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../media/local-media-path.js";
 import { createImageProcessor, getImageMetadata } from "../media/media-services.js";
@@ -71,6 +72,8 @@ import {
   insertManagedImageRecordWithFile,
 } from "./managed-image-attachments.custody.js";
 import {
+  formatLimitMiB,
+  maxBytesForManagedMediaKind,
   resolveManagedMediaKind,
   type ManagedMediaKind,
 } from "./managed-image-attachments.media-kind.js";
@@ -182,15 +185,6 @@ function resolveManagedImageAttachmentLimits(
   };
 }
 
-function formatLimitMiB(bytes: number): string {
-  if (bytes < 1024 * 1024) {
-    return `${bytes} bytes`;
-  }
-  return Number.isInteger(bytes / (1024 * 1024))
-    ? `${bytes / (1024 * 1024)} MiB`
-    : `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
-}
-
 function createManagedImageAttachmentError(message: string) {
   const error = new Error(message);
   error.name = "ManagedImageAttachmentError";
@@ -230,13 +224,6 @@ export function buildManagedMediaFailureBlock(params: {
       ...(params.mimeType ? { mimeType: params.mimeType } : {}),
     },
   };
-}
-
-function maxBytesForManagedMediaKind(
-  kind: ManagedMediaKind,
-  imageLimits: ManagedImageAttachmentLimits,
-): number {
-  return kind === "image" ? imageLimits.maxBytes : maxBytesForKind(kind);
 }
 
 function assertManagedMediaByteLimit(
@@ -379,7 +366,7 @@ function parseMediaDataUrl(
     throw new Error("Managed media attachment has an unsupported data URL content type");
   }
 
-  const maxBytes = maxBytesForManagedMediaKind(mediaKind, imageLimits);
+  const maxBytes = maxBytesForManagedMediaKind(mediaKind, imageLimits.maxBytes);
   const base64 = base64Part.replace(/\s+/g, "");
   const padding = Math.min(/=+$/u.exec(base64)?.[0].length ?? 0, 2);
   assertManagedMediaByteLimit(
@@ -1138,7 +1125,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
               parsedDataUrl.buffer,
               parsedDataUrl.contentType,
               "outgoing/originals",
-              maxBytesForManagedMediaKind(parsedDataUrl.mediaKind, limits),
+              maxBytesForManagedMediaKind(parsedDataUrl.mediaKind, limits.maxBytes),
               `generated-${parsedDataUrl.mediaKind}-${index + 1}`,
             )
           : await (async () => {
@@ -1160,6 +1147,9 @@ export async function createManagedOutgoingMediaBlocks(params: {
               const ingestSource = localMediaPath ?? mediaUrl;
               const maxBytes = Math.max(
                 limits.maxBytes,
+                localMediaPath && (inferredKind === "audio" || inferredKind === "video")
+                  ? WEBCHAT_LOCAL_MEDIA_MAX_BYTES
+                  : 0,
                 maxBytesForKind("audio"),
                 maxBytesForKind("video"),
                 maxBytesForKind("document"),
@@ -1189,7 +1179,11 @@ export async function createManagedOutgoingMediaBlocks(params: {
         if (localMediaPath && mediaKind !== "image" && !item.trustedLocal) {
           throw new Error("Local audio/video media requires an explicitly trusted reply payload");
         }
-        const maxBytes = maxBytesForManagedMediaKind(mediaKind, limits);
+        const maxBytes = maxBytesForManagedMediaKind(
+          mediaKind,
+          limits.maxBytes,
+          Boolean(localMediaPath),
+        );
         assertManagedMediaByteLimit(savedOriginal.size, mediaKind, label, maxBytes);
 
         let originalStats: Awaited<ReturnType<typeof getVariantStats>> = {

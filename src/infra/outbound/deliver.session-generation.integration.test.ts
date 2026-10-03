@@ -125,7 +125,7 @@ describe("generation-bound result delivery", () => {
       const { generation, update } = fixture();
       const entered = createDeferred();
       const released = createDeferred();
-      const mutation = runExclusiveSessionLifecycleMutation({
+      const mutation = runExclusiveSessionLifecycleMutation("reset", {
         scope: generation.storePath,
         identities: [generation.sessionKey, generation.sessionId],
         prepare: async () => {

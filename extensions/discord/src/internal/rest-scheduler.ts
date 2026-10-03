@@ -1,4 +1,4 @@
-import { resolveIntegerOption, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { RateLimitError, readDiscordRateLimitBucket, readRetryAfter } from "./rest-errors.js";
 import {
   createBucketKey,
@@ -38,44 +38,24 @@ type BucketState<TData> = {
   routeKeys: Set<string>;
 };
 
-type RestSchedulerLaneOptions = {
-  maxQueueSize: number;
-  staleAfterMs?: number;
-  weight: number;
-};
-
-type RestSchedulerOptions = {
-  lanes: Record<RequestPriority, RestSchedulerLaneOptions>;
-  maxConcurrency: number;
-  maxQueueSize: number;
-  maxRateLimitRetries: number;
-};
-
 const INVALID_REQUEST_WINDOW_MS = 10 * 60_000;
+const MAX_QUEUE_SIZE = 1000;
+const MAX_CONCURRENT_WORKERS = 4;
+const MAX_RATE_LIMIT_RETRIES = 3;
+const BACKGROUND_STALE_AFTER_MS = 20_000;
 const requestPriorities = ["critical", "standard", "background"] as const;
-
-function normalizeRestSchedulerOptions(options: RestSchedulerOptions): RestSchedulerOptions {
-  return {
-    lanes: {
-      critical: normalizeLaneOptions(options.lanes.critical),
-      standard: normalizeLaneOptions(options.lanes.standard),
-      background: normalizeLaneOptions(options.lanes.background),
-    },
-    maxConcurrency: resolveIntegerOption(options.maxConcurrency, 1, { min: 1 }),
-    maxQueueSize: resolveIntegerOption(options.maxQueueSize, 1, { min: 1 }),
-    maxRateLimitRetries: resolveIntegerOption(options.maxRateLimitRetries, 0, { min: 0 }),
-  };
-}
-
-function normalizeLaneOptions(options: RestSchedulerLaneOptions): RestSchedulerLaneOptions {
-  return {
-    maxQueueSize: resolveIntegerOption(options.maxQueueSize, 1, { min: 1 }),
-    ...(options.staleAfterMs === undefined
-      ? {}
-      : { staleAfterMs: resolveIntegerOption(options.staleAfterMs, 0, { min: 0 }) }),
-    weight: resolveIntegerOption(options.weight, 1, { min: 1 }),
-  };
-}
+const laneSchedule: readonly RequestPriority[] = [
+  "critical",
+  "critical",
+  "critical",
+  "critical",
+  "critical",
+  "critical",
+  "standard",
+  "standard",
+  "standard",
+  "background",
+];
 
 function createLaneQueues<TData>(): LaneQueues<TData> {
   return {
@@ -90,7 +70,6 @@ function countPending<TData>(bucket: BucketState<TData>): number {
 }
 
 export class RestScheduler<TData> {
-  private readonly options: RestSchedulerOptions;
   private activeWorkers = 0;
   private buckets = new Map<string, BucketState<TData>>();
   private drainTimer: NodeJS.Timeout | undefined;
@@ -102,7 +81,6 @@ export class RestScheduler<TData> {
     standard: 0,
     background: 0,
   };
-  private laneSchedule: RequestPriority[];
   private queuedByLane: Record<RequestPriority, number> = {
     critical: 0,
     standard: 0,
@@ -112,13 +90,7 @@ export class RestScheduler<TData> {
   private queuedRequests = 0;
   private routeBuckets = new Map<string, string>();
 
-  constructor(
-    options: RestSchedulerOptions,
-    private readonly executor: (request: ScheduledRequest<TData>) => Promise<unknown>,
-  ) {
-    this.options = normalizeRestSchedulerOptions(options);
-    this.laneSchedule = this.buildLaneSchedule(this.options.lanes);
-  }
+  constructor(private readonly executor: (request: ScheduledRequest<TData>) => Promise<unknown>) {}
 
   enqueue(params: {
     method: string;
@@ -127,15 +99,8 @@ export class RestScheduler<TData> {
     priority: RequestPriority;
     query?: RequestQuery;
   }): Promise<unknown> {
-    if (this.queuedRequests >= this.options.maxQueueSize) {
+    if (this.queuedRequests >= MAX_QUEUE_SIZE) {
       throw new Error("Discord request queue is full");
-    }
-    const laneOptions = this.options.lanes[params.priority];
-    if (this.queuedByLane[params.priority] >= laneOptions.maxQueueSize) {
-      this.laneDropped[params.priority] += 1;
-      throw new Error(
-        `Discord ${params.priority} request queue is full (${this.queuedByLane[params.priority]} / ${laneOptions.maxQueueSize})`,
-      );
     }
     const routeKey = createRouteKey(params.method, params.path);
     const bucket = this.getBucket(this.routeBuckets.get(routeKey) ?? routeKey);
@@ -213,7 +178,7 @@ export class RestScheduler<TData> {
         requestPriorities.map((lane) => [lane, this.getOldestQueuedAge(lane)]),
       ),
       activeWorkers: this.activeWorkers,
-      maxConcurrentWorkers: this.options.maxConcurrency,
+      maxConcurrentWorkers: MAX_CONCURRENT_WORKERS,
     };
   }
 
@@ -360,7 +325,7 @@ export class RestScheduler<TData> {
 
   private drainQueues(): void {
     let nextDelayMs = Number.POSITIVE_INFINITY;
-    while (this.activeWorkers < this.options.maxConcurrency) {
+    while (this.activeWorkers < MAX_CONCURRENT_WORKERS) {
       const next = this.takeNextQueuedRequest();
       if (!next.queued) {
         if (next.waitMs !== undefined) {
@@ -394,8 +359,8 @@ export class RestScheduler<TData> {
     if (buckets.length === 0) {
       return {};
     }
-    for (let laneOffset = 0; laneOffset < this.laneSchedule.length; laneOffset += 1) {
-      const lane = this.laneSchedule[(this.laneCursor + laneOffset) % this.laneSchedule.length];
+    for (let laneOffset = 0; laneOffset < laneSchedule.length; laneOffset += 1) {
+      const lane = laneSchedule[(this.laneCursor + laneOffset) % laneSchedule.length];
       if (!lane || this.queuedByLane[lane] <= 0) {
         continue;
       }
@@ -418,7 +383,7 @@ export class RestScheduler<TData> {
           continue;
         }
         this.queuedByLane[lane] = Math.max(0, this.queuedByLane[lane] - 1);
-        this.laneCursor = (this.laneCursor + laneOffset + 1) % this.laneSchedule.length;
+        this.laneCursor = (this.laneCursor + laneOffset + 1) % laneSchedule.length;
         return { bucket, queued };
       }
     }
@@ -433,11 +398,7 @@ export class RestScheduler<TData> {
     if (lane !== "background") {
       return;
     }
-    const staleAfterMs = this.options.lanes[lane].staleAfterMs;
-    if (!staleAfterMs || staleAfterMs <= 0) {
-      return;
-    }
-    while (queue.length > 0 && now - (queue[0]?.enqueuedAt ?? now) > staleAfterMs) {
+    while (queue.length > 0 && now - (queue[0]?.enqueuedAt ?? now) > BACKGROUND_STALE_AFTER_MS) {
       const stale = queue.shift();
       if (!stale) {
         continue;
@@ -500,10 +461,7 @@ export class RestScheduler<TData> {
   }
 
   private requeueRateLimitedRequest(queued: ScheduledRequest<TData>): boolean {
-    if (
-      queued.generation !== this.queueGeneration ||
-      queued.retryCount >= this.options.maxRateLimitRetries
-    ) {
+    if (queued.generation !== this.queueGeneration || queued.retryCount >= MAX_RATE_LIMIT_RETRIES) {
       return false;
     }
     const bucketKey = this.routeBuckets.get(queued.routeKey) ?? queued.routeKey;
@@ -526,17 +484,6 @@ export class RestScheduler<TData> {
         }
       }
     }
-  }
-
-  private buildLaneSchedule(lanes: Record<RequestPriority, RestSchedulerLaneOptions>) {
-    const schedule: RequestPriority[] = [];
-    for (const lane of requestPriorities) {
-      const weight = lanes[lane].weight;
-      for (let i = 0; i < weight; i += 1) {
-        schedule.push(lane);
-      }
-    }
-    return schedule;
   }
 
   private getOldestQueuedAge(lane: RequestPriority): number {

@@ -22,8 +22,8 @@ import {
 import { preparePackageActivationJournal } from "./package-update-activation-prepare.js";
 import { packageActivationRuntimeEntrypoint } from "./package-update-activation-runtime-assets.js";
 import { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
+import type { PackageActivationRuntime } from "./package-update-activation-runtime.types.js";
 import { createPackageIntegrityReader } from "./package-update-integrity.js";
-import type { PackageActivationRuntime } from "./package-update-swap-contract.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import * as runtimeWorker from "./runtime-worker-url.js";
 

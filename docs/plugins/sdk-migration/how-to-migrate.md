@@ -47,12 +47,20 @@ await mentionInbox.listAsync(client, (result) => {
 Await the returned promise before releasing request resources or starting work
 that depends on the operation. Dismissal IDs retain exact-match semantics.
 
-The shipped `list` and `dismiss` methods remain synchronous third-party adapters
-until the next Plugin SDK major and explicit breaking-release approval. Each
-emits a `DEP_SESSION_PERSISTENCE` deprecation warning once per plugin and method
-per process; calls outside a plugin invocation warn once per method. Existing
-return values and completion timing stay intact. This migration changes no
-schema, retained data, retention, or update behavior.
+Replace `recordCommittedInput(input)` with `await recordCommittedInputAsync(input)`
+and `invalidate(sessionKey)` with `await invalidateAsync(sessionKey)`. Await
+recording before reading the resulting Inbox, and await invalidation before
+depending on refreshed connected views.
+
+The shipped `list`, `dismiss`, `recordCommittedInput`, and `invalidate` methods
+remain synchronous third-party adapters until the next Plugin SDK major and
+explicit breaking-release approval. Each emits a `DEP_SESSION_PERSISTENCE`
+deprecation warning once per plugin and method per process; calls outside a
+plugin invocation warn once per method. Existing return values and completion
+timing stay intact, including recording before an immediate synchronous list.
+Notifications publish after the enclosing transaction commits and are discarded
+on rollback. This migration changes no schema, retained data, retention, or
+update behavior.
 
 ## Await session transcript persistence
 

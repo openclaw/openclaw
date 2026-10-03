@@ -270,7 +270,7 @@ export function registerSecretStoreCli(secrets: Command): void {
                 valueFile: options.valueFile,
               });
         if (isRedactedSecretValue(value)) {
-          const current = storeModule.readSecretStoreValue({ scope, name });
+          const current = await storeModule.readSecretStoreValue({ scope, name });
           if (current.ok && !isRedactedSecretValue(current.value)) {
             defaultRuntime.log(`Skipped redacted value for ${name}; existing entry unchanged.`);
             return;
@@ -323,7 +323,7 @@ export function registerSecretStoreCli(secrets: Command): void {
               `Secret store entry "${name}" is write-only by design. Reference it from config with a store SecretRef.`,
             );
           }
-          const result = readSecretStoreValue({ scope, name });
+          const result = await readSecretStoreValue({ scope, name });
           if (!result.ok) {
             throw new SecretStoreCliFailure(
               result.error.code === "SECRET_STORE_NOT_FOUND" ? 3 : 1,
@@ -415,19 +415,20 @@ export function registerSecretStoreCli(secrets: Command): void {
               : (existingKinds.get(name) ?? storeKind(undefined, name)),
           };
         });
-        const writable = normalized.filter((entry) => {
+        const writable: typeof normalized = [];
+        for (const entry of normalized) {
           if (isRedactedSecretValue(entry.value)) {
-            const current = storeModule.readSecretStoreValue({ scope, name: entry.name });
+            const current = await storeModule.readSecretStoreValue({ scope, name: entry.name });
             if (current.ok && !isRedactedSecretValue(current.value)) {
               defaultRuntime.log(
                 `Skipped redacted value for ${entry.name}; existing entry unchanged.`,
               );
-              return false;
+              continue;
             }
           }
           storeModule.assertSecretStoreValue(entry.value, entry.kind, entry.name);
-          return true;
-        });
+          writable.push(entry);
+        }
         if (options.dryRun) {
           defaultRuntime.log(`Would import ${writable.length} team store entries.`);
           return;

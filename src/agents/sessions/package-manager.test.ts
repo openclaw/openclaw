@@ -380,6 +380,7 @@ describe("DefaultPackageManager", () => {
       manifest?: { prompts?: string[] };
       filter?: { prompts?: string[]; skills?: string[] };
       expected: Array<[string, boolean]>;
+      ordered?: boolean;
     }> = [
       {
         name: "no manifest",
@@ -419,6 +420,7 @@ describe("DefaultPackageManager", () => {
       },
       {
         name: "unfiltered force-include order",
+        ordered: true,
         manifest: orderedManifest,
         expected: [
           ["custom/a.md", true],
@@ -427,6 +429,7 @@ describe("DefaultPackageManager", () => {
       },
       {
         name: "filtered force-include order",
+        ordered: true,
         manifest: orderedManifest,
         filter: { prompts: ["*.md", "!b.md"] },
         expected: [
@@ -435,7 +438,7 @@ describe("DefaultPackageManager", () => {
         ],
       },
     ];
-    for (const { name, manifest, filter, expected } of cases) {
+    for (const { name, manifest, filter, expected, ordered } of cases) {
       await writeFile(join(packageRoot, "package.json"), JSON.stringify({ openclaw: manifest }));
       const manager = new DefaultPackageManager({
         cwd: root,
@@ -444,10 +447,13 @@ describe("DefaultPackageManager", () => {
           packages: [{ source: packageRoot, ...filter }],
         }),
       });
-      expect(
-        (await manager.resolve()).prompts.map(({ path, enabled }) => [path, enabled]),
-        name,
-      ).toEqual(expected.map(([path, enabled]) => [join(packageRoot, path), enabled]));
+      const prompts = (await manager.resolve()).prompts.map(
+        ({ path, enabled }) => [path, enabled] as const,
+      );
+      // Convention discovery follows filesystem order; explicit manifest order is contractual.
+      expect(ordered ? prompts : prompts.toSorted(([a], [b]) => a.localeCompare(b)), name).toEqual(
+        expected.map(([path, enabled]) => [join(packageRoot, path), enabled]),
+      );
     }
   });
 

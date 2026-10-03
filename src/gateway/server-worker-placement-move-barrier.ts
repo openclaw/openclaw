@@ -46,7 +46,7 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
     });
     const lifecycleIdentities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
     let begun: Awaited<ReturnType<typeof begin>> | undefined;
-    return await runExclusiveSessionLifecycleMutation({
+    return await runExclusiveSessionLifecycleMutation("placement-move", {
       scope: target.storePath,
       identities: lifecycleIdentities,
       signal,

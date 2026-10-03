@@ -121,7 +121,7 @@ export function readMentionStoreSnapshot(
   return { head, sources: sources.toSorted((left, right) => left.sequence - right.sequence) };
 }
 
-/** Called only inside the shared-state worker transaction. */
+/** Called only inside the owning SQLite write transaction. */
 export function writeMentionStoreChanges(
   database: DatabaseSync,
   head: MentionStoreHead,

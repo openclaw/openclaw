@@ -1,4 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
 import { openWarmImageStore } from "./crabbox-state.test-support.js";
 import { commandResult } from "./crabbox-worker-provider.test-support.js";
@@ -358,9 +360,18 @@ describe("Crabbox idle image maintenance", () => {
       expect(calls.filter(({ argv }) => argv[2] === "delete").map(({ argv }) => argv)).toEqual([
         ["/opt/a/crabbox", "checkpoint", "delete", "chk_expired"],
       ]);
-      const replacement = createWarmProvider(undefined, stateDir);
+      await closeOpenClawStateDatabaseAsync();
+      resetPluginStateStoreForTests();
+      const replacement = createWarmProvider(
+        () => commandResult({ stdout: "checkpoint absent id=chk_expired\n" }),
+        stateDir,
+      );
       await replacement.provider.maintain!(context());
-      expect(store.lookup("expired")).toBeUndefined();
+      expect(openWarmImageStore().lookup("expired")).toBeUndefined();
+      await replacement.provider.maintain!(context());
+      expect(replacement.calls.map(({ argv }) => argv.slice(1))).toEqual([
+        ["checkpoint", "delete", "chk_expired"],
+      ]);
       if (boundary !== "authority") {
         expect(stopped).toBe(true);
         expect(() => provider.maintain!(context())).toThrow();

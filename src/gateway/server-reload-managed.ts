@@ -346,7 +346,7 @@ export function startManagedGatewayConfigReloader(
       if (sessionStoresChanged) {
         publishSystemEventStoreConfig(nextCommittedRuntimeConfig);
       }
-      void params.resolveGatewayContext?.()?.mentionInbox?.invalidate();
+      void params.resolveGatewayContext?.()?.mentionInbox?.invalidateAsync();
     },
     ...(params.prepareConfigCandidate
       ? { prepareConfigCandidate: params.prepareConfigCandidate }

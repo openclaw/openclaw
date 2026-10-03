@@ -60,7 +60,7 @@ describe("temporary human mention Inbox", () => {
       await f.post("original");
       const original = (await read(f.inbox, f.bobClient)).items[0]!;
       const peer = f.openInbox("foreign-writer");
-      await peer.invalidate();
+      await peer.invalidateAsync();
       const held = holdMentionRead();
       const first = f.post("queued-first");
       const second = f.post("queued-second");
@@ -276,7 +276,7 @@ describe("temporary human mention Inbox", () => {
         headKey,
       );
       try {
-        await f.inbox.invalidate();
+        await f.inbox.invalidateAsync();
       } finally {
         db.prepare("UPDATE config_machine_state SET value_json = ? WHERE state_key = ?").run(
           saved,
@@ -367,7 +367,7 @@ describe("temporary human mention Inbox", () => {
         await f.inbox.dispose();
         await f.clock.advanceBy(6 * 24 * 60 * 60_000);
         const restarted = f.openInbox("restarted-gateway");
-        await restarted.invalidate();
+        await restarted.invalidateAsync();
         expect(storedSources()).toHaveLength(1);
         if (scenario !== "normal") {
           db.exec(`CREATE TRIGGER reject_mention_expiry BEFORE DELETE ON config_machine_state
@@ -389,7 +389,7 @@ describe("temporary human mention Inbox", () => {
           await f.clock.advanceBy(60_000);
           expect(storedSources()).toHaveLength(scenario === "dispose after failure" ? 1 : 0);
           if (scenario === "dispose after failure") {
-            await f.openInbox("next-gateway").invalidate();
+            await f.openInbox("next-gateway").invalidateAsync();
             expect(storedSources()).toEqual([]);
           }
         }
@@ -675,7 +675,7 @@ describe("temporary human mention Inbox", () => {
       await f.post();
       const visible = await read(f.inbox, f.bobClient);
       await f.setSession({ visibility: "draft" });
-      await f.inbox.invalidate();
+      await f.inbox.invalidateAsync();
       const hidden = await read(f.inbox, f.bobClient);
       expect(hidden.items).toEqual([]);
       expect(hidden.revision).toBeGreaterThan(visible.revision);

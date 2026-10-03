@@ -147,7 +147,7 @@ vi.mock("../daemon-cli/restart-health.js", async (original) => ({
   ...(await original<typeof import("../daemon-cli/restart-health.js")>()),
   waitForGatewayHealthyRestart: async () => {
     native.events.push("restart-verified");
-    return { healthy: !native.stopped };
+    return { outcome: native.stopped ? "failed" : "ready", healthy: !native.stopped };
   },
   renderRestartDiagnostics: () => [],
 }));

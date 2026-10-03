@@ -154,7 +154,7 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
         };
         committedSources.set(sourceId, committedSource);
       }
-      return target.recordCommittedInput({
+      return target.recordCommittedInputAsync({
         sourceId,
         committedSource,
         sessionKey: SESSION_KEY,

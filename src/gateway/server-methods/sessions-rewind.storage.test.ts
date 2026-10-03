@@ -393,7 +393,7 @@ async function revokeWithPublicLifecyclePredecessor(
   const storePath = resolveSessionStorePathCore(undefined, { agentId: scope.agentId });
   const entered = createDeferredCore();
   const release = createDeferredCore();
-  const heldLifecycle = runExclusiveSessionLifecycleMutation({
+  const heldLifecycle = runExclusiveSessionLifecycleMutation("rewind", {
     scope: storePath,
     identities: [scope.sessionId],
     run: async () => {

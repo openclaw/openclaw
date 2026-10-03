@@ -166,7 +166,7 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
       const entry = { scope: { kind: "team" as const }, name: gatewayTokenRef.id, database };
       let rollback: (() => Promise<boolean>) | undefined;
       try {
-        const current = readSecretStoreValue(entry);
+        const current = await readSecretStoreValue(entry);
         if (!current.ok || !isRedactedSecretValue(current.value)) {
           note(
             `Secret store entry "${entry.name}" changed; rerun Doctor to inspect it.`,
@@ -188,7 +188,7 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
           kind: "secret",
           updatedBy: "doctor",
         }));
-        const repaired = readSecretStoreValue(entry);
+        const repaired = await readSecretStoreValue(entry);
         if (!repaired.ok || repaired.value !== nextToken) {
           throw new Error("the replacement token could not be verified");
         }

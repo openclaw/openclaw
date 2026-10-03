@@ -34,6 +34,7 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { buildDashboardSessionKey } from "../session-create-key.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
@@ -45,7 +46,6 @@ import { forkSessionRepositoryWorkspace } from "../worker-environments/session-r
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { prepareSessionForkFilesystemRoot } from "./session-create-root.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
 import {
   createUpstreamForkCurrentGuard,
@@ -284,7 +284,7 @@ async function mutateSessionAtMessage(
   ];
   let targetStillCurrent = true;
   let blockedByActiveRun = false;
-  await runExclusiveSessionLifecycleMutation({
+  await runExclusiveSessionLifecycleMutation(action, {
     scope: initial.storePath,
     identities: lifecycleIdentities,
     prepare: async () => {

@@ -37,7 +37,8 @@ Platforms:
 - Linux: checks common Chrome/Brave/Edge/Chromium locations under `/usr/bin`,
   `/snap/bin`, `/opt/google`, `/opt/brave.com`, `/usr/lib/chromium`, and
   `/usr/lib/chromium-browser`, plus Playwright-managed Chromium under
-  `PLAYWRIGHT_BROWSERS_PATH` or `~/.cache/ms-playwright`.
+  `PLAYWRIGHT_BROWSERS_PATH` or `$XDG_CACHE_HOME/ms-playwright` (defaults to
+  `~/.cache/ms-playwright` when `XDG_CACHE_HOME` is unset or empty).
 - Windows: checks common install locations.
 
 ## Control API (optional)

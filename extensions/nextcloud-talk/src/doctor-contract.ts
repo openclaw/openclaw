@@ -4,7 +4,10 @@ import {
   createLegacyWebhookListenerDoctorContract,
   defineChannelAliasMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import { listNextcloudTalkAccountIds, mergeNextcloudTalkAccountConfig } from "./accounts.js";
+import {
+  listNextcloudTalkAccountIds,
+  mergeNextcloudTalkAccountConfig,
+} from "../configured-state.js";
 
 const webhookContract = createLegacyWebhookListenerDoctorContract({
   channelKey: "nextcloud-talk",

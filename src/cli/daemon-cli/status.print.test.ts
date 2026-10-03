@@ -459,9 +459,10 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.error, "openclaw --profile work gateway restart");
   });
 
-  it("prints successful connectivity and capability separately", () => {
+  it("prints connectivity and capability without a service config summary", () => {
     printDaemonStatus({
       service: runningService,
+      config: { cli: { path: "/tmp/openclaw.json", exists: true, valid: true } },
       gateway,
       rpc: { ok: true, kind: "connect", capability: "write_capable", url: gateway.probeUrl },
     });
@@ -469,6 +470,7 @@ describe("printDaemonStatus", () => {
     expect(
       runtime.log.mock.calls.map(([line]) => line).filter((line) => line.startsWith("Capability:")),
     ).toEqual(["Capability: write-capable"]);
+    expect(output(runtime.error)).not.toContain("doctor --fix");
   });
 
   it("passes daemon TLS state to dashboard link rendering", () => {

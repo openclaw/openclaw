@@ -1,10 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { getNodeSqliteKysely, prepareSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
-import { readSqliteDataVersion } from "../../infra/node-sqlite.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
   getAdmittedSqliteSchemaFacts,
   readSqliteCacheDataVersion,
+  readSqliteDataVersion,
 } from "../../infra/sqlite-schema-facts.js";
 
 /** Connection revision shared by entry snapshots and maintenance age facts. */

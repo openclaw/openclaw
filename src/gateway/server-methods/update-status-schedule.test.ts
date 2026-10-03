@@ -321,3 +321,65 @@ it("omits app-owned install and stale package targets from the protocol schedule
   expect(result.schedule).toEqual({ channel: "dev", autoEnabled: false });
   expect(result.updateAvailable).toBeNull();
 });
+
+it("reports a refreshed immutable preparation without enabling activation or retaining package targets", async () => {
+  const immutable = {
+    root: "/opt/openclaw",
+    currentSha: "a".repeat(40),
+    currentPath: `/opt/openclaw/releases/${"a".repeat(40)}`,
+  };
+  const discovered = {
+    root: immutable.currentPath,
+    installReceipt: null,
+    status: {
+      root: immutable.currentPath,
+      installKind: "immutable",
+      packageManager: "unknown",
+      immutable,
+    },
+  };
+  install.mockResolvedValue(discovered);
+  await lifecycle.initialize();
+  setUpdateScheduleCache({
+    next: {
+      channel: "stable",
+      autoEnabled: true,
+      install: { kind: "package" },
+      target: { kind: "package", version: "99.0.0" },
+    },
+  });
+  const prepared = {
+    sha: "b".repeat(40),
+    path: `/opt/openclaw/releases/${"b".repeat(40)}`,
+    buildDigest: "c".repeat(64),
+    preparedAtMs: 123,
+  };
+  install.mockResolvedValue({
+    ...discovered,
+    status: { ...discovered.status, immutable: { ...immutable, prepared } },
+  });
+
+  const result = await status(
+    { update: { channel: "stable", auto: { enabled: true } } },
+    { refreshCheckout: true },
+  );
+
+  expect(result.schedule).toEqual({
+    channel: "stable",
+    autoEnabled: false,
+    install: { kind: "immutable", immutable: { ...immutable, prepared } },
+  });
+  expect(result.updateAvailable).toBeNull();
+  expect((await lifecycle.initialize()).status.immutable?.prepared).toEqual(prepared);
+
+  install.mockResolvedValue({
+    root: immutable.currentPath,
+    installReceipt: null,
+    status: { root: immutable.currentPath, installKind: "unknown", packageManager: "unknown" },
+  });
+  const unowned = await status(
+    { update: { channel: "stable", auto: { enabled: false } } },
+    { refreshCheckout: true },
+  );
+  expect(unowned.schedule.install).toEqual({ kind: "unknown" });
+});

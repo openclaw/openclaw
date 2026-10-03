@@ -7,25 +7,26 @@ it("warns once per plugin and released Inbox method, including after a plugin re
   const first = new PluginInstance("mention-compat-first");
   const second = new PluginInstance("mention-compat-second");
   const reloaded = new PluginInstance("mention-compat-first");
+  const methods = ["list", "dismiss", "recordCommittedInput", "invalidate"] as const;
   try {
     first.run(() => {
-      warnMentionInboxDeprecation("list");
-      warnMentionInboxDeprecation("list");
-      warnMentionInboxDeprecation("dismiss");
-      warnMentionInboxDeprecation("dismiss");
+      for (const method of methods) {
+        warnMentionInboxDeprecation(method);
+        warnMentionInboxDeprecation(method);
+      }
     });
     second.run(() => {
       warnMentionInboxDeprecation("list");
       warnMentionInboxDeprecation("list");
     });
     reloaded.run(() => {
-      warnMentionInboxDeprecation("list");
-      warnMentionInboxDeprecation("dismiss");
+      for (const method of methods) {
+        warnMentionInboxDeprecation(method);
+      }
     });
-    expect(warning).toHaveBeenCalledTimes(3);
+    expect(warning).toHaveBeenCalledTimes(5);
     for (const { plugin, method } of [
-      { plugin: "mention-compat-first", method: "list" },
-      { plugin: "mention-compat-first", method: "dismiss" },
+      ...methods.map((method) => ({ plugin: "mention-compat-first", method })),
       { plugin: "mention-compat-second", method: "list" },
     ]) {
       const calls = warning.mock.calls.filter(

@@ -385,7 +385,7 @@ async function scenario(
   if (beforeStop) {
     // A preceding lifecycle owner holds ingress pending while Stop joins that
     // same owner. This fixes ordering without timer delays or editing ingress.
-    await runExclusiveSessionLifecycleMutation({
+    await runExclusiveSessionLifecycleMutation("placement-reclaim", {
       scope: storePath,
       identities: [REQUEST.sessionKey, REQUEST.sessionId],
       run: async () => {

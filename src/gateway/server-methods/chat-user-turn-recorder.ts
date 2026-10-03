@@ -214,7 +214,7 @@ export function createGatewayChatUserTurnController(params: {
               );
               return;
             }
-            mentionCommit = mentionInbox.recordCommittedInput({
+            mentionCommit = mentionInbox.recordCommittedInputAsync({
               sourceId,
               committedSource: {
                 generation: anchor.generation,

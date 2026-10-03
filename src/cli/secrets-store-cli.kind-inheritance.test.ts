@@ -139,7 +139,7 @@ async function protectEntry(name: string, valueFile: string, host: string): Prom
 
 async function exposureFor(name: string) {
   const entry = await entryFor(name);
-  const execEnvironment = readSecretStoreExecEnvironment({
+  const execEnvironment = await readSecretStoreExecEnvironment({
     includeSecretSentinels: true,
     database: mocks.database,
   });
@@ -195,7 +195,7 @@ describe("secrets store kind inheritance", () => {
       { from: "user" },
     );
 
-    const execEnvironment = readSecretStoreExecEnvironment({
+    const execEnvironment = await readSecretStoreExecEnvironment({
       includeSecretSentinels: true,
       database: mocks.database,
     });
@@ -214,7 +214,7 @@ describe("secrets store kind inheritance", () => {
       sealedSentinel: true,
       egressBindings: 1,
     });
-    expect(readSecretStoreValue({ scope, name: "OPENAI_KEY" })).toEqual({
+    expect(await readSecretStoreValue({ scope, name: "OPENAI_KEY" })).toEqual({
       ok: true,
       value: "sk-rotated-credential",
     });
@@ -292,7 +292,7 @@ describe("secrets store kind inheritance", () => {
     });
     expect((await entryFor("OPENAI_KEY"))?.valuePreview).toBeUndefined();
     expect((await entryFor("SERVICE_MODE"))?.kind).toBe("env");
-    expect(readSecretStoreValue({ scope, name: "OPENAI_KEY" })).toEqual({
+    expect(await readSecretStoreValue({ scope, name: "OPENAI_KEY" })).toEqual({
       ok: true,
       value: "sk-rotated-credential",
     });
@@ -327,7 +327,7 @@ describe("secrets store kind inheritance", () => {
       sealedSentinel: true,
       egressBindings: 1,
     });
-    expect(readSecretStoreValue({ scope, name: "SERVICE_API_KEY" })).toEqual({
+    expect(await readSecretStoreValue({ scope, name: "SERVICE_API_KEY" })).toEqual({
       ok: true,
       value: "sk-rotated-credential",
     });
@@ -381,7 +381,7 @@ describe("secrets store kind inheritance", () => {
           egressBindings: 1,
         });
       }
-      expect(readSecretStoreValue({ scope, name: "MY_APP_CRED" })).toEqual({
+      expect(await readSecretStoreValue({ scope, name: "MY_APP_CRED" })).toEqual({
         ok: true,
         value: explicitEnv ? "literal-value" : "protected-value",
       });

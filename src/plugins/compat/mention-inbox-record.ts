@@ -9,11 +9,13 @@ export const MENTION_INBOX_COMPAT_RECORD = {
   warningStarts: "2026-10-03",
   removalGate: "next-plugin-sdk-major",
   replacement:
-    "Await mentionInbox.listAsync(client, publish) and mentionInbox.dismissAsync(client, ids, publish). Publish responses synchronously inside the supplied callback. Retain synchronous list/dismiss only for shipped third-party contracts until the next Plugin SDK major and explicit breaking-release approval.",
+    "Await mentionInbox.listAsync(client, publish), mentionInbox.dismissAsync(client, ids, publish), mentionInbox.recordCommittedInputAsync(input), and mentionInbox.invalidateAsync(sessionKey). Publish list/dismiss responses synchronously inside the supplied callback. Retain synchronous methods only for shipped third-party contracts until the next Plugin SDK major and explicit breaking-release approval.",
   docsPath: "/plugins/sdk-migration/how-to-migrate#await-mention-inbox-operations",
   surfaces: [
     "GatewayRequestHandlerOptions.context.mentionInbox.list",
     "GatewayRequestHandlerOptions.context.mentionInbox.dismiss",
+    "GatewayRequestHandlerOptions.context.mentionInbox.recordCommittedInput",
+    "GatewayRequestHandlerOptions.context.mentionInbox.invalidate",
     "getPluginRuntimeGatewayRequestScope().context.mentionInbox",
   ],
   diagnostics: [
@@ -24,7 +26,8 @@ export const MENTION_INBOX_COMPAT_RECORD = {
     "src/plugins/compat/mention-inbox-deprecation.test.ts",
     "src/plugin-sdk/gateway-mention-inbox-compat.test.ts",
     "src/gateway/mention-inbox.test.ts",
+    "src/gateway/mention-inbox.compat.test.ts",
   ],
   releaseNote:
-    "Mention Inbox reads and dismissals expose awaited worker-backed methods. Synchronous plugin methods retain their existing return values and completion timing until the next Plugin SDK major; stored data, retention, and update behavior are unchanged.",
+    "Mention Inbox reads, dismissals, recording, and invalidation expose awaited worker-backed methods. Synchronous plugin methods retain their existing return values and completion timing until the next Plugin SDK major; stored data, retention, and update behavior are unchanged.",
 } as const satisfies PluginCompatRecord;

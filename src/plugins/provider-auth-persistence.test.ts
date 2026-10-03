@@ -39,7 +39,7 @@ describe("provider auth protected persistence", () => {
     secretStorage: { kind: "store" as const, namePrefix: "OPENAI_TOKEN" },
   });
 
-  function resolvePersistedToken(params: {
+  async function resolvePersistedToken(params: {
     agentDir: string;
     env: NodeJS.ProcessEnv;
     profileId: string;
@@ -51,7 +51,7 @@ describe("provider auth protected persistence", () => {
     if (!profile || profile.type !== "token" || !profile.tokenRef) {
       throw new Error("Expected persisted protected token profile");
     }
-    const resolved = readSecretStoreValue({
+    const resolved = await readSecretStoreValue({
       scope: { kind: "team" },
       name: profile.tokenRef.id,
       database: { env: params.env },
@@ -153,7 +153,7 @@ describe("provider auth protected persistence", () => {
           throw new Error("Expected persisted Copilot tokenRef");
         }
         expect(
-          readSecretStoreValue({
+          await readSecretStoreValue({
             scope: { kind: "team" },
             name: profile.tokenRef.id,
             database: { env },
@@ -226,7 +226,7 @@ describe("provider auth protected persistence", () => {
       throw new Error("Expected retained tokenRef");
     }
     expect(
-      readSecretStoreValue({
+      await readSecretStoreValue({
         scope: { kind: "team" },
         name: profile.tokenRef.id,
         database: { env },
@@ -280,7 +280,7 @@ describe("provider auth protected persistence", () => {
       const b = await bPending;
       await b.rollback();
 
-      expect(resolvePersistedToken({ agentDir, env, profileId })).toMatchObject({
+      expect(await resolvePersistedToken({ agentDir, env, profileId })).toMatchObject({
         profile: { provider: "openai", type: "token" },
         token: "baseline-c",
       });
@@ -315,7 +315,7 @@ describe("provider auth protected persistence", () => {
       const b = await stage("candidate-b");
       await b.rollback();
 
-      expect(resolvePersistedToken({ agentDir, env, profileId })).toMatchObject({
+      expect(await resolvePersistedToken({ agentDir, env, profileId })).toMatchObject({
         profile: { provider: "openai", type: "token" },
         token: "candidate-a",
       });
@@ -369,7 +369,7 @@ describe("provider auth protected persistence", () => {
         "Cannot commit provider auth persistence after rollback failed",
       );
       expect(
-        readSecretStoreValue({
+        await readSecretStoreValue({
           scope: { kind: "team" },
           name: credential.tokenRef.id,
           database,
@@ -390,7 +390,7 @@ describe("provider auth protected persistence", () => {
       });
       await successor.commit();
       expect(
-        readSecretStoreValue({
+        await readSecretStoreValue({
           scope: { kind: "team" },
           name: credential.tokenRef.id,
           database,

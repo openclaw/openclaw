@@ -143,7 +143,7 @@ describe("Doctor gateway config writer ordering", () => {
         expect(bytes.includes(token)).toBe(false);
         const ref = JSON.parse(bytes).gateway.auth.token;
         expect(ref).toMatchObject({ source: "store", provider: "team" });
-        const stored = readSecretStoreValue({ scope, name: ref.id });
+        const stored = await readSecretStoreValue({ scope, name: ref.id });
         expect(stored.ok && stored.value === token).toBe(true);
         const entriesAfter = await listSecretStoreEntries({ scope });
         if (existing) {

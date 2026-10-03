@@ -39,9 +39,14 @@ describe("validateToolArguments", () => {
     ).toThrow("  - room.~1%2F.leaf:");
   });
 
-  it.each(["anyOf", "oneOf", "TypeBox", "type-array integer/null", "type-array null/integer"])(
-    "keeps invalid non-null values out of a nullable integer %s",
-    (union) => {
+  it("keeps invalid non-null values out of nullable integer schemas", () => {
+    for (const union of [
+      "anyOf",
+      "oneOf",
+      "TypeBox",
+      "type-array integer/null",
+      "type-array null/integer",
+    ]) {
       const validateArgs = validator(
         "nullable-limit",
         union === "TypeBox"
@@ -73,8 +78,8 @@ describe("validateToolArguments", () => {
       } else {
         expect(() => validate(1.5)).toThrow(/Validation failed for tool "nullable-limit"/);
       }
-    },
-  );
+    }
+  });
 
   it.each([
     { name: "object/null", types: ["object", "null"] },
@@ -107,63 +112,51 @@ describe("validateToolArguments", () => {
     }
   });
 
-  const numericConversions = [
-    { input: "2.5", output: 2.5 },
-    { input: false, output: 0 },
-    { input: 0, output: 0 },
-  ];
-  const stringConversions = [
-    { input: false, output: "false" },
-    { input: 0, output: "0" },
-    { input: "", output: "" },
-    { input: "existing", output: "existing" },
-  ];
-
-  it.each([
-    { name: "number/null", types: ["number", "null"], conversions: numericConversions },
-    { name: "null/number", types: ["null", "number"], conversions: numericConversions },
-    { name: "string/null", types: ["string", "null"], conversions: stringConversions },
-    { name: "null/string", types: ["null", "string"], conversions: stringConversions },
-  ])("retains valid non-null coercions in a $name type array", ({ types, conversions }) => {
-    const validate = validator("nullable-value", {
-      type: "object",
-      properties: { value: { type: types } },
-      required: ["value"],
-    });
-    expect(validate({ value: null })).toEqual({ value: null });
-    for (const { input, output } of conversions) {
-      expect(validate({ value: input })).toEqual({ value: output });
+  it("preserves nullable scalar values and null-only coercions", () => {
+    const numbers = [
+      ["2.5", 2.5],
+      [false, 0],
+      [0, 0],
+    ] as const;
+    const strings = [
+      [false, "false"],
+      [0, "0"],
+      ["", ""],
+      ["existing", "existing"],
+    ] as const;
+    const nulls = [
+      [false, null],
+      [0, null],
+      ["", null],
+    ] as const;
+    const cases: [Tool["parameters"], readonly (readonly [unknown, unknown])[]][] = [
+      [{ type: ["number", "null"] }, numbers],
+      [{ type: ["null", "number"] }, numbers],
+      [{ type: ["string", "null"] }, strings],
+      [{ type: ["null", "string"] }, strings],
+      [{ type: "null" }, nulls],
+      [{ type: ["null"] }, nulls],
+    ];
+    for (const [schema, conversions] of cases) {
+      const validate = validator("nullable-value", {
+        type: "object",
+        properties: { value: schema },
+        required: ["value"],
+      });
+      expect(validate({ value: null })).toEqual({ value: null });
+      for (const [input, output] of conversions) {
+        expect(validate({ value: input })).toEqual({ value: output });
+      }
     }
   });
 
-  it.each([
-    { name: "a null type", type: "null" },
-    { name: "a single-member null type array", type: ["null"] },
-  ])("preserves existing coercion for $name", ({ type }) => {
-    const validate = validator("null-only", {
-      type: "object",
-      properties: { value: { type } },
-      required: ["value"],
-    });
-    for (const value of [null, false, 0, ""]) {
-      expect(validate({ value })).toEqual({ value: null });
+  it("coerces strict decimal strings and rejects non-decimal JSON-schema numbers", () => {
+    for (const validate of [
+      validateDecimal,
+      validator("decimal-tool", Type.Object({ amount: Type.Number(), count: Type.Integer() })),
+    ]) {
+      expect(validate({ amount: "1e3", count: "+3" })).toEqual({ amount: 1000, count: 3 });
     }
-  });
-
-  it.each([
-    { label: "JSON Schema", validate: validateDecimal },
-    {
-      label: "TypeBox",
-      validate: validator(
-        "decimal-tool",
-        Type.Object({ amount: Type.Number(), count: Type.Integer() }),
-      ),
-    },
-  ])("coerces strict decimal numeric strings for $label", ({ validate }) => {
-    expect(validate({ amount: "1e3", count: "+3" })).toEqual({ amount: 1000, count: 3 });
-  });
-
-  it("rejects non-decimal numeric strings for plain JSON schemas", () => {
     for (const input of [
       { amount: "0x10", count: 3 },
       { amount: 16, count: "0b10" },
@@ -252,22 +245,24 @@ describe("validateToolArguments — root references", () => {
     }
   });
 
-  it.each([
-    ["Partial<Filter>", "#/definitions/Partial<Filter>"],
-    ["Partial<Filter>", "#/definitions/Partial%3CFilter%3E"],
-    ["Partial<Filter>", "#%2Fdefinitions%2FPartial%3CFilter%3E"],
-    ["Filter/value~", "#%2Fdefinitions%2FFilter%7E1value%7E0"],
-    ["Filter%2Fvalue", "#/definitions/Filter%252Fvalue"],
-  ])("coerces through the definition %s referenced by %s", (name, ref) => {
-    const parameters = {
-      type: "object",
-      properties: { value: { $ref: ref } },
-      definitions: {
-        [name]: { type: "object", properties: { limit: { type: "number" } } },
-      },
-    };
-    expect(validate(parameters, { limit: "5" })).toEqual({ value: { limit: 5 } });
-    expect(() => validate(parameters, { limit: "invalid" })).toThrow(/Validation failed/);
+  it("coerces URI-fragment and JSON-pointer encoded definitions", () => {
+    for (const [name, ref] of [
+      ["Partial<Filter>", "#/definitions/Partial<Filter>"],
+      ["Partial<Filter>", "#/definitions/Partial%3CFilter%3E"],
+      ["Partial<Filter>", "#%2Fdefinitions%2FPartial%3CFilter%3E"],
+      ["Filter/value~", "#%2Fdefinitions%2FFilter%7E1value%7E0"],
+      ["Filter%2Fvalue", "#/definitions/Filter%252Fvalue"],
+    ] as const) {
+      const parameters = {
+        type: "object",
+        properties: { value: { $ref: ref } },
+        definitions: {
+          [name]: { type: "object", properties: { limit: { type: "number" } } },
+        },
+      };
+      expect(validate(parameters, { limit: "5" }), ref).toEqual({ value: { limit: 5 } });
+      expect(() => validate(parameters, { limit: "invalid" })).toThrow(/Validation failed/);
+    }
   });
 
   it("keeps union branch validators bound to each tool's root", () => {

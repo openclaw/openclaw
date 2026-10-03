@@ -1,10 +1,5 @@
 // Native state probes share the invocation's compiled graph before starting child deadlines.
 export const stateNativeProcessEntrypoints = {
-  clawPackageLifecycleLease: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "claw-package-lifecycle-lease",
-    distWorkerPath: "state/claw-package-lifecycle-lease.js",
-  },
   agentDatabase: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "openclaw-agent-db",

@@ -4,6 +4,8 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/pr
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import * as mentionWorker from "./mention-inbox-worker.js";
 import {
+  SESSION_KEY,
+  SESSION_ID,
   withMentionInbox as withInbox,
   readMentionInbox as read,
 } from "./mention-inbox.test-support.js";
@@ -11,6 +13,104 @@ import {
 afterEach(() => vi.restoreAllMocks());
 
 describe("released Mention Inbox compatibility", () => {
+  it("completes a released record call before an immediate synchronous list", async () => {
+    await withInbox(async (f) => {
+      const returned = f.inbox.recordCommittedInput({
+        sourceId: "released-record",
+        committedSource: {
+          generation: "test-generation",
+          sequence: 1,
+          timestamp: f.scheduler.now(),
+        },
+        sessionKey: SESSION_KEY,
+        agentId: "main",
+        sessionId: SESSION_ID,
+        messageId: "message-released-record",
+        senderProfileId: f.alice.id,
+        recipientProfileIds: [f.bob.id],
+      });
+      expect(f.inbox.list(f.bobClient)).toMatchObject({
+        ok: true,
+        value: { items: [{ messageId: "message-released-record" }] },
+      });
+      expect(returned).toBeUndefined();
+      expect(f.push).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("publishes a foreign dismissal before a released invalidation returns", async () => {
+    await withInbox(async (f) => {
+      await f.post("before-invalidation");
+      const previous = f.inbox.list(f.bobClient);
+      if (!previous.ok) {
+        throw new Error(previous.error.message);
+      }
+      const peer = f.openInbox("foreign-invalidation");
+      expect(peer.dismiss(f.bobClient, [previous.value.items[0]!.id])).toMatchObject({
+        ok: true,
+        value: { items: [] },
+      });
+      f.broadcast.mockClear();
+      const returned = f.inbox.invalidate();
+      expect(f.broadcast).toHaveBeenCalledWith(
+        "mentions.changed",
+        { gatewayInstanceId: "mention-gateway", revision: previous.value.revision + 1 },
+        new Set([f.bobClient.connId]),
+      );
+      expect(returned).toBeUndefined();
+    });
+  });
+
+  it("publishes native records only after outer commit and discards rollback notifications", async () => {
+    await withInbox(async (f) => {
+      const rollback = new Error("synthetic record rollback");
+      for (const commit of [false, true]) {
+        f.broadcast.mockClear();
+        f.push.mockClear();
+        const transaction = () =>
+          runOpenClawStateWriteTransaction(() => {
+            f.inbox.recordCommittedInput({
+              sourceId: "nested-record",
+              committedSource: {
+                generation: "test-generation",
+                sequence: 1,
+                timestamp: f.scheduler.now(),
+              },
+              sessionKey: SESSION_KEY,
+              agentId: "main",
+              sessionId: SESSION_ID,
+              messageId: "message-nested-record",
+              senderProfileId: f.alice.id,
+              recipientProfileIds: [f.bob.id],
+            });
+            expect(f.inbox.list(f.bobClient)).toMatchObject({
+              ok: true,
+              value: { items: [{ messageId: "message-nested-record" }] },
+            });
+            expect(f.broadcast).not.toHaveBeenCalled();
+            expect(f.push).not.toHaveBeenCalled();
+            if (!commit) {
+              throw rollback;
+            }
+          });
+        if (commit) {
+          transaction();
+          expect(f.push).toHaveBeenCalledOnce();
+          expect(f.broadcast).toHaveBeenCalledWith(
+            "mentions.changed",
+            expect.objectContaining({ gatewayInstanceId: "mention-gateway" }),
+            new Set([f.bobSecond.connId]),
+          );
+        } else {
+          expect(transaction).toThrow(rollback);
+          expect(f.broadcast).not.toHaveBeenCalled();
+          expect(f.push).not.toHaveBeenCalled();
+        }
+        expect((await read(f.inbox, f.bobSecond)).items).toHaveLength(commit ? 1 : 0);
+      }
+    });
+  });
+
   it("keeps released synchronous reads and exact-ID dismissals fresh and durable", async () => {
     await withInbox(async (f) => {
       await f.post("original");
