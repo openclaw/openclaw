@@ -500,6 +500,24 @@ describe("cron standing grant mint", () => {
 });
 
 describe("cron standing grant consumption", () => {
+  it("consumes a valid grant and records usage facts", async () => {
+    const { databaseOptions, revision } = await seedMintedGrant();
+    const first = consume({ databaseOptions, revision });
+    expect(first.outcome).toBe("consumed");
+    if (first.outcome !== "consumed") {
+      throw new Error("expected consumed");
+    }
+    expect(first.grant.useCount).toBe(1);
+    expect(first.grant.lastUsedAtMs).toBe(NOW_MS + 10_000);
+    expect(first.grant.mintedByApprovalId).toBe("approval-1");
+    const second = consume({ databaseOptions, revision, nowMs: NOW_MS + 20_000 });
+    expect(second.outcome).toBe("consumed");
+    if (second.outcome !== "consumed") {
+      throw new Error("expected consumed");
+    }
+    expect(second.grant.useCount).toBe(2);
+  });
+
   it.each([
     ["different operation binding", ["no-grant"]],
     ["stamped expiry passed", ["expired"]],

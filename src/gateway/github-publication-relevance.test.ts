@@ -112,7 +112,9 @@ type SnapshotCase = [
   calls?: number,
 ];
 const snapshotCases: SnapshotCase[] = [
-  ["committed merged history", {}, true, 2],
+  ["committed open history", { pullRequest: { state: "open" } }, true, 2],
+  ["committed draft history", { pullRequest: { state: "draft" } }, true, 2],
+  ["committed merged history", { pullRequest: { state: "merged" } }, true, 2],
   [
     "uncommitted exact tree",
     { accepted: { source_head_commit: null }, publishedTree: tree },

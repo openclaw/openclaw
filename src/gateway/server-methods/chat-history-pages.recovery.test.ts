@@ -299,6 +299,31 @@ describe("historical page recovery context", () => {
   });
 
   it.each([
+    { offset: 1, messageId: undefined, expectedIds: ["user"] },
+    { offset: undefined, messageId: "failed", expectedIds: [] },
+  ])(
+    "omits a recovered failure outside the newer page (offset=$offset, anchor=$messageId)",
+    async ({ expectedIds, ...options }) => {
+      await withTranscript(
+        [
+          ["user", user],
+          ["failed", failed],
+          ["answer", answer],
+        ],
+        async ({ read, raw }) => {
+          const original = await raw();
+          const page = await read(options);
+          expect(page.messages.map(readChatHistoryMessageId)).toEqual(expectedIds);
+          if (options.offset !== undefined) {
+            expect(page.pagination).toEqual({ offset: 1, totalMessages: 3, rawPageMessages: 2 });
+          }
+          expect(await raw()).toEqual(original);
+        },
+      );
+    },
+  );
+
+  it.each([
     { reason: "later turn", offset: 2, messageId: undefined },
     { reason: "byte budget", offset: 1, messageId: undefined },
     { reason: "ordinary offset", offset: 1, messageId: undefined },

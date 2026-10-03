@@ -206,6 +206,29 @@ describe("gateway lifetime sidecars", () => {
     });
   });
 
+  test("does not sweep secrets in a minimal gateway", async () => {
+    const clock = createGatewaySchedulerClock(Date.now());
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const owner = createGatewaySidecarStopOwner();
+    const purge = vi.spyOn(secretStore, "purgeExpiredSecretStoreEntries").mockResolvedValue(0);
+    try {
+      await attachInitialGatewayLifetimeSidecars({
+        scheduler,
+        chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
+        gatewayRequestContext: {} as never,
+        flushPendingSessionsChangedEvents: vi.fn(),
+        minimalTestGateway: true,
+        logWarning: vi.fn(),
+        publishSidecars: owner.publish,
+      });
+      await clock.wake();
+      await clock.advanceBy(60_000);
+      expect(purge).not.toHaveBeenCalled();
+    } finally {
+      await owner.stop();
+    }
+  });
+
   test.each(["before", "after"])("owns sidecars published %s shutdown begins", async (timing) => {
     const owner = createGatewaySidecarStopOwner();
     const budget = { deadline: 10_000, warn: vi.fn() };

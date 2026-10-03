@@ -132,7 +132,7 @@ describe("diagnostics.heapSnapshot", () => {
     },
   );
 
-  it.each([null, { reason: "x".repeat(257) }, { path: "/tmp/override" }])(
+  it.each([null, { reason: 1 }, { reason: "x".repeat(257) }, { path: "/tmp/override" }])(
     "rejects malformed or path-controlling params %j",
     async (params) => {
       const call = request({ params });
