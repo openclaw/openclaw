@@ -1,12 +1,21 @@
 import { html, nothing, type PropertyValues } from "lit";
-import { property } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
 import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update-run-vocabulary.js";
-import type { UpdateRunRecord, UpdateRunStep } from "../../../src/infra/update-run-record.ts";
+import {
+  isAcknowledgedAbandonedUpdateRun,
+  type UpdateRunRecord,
+  type UpdateRunStep,
+} from "../../../src/infra/update-run-record.ts";
+import { renderUpdateRunReport } from "../../../src/infra/update-run-report.ts";
+import { isReportableUpdateRun } from "../../../src/shared/update-outcome.ts";
 import { projectUpdateRun, updateRunStepOwner } from "../app/update-run-projection.ts";
 import { t } from "../i18n/index.ts";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
+import { redactToolDetail } from "../lib/browser-redact.ts";
+import { clampText } from "../lib/format.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { StreamAutoFollowController } from "../lit/stream-auto-follow-controller.ts";
+import { copyMarkdownText } from "./markdown-copy.ts";
 import "../styles/update-run-view.css";
 
 registerUpdateActionsEnglish();
@@ -38,6 +47,51 @@ function formatUpdateRunStepLabel(step: string): string {
   return step.startsWith("warning:") ? t("updates.run.stepWarning", { step: label }) : label;
 }
 
+function repairPrompt(run: UpdateRunRecord): string {
+  // The report truncates some diagnostics, so redact complete source fields first.
+  const safeRun = JSON.parse(
+    JSON.stringify(run, (_key, value) =>
+      typeof value === "string" ? redactRepairFact(value) : value,
+    ),
+    // SAFETY: the update record is JSON data; the replacer changes only string values.
+  ) as UpdateRunRecord;
+  const report = renderUpdateRunReport(safeRun);
+  const facts = clampText(
+    redactRepairFact(
+      [
+        `Run ID: ${safeRun.runId}`,
+        `Installed: ${formatUpdateIdentity([
+          ["version", safeRun.before.version],
+          ["SHA", safeRun.before.sha],
+        ])}`,
+        `Requested target: ${formatUpdateIdentity([
+          ["version", safeRun.target.version],
+          ["SHA", safeRun.target.sha],
+          ["tag", safeRun.target.tag],
+        ])}`,
+        report.markdown,
+      ].join("\n"),
+    ),
+    1_800,
+  );
+  return t("updates.run.repairPrompt", { facts });
+}
+
+function formatUpdateIdentity(fields: Array<[string, string | null | undefined]>): string {
+  return (
+    fields
+      .flatMap(([label, value]) => (value ? [`${label}: ${clampText(value, 120)}`] : []))
+      .join("; ") || "unknown"
+  );
+}
+
+function redactRepairFact(value: string): string {
+  return redactToolDetail(value).replace(
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*/gu,
+    "[redacted private key]",
+  );
+}
+
 const STEP_MARKS = {
   completed: "✓",
   in_progress: "◌",
@@ -58,6 +112,7 @@ function renderReportHeadline(headline: string) {
 class UpdateRunView extends OpenClawLightDomElement {
   @property({ attribute: false }) run: UpdateRunRecord | null = null;
   @property({ type: Boolean }) connected = true;
+  @state() private copyStatus: "idle" | "copied" | "failed" = "idle";
 
   private readonly streamFollow = new StreamAutoFollowController(this, {
     selector: ".update-run-view__details",
@@ -82,9 +137,31 @@ class UpdateRunView extends OpenClawLightDomElement {
     super.updated(changed);
     if (changed.has("run")) {
       const previous = changed.get("run");
+      if (previous?.runId !== this.run?.runId || previous?.updatedAtMs !== this.run?.updatedAtMs) {
+        this.copyStatus = "idle";
+      }
       this.streamFollow.schedule(previous?.runId !== this.run?.runId);
       this.stepsFollow.schedule(previous?.runId !== this.run?.runId);
     }
+  }
+
+  private copyRepairPrompt(event: Event) {
+    const run = this.run;
+    const button = event.currentTarget;
+    if (!run || !(button instanceof HTMLButtonElement)) {
+      return;
+    }
+    copyMarkdownText(
+      button,
+      repairPrompt(run),
+      () =>
+        this.isConnected &&
+        this.run?.runId === run.runId &&
+        this.run?.updatedAtMs === run.updatedAtMs,
+      (copied) => {
+        this.copyStatus = copied === undefined ? "idle" : copied ? "copied" : "failed";
+      },
+    );
   }
 
   private renderStep(step: UpdateRunStep, label = formatUpdateRunStepLabel(step.step)) {
@@ -195,6 +272,30 @@ ${view.details || t(view.detailStep === "updater-runtime-retention" ? "updates.r
               <div class="update-run-view__report-body" tabindex="0">
                 ${view.report.lines.map((line) => html`<p>${line}</p>`)}
               </div>
+              ${
+                isReportableUpdateRun(this.run) &&
+                !isAcknowledgedAbandonedUpdateRun(this.run) &&
+                this.run.target.installationMethod !== "ocm"
+                  ? html`<div class="update-run-view__prompt-action">
+                      <button
+                        class="btn btn--sm update-run-view__copy-prompt"
+                        type="button"
+                        @click=${(event: Event) => this.copyRepairPrompt(event)}
+                      >
+                        ${t("updates.run.copyAgentPrompt")}
+                      </button>
+                      <span role="status" aria-live="polite">
+                        ${
+                          this.copyStatus === "copied"
+                            ? t("updates.run.promptCopied")
+                            : this.copyStatus === "failed"
+                              ? t("updates.run.promptCopyFailed")
+                              : nothing
+                        }
+                      </span>
+                    </div>`
+                  : nothing
+              }
             </section>`
           : nothing
       }

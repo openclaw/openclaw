@@ -193,6 +193,18 @@
   white-space: pre-wrap;
 }
 
+.update-run-view__prompt-action {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.update-run-view__prompt-action [role="status"] {
+  color: var(--muted);
+}
+
 @media (max-width: 560px) {
   .update-run-view__phases {
     grid-template-columns: 1fr;

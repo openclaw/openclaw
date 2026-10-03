@@ -3,8 +3,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UpdateRunPhase, UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import { projectUpdateRun } from "../app/update-run-projection.ts";
+import { copyToClipboard } from "../lib/clipboard.ts";
 import { createUpdateRunFixture as run } from "../test-helpers/update-run.ts";
 import "./update-run-view.ts";
+
+vi.mock("../lib/clipboard.ts", () => ({ copyToClipboard: vi.fn(async () => true) }));
 
 type RunViewElement = HTMLElement & {
   run: UpdateRunRecord | null;
@@ -22,6 +25,7 @@ async function mount(record: UpdateRunRecord) {
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.mocked(copyToClipboard).mockReset().mockResolvedValue(true);
   vi.useRealTimers();
 });
 
@@ -149,6 +153,135 @@ describe("update run projection", () => {
 });
 
 describe("update run view", () => {
+  it("copies a redacted repair prompt from a failed update report", async () => {
+    const secret = `gho_${"A".repeat(20)}`;
+    const element = await mount(
+      run({
+        phase: "finished",
+        status: "failed",
+        reason: "database-schema-preflight",
+        steps: [
+          { step: "validating", status: "failed" },
+          {
+            step: "database-schema-preflight",
+            status: "failed",
+            detail: `Target schema is incompatible. token=${secret}`,
+          },
+        ],
+      }),
+    );
+
+    element.querySelector<HTMLButtonElement>(".update-run-view__copy-prompt")?.click();
+    await vi.waitFor(() => expect(copyToClipboard).toHaveBeenCalledOnce());
+    const prompt = vi.mocked(copyToClipboard).mock.calls[0]?.[0] ?? "";
+    expect(prompt).toContain("database-schema-preflight");
+    expect(prompt).toContain("Target schema is incompatible");
+    expect(prompt).toContain("open a pull request");
+    expect(prompt).toContain("do not bypass safety checks");
+    expect(prompt).not.toContain(secret);
+    await vi.waitFor(() => expect(element.textContent).toContain("Prompt copied"));
+  });
+
+  it("preserves installed and requested identities before early-failure diagnostics", async () => {
+    const secret = `gho_${"A".repeat(20)}`;
+    const installedSha = "a1".repeat(20);
+    const requestedSha = "b2".repeat(20);
+    const element = await mount(
+      run({
+        phase: "finished",
+        status: "failed",
+        reason: "database-schema-preflight",
+        before: { version: "2026.9.1", sha: installedSha },
+        target: {
+          kind: "git",
+          version: "2026.9.2",
+          sha: requestedSha,
+          tag: `stable token=${secret}`,
+        },
+        after: {},
+        verification: {},
+        steps: [
+          {
+            step: "database-schema-preflight",
+            status: "failed",
+            detail: "Candidate database schema is incompatible.",
+          },
+        ],
+      }),
+    );
+
+    element.querySelector<HTMLButtonElement>(".update-run-view__copy-prompt")?.click();
+    await vi.waitFor(() => expect(copyToClipboard).toHaveBeenCalledOnce());
+    const prompt = vi.mocked(copyToClipboard).mock.calls[0]?.[0] ?? "";
+    expect(prompt).toContain(`Installed: version: 2026.9.1; SHA: ${installedSha}`);
+    expect(prompt).toContain(`Requested target: version: 2026.9.2; SHA: ${requestedSha}`);
+    expect(prompt).toContain("tag: stable token=[redacted]");
+    expect(prompt).not.toContain(secret);
+    expect(prompt.indexOf("Requested target:")).toBeLessThan(prompt.indexOf("Failed:"));
+  });
+
+  it("offers the repair prompt only for reportable failed outcomes", async () => {
+    const element = await mount(run({ phase: "finished", status: "succeeded" }));
+    expect(element.querySelector(".update-run-view__copy-prompt")).toBeNull();
+    element.run = run({ phase: "finished", status: "failed", reason: "build-failed" });
+    await element.updateComplete;
+    expect(element.querySelector(".update-run-view__copy-prompt")).not.toBeNull();
+    element.run = run({
+      phase: "finished",
+      status: "failed",
+      reason: "build-failed",
+      target: { kind: "package", installationMethod: "ocm" },
+    });
+    await element.updateComplete;
+    expect(element.querySelector(".update-run-view__copy-prompt")).toBeNull();
+    element.run = run({
+      phase: "finished",
+      status: "failed",
+      reason: "abandoned",
+      steps: [{ step: "reconcile:acknowledged", status: "completed" }],
+    });
+    await element.updateComplete;
+    expect(element.querySelector(".update-run-view__copy-prompt")).toBeNull();
+  });
+
+  it.each(["complete", "truncated"] as const)(
+    "masks a %s PEM key before copying a shortened failure report",
+    async (kind) => {
+      const pem = `-----BEGIN PRIVATE KEY-----\n${"A".repeat(360)}${kind === "complete" ? "\n-----END PRIVATE KEY-----" : ""}`;
+      const element = await mount(
+        run({
+          phase: "finished",
+          status: "failed",
+          reason: "database-schema-preflight",
+          steps: [{ step: "database-schema-preflight", status: "failed", detail: pem }],
+        }),
+      );
+      element.querySelector<HTMLButtonElement>(".update-run-view__copy-prompt")?.click();
+      await vi.waitFor(() => expect(copyToClipboard).toHaveBeenCalledOnce());
+      const prompt = vi.mocked(copyToClipboard).mock.calls[0]?.[0] ?? "";
+      expect(prompt).toContain("[redacted private key]");
+      expect(prompt).not.toContain("A".repeat(40));
+    },
+  );
+
+  it("keeps copy feedback through an identical-revision refresh", async () => {
+    const record = run({ phase: "finished", status: "failed", reason: "build-failed" });
+    let finishCopy: ((copied: boolean) => void) | undefined;
+    vi.mocked(copyToClipboard).mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishCopy = resolve;
+        }),
+    );
+    const element = await mount(record);
+    element.querySelector<HTMLButtonElement>(".update-run-view__copy-prompt")?.click();
+    await vi.waitFor(() => expect(copyToClipboard).toHaveBeenCalledOnce());
+    element.run = { ...record };
+    await element.updateComplete;
+    finishCopy?.(true);
+    await vi.waitFor(() => expect(element.textContent).toContain("Prompt copied"));
+  });
+
   it("registers its own English step labels and retention guidance on first load", async () => {
     const element = await mount(
       run({ steps: [{ step: "updater-runtime-retention", status: "in_progress" }] }),

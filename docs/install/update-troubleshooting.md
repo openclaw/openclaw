@@ -29,6 +29,9 @@ In the Control UI, a failed attempt opens **Ask OpenClaw** with its recorded
 details and asks it to investigate before retrying. A lost connection or
 verification timeout is presented as an unknown outcome. The tab remembers the
 latest 32 investigated attempt identities, scoped to their Gateway and profile.
+The failed Gateway-managed update report also offers **Copy agent prompt**. It copies a bounded,
+redacted report and asks a coding agent to check whether the updater is defective,
+preserve the live installation, and open a source pull request for a verified fix.
 Status checks, switching between those scopes, and reloading the same tab do not
 automatically send those investigations again. If the browser cannot read or
 save that history, the failure details remain visible without an automatic

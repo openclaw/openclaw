@@ -9,6 +9,98 @@ import { createUpdateRunFixture } from "./update-run.test-support.ts";
 const suite = createControlUiE2eSuite({ name: "Control UI update run E2E" });
 
 suite.define(() => {
+  it("copies a repair prompt from a failed update dialog at desktop and phone widths", async () => {
+    const proofDir = createControlUiE2eArtifactDir("update-repair-prompt");
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 980, width: 1200 },
+      },
+      async ({ context, page }) => {
+        let run = createUpdateRunFixture();
+        const config = { update: { auto: { enabled: false }, channel: "stable" } };
+        const gateway = await installMockGateway(page, {
+          communityInvite: false,
+          updateAvailable: {
+            channel: "stable",
+            currentVersion: "2026.9.3",
+            latestVersion: "2026.9.4",
+          },
+          methodResponses: {
+            "config.get": {
+              config,
+              hash: "update-repair-prompt-config",
+              issues: [],
+              raw: JSON.stringify(config),
+              runtimeConfig: config,
+              valid: true,
+            },
+            "update.run": { ok: true, runId: run.runId, result: { status: "ok" } },
+            "update.runs.get": { run },
+            "update.status": { activeRun: null, lastRun: null },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/updates`);
+        await gateway.waitForRequest("config.get");
+        await page.getByRole("button", { name: "Update now", exact: true }).click();
+        const dialog = page.locator("openclaw-modal-dialog");
+        await dialog.getByRole("button", { name: "Update and restart", exact: true }).click();
+        await gateway.waitForRequest("update.runs.get");
+
+        run = {
+          ...run,
+          phase: "finished",
+          status: "failed",
+          reason: "database-schema-preflight",
+          updatedAtMs: run.updatedAtMs + 1_000,
+          finishedAtMs: run.updatedAtMs + 1_000,
+          steps: [
+            { step: "requested", status: "completed" },
+            { step: "staging", status: "completed" },
+            { step: "validating", status: "failed" },
+            {
+              step: "database-schema-preflight",
+              status: "failed",
+              detail: "Exit code: 1; verify database schema compatibility before retrying.",
+            },
+          ],
+          verification: { serviceRunning: true, runningVersion: "2026.9.3" },
+        } satisfies UpdateRunRecord;
+        await gateway.setMethodResponse("update.runs.get", { run });
+        await gateway.emitGatewayEvent("update.run.changed", {
+          runId: run.runId,
+          phase: run.phase,
+          status: run.status,
+          updatedAtMs: run.updatedAtMs,
+        });
+        const copy = dialog.getByRole("button", { name: "Copy agent prompt", exact: true });
+        await copy.waitFor();
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(proofDir, "failed-update-desktop.png"),
+        });
+
+        await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+        await copy.click();
+        await dialog.getByText("Prompt copied", { exact: true }).waitFor();
+        const prompt = await page.evaluate(() => navigator.clipboard.readText());
+        expect(prompt).toContain("database-schema-preflight");
+        expect(prompt).toContain("open a pull request");
+        expect(prompt).toContain("verify database schema compatibility");
+        expect(await gateway.getRequests("update.run")).toHaveLength(1);
+
+        await page.setViewportSize({ height: 844, width: 390 });
+        await copy.scrollIntoViewIfNeeded();
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(proofDir, "failed-update-phone.png"),
+        });
+      },
+    );
+  });
+
   it("resumes the same update after restart and keeps its successful report visible", async () => {
     const proofDir = createControlUiE2eArtifactDir("update-run", ".artifacts/control-ui-e2e");
     const viewport = { height: 1100, width: 1440 };
