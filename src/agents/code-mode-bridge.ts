@@ -15,7 +15,10 @@ import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import type { CodeModeReplyLease } from "./code-mode-program-data.js";
 import type { CodeModeResultsAccess } from "./code-mode-results.js";
 import { CODE_MODE_EXEC_YIELD_MARGIN_MS, type PendingBridgeRequest } from "./code-mode-runtime.js";
-import type { CodeModeSessionStoreAccess } from "./code-mode-session-store.js";
+import {
+  isCodeModeSessionStoreRequest,
+  type CodeModeSessionStoreAccess,
+} from "./code-mode-session-store.js";
 import { createCodeModeToolApiFile } from "./code-mode-tool-api.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
@@ -245,11 +248,7 @@ export async function runBridgeRequest(params: {
   onUpdate?: AgentToolUpdateCallback;
 }): Promise<void> {
   const catalogProjection = params.catalogProjection;
-  const sessionStoreRequest =
-    (params.request.method === "resultSave" ||
-      params.request.method === "resultLoad" ||
-      params.request.method === "resultDelete") &&
-    params.request.args[1] === "session";
+  const sessionStoreRequest = isCodeModeSessionStoreRequest(params.request);
   try {
     params.signal?.throwIfAborted();
     const values = Array.isArray(params.request.args) ? params.request.args : [];

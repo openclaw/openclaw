@@ -32,6 +32,10 @@ import {
   type PendingBridgeRequest,
 } from "./code-mode-runtime.js";
 import {
+  commitCodeModeSessionStore,
+  isCodeModeSessionStoreRequest,
+} from "./code-mode-session-store.js";
+import {
   activeRuns,
   cancelPendingBridgeStates,
   cancelPendingBridgeStatesById,
@@ -585,13 +589,7 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
           telemetry: telemetry(params.runtime),
         },
         {
-          error: result.pendingRequests.some(
-            (request) =>
-              (request.method === "resultSave" ||
-                request.method === "resultLoad" ||
-                request.method === "resultDelete") &&
-              request.args[1] === "session",
-          )
+          error: result.pendingRequests.some(isCodeModeSessionStoreRequest)
             ? "Code Mode store/load is unavailable in restart-safe cells; start a new interactive cell."
             : result.pendingRequests.every((request) => request.method === "namespace")
               ? "restart-safe code mode cannot call namespace tools."
@@ -619,15 +617,10 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
   // Defensive cleanup covers aborts or terminal failures; successful runs have
   // already drained every dispatched call before releasing their snapshot.
   cancelPendingBridgeStates(pending);
-  let storeWarning: string | undefined;
-  if (result.status === "completed") {
-    try {
-      await params.owner.sessionStore?.commit();
-    } catch {
-      storeWarning =
-        "Code Mode session store persistence could not be confirmed. The cell completed; verify the session transcript before relying on these values in a later cell or reply.";
-    }
-  }
+  const storeWarning =
+    result.status === "completed"
+      ? await commitCodeModeSessionStore(params.owner.sessionStore)
+      : undefined;
   const channels = {
     ...(result.status === "completed" ? { value: result.value } : {}),
     ...(result.status === "failed" ? { error: result.error } : {}),

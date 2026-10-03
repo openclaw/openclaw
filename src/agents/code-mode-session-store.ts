@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sameSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
 import { stringifyCodeModeJsonSafe } from "./code-mode-json.js";
+import type { PendingBridgeRequest } from "./code-mode-runtime.js";
 import type { SessionEntry, SessionManager } from "./sessions/session-manager.js";
 import type { ToolSearchCatalogRef, ToolSearchToolContext } from "./tool-search-types.js";
 
@@ -131,6 +132,28 @@ function replay(entries: readonly SessionEntry[]): Projection {
 }
 
 export type CodeModeSessionStoreAccess = ReturnType<typeof createCodeModeSessionStoreAccess>;
+
+/** store/load reuse the results bridge methods with a "session" selector (see the controller shim). */
+export function isCodeModeSessionStoreRequest(request: PendingBridgeRequest): boolean {
+  return (
+    (request.method === "resultSave" ||
+      request.method === "resultLoad" ||
+      request.method === "resultDelete") &&
+    request.args[1] === "session"
+  );
+}
+
+/** Commits a completed cell's writes; returns a warning when persistence is unconfirmed. */
+export async function commitCodeModeSessionStore(
+  access: CodeModeSessionStoreAccess | undefined,
+): Promise<string | undefined> {
+  try {
+    await access?.commit();
+    return undefined;
+  } catch {
+    return "Code Mode session store persistence could not be confirmed. The cell completed; verify the session transcript before relying on these values in a later cell or reply.";
+  }
+}
 
 /** Each cell retains a private write buffer and the exact admitted run projection. */
 export function createCodeModeSessionStoreAccess(ctx: ToolSearchToolContext, signal: AbortSignal) {

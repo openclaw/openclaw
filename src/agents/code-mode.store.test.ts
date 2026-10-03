@@ -17,7 +17,9 @@ import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 const catalogs: Array<ReturnType<typeof createCodeModeHarness>["ctx"]> = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const ctx of catalogs.splice(0)) clearToolSearchCatalog(ctx);
+  for (const ctx of catalogs.splice(0)) {
+    clearToolSearchCatalog(ctx);
+  }
   await resetCodeModeTestState();
 });
 
