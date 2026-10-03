@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   coerceSecretRef,
+  hasLegacySecretRefExtraFields,
   isLegacySecretRefWithoutProvider,
   parseLegacySecretRefEnvMarker,
 } from "../../../config/types.secrets.js";
@@ -24,13 +25,17 @@ export function migrateLegacySecretInputs(config: OpenClawConfig): {
       continue;
     }
     next ??= structuredClone(config);
-    const value = providerless ? { ...original, provider: ref.provider } : ref;
-    if (setPathExistingStrict(next, target.pathSegments, value)) {
+    if (setPathExistingStrict(next, target.pathSegments, ref)) {
       changes.push(
         providerless
           ? `Added provider ${ref.provider} to ${target.path} SecretRef.`
           : `Moved ${target.path} ${String(target.value).trim()} marker → structured env SecretRef.`,
       );
+      if (hasLegacySecretRefExtraFields(original)) {
+        changes.push(
+          `Canonicalized ${target.path} SecretRef to source/provider/id; Doctor preserves removed fields in the original config backup before writing the repair.`,
+        );
+      }
     }
   }
   return { config: next ?? config, changes };

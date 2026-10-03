@@ -26,10 +26,12 @@ backs up config and auth databases before rewriting them; updates run the same
 repair. The Plugin SDK's input coercion remains compatible, and SDK auth writes
 persist canonical refs.
 
-Auth SecretRefs contain exactly those three fields. If an older providerless
-auth ref includes other fields, Doctor reports their removal and preserves the
-original row in its verified database backup or source archive. New SDK auth
-writes reject these extended inputs before changing stored or published state.
+SecretRefs contain exactly those three fields. If an older providerless ref in
+a registered config credential or auth profile includes other fields, Doctor
+reports their removal and preserves the original config or auth row in its
+backup or source archive before writing the canonical ref. Opaque values outside
+registered credential paths stay unchanged. New SDK auth writes reject extended
+inputs before changing stored or published state.
 Keep that metadata separately and explicitly call `coerceSecretRef` to choose
 the canonical reference before saving.
 

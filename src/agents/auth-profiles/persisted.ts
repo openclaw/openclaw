@@ -65,10 +65,10 @@ function parseCredentialEntry(
   if (!isRecord(raw)) {
     return { ok: false, reason: "non_object" };
   }
-  if (!AUTH_PROFILE_TYPES.has(raw.type as AuthProfileCredential["type"])) {
+  const typed = normalizeRawCredentialEntry(raw);
+  if (!typed) {
     return { ok: false, reason: "invalid_type" };
   }
-  const typed = normalizeRawCredentialEntry(raw);
   const provider = typed.provider || fallbackProvider;
   const normalizedProvider = typeof provider === "string" ? normalizeProviderId(provider) : "";
   if (!normalizedProvider) {

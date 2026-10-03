@@ -76,12 +76,16 @@ function normalizeCommonCredentialFields(entry: Record<string, unknown>): Record
 
 export function normalizeRawCredentialEntry(
   entry: Record<string, unknown>,
-): Partial<AuthProfileCredential> {
-  const normalized: Record<string, unknown> = {
-    type: entry.type,
+): Partial<AuthProfileCredential> | undefined {
+  const type = entry.type;
+  if (type !== "api_key" && type !== "token" && type !== "oauth") {
+    return undefined;
+  }
+  const normalized: Partial<AuthProfileCredential> = {
+    type,
     ...normalizeCommonCredentialFields(entry),
   };
-  if (entry.type === "api_key") {
+  if (normalized.type === "api_key") {
     const key = readNonBlankString(entry.key);
     const keyRef = parseSecretRef(entry.keyRef);
     const metadata = normalizeCredentialMetadata(entry.metadata);
@@ -94,7 +98,7 @@ export function normalizeRawCredentialEntry(
     if (metadata) {
       normalized.metadata = metadata;
     }
-  } else if (entry.type === "token") {
+  } else if (normalized.type === "token") {
     const token = readNonBlankString(entry.token);
     const tokenRef = parseSecretRef(entry.tokenRef);
     if (token !== undefined) {
@@ -103,26 +107,27 @@ export function normalizeRawCredentialEntry(
     if (tokenRef) {
       normalized.tokenRef = structuredClone(tokenRef);
     }
-  } else if (entry.type === "oauth") {
+  } else if (normalized.type === "oauth") {
     if (isLegacyOAuthRef(entry.oauthRef)) {
       normalized.oauthRef = structuredClone(entry.oauthRef);
     }
-    for (const field of [
+    const fields: Array<"access" | "refresh" | keyof typeof oauthCredentialMetadataSchema.shape> = [
       "access",
       "refresh",
-      ...Object.keys(oauthCredentialMetadataSchema.shape),
-    ]) {
+      ...oauthCredentialMetadataSchema.keyof().options,
+    ];
+    for (const field of fields) {
       const value = readNonBlankString(entry[field]);
       if (value !== undefined) {
         normalized[field] = value;
       }
     }
   }
-  if (entry.type !== "api_key") {
+  if (normalized.type === "token" || normalized.type === "oauth") {
     const expires = normalizeExpiryField(entry.expires);
     if (expires !== undefined) {
       normalized.expires = expires;
     }
   }
-  return normalized as Partial<AuthProfileCredential>;
+  return normalized;
 }

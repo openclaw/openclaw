@@ -1267,7 +1267,7 @@ src/agents/auth-profiles/external-auth.ts	1
 src/agents/auth-profiles/oauth-refresh-failure.ts	2
 src/agents/auth-profiles/oauth-refresh-lock-errors.ts	1
 src/agents/auth-profiles/oauth.ts	2
-src/agents/auth-profiles/persisted.ts	4
+src/agents/auth-profiles/persisted.ts	2
 src/agents/auth-profiles/policy.ts	1
 src/agents/auth-profiles/portability.ts	1
 src/agents/auth-profiles/profiles.ts	1

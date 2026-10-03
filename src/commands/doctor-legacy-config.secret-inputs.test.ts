@@ -2,6 +2,7 @@
 // oxfmt-ignore
 import { legacyConfig, useDoctorLegacyConfigFixture } from "./doctor/shared/legacy-config-fixture.test-support.js";
 import { describe, expect, it } from "vitest";
+import { parseSecretRef } from "../config/types.secrets.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 
 describe("normalizeCompatibilityConfigValues", () => {
@@ -80,6 +81,11 @@ describe("normalizeCompatibilityConfigValues", () => {
               models: [],
               baseUrl: "https://example.test/v1",
             },
+            extended: {
+              apiKey: { source, id, opaque: { label: "synthetic-ref-metadata" } },
+              models: [],
+              baseUrl: "https://example.test/v1",
+            },
           },
         },
         plugins: { entries: { opaque: { config: { metadata: { source, id: "SYNTHETIC_KEY" } } } } },
@@ -91,9 +97,18 @@ describe("normalizeCompatibilityConfigValues", () => {
         provider: "configured",
         id,
       });
+      const extended = result.config.models?.providers?.extended?.apiKey;
+      expect(extended).toEqual({ source, provider: "configured", id });
+      expect(parseSecretRef(extended)).toBe(extended);
+      expect(result.changes).toContain(
+        "Canonicalized models.providers.extended.apiKey SecretRef to source/provider/id; Doctor preserves removed fields in the original config backup before writing the repair.",
+      );
+      expect(result.changes.join("\n")).not.toContain("synthetic-ref-metadata");
       expect(result.config.plugins?.entries?.opaque).toEqual(original.plugins?.entries?.opaque);
       expect(original).toEqual(before);
-      expect(normalizeCompatibilityConfigValues(result.config).changes).toEqual([]);
+      const repeated = normalizeCompatibilityConfigValues(result.config);
+      expect(repeated.config).toEqual(result.config);
+      expect(repeated.changes).toEqual([]);
     },
   );
 });
