@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createInvalidConfigError, isInvalidConfigError } from "../../config/io.invalid-config.js";
 import { mergeDeep } from "../../infra/deep-merge.js";
 import { getAgentDir } from "../config.js";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.js";
@@ -47,9 +48,34 @@ function deepMergeSettings(base: Settings, overrides: Settings): Settings {
   return mergeDeep(base, overrides) as Settings;
 }
 
-function requireSettingsObject(value: unknown): Settings {
-  if (value === null || typeof value !== "object") {
+function requireSupportedSettings(value: unknown, scope: SettingsScope): Settings {
+  if (!isRecord(value)) {
     throw new TypeError("Session settings must be an object");
+  }
+  const retired: string[] = [];
+  if (Object.hasOwn(value, "queueMode")) {
+    retired.push("queueMode: use steeringMode");
+  }
+  if (Object.hasOwn(value, "websockets")) {
+    retired.push('websockets: use transport (true becomes "websocket", false becomes "sse")');
+  }
+  if (isRecord(value.skills)) {
+    retired.push(
+      "skills: use its customDirectories array (or []), and move skills.enableSkillCommands to top-level enableSkillCommands if present",
+    );
+  }
+  if (isRecord(value.retry) && Object.hasOwn(value.retry, "maxDelayMs")) {
+    retired.push("retry.maxDelayMs: use retry.provider.maxRetryDelayMs");
+  }
+  if (retired.length > 0) {
+    throw createInvalidConfigError(
+      `${scope} session settings.json`,
+      `Retired session settings: ${retired.join("; ")}. ` +
+        "Preserve the original file and replace the retired forms while retaining existing canonical values before retrying. " +
+        "For a staged upgrade, OpenClaw 2026.9.7 retains the former settings reader. " +
+        "See https://docs.openclaw.ai/gateway/doctor/config-migrations#session-settings.",
+      { recovery: "manual" },
+    );
   }
   return value as Settings;
 }
@@ -94,7 +120,7 @@ export class SettingsManager {
   /** Create an in-memory SettingsManager (no file I/O) */
   static inMemory(settings: Partial<Settings> = {}): SettingsManager {
     const storage = new InMemorySettingsStorage();
-    const initialSettings = requireSettingsObject(structuredClone(settings));
+    const initialSettings = requireSupportedSettings(structuredClone(settings), "global");
     storage.withLock("global", () => JSON.stringify(initialSettings, null, 2));
     return SettingsManager.fromStorage(storage);
   }
@@ -110,9 +136,12 @@ export class SettingsManager {
           return undefined;
         });
       }
-      const settings = content ? requireSettingsObject(JSON.parse(content)) : {};
+      const settings = content ? requireSupportedSettings(JSON.parse(content), scope) : {};
       return SettingsManager.createScopeState(settings);
     } catch (error) {
+      if (isInvalidConfigError(error)) {
+        throw error;
+      }
       return SettingsManager.createScopeState({}, error as Error);
     }
   }
@@ -190,7 +219,9 @@ export class SettingsManager {
     modified: Map<keyof Settings, Set<string> | null>,
   ): void {
     this.storage.withLock(scope, (current) => {
-      const currentFileSettings = current ? requireSettingsObject(JSON.parse(current)) : {};
+      const currentFileSettings = current
+        ? requireSupportedSettings(JSON.parse(current), scope)
+        : {};
       const mergedSettings: Settings = { ...currentFileSettings };
       for (const [field, nestedModified] of modified) {
         const value = snapshotSettings[field];

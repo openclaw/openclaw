@@ -43,6 +43,28 @@ silently discard persisted data.
 Legacy normalization belongs to Doctor and migration owners, with the existing
 backup and verification flow. Runtime readers consume canonical state.
 
+### Session settings
+
+Global and project `settings.json` readers refuse retired settings before
+discovering agent resources. They preserve the original file and name the fields
+to repair. Back up the file, keep any existing canonical values, and replace:
+
+- `queueMode` with `steeringMode`.
+- `websockets` with `transport`: `true` becomes `"websocket"`, and `false` becomes `"sse"`.
+- An object-shaped `skills` with its `customDirectories` array, or `[]` when absent.
+  Move `skills.enableSkillCommands` to top-level `enableSkillCommands` if present.
+- `retry.maxDelayMs` with `retry.provider.maxRetryDelayMs`, preserving the other
+  `retry.provider` settings.
+
+Remove superseded keys after moving their values. OpenClaw `2026.9.7`
+retains the former settings reader if a staged upgrade is needed; see
+[upgrading very old versions](/install/updating#upgrading-very-old-versions) before
+using an older release with existing state. These embedded session files are
+separate from `openclaw.json`: current `doctor --fix` owns supported July-and-later
+config migrations, but does not rewrite these retired session settings.
+
+### Retired state and config formats
+
 Unreleased per-agent SQLite session layouts below schema 8 and their pre-landing
 transcript search caches are retired. Doctor refuses those layouts without
 repairing their tables. Shipped schema-1

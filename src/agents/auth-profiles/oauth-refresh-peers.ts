@@ -196,9 +196,14 @@ export async function fenceOAuthRefreshPeers(params: {
       }
       const original = { ...credential };
       const releaseUnclaimedObservation = params.onFence?.(candidate.databasePath);
-      const updated = updateOAuthRefreshPeer(candidate, params.profileId, original, (store) => {
-        store.profiles[params.profileId] = { ...params.fence };
-      });
+      const updated = updateOAuthRefreshPeer(
+        candidate,
+        params.profileId,
+        original,
+        (currentStore) => {
+          currentStore.profiles[params.profileId] = { ...params.fence };
+        },
+      );
       if (!updated.changed) {
         const current = updated.store.profiles[params.profileId];
         if (isExactOAuthCredential(current, params.fence)) {
