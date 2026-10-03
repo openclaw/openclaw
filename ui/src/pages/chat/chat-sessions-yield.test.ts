@@ -1,7 +1,8 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import type { ChatItem } from "../../lib/chat/chat-types.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
-import { latestSessionsYieldTimestamp } from "./chat-sessions-yield.ts";
+import { latestSessionsYieldTimestamp, projectSessionsYieldItems } from "./chat-sessions-yield.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { createProps } from "./chat-thread.test-support.ts";
 
@@ -42,6 +43,39 @@ const nestedHistory = [
 ];
 
 describe("sessions_yield transcript markers", () => {
+  it.each([false, true])(
+    "preserves non-yield item identity with showToolCalls=%s",
+    (showToolCalls) => {
+      const items = [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Implementation continues." }],
+          activity: [],
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "read", name: "read", arguments: { path: "README.md" } },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "read",
+          toolName: "read",
+          content: [{ type: "text", text: "Project documentation" }],
+        },
+      ].map(
+        (message, index) =>
+          ({ kind: "message", key: `ordinary:${index}`, message }) satisfies ChatItem,
+      );
+      const projected = projectSessionsYieldItems(items, undefined, showToolCalls);
+      for (const [index, item] of items.entries()) {
+        expect(projected[index]).toBe(item);
+      }
+      expect(projected).toHaveLength(items.length);
+    },
+  );
+
   it.each([
     ["separate call and result", separateHistory],
     ["nested exec activity", nestedHistory],

@@ -79,13 +79,14 @@ export function projectSessionsYieldItems(
       laterActivity = true;
     }
     let remaining: ChatItem[] = [item];
-    if (message && !showToolCalls && isStandaloneToolMessageForDisplay(message)) {
-      remaining = [];
-    } else if (
+    if (
       message &&
-      (yieldCards.length > 0 || !showToolCalls) &&
-      Array.isArray(message.content)
+      yieldCards.length > 0 &&
+      !showToolCalls &&
+      isStandaloneToolMessageForDisplay(message)
     ) {
+      remaining = [];
+    } else if (message && yieldCards.length > 0 && Array.isArray(message.content)) {
       const yieldIds = new Set(yieldCards.map((card) => card.callId));
       const ids = new Set(yields.map((card) => card.callId));
       const content = message.content.filter((block: unknown) => {
