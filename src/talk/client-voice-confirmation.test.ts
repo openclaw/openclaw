@@ -107,6 +107,68 @@ describe("client voice confirmation", () => {
     expect(snapshotClientVoiceConfirmationStateForTest().approvedGrants).toBe(0);
   });
 
+  it.each([
+    "Okay, yes.",
+    "Okay,yes.",
+    "All right, go ahead, please.",
+    "All right,go ahead,please.",
+    "Um, okay, yes, do it.",
+    "Oh, this thing again, bro. Okay, yes",
+  ])("accepts explicit spoken assent with bounded conversational padding: %j", (text) => {
+    block({ voiceSessionId: "voice-1", runId: "original", now: 100 });
+    noteClientVoiceConfirmationUtterance({ voiceSessionId: "voice-1", text, timestamp: 101 });
+    const grant = authorizeObservedClientVoiceConfirmation({
+      agentId: "main",
+      voiceSessionId: "voice-1",
+      now: 102,
+    });
+    expect(grant).toBeDefined();
+    expect(bindAuthorizedClientVoiceConfirmation({ grant: grant!, runId: "retry", now: 103 })).toBe(
+      true,
+    );
+    expect(
+      consumeClientVoiceToolConfirmationPolicy({
+        voiceSessionId: "voice-1",
+        runId: "retry",
+        toolName: "message",
+        toolParams: { action: "send", message: "hello" },
+        now: 104,
+      }),
+    ).toEqual({ allowed: true });
+    expect(
+      consumeClientVoiceToolConfirmationPolicy({
+        voiceSessionId: "voice-1",
+        runId: "retry",
+        toolName: "message",
+        toolParams: { action: "send", message: "hello" },
+        now: 105,
+      }).allowed,
+    ).toBe(false);
+  });
+
+  it.each([
+    "Okay, no, yes",
+    "Yes, don't do it",
+    "I said yes",
+    "He said yes",
+    'Say "yes" to confirm',
+    "If I say yes",
+    "Maybe yes",
+    "Okay yes, but wait",
+    "Okay yes? Or no?",
+    "Well, okay, yes, if it is safe",
+  ])("does not authorize refused, reported, hypothetical, or qualified assent: %j", (text) => {
+    block({ voiceSessionId: "voice-1", runId: "original", now: 100 });
+    noteClientVoiceConfirmationUtterance({ voiceSessionId: "voice-1", text, timestamp: 101 });
+    expect(
+      authorizeObservedClientVoiceConfirmation({
+        agentId: "main",
+        voiceSessionId: "voice-1",
+        now: 102,
+      }),
+    ).toBeUndefined();
+  });
+
   it("wakes readiness for finalized speech, invalidation, and the existing challenge expiry", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(100);
