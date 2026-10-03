@@ -267,6 +267,16 @@ and follow the reported process-inspection guidance before retrying repair.
 The installed updater owns this process supervision: a first update driven by
 2026.9.5 remains limited by that older parent's settlement checks.
 
+Before starting a preserved candidate, the updater checks shared and existing
+agent database schemas against the candidate's contract. If migrations remain
+pending after the failed Doctor has stopped, it runs the candidate Doctor again
+under Doctor's maintenance and backup safeguards, then checks completion before
+restarting the Gateway. A refused or incomplete repair stays in the update report
+with the reason and the commands `openclaw doctor --fix` followed by
+`openclaw gateway start`. Newer database schemas are never downgraded by this repair.
+The original update failure remains recorded even when recovery restores service.
+Its durable restart notice is delivered when the Gateway starts again.
+
 Automatic rollback restores code and captured config, and restores pre-migration
 database snapshots only when the Gateway was confirmed stopped during capture
 and the candidate was never allowed to start, with matching write fingerprints

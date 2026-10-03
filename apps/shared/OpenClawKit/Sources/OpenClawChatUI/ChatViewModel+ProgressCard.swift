@@ -193,30 +193,13 @@ extension OpenClawChatViewModel {
     }
 
     private static func parseLegacyProgressCardStep(_ rawValue: Any) -> ProgressCardStep? {
-        let value = (rawValue as? AnyCodable)?.value ?? rawValue
-        if let legacyStep = value as? String {
+        let value = (rawValue as? AnyCodable) ?? AnyCodable(rawValue)
+        if let legacyStep = value.stringValue {
             return self.makeLegacyProgressCardStep(text: legacyStep, status: .pending)
         }
-
-        let fields: [String: Any]
-        switch value {
-        case let dictionary as [String: AnyCodable]:
-            fields = dictionary.mapValues(\.value)
-        case let dictionary as [String: String]:
-            fields = dictionary
-        case let dictionary as [String: Any]:
-            fields = dictionary
-        case let dictionary as NSDictionary:
-            fields = dictionary.reduce(into: [:]) { result, entry in
-                guard let key = entry.key as? String else { return }
-                result[key] = (entry.value as? AnyCodable)?.value ?? entry.value
-            }
-        default:
-            return nil
-        }
-
-        guard let text = fields["step"] as? String,
-              let rawStatus = fields["status"] as? String,
+        guard let fields = value.dictionaryValue,
+              let text = fields["step"]?.stringValue,
+              let rawStatus = fields["status"]?.stringValue,
               let status = ProgressCardStepStatus(rawValue: rawStatus)
         else {
             return nil

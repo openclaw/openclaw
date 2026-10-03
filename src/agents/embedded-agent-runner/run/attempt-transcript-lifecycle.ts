@@ -8,7 +8,6 @@ const TRANSCRIPT_TEARDOWN_BUDGET_MS = 30_000;
 /** Per-attempt transcript write state carried by the owned AsyncLocalStorage. */
 export type LifecycleOwner = {
   active: boolean;
-  nestedPending: number;
   nestedTail: Promise<void>;
   pendingOperations: Set<Promise<void>>;
 };
@@ -40,7 +39,6 @@ export function createEmbeddedAttemptTranscriptLifecycle(
 
   const createLifecycleOwner = (): LifecycleOwner => ({
     active: true,
-    nestedPending: 0,
     nestedTail: Promise.resolve(),
     pendingOperations: new Set(),
   });
@@ -100,10 +98,7 @@ export function createEmbeddedAttemptTranscriptLifecycle(
   const serializeLifecycle = async <T>(run: () => Promise<T> | T): Promise<T> => {
     const inheritedOwner = lifecycleOwner.getStore();
     if (inheritedOwner?.active) {
-      const waitForPrevious =
-        inheritedOwner.nestedPending > 0 ? inheritedOwner.nestedTail : Promise.resolve();
-      inheritedOwner.nestedPending += 1;
-      const operation = waitForPrevious.then(async () => {
+      const operation = inheritedOwner.nestedTail.then(async () => {
         const childOwner = createLifecycleOwner();
         return await runLifecycleOwner(childOwner, run);
       });
@@ -115,9 +110,6 @@ export function createEmbeddedAttemptTranscriptLifecycle(
       void propagated.catch(() => {});
       inheritedOwner.nestedTail = queueTail;
       inheritedOwner.pendingOperations.add(propagated);
-      void queueTail.finally(() => {
-        inheritedOwner.nestedPending -= 1;
-      });
       return await operation;
     }
 

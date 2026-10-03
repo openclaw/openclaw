@@ -133,6 +133,7 @@ export default definePluginEntry({
 
     api.registerService({
       id: "logbook",
+      apiVersion: 2,
       start: async (ctx) => {
         if (retired) {
           throw new Error("Logbook plugin runtime has been retired");
@@ -150,6 +151,7 @@ export default definePluginEntry({
           runtime: api.runtime,
           fullConfig: ctx.config,
           logger: ctx.logger,
+          scheduler: ctx.scheduler,
           dataDir: path.join(ctx.stateDir, "logbook"),
           workerModuleUrl: new URL(
             `./src/store.worker${path.extname(api.runtimeSource)}`,

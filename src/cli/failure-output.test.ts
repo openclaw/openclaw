@@ -71,7 +71,13 @@ describe("formatCliJsonFailure", () => {
       targetVersion: "2026.9.4",
       cause: new Error("content migration failed"),
     });
-    const output = formatCliFailureLines({ title: "Update failed", error, env: {} }).join("\n");
+    const output = formatCliFailureLines({
+      title: "Update failed",
+      error,
+      argv: ["node", "openclaw", "update", "--json"],
+      env: {},
+    }).join("\n");
+    expect(output).toContain("[openclaw] OpenClaw needs a manual recovery step.");
     expect(output).toContain("Let the updater restore the previous package and exit");
     expect(output).toContain("openclaw doctor --fix");
     expect(formatCliJsonFailure(error, { env: {} })).toMatchObject({
@@ -185,6 +191,23 @@ describe("formatCliJsonFailure", () => {
 });
 
 describe("formatCliFailureLines", () => {
+  it.each([false, true])(
+    "keeps update reasons before an updater marker exists (json=%s)",
+    (json) => {
+      const reason = "global-install-failed: original package-manager failure";
+      const output = formatCliFailureLines({
+        title: "The CLI command failed.",
+        error: new Error(reason, { cause: new Error("private nested diagnostic") }),
+        argv: ["node", "openclaw", "--profile", "work", "update", ...(json ? ["--json"] : [])],
+        env: {},
+      }).join("\n");
+
+      expect(output).toContain(reason);
+      expect(output).not.toContain("private nested diagnostic");
+      expect(output).not.toContain("Stack:");
+    },
+  );
+
   it("emits expected guidance only when not already written even with debug output", () => {
     const env = { OPENCLAW_DEBUG: "1" };
     const pending = new ExpectedCliError({

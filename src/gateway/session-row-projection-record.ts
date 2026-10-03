@@ -12,6 +12,7 @@ import type {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { notifyListeners } from "../shared/listeners.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import type { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { compareSessionEntryPairs } from "./session-list-order.js";
@@ -86,27 +87,93 @@ export type Row = {
   };
 };
 
+/** Accepted selection facts exclude replaceable display graphs. */
+export type SelectionRow = Pick<
+  EntryRow,
+  "key" | "agentId" | "storeTarget" | "entry" | "selection" | "hasBoard" | "generation"
+>;
+export type SelectionChange =
+  | { kind: "reset" }
+  | {
+      kind: "row";
+      id: string;
+      key: string;
+      agentId: string;
+      row: SelectionRow | undefined;
+    };
+
+export function selectionRow(row: Row): SelectionRow | undefined {
+  return row.entry
+    ? {
+        key: row.key,
+        agentId: row.agentId,
+        storeTarget: row.storeTarget,
+        entry: row.entry,
+        selection: row.selection,
+        hasBoard: row.hasBoard,
+        generation: row.generation,
+      }
+    : undefined;
+}
+
 /** Sharing fences every publication; selection holds only unchanged metadata. */
 export function createSessionRowProjectionRevisions() {
   let sharing: object | undefined;
   let selection: object | undefined;
+  const selectionListeners = new Set<(change: SelectionChange) => void>();
   const invalidate = (metadataChanged = false) => {
     sharing = undefined;
     if (metadataChanged) {
       selection = undefined;
     }
   };
+  const publishSelection = (row?: Row, removed = false) => {
+    if (!row) {
+      invalidate(true);
+    }
+    const change: SelectionChange = row
+      ? {
+          kind: "row",
+          id: identity(row),
+          key: row.key,
+          agentId: row.agentId,
+          row: removed ? undefined : selectionRow(row),
+        }
+      : { kind: "reset" };
+    // Failed derived updates retire orders without interrupting accepted row maintenance.
+    notifyListeners(selectionListeners, change, () =>
+      notifyListeners(selectionListeners, { kind: "reset" }),
+    );
+  };
   return {
+    onSelectionChange(this: void, listener: (change: SelectionChange) => void) {
+      selectionListeners.add(listener);
+    },
+    publishSelection,
+    dispose() {
+      publishSelection();
+      selectionListeners.clear();
+    },
     sharing: () => (sharing ??= {}),
     selection: () => (selection ??= {}),
     invalidate,
+    materialized(row: Row, previousBoard: Row["hasBoard"]) {
+      const changed = row.hasBoard !== previousBoard;
+      invalidate(changed);
+      if (changed && !isIncognitoSessionKey(row.key)) {
+        publishSelection(row);
+      }
+    },
     replace(previous: Row | undefined, row: Row) {
-      invalidate(
+      const changed =
         !previous ||
-          previous.generation !== row.generation ||
-          previous.hasBoard !== row.hasBoard ||
-          !isDeepStrictEqual(previous.entry, row.entry),
-      );
+        previous.generation !== row.generation ||
+        previous.hasBoard !== row.hasBoard ||
+        !isDeepStrictEqual(previous.entry, row.entry);
+      invalidate(changed);
+      if (changed) {
+        publishSelection(row);
+      }
     },
   };
 }

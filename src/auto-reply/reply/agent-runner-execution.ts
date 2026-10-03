@@ -456,24 +456,27 @@ async function executeAgentTurnInternalLoop(
   }
 
   return {
-    kind: "completed",
+    kind: "settled",
     maintenanceAuthProfile: fallbackCycleState.maintenanceAuthProfile,
     compactionRequestBudget: fallbackCycleState.compactionRequestBudget,
     result: runResult,
-    fallbackProvider,
-    fallbackModel,
-    ...(fallbackExhausted ? { fallbackExhausted: true as const } : {}),
-    fallbackAttempts,
+    resolved: { provider: fallbackProvider, model: fallbackModel },
+    fallback: { exhausted: fallbackExhausted, attempts: fallbackAttempts },
     didLogHeartbeatStrip: heartbeatState.didLogStrip,
     autoCompactionCount: compaction.count,
     hasDirectlySentBlockReply:
       directBlockDeliveries.some((delivery) => delivery.terminalDeliveryConfirmed === true) ||
       undefined,
     directBlockDeliveries,
-    ...(terminalFailurePayload ? { terminalFailurePayload } : {}),
-    ...(terminalRunFailed && fallbackCycleState.postCompactionModelAttempted
-      ? { postCompactionModelFailure: true as const }
-      : {}),
+    ...(terminalFailurePayload
+      ? {
+          status: "failed" as const,
+          terminalFailurePayload,
+          ...(fallbackCycleState.postCompactionModelAttempted
+            ? { postCompactionModelFailure: true as const }
+            : {}),
+        }
+      : { status: "ok" as const }),
   };
 }
 
@@ -616,42 +619,9 @@ async function executeAgentTurnOutcome(
         },
       };
     }
-    const provider =
-      internal.fallbackProvider ??
-      internal.result.meta?.agentMeta?.provider ??
-      executionParams.followupRun.run.provider;
-    const model =
-      internal.fallbackModel ??
-      internal.result.meta?.agentMeta?.model ??
-      executionParams.followupRun.run.model;
-    const terminalStatus = internal.terminalFailurePayload
-      ? {
-          status: "failed" as const,
-          terminalFailurePayload: internal.terminalFailurePayload,
-          ...(internal.postCompactionModelFailure
-            ? { postCompactionModelFailure: internal.postCompactionModelFailure }
-            : {}),
-        }
-      : { status: "ok" as const };
     return {
       runId,
-      outcome: {
-        kind: "settled",
-        maintenanceAuthProfile: internal.maintenanceAuthProfile,
-        compactionRequestBudget: internal.compactionRequestBudget,
-        ...terminalStatus,
-        result: internal.result,
-        resolved: { provider, model },
-        fallback: {
-          exhausted: internal.fallbackExhausted === true,
-          attempts: internal.fallbackAttempts,
-        },
-        autoCompactionCount: internal.autoCompactionCount,
-        ...completedCompaction(),
-        didLogHeartbeatStrip: internal.didLogHeartbeatStrip,
-        hasDirectlySentBlockReply: internal.hasDirectlySentBlockReply,
-        directBlockDeliveries: internal.directBlockDeliveries,
-      },
+      outcome: { ...internal, ...completedCompaction() },
     };
   } catch (error) {
     const abortReason = resolveReplyOperationAbortReason(executionParams.replyOperation, error);

@@ -137,6 +137,15 @@ and does not change admission, ordering, or warning thresholds.
 The Gateway records a bounded, payload-free stability stream by default when
 diagnostics are enabled. It captures operational facts, not content.
 
+Gateway RPC diagnostics retain exact core and registered plugin method names,
+including `node.invoke.result` and `workboard.cards.list`; unregistered request
+names fold into `other` (dedicated worker ingress uses `unknown`). The method
+label set is bounded by the registered catalog plus these fallback labels, not
+by caller-supplied names. The Prometheus exporter retains its shared 2,048-sample
+cap across counters, gauges, and histograms; a fully observed method uses up to
+five samples. Watch `openclaw_prometheus_series_dropped_total` for incomplete
+coverage. See [Prometheus metrics](/gateway/prometheus) for timing semantics.
+
 The existing diagnostic heartbeat debug log includes `nextWakeAtMs`, the earliest
 pending wake time in the Gateway scheduler as a Unix timestamp in milliseconds
 (or `none` when no wake is pending). Overdue diagnostic heartbeats run once after sleep;
@@ -345,6 +354,33 @@ paths and V8-specific weak/ephemeron semantics; the script is a strong-edge grap
 summary. `--json` produces machine-readable output. Treat diff output as sensitive
 too: it contains unredacted heap names.
 
+Add `--top 40 --max-depth 60` to include named strong retaining paths and
+dominator chains for the largest growers. `--node <id>` selects a particular
+object in the later snapshot. A shortest root path shows reachability;
+the separate dominator chain identifies exclusive retention in that graph.
+
+From a built source checkout, an isolated synthetic workload can collect a
+comparable pair without connecting to an existing Gateway:
+
+```bash
+node scripts/gateway-heap-rig.mjs --root .rig/node26 --minutes 90
+```
+
+Run this on a dedicated host with enough memory for snapshots. It starts the
+dist Gateway and local mock model servers on loopback ports 19548–19550,
+seeds 2,000 sessions across two agents, and drives ten reconnecting Control UI
+WebSocket clients plus mock model, Code Mode, and subagent turns. A synthetic
+catalog plugin exercises Gateway projection and publication ownership; it does
+not emulate a native provider's caches or remote-node transport.
+The root must be new. All state, logs, minute samples, and snapshots stay there.
+The rig stops its children on completion or interruption and retains evidence.
+Successful RPC counts and any retried refusals are recorded separately. If
+`projects.list` refuses a read because access facts changed, the rig retries it
+once; a second refusal or another error stops the run.
+Use the same script and settings with another Node binary for a runtime control;
+choose another root and three-port block for each run. Raw minute samples include
+allocation churn; compare the snapshot `heapUsedAfter` anchors for post-GC growth.
+
 ## Sampling heap profile
 
 An operator with `operator.admin` can sample allocations in the Gateway's main
@@ -357,8 +393,10 @@ openclaw gateway call diagnostics.heapProfile --params '{"includeObjectsCollecte
 ```
 
 The Node-only RPC defaults to five seconds and an average sampling interval of
-32 KiB. `durationMs` and `samplingIntervalBytes` must be positive integers. Durations above 30 seconds are
-clamped to 30 seconds; intervals below 4 KiB are clamped to 4 KiB. Smaller intervals
+32 KiB. `durationMs` and `samplingIntervalBytes` must be positive integers. With
+both collection flags false, durations are capped at 15 minutes (900,000 ms).
+Enabling either collection flag keeps the duration cap at 30 seconds;
+intervals below 4 KiB are clamped to 4 KiB. Smaller intervals
 collect more samples at greater CPU and memory cost. Choose a CLI timeout longer
 than the requested capture. The critical-memory warning points to this RPC;
 pressure never starts a capture automatically.
@@ -368,6 +406,20 @@ The optional booleans `includeObjectsCollectedByMajorGC` and
 samples of objects collected during the window and attribute transient allocation
 churn. Retaining collected samples can increase profiler memory use.
 
+For retention attribution, keep both collection flags false (the default) and
+use a longer window with a coarser sampling interval:
+
+```bash
+openclaw gateway call diagnostics.heapProfile --json --timeout 930000 --params '{"durationMs":900000,"samplingIntervalBytes":262144}'
+```
+
+Read each node's `selfSize` in `profile.head` as estimated bytes **allocated
+during the window and still alive at stop**. These are allocation sites, not
+retaining paths or objects allocated before capture. The 930,000 ms CLI timeout
+allows 30 seconds beyond the requested window for setup and cleanup; event-loop
+stalls can require more time. Disconnection, authority revocation, or Gateway
+shutdown cancels sampling and discards the partial profile after cleanup.
+
 The result includes actual elapsed `durationMs`, `samplingIntervalBytes`,
 `includeObjectsCollectedByMajorGC`, `includeObjectsCollectedByMinorGC`,
 `heapUsedBefore`, `heapUsedAfter`, `rssBefore`, `rssAfter` (all memory values in
@@ -376,6 +428,27 @@ and `truncated`. When present, `profile` contains the sanitized V8 sampling tree
 and samples. Each node's `selfSize` is the estimated allocation bytes at that call
 site; sum its descendants for inclusive
 bytes. Samples link to nodes by `nodeId`.
+
+`heapSpacesBefore` and `heapSpacesAfter` contain the main isolate's V8 heap-space
+statistics at the same boundaries as the memory readings: `space_name`,
+`space_used_size`, `space_size`, `space_available_size`, and `physical_space_size`
+(sizes in bytes). Compare entries by name to locate growth in old, large-object,
+code, or other spaces. On Node, the [Prometheus exporter](/gateway/prometheus)
+also exposes `openclaw_heap_space_bytes{space="<space_name>",stat="used|size|available|physical"}`
+from the existing 30-second diagnostic memory heartbeat, with the same idle
+sample suppression, never per scrape. Names come from V8's finite space set,
+including spaces added by future V8 versions; each space contributes four gauges
+under the exporter's existing series cap.
+
+Heap and CPU profiles label dependency frames as `[dep:<pkg>]` with URL
+`node_modules/<pkg>`, including scoped packages and pnpm layouts; symbols,
+versions, filenames, and absolute paths stay hidden. URLs with query or fragment
+markers remain redacted. Frames with script ID `0`,
+an empty URL, and a negative line number use `[native]`, except for known V8
+engine labels such as `(root)`. This bucket identifies missing JavaScript source
+attribution, not a specific native allocator or external Buffer bytes. Other
+unrecognized frames remain `[redacted]`; `redactedNodeCount` excludes dependency
+and native labels (CPU nodes with hidden deoptimization reasons still count).
 
 V8 can sample allocations made while constructing its own profile, after a call
 site has been translated into the returned tree. Samples without a matching tree

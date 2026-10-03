@@ -351,7 +351,7 @@ describe("runDoctorConfigPreflight", () => {
                 session: { idleMinutes: 45 },
                 channels: {
                   discord: {
-                    guilds: { "100": { channels: { general: { allow: true } } } },
+                    guilds: { "100": { channels: { general: { enabled: true } } } },
                   },
                 },
               },
@@ -521,6 +521,7 @@ describe("runDoctorConfigPreflight", () => {
     await withUnscopedDoctorConfigPreflightHome(async (home) => {
       await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const configPath = await writeOpenClawConfig(home, {
+          meta: { migrations: { webhookListeners: true } },
           gateway: { mode: "local" },
           plugins: {
             enabled: false,

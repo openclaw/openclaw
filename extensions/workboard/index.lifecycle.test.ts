@@ -1,9 +1,10 @@
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawPluginApi, OpenClawPluginService } from "./api.js";
+import type { OpenClawPluginApi } from "./api.js";
 import plugin from "./index.js";
 import { registerWorkboardGatewayMethods } from "./runtime-api.js";
 import { WorkboardStore } from "./src/store.js";
@@ -13,7 +14,7 @@ const workerModuleUrl = new URL("./src/sqlite-store.worker.ts", import.meta.url)
 const runtimeSource = fileURLToPath(new URL("./index.ts", import.meta.url));
 
 function registerGeneration(register: (api: OpenClawPluginApi) => void = plugin.register) {
-  const services: OpenClawPluginService[] = [];
+  const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
   const methods = new Map<string, Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]>();
   let gatewayStart = () => {};
   let gatewayStop = () => {};
@@ -42,7 +43,9 @@ function registerGeneration(register: (api: OpenClawPluginApi) => void = plugin.
   });
   const warn = vi.fn();
   const emit = vi.fn();
+  const scheduler = createTestPluginServiceScheduler();
   const serviceContext = {
+    scheduler,
     config: {},
     stateDir: process.env.OPENCLAW_STATE_DIR!,
     logger: { ...captured.api.logger, warn },
@@ -56,9 +59,14 @@ function registerGeneration(register: (api: OpenClawPluginApi) => void = plugin.
     await vi.advanceTimersByTimeAsync(0);
   };
   const stop = async () => {
-    gatewayStop();
-    for (const service of services) {
-      await service.stop?.(serviceContext);
+    scheduler.beginClose();
+    try {
+      gatewayStop();
+      for (const service of services) {
+        await service.stop?.(serviceContext);
+      }
+    } finally {
+      await scheduler.stop();
     }
   };
   const cleanup = async (

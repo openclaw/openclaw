@@ -37,7 +37,6 @@ export const triageFailureSchema = z.strictObject({
   expectedVersion: z.string().max(100).optional(),
   gateway: z.enum(["verify-running", "preserve"]),
 });
-const text = managedHandoffLeaseText;
 
 type LeaseRead =
   | { kind: "absent" }
@@ -72,7 +71,7 @@ export function createManagedHandoffLeaseRows(
     const payload = parseManagedHandoffLeasePayload(value.payload_json);
     if (
       !payload ||
-      !text.safeParse(value.owner).success ||
+      !managedHandoffLeaseText.safeParse(value.owner).success ||
       (payload.version === 2 &&
         payload.mutationOriginal &&
         (payload.mutationOriginal.key === root || root.includes("/.openclaw-update-child-"))) ||
@@ -92,6 +91,17 @@ export function createManagedHandoffLeaseRows(
       updatedAt: value.updated_at,
       ...payload,
     };
+  }
+  function descendants(db: HandoffDatabase, parent: { key: string }): LeaseTable[] {
+    const prefix = `${parent.key}/.openclaw-update-child-`;
+    return executeSqliteQuerySync(
+      db,
+      leaseQueries(db)
+        .selectFrom("managed_update_handoffs")
+        .select(["install_root", "owner", "payload_json", "updated_at"])
+        .where("install_root", ">=", prefix)
+        .where("install_root", "<", prefix + "\uffff"),
+    ).rows;
   }
   function deleteRow(db: HandoffDatabase, root: string, value: LeaseRow) {
     return (
@@ -189,6 +199,7 @@ export function createManagedHandoffLeaseRows(
   return {
     row,
     handle,
+    descendants,
     deleteRow,
     updateRow,
     read,

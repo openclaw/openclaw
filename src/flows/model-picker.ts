@@ -92,14 +92,6 @@ function formatModelRefLabel(params: {
     : params.key;
 }
 
-function resolvePickerAgentDir(params: {
-  cfg: OpenClawConfig;
-  agentDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): string {
-  return params.agentDir ?? resolveDefaultAgentDir(params.cfg, params.env ?? process.env);
-}
-
 type PromptDefaultModelParams = {
   config: OpenClawConfig;
   prompter: WizardPrompter;
@@ -120,10 +112,6 @@ type PromptDefaultModelParams = {
 
 type PromptDefaultModelResult = { model?: string; config?: OpenClawConfig };
 type PromptModelAllowlistResult = { models?: string[]; scopeKeys?: string[] };
-
-function resolveConfiguredModelRaw(cfg: OpenClawConfig): string {
-  return resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ?? "";
-}
 
 function resolveConfiguredModelKeys(cfg: OpenClawConfig): string[] {
   const models = cfg.agents?.defaults?.models ?? {};
@@ -556,11 +544,7 @@ export async function promptDefaultModel(
 ): Promise<PromptDefaultModelResult> {
   const cfg = params.config;
   const pickerConfig = resolveModelPickerConfig(cfg, params.agentId);
-  const pickerAgentDir = resolvePickerAgentDir({
-    cfg,
-    ...(params.agentDir !== undefined ? { agentDir: params.agentDir } : {}),
-    ...(params.env !== undefined ? { env: params.env } : {}),
-  });
+  const pickerAgentDir = params.agentDir ?? resolveDefaultAgentDir(cfg, params.env ?? process.env);
   const allowKeep = params.allowKeep ?? true;
   const includeManual = params.includeManual ?? true;
   const includeProviderPluginSetups = params.includeProviderPluginSetups ?? false;
@@ -572,7 +556,7 @@ export async function promptDefaultModel(
     ? normalizeProviderId(preferredProviderRaw)
     : undefined;
   const providerScopedCatalog = Boolean(browseCatalogOnDemand && preferredProvider);
-  const configuredRaw = resolveConfiguredModelRaw(pickerConfig);
+  const configuredRaw = resolveAgentModelPrimaryValue(pickerConfig.agents?.defaults?.model) ?? "";
   const useStaticModelNormalization = !loadCatalog || browseCatalogOnDemand;
   const resolved = resolveConfiguredModelRef({
     cfg: pickerConfig,
@@ -748,9 +732,6 @@ export async function promptDefaultModel(
         env: params.env,
       })
     : undefined;
-  const hasPreferredProvider = preferredProvider
-    ? filteredModels.some((entry) => matchesPreferredProvider?.(entry.provider))
-    : false;
   const literalPrefixProviders = await resolveCachedLiteralPrefixProviders();
 
   // Show the literal form (e.g. nvidia/nvidia/...) in the "Keep current" label
@@ -804,10 +785,9 @@ export async function promptDefaultModel(
     });
   }
 
-  const firstPreferredModel =
-    preferredProvider && hasPreferredProvider
-      ? filteredModels.find((entry) => matchesPreferredProvider?.(entry.provider))
-      : undefined;
+  const firstPreferredModel = preferredProvider
+    ? filteredModels.find((entry) => matchesPreferredProvider?.(entry.provider))
+    : undefined;
   const firstPreferredModelKey = firstPreferredModel
     ? modelCatalogEntryKey(firstPreferredModel)
     : undefined;
@@ -878,13 +858,9 @@ export async function promptModelAllowlist(params: {
   providerScopedCatalog?: boolean;
 }): Promise<PromptModelAllowlistResult> {
   const cfg = resolveModelPickerConfig(params.config, params.agentId);
-  const pickerAgentDir = resolvePickerAgentDir({
-    cfg,
-    ...(params.agentDir !== undefined ? { agentDir: params.agentDir } : {}),
-    ...(params.env !== undefined ? { env: params.env } : {}),
-  });
+  const pickerAgentDir = params.agentDir ?? resolveDefaultAgentDir(cfg, params.env ?? process.env);
   const existingKeys = resolveConfiguredModelKeys(cfg);
-  const configuredRaw = resolveConfiguredModelRaw(cfg);
+  const configuredRaw = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ?? "";
   const allowedKeys = normalizeModelKeys(params.allowedKeys ?? []);
   const preferredProviderRaw = normalizeOptionalString(params.preferredProvider);
   const preferredProvider = preferredProviderRaw

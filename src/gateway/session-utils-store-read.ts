@@ -59,6 +59,7 @@ export function loadGatewaySessionStoreReads(reads: readonly GatewaySessionStore
   const results = loadExactSessionEntryCandidatesReadOnlyBatch(
     pending.map((read) => ({
       agentId: read.agentId,
+      env: read.options.env,
       storePath: read.storePath,
       projection: read.options.projection,
       clone: false,
@@ -85,6 +86,7 @@ function loadGatewaySessionLookupStore(
   clone: boolean | undefined,
   agentId?: string,
   options: {
+    env?: NodeJS.ProcessEnv;
     readOnly?: boolean;
     cache?: GatewaySessionStoreCache;
     exactKeys?: readonly string[];
@@ -128,6 +130,7 @@ function loadGatewaySessionLookupStoreUncached(
         };
     const entries = loadExactSessionEntryCandidates({
       ...target,
+      env: options.env,
       projection: options.projection,
       sessionKeys: options.exactKeys,
       onReadSource: (source) => {
@@ -147,6 +150,7 @@ function loadGatewaySessionLookupStoreUncached(
   return {
     store: Object.fromEntries(
       listEntries({
+        env: options.env,
         ...(agentId ? { agentId } : {}),
         ...(clone === false ? { clone: false } : {}),
         ...(options.projection ? { projection: options.projection } : {}),

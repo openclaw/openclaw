@@ -144,19 +144,17 @@ export function applyRecordedAllowlistUse(params: {
       authorization: params.authorization,
     });
   }
-  return applyRecordedAllowlistMetadata(params);
+  return applyRecordedAllowlistMetadata({ ...params, keys });
 }
 
 function applyRecordedAllowlistMetadata(params: {
   file: ExecApprovalsFile;
   agentId: string | undefined;
-  matches: readonly ExecAllowlistEntry[];
+  keys: ReadonlySet<string>;
   command: string;
   resolvedPath?: string;
 }): ExecApprovalsFile | null {
-  const keys = new Set(
-    params.matches.filter((entry) => entry.pattern).map(buildAllowlistEntryMatchKey),
-  );
+  const { keys } = params;
   if (keys.size === 0) {
     return null;
   }
@@ -226,19 +224,15 @@ export function applyExecAuthorizationCommit(
     authorization: params.authorization,
   });
 
-  let next = file;
-  let changed = false;
-  if (params.allowAlwaysDecision && params.allowAlwaysDecision.kind !== "one-shot") {
-    const granted = applyAllowAlwaysDecision({
-      file: next,
-      agentId: params.agentId,
-      decision: params.allowAlwaysDecision,
-    });
-    if (granted) {
-      next = granted;
-      changed = true;
-    }
-  }
-  const recorded = applyRecordedAllowlistMetadata({ ...params, file: next });
-  return recorded ?? (changed ? next : null);
+  const granted =
+    params.allowAlwaysDecision && params.allowAlwaysDecision.kind !== "one-shot"
+      ? applyAllowAlwaysDecision({
+          file,
+          agentId: params.agentId,
+          decision: params.allowAlwaysDecision,
+        })
+      : null;
+  return (
+    applyRecordedAllowlistMetadata({ ...params, file: granted ?? file, keys: matchKeys }) ?? granted
+  );
 }

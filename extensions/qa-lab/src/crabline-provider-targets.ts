@@ -4,8 +4,8 @@ import type {
   OpenClawCrablineInboundInput,
   StartedOpenClawCrablineCorrelatedAdapter,
 } from "@openclaw/crabline";
+import type { QaBusInboundMessageInput } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { parseQaTarget } from "./qa-bus-protocol.js";
-import type { QaBusInboundMessageInput } from "./runtime-api.js";
 
 const MATRIX_QA_SERVER_NAME = "matrix-qa.test";
 const MATRIX_QA_DRIVER_ID = `@driver:${MATRIX_QA_SERVER_NAME}`;

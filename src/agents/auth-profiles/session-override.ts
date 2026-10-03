@@ -270,19 +270,13 @@ export async function clearSessionAuthProfileOverride(params: {
   storePath?: string;
   assertCommitAllowed?: () => void;
 }) {
-  const { sessionEntry, sessionStore, sessionKey, storePath } = params;
   await persistSessionAuthProfileOverrideState({
-    agentId: params.agentId,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
+    ...params,
     state: {
       authProfileOverride: undefined,
       authProfileOverrideSource: undefined,
       authProfileOverrideCompactionCount: undefined,
     },
-    storePath,
-    assertCommitAllowed: params.assertCommitAllowed,
   });
 }
 

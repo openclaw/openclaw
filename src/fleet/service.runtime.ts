@@ -698,7 +698,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
     },
 
     async doctor(tenant?: string) {
-      return await runFleetDoctor({ env, containers, fetchImpl, tenant, getuid, getgid });
+      return await runFleetDoctor({ env, containers, fetchImpl, tenant });
     },
 
     async remove(params: {

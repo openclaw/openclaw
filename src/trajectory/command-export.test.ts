@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   exportTrajectoryForCommand,
   formatTrajectoryCommandExportSummary,
 } from "./command-export.js";
 import { resolveTrajectoryFilePath } from "./paths.js";
+import * as runtimeStoreWriter from "./runtime-store-writer.js";
 import { createTrajectoryRuntimeRecorder } from "./runtime.js";
 import type { TrajectoryBundleManifest } from "./types.js";
 
@@ -52,6 +53,8 @@ const cases: Array<{
 ];
 
 describe("trajectory command export inventory", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it.each(cases)(
     "reports only written files in existing order for $name",
     async ({ contexts, contextFiles, outputPath = "inventory" }) => {
@@ -79,19 +82,17 @@ describe("trajectory command export inventory", () => {
         await fs.writeFile(sessionFile, sessionBytes);
         const runtimeFile = resolveTrajectoryFilePath({ env: {}, sessionFile, sessionId });
         const writes: string[] = [];
+        vi.spyOn(runtimeStoreWriter, "createSqliteTrajectoryRuntimeSink").mockReturnValueOnce({
+          write: (_event, line) => writes.push(`${line}\n`),
+          flush: async () => {},
+          describeFlushState: () => undefined,
+        });
         const recorder = createTrajectoryRuntimeRecorder({
           sessionId,
           sessionKey,
           sessionFile,
           workspaceDir: root,
           env: { OPENCLAW_TRAJECTORY: "1" },
-          writer: {
-            filePath: runtimeFile,
-            write: (line) => {
-              writes.push(line);
-            },
-            flush: async () => {},
-          },
         });
         if (!recorder) {
           throw new Error("Expected the synthetic recorder to be enabled");

@@ -59,12 +59,6 @@ export function isTelegramHistoryEntryAfterAmbientWatermark(
   return entry.messageId !== watermark.messageId;
 }
 
-function telegramChatWindowPayload(
-  entry: TelegramPromptContextEntry | undefined,
-): Record<string, unknown> | undefined {
-  return asOptionalRecord(entry?.payload);
-}
-
 function telegramPromptMessages(payload: Record<string, unknown> | undefined) {
   return Array.isArray(payload?.["messages"]) ? payload["messages"].filter(isRecord) : [];
 }
@@ -78,7 +72,7 @@ export function telegramPromptContextHistory(
 ): HistoryEntry[] {
   return promptContext.flatMap((entry) =>
     isTelegramChatWindowPromptContext(entry)
-      ? telegramPromptMessages(telegramChatWindowPayload(entry)).flatMap((message) =>
+      ? telegramPromptMessages(asOptionalRecord(entry.payload)).flatMap((message) =>
           typeof message["body"] === "string" && typeof message["sender"] === "string"
             ? [
                 {
@@ -108,7 +102,7 @@ export function selectTelegramGroupPromptContext(params: {
     if (!isTelegramChatWindowPromptContext(entry)) {
       return [entry];
     }
-    const payload = telegramChatWindowPayload(entry);
+    const payload = asOptionalRecord(entry.payload);
     const sourceMessages = telegramPromptMessages(payload);
     const recentMessages =
       params.historyLimit > 0

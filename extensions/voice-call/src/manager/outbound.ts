@@ -42,21 +42,8 @@ type InitiateContext = Pick<
   | "isStopping"
 >;
 
-type SpeakContext = Pick<
-  CallManagerContext,
-  | "activeCalls"
-  | "providerCallIdMap"
-  | "provider"
-  | "config"
-  | "storePath"
-  | "stateRuntime"
-  | "transcriptWaiters"
-  | "maxDurationTimers"
-  | "endCallOperations"
-  | "mutationQueue"
-  | "trackCallWork"
-  | "isStopping"
->;
+type SpeakContext = EndCallContext &
+  Pick<CallManagerContext, "config" | "trackCallWork" | "isStopping">;
 
 type ConversationContext = SpeakContext &
   Pick<CallManagerContext, "activeTurnCalls" | "initialMessageInFlight" | "notifyHangupTimers">;
@@ -159,8 +146,7 @@ export async function initiateCall(
   }
 
   const callId = crypto.randomUUID();
-  const from =
-    ctx.config.fromNumber || (ctx.provider?.name === "mock" ? "+15550000000" : undefined);
+  const from = ctx.config.fromNumber || (ctx.provider.name === "mock" ? "+15550000000" : undefined);
   if (!from) {
     return { callId: "", success: false, error: "fromNumber not configured" };
   }
@@ -205,7 +191,6 @@ export async function initiateCall(
     if (ctx.isStopping()) {
       throw new Error("Voice Call manager is stopping");
     }
-    // For notify mode with a message, use inline TwiML with <Say>.
     let inlineTwiml: string | undefined;
     let preConnectTwiml: string | undefined;
     if (mode === "notify" && initialMessage) {
@@ -332,13 +317,12 @@ export async function speak(
     const voice = resolvePreferredTtsVoice(
       resolveVoiceCallEffectiveConfig(ctx.config, numberRouteKey).config,
     );
-    const playbackOptions = options?.listenAfterPlayback ? { listenAfterPlayback: true } : {};
     await provider.playTts({
       callId,
       providerCallId: call.providerCallId ?? providerCallId,
       text,
       voice,
-      ...playbackOptions,
+      ...(options?.listenAfterPlayback ? { listenAfterPlayback: true } : {}),
     });
 
     if (!(await updateCall(ctx, call, (next) => addTranscriptEntry(next, "bot", text)))) {
@@ -358,14 +342,15 @@ export async function speak(
   }
 }
 
-function shouldStartListeningAfterInitialMessage(ctx: ConversationContext): boolean {
-  if (ctx.provider?.name !== "twilio") {
-    return true;
-  }
-  if (!ctx.config.streaming.enabled) {
-    return true;
-  }
-  return ctx.provider.isConversationStreamConnectEnabled?.() !== true;
+export function hasConversationStreamConnect(
+  provider: CallManagerContext["provider"],
+  config: CallManagerContext["config"],
+): boolean {
+  return (
+    provider?.name === "twilio" &&
+    config.streaming.enabled &&
+    provider.isConversationStreamConnectEnabled?.() === true
+  );
 }
 
 export async function sendDtmf(
@@ -486,7 +471,7 @@ export async function speakInitialMessage(
     } else if (
       mode === "conversation" &&
       ctx.provider &&
-      shouldStartListeningAfterInitialMessage(ctx)
+      !hasConversationStreamConnect(ctx.provider, ctx.config)
     ) {
       if (
         !(await updateCall(ctx, call, (next) => transitionState(next, "listening"))) ||
@@ -558,7 +543,6 @@ export async function continueCall(
     const transcript = await waitForFinalTranscript(ctx, callId, turnToken);
     const transcriptReceivedAt = Date.now();
 
-    // Best-effort: stop listening after final transcript.
     await provider.stopListening({ callId, providerCallId });
 
     const lastTurnLatencyMs = transcriptReceivedAt - turnStartedAt;
@@ -580,12 +564,7 @@ export async function continueCall(
     }
 
     console.log(
-      "[voice-call] continueCall latency call=" +
-        call.callId +
-        " totalMs=" +
-        String(lastTurnLatencyMs) +
-        " listenWaitMs=" +
-        String(lastTurnListenWaitMs),
+      `[voice-call] continueCall latency call=${call.callId} totalMs=${lastTurnLatencyMs} listenWaitMs=${lastTurnListenWaitMs}`,
     );
 
     return { success: true, transcript };

@@ -35,6 +35,7 @@ import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/age
 import { waitForChatAbortTerminalPersistence } from "../chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
+import { formatStopRequest } from "../control-plane-audit.js";
 import { resolveSessionForRun } from "../server-session-key.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import {
@@ -49,7 +50,7 @@ import {
   resolveStoredSessionOwnerAgentId,
 } from "../session-store-key.js";
 import { loadSessionEntry } from "../session-utils.js";
-import { resolveWorkerInferenceTarget } from "../worker-environments/inference-control-internal.js";
+import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import { resolveChatAbortRequester } from "./chat-abort-authorization.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
 import {
@@ -165,6 +166,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsAbortParams, "sessions.abort", respond)) {
       return;
     }
+    context.logGateway.info(formatStopRequest("sessions.abort", client, params));
     const p = params;
     const cfg = context.getRuntimeConfig();
     const requestedRunId = readStringValue(p.runId);
@@ -172,7 +174,9 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     const requestedParamAgentId = normalizeOptionalString(p.agentId);
     const clearQueued = p.clearQueued === true;
     const workerRunTarget = requestedRunId
-      ? resolveWorkerInferenceTarget(context.workerEnvironmentService, requestedRunId)
+      ? getWorkerInferenceSessionControl(
+          context.workerEnvironmentService,
+        )?.resolveSessionTargetForRunId(requestedRunId)
       : undefined;
     const embeddedRun = requestedRunId
       ? resolveActiveEmbeddedRunOwnerByRunId(requestedRunId)

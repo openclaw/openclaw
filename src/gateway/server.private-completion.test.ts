@@ -421,11 +421,18 @@ describe("private subagent completion processing receipts", () => {
   it("publishes a failed final when the required receipt write fails, then permits retry", async () => {
     ensureSessionInputCompletionsSchema(database().db);
     database().db.exec(
-      "CREATE TRIGGER fail_private_receipt BEFORE INSERT ON session_input_completions BEGIN SELECT RAISE(ABORT, 'synthetic receipt write unavailable'); END",
+      "CREATE TEMP TRIGGER fail_private_receipt BEFORE INSERT ON session_input_completions BEGIN SELECT RAISE(ABORT, 'synthetic receipt write unavailable'); END",
     );
     agentCommandMock.mockImplementation(processPrivateInput);
     try {
-      await expect(dispatch()).rejects.toThrow("synthetic receipt write unavailable");
+      let acceptedEntry: ChatAbortControllerEntry | undefined;
+      await expect(
+        dispatch(undefined, () => {
+          acceptedEntry = kernel.gatewayRequestContext.chatAbortControllers.get(runId);
+        }),
+      ).rejects.toThrow("synthetic receipt write unavailable");
+      const active = expectDefined(acceptedEntry, "accepted private receipt controller");
+      await expectDefined(active.executionSettlement, "private receipt execution").completion;
       expect(kernel.gatewayRequestContext.chatAbortControllers.has(runId)).toBe(false);
       expect(kernel.gatewayRequestContext.dedupe.get(`agent:${runId}`)).toMatchObject({
         ok: false,
@@ -521,7 +528,7 @@ describe("private subagent completion processing receipts", () => {
       ensureSessionInputCompletionsSchema(database().db);
       const table = phase === "admission" ? "session_pending_inputs" : "session_input_completions";
       database().db.exec(
-        `CREATE TRIGGER fail_private_admission BEFORE INSERT ON ${table} BEGIN SELECT RAISE(ABORT, 'synthetic private transaction failure'); END`,
+        `CREATE TEMP TRIGGER fail_private_admission BEFORE INSERT ON ${table} BEGIN SELECT RAISE(ABORT, 'synthetic private transaction failure'); END`,
       );
       const aborted: Array<{ runId: string; entry: ChatAbortControllerEntry }> = [];
       try {
@@ -884,10 +891,11 @@ describe("private subagent completion processing receipts", () => {
         expect(kernel.gatewayRequestContext.chatAbortControllers.get(runId)).toBe(active);
         expect(completions()).toEqual([]);
         if (kind === "abandoned") {
-          // Keep the real terminal write pending through maintenance retirement.
+          // Keep the real terminal write and raw execution pending through timeout settlement.
           expect(terminalWrite).toBeInstanceOf(Promise);
           await clock.advanceBy(60_000);
-          expect(kernel.gatewayRequestContext.chatAbortControllers.has(runId)).toBe(false);
+          expect(kernel.gatewayRequestContext.chatAbortControllers.get(runId)).toBe(active);
+          expect(active.executionSettlement?.status).toBe("pending");
           expect(active.projectSessionTerminalPending).toBe(true);
           expect(active.projectSessionTerminalPersistence).toBe(terminalWrite);
           expect(JSON.parse(String(completions()[0]?.outcome_json))).toMatchObject({

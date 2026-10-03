@@ -138,6 +138,7 @@ export function createReplyOperation(params: {
     result = next;
     toolAuthority.close();
     recordActivity();
+    phase = next.kind;
   };
   const markProgress = (reason: string) => {
     markDiagnosticRunProgress({
@@ -438,7 +439,6 @@ export function createReplyOperation(params: {
       producerCompletion.resolve();
       if (!result) {
         setResult({ kind: "completed" });
-        phase = "completed";
       }
       clearState();
       settleOwner();
@@ -457,7 +457,6 @@ export function createReplyOperation(params: {
         : completed;
       if (!result) {
         setResult({ kind: "completed" });
-        phase = "completed";
       }
       clearState(barrier, timeoutMs);
       // This barrier owns dispatch delivery and terminal persistence. Stale
@@ -471,7 +470,6 @@ export function createReplyOperation(params: {
       finalizationLease.clear();
       if (!result) {
         setResult({ kind: "failed", code, cause });
-        phase = "failed";
       }
       if (!retainFailureUntilComplete && !retainStateUntilCompleteOperations.has(operation)) {
         clearState();
@@ -505,7 +503,6 @@ export function createReplyOperation(params: {
       beforeSupersede?.();
       if (abortFrozen) {
         setResult({ kind: "aborted", code: "aborted_for_supersession" });
-        phase = "aborted";
         scheduleTerminalSettle();
         return true;
       }
@@ -533,7 +530,6 @@ export function createReplyOperation(params: {
       // from post-output stalls (finalization/terminal cleanup; feedback is noise).
       staleExpiryReason = reason;
       setResult({ kind: "failed", code: "run_stalled" });
-      phase = "failed";
     }
     if (options?.afterClearBarrier) {
       // Prepare the recovery fence before cancellation, but retain exact lane
@@ -614,7 +610,6 @@ export function createReplyOperation(params: {
     }
     if (!result) {
       setResult({ kind: "aborted", code: "aborted_for_restart" });
-      phase = "aborted";
     }
     controller.abort(createAgentRunRestartAbortError());
     try {

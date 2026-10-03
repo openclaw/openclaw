@@ -502,7 +502,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           "channel-list",
         ],
         describeMessageTool: describeMSTeamsMessageTool,
-        extractToolSendResult: ({ result, send }) => extractMSTeamsToolSendResult(result, send),
+        extractToolSendResult: ({ result }) => extractMSTeamsToolSendResult(result),
         requiresTrustedRequesterSender: ({ action, toolContext }) =>
           normalizeOptionalString(toolContext?.currentChannelProvider)?.toLowerCase() ===
             "msteams" && MSTEAMS_GROUP_MANAGEMENT_ACTIONS.has(action),

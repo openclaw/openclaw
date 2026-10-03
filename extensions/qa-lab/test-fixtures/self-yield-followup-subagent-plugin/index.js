@@ -55,6 +55,7 @@ export default {
       }
       const state = getState();
       state.yieldEntered = true;
+      // Admit the continuation before the paused turn can publish its requester notice.
       await new Promise((resolve) => {
         state.releaseYield = resolve;
       });

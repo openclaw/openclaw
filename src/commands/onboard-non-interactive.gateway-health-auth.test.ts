@@ -2,12 +2,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withSetupHealthGateway } from "../../test/helpers/setup-health-gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deleteTestEnvValue } from "../test-utils/env.js";
 import {
   capturedReplaceConfigFileCalls,
   configWritePluginLeaseDepths,
   gatewayReachableState,
+  gatewayServiceMock,
   healthCommandMock,
   readTestConfig,
   resolveTestConfigPath,
@@ -21,6 +23,8 @@ import {
   readOnboardFirstMockCall,
   type OnboardGatewayHealthCall,
 } from "./onboard-non-interactive.test-helpers.js";
+
+const SETUP_GATEWAY_PORT = 19861;
 
 async function writeSecureFile(filePath: string, content: string): Promise<void> {
   await fs.writeFile(filePath, content, { mode: 0o600 });
@@ -48,12 +52,19 @@ describe("onboard (non-interactive): gateway health auth", () => {
     deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
     deleteTestEnvValue("OPENCLAW_GATEWAY_PASSWORD");
     vi.clearAllMocks();
+    healthCommandMock.mockReset().mockResolvedValue(undefined);
+    gatewayServiceMock.readRuntime.mockReset().mockResolvedValue({
+      status: "running",
+      state: "active",
+      pid: 4242,
+    });
   });
 
   async function runHealthSetup(
     stateDir: string,
     config: OpenClawConfig,
     reachable = true,
+    port = SETUP_GATEWAY_PORT,
   ): Promise<unknown> {
     testConfigStore.set(resolveTestConfigPath(), config);
     gatewayReachableState.mock = vi.fn(async () =>
@@ -61,7 +72,12 @@ describe("onboard (non-interactive): gateway health auth", () => {
     );
     const { runtimeWithCapture, readCapturedJson } = createOnboardJsonCaptureRuntime();
     const setup = runNonInteractiveSetup(
-      { ...createOnboardLocalDaemonOptions(stateDir), installDaemon: false, json: true },
+      {
+        ...createOnboardLocalDaemonOptions(stateDir),
+        gatewayPort: port,
+        installDaemon: false,
+        json: true,
+      },
       runtimeWithCapture,
     );
     if (reachable) {
@@ -71,6 +87,30 @@ describe("onboard (non-interactive): gateway health auth", () => {
     }
     return JSON.parse(readCapturedJson());
   }
+
+  it("keeps real health authentication on the setup Gateway despite ambient endpoints", async ({
+    signal,
+  }) => {
+    const actual = await vi.importActual<typeof import("./health.js")>("./health.js");
+    await withStateDir("state-real-health-", async (stateDir) => {
+      await withSetupHealthGateway("noninteractive", signal, async ({ config, port, pid }) => {
+        gatewayServiceMock.readRuntime.mockResolvedValue({
+          status: "running",
+          state: "active",
+          pid,
+        });
+        let completed = false;
+        healthCommandMock.mockImplementation(async (...args) => {
+          await actual.healthCommandNonExiting(...args);
+          completed = true;
+        });
+        const result = await runHealthSetup(stateDir, config, true, port);
+        expect(completed).toBe(true);
+        expect(result).toMatchObject({ ok: true });
+        expect(readTestConfig().gateway?.auth?.mode).toBe("trusted-proxy");
+      });
+    });
+  }, 90_000);
 
   it("resolves file SecretRefs for the local onboarding health probe without persisting plaintext", async () => {
     await withStateDir("state-file-token-", async (stateDir) => {
@@ -127,25 +167,45 @@ describe("onboard (non-interactive): gateway health auth", () => {
     });
   });
 
-  it("resolves password auth for the local onboarding health probe", async () => {
-    await withStateDir("state-password-ref-", async (stateDir) => {
-      process.env.OPENCLAW_GATEWAY_TOKEN = "stale-env-token";
-      process.env.OPENCLAW_GATEWAY_PASSWORD = "resolved-password"; // pragma: allowlist secret
-      const passwordRef = {
-        source: "env" as const,
-        provider: "default",
-        id: "OPENCLAW_GATEWAY_PASSWORD",
-      };
-      const result = await runHealthSetup(stateDir, {
-        gateway: { auth: { mode: "password", password: passwordRef } },
-      });
+  it.each(["password", "trusted-proxy"] as const)(
+    "resolves %s auth for the local onboarding health probe",
+    async (mode) => {
+      await withStateDir("state-password-ref-", async (stateDir) => {
+        if (mode === "password") {
+          process.env.OPENCLAW_GATEWAY_TOKEN = "stale-env-token";
+        }
+        process.env.OPENCLAW_GATEWAY_PASSWORD = "resolved-password"; // pragma: allowlist secret
+        const passwordRef = {
+          source: "env" as const,
+          provider: "default",
+          id: "OPENCLAW_GATEWAY_PASSWORD",
+        };
+        const result = await runHealthSetup(stateDir, {
+          gateway: {
+            auth: {
+              mode,
+              password: passwordRef,
+              ...(mode === "trusted-proxy"
+                ? { trustedProxy: { userHeader: "x-forwarded-user" } }
+                : {}),
+            },
+            trustedProxies: ["10.0.0.5"],
+          },
+        });
 
-      expectAuthCall(gatewayReachableState.mock, "reachability", { password: "resolved-password" });
-      expectAuthCall(healthCommandMock, "health", { password: "resolved-password" });
-      expect(readTestConfig().gateway?.auth?.password).toEqual(passwordRef);
-      expect(result).toMatchObject({ ok: true });
-    });
-  });
+        expectAuthCall(gatewayReachableState.mock, "reachability", {
+          password: "resolved-password",
+        });
+        expectAuthCall(healthCommandMock, "health", { password: "resolved-password" });
+        expect(healthCommandMock).toHaveBeenCalledWith(
+          expect.objectContaining({ localPortOverride: SETUP_GATEWAY_PORT }),
+          expect.anything(),
+        );
+        expect(readTestConfig().gateway?.auth?.password).toEqual(passwordRef);
+        expect(result).toMatchObject({ ok: true });
+      });
+    },
+  );
 
   it("does not fall back to ambient password auth when its configured SecretRef is unresolved", async () => {
     await withStateDir("state-missing-password-", async (stateDir) => {

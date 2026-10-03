@@ -18,6 +18,7 @@ import {
   findCliTerminalStopError,
   findCliTimeoutError,
   isFailoverError,
+  isNonProviderRuntimeCoordinationError,
 } from "../../agents/failover-error.js";
 import {
   renderAssistantRequestFailureCopy,
@@ -48,6 +49,7 @@ import {
   readErrorCauses,
   readErrorName,
 } from "../../infra/errors.js";
+import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
 import { buildProviderLoginRecovery } from "../provider-login-recovery.js";
 import {
   copyReplyPayloadMetadata,
@@ -260,6 +262,16 @@ export function buildExternalRunFailureReply(
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
   const useHeartbeatFailureCopy = options?.useHeartbeatFailureCopy ?? options?.isHeartbeat === true;
+  if (
+    collectErrorGraphCandidates(error, readErrorCauses).some(
+      (candidate) => candidate instanceof SkillResourceDeliveryLimitError,
+    )
+  ) {
+    return {
+      text: "⚠️ Selected skill resources exceed the 8 MiB delivery limit. Select fewer skills, then try again.",
+      isGenericRunnerFailure: false,
+    };
+  }
   // A preflight refusal is host-authored and names the next step. Heartbeats run
   // unattended in the owner's session, so they disclose it without the verbose
   // opt-in; raw thrown detail further below stays verbose-gated.
@@ -288,10 +300,10 @@ export function buildExternalRunFailureReply(
   if (failoverCodeCopy) {
     return { text: failoverCodeCopy, isGenericRunnerFailure: false };
   }
-  const runtimeCoordinationFailure = renderRuntimeCoordinationFailureCopy(
-    error,
-    failoverFacts.code,
-  );
+  const runtimeCoordinationFailure =
+    failoverFacts.code && isNonProviderRuntimeCoordinationError(error)
+      ? renderRuntimeCoordinationFailureCopy(failoverFacts.code)
+      : undefined;
   if (runtimeCoordinationFailure) {
     return { text: runtimeCoordinationFailure, isGenericRunnerFailure: false };
   }

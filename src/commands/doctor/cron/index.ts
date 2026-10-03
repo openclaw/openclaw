@@ -329,6 +329,20 @@ export async function maybeRepairLegacyCronStore(params: {
     return;
   }
   const { storePath, legacyQuarantine, invalidConfigRows, persistedQuarantine, rawJobs } = state;
+  const repair = async (normalized?: ReturnType<typeof normalizeStoredCronJobs>) => {
+    if (
+      await params.prompter.confirm({ message: "Repair legacy cron jobs now?", initialValue: true })
+    ) {
+      noteLegacyCronRepairResult(
+        await applyLegacyCronStoreRepair({
+          cfg: params.cfg,
+          state,
+          ...(normalized ? { normalized } : {}),
+          recoverQuarantinedScheduleJobs: true,
+        }),
+      );
+    }
+  };
   const revalidatableQuarantineCount = persistedQuarantine.filter(
     (entry) => entry.reason === "invalid-schedule" && entry.job,
   ).length;
@@ -374,33 +388,18 @@ export async function maybeRepairLegacyCronStore(params: {
     if (!legacyQuarantine && invalidConfigRows.length === 0 && revalidatableQuarantineCount === 0) {
       return;
     }
-    const previewLines: string[] = [];
-    previewLines.push(...storagePreviewLines);
     const noteHeading = legacyQuarantine
       ? `Legacy cron storage detected at ${shortenHomePath(storePath)}.`
       : `Cron store issues detected at ${shortenHomePath(sqliteStorePath)}.`;
     note(
       [
         noteHeading,
-        ...previewLines,
+        ...storagePreviewLines,
         `Repair with ${formatCliCommand("openclaw doctor --fix")} to finish the migration.`,
       ].join("\n"),
       "Cron",
     );
-    const shouldRepair = await params.prompter.confirm({
-      message: "Repair legacy cron jobs now?",
-      initialValue: true,
-    });
-    if (!shouldRepair) {
-      return;
-    }
-    noteLegacyCronRepairResult(
-      await applyLegacyCronStoreRepair({
-        cfg: params.cfg,
-        state,
-        recoverQuarantinedScheduleJobs: true,
-      }),
-    );
+    await repair();
     return;
   }
   noteCronModelOverrides({ cfg: params.cfg, jobs: rawJobs });
@@ -505,20 +504,5 @@ export async function maybeRepairLegacyCronStore(params: {
     "Cron",
   );
 
-  const shouldRepair = await params.prompter.confirm({
-    message: "Repair legacy cron jobs now?",
-    initialValue: true,
-  });
-  if (!shouldRepair) {
-    return;
-  }
-
-  noteLegacyCronRepairResult(
-    await applyLegacyCronStoreRepair({
-      cfg: params.cfg,
-      state,
-      normalized,
-      recoverQuarantinedScheduleJobs: true,
-    }),
-  );
+  await repair(normalized);
 }

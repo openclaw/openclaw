@@ -165,8 +165,9 @@ describe("plugin subagent sessions_yield follow-up", () => {
     const outbound = state
       .getSnapshot()
       .messages.filter((message) => message.direction === "outbound");
-    // Exactly one announce for the whole continued run: the paused kickoff must
-    // not announce separately, and the follow-up must not announce twice.
+    // The queued follow-up supersedes the paused turn before its notice publishes.
+    // Only the final completion may reach the requester, exactly once.
+    expect(outbound).toHaveLength(outboundStartIndex + 1);
     expect(
       outbound.filter((message) => message.text.includes(QA_SUBAGENT_SELF_YIELD_MARKER)),
     ).toHaveLength(1);
@@ -216,6 +217,7 @@ describe("plugin subagent sessions_yield follow-up", () => {
           (request) => request.plannedToolName === "sessions_yield",
         ).length,
         childModelRequests: handoffRequests.length,
+        pauseNoticeRequests: requests.length - handoffRequests.length,
         visibleReplies: outbound.filter((message) =>
           message.text.includes(QA_SUBAGENT_SELF_YIELD_MARKER),
         ).length,
@@ -227,6 +229,7 @@ describe("plugin subagent sessions_yield follow-up", () => {
     expect(verdict.facts).toEqual({
       sessionsYieldCalls: 1,
       childModelRequests: 2,
+      pauseNoticeRequests: 0,
       visibleReplies: 1,
       duplicateRepliesAfterQuietWindow: 0,
       duplicateRepliesAfterGatewayRestart: 0,

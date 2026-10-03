@@ -8,10 +8,8 @@ import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inv
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { finalizeRestartUpdateRun } from "../../gateway/server-restart-update-run.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
-import {
-  swapStagedPackageInstall,
-  type PackageUpdateTransaction,
-} from "../../infra/package-update-swap.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
+import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import {
   createPackageSwapFixture,
   createRetainedPackageSwap,

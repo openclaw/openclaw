@@ -129,7 +129,7 @@ const mockState = vi.hoisted(() => {
     triggerAgentRunStart: false,
     replyDispatchRun: undefined as ReplyDispatchRun | undefined,
     triggerUserMessagePersisted: false,
-    runtimeUserMessagePersistencePending: null as Promise<void> | null,
+    runtimeUserMessagePersistenceError: null as Error | null,
     onAfterAgentRunStart: null as (() => void) | null,
     agentRunId: "run-agent-1",
     sessionEntry: {} as Record<string, unknown>,
@@ -331,10 +331,12 @@ dispatchInboundMessageMock.mockImplementation(
         timestamp: Date.now(),
       });
     }
-    if (mockState.runtimeUserMessagePersistencePending) {
-      params.replyOptions?.userTurnTranscriptRecorder?.markRuntimePersistencePending(
-        mockState.runtimeUserMessagePersistencePending,
+    if (mockState.runtimeUserMessagePersistenceError) {
+      const runtimeRecorder = expectDefined(recorder, "runtime persistence fixture");
+      runtimeRecorder.markRuntimePersistencePending(
+        Promise.reject(mockState.runtimeUserMessagePersistenceError),
       );
+      await runtimeRecorder.waitForRuntimePersistence();
     }
     if (mockState.dispatchErrorAfterAgentRunStart) {
       throw mockState.dispatchErrorAfterAgentRunStart;
@@ -5476,9 +5478,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       "openclaw-chat-send-user-transcript-success-runtime-persist-failed-",
     );
     mockState.triggerAgentRunStart = true;
-    mockState.runtimeUserMessagePersistencePending = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error("runtime prompt mirror failed")), 0);
-    });
+    mockState.runtimeUserMessagePersistenceError = new Error("runtime prompt mirror failed");
     mockState.finalPayload = { text: "agent still answered" };
     const { context, send } = createChatRequestFixture();
 

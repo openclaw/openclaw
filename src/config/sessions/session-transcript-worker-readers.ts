@@ -53,6 +53,12 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    readRuntimeTarget: reader(
+      "session-runtime-target",
+      "runtime transcript target",
+      (input) => ({ kind: "session-runtime-target", ...input }),
+      (value) => value.target,
+    ),
     readConversations: reader(
       "conversation-rows",
       "conversations",

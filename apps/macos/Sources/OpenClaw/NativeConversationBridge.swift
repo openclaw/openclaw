@@ -426,6 +426,17 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
             completionHandler: completionHandler)
     }
 
+    /// WebKit defaults to prompting when this delegate method is absent.
+    func webView(
+        _: WKWebView,
+        requestMediaCapturePermissionFor _: WKSecurityOrigin,
+        initiatedByFrame _: WKFrameInfo,
+        type _: WKMediaCaptureType,
+        decisionHandler: @escaping @MainActor @Sendable (WKPermissionDecision) -> Void)
+    {
+        decisionHandler(ControlUIDocumentHost.mediaCaptureDecision(.prompt))
+    }
+
     func webView(
         _ webView: WKWebView,
         runJavaScriptConfirmPanelWithMessage message: String,
@@ -461,7 +472,7 @@ final class NativeConversationBridge: NSObject, WKNavigationDelegate, WKUIDelega
             for: navigationAction.request.url,
             sourceIsNativeReadingTab: false)
         {
-            NSWorkspace.shared.open(url)
+            AppActivation.shared.open(url)
         }
         return nil
     }

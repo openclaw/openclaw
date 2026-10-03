@@ -138,6 +138,7 @@ it.each(["transaction", "commit"] as const)(
         sessionId: scope.sessionId,
         sessionKey: scope.sessionKey,
         databasePath: database.path,
+        workerDatabasePath: identity.canonicalPath,
         idempotencyKey: "late:user",
         lifecycleGeneration: getAgentEventLifecycleGeneration(),
         messageJson: JSON.stringify(receipt.message),

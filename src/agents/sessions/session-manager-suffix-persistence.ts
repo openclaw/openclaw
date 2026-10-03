@@ -11,14 +11,14 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
+import type {
+  SessionTranscriptMaintenanceRead,
+  SessionTranscriptMaintenanceFacts,
+} from "../../config/sessions/session-transcript-hydration.types.js";
 import {
   SYNC_REBUILD_MAX_BYTES,
   SYNC_REBUILD_MAX_ROWS,
 } from "../../config/sessions/session-transcript-index.js";
-import type {
-  SessionTranscriptMaintenanceRead,
-  SessionTranscriptMaintenanceFacts,
-} from "../../config/sessions/session-transcript-maintenance-read.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
@@ -31,7 +31,7 @@ import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
 import type { SessionMaintenanceOperations } from "./session-manager-maintenance.worker.js";
 import { SessionManagerPersistence } from "./session-manager-persistence.js";
-import type { FileEntry, SessionEntry } from "./session-manager-types.js";
+import type { SessionEntry } from "./session-manager-types.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import { warnSessionPersistenceDeprecation } from "./session-persistence-deprecation.js";
 import {
@@ -316,8 +316,7 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
     const prepared = new SessionManagerSuffixPersistence(
       this.cwd,
       undefined,
-      // SAFETY: Transcript suffix rows use the same persisted file-entry codec as full reads.
-      preparedEntries as FileEntry[],
+      preparedEntries,
       undefined,
       this.transcriptMutationAt,
     );
@@ -332,26 +331,18 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
     prepared.leafId = this.leafId;
     prepared.appendParentId = this.appendParentId;
     prepared.appendMode = this.appendMode;
-    const removableIndexes: number[] = [];
+    let removeStart: number | undefined;
     const removedEntries: SessionEntry[] = [];
     for (let index = 1; index < prepared.fileEntries.length; index += 1) {
       const entry = prepared.fileEntries[index];
       if (isIndexedSessionEntry(entry) && removableEntryIds.has(entry.id)) {
-        removableIndexes.push(index);
+        removeStart ??= index;
         removedEntries.push(entry);
       }
     }
-    if (removableIndexes.length !== removableEntryIds.size) {
+    if (removedEntries.length !== removableEntryIds.size) {
       throw new Error(`SQLite session changed before trimming ${this.sessionId}`);
     }
-
-    const shiftOpaqueIndexesAfterRemoval = (start: number, count: number): void => {
-      for (const opaqueEntry of prepared.opaqueFileEntries) {
-        const removedBeforeOpaque = Math.max(0, Math.min(count, opaqueEntry.index - start));
-        opaqueEntry.index -= removedBeforeOpaque;
-      }
-    };
-    const removeStart = removableIndexes[0];
     if (removeStart === undefined) {
       return 0;
     }
@@ -385,7 +376,11 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
       if (!isIndexedSessionEntry(entry) || !removedEntryIds.has(entry.id)) {
         continue;
       }
-      shiftOpaqueIndexesAfterRemoval(index, 1);
+      for (const opaqueEntry of prepared.opaqueFileEntries) {
+        if (opaqueEntry.index > index) {
+          opaqueEntry.index--;
+        }
+      }
       prepared.fileEntries.splice(index, 1);
     }
 

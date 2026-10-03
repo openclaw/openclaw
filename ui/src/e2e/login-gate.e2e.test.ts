@@ -565,7 +565,7 @@ suite.define(() => {
     const page = await context.newPage();
 
     try {
-      await renderLoginGate(page, suite.server.baseUrl);
+      const gateway = await renderLoginGate(page, suite.server.baseUrl);
       const gatewayInput = page.locator(".login-gate__form .field input").first();
       expect(await gatewayInput.getAttribute("inputmode")).toBe("url");
       expect(await gatewayInput.getAttribute("autocapitalize")).toBe("none");
@@ -573,8 +573,27 @@ suite.define(() => {
       expect(await gatewayInput.getAttribute("spellcheck")).toBe("false");
       expect(await gatewayInput.getAttribute("enterkeyhint")).toBe("go");
 
+      // App renders must retain the real connection action, not a fixture-owned callback.
+      await page.evaluate(async () => {
+        const app = document.querySelector<
+          HTMLElement & { requestUpdate(): void; updateComplete: Promise<unknown> }
+        >("openclaw-app")!;
+        app.requestUpdate();
+        await app.updateComplete;
+        await document.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
+          "openclaw-login-gate",
+        )!.updateComplete;
+      });
+      await gateway.deferNext("connect");
       await gatewayInput.press("Enter");
-      expect(await page.locator("body").getAttribute("data-connect-count")).toBe("1");
+      await gateway.waitForRequest("connect", { after: 1 });
+      expect(await gateway.getRequests("connect")).toHaveLength(2);
+      await gateway.rejectDeferred("connect", {
+        code: "INVALID_REQUEST",
+        message: "token missing",
+        details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+      });
+      await page.locator('.login-gate__failure[data-kind="auth-required"]').waitFor();
 
       const metrics = await page.evaluate(() => {
         const gate = document.querySelector<HTMLElement>(".login-gate");

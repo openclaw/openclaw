@@ -122,29 +122,29 @@ async function persistUserTurnTranscript(
         {
           message,
           idempotencyLookup: "scan",
-          prepareMessageAfterIdempotencyCheck: (candidate) =>
-            preparePersistedUserTurnMessageForTranscriptWrite(
-              candidate as PersistedUserTurnMessage,
-              params,
-            ),
+          workerPreparation: {
+            beforeFreshMessageCommit: params.beforeFreshMessageCommit,
+            prepareMessageAfterIdempotencyCheck: (candidate) =>
+              preparePersistedUserTurnMessageForTranscriptWrite(
+                candidate as PersistedUserTurnMessage,
+                params,
+              ),
+          },
         },
       ],
     },
   );
-  let appended = turn.messages[0] as
-    | {
-        anchor?: Omit<UserTurnTranscriptAdmissionReceipt, "logicalTurnId" | "role">;
-        appended: boolean;
-        messageId: string;
-        message: PersistedUserTurnMessage;
-      }
-    | undefined;
-  if (appended && !appended.anchor && appended.message.role === "user") {
+  const result = turn.messages[0];
+  if (!result || !isUserMessage(result.message)) {
+    return undefined;
+  }
+  let appended = { ...result, message: result.message };
+  if (!appended.anchor) {
     await waitForSessionTranscriptProjection(params);
     const anchor = readActiveTranscriptEntryAnchor({ ...params, entryId: appended.messageId });
     appended = anchor ? { ...appended, anchor } : appended;
   }
-  if (!appended?.anchor || appended.message.role !== "user") {
+  if (!appended.anchor || appended.message.role !== "user") {
     return undefined;
   }
   if (committedWithoutAnchor && appended.appended) {
@@ -466,6 +466,10 @@ export function createUserTurnTranscriptRecorder(
             expectedSessionState: options.expectedSessionState ?? params.expectedSessionState,
             updateMode: candidateUpdateMode,
             beforeMessageWrite: params.beforeMessageWrite ?? resolvedTarget.beforeMessageWrite,
+            beforeFreshMessageCommit:
+              candidate.idempotencyKey === message?.idempotencyKey
+                ? recorder.assertOriginalInputCommit
+                : undefined,
             onOriginalInputCommitted: notifyOriginalInputCommitted,
           });
         // Collection can resolve its media lazily during admission. Bind custody

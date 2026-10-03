@@ -141,22 +141,25 @@ export function createExecApprovalPolicySnapshot(params: {
     file: params.file,
     agentId: params.agentId,
   });
-  const allowlistRulesByKey = new Map(
-    resolved.allowlist.map((entry) => {
-      const rule = {
-        pattern: entry.pattern,
-        ...(entry.argPattern !== undefined ? { argPattern: entry.argPattern } : {}),
-        ...(entry.source === "allow-always" ? { source: entry.source } : {}),
-      };
-      return [buildExecApprovalPolicyRuleKey(rule), rule] as const;
-    }),
-  );
   return {
     security: resolved.agent.security,
     ask: resolved.agent.ask,
     askFallback: resolved.agent.askFallback,
     autoAllowSkills: resolved.agent.autoAllowSkills,
-    allowlistRules: canonicalizeExecApprovalPolicyRules([...allowlistRulesByKey.values()]),
+    allowlistRules: canonicalizeExecApprovalPolicyRules(
+      resolved.allowlist.map((entry) => {
+        const rule: ExecApprovalPolicySnapshot["allowlistRules"][number] = {
+          pattern: entry.pattern,
+        };
+        if (entry.argPattern !== undefined) {
+          rule.argPattern = entry.argPattern;
+        }
+        if (entry.source === "allow-always") {
+          rule.source = entry.source;
+        }
+        return rule;
+      }),
+    ),
   };
 }
 

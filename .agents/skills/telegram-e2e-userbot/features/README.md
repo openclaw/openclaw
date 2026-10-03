@@ -46,7 +46,7 @@ The audit lane exercises config the default path never uses:
 | `E2E_REQUIRE_MENTION=true`  | makes the test group mention-required; ack scope treats `group-mentions` as mention-_required_ groups, so reaction rows need it |
 | `E2E_TELEGRAM_PROVIDER_API` | `openai-completions` for commentary and preamble scenarios                                                                      |
 | `E2E_MOCK_SERVER_PATH`      | an alternate mock server for provider-shape controls                                                                            |
-| `--source-gateway`          | the exact TypeScript checkout without a build step                                                                              |
+| `--source-gateway`          | core and the Telegram plugin from TypeScript source; other plugins use built output when present                                |
 | `--pre-send '<text>'`       | posts as the QA user before the driven turn, for history-scoped rows                                                            |
 
 Scenario action `command` runs argv without an implicit shell in the leased

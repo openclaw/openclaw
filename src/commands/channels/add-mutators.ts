@@ -1,6 +1,6 @@
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { resolveChannelSetupExecutionAdapter } from "../../channels/plugins/setup-contract.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAccountId } from "../../routing/session-key.js";

@@ -132,7 +132,7 @@ export function bindSessionPendingInputSources(
     !idempotencyKey ||
     sources.some(
       (source) =>
-        source.databasePath !== first.databasePath ||
+        source.workerDatabasePath !== first.workerDatabasePath ||
         source.sessionId !== first.sessionId ||
         source.sessionKey !== first.sessionKey ||
         source.idempotencyKey === idempotencyKey,
@@ -406,6 +406,7 @@ export async function stageSessionPendingInput(
             path: current.path,
             databaseIdentity: physical.identity,
             databaseBirthtime: physical.birthtime,
+            workerDatabasePath: physical.canonicalPath || current.path,
           };
         },
         databaseOptions,
@@ -420,6 +421,7 @@ export async function stageSessionPendingInput(
         sessionId: scope.sessionId,
         sessionKey: resolved.sessionKey,
         databasePath: source.path,
+        workerDatabasePath: source.workerDatabasePath,
         idempotencyKey,
         lifecycleGeneration,
         messageJson,

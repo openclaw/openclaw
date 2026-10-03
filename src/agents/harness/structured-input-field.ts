@@ -15,6 +15,7 @@ import type {
   StructuredInputCompilerOptions,
   StructuredInputField,
   StructuredInputRecord,
+  StructuredInputValue,
 } from "./structured-input-boundary.js";
 import type {
   AgentHarnessUserInputOption,
@@ -146,17 +147,27 @@ export function readSuggestions(
     return [];
   }
   return normalizeChoices(
-    raw.map((entry) => ({
-      value: isStructuredInputRecord(entry) ? ownValue(entry, "const") : undefined,
-      label: isStructuredInputRecord(entry) ? ownValue(entry, "title") : undefined,
-      description: isStructuredInputRecord(entry) ? ownValue(entry, "description") : undefined,
-      thumbnail: isStructuredInputRecord(entry)
-        ? (ownValue(entry, "x-openai-thumbnail") ?? ownValue(entry, "x-openai-preview"))
-        : undefined,
-    })),
+    raw.map((entry) => readStructuredInputChoice(entry, options)),
     1,
     64,
   );
+}
+
+export function readStructuredInputChoice(
+  entry: StructuredInputValue,
+  options: StructuredInputCompilerOptions,
+) {
+  if (!isStructuredInputRecord(entry)) {
+    return { value: undefined, label: undefined };
+  }
+  return {
+    value: ownValue(entry, "const"),
+    label: ownValue(entry, "title"),
+    description: ownValue(entry, "description"),
+    thumbnail: options.allowRichForms
+      ? (ownValue(entry, "x-openai-thumbnail") ?? ownValue(entry, "x-openai-preview"))
+      : undefined,
+  };
 }
 
 export function buildField(

@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import * as payloadStore from "./outbox-payload-store.runtime.ts";
 import {
   captureChatOutboxRecoveryDestination,
+  discardChatOutboxRecovery,
   readChatOutboxRecovery,
   restoreChatOutboxRecovery,
 } from "./outbox-recovery.ts";
@@ -74,6 +76,150 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("does not offer clear fences as saved messages or erase canonical clear fences", () => {
+  const f = fixture("draft");
+  const legacy = readStoredOutboxStore(sessionStorage, f.source);
+  const fence = { updatedAt: 12, draftRevision: 12 };
+  legacy.sessions["global\u0000agent:main"] = fence;
+  legacy.recovery.cleared = { sourceVersion: 3, sourceScopeKey: sourceScope, session: fence };
+  writeStoredOutboxStore(sessionStorage, f.source, legacy);
+  const owned = f.stored();
+  owned.recovery.cleared = { sourceVersion: 4, sourceScopeKey: sourceScope, session: fence };
+  writeStoredOutboxStore(sessionStorage, storageTargetForComposer(f.state), owned);
+  const before = sessionStorage.getItem(f.source.key);
+  expect(readChatOutboxRecovery(f.state).entries.map((entry) => entry.session.draft)).toEqual([
+    "Retained draft 雪",
+  ]);
+  expect(sessionStorage.getItem(f.source.key)).toBe(before);
+  expect(f.stored().recovery.cleared).toBeUndefined();
+  expect(
+    readStoredOutboxStore(sessionStorage, f.source).sessions["global\u0000agent:main"],
+  ).toEqual(fence);
+});
+
+it("keeps textless attachment, goal, and reply recovery actionable", () => {
+  const f = fixture("draft");
+  const legacy = readStoredOutboxStore(sessionStorage, f.source);
+  legacy.sessions = {};
+  legacy.recovery = {
+    attachment: {
+      sourceVersion: 4,
+      sourceScopeKey: sourceScope,
+      session: {
+        updatedAt: 1,
+        queue: [
+          {
+            id: "attachment",
+            text: "",
+            createdAt: 1,
+            attachments: [{ id: "file", mimeType: "text/plain", fileName: "saved.txt" }],
+          },
+        ],
+      },
+    },
+    goal: {
+      sourceVersion: 4,
+      sourceScopeKey: sourceScope,
+      session: { updatedAt: 2, goalMode: { action: "start" } },
+    },
+    reply: {
+      sourceVersion: 4,
+      sourceScopeKey: sourceScope,
+      session: { updatedAt: 3, replyTarget: { messageId: "message", text: "quoted" } },
+    },
+  };
+  writeStoredOutboxStore(sessionStorage, f.source, legacy);
+  expect(readChatOutboxRecovery(f.state).entries.map((entry) => entry.id)).toEqual([
+    "legacy-recovery:attachment",
+    "legacy-recovery:goal",
+    "legacy-recovery:reply",
+  ]);
+});
+
+it.each(["queue", "draft"] as const)(
+  "discards only the confirmed %s without filling the current composer",
+  (kind) => {
+    const f = fixture(kind, true);
+    const entry = f.entry();
+    const owned = f.stored();
+    owned.sessions[storedChatOutboxScopeKey(firstScope)] = {
+      draft: "current input",
+      updatedAt: 10,
+      draftRevision: 10,
+    };
+    writeStoredOutboxStore(sessionStorage, storageTargetForComposer(f.state), owned);
+    f.state.chatMessage = "current input";
+    expect(discardChatOutboxRecovery(f.state, entry)).toBe("discarded");
+    expect(f.state.chatMessage).toBe("current input");
+    expect(f.stored().sessions).toEqual(owned.sessions);
+    expect(readChatOutboxRecovery(f.state).entries.map((row) => row.session.draft)).toEqual([
+      "untouched",
+    ]);
+    expect(discardChatOutboxRecovery(f.state, entry)).toBe("conflict");
+  },
+);
+
+it.each(["account", "gateway", "revision", "incognito", "confirmation"] as const)(
+  "does not discard across a changed %s",
+  (change) => {
+    const f = fixture("draft");
+    const entry = f.entry();
+    if (change === "revision") {
+      const legacy = readStoredOutboxStore(sessionStorage, f.source);
+      legacy.sessions[sourceScope] = { draft: "newer", draftRevision: 2, updatedAt: 2 };
+      writeStoredOutboxStore(sessionStorage, f.source, legacy);
+    } else if (change === "account") {
+      f.state.client.recoveryScope = "account-b";
+    } else if (change === "gateway") {
+      f.state.settings.gatewayUrl = "wss://other.test";
+    } else if (change === "incognito") {
+      Object.assign(f.state, { selectedChatSessionIncognito: true });
+    }
+    const before = sessionStorage.getItem(f.source.key);
+    expect(discardChatOutboxRecovery(f.state, entry, () => change !== "confirmation")).toBe(
+      "conflict",
+    );
+    expect(sessionStorage.getItem(f.source.key)).toBe(before);
+    expect(f.stored().sessions).toEqual({});
+  },
+);
+
+it("preserves newer sibling writes discovered during discard", () => {
+  const f = fixture("draft");
+  const entry = f.entry();
+  const target = storageTargetForComposer(f.state);
+  const get = sessionStorage.getItem.bind(sessionStorage);
+  const set = sessionStorage.setItem.bind(sessionStorage);
+  let retired = false;
+  let changed = false;
+  const remove = sessionStorage.removeItem.bind(sessionStorage);
+  vi.spyOn(sessionStorage, "removeItem").mockImplementation((key) => {
+    remove(key);
+    if (key === f.source.key) {
+      retired = true;
+    }
+  });
+  vi.spyOn(sessionStorage, "getItem").mockImplementation((key) => {
+    if (retired && !changed && key === target.key) {
+      changed = true;
+      const store = JSON.parse(get(key)!);
+      store.recovery.newer = {
+        sourceVersion: 4,
+        sourceScopeKey: sourceScope,
+        session: { draft: "newer sibling", updatedAt: 2 },
+      };
+      set(key, JSON.stringify(store));
+    }
+    return get(key);
+  });
+  // A new sibling read before consumption belongs to the same canonical store.
+  expect(discardChatOutboxRecovery(f.state, entry)).toBe("discarded");
+  expect(changed).toBe(true);
+  expect(readChatOutboxRecovery(f.state).entries.map((row) => row.session.draft)).toEqual([
+    "newer sibling",
+  ]);
+});
+
 it.each(["queue", "draft"] as const)(
   "never duplicates %s recovery across destinations after failed source retirement",
   (kind) => {
@@ -117,6 +263,83 @@ it.each(["queue", "draft"] as const)(
     expect(readChatOutboxRecovery(f.state).entries).toEqual([]);
   },
 );
+
+it.each(["claim", "stage", "retire", "discard"] as const)(
+  "retains an inert recovery through failed %s during discard",
+  (boundary) => {
+    const f = fixture("queue");
+    const entry = f.entry();
+    const target = storageTargetForComposer(f.state);
+    const set = sessionStorage.setItem.bind(sessionStorage);
+    const remove = sessionStorage.removeItem.bind(sessionStorage);
+    const writes = vi.spyOn(sessionStorage, "setItem").mockImplementation((key, value) => {
+      if (
+        (boundary === "claim" && key === f.source.key) ||
+        (boundary === "stage" && key === target.key)
+      ) {
+        throw new Error("blocked write");
+      }
+      set(key, value);
+    });
+    const removals = vi.spyOn(sessionStorage, "removeItem").mockImplementation((key) => {
+      if (
+        (boundary === "retire" && key === f.source.key) ||
+        (boundary === "discard" && key === target.key)
+      ) {
+        throw new Error("blocked removal");
+      }
+      remove(key);
+    });
+    expect(discardChatOutboxRecovery(f.state, entry)).toBe("storage-failed");
+    writes.mockRestore();
+    removals.mockRestore();
+    expect(f.stored().sessions).toEqual({});
+    expect(f.entry().session).toEqual(f.session);
+    expect(discardChatOutboxRecovery(f.state, f.entry())).toBe("discarded");
+    expect(readChatOutboxRecovery(f.state).entries).toEqual([]);
+  },
+);
+
+it("keeps a resurrected source claimed until confirmed discard can retire both copies", () => {
+  const f = fixture("queue");
+  const entry = f.entry();
+  const source = sessionStorage.getItem(f.source.key)!;
+  const remove = sessionStorage.removeItem.bind(sessionStorage);
+  const removals = vi.spyOn(sessionStorage, "removeItem").mockImplementation((key) => {
+    remove(key);
+    if (key === f.source.key) {
+      sessionStorage.setItem(key, source);
+    }
+  });
+  expect(discardChatOutboxRecovery(f.state, entry)).toBe("storage-failed");
+  removals.mockRestore();
+  expect(
+    readChatOutboxRecovery({
+      ...f.state,
+      client: { recoveryScope: "account-b", recoveryScopeReady: true },
+    }).entries,
+  ).toEqual([]);
+  expect(readChatOutboxRecovery(f.state).entries).toHaveLength(1);
+  expect(discardChatOutboxRecovery(f.state, f.entry())).toBe("discarded");
+  expect(readChatOutboxRecovery(f.state).entries).toEqual([]);
+  expect(f.stored().sessions).toEqual({});
+});
+
+it("retires attachment payloads only after the last recovery copy is discarded", () => {
+  const f = fixture("queue");
+  const reference = { key: "blob", tabId: "this-tab", recoveryScope: "account-a" };
+  const legacy = readStoredOutboxStore(sessionStorage, f.source);
+  legacy.sessions[sourceScope]!.queue![0]!.attachmentPayload = reference;
+  legacy.sessions[sourceScope]!.queue![0]!.attachments = [
+    { id: "file", mimeType: "text/plain", fileName: "saved.txt" },
+  ];
+  writeStoredOutboxStore(sessionStorage, f.source, legacy);
+  const cleanup = vi.spyOn(payloadStore, "removeOutboxPayloads").mockImplementation(async () => {
+    expect(readChatOutboxRecovery(f.state).entries).toEqual([]);
+  });
+  expect(discardChatOutboxRecovery(f.state, f.entry())).toBe("discarded");
+  expect(cleanup).toHaveBeenCalledExactlyOnceWith([reference]);
+});
 
 const stages = ["claim", "stage", "retire-write", "retire-remove", "publish"] as const;
 const failures = ["throw", "silent", "after-write"] as const;

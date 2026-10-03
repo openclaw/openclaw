@@ -40,6 +40,7 @@ export {
   type RetryOptions,
 } from "../infra/retry.js";
 export { isTransientNetworkError } from "../infra/retryable-network-errors.js";
+export { sleepWithAbort } from "../infra/backoff.js";
 export {
   createChannelApiRetryRunner,
   createRateLimitRetryRunner,

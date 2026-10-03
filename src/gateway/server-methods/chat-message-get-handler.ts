@@ -236,11 +236,18 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       respond(true, { ok: false, unavailableReason: "oversized" });
       return;
     }
-
+    const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
+      [resolved.message],
+      context.cronStorePath,
+    );
+    if (!canReadSession()) {
+      return;
+    }
     const projectedMessage = resolved.message
       ? projectChatDisplayMessage(resolved.message, {
           maxChars: effectiveMaxChars,
           resolveCurrentUserProfileDisplay,
+          resolveCronJobName,
         })
       : undefined;
     const projected = projectedMessage

@@ -67,8 +67,7 @@ export function createHarness(
     reconcileChanged?: boolean;
     reconcileCommitsManifest?: boolean;
     reconcileCommitsManifestOnApply?: boolean;
-    verifyFails?: boolean;
-    verifyFailureCall?: number;
+    verifyFailurePhase?: "before-apply" | "after-apply";
     leaseFails?: boolean;
     leaseFailureCount?: number;
     leaseFailureCall?: number;
@@ -93,7 +92,7 @@ export function createHarness(
     prepareAcceptedWorkspacePublication?: DispatchOptions["prepareAcceptedWorkspacePublication"];
     publishAcceptedWorkspace?: DispatchOptions["publishAcceptedWorkspace"];
     beforeMoveBegin?: (abandoned: { runId: string } | undefined) => Promise<void>;
-    afterMoveBegin?: () => void;
+    afterMoveBegin?: () => Promise<void> | void;
     afterDestroy?: () => Promise<void> | void;
     afterReconcile?: () => Promise<void> | void;
     afterStopTunnel?: () => Promise<void> | void;
@@ -106,7 +105,7 @@ export function createHarness(
   let remainingReconcileFailures = options.reconcileFailureCount ?? 0;
   let remainingLeaseFailures = options.leaseFailureCount ?? 0;
   let leaseCalls = 0;
-  let verifyCalls = 0;
+  let pendingVerifyFailurePhase = options.verifyFailurePhase;
   const log: string[] = [];
   const reportWorkspaceResultConflict = vi.fn(async () => {});
   const reportWorkspaceResultRecoveryFailure = vi.fn(
@@ -140,9 +139,9 @@ export function createHarness(
       log.push("placement:local");
       return placementStore.completeAbandonedPlacementMoveSourceToLocal(params);
     },
-    acceptWorkspaceResult: (claim) => placementStore.acceptWorkspaceResult(claim),
-    completeWorkspaceResultAndReleaseTurn: (claim) =>
-      placementStore.completeWorkspaceResultAndReleaseTurn(claim),
+    acceptWorkspaceResult: (...args) => placementStore.acceptWorkspaceResult(...args),
+    completeWorkspaceResultAndReleaseTurn: (...args) =>
+      placementStore.completeWorkspaceResultAndReleaseTurn(...args),
     failWorkspaceResultAndReleaseTurn: (pending, error) => {
       const current = placementStore.get(pending.sessionId);
       if (current?.state === "active") {
@@ -181,9 +180,9 @@ export function createHarness(
       }
       return placementStore.startDrain(params);
     },
-    startWorkspaceResultDrain: (claim) => {
+    startWorkspaceResultDrain: (...args) => {
       log.push("placement:draining");
-      return placementStore.startWorkspaceResultDrain(claim);
+      return placementStore.startWorkspaceResultDrain(...args);
     },
     startReconcile: (params) => {
       log.push("placement:reconciling");
@@ -268,10 +267,10 @@ export function createHarness(
             ownerEpoch: persistedClaim.ownerEpoch,
           },
         };
-        placementStore.acceptWorkspaceResult(claim);
+        await placementStore.acceptWorkspaceResult(claim);
         setEnvironment(destroyedEnvironment(currentEnvironment?.ownerEpoch ?? 1));
         log.push("teardown:destroy");
-        completeReclaimedWorkspaceTeardown({
+        await completeReclaimedWorkspaceTeardown({
           placements: placementStore,
           turnClaim: claim,
           environmentId: owned.environmentId,
@@ -283,6 +282,7 @@ export function createHarness(
         await stagedResult.record(stagedResult.ref);
       }
       await options.afterReconcile?.();
+      let applied = false;
       const verifyLocalStable = async () => {
         log.push("workspace:verify-local");
         if (options.localVerifyFails) {
@@ -296,8 +296,8 @@ export function createHarness(
         discardPreparedStagedResult: async () => {},
         verifyStable: async () => {
           log.push("workspace:verify");
-          verifyCalls += 1;
-          if (options.verifyFails || verifyCalls === options.verifyFailureCall) {
+          if (pendingVerifyFailurePhase === (applied ? "after-apply" : "before-apply")) {
+            pendingVerifyFailurePhase = undefined;
             throw new Error("workspace changed after reconciliation");
           }
         },
@@ -319,6 +319,7 @@ export function createHarness(
               applyPreparedStagedResult: async () => {
                 log.push("workspace:apply-prepared");
                 await journal.commit(reconciledManifestRef);
+                applied = true;
               },
             }
           : {}),
@@ -483,7 +484,7 @@ export function createHarness(
             authorize?.();
           }
         });
-        options.afterMoveBegin?.();
+        await options.afterMoveBegin?.();
         if (options.failMoveAfterBegin) {
           throw new Error("move barrier interrupted");
         }

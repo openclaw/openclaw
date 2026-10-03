@@ -9,11 +9,7 @@ import {
   resolvePluginSetupRegistry,
 } from "../plugins/setup-registry.js";
 import { resolveRuntimeTextTransforms } from "../plugins/text-transforms.runtime.js";
-import type {
-  CliBackendNormalizeConfigContext,
-  CliBundleMcpMode,
-  CliBackendPlugin,
-} from "../plugins/types.js";
+import type { CliBackendNormalizeConfigContext, CliBackendPlugin } from "../plugins/types.js";
 import { mergePluginTextTransforms } from "./plugin-text-transforms.js";
 
 const defaultCliBackendsDeps = {
@@ -72,23 +68,6 @@ type CliRuntimeModelBackendBinding = {
   runtime: string;
   pluginId?: string;
 };
-
-function normalizeBundleMcpMode(
-  mode: CliBundleMcpMode | undefined,
-  enabled: boolean,
-): CliBundleMcpMode | undefined {
-  if (!enabled) {
-    return undefined;
-  }
-  return mode ?? "claude-config-file";
-}
-
-function resolveRegisteredBackend(provider: string) {
-  const normalized = normalizeProviderId(provider);
-  return cliBackendsDeps
-    .resolveRuntimeCliBackends()
-    .find((entry) => normalizeProviderId(entry.id) === normalized);
-}
 
 function resolveCliBackendModelProvider(
   backend: Pick<CliBackendPlugin, "modelProvider">,
@@ -281,7 +260,9 @@ export function resolveCliBackendConfig(
     ...(cfg ? { config: cfg } : {}),
   };
   const runtimeTextTransforms = resolveRuntimeTextTransforms();
-  const registered = resolveRegisteredBackend(normalized);
+  const registered = cliBackendsDeps
+    .resolveRuntimeCliBackends()
+    .find((entry) => normalizeProviderId(entry.id) === normalized);
   const backend =
     registered ?? cliBackendsDeps.resolvePluginSetupCliBackend({ backend: normalized })?.backend;
   if (!backend) {
@@ -302,7 +283,7 @@ export function resolveCliBackendConfig(
     ...(modelProvider ? { modelProvider } : {}),
     config: { ...config, command },
     bundleMcp,
-    bundleMcpMode: normalizeBundleMcpMode(backend.bundleMcpMode, bundleMcp),
+    bundleMcpMode: bundleMcp ? (backend.bundleMcpMode ?? "claude-config-file") : undefined,
     ...(registered ? { pluginId: registered.pluginId } : {}),
     transformSystemPrompt: backend.transformSystemPrompt,
     textTransforms: mergePluginTextTransforms(runtimeTextTransforms, backend.textTransforms),

@@ -1013,17 +1013,27 @@ describe("buildQaRuntimeEnv", () => {
     ).not.toThrow();
   });
 
-  it("fails fast when live OpenAI runs have no portable QA auth", () => {
-    expect(() =>
-      assertQaLiveCodexAuthAvailable({
-        cfg: {},
-        providerIds: ["openai"],
-        env: {
-          CODEX_HOME: path.join(os.tmpdir(), "missing-openclaw-codex-home"),
-        },
-        readCodexCredentials: () => null,
-      }),
-    ).toThrow("QA live-frontier cannot run Codex-backed OpenAI models");
+  it("keeps the Codex API-key handoff out of profiles and maps it only into the gateway env", async () => {
+    const stateDir = await tempDirs.makeTempDir("qa-codex-handoff-state-");
+    const baseEnv = { OPENCLAW_QA_CODEX_API_KEY_HANDOFF: "  synthetic-qa-api-key  " };
+    const cfg = await stageQaLiveApiKeyProfiles({
+      cfg: {},
+      stateDir,
+      providerIds: ["openai"],
+      env: baseEnv,
+    });
+
+    expect(cfg.auth?.profiles).toBeUndefined();
+    for (const agentId of ["main", "qa"]) {
+      expect(readAuthProfileStore(stateDir, agentId).profiles).toEqual({});
+    }
+    const env = buildQaRuntimeEnv({
+      ...createParams(baseEnv),
+      stateDir,
+      providerMode: "live-frontier",
+    });
+    expect(env.CODEX_API_KEY).toBe("synthetic-qa-api-key");
+    expect(env).not.toHaveProperty("OPENCLAW_QA_CODEX_API_KEY_HANDOFF");
   });
 
   it("does not require Codex auth for custom OpenAI-compatible provider configs", () => {
@@ -1060,32 +1070,6 @@ describe("buildQaRuntimeEnv", () => {
         readCodexCredentials: () => null,
       }),
     ).not.toThrow();
-  });
-
-  it("accepts a logged-in Codex CLI home for live OpenAI QA runs", () => {
-    const readCodexCredentials = vi.fn(() => ({
-      type: "oauth" as const,
-      provider: "openai",
-      access: "access-token",
-      refresh: "refresh-token",
-      expires: Date.now() + 60_000,
-    }));
-
-    expect(() =>
-      assertQaLiveCodexAuthAvailable({
-        cfg: {},
-        providerIds: ["openai"],
-        env: {
-          CODEX_HOME: "/host/.codex",
-        },
-        readCodexCredentials,
-      }),
-    ).not.toThrow();
-    expect(readCodexCredentials).toHaveBeenCalledWith({
-      codexHome: "/host/.codex",
-      allowKeychainPrompt: false,
-      ttlMs: 5_000,
-    });
   });
 
   it("lets a legacy packaged candidate create its auth DB before gateway spawn", async () => {

@@ -34,87 +34,41 @@ function failInvalidOption(message: string): never {
   throw new AcpRuntimeError("ACP_INVALID_RUNTIME_OPTION", message);
 }
 
-function validateNoControlChars(value: string, field: string): string {
-  for (let i = 0; i < value.length; i += 1) {
-    const code = value.charCodeAt(i);
+function validateBoundedText(value: unknown, field: string, maxLength: number): string {
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    failInvalidOption(`${field} must not be empty.`);
+  }
+  if (normalized.length > maxLength) {
+    failInvalidOption(`${field} must be at most ${maxLength} characters.`);
+  }
+  for (let i = 0; i < normalized.length; i += 1) {
+    const code = normalized.charCodeAt(i);
     if (code < 32 || code === 127) {
       failInvalidOption(`${field} must not include control characters.`);
     }
   }
-  return value;
-}
-
-function validateBoundedText(params: { value: unknown; field: string; maxLength: number }): string {
-  const normalized = normalizeText(params.value);
-  if (!normalized) {
-    failInvalidOption(`${params.field} must not be empty.`);
-  }
-  if (normalized.length > params.maxLength) {
-    failInvalidOption(`${params.field} must be at most ${params.maxLength} characters.`);
-  }
-  return validateNoControlChars(normalized, params.field);
-}
-
-function validateBackendOptionKey(rawKey: unknown): string {
-  const key = validateBoundedText({
-    value: rawKey,
-    field: "ACP config key",
-    maxLength: MAX_BACKEND_OPTION_KEY_LENGTH,
-  });
-  if (!SAFE_OPTION_KEY_RE.test(key)) {
-    failInvalidOption(
-      "ACP config key must use letters, numbers, dots, colons, underscores, or dashes.",
-    );
-  }
-  return key;
-}
-
-function validateBackendOptionValue(rawValue: unknown): string {
-  return validateBoundedText({
-    value: rawValue,
-    field: "ACP config value",
-    maxLength: MAX_BACKEND_OPTION_VALUE_LENGTH,
-  });
+  return normalized;
 }
 
 export function validateRuntimeModeInput(rawMode: unknown): string {
-  return validateBoundedText({
-    value: rawMode,
-    field: "Runtime mode",
-    maxLength: MAX_RUNTIME_MODE_LENGTH,
-  });
+  return validateBoundedText(rawMode, "Runtime mode", MAX_RUNTIME_MODE_LENGTH);
 }
 
 export function validateRuntimeModelInput(rawModel: unknown): string {
-  return validateBoundedText({
-    value: rawModel,
-    field: "Model id",
-    maxLength: MAX_MODEL_LENGTH,
-  });
+  return validateBoundedText(rawModel, "Model id", MAX_MODEL_LENGTH);
 }
 
 function validateRuntimeThinkingInput(rawThinking: unknown): string {
-  return validateBoundedText({
-    value: rawThinking,
-    field: "Thinking level",
-    maxLength: MAX_THINKING_LENGTH,
-  });
+  return validateBoundedText(rawThinking, "Thinking level", MAX_THINKING_LENGTH);
 }
 
 export function validateRuntimePermissionProfileInput(rawProfile: unknown): string {
-  return validateBoundedText({
-    value: rawProfile,
-    field: "Permission profile",
-    maxLength: MAX_PERMISSION_PROFILE_LENGTH,
-  });
+  return validateBoundedText(rawProfile, "Permission profile", MAX_PERMISSION_PROFILE_LENGTH);
 }
 
 export function validateRuntimeCwdInput(rawCwd: unknown): string {
-  const cwd = validateBoundedText({
-    value: rawCwd,
-    field: "Working directory",
-    maxLength: MAX_CWD_LENGTH,
-  });
+  const cwd = validateBoundedText(rawCwd, "Working directory", MAX_CWD_LENGTH);
   if (!isAbsolute(cwd)) {
     failInvalidOption(`Working directory must be an absolute path. Received "${cwd}".`);
   }
@@ -149,9 +103,15 @@ export function validateRuntimeConfigOptionInput(
   key: string;
   value: string;
 } {
+  const key = validateBoundedText(rawKey, "ACP config key", MAX_BACKEND_OPTION_KEY_LENGTH);
+  if (!SAFE_OPTION_KEY_RE.test(key)) {
+    failInvalidOption(
+      "ACP config key must use letters, numbers, dots, colons, underscores, or dashes.",
+    );
+  }
   return {
-    key: validateBackendOptionKey(rawKey),
-    value: validateBackendOptionValue(rawValue),
+    key,
+    value: validateBoundedText(rawValue, "ACP config value", MAX_BACKEND_OPTION_VALUE_LENGTH),
   };
 }
 

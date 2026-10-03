@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { MatrixVerificationSummary } from "@openclaw/matrix/test-api.js";
+import { z } from "zod";
 import { createMatrixQaClient } from "../substrate/client.js";
 import type { MatrixQaE2eeScenarioId } from "./scenario-contract.js";
 import {
@@ -16,29 +17,35 @@ import {
 } from "./scenario-runtime-e2ee-shared.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
-export type MatrixQaCliVerificationStatus = {
-  backup?: {
-    decryptionKeyCached?: boolean | null;
-    keyLoadError?: string | null;
-    matchesDecryptionKey?: boolean | null;
-    trusted?: boolean | null;
-  };
-  backupVersion?: string | null;
-  crossSigningVerified?: boolean;
-  encryptionEnabled?: boolean;
-  pendingVerifications?: number;
-  error?: string;
-  recoveryKeyAccepted?: boolean;
-  backupUsable?: boolean;
-  deviceOwnerVerified?: boolean;
-  recoveryKeyStored?: boolean;
-  serverDeviceKnown?: boolean | null;
-  verified?: boolean;
-  signedByOwner?: boolean;
-  success?: boolean;
-  deviceId?: string | null;
-  userId?: string | null;
-};
+const matrixQaCliVerificationStatusSchema = z.looseObject({
+  backup: z
+    .looseObject({
+      decryptionKeyCached: z.boolean().nullish(),
+      keyLoadError: z.string().nullish(),
+      matchesDecryptionKey: z.boolean().nullish(),
+      trusted: z.boolean().nullish(),
+    })
+    .optional(),
+  backupVersion: z.string().nullish(),
+  crossSigningVerified: z.boolean().optional(),
+  encryptionEnabled: z.boolean().optional(),
+  pendingVerifications: z.number().optional(),
+  error: z.string().optional(),
+  recoveryKeyAccepted: z.boolean().optional(),
+  backupUsable: z.boolean().optional(),
+  deviceOwnerVerified: z.boolean().optional(),
+  recoveryKeyStored: z.boolean().optional(),
+  serverDeviceKnown: z.boolean().nullish(),
+  verified: z.boolean().optional(),
+  signedByOwner: z.boolean().optional(),
+  success: z.boolean().optional(),
+  deviceId: z.string().nullish(),
+  userId: z.string().nullish(),
+  imported: z.number().optional(),
+  loadedFromSecretStorage: z.boolean().optional(),
+  total: z.number().optional(),
+});
+export type MatrixQaCliVerificationStatus = z.infer<typeof matrixQaCliVerificationStatusSchema>;
 export type MatrixQaCliEncryptionSetupStatus = {
   accountId?: string;
   bootstrap?: {
@@ -61,15 +68,16 @@ export type MatrixQaCliAccountAddStatus = {
     success?: boolean;
   };
 };
-export type MatrixQaCliBackupRestoreStatus = {
-  success?: boolean;
-  backup?: MatrixQaCliVerificationStatus["backup"];
-  backupVersion?: string | null;
-  error?: string;
-  imported?: number;
-  loadedFromSecretStorage?: boolean;
-  total?: number;
-};
+export type MatrixQaCliBackupRestoreStatus = Pick<
+  MatrixQaCliVerificationStatus,
+  | "success"
+  | "backup"
+  | "backupVersion"
+  | "error"
+  | "imported"
+  | "loadedFromSecretStorage"
+  | "total"
+>;
 
 export function isMatrixQaCliBackupUsable(
   backup: MatrixQaCliVerificationStatus["backup"],
@@ -101,6 +109,10 @@ export function parseMatrixQaCliJson(result: MatrixQaCliRunResult): unknown {
       { cause: error },
     );
   }
+}
+
+export function parseMatrixQaCliVerificationStatus(result: MatrixQaCliRunResult) {
+  return matrixQaCliVerificationStatusSchema.parse(parseMatrixQaCliJson(result));
 }
 
 export function buildMatrixQaPluginActivationConfig() {

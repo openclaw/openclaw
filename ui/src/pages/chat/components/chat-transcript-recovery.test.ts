@@ -5,7 +5,7 @@ import { html, LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { resetChatViewState } from "../chat-view-state.ts";
-import type { SidebarFullMessageLoader } from "./chat-sidebar.ts";
+import type { SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 import {
   renderTranscriptSearch,
   toggleTranscriptSearch,

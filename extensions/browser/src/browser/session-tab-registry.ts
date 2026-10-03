@@ -101,7 +101,7 @@ async function performVolatileCleanup(
       let closeTab = params.closeTab;
       try {
         if (!closeTab && tab.route.kind === "browser-control") {
-          const { browserCloseTabByRawTargetId } = await import("./client.js");
+          const { browserCloseTabByRawTargetId } = await import("./client-tab-close.runtime.js");
           const latest = resolveCurrent();
           if (!latest) {
             // No dispatch occurred: a lifecycle joiner may retry a touched sweep.

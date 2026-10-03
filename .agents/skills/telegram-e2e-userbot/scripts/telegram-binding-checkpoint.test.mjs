@@ -1,66 +1,14 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.ts";
+import { run, stopChildren } from "./node-test-children.mjs";
 
 // Leave time inside the harness's 120 s budget for after hooks to join children.
 const TEST_TIMEOUT_MS = 90_000;
-
-function run(context, children, command, args, options) {
-  context.signal.throwIfAborted();
-  const child = spawn(command, args, {
-    ...options,
-    detached: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let stdout = "";
-  let stderr = "";
-  child.stdout.setEncoding("utf8").on("data", (chunk) => {
-    stdout += chunk;
-  });
-  child.stderr.setEncoding("utf8").on("data", (chunk) => {
-    stderr += chunk;
-  });
-  const closed = new Promise((resolve) => {
-    child.once("close", (status, signal) => resolve({ status, signal, stdout, stderr }));
-  });
-  children.add({ child, closed });
-  return new Promise((resolve, reject) => {
-    const abort = () => {
-      const error = new Error(
-        `Child did not finish before the test ended:\n${stderr.slice(-4000)}`,
-        {
-          cause: context.signal.reason,
-        },
-      );
-      context.diagnostic(error.message);
-      reject(error);
-    };
-    context.signal.addEventListener("abort", abort, { once: true });
-    child.once("error", reject);
-    closed.then(resolve).finally(() => context.signal.removeEventListener("abort", abort));
-  });
-}
-
-// A descendant can hold the pipes after its parent exits, so always kill the group.
-async function stopChildren(children) {
-  for (const { child } of children) {
-    if (child.pid) {
-      try {
-        process.kill(-child.pid, "SIGKILL");
-      } catch (error) {
-        if (error.code !== "ESRCH" && error.code !== "EPERM") {
-          throw error;
-        }
-      }
-    }
-  }
-  await Promise.all([...children].map(({ closed }) => closed));
-}
 
 // The 90 s / 60 s budgets bound live runs and are not under test here.
 const frozenClock = "data:text/javascript,const t=performance.now();performance.now=()=>t;";

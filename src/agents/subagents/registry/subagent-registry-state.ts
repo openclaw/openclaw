@@ -18,7 +18,6 @@ import { getSubagentRunsForChildSession, subagentRuns } from "./subagent-registr
 import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
 import {
   assertSubagentReadContext,
-  captureSubagentFactsAdmission,
   consumeFreshSubagentRuns,
   getSessionListLookup,
   getSubagentRunsSnapshot,
@@ -54,20 +53,17 @@ import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js
 
 const persistedSubagentRunsReadCache: SubagentRunsCache<SubagentRunRecord> = {
   state: {},
-  captureAdmission: captureSubagentFactsAdmission,
   load: loadSubagentRegistryFromSqlite,
   copy: (entry) => copySubagentRunRuntimeOwner(entry, structuredClone(entry)),
   project: (entry) => entry,
 };
 const persistedSubagentSessionListRunsReadCache: SubagentRunsCache<SubagentRunReadRecord> = {
   state: {},
-  captureAdmission: captureSubagentFactsAdmission,
   copy: projectSubagentRunForSessionList,
   project: projectSubagentRunForSessionList,
 };
 const persistedSubagentMaintenanceRunsReadCache: SubagentRunsCache<SubagentRunMaintenanceRecord> = {
   state: {},
-  captureAdmission: captureSubagentFactsAdmission,
   load: () => loadSubagentMaintenanceRunsFromSqlite(),
   copy: (entry) => copySubagentRunRuntimeOwner(entry, projectSubagentRunForMaintenance(entry)),
   // Maintenance consumes live rows synchronously into keys; only published facts need copies.

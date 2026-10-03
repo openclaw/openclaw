@@ -123,18 +123,11 @@ function normalizeInstallOptions(
   }
 
   const install = entry.metadata?.install ?? [];
-  if (install.length === 0) {
-    return [];
-  }
-
   const supportsPlatform = (spec: SkillInstallSpec) => {
     const osList = spec.os ?? [];
     return osList.length === 0 || osList.includes(platform);
   };
   const filtered = install.filter(supportsPlatform);
-  if (filtered.length === 0) {
-    return [];
-  }
 
   const toOption = (spec: SkillInstallSpec, index: number): SkillInstallOption => {
     const id = (spec.id ?? `${spec.kind}-${index}`).trim();

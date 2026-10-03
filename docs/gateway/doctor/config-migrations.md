@@ -31,8 +31,10 @@ untouched so Doctor can report and persist the repair.
 ## Retention policy
 
 OpenClaw supports migrations from formats written by shipped releases on or after
-July 1, 2026. Retain a transform whenever a release in that window can still write
-its input format. A supported release that preserves a legacy
+July 1, 2026. The publication date controls this cutoff: an older version number
+published later, including an extended-stable release, still counts. Retain a
+transform whenever a release in that window can still write its input format.
+A supported release that preserves a legacy
 format when rewriting existing data also counts as a writer. A format last
 written before the cutoff may be retired only with a clear refusal naming an
 intermediate release to upgrade through before retrying. Retirement must never
@@ -41,12 +43,52 @@ silently discard persisted data.
 Legacy normalization belongs to Doctor and migration owners, with the existing
 backup and verification flow. Runtime readers consume canonical state.
 
+Unreleased per-agent SQLite session layouts below schema 8 and their pre-landing
+transcript search caches are retired. Doctor refuses those layouts without
+repairing their tables. Shipped schema-1
+memory/auth/cache databases remain supported; see [agent schema
+history](/reference/database-schemas/agent-schema-history) for the supported
+layouts and recovery route.
+
 Old `openclaw.extension.json` npm declaration stubs are ignored by discovery and
 Doctor. They are not plugin manifests, and their files remain unchanged. Reinstall
 the package with `openclaw plugins install npm:<package>` and update any explicit
 `plugins.load.paths` entry to the installed plugin root. To use the old automatic
 stub repair, run `openclaw doctor --fix` on `2026.9.7` before upgrading. Current
 `openclaw.plugin.json` manifests and npm package installation remain supported.
+
+Discord `voice.tts.<provider>` blocks and guild-channel `allow` and `agentId`
+settings are also retired, including account overrides. Doctor preserves the
+original config and names the affected path. Install `2026.9.7`, run
+`openclaw doctor --fix`, then upgrade again. The repaired forms are
+`voice.tts.providers.<provider>`, guild-channel `enabled`, and top-level `bindings`.
+
+Device Pair `device-pair-notify.json` is retired. Upgrade through `2026.9.5` and
+run `openclaw doctor --fix` to import subscribers. Verify the imported state
+before updating. If the intermediate release retains the original file for
+rollback or cannot interpret an empty or invalid source, preserve a backup and
+move that file out of the active state directory before retrying. Current Doctor
+refuses the retired source without deleting or rewriting it.
+
+Discord model preferences and thread bindings stored in JSON, plus iMessage
+reply-cache, sent-echo, and catchup files, are also retired. Upgrade through
+`2026.9.5`, run `openclaw doctor --fix`, and verify the imported SQLite state.
+Preserve a backup and move any retained original files out of the active state
+directory before updating; current Doctor refuses these sources without
+modifying their bytes. Discord's July-era command deployment cache migration
+remains supported and rebuilds its disposable hashes.
+
+Voice Call JSONL call logs are retired pre-July state. Upgrade through
+`2026.9.7` and run `openclaw doctor --fix` to import them before updating.
+Current Doctor preserves remaining JSONL sources and reports that intermediate
+upgrade. SQLite schema repair remains supported.
+
+Voice Call config migration remains supported for `provider: "log"`,
+`twilio.from`, flat streaming provider settings, and
+`realtime.agentContext.includeSystemPrompt`. Published `2026.9.7` can preserve
+and rewrite these settings while plugin repair is deferred. Doctor owns their
+normalization, preserves canonical values, and backs up config before writing;
+runtime parsing accepts only the canonical shape.
 
 OpenClaw `v2026.9.7` can still write ownerless and mode-less cron jobs, and its
 migration/import writers can preserve null, `deliver`, or mixed-case delivery
@@ -63,6 +105,13 @@ live files and reports the upgrade requirement before activation, including when
 a published updater omits those files from its later rehearsal snapshot. Existing SQLite cron stores,
 including their owner and delivery repairs, keep their normal update path.
 
+Doctor refuses pre-July JSON delivery queue files and leaves them unchanged.
+Upgrade through `2026.9.7` and run its `openclaw doctor --fix` before retrying.
+Current SQLite queues remain supported. Updates driven by `2026.9.7` check these
+original files before stopping the running Gateway. The same early check reports
+the existing recovery guidance for a retired `plugins/installs.json` index. See
+[state migration recovery](/gateway/doctor/state-and-sessions).
+
 Doctor also refuses these retired config inputs:
 
 - `agents.defaults.llm`, agent `embeddedPi`, `embeddedHarness`, whole-agent
@@ -76,6 +125,8 @@ Doctor also refuses these retired config inputs:
 - Queue modes `queue`, `steer-backlog`, and `steer+backlog` in `messages.queue.mode`
   or `messages.queue.byChannel`.
 - Top-level `heartbeat`, `routing.allowFrom`, and `routing.groupChat`.
+- Top-level Talk realtime selectors `talk.mode`, `talk.transport`, `talk.brain`,
+  `talk.model`, and `talk.voice`.
 - `channels.telegram.requireMention`, `channels.feishu.accounts.<id>.botName`,
   and the retired `channels.webchat` section.
 - `session.threadBindings.ttlHours` and Discord/LINE/Matrix/Telegram `threadBindings.ttlHours`,
@@ -83,6 +134,11 @@ Doctor also refuses these retired config inputs:
 - Telegram `dm`, `direct.*.threadReplies`, native draft preview settings, and scalar
   or flat streaming settings (`streamMode`, `chunkMode`, `blockStreaming`,
   `blockStreamingCoalesce`, and `draftChunk`), including account overrides.
+- Nextcloud Talk `allowPrivateNetwork`; use the intermediate migration before the
+  canonical `network.dangerouslyAllowPrivateNetwork` setting.
+- Matrix `dm.policy: "trusted"`, flat `allowPrivateNetwork`, and `allow` in
+  `groups.<room>` or `rooms.<room>`, including account overrides.
+- Slack `channels.<id>.allow`, including account overrides.
 
 Configs containing these keys must be repaired before current validation can
 succeed. Doctor preserves the config and stops with recovery guidance instead
@@ -161,6 +217,27 @@ runs the same migration. Repeating Doctor leaves the normalized row and its IDs
 unchanged. Published SDK and operator input normalization remain available at
 the input boundary.
 
+## Channel account routing during an update
+
+Doctor preserves existing channel account maps and their implicit default route.
+Shared root policy never creates an extra `accounts.default` beside named accounts.
+An empty account map can still receive migrated single-account fields; plugins
+such as WhatsApp keep their supported shared policy at the root.
+
+When a policy-only, unlinked WhatsApp `accounts.default` sits beside named
+accounts, Doctor warns that it may be left over from an earlier promotion or may
+be an intentional account awaiting login. It names the account currently selected
+for unqualified operations and leaves the account map, shared policy, and routing
+unchanged. Doctor cannot infer who created an account from this config shape.
+
+To explicitly select an existing named account while retaining all accounts and
+shared policy, run `openclaw config set channels.whatsapp.defaultAccount '"work"' --strict-json`
+(replace `work` with the desired account ID). If you decide the default account is
+unwanted, first preserve any shared policy inherited from it, then run
+`openclaw channels remove --channel whatsapp --account default --delete`.
+Doctor's warning provides the command for a configured named account. It does not
+perform either action, including during updates or repeated `doctor --fix` runs.
+
 ## Channel ownership during an update
 
 When Doctor migrates a legacy `agents.list` roster without a `default: true` marker
@@ -224,53 +301,95 @@ the backups until the repaired config and migrated state have been verified.
 
 ## Channel webhook listeners
 
-Feishu, Nextcloud Talk, and Telegram receive webhooks on Gateway HTTP routes. Their plugin-owned
-Doctor migrations move an explicitly configured `webhookPort` and effective bind host
-into `legacyWebhook: { port, host? }`. An explicit host without a port keeps that
-host with the channel's previous port (`3000` for Feishu, `8788` for Nextcloud Talk,
-`8787` for Telegram).
-Doctor validates and backs up the config through the normal write flow. The
-compatibility listener forwards only its registered webhook
-routes through the same Gateway request pipeline, preserving signatures and retry
-responses during channel restarts.
+Feishu, Microsoft Teams, Nextcloud Talk, and Telegram receive webhooks on Gateway
+HTTP routes. New installations open no separate webhook port unless
+`legacyWebhook: { port, host? }` explicitly selects one.
+
+Doctor preserves existing callbacks with a one-shot migration. It checks evidence
+of prior Gateway operation, channel ingress, or an update, rather than comparing
+version strings or treating an empty state database as an existing installation.
+For an enabled webhook account with no explicit or inherited `legacyWebhook`
+setting, it pins the historical endpoint: Feishu `127.0.0.1:3000`, Teams wildcard
+port `3978`, Nextcloud Talk `0.0.0.0:8788`, or Telegram `127.0.0.1:8787` when its
+callback URL does not match its configured public Gateway destination or its
+configured path cannot be served by the Gateway. Disabled accounts, Telegram polling, and
+Feishu WebSocket transport receive no pin. Explicit objects and `false` settings
+remain authoritative.
+
+Startup and update-time Doctor use the same migration owner. Doctor validates
+and backs up the config through the normal write flow. Pins and the
+`meta.migrations.webhookListeners` completion marker are saved together, including
+when channel settings come from `$include` files. Fresh installations record
+`true` without pins. Existing installations record an object whose keys are
+completed channel IDs and whose values list the exact config paths inserted by
+the migration; an empty list means the channel needed no pin.
+
+Keep this marker when removing a pin. Subsequent Doctor runs, restarts, and
+updates will not recreate it. Account pins cover only accounts present during
+migration. For trusted official plugins with older Doctor contracts, Doctor uses
+historical listener facts shipped with the Gateway. The installed plugin retains
+ownership of its other config migrations. Other plugins can remain pending while
+other channels finish. Replacing a pending plugin runs the same migration through
+the installer's backed-up config publication before its new runtime starts.
+Update a retained older standalone plugin before removing its pin; older plugin
+versions can still open their historical default port.
+
+For a read-only external config source, startup records completion in canonical
+SQLite machine state only when the completion marker is the sole required change.
+If endpoints or other channel settings need repair, update that external source
+and its completion marker as directed by the startup error. Startup refuses to
+drop an unmigrated endpoint. A fresh read-only installation needs no pins.
+When no config file exists yet, startup can record the same marker-only completion
+without creating a config file that would interfere with `gateway --dev` setup.
+
+The existing explicit-key migrations remain supported: `webhookPort` and
+`webhookHost` become `legacyWebhook: { port, host? }`; Teams `webhook.port` becomes
+`legacyWebhook.port` while `webhook.path` is preserved. A host-only setting keeps
+its historical default port. Both listeners use the same Gateway request pipeline,
+signature checks, and retry responses.
 
 The exported Feishu, Microsoft Teams, Nextcloud Talk, and Telegram config types
 retain deprecated listener input properties (`webhookPort`, `webhookHost`, or
 `webhook.port`) until the next Plugin SDK major. TypeScript config producers remain
 source-compatible, but parsed runtime config uses only `legacyWebhook`; run Doctor
-before using legacy inputs. This type compatibility window does not schedule
-removal of the default listener.
+before using legacy inputs.
 
 Update the external callback or reverse-proxy upstream to the Gateway port and
-the channel's webhook path, verify delivery, then set `legacyWebhook: false` to
-close the old port. Omitting `legacyWebhook` preserves Feishu's previous
-`127.0.0.1:3000` listener, Nextcloud Talk's `0.0.0.0:8788` listener, or Telegram's
-`127.0.0.1:8787` listener while webhook transport is active.
-An explicit object selects its configured endpoint;
-an account-level value overrides the
-channel-level setting. Doctor explains the canonical Gateway route and opt-out
-without changing implicit settings. A shared compatibility port closes when no
-account retains that endpoint.
+the channel's webhook path, verify delivery, then remove the pin to close the old
+port. Use account-level `legacyWebhook: false` to disable an inherited endpoint.
+A shared compatibility port closes when no account retains it. Doctor identifies
+the Gateway route and the external callback or proxy change still required.
 
-This behavior is the same for existing and new installations. It needs no upgrade
-eligibility check or migration receipt. Removing `legacyWebhook: false` restores
-the default listener; removing an explicit object also returns to the default.
-Retiring these listeners is a separate future change, with no removal deadline
-or automatic expiry introduced here.
+New separately installed Feishu, Microsoft Teams, Nextcloud Talk, and Telegram
+plugins require OpenClaw 2026.9.9 or newer so the host can preserve implicit listeners before
+replacement. Older hosts refuse these packages and retain the installed plugin;
+upgrade OpenClaw first.
 
-Telegram re-registers its configured public `webhookUrl` at startup. It preserves
-that URL because its reverse-proxy upstream cannot be inferred safely. Accounts
-that shared a path and secret on different explicit ports keep their old-port
-routing; assign distinct secrets or paths before moving them to one Gateway port.
+For Telegram with no explicit listener setting, Doctor recognizes a Gateway
+destination when `webhookUrl` matches `gateway.publicOrigin` plus a usable
+`webhookPath`, including the path and query. Startup registers the configured
+`webhookUrl` unchanged. Registration must succeed before channel
+readiness releases an old listener handoff; admitting an incoming webhook does
+not release it. A full process restart still has its ordinary restart interval.
+Any other callback URL may still proxy to the old port, so Doctor preserves that
+port with a pin even when `gateway.publicOrigin` is configured. Set `webhookUrl`
+to the public Gateway route before removing the pin, or move the existing proxy's
+upstream to the Gateway port. Explicit endpoint objects and `false` remain authoritative.
+Accounts that shared a path and secret on different ports must use distinct
+secrets or paths before moving them to one Gateway port.
 
-A separately installed Telegram plugin on the 2026.9.6 host performs the same config migration, but the host predates Gateway-owned forwarding. Telegram retains the predecessor's direct per-account listener there; accounts need distinct legacy endpoints. Doctor places the listener guidance in its supported warning output and identifies this limitation. On newer hosts, the shared Gateway listener and informational notes remain unchanged.
+Microsoft Teams keeps its Express body parser, ExpressAdapter, and SDK
+authentication on both listeners. Move its Azure Bot messaging endpoint or proxy
+upstream to the Gateway route before removing the pin.
 
-Microsoft Teams uses the same owner: Doctor moves explicit
-`channels.msteams.webhook.port` to `channels.msteams.legacyWebhook.port`, preserving
-`webhook.path`. Omitted listener settings retain port `3978` with its previous
-wildcard bind. After verifying the Azure Bot endpoint through the Gateway port,
-set `channels.msteams.legacyWebhook: false` to close the compatibility listener.
-Teams keeps its Express body parser and SDK authentication on both listeners.
+For environment-only Teams credentials, Doctor preserves the endpoint without
+persisting activation; `gateway run --ambient-channels` still controls whether
+Teams runs. If Doctor runs without those credentials, an existing installation
+leaves only the Teams migration pending until the first Gateway startup; other
+channels remain completed. A startup without Teams credentials, or a newly authored
+Teams configuration, completes that decision without a pin. Adding Teams later
+does not reopen its old port. Existing listener-only source configurations gain
+`enabled: true` to preserve their previous activation.
 
 ## Talk realtime inheritance
 
@@ -530,7 +649,7 @@ against the current SQLite owners before the import can rename profiles.
   <Accordion title="1. Config normalization">
     GitHub Copilot now requires explicit provider config, a saved Copilot auth profile, or `COPILOT_GITHUB_TOKEN`. Generic `GH_TOKEN` and `GITHUB_TOKEN` no longer activate it. Doctor reports this change once when only a generic GitHub token is present. Doctor removes the retired `plugins.entries.github-copilot.config.discovery.enabled` setting, including malformed values, before validating and saving the config. Ordinary config reads require the repaired config.
 
-    Doctor normalizes legacy value shapes into the current schema. Current Talk speech config is `talk.provider` + `talk.providers.<provider>`, with realtime voice config under `talk.realtime.*`. Doctor rewrites old `talk.voiceId` / `talk.voiceAliases` / `talk.modelId` / `talk.outputFormat` / `talk.apiKey` shapes into the provider map, and rewrites legacy top-level realtime selectors (`talk.mode`, `talk.transport`, `talk.brain`, `talk.model`, `talk.voice`) into `talk.realtime`.
+    Doctor normalizes legacy value shapes into the current schema. Current Talk speech config is `talk.provider` + `talk.providers.<provider>`, with realtime voice config under `talk.realtime.*`. Doctor rewrites old `talk.voiceId` / `talk.voiceAliases` / `talk.modelId` / `talk.outputFormat` / `talk.apiKey` shapes into the provider map. Top-level realtime selectors are retired under the retention policy above.
 
     Doctor also warns when `plugins.allow` is non-empty and tool policy uses wildcard or plugin-owned tool entries. `tools.allow: ["*"]` only matches tools from plugins that actually load; it does not bypass the exclusive plugin allowlist.
 
@@ -580,7 +699,6 @@ against the current SQLite owners before the import can rename profiles.
     | `tools.codeMode.runtime: "quickjs-wasi"` (global and per-agent)                                | `tools.codeMode.executor: "quickjs"` (an existing executor selection wins) |
     | `tools.codeMode.languages`, `agents.entries.*.tools.codeMode.languages`                         | removed (Code Mode executes JavaScript; activation and limits are preserved) |
     | legacy `talk.voiceId`/`talk.voiceAliases`/`talk.modelId`/`talk.outputFormat`/`talk.apiKey`        | `talk.provider` + `talk.providers.<provider>`                               |
-    | legacy top-level realtime Talk selectors (`talk.mode`/`talk.transport`/`talk.brain`/`talk.model`/`talk.voice`) | `talk.realtime`                                                              |
     | `messages.tts`                                                                                  | top-level `tts`                                                              |
     | `messages.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`)                             | `tts.providers.<provider>`                                                   |
     | `messages.tts.provider: "edge"` / `messages.tts.providers.edge`                                  | `tts.provider: "microsoft"` / `tts.providers.microsoft`                    |
@@ -591,7 +709,7 @@ against the current SQLite owners before the import can rename profiles.
     | `meta.lastTouchedAt`, hook installs, cron store, bundled discovery, global TTS prefs path            | shared SQLite state                                                       |
     | TTS speaker fields `voice`/`voiceName`/`voiceId`                                                 | `speakerVoice`/`speakerVoiceId`                                              |
     | `channels.<id>.tts.<provider>` / `channels.<id>.accounts.<accountId>.tts.<provider>` (all channels except Discord)                                          | `...tts.providers.<provider>`                                                |
-    | `channels.<id>.voice.tts.<provider>` / `channels.<id>.accounts.<accountId>.voice.tts.<provider>` (all channels, including Discord)                          | `...voice.tts.providers.<provider>`                                          |
+    | `channels.<id>.voice.tts.<provider>` / `channels.<id>.accounts.<accountId>.voice.tts.<provider>` (all channels except Discord)                          | `...voice.tts.providers.<provider>`                                          |
     | `plugins.entries.voice-call.config.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`)     | `plugins.entries.voice-call.config.tts.providers.<provider>`                |
     | `plugins.entries.voice-call.config.tts.provider: "edge"` / `...tts.providers.edge`                | `provider: "microsoft"` / `...tts.providers.microsoft`                      |
     | `plugins.entries.voice-call.config.provider: "log"`                                              | `"mock"`                                                                      |

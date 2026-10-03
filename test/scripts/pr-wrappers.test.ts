@@ -1749,26 +1749,29 @@ exit 99
     },
   );
 
-  it("routes a mismatched landing subcommand through the materialized anchor", () => {
-    const fixture = makeMismatchedWrapperRepo();
-    seedReadyReview(fixture);
-    parkCanonicalOffAnchor(fixture);
-    const result = spawnSync(join(fixture.linked, "scripts", "pr"), ["prepare-run", "123"], {
-      cwd: fixture.linked,
-      encoding: "utf8",
-      env: fixture.env,
-    });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      "running wrapper code materialized from the refs/remotes/origin/main trust anchor",
-    );
-    // The stubbed gh reports a non-main base: reaching this gate proves the
-    // materialized anchor wrapper ran the landing subcommand.
-    expect(result.stderr).toContain(
-      "scripts/pr prepare and merge commands only support PRs targeting main; PR #123 targets not-main.",
-    );
-    expect(result.stderr).not.toContain("Refusing to silently substitute");
-  });
+  it.each(["prepare-run", "prepare-baseline-refresh"])(
+    "routes mismatched %s through the materialized anchor",
+    (command) => {
+      const fixture = makeMismatchedWrapperRepo();
+      seedReadyReview(fixture);
+      parkCanonicalOffAnchor(fixture);
+      const result = spawnSync(join(fixture.linked, "scripts", "pr"), [command, "123"], {
+        cwd: fixture.linked,
+        encoding: "utf8",
+        env: fixture.env,
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "running wrapper code materialized from the refs/remotes/origin/main trust anchor",
+      );
+      // The stubbed gh reports a non-main base: reaching this gate proves the
+      // materialized anchor wrapper ran the landing subcommand.
+      expect(result.stderr).toContain(
+        "scripts/pr prepare and merge commands only support PRs targeting main; PR #123 targets not-main.",
+      );
+      expect(result.stderr).not.toContain("Refusing to silently substitute");
+    },
+  );
 
   it("initializes stamped review artifacts through the materialized anchor", () => {
     const fixture = makeMismatchedWrapperRepo();

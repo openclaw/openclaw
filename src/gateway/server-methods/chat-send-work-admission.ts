@@ -1,5 +1,7 @@
+import { isDeepStrictEqual } from "node:util";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
+import type { SessionTranscriptTurnMutation } from "../../config/sessions/goals-operations.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { retireProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
@@ -10,7 +12,6 @@ import {
 import type { registerChatAbortController } from "../chat-abort.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
-import { loadSessionEntry } from "../session-utils.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import { formatForLog } from "../ws-log.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
@@ -162,7 +163,9 @@ export function createChatSendGoalCommitGuard(
       | "sessionRoutingChanged"
     >;
   },
-): () => void {
+): Pick<SessionTranscriptTurnMutation, "assertCurrent" | "routingPredicate"> & {
+  assertCurrent: () => void;
+} {
   const {
     admission,
     session,
@@ -171,19 +174,24 @@ export function createChatSendGoalCommitGuard(
     sessionMutationAuthorization,
     sessionMutationCommitGuard,
   } = params;
-  return () => {
+  const routingPredicate = admission.initialSessionEntry
+    ? {
+        config: structuredClone(context.getRuntimeConfig()),
+        key: session.sessionLoadKey,
+        agentId: session.sessionLoadOptions.agentId,
+        storePath: session.storePath,
+        canonicalKey: session.sessionKey,
+      }
+    : undefined;
+  const assertCurrent = () => {
     sessionMutationCommitGuard?.();
     sessionMutationAuthorization?.assertCurrent();
     const currentConfig = context.getRuntimeConfig();
     const initialEntry = admission.initialSessionEntry;
     if (initialEntry) {
       admission.assertInitialSkillSelection?.();
-      // Missing targets have no sharing owner yet; revalidate their creator before SQL commit.
-      const currentTarget = loadSessionEntry(session.sessionLoadKey, session.sessionLoadOptions);
-      if (
-        currentTarget.storePath !== session.storePath ||
-        currentTarget.canonicalKey !== session.sessionKey
-      ) {
+      // The executor checks rows; live configuration and creator authority remain host-owned.
+      if (!isDeepStrictEqual(currentConfig, routingPredicate?.config)) {
         throw new Error("Session routing changed before Goal admission; refresh and retry.");
       }
       const creationError = authorizeGatewaySessionCreation({
@@ -210,4 +218,5 @@ export function createChatSendGoalCommitGuard(
       throw new Error("Goal admission changed before commit; refresh and retry.");
     }
   };
+  return { assertCurrent, routingPredicate };
 }

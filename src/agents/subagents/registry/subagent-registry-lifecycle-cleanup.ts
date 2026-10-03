@@ -190,7 +190,7 @@ export function retireSupersededCleanupInBackground(
   // A late delivery callback still owns retirement through its original source.
   void runWithSubagentCleanupWorkAdmission(async () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
-    await retireSupersededCleanupIfNeeded(context, runId, entry, generation);
+    await retireSupersededCleanupIfNeeded(context, entry, generation);
   }).catch((error: unknown) => {
     defaultRuntime.log(
       `[warn] subagent superseded cleanup retirement failed (${runId}): ${String(error)}`,

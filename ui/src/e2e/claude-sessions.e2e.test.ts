@@ -350,10 +350,11 @@ suite.define(() => {
         title: "claude --resume claude-termi…",
       });
       await expect.poll(() => connecting.count()).toBe(1);
+      const terminalOutput = "Claude Code ready\r\n";
       await gateway.emitGatewayEvent("terminal.data", {
         sessionId: "claude-terminal-e2e",
-        seq: 17,
-        data: "Claude Code ready\r\n",
+        seq: terminalOutput.length,
+        data: terminalOutput,
       });
       await expect.poll(() => connecting.count()).toBe(0);
       expect(await page.locator(".tabstrip-tab.is-live").count()).toBe(1);

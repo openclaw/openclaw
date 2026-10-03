@@ -22,6 +22,10 @@ import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import * as modelSwitchEval from "./model-switch-eval.js";
 import { runQaCli } from "./qa-cli-process.js";
 import * as runtimeToolFixture from "./runtime-tool-fixture.js";
+import {
+  formatToolSearchDiscoveryReceipt,
+  requireToolSearchDiscoveryEvidence,
+} from "./runtime-tool-search-evidence.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 import { createQaScenarioRuntimeApi, type QaScenarioRuntimeEnv } from "./scenario-runtime-api.js";
@@ -77,6 +81,8 @@ const qaSuiteScenarioIdentityDeps = {
   buildAgentSessionKey,
   resolveAgentRoute,
   normalizeLowercaseStringOrEmpty,
+  formatToolSearchDiscoveryReceipt,
+  requireToolSearchDiscoveryEvidence,
 };
 
 export async function runQaSuiteScenarioSteps(

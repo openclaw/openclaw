@@ -1,4 +1,4 @@
-/** Resolves the effective parent for a transcript message append inside the write transaction. */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
 import {
   executeSqliteQueryTakeFirstSync,
@@ -205,13 +205,7 @@ export function resolveTranscriptEventAppendParent(
   event: TranscriptEvent,
   options: TranscriptEventAppendOptions,
 ): TranscriptEvent {
-  if (
-    options.appendIntent !== "active-branch" ||
-    !event ||
-    typeof event !== "object" ||
-    Array.isArray(event) ||
-    !("parentId" in event)
-  ) {
+  if (options.appendIntent !== "active-branch" || !isRecord(event) || !("parentId" in event)) {
     return event;
   }
   const parentId = event.parentId;

@@ -190,7 +190,8 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       workspaceDir: state.workspaceDir,
       prompt: "continue",
       timeoutMs: 30_000,
-      config: { agents: { defaults: { compaction: { timeoutSeconds: 1 } } } },
+      // Ordinary lifecycle proofs use the production window, not a disk-speed deadline.
+      config: {},
       abortSignal: controller.signal,
       admittedRunContext,
       sessionPersistence: options.detached ? "detached" : undefined,

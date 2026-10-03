@@ -52,17 +52,17 @@ function runNextcloudTalkDoctorSequence(params: {
       warningNotes.push(
         `- channels.nextcloud-talk.${account.accountId}: ${routeConflict}` +
           (legacyListener
-            ? ` Legacy webhook listener ${legacyListener.host}:${legacyListener.port} remains available; verify the new route before setting legacyWebhook: false.`
+            ? ` Legacy webhook listener ${legacyListener.host}:${legacyListener.port} remains available; verify the new route before removing the legacyWebhook pin.`
             : " This account cannot start until the callback path is changed."),
       );
     } else if (legacyListener) {
       infoNotes.push(
         `- channels.nextcloud-talk.${account.accountId}: legacy webhook listener ${legacyListener.host}:${legacyListener.port} forwards to the Gateway route. ` +
-          `Point the Nextcloud callback or reverse-proxy upstream to ${destination}, verify delivery, then set legacyWebhook: false to disable this account's legacy forwarding.`,
+          `Point the Nextcloud callback or reverse-proxy upstream to ${destination}, verify delivery, then remove the legacyWebhook pin; use legacyWebhook: false to override an inherited endpoint.`,
       );
     } else {
       infoNotes.push(
-        `- channels.nextcloud-talk.${account.accountId}: legacyWebhook is false; use ${destination} for the Nextcloud callback or reverse-proxy upstream.`,
+        `- channels.nextcloud-talk.${account.accountId}: no legacy listener is configured; use ${destination} for the Nextcloud callback or reverse-proxy upstream.`,
       );
     }
   }

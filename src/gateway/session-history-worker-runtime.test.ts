@@ -217,7 +217,7 @@ function historyTarget() {
   };
 }
 
-function page(text: string): SessionHistoryWorkerResult {
+function page(text: string): Extract<SessionHistoryWorkerResult, { kind: "rpc" }> {
   return {
     kind: "rpc",
     page: { messages: [{ role: "assistant", content: [{ type: "text", text }] }] },
@@ -683,9 +683,13 @@ it("discards a rejected queued read so a later request can succeed", async () =>
   });
 });
 
-it.each([0, DEFAULT_WORKER_PENDING_TASKS - 1])(
-  "bounds coalesced waiters when reader %i cancels",
-  async (cancelledIndex) => {
+it.each(
+  [false, true].flatMap((encoded) =>
+    [0, DEFAULT_WORKER_PENDING_TASKS - 1].map((cancelledIndex) => ({ encoded, cancelledIndex })),
+  ),
+)(
+  "bounds coalesced waiters when reader $cancelledIndex cancels during the worker read (encoded: $encoded)",
+  async ({ cancelledIndex, encoded }) => {
     const controller = new AbortController();
     const readers = Array.from({ length: DEFAULT_WORKER_PENDING_TASKS }, (_, index) =>
       readSessionHistoryPageInWorker(
@@ -699,6 +703,7 @@ it.each([0, DEFAULT_WORKER_PENDING_TASKS - 1])(
     await expect(readSessionHistoryPageInWorker(request())).rejects.toMatchObject({
       code: "overloaded",
     });
+    queued[0]!.prepare();
     const cancelled = new Error("caller closed");
     controller.abort(cancelled);
     // The cancelled callback remains retained by the shared promise until its job settles.
@@ -709,8 +714,18 @@ it.each([0, DEFAULT_WORKER_PENDING_TASKS - 1])(
 
     const clone = vi.spyOn(globalThis, "structuredClone");
     try {
-      queued[0]!.prepare();
-      queued[0]!.result.resolve(page("shared result"));
+      const reply = page("shared result");
+      const bytes = new TextEncoder().encode(JSON.stringify(reply.page.messages));
+      if (encoded) {
+        reply.page.messages = [];
+        reply.page.encodedResponse = {
+          messages: bytes,
+          messagesBytes: bytes.byteLength,
+          responseHistoryBytes: 1024,
+          omission: { omittedCount: 1, normalizedBytes: 2048 },
+        };
+      }
+      queued[0]!.result.resolve(reply);
       const results = await settled;
       expect(results[cancelledIndex]).toEqual({ status: "rejected", reason: cancelled });
       expect(
@@ -718,6 +733,17 @@ it.each([0, DEFAULT_WORKER_PENDING_TASKS - 1])(
           .filter((_, index) => index !== cancelledIndex)
           .every((result) => result.status === "fulfilled"),
       ).toBe(true);
+      if (encoded) {
+        const pages = results.flatMap((result) =>
+          result.status === "fulfilled" ? [result.value] : [],
+        );
+        for (const result of pages) {
+          // A coalesced page transfers its immutable wire buffer only once.
+          expect(result.encodedResponse?.messages).toBe(bytes);
+        }
+        pages[0]!.encodedResponse!.omission!.omittedCount = 9;
+        expect(pages[1]!.encodedResponse!.omission!.omittedCount).toBe(1);
+      }
       expect(clone).toHaveBeenCalledTimes(
         DEFAULT_WORKER_PENDING_TASKS - (cancelledIndex === 0 ? 2 : 1),
       );

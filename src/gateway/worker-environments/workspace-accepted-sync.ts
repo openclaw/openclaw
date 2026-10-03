@@ -57,7 +57,7 @@ export async function recoverAcceptedWorkspacePublication(params: {
   }
 }
 
-function createAcceptedWorkspacePublisher(params: {
+export function createAcceptedWorkspacePublisher(params: {
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>;
   runRsync: (argv: (rsyncSsh: string) => string[]) => Promise<SpawnResult>;
   scpTarget: string;
@@ -65,10 +65,12 @@ function createAcceptedWorkspacePublisher(params: {
   localPath: string;
   remoteWorkspaceDir: string;
   remoteManifest: WorkerWorkspaceManifest;
+  initialRemoteRef: string;
   hashMemo: WorkspaceHashMemo;
   metrics: WorkspaceReconcileMetrics;
 }) {
-  return async (accepted: {
+  let expectedRemoteRef = params.initialRemoteRef;
+  const publish = async (accepted: {
     manifestRef: string;
     manifest: WorkerWorkspaceManifest;
     conflictPaths: string[];
@@ -294,24 +296,11 @@ function createAcceptedWorkspacePublisher(params: {
       throw error;
     }
   };
-}
-
-export function createAcceptedWorkspacePublisherFactory(
-  params: Omit<Parameters<typeof createAcceptedWorkspacePublisher>[0], "remoteManifest">,
-) {
-  return (remoteManifest: WorkerWorkspaceManifest, initialRemoteRef: string) => {
-    let expectedRemoteRef = initialRemoteRef;
-    const publish = createAcceptedWorkspacePublisher({ ...params, remoteManifest });
-    return {
-      expectedRemoteRef: () => expectedRemoteRef,
-      publishAcceptedManifest: async (accepted: {
-        manifestRef: string;
-        manifest: WorkerWorkspaceManifest;
-        conflictPaths: string[];
-      }) => {
-        await publish(accepted);
-        expectedRemoteRef = accepted.manifestRef;
-      },
-    };
+  return {
+    expectedRemoteRef: () => expectedRemoteRef,
+    publishAcceptedManifest: async (accepted: Parameters<typeof publish>[0]) => {
+      await publish(accepted);
+      expectedRemoteRef = accepted.manifestRef;
+    },
   };
 }

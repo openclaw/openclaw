@@ -302,7 +302,8 @@ export const en: TranslationMap & {
     shortCount: "{completed} of {total}",
     noteLabel: "Progress note",
     dismiss: "Dismiss progress card",
-    dismissFailed: "Could not dismiss the progress card. Try again.",
+    clearSaved: "Clear saved progress for everyone",
+    clearFailed: "Could not clear saved progress card.",
     refresh: {
       label: "Refresh task progress",
       retry: "Retry progress refresh",
@@ -554,11 +555,12 @@ export const en: TranslationMap & {
     stylesFailed: "Styles failed to load, so the page may look broken.",
   },
   communityInvite: {
-    title: "Find your people",
-    body: "Questions, projects, and the latest from OpenClaw.",
-    reddit: "Reddit",
-    discord: "Discord",
-    x: "X",
+    title: "Pull up a chair.",
+    body: "There’s a place for you in the AI future. Join the Community on Reddit, Discord, and X.",
+    join: "Join",
+    follow: "Follow",
+    joinPlatform: "Join the OpenClaw community on {platform}",
+    followPlatform: "Follow OpenClaw on {platform}",
     dismissForever: "Dismiss and don't show again",
     dismissFailed: "Invitation dismissed, but your preference couldn't be saved.",
   },
@@ -2388,6 +2390,15 @@ export const en: TranslationMap & {
       hint: "Connected with the Gateway token or over a tunnel, not a personal sign-in.",
     },
     rosterTitle: "Online",
+    filters: {
+      label: "Filter & sort people",
+      noMatches: "No people match this filter",
+      presence: "Active people first",
+      reset: "Reset to defaults",
+      running: "Running sessions",
+      total: "Total sessions",
+      name: "Name",
+    },
     active: "Active",
     onlineActive: "Online · Active",
     onlineIdle: "Online · Idle",
@@ -2973,6 +2984,7 @@ export const en: TranslationMap & {
   // Login copy lives in the lazy en-login catalog; the anchor keeps its merge target.
   login: {},
   chat: {
+    agentDatabaseWarming: "This agent is still starting. Retry in a moment.",
     historyRequestTimedOut: "Chat history request timed out. Retry to load the conversation.",
     clawhub: {
       retryStatus: "Status unavailable · Retry",
@@ -3457,20 +3469,45 @@ export const en: TranslationMap & {
       label: "Session reset",
       description: "The earlier conversation was cleared.",
     },
-    outboxRecoveryTitle: "Saved messages need a destination",
+    outboxRecoveryTitle: "{count} saved messages to review",
+    outboxRecoveryTitleOne: "1 saved message to review",
+    outboxRecoveryDraftTitle: "{count} saved drafts",
+    outboxRecoveryDraftTitleOne: "1 saved draft",
     outboxRecoveryFailedTitle: "Saved messages could not be loaded",
     outboxRecoveryDescription:
-      "These saved drafts and queued messages need a conversation. Open an empty non-Incognito conversation, then restore an entry for review. Nothing is sent automatically. Attachment drafts may appear separately.",
+      "These messages were saved in this browser. Review them before sending, or delete copies you don’t need. Nothing is sent automatically.",
+    outboxRecoveryDraftDescription:
+      "We found unfinished messages saved in this browser. Review them here or delete them. Nothing is sent automatically.",
+    outboxRecoveryDraftDescriptionOne:
+      "We found an unfinished message saved in this browser. Review it here or delete it. Nothing is sent automatically.",
+    outboxRecoveryReviewTitle: "Review in this chat?",
     outboxRecoveryConfirm:
-      "Confirm this destination for the saved entry. Queued messages will remain paused for review and Retry. If delivery was uncertain, check the conversation before retrying.",
-    outboxRecoveryRestore: "Restore here for review",
+      "Add this saved copy to “{chat}” for review? Nothing will be sent. Check the original chat before retrying a message that may already have arrived.",
+    outboxRecoveryRestore: "Review in this chat",
     outboxRecoveryConflict:
-      "This destination has a newer draft or queue, or changed during confirmation. Open an empty conversation and try again. The saved entry is still available.",
+      "Keep or clear the draft and pending messages in this chat first, or open another non-Incognito chat. Your saved copy is unchanged.",
     outboxRecoveryStorageFailed:
-      "Your saved data has been kept. Reload to try again. If the problem continues, check that browser storage is available. Do not clear site data while you have messages to recover.",
+      "We could not access your saved messages. Reload to try again. Do not clear browser site data if you want to keep them.",
     outboxRecoveryFull:
-      "Recovery is full. Restore saved entries to make room; remaining legacy data is still retained in this browser.",
-    outboxRecoveryMessages: "Queued messages: {count}",
+      "There are more saved messages than we can show. Review or delete the copies below to make room. The remaining messages are still saved in this browser.",
+    outboxRecoveryDraft: "Draft · Not sent",
+    outboxRecoveryQueued: "Saved message · Review before sending",
+    outboxRecoverySource: "From: {chat}",
+    outboxRecoveryUnknownSource: "Original chat unavailable",
+    outboxRecoveryUpdated: "Last updated {time}",
+    outboxRecoveryGoal: "Includes an unsent goal change",
+    outboxRecoveryReply: "Reply to: {text}",
+    outboxRecoveryAttachments: "Attachments: {files}",
+    outboxRecoveryUnconfirmed:
+      "Delivery unconfirmed. This message may already have been sent. Check the original chat before sending it again.",
+    outboxRecoveryAttachmentMissing:
+      "An attachment could not be loaded. Review the message and reattach the file before sending.",
+    outboxRecoveryDelete: "Delete saved copy",
+    outboxRecoveryDeleteTitle: "Delete this saved copy?",
+    outboxRecoveryDeleteConfirm:
+      "This removes the draft and any saved messages or attachments shown with it from this browser. It cannot be undone. Messages already sent to a chat will not be deleted.",
+    outboxRecoveryDeleteConflict:
+      "This saved copy changed while you were reviewing it. Nothing was deleted. Reload and review it again.",
     privateDraftReload: {
       blocked: "An unsent Incognito draft is keeping this tab open. Review it before refreshing.",
       review: "Review private draft",

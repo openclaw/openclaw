@@ -170,19 +170,22 @@ test("forwardBurst rejects a non-DM scenario before acquiring credentials", asyn
   assert.doesNotMatch(result.stderr, /unexpected credential acquisition/);
 });
 
-test("gateway readiness budget rejects non-positive values before acquiring credentials", async () => {
-  for (const value of ["0", "-1", "1.5", "soon"]) {
+test("gateway and recorder readiness budgets reject invalid values before acquiring credentials", async () => {
+  for (const [flag, value] of [
+    ["--gateway-ready-timeout-ms", "0"],
+    ["--gateway-ready-timeout-ms", "-1"],
+    ["--gateway-ready-timeout-ms", "1.5"],
+    ["--gateway-ready-timeout-ms", "soon"],
+    ["--recorder-ready-timeout-ms", "0"],
+    ["--recorder-ready-timeout-ms", "1.5"],
+  ]) {
     const result = await runCommand(
       process.execPath,
-      [
-        new URL("./run-mock-sut-user-e2e.mjs", import.meta.url).pathname,
-        "--gateway-ready-timeout-ms",
-        value,
-      ],
+      [new URL("./run-mock-sut-user-e2e.mjs", import.meta.url).pathname, flag, value],
       { env: {} },
     );
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /--gateway-ready-timeout-ms takes a positive integer/);
+    assert.ok(result.stderr.includes(`${flag} takes a positive integer.`), result.stderr);
   }
 });
 
@@ -300,6 +303,28 @@ test("gateway token stays in a private run-owned file until scratch cleanup", as
   await currentTelegramRun().close();
   assert.equal(fs.existsSync(tokenFile), false);
   assert.equal(fs.existsSync(temp.root), false);
+});
+
+test("source Gateway selects the checkout's Telegram plugin entry over its built peer", () => {
+  const repoRoot = path.resolve(import.meta.dirname, "../../../..");
+  const params = {
+    sutToken: "42:synthetic-file-token",
+    backend: "mock",
+    gatewayPort: 19879,
+    mockPort: 19882,
+    telegramApiRoot: "http://127.0.0.1:19881",
+    testerId: "123",
+    groupId: "-1001",
+    repoRoot,
+  };
+  const readPlugins = (sourceGateway) =>
+    JSON.parse(fs.readFileSync(writeConfig({ ...params, sourceGateway }).configPath, "utf8"))
+      .plugins;
+  // Without this selection, Gateway startup runs dist/extensions/telegram whenever it exists.
+  const sourcePaths = readPlugins(true).load?.paths;
+  assert.deepEqual(sourcePaths, [path.join(repoRoot, "extensions", "telegram")]);
+  assert.equal(fs.existsSync(path.join(sourcePaths[0], "openclaw.plugin.json")), true);
+  assert.equal(Object.hasOwn(readPlugins(false), "load"), false);
 });
 
 test("scenario command evidence retains no argv or process output", () => {

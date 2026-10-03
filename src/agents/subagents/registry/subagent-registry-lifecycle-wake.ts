@@ -1,7 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
-import { clearGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { isGatewayRestartDrainError } from "../../../process/gateway-work-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
@@ -10,6 +9,7 @@ import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announ
 import { revokeRequesterCronAuthorityBatch } from "../requester-cron-authority.js";
 import { revokeRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { isCompletedRequesterDeliveryBlocked } from "./subagent-delivery-state.js";
+import { retireSubagentGatewayBinding } from "./subagent-registry-execution-cleanup.js";
 import type {
   PendingRequesterSettleWakeCommit,
   SubagentLifecycleWakeContext,
@@ -119,7 +119,7 @@ function releaseRequesterSettleWakeBatch(
       ) {
         context.pendingRequesterSettleWakeCommits.delete(getSubagentRunRuntimeKey(entry));
       }
-      clearGatewayContextResolver(entry);
+      retireSubagentGatewayBinding(entry);
       params.resumedRuns.delete(getSubagentRunRuntimeKey(entry));
       params.clearPendingLifecycleError(runId);
     }
@@ -302,10 +302,7 @@ export function scheduleRequesterSettleWake(
   if (publishedAtAdmission && !isSameSubagentRunOwner(publishedAtAdmission, observedEntry)) {
     return;
   }
-  let entry =
-    publishedAtAdmission && isSameSubagentRunOwner(publishedAtAdmission, observedEntry)
-      ? publishedAtAdmission
-      : observedEntry;
+  let entry = publishedAtAdmission ?? observedEntry;
   if (context.cancelledRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry))) {
     return;
   }

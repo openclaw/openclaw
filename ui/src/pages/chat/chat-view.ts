@@ -34,7 +34,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
-import { livePresentation, type PresentationBinding } from "../../lit/presentation-binding.ts";
+import { livePresentation, type PresentationValue } from "../../lit/presentation-binding.ts";
 import { renderPluginSurface } from "../../plugins/control-ui-view.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
@@ -121,8 +121,7 @@ export type ChatProps = Omit<
       itemId?: string,
       sourceMessageId?: string,
     ) => Promise<boolean>;
-    presented?: boolean;
-    presentation?: PresentationBinding;
+    presented?: PresentationValue;
     historyState?: ChatState;
     startupStatus?: ChatRunStartupStatus | null;
     providerPolicyNotice?: ProviderPolicyNotice | null;
@@ -357,7 +356,7 @@ export function renderChat(props: ChatProps) {
       },
       props.transcript,
     ),
-    props.presentation ?? props.presented ?? true,
+    props.presented ?? true,
   );
   const footerContent = html`${
       pendingInputs &&
@@ -417,7 +416,6 @@ export function renderChat(props: ChatProps) {
       basePath: props.basePath,
       sessionKey: scopedSessionArtifactKey(props.sessionKey, props.currentAgentId ?? undefined),
       presented: props.presented ?? true,
-      presentation: props.presentation,
       branch: props.pullRequestsBranch,
       status: props.pullRequestsStatus ?? "ready",
       onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
@@ -438,7 +436,7 @@ export function renderChat(props: ChatProps) {
       .kind=${"composer"}
       .sessionKey=${props.sessionKey}
       .agentId=${props.currentAgentId}
-      .presented=${livePresentation(props.presentation ?? props.presented ?? true)}
+      .presented=${livePresentation(props.presented ?? true)}
     ></openclaw-plugin-contributions>`;
   // The composer keeps the outbox queue; only the transcript includes the
   // placement initial turn, whose retry action belongs to startup.
@@ -480,7 +478,7 @@ export function renderChat(props: ChatProps) {
       abort: props.onAbort,
     },
     defaultComposer,
-    props.presentation ?? props.presented ?? true,
+    props.presented ?? true,
     html`<div class="chat-footer__context">
       ${footerContent}
       <div class="agent-chat__composer-notices">${notices}</div>
@@ -617,7 +615,7 @@ export function renderChat(props: ChatProps) {
               .props=${props}
               .disabled=${!canCompose}
               .sessionKey=${props.sessionKey}
-              .presented=${livePresentation(props.presentation ?? props.presented ?? true)}
+              .presented=${livePresentation(props.presented ?? true)}
             ></openclaw-chat-comment-controller>`
       }
       <div class="chat-workbench" ${shellLayoutTraits({ workbench: true })}>
@@ -630,7 +628,7 @@ export function renderChat(props: ChatProps) {
                   .kind=${"header"}
                   .sessionKey=${props.sessionKey}
                   .agentId=${props.currentAgentId}
-                  .presented=${livePresentation(props.presentation ?? props.presented ?? true)}
+                  .presented=${livePresentation(props.presented ?? true)}
                 ></openclaw-plugin-contributions>
                 ${renderTranscriptSearch(props.paneId, requestUpdate)}
                 <div class="chat-main__conversation-frame">

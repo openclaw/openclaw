@@ -5,7 +5,7 @@ import {
   resolveRuntimeConversationBindingRoute,
   type RuntimeConversationBindingRouteResult,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { parseSlackTarget, type SlackTargetKind } from "./targets.js";
+import { parseSlackTarget } from "./targets.js";
 
 type SlackRouteBinding = NonNullable<OpenClawConfig["bindings"]>[number];
 type SlackRouteBindingPeer = NonNullable<SlackRouteBinding["match"]["peer"]>;
@@ -15,42 +15,26 @@ const slackRouteBindingConfigCache = new WeakMap<
   { bindingsRef: OpenClawConfig["bindings"]; normalizedCfg: OpenClawConfig }
 >();
 
-function slackTargetDefaultKindForPeer(kind: SlackRouteBindingPeer["kind"]): SlackTargetKind {
-  return kind === "direct" ? "user" : "channel";
-}
-
-function slackTargetKindMatchesPeer(
-  peerKind: SlackRouteBindingPeer["kind"],
-  targetKind: SlackTargetKind,
-): boolean {
-  if (targetKind === "user") {
-    return peerKind === "direct";
-  }
-  return peerKind === "channel" || peerKind === "group";
-}
-
 function normalizeSlackRouteBindingPeer(peer: SlackRouteBindingPeer): SlackRouteBindingPeer {
   const rawId = peer.id.trim();
   if (!rawId || rawId === "*") {
     return peer;
   }
 
-  const target = (() => {
-    try {
-      return parseSlackTarget(rawId, {
-        defaultKind: slackTargetDefaultKindForPeer(peer.kind),
-      });
-    } catch {
-      return undefined;
+  try {
+    const target = parseSlackTarget(rawId, {
+      defaultKind: peer.kind === "direct" ? "user" : "channel",
+    });
+    if (!target || (target.kind === "user") !== (peer.kind === "direct")) {
+      return peer;
     }
-  })();
-  if (!target || !slackTargetKindMatchesPeer(peer.kind, target.kind)) {
+    const normalizedId = target.teamId
+      ? `team:${target.teamId}:${target.kind}:${target.id}`
+      : target.id;
+    return normalizedId === peer.id ? peer : { ...peer, id: normalizedId };
+  } catch {
     return peer;
   }
-  const normalizedId = target.teamId
-    ? `team:${target.teamId}:${target.kind}:${target.id}`
-    : target.id;
-  return normalizedId === peer.id ? peer : { ...peer, id: normalizedId };
 }
 
 export function normalizeSlackRouteBindingConfig(cfg: OpenClawConfig): OpenClawConfig {

@@ -52,6 +52,7 @@ import type {
   SessionColdMutationResult,
   SessionColdPreparationWorkerData,
   SessionColdWorkerData,
+  SessionColdTurnGuard,
 } from "./session-cold-storage-worker.js";
 import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
 import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
@@ -355,10 +356,18 @@ async function archiveSessionColdBatch(options: ColdBatchOptions): Promise<ColdB
   });
 }
 
+export class SessionColdTurnReboundError extends Error {
+  constructor(readonly result: NonNullable<SessionColdMutationResult["turnRebound"]>) {
+    super("Session changed before cold transcript restoration");
+    this.name = "SessionColdTurnReboundError";
+  }
+}
+
 export async function restoreSessionColdTranscript(
   scope: SessionTranscriptReadScope,
   assertCurrent?: () => void,
   preparation?: SessionColdReadPreparation,
+  turnGuard?: SessionColdTurnGuard,
 ): Promise<void> {
   assertCurrent?.();
   let resolved = preparation?.target;
@@ -414,16 +423,21 @@ export async function restoreSessionColdTranscript(
             );
           }
         };
-        return await restoreSessionColdTranscript(captured, assertAllowed, {
-          target,
-          readMetadata: async () => {
-            const metadata = await owner.readColdMetadata({
-              sessionId: target.sessionId,
-              env: captured.env,
-            });
-            return metadata.archive;
+        return await restoreSessionColdTranscript(
+          captured,
+          assertAllowed,
+          {
+            target,
+            readMetadata: async () => {
+              const metadata = await owner.readColdMetadata({
+                sessionId: target.sessionId,
+                env: captured.env,
+              });
+              return metadata.archive;
+            },
           },
-        });
+          turnGuard,
+        );
       });
     }
   }
@@ -454,15 +468,19 @@ export async function restoreSessionColdTranscript(
     if (!archive) {
       return;
     }
-    await runColdMutation(
+    const result = await runColdMutation(
       {
         kind: "cold-restore",
         databaseOptions: workerDatabaseOptions(options),
         sessionId: resolved.sessionId,
         archive,
+        turnGuard,
       },
       assertCurrent,
     );
+    if (result.turnRebound) {
+      throw new SessionColdTurnReboundError(result.turnRebound);
+    }
     assertCurrent?.();
     // Keep viewed history hot without changing canonical transcript timestamps or bytes.
     const now = Date.now();

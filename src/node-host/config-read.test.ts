@@ -14,10 +14,9 @@ import {
 import type { OpenClawStateReadReply } from "../state/openclaw-state-read.types.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
-import { configureNodeHost, loadNodeHostConfig, loadNodeHostConfigReadOnly } from "./config.js";
+import { configureNodeHost, loadNodeHostConfig } from "./config.js";
 
 const tempDirs = useStateDatabaseTempDirs();
-const readers = [loadNodeHostConfig, loadNodeHostConfigReadOnly];
 
 function fixture() {
   const root = tempDirs.make("openclaw-node-host-config-reader-");
@@ -66,9 +65,7 @@ it.each(["cached", "fresh"] as const)(
     }
     const startedAt = performance.now();
     const parentSqlCalls = await withoutParentSql(async () => {
-      for (const read of readers) {
-        expect(await read(env)).toEqual(expected);
-      }
+      expect(await loadNodeHostConfig(env)).toEqual(expected);
     });
     console.info("node-host configuration read", {
       mode,
@@ -94,9 +91,7 @@ it.each(["fresh", "cached"] as const)(
         openOpenClawStateDatabase({ env });
       }
       await withoutParentSql(async () => {
-        for (const read of readers) {
-          expect(await read(env)).toEqual(expected);
-        }
+        expect(await loadNodeHostConfig(env)).toEqual(expected);
       });
       const external = new DatabaseSync(databasePath);
       try {
@@ -105,9 +100,7 @@ it.each(["fresh", "cached"] as const)(
         external.close();
       }
       await withoutParentSql(async () => {
-        for (const read of readers) {
-          await expect(read(env)).rejects.toThrow(/idx_plugin_state_listing|schema/i);
-        }
+        await expect(loadNodeHostConfig(env)).rejects.toThrow(/idx_plugin_state_listing|schema/i);
       });
     });
     await closeOpenClawStateDatabaseAsync();
@@ -129,9 +122,7 @@ it.each(["fresh", "cached"] as const)(
 
 it("leaves absent node-host configuration stores uncreated", async () => {
   const { env, databasePath } = fixture();
-  for (const read of readers) {
-    expect(await read(env)).toBeNull();
-  }
+  expect(await loadNodeHostConfig(env)).toBeNull();
   expect(fs.existsSync(databasePath)).toBe(false);
 });
 
@@ -140,14 +131,12 @@ it("joins admitted node-host configuration reads before their disposable scope e
   const expected = await seed(env);
   const outcomes: unknown[] = [];
   await stateReads.withDisposableOpenClawStateReads(databasePath, async () => {
-    for (const read of readers) {
-      void read(env).then(
-        (value) => outcomes.push(value),
-        (error: unknown) => outcomes.push(error),
-      );
-    }
+    void loadNodeHostConfig(env).then(
+      (value) => outcomes.push(value),
+      (error: unknown) => outcomes.push(error),
+    );
   });
-  expect(outcomes).toEqual([expected, expected]);
+  expect(outcomes).toEqual([expected]);
 });
 
 it.each([
@@ -172,30 +161,22 @@ it.each([
     sourceAdmitted: true,
     row: { value_json: row.value_json, updated_at_ms: row.updated_at_ms },
   });
-  for (const read of readers) {
-    const failure = await read(env).catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(row.error);
-    expect(failure).toMatchObject({ message: expect.stringMatching(row.message) });
-  }
+  const failure = await loadNodeHostConfig(env).catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(row.error);
+  expect(failure).toMatchObject({ message: expect.stringMatching(row.message) });
 });
 
 it("refuses retired node-host files before admitting a read", async () => {
   const { env, root } = fixture();
   fs.writeFileSync(path.join(root, "node.json"), "{}\n");
   const execute = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-  for (const read of readers) {
-    await expect(read(env)).rejects.toThrow("openclaw doctor --fix");
-  }
+  await expect(loadNodeHostConfig(env)).rejects.toThrow("openclaw doctor --fix");
   expect(execute).not.toHaveBeenCalled();
 });
 
-it.each(
-  readers.flatMap((read) =>
-    [true, false].map((markerAtOriginal) => ({ read, name: read.name, markerAtOriginal })),
-  ),
-)(
-  "retains the selected state root after $name waits (original marker=$markerAtOriginal)",
-  async ({ read, markerAtOriginal }) => {
+it.each([true, false])(
+  "retains the selected state root while reading (original marker=%s)",
+  async (markerAtOriginal) => {
     const original = fixture();
     const other = fixture();
     const env = { ...original.env };
@@ -203,7 +184,7 @@ it.each(
     const execute = vi
       .spyOn(stateReads, "executeExistingOpenClawStateRead")
       .mockReturnValue(reply.promise);
-    const result = read(env);
+    const result = loadNodeHostConfig(env);
     env.OPENCLAW_STATE_DIR = other.root;
     fs.writeFileSync(path.join(markerAtOriginal ? original.root : other.root, "node.json"), "{}\n");
     reply.resolve({

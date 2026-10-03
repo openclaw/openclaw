@@ -230,6 +230,138 @@ describe("voice-call CLI status fallback", () => {
     expect(ensureRuntime).not.toHaveBeenCalled();
   });
 
+  it("keeps standalone serving after printing the call ID and joins signal cleanup", async () => {
+    callGatewayFromCliMock.mockRejectedValue(gatewayTransportError());
+    const printed = Promise.withResolvers<void>();
+    const stopping = Promise.withResolvers<void>();
+    const stopped = Promise.withResolvers<void>();
+    const originalListeners = new Set(process.listeners("SIGTERM"));
+    const originalExitCode = process.exitCode;
+    const stop = vi.fn(async () => {
+      stopping.resolve();
+      await stopped.promise;
+    });
+    const program = buildProgram(
+      {},
+      {},
+      async () =>
+        ({
+          config: { toNumber: "+15550001234" },
+          manager: { initiateCall: async () => ({ success: true, callId: "call-owned" }) },
+          stop,
+        }) as never,
+    );
+    let output = "";
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+      output += String(chunk);
+      if (output.includes("call-owned")) {
+        printed.resolve();
+      }
+      return true;
+    }) as typeof process.stdout.write);
+    let completed = false;
+    const command = program.parseAsync(["voicecall", "call", "--message", "hello"], {
+      from: "user",
+    });
+    void command.then(
+      () => {
+        completed = true;
+      },
+      () => {},
+    );
+    try {
+      await printed.promise;
+      expect(JSON.parse(output)).toEqual({ callId: "call-owned" });
+      const handlers = process
+        .listeners("SIGTERM")
+        .filter((listener) => !originalListeners.has(listener));
+      expect(handlers).toHaveLength(1);
+      // Deliver to this invocation's handler without signaling the Vitest worker.
+      handlers[0]?.("SIGTERM");
+      handlers[0]?.("SIGTERM");
+      await stopping.promise;
+      expect(completed).toBe(false);
+      expect(stop).toHaveBeenCalledOnce();
+      stopped.resolve();
+      await command;
+      expect(process.listeners("SIGTERM")).toEqual([...originalListeners]);
+      expect(process.exitCode).toBe(143);
+    } finally {
+      for (const handler of process.listeners("SIGTERM")) {
+        if (!originalListeners.has(handler)) {
+          handler("SIGTERM");
+        }
+      }
+      stopped.resolve();
+      await command;
+      write.mockRestore();
+      process.exitCode = originalExitCode;
+    }
+  });
+
+  it.each(["creation", "operation"] as const)(
+    "joins accepted standalone %s when interrupted",
+    async (phase) => {
+      callGatewayFromCliMock.mockRejectedValue(gatewayTransportError());
+      const ready = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const originalListeners = new Set(process.listeners("SIGINT"));
+      const originalExitCode = process.exitCode;
+      const stop = vi.fn(async () => {});
+      const initiateCall = vi.fn(async () => {
+        ready.resolve();
+        await release.promise;
+        return { success: true, callId: "call-owned" };
+      });
+      const program = buildProgram({}, {}, async () => {
+        if (phase === "creation") {
+          ready.resolve();
+          await release.promise;
+        }
+        return { config: { toNumber: "+15550001234" }, manager: { initiateCall }, stop } as never;
+      });
+      const capturer = captureStdout();
+      const command = program.parseAsync(["voicecall", "call", "--message", "hello"], {
+        from: "user",
+      });
+      const outcome = command.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await ready.promise;
+        const handlers = process
+          .listeners("SIGINT")
+          .filter((listener) => !originalListeners.has(listener));
+        expect(handlers).toHaveLength(1);
+        handlers[0]?.("SIGINT");
+        expect(stop).not.toHaveBeenCalled();
+        release.resolve();
+        const result = await outcome;
+        if (phase === "creation") {
+          expect(result).toMatchObject({ message: "Voice call command interrupted by SIGINT" });
+          expect(initiateCall).not.toHaveBeenCalled();
+        } else {
+          expect(result).toBeUndefined();
+          expect(initiateCall).toHaveBeenCalledOnce();
+        }
+        expect(stop).toHaveBeenCalledOnce();
+        expect(process.listeners("SIGINT")).toEqual([...originalListeners]);
+        expect(process.exitCode).toBe(130);
+      } finally {
+        for (const handler of process.listeners("SIGINT")) {
+          if (!originalListeners.has(handler)) {
+            handler("SIGINT");
+          }
+        }
+        release.resolve();
+        await outcome;
+        capturer.restore();
+        process.exitCode = originalExitCode;
+      }
+    },
+  );
+
   it("explains a standalone webhook port collision", async () => {
     callGatewayFromCliMock.mockRejectedValue(gatewayTransportError());
     const ensureRuntime = vi.fn(async () => {

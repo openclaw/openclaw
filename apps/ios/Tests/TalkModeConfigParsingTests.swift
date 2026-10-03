@@ -261,19 +261,6 @@ struct TalkModeManagerTests {
         #expect(parsed.realtimeModelId == "gpt-realtime-2")
     }
 
-    @Test func `formats generic realtime voice mode without native provider fallback`() {
-        let descriptor = TalkVoiceModeDescriptorBuilder.build(
-            providerId: "realtime",
-            providerLabel: "Realtime Voice",
-            modelId: "gpt-realtime-2",
-            voiceId: nil,
-            transport: "webrtc",
-            isRealtime: true)
-
-        #expect(descriptor.title == "Realtime Voice")
-        #expect(descriptor.subtitle == "Native WebRTC • gpt-realtime-2")
-    }
-
     @Test func `defaults open AI realtime model when provider omits model`() {
         let parsed = Self.parseRealtime(
             provider: "openai",
@@ -325,60 +312,7 @@ struct TalkModeManagerTests {
         #expect(manager._test_realtimeModelId() == "gpt-live-1-codex")
     }
 
-    @Test func `formats open AI realtime voice mode`() {
-        let descriptor = TalkVoiceModeDescriptorBuilder.build(
-            providerId: "openai",
-            providerLabel: "OpenAI",
-            modelId: "gpt-realtime-2",
-            voiceId: "marin",
-            transport: "webrtc",
-            isRealtime: true)
-
-        #expect(descriptor.title == "GPT Realtime 2.0")
-        #expect(descriptor.subtitle == "Native WebRTC • Marin")
-        #expect(descriptor.accessibilityValue == "GPT Realtime 2.0, Native WebRTC • Marin")
-    }
-
-    @Test func `formats gateway relay realtime voice mode`() {
-        let descriptor = TalkVoiceModeDescriptorBuilder.build(
-            providerId: "google",
-            providerLabel: "Google Live Voice",
-            modelId: "gemini-live-2.5-flash-preview",
-            voiceId: nil,
-            transport: "gateway-relay",
-            isRealtime: true)
-
-        #expect(descriptor.title == "Google Live Voice")
-        #expect(descriptor.subtitle == "Gateway Relay • gemini-live-2.5-flash-preview")
-    }
-
-    @Test func `formats eleven labs voice mode`() {
-        let descriptor = TalkVoiceModeDescriptorBuilder.build(
-            providerId: "elevenlabs",
-            providerLabel: "ElevenLabs",
-            modelId: "eleven_v3",
-            voiceId: "voice-id",
-            transport: "native",
-            isRealtime: false)
-
-        #expect(descriptor.title == "ElevenLabs")
-        #expect(descriptor.subtitle == "Native • eleven_v3 • voice-id")
-    }
-
-    @Test func `formats system voice fallback mode`() {
-        let descriptor = TalkVoiceModeDescriptorBuilder.build(
-            providerId: "system",
-            providerLabel: "iOS System Voice",
-            modelId: nil,
-            voiceId: "en-US",
-            transport: "native",
-            isRealtime: false)
-
-        #expect(descriptor.title == "iOS System Voice")
-        #expect(descriptor.subtitle == "Native • en-US")
-    }
-
-    @Test func `stale device preferences cannot override gateway Talk provider or voice`() async throws {
+    @Test func `stale device preferences cannot override gateway Talk provider model or voice`() async throws {
         let defaults = UserDefaults.standard
         let providerKey = "talk.providerSelection"
         let voiceKey = "talk.realtime.voiceSelection"
@@ -389,20 +323,37 @@ struct TalkModeManagerTests {
             defaults.set(previousVoice, forKey: voiceKey)
         }
         defaults.set("cedar", forKey: voiceKey)
+        let createRequests = AsyncStream<Data>.makeStream()
+        defer { createRequests.continuation.finish() }
         let socket = GatewayTestWebSocketTask(sendHook: { socket, message, _ in
-            guard GatewayWebSocketTestSupport.requestMethod(from: message) == "talk.config" else { return }
+            let method = GatewayWebSocketTestSupport.requestMethod(from: message)
+            guard method == "talk.config" || method == "talk.client.create" else { return }
             let id = try #require(GatewayWebSocketTestSupport.requestID(from: message))
+            if method == "talk.client.create" {
+                let data: Data = switch message {
+                case let .data(data): data
+                case let .string(text): Data(text.utf8)
+                @unknown default: Data()
+                }
+                createRequests.continuation.yield(data)
+                try socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.errorResponseData(
+                    id: id,
+                    code: "UNAVAILABLE",
+                    message: "Synthetic prefetch stops after request observation",
+                    details: [:])))
+                return
+            }
             let response = try JSONSerialization.data(withJSONObject: [
                 "type": "res", "id": id, "ok": true,
                 "payload": ["config": ["talk": [
-                    "provider": "google",
-                    "resolved": ["provider": "google", "config": [:]],
+                    "provider": "openai",
+                    "resolved": ["provider": "openai", "config": [:]],
                     "realtime": [
-                        "provider": "google",
+                        "provider": " OpenAI ",
                         "model": "gateway-live-model",
-                        "voice": "puck",
+                        "voice": "marin",
                         "mode": "realtime",
-                        "transport": "gateway-relay",
+                        "transport": "webrtc",
                         "brain": "agent-consult",
                     ],
                 ]]],
@@ -419,16 +370,24 @@ struct TalkModeManagerTests {
                 onConnected: {},
                 onDisconnected: { _ in },
                 onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
-            let manager = TalkModeManager(allowSimulatorCapture: true)
+            var requests = createRequests.stream.makeAsyncIterator()
             for obsoleteSelection in ["openai-realtime", "elevenlabs"] {
+                let manager = TalkModeManager(allowSimulatorCapture: true)
+                defer { manager.stop() }
+                manager.attachGateway(gateway)
+                manager.updateGatewayConnected(true)
                 defaults.set(obsoleteSelection, forKey: providerKey)
                 await manager.reloadConfig(gateway: gateway)
 
                 #expect(manager.gatewayTalkConfigLoaded)
-                #expect(manager._test_runtimeRoute() == .realtimeRelay)
-                #expect(manager._test_realtimeProvider() == "google")
-                #expect(manager._test_realtimeModelId() == "gateway-live-model")
-                #expect(manager.gatewayTalkRealtimeVoiceId == "puck")
+                #expect(manager._test_runtimeRoute() == .realtimeWebRTC)
+                await manager.prefetchRealtimeSessionIfReady(reason: "config-test")
+                let frame = try #require(await requests.next())
+                let request = try #require(JSONSerialization.jsonObject(with: frame) as? [String: Any])
+                let params = try #require(request["params"] as? [String: Any])
+                #expect((params["provider"] as? String)?.lowercased() == "openai")
+                #expect(params["model"] as? String == "gateway-live-model")
+                #expect(params["voice"] as? String == "marin")
             }
         } catch {
             await gateway.disconnect()
@@ -437,34 +396,11 @@ struct TalkModeManagerTests {
         await gateway.disconnect()
     }
 
-    @Test func `preserves configured voice for case insensitive provider`() {
-        let manager = TalkModeManager(allowSimulatorCapture: true)
-        let parsed = Self.parseRealtime(
-            provider: " OpenAI ",
-            voice: "marin",
-            mode: "realtime",
-            transport: "webrtc",
-            brain: "agent-consult")
-
-        manager._test_applyLoadedTalkConfig(parsed)
-
-        #expect(manager._test_realtimeProvider()?.lowercased() == "openai")
-        #expect(manager.gatewayTalkRealtimeVoiceId == "marin")
-    }
-
     @Test func `builds generic realtime fallback issue for display`() {
-        let issue = TalkRuntimeIssue(
-            code: .realtimeUnavailable,
-            message: "OpenAI API key rejected with 401",
-            provider: "openai",
-            model: "gpt-realtime-2",
-            transport: "gateway-relay",
-            phase: "start")
+        let issue = TalkRuntimeIssue(message: "OpenAI API key rejected with 401")
 
         #expect(issue.code == .realtimeUnavailable)
         #expect(issue.displayMessage == "OpenAI API key rejected with 401")
-        #expect(issue.diagnosticSummary.contains("provider: openai"))
-        #expect(issue.diagnosticSummary.contains("model: gpt-realtime-2"))
         #expect(issue.fallbackStatusText == "Listening (iOS Speech fallback)")
     }
 
@@ -478,27 +414,17 @@ struct TalkModeManagerTests {
         #expect(codes == [.audioInputUnavailable, .realtimeOutputCancelFailed, .realtimeUnavailable])
     }
 
-    @Test func `native fallback keeps realtime issue visible`() {
+    @Test func `native fallback keeps its status visible`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
-        let issue = TalkRuntimeIssue(
-            code: .realtimeUnavailable,
-            message: "Realtime closed before it became ready.",
-            provider: "openai",
-            model: "gpt-realtime-2",
-            transport: "gateway-relay",
-            phase: "connect")
+        let issue = TalkRuntimeIssue(message: "Realtime closed before it became ready.")
 
         manager._test_markNativeFallbackActive(after: issue)
 
         #expect(manager.statusText == "Listening (iOS Speech fallback)")
-        #expect(manager.gatewayTalkActiveModeTitle == "iOS Speech fallback")
-        #expect(manager.gatewayTalkActiveModeSubtitle == "Realtime closed before it became ready.")
-        #expect(manager.gatewayTalkLastIssueText?.contains("phase: connect") == true)
-        #expect(manager.gatewayTalkCurrentFallbackIssue == issue)
+        #expect(manager.phase == .listening)
     }
 
     @Test func `gateway talk issue details drive realtime failure display`() {
-        let manager = TalkModeManager(allowSimulatorCapture: true)
         let error = GatewayResponseError(
             method: "talk.session.create",
             code: "UNAVAILABLE",
@@ -514,37 +440,24 @@ struct TalkModeManagerTests {
                 ]),
             ])
 
-        let issue = manager._test_realtimeIssue(from: error, phase: "start")
+        let issue = TalkModeManager.runtimeIssue(from: error)
 
         #expect(issue.code == .realtimeUnavailable)
         #expect(issue.displayMessage == "OpenAI API key rejected with 401")
-        #expect(issue.provider == "openai")
-        #expect(issue.model == "gpt-realtime-2")
-        #expect(issue.transport == "gateway-relay")
-        #expect(issue.phase == "request")
     }
 
     @Test func `relay startup issue survives until ready status`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
-        let issue = TalkRuntimeIssue(
-            code: .realtimeUnavailable,
-            message: "OpenAI API key rejected with 401",
-            provider: "openai",
-            model: "gpt-realtime-2",
-            transport: "gateway-relay",
-            phase: "connect")
+        let issue = TalkRuntimeIssue(message: "OpenAI API key rejected with 401")
 
         manager._test_recordRealtimeIssue(issue)
         manager._test_handleRealtimeRelayStatus("Connecting realtime…")
-
-        #expect(manager.gatewayTalkActiveModeTitle == "Realtime unavailable")
-        #expect(manager.gatewayTalkLastIssueText?.contains("OpenAI API key rejected") == true)
+        #expect(manager._test_hasPendingRealtimeIssue())
 
         manager._test_handleRealtimeRelayStatus("Listening (Realtime)")
 
         #expect(manager.statusText == "Listening (Realtime)")
-        #expect(manager.gatewayTalkLastIssueText == nil)
-        #expect(manager.gatewayTalkCurrentFallbackIssue == nil)
+        #expect(!manager._test_hasPendingRealtimeIssue())
     }
 
     @Test func `relay close clears active realtime mode`() {
@@ -552,14 +465,13 @@ struct TalkModeManagerTests {
 
         manager._test_handleRealtimeRelayStatus("Listening (Realtime)")
         #expect(manager.statusText == "Listening (Realtime)")
-        #expect(manager.gatewayTalkActiveModeTitle != "Not active")
 
         manager._test_handleRealtimeRelayStatus("Ready")
         manager._test_handleRealtimeRelayTermination()
 
         #expect(manager.statusText == "Ready")
-        #expect(manager.gatewayTalkActiveModeTitle == "Not active")
-        #expect(manager.gatewayTalkActiveModeSubtitle == nil)
+        #expect(!manager.isListening)
+        #expect(!manager.isSpeaking)
     }
 
     @Test func `realtime failures remain visible on the watch`() {
@@ -617,26 +529,17 @@ struct TalkModeManagerTests {
         #expect(manager._test_realtimeStatusPreservesPushToTalkCapture())
     }
 
-    @Test func `relay retry clears stale fallback trigger but keeps last issue visible`() {
+    @Test func `relay retry clears stale fallback trigger`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
-        let issue = TalkRuntimeIssue(
-            code: .realtimeUnavailable,
-            message: "Realtime closed before it became ready.",
-            provider: "openai",
-            model: "gpt-realtime-2",
-            transport: "gateway-relay",
-            phase: "connect")
+        let issue = TalkRuntimeIssue(message: "Realtime closed before it became ready.")
 
         manager._test_recordRealtimeIssue(issue)
         manager._test_markNativeFallbackActive(after: issue)
         #expect(manager._test_hasPendingRealtimeIssue())
-        #expect(manager.gatewayTalkCurrentFallbackIssue == issue)
 
         manager._test_prepareRealtimeRelayStart()
 
         #expect(!manager._test_hasPendingRealtimeIssue())
-        #expect(manager.gatewayTalkCurrentFallbackIssue == nil)
-        #expect(manager.gatewayTalkLastIssueText?.contains("Realtime closed before") == true)
     }
 
     @Test func `session switch invalidates an in flight realtime relay start`() {

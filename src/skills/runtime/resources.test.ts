@@ -8,6 +8,7 @@ import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
+import { SkillResourceDeliveryLimitError } from "./resource-delivery-error.js";
 import { materializeSkillResources, prepareSkillResourceDelivery } from "./resources.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
@@ -24,6 +25,27 @@ async function loadSnapshot(workspace: string) {
 }
 
 describe("prepared workspace skill resources", () => {
+  it("accepts 8 MiB of combined resources and identifies aggregate overflow", async () => {
+    const workspace = temps.make("skill-delivery-limit-");
+    let lastSupport = "";
+    for (const name of ["alpha", "beta"]) {
+      const directory = await writeSkill(workspace, name);
+      for (let index = 0; index < 4; index++) {
+        lastSupport = path.join(directory, `reference-${index}.txt`);
+        const size = 1024 * 1024 - (index === 3 ? Buffer.byteLength(markdown) : 0);
+        await fs.writeFile(lastSupport, Buffer.alloc(size, "a"));
+      }
+    }
+    const snapshot = await loadSnapshot(workspace);
+    const delivery = await prepareSkillResourceDelivery(snapshot, () => {});
+    expect(delivery?.skills.map((skill) => skill.name)).toEqual(["alpha", "beta"]);
+
+    await fs.appendFile(lastSupport, "a");
+    await expect(prepareSkillResourceDelivery(snapshot, () => {})).rejects.toBeInstanceOf(
+      SkillResourceDeliveryLimitError,
+    );
+  });
+
   it("recreates stable session paths and prompt bytes independent of delivery order", async () => {
     const workspace = await fs.realpath(temps.make("skill-stable-workspace-"));
     const root = temps.make("skill-stable-inputs-");

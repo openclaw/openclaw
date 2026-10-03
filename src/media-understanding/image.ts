@@ -575,28 +575,23 @@ async function describeImagesWithModelInternal(
 }
 
 function toImagesDescriptionRequest(params: ImageDescriptionRequest): ImagesDescriptionRequest {
+  const {
+    buffer,
+    fileName,
+    mime,
+    signal,
+    agentId,
+    workspaceDir,
+    preparedModelRuntime,
+    ...request
+  } = params;
   return {
-    images: [
-      {
-        buffer: params.buffer,
-        fileName: params.fileName,
-        mime: params.mime,
-      },
-    ],
-    model: params.model,
-    provider: params.provider,
-    prompt: params.prompt,
-    maxTokens: params.maxTokens,
-    timeoutMs: params.timeoutMs,
-    ...(params.signal ? { signal: params.signal } : {}),
-    profile: params.profile,
-    preferredProfile: params.preferredProfile,
-    authStore: params.authStore,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    agentDir: params.agentDir,
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    ...(params.preparedModelRuntime ? { preparedModelRuntime: params.preparedModelRuntime } : {}),
-    cfg: params.cfg,
+    ...request,
+    images: [{ buffer, fileName, mime }],
+    ...(signal ? { signal } : {}),
+    ...(agentId ? { agentId } : {}),
+    ...(workspaceDir ? { workspaceDir } : {}),
+    ...(preparedModelRuntime ? { preparedModelRuntime } : {}),
   };
 }
 

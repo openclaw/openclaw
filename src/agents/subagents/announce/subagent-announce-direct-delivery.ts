@@ -136,12 +136,7 @@ export async function sendSubagentAnnounceDirectly(
     const requesterLifecycleRevision = requesterEntry?.lifecycleRevision;
     const deliveryTarget =
       !parentOnly && !params.requesterIsSubagent
-        ? resolveExternalBestEffortDeliveryTarget({
-            channel: effectiveDirectOrigin?.channel,
-            to: effectiveDirectOrigin?.to,
-            accountId: effectiveDirectOrigin?.accountId,
-            threadId: effectiveDirectOrigin?.threadId,
-          })
+        ? resolveExternalBestEffortDeliveryTarget(effectiveDirectOrigin ?? {})
         : { deliver: false };
     const normalizedSessionOnlyOriginChannel = !params.requesterIsSubagent
       ? normalizeMessageChannel(sessionOnlyOrigin?.channel)

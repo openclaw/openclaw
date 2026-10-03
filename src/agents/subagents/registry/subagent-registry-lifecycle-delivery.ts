@@ -23,7 +23,6 @@ import {
   ensureDeliveryState,
   loadPendingFinalDeliveryPayload,
 } from "./subagent-delivery-state.js";
-import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import { capFrozenResultText } from "./subagent-registry-helpers.js";
 import type {
   SubagentLifecycleCommonContext,
@@ -217,7 +216,6 @@ export const captureSubagentRunResult = async (
     const current = getCurrentSubagentRunOwner(params.runs, entry);
     return (
       current !== undefined &&
-      isSameSubagentRunOwner(current, entry) &&
       current.pauseReason !== "sessions_yield" &&
       !context.newerGenerationOwnsSession(current)
     );
@@ -327,7 +325,6 @@ export const refreshFrozenResultFromSession = async (
   const previousCapturedAt = entry.completion?.capturedAt;
   const isCurrent = (current = getCurrentSubagentRunOwner(params.runs, entry)) =>
     current !== undefined &&
-    isSameSubagentRunOwner(current, entry) &&
     current.pauseReason !== "sessions_yield" &&
     current.cleanupCompletedAt === undefined &&
     current.completion?.resultText === previousResultText &&
@@ -376,24 +373,6 @@ export const refreshFrozenResultFromSession = async (
     },
   });
   return true;
-};
-
-export const emitCompletionEndedHookIfNeeded = async (
-  params: SubagentLifecycleOptions,
-  entry: SubagentRunRecord,
-  reason: SubagentLifecycleEndedReason,
-  isCurrent?: () => boolean,
-  prepareCurrent?: () => Promise<boolean>,
-) => {
-  if (params.shouldEmitEndedHookForRun({ entry, reason })) {
-    await params.emitSubagentEndedHookForRun({
-      entry,
-      reason,
-      sendFarewell: true,
-      isCurrent,
-      prepareCurrent,
-    });
-  }
 };
 
 export const markPendingFinalDelivery = (args: { entry: SubagentRunRecord; error?: string }) => {

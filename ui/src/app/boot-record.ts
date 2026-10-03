@@ -134,6 +134,18 @@ function isBootRecord(value: unknown): value is BootRecord {
   );
 }
 
+function parseBootRecord(raw: string | null, scope: string | undefined): BootRecord | null {
+  if (!raw || new TextEncoder().encode(raw).length > BOOT_RECORD_MAX_BYTES) {
+    return null;
+  }
+  try {
+    const record: unknown = JSON.parse(raw);
+    return isBootRecord(record) && record.scope === scope ? record : null;
+  } catch {
+    return null;
+  }
+}
+
 export function readBootRecord(
   scope: string,
   credentialForMethod: (method: string) => string | null | undefined,
@@ -145,24 +157,18 @@ export function readBootRecord(
     if (json == null) {
       return null;
     }
-    if (new TextEncoder().encode(json).length <= BOOT_RECORD_MAX_BYTES) {
-      const record: unknown = JSON.parse(json);
-      if (
-        isBootRecord(record) &&
-        record.scope === scope &&
-        Date.now() - record.savedAt <= BOOT_RECORD_MAX_AGE
-      ) {
-        // A different document’s credential selection cannot retire this owner.
-        // Only malformed/expired data is eviction; non-admission is a pure read.
-        try {
-          const credential = credentialForMethod(record.authMethod);
-          const admitted = ["trusted-proxy", "tailscale", "password"].includes(record.authMethod)
-            ? credential === ""
-            : record.credential === credentialFingerprint(credential);
-          return admitted ? record : null;
-        } catch {
-          return null;
-        }
+    const record = parseBootRecord(json, scope);
+    if (record && Date.now() - record.savedAt <= BOOT_RECORD_MAX_AGE) {
+      // A different document’s credential selection cannot retire this owner.
+      // Only malformed/expired data is eviction; non-admission is a pure read.
+      try {
+        const credential = credentialForMethod(record.authMethod);
+        const admitted = ["trusted-proxy", "tailscale", "password"].includes(record.authMethod)
+          ? credential === ""
+          : record.credential === credentialFingerprint(credential);
+        return admitted ? record : null;
+      } catch {
+        return null;
       }
     }
   } catch {
@@ -316,35 +322,11 @@ if (
       return;
     }
     const scope = event.key?.slice(BOOT_RECORD_PREFIX.length);
-    let replacement: BootRecordChange["replacement"];
-    if (
-      event.newValue &&
-      new TextEncoder().encode(event.newValue).length <= BOOT_RECORD_MAX_BYTES
-    ) {
-      try {
-        const next: unknown = JSON.parse(event.newValue);
-        if (
-          isBootRecord(next) &&
-          next.scope === scope &&
-          Date.now() - next.savedAt <= BOOT_RECORD_MAX_AGE
-        ) {
-          replacement = bootRecordOwner(next);
-        }
-      } catch {}
-    }
-    let retiredOwner: BootRecordOwner | undefined;
-    if (
-      event.newValue === null &&
-      event.oldValue &&
-      new TextEncoder().encode(event.oldValue).length <= BOOT_RECORD_MAX_BYTES
-    ) {
-      try {
-        const previous: unknown = JSON.parse(event.oldValue);
-        if (isBootRecord(previous) && previous.scope === scope) {
-          retiredOwner = bootRecordOwner(previous);
-        }
-      } catch {}
-    }
+    const next = parseBootRecord(event.newValue, scope);
+    const replacement =
+      next && Date.now() - next.savedAt <= BOOT_RECORD_MAX_AGE ? bootRecordOwner(next) : undefined;
+    const previous = event.newValue === null ? parseBootRecord(event.oldValue, scope) : null;
+    const retiredOwner = previous ? bootRecordOwner(previous) : undefined;
     // Replacement data never admits an account. Each consumer compares its own
     // owner; same-account tabs keep their live connection and pending publication.
     if (

@@ -15,6 +15,7 @@ import { t } from "../i18n/index.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-widget-frame-generation.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { isAwaitingGatewayFailure, isGatewayAvailable } from "../lib/gateway-availability.ts";
+import { generateUUID } from "../lib/uuid.ts";
 import {
   WidgetSandboxHost,
   WIDGET_LOAD_TIMEOUT_MS,
@@ -23,6 +24,7 @@ import {
 import { registerWidgetThemeFrame, postWidgetTheme } from "../lib/widget-theme.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import { forwardChatWheelToTranscript } from "../pages/chat/chat-scroll-input.ts";
 import { allowWidgetPrompt, dispatchWidgetPrompt } from "./mcp-app-security.ts";
 import { resolveSandboxHostUrl } from "./sandbox-host.ts";
 
@@ -93,6 +95,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
   private sandboxHost?: WidgetSandboxHost;
   private promptPort?: MessagePort;
   private sandboxOrigin = "";
+  private scrollNonce = "";
   private releaseTheme?: () => void;
   private scriptsAllowed = true;
   private sandboxGeneration = 0;
@@ -178,6 +181,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
   }
 
   private clearSandbox(): void {
+    this.scrollNonce = "";
     this.sandboxHost?.dispose();
     this.sandboxHost = undefined;
     this.promptPort?.close();
@@ -342,6 +346,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
       return;
     }
     this.releaseTheme = registerWidgetThemeFrame(frame, this.sandboxOrigin);
+    this.scrollNonce = generateUUID();
     this.sandboxHost = new WidgetSandboxHost({
       frame,
       sandboxOrigin: this.sandboxOrigin,
@@ -352,6 +357,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
         this.pending = false;
         this.postHostState();
       },
+      onRendered: () => this.postHostState(),
       onError: (error) => this.fail(error),
       onReadyTimeout: () => {
         this.pending = true;
@@ -374,6 +380,11 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
     }
     postWidgetTheme(frame, this.sandboxOrigin);
     frame.contentWindow?.postMessage({ type: "openclaw:widget-chat-host" }, this.sandboxOrigin);
+    // Saved widget documents already use this bridge for unconsumed wheel/touch input.
+    frame.contentWindow?.postMessage(
+      { type: "openclaw:widget-board-host", nonce: this.scrollNonce },
+      this.sandboxOrigin,
+    );
   }
 
   private readonly handleMessage = (event: MessageEvent): void => {
@@ -389,6 +400,19 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
     }
     host.handleMessage(event);
     const data = asOptionalRecord(event.data);
+    if (
+      data?.type === "openclaw:widget-scroll" &&
+      this.scrollNonce &&
+      data.nonce === this.scrollNonce &&
+      typeof data.deltaY === "number" &&
+      Number.isFinite(data.deltaY)
+    ) {
+      forwardChatWheelToTranscript(
+        new WheelEvent("wheel", { deltaY: data.deltaY, cancelable: true }),
+        this.closest<HTMLElement>(".chat-thread"),
+      );
+      return;
+    }
     if (data?.type === "openclaw:widget-runtime-error") {
       if (!this.sessionKey || typeof data.message !== "string") {
         return;

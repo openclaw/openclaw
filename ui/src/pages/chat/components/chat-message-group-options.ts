@@ -11,7 +11,7 @@ import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
 import type { StreamGroupOptions, StreamGroupPart } from "./chat-message-stream.ts";
 import type { ReplyLine } from "./chat-reply-attribution.ts";
 import type { ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
-import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
+import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 
 type ActiveContinuation = {
   parts: StreamGroupPart[];

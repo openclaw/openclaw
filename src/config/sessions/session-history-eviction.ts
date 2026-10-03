@@ -64,12 +64,13 @@ import {
   type SessionHistoryBudgetKick,
   type SessionHistoryDiskBudgetParams,
 } from "./session-history-budget-state.js";
-import { deleteDiskBudgetArchivedSessionEntry } from "./session-history-entry-eviction.runtime.js";
 import {
   collectSessionAdmissionReferences,
   readDiskEvictableArchivedSessionBatchInDatabase,
   readHistoricalSessionIdsInDatabase,
 } from "./session-history-eviction-candidates.js";
+import { maintenanceLane } from "./session-transcript-worker-resources.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 
 /** Reports the same physical total enforce mode compares, without projecting logical row bytes. */
@@ -183,10 +184,6 @@ async function readHistoricalSessionIds(params: {
       database: openOpenClawAgentDatabase(params.databaseOptions),
     });
   }
-  const [{ withSessionHistoryWorkerDatabase }, { maintenanceLane }] = await Promise.all([
-    import("./session-transcript-worker-runtime.js"),
-    import("./session-transcript-worker-resources.js"),
-  ]);
   return withSessionHistoryWorkerDatabase(
     params.databaseOptions,
     (owner) =>
@@ -218,10 +215,6 @@ async function readDiskEvictableArchivedSessionBatch({
   }
   const options = { ...databaseOptions, path: resolveOpenClawAgentSqlitePath(databaseOptions) };
   return withSqliteMutationWorkerLifetime(options, async ({ assertCurrent }) => {
-    const [{ withSessionHistoryWorkerDatabase }, { maintenanceLane }] = await Promise.all([
-      import("./session-transcript-worker-runtime.js"),
-      import("./session-transcript-worker-resources.js"),
-    ]);
     assertCurrent();
     const batch = await withSessionHistoryWorkerDatabase(
       options,
@@ -608,8 +601,10 @@ async function enforceSessionHistoryMaintenanceForDatabase(
         const deletion = await runExclusiveSessionLifecycleMutation({
           scope: params.storePath,
           identities: [candidate.sessionKey, candidate.entry.sessionId],
-          run: async () =>
-            await deleteDiskBudgetArchivedSessionEntry(
+          run: async () => {
+            const { deleteDiskBudgetSessionEntryLifecycle } =
+              await import("./session-accessor.sqlite-lifecycle.js");
+            return await deleteDiskBudgetSessionEntryLifecycle(
               {
                 ...(params.agentId ? { agentId: params.agentId } : {}),
                 archiveTranscript: false,
@@ -621,7 +616,8 @@ async function enforceSessionHistoryMaintenanceForDatabase(
                 target: { canonicalKey: candidate.sessionKey, storeKeys: [candidate.sessionKey] },
               },
               resolved,
-            ),
+            );
+          },
         });
         if (!deletion.deleted) {
           usage = await measureSessionPhysicalDiskUsage(params.storePath);

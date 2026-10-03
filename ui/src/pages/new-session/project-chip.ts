@@ -207,147 +207,144 @@ export function renderProjectChip(params: {
           : html`
               <div class="new-session-page__picker-root">
                 <div class="new-session-page__menu-title">${t("newSession.projects")}</div>
-                ${html`
-                  ${
-                    params.onNewWorkspace && !query
-                      ? renderSessionMenuItem(
-                          {
-                            value: "new-workspace",
-                            label: t("newSession.newWorkspace"),
-                            icon: icons.folder,
-                            sub: t("newSession.newWorkspaceDescription"),
-                            checked: params.freshWorkspace === true,
-                            onSelect: params.onNewWorkspace,
-                          },
-                          params.submitting || params.pendingPlacement,
-                        )
-                      : nothing
-                  }
-                  ${
-                    params.workspace && params.state.showWorkspace
-                      ? renderSessionMenuItem(
-                          {
-                            value: "workspace",
-                            label: pathDisplayName(params.workspace),
-                            icon: icons.folder,
-                            checked:
-                              !params.freshWorkspace &&
-                              !params.projectId &&
-                              folder === params.workspace,
-                            onSelect: () => params.onApplyFolder(params.workspace),
-                          },
-                          params.submitting,
-                        )
-                      : nothing
-                  }
-                  <label class="new-session-page__project-search">
-                    <span class="sr-only">${t("newSession.projectSearchPlaceholder")}</span>
-                    <input
-                      type="search"
-                      placeholder=${t("newSession.projectSearchPlaceholder")}
-                      .value=${params.projectQuery}
-                      ?disabled=${params.submitting || params.pendingPlacement}
-                      @input=${(event: Event) => params.onProjectQueryInput(inputValue(event))}
-                      @keydown=${(event: KeyboardEvent) => {
-                        if (event.key === "Enter" && cloneInput && params.projectAddAvailable) {
-                          event.preventDefault();
-                          params.onSelectRemoteProject({
-                            identity: cloneInput,
-                            cloneUrl: cloneInput,
-                          });
+                ${
+                  params.onNewWorkspace && !query
+                    ? renderSessionMenuItem(
+                        {
+                          value: "new-workspace",
+                          label: t("newSession.newWorkspace"),
+                          icon: icons.folder,
+                          sub: t("newSession.newWorkspaceDescription"),
+                          checked: params.freshWorkspace === true,
+                          onSelect: params.onNewWorkspace,
+                        },
+                        params.submitting || params.pendingPlacement,
+                      )
+                    : nothing
+                }
+                ${
+                  params.workspace && params.state.showWorkspace
+                    ? renderSessionMenuItem(
+                        {
+                          value: "workspace",
+                          label: pathDisplayName(params.workspace),
+                          icon: icons.folder,
+                          checked:
+                            !params.freshWorkspace &&
+                            !params.projectId &&
+                            folder === params.workspace,
+                          onSelect: () => params.onApplyFolder(params.workspace),
+                        },
+                        params.submitting,
+                      )
+                    : nothing
+                }
+                <label class="new-session-page__project-search">
+                  <span class="sr-only">${t("newSession.projectSearchPlaceholder")}</span>
+                  <input
+                    type="search"
+                    placeholder=${t("newSession.projectSearchPlaceholder")}
+                    .value=${params.projectQuery}
+                    ?disabled=${params.submitting || params.pendingPlacement}
+                    @input=${(event: Event) => params.onProjectQueryInput(inputValue(event))}
+                    @keydown=${(event: KeyboardEvent) => {
+                      if (event.key === "Enter" && cloneInput && params.projectAddAvailable) {
+                        event.preventDefault();
+                        params.onSelectRemoteProject({
+                          identity: cloneInput,
+                          cloneUrl: cloneInput,
+                        });
+                      }
+                    }}
+                  />
+                </label>
+                ${params.state.localProjects.map((project) =>
+                  renderSessionMenuItem(
+                    {
+                      value: `project:${project.id}`,
+                      label: project.displayName,
+                      icon: icons.gitBranch,
+                      checked: params.projectId === project.id,
+                      title: project.repoRoot,
+                      onSelect: () => params.onSelectProject(project.id),
+                    },
+                    params.submitting,
+                  ),
+                )}
+                ${
+                  cloneInput && params.projectAddAvailable
+                    ? renderSessionMenuItem(
+                        {
+                          value: "project-clone-url",
+                          label: cloneInput,
+                          icon: icons.gitBranch,
+                          sub: t("newSession.cloneProject"),
+                          checked: params.selectedRemoteProject?.cloneUrl === cloneInput,
+                          onSelect: () =>
+                            params.onSelectRemoteProject({
+                              identity: cloneInput,
+                              cloneUrl: cloneInput,
+                            }),
+                        },
+                        params.submitting,
+                      )
+                    : nothing
+                }
+                ${
+                  !cloneInput && query.length >= 2 && params.projectSearchAvailable
+                    ? html`
+                        <div class="new-session-page__menu-title">
+                          ${t("newSession.githubProjects")}
+                        </div>
+                        ${
+                          params.projectSearchCredentialMissing
+                            ? html`<div class="new-session-page__menu-note">
+                                ${t("newSession.githubTokenHint")}
+                              </div>`
+                            : nothing
                         }
-                      }}
-                    />
-                  </label>
-                  ${params.state.localProjects.map((project) =>
-                    renderSessionMenuItem(
-                      {
-                        value: `project:${project.id}`,
-                        label: project.displayName,
-                        icon: icons.gitBranch,
-                        checked: params.projectId === project.id,
-                        title: project.repoRoot,
-                        onSelect: () => params.onSelectProject(project.id),
-                      },
-                      params.submitting,
-                    ),
-                  )}
-                  ${
-                    cloneInput && params.projectAddAvailable
-                      ? renderSessionMenuItem(
-                          {
-                            value: "project-clone-url",
-                            label: cloneInput,
-                            icon: icons.gitBranch,
-                            sub: t("newSession.cloneProject"),
-                            checked: params.selectedRemoteProject?.cloneUrl === cloneInput,
-                            onSelect: () =>
-                              params.onSelectRemoteProject({
-                                identity: cloneInput,
-                                cloneUrl: cloneInput,
-                              }),
-                          },
-                          params.submitting,
-                        )
-                      : nothing
-                  }
-                  ${
-                    !cloneInput && query.length >= 2 && params.projectSearchAvailable
-                      ? html`
-                          <div class="new-session-page__menu-title">
-                            ${t("newSession.githubProjects")}
-                          </div>
-                          ${
-                            params.projectSearchCredentialMissing
-                              ? html`<div class="new-session-page__menu-note">
-                                  ${t("newSession.githubTokenHint")}
-                                </div>`
-                              : nothing
-                          }
-                          ${
-                            params.projectSearchLoading
-                              ? html`<div class="new-session-page__project-status" role="status">
-                                  ${t("common.loading")}
-                                </div>`
-                              : nothing
-                          }
-                          ${
-                            params.projectSearchError
-                              ? html`<div class="new-session-page__project-error" role="alert">
-                                  ${params.projectSearchError}
-                                </div>`
-                              : nothing
-                          }
-                          ${params.remoteProjects.map((project) =>
-                            renderSessionMenuItem(
-                              {
-                                value: `remote-project:${project.fullName}`,
-                                label: project.fullName,
-                                icon: icons.gitBranch,
-                                sub: project.description ?? t("newSession.cloneProject"),
-                                checked:
-                                  params.selectedRemoteProject?.cloneUrl === project.cloneUrl,
-                                title: project.webUrl,
-                                onSelect: () =>
-                                  params.onSelectRemoteProject({
-                                    identity: project.fullName,
-                                    cloneUrl: project.cloneUrl,
-                                  }),
-                              },
-                              params.submitting || !params.projectAddAvailable,
-                            ),
-                          )}
-                        `
-                      : nothing
-                  }
-                  ${
-                    params.projects.length === 0 && params.canWrite && !params.isAdmin
-                      ? html`<div class="new-session-page__menu-note">
-                          ${t("newSession.projectsAdminHint")}
-                        </div>`
-                      : nothing
-                  }
-                `}
+                        ${
+                          params.projectSearchLoading
+                            ? html`<div class="new-session-page__project-status" role="status">
+                                ${t("common.loading")}
+                              </div>`
+                            : nothing
+                        }
+                        ${
+                          params.projectSearchError
+                            ? html`<div class="new-session-page__project-error" role="alert">
+                                ${params.projectSearchError}
+                              </div>`
+                            : nothing
+                        }
+                        ${params.remoteProjects.map((project) =>
+                          renderSessionMenuItem(
+                            {
+                              value: `remote-project:${project.fullName}`,
+                              label: project.fullName,
+                              icon: icons.gitBranch,
+                              sub: project.description ?? t("newSession.cloneProject"),
+                              checked: params.selectedRemoteProject?.cloneUrl === project.cloneUrl,
+                              title: project.webUrl,
+                              onSelect: () =>
+                                params.onSelectRemoteProject({
+                                  identity: project.fullName,
+                                  cloneUrl: project.cloneUrl,
+                                }),
+                            },
+                            params.submitting || !params.projectAddAvailable,
+                          ),
+                        )}
+                      `
+                    : nothing
+                }
+                ${
+                  params.projects.length === 0 && params.canWrite && !params.isAdmin
+                    ? html`<div class="new-session-page__menu-note">
+                        ${t("newSession.projectsAdminHint")}
+                      </div>`
+                    : nothing
+                }
                 ${
                   params.state.recents.length > 0
                     ? html`

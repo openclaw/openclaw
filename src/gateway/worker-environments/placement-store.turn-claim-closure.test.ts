@@ -39,7 +39,7 @@ import {
   getWorkerTurnExecutionIdentityCapability,
   runWorkerTurnAdmissionContinuation,
 } from "./placement-turn-claim-events.js";
-import { createWorkerTranscriptCommitStore } from "./transcript-commit-store.js";
+import { createWorkerTranscriptCommitStore } from "./transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
@@ -97,18 +97,14 @@ it.each([
       claimId: `workspace-result-${scenario.executionMode}`,
       runId: `run-${scenario.executionMode}`,
     });
-    store.markWorkspaceResultPending(claim);
+    await store.markWorkspaceResultPending(claim);
 
-    const readReconciling = () => store.getWorkspaceResultReconcilingSessionIds([active.sessionId]);
-    expect(readReconciling().has(active.sessionId)).toBe(scenario.visibleBeforeStaging);
-    expect(
-      (await store.readProjection([active.sessionId])).workspaceResultReconcilingSessionIds.has(
-        active.sessionId,
-      ),
-    ).toBe(scenario.visibleBeforeStaging);
+    const readReconciling = async () =>
+      (await store.readProjection([active.sessionId])).workspaceResultReconcilingSessionIds;
+    expect((await readReconciling()).has(active.sessionId)).toBe(scenario.visibleBeforeStaging);
     const stagedResultRef = `refs/openclaw/worker-results/${claim.claimId}`;
     await store.recordStagedWorkspaceResult(claim, stagedResultRef);
-    expect(readReconciling()).toEqual(new Set([active.sessionId]));
+    expect(await readReconciling()).toEqual(new Set([active.sessionId]));
     store.recordWorkspaceResultConflict(claim, { paths: ["conflict.txt"], stagedResultRef });
     const conflicted = await store.readProjection([active.sessionId]);
     expect(conflicted.placements.get(active.sessionId)).toMatchObject({
@@ -119,8 +115,8 @@ it.each([
     expect(
       (await store.readProjection([active.sessionId])).placements.get(active.sessionId),
     ).not.toHaveProperty("workspaceResultConflict");
-    store.acceptWorkspaceResult(claim);
-    store.completeWorkspaceResultAndReleaseTurn(claim);
+    await store.acceptWorkspaceResult(claim);
+    await store.completeWorkspaceResultAndReleaseTurn(claim);
     expect(
       (await store.readProjection([active.sessionId])).workspaceResultReconcilingSessionIds.has(
         active.sessionId,
@@ -137,7 +133,7 @@ it("keeps placement and result facts in one snapshot across a peer commit", asyn
     claimId: "projection-peer-claim",
     runId: "projection-peer-run",
   });
-  store.markWorkspaceResultPending(claim);
+  await store.markWorkspaceResultPending(claim);
 
   database.db.exec("PRAGMA journal_mode = WAL");
   const peer = new DatabaseSync(database.path);

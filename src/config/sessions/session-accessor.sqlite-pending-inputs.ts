@@ -15,6 +15,7 @@ import {
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { SessionPendingInputs } from "../../state/openclaw-agent-db.generated.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
@@ -50,7 +51,10 @@ export type SessionPendingInputOwner = {
   transcriptInputId: string;
   sessionId: string;
   sessionKey: string;
+  /** Native cache locator; may be the process-held incognito sentinel. */
   databasePath: string;
+  /** Captured physical locator, or native incognito locator, for comparisons and workers. */
+  workerDatabasePath: string;
   idempotencyKey: string;
   lifecycleGeneration: string;
   messageJson: string;
@@ -88,6 +92,7 @@ const workerCustody = resolveGlobalSingleton(
     new AsyncLocalStorage<{
       owner: SessionPendingInputOwner;
       assertCurrent(): void;
+      consumed: Set<string>;
     }>(),
 );
 
@@ -101,7 +106,7 @@ export function captureSessionPendingInputWorkerCustody() {
     transcriptInputId: current.transcriptInputId,
     sessionId: current.sessionId,
     sessionKey: current.sessionKey,
-    databasePath: current.databasePath,
+    databasePath: current.workerDatabasePath,
     idempotencyKey: current.idempotencyKey,
     lifecycleGeneration: current.lifecycleGeneration,
     messageJson: current.messageJson,
@@ -133,6 +138,7 @@ export function runWithSessionPendingInputWorkerCustody<T>(
 ): { value: T; receipt: SessionPendingInputWorkerReceipt } {
   const hydrate = (current: SessionPendingInputWorkerFacts): SessionPendingInputOwner => ({
     ...current,
+    workerDatabasePath: current.databasePath,
     sources: current.sources?.map(hydrate),
     assertCurrent,
     finish: () => {
@@ -140,7 +146,7 @@ export function runWithSessionPendingInputWorkerCustody<T>(
     },
   });
   const owner = hydrate(facts);
-  const value = workerCustody.run({ owner, assertCurrent }, () =>
+  const value = workerCustody.run({ owner, assertCurrent, consumed: new Set() }, () =>
     owners.current.run(owner, () =>
       relocation === undefined
         ? run()
@@ -155,6 +161,22 @@ export function runWithSessionPendingInputWorkerCustody<T>(
         .filter((source) => source.consumed)
         .map((source) => source.inputId),
     },
+  };
+}
+
+/** Provisional worker facts; only the matching outer COMMIT may publish them on the host. */
+export function readSessionPendingInputWorkerReceipt(
+  database: PendingInputDatabase,
+): SessionPendingInputWorkerReceipt | undefined {
+  const custody = workerCustody.getStore();
+  if (!custody) {
+    return undefined;
+  }
+  return {
+    transcriptInputId:
+      owners.transactionRelocations.get(database.db)?.get(custody.owner) ??
+      custody.owner.transcriptInputId,
+    consumedInputIds: [...custody.consumed],
   };
 }
 
@@ -298,7 +320,7 @@ export function hasRegisteredSessionPendingInputOwner(
 ): boolean {
   const owner = owners.live.get(row.input_id);
   return (
-    owner?.databasePath === databasePath &&
+    owner?.workerDatabasePath === databasePath &&
     owner.sessionId === row.session_id &&
     owner.sessionKey === row.session_key &&
     owner.lifecycleGeneration === row.lifecycle_generation &&
@@ -314,9 +336,8 @@ export function readSessionPendingInputOwnerIds(
     "input_id" | "session_key" | "session_id" | "lifecycle_generation"
   >[],
 ): Set<string> {
-  const candidates = rows.filter((row) =>
-    hasRegisteredSessionPendingInputOwner(database.path, row),
-  );
+  const databasePath = readOpenClawAgentDatabaseIdentity(database).canonicalPath || database.path;
+  const candidates = rows.filter((row) => hasRegisteredSessionPendingInputOwner(databasePath, row));
   if (!candidates.length) {
     return new Set();
   }
@@ -459,7 +480,8 @@ export function claimCurrentSessionPendingInputDedupeRecovery(
     owner.sources ||
     owner.restartRecovered !== true ||
     recoveredDedupeOwners.has(owner) ||
-    owner.databasePath !== database.path ||
+    owner.workerDatabasePath !==
+      (readOpenClawAgentDatabaseIdentity(database).canonicalPath || database.path) ||
     owner.sessionId !== scope.sessionId ||
     owner.sessionKey !== scope.sessionKey ||
     owner.idempotencyKey !== `${runId}:user`
@@ -527,7 +549,8 @@ export function resolveSessionPendingInputAppend(
   // A bound-session mirror shares source correlation, never its pending custody.
   const ownsInput =
     owner?.idempotencyKey === idempotencyKey &&
-    owner.databasePath === database.path &&
+    owner.workerDatabasePath ===
+      (readOpenClawAgentDatabaseIdentity(database).canonicalPath || database.path) &&
     owner.sessionId === scope.sessionId &&
     owner.sessionKey === scope.sessionKey;
   if (!row && !ownsInput) {
@@ -659,11 +682,12 @@ export function consumeSessionPendingInput(
   }
   const owner = owners.current.getStore();
   const inputIds = new Set(pending.sourceInputIds ?? [pending.inputId]);
+  const databasePath = readOpenClawAgentDatabaseIdentity(database).canonicalPath || database.path;
   const consumedOwners = (owner?.sources ?? (owner ? [owner] : [])).filter(
     (candidate) =>
       (owners.live.get(candidate.inputId) === candidate ||
         workerCustody.getStore()?.owner === owner) &&
-      candidate.databasePath === database.path &&
+      candidate.workerDatabasePath === databasePath &&
       inputIds.has(candidate.inputId),
   );
   if (pending.sourceInputIds) {
@@ -694,9 +718,21 @@ export function consumeSessionPendingInput(
     }
   }
   // Outer commit publishes this fact before observers; rollback leaves finish responsible.
+  const worker = workerCustody.getStore();
+  const newlyConsumed = consumedOwners.filter(
+    (candidate) => !worker?.consumed.has(candidate.inputId),
+  );
   stageSqliteTransactionState(database.db, {
-    stage: () => {},
-    rollback: () => {},
+    stage: () => {
+      for (const consumedOwner of newlyConsumed) {
+        worker?.consumed.add(consumedOwner.inputId);
+      }
+    },
+    rollback: () => {
+      for (const consumedOwner of newlyConsumed) {
+        worker?.consumed.delete(consumedOwner.inputId);
+      }
+    },
     commit: () => {
       for (const consumedOwner of consumedOwners) {
         consumedOwner.consumed = true;

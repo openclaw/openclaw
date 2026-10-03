@@ -180,11 +180,10 @@ function createQaMultipassPlan(params: {
   const transportId = params.transportId?.trim() || "qa-channel";
   const providerMode = params.providerMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE;
   const provider = getQaProvider(providerMode);
-  const forwardedEnv = provider.appliesLiveEnvAliases ? resolveQaForwardedLiveEnv() : {};
+  const forwardedEnv = provider.kind === "live" ? resolveQaForwardedLiveEnv() : {};
   const hostCodexHomePath = forwardedEnv.CODEX_HOME;
-  const liveProviderConfig = provider.usesModelProviderPlugins
-    ? resolveQaLiveProviderConfigPath()
-    : undefined;
+  const liveProviderConfig =
+    provider.kind === "live" ? resolveQaLiveProviderConfigPath() : undefined;
   const hostLiveProviderConfigPath =
     liveProviderConfig && fs.existsSync(liveProviderConfig.path)
       ? liveProviderConfig.path

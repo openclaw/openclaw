@@ -64,8 +64,6 @@ export type BlockStreamingCoalescing = {
   maxChars: number;
   idleMs: number;
   joiner: string;
-  /** Internal escape hatch for transports that truly need per-enqueue flushing. */
-  flushOnEnqueue?: boolean;
 };
 
 type BlockStreamingChunking = {

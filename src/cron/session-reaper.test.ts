@@ -28,6 +28,7 @@ import {
   unregisterOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db-registry.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
@@ -383,7 +384,8 @@ describe("sweepCronRunSessions", () => {
       },
       { sessionId: "ops-run", updatedAt: now - 25 * 3_600_000 },
     );
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabaseByPathAsync(exactStorePath);
+    closeOpenClawAgentDatabasesForTest(exactStorePath);
     unregisterOpenClawAgentDatabase({ agentId: "main", path: exactStorePath });
     expect(
       listOpenClawRegisteredAgentDatabases().filter((entry) =>

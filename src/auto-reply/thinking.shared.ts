@@ -148,19 +148,6 @@ type ResponseUsageDefaultConfig =
   | ResponseUsageInput
   | { default?: ResponseUsageInput; [channel: string]: ResponseUsageInput | undefined };
 
-function resolveMessagesResponseUsageDefault(
-  configured: ResponseUsageDefaultConfig | undefined,
-  channel?: string,
-): ResponseUsageInput | undefined {
-  if (typeof configured === "string") {
-    return configured;
-  }
-  if (configured && typeof configured === "object") {
-    return (channel ? configured[channel] : undefined) ?? configured.default;
-  }
-  return undefined;
-}
-
 export function resolveEffectiveResponseUsage(
   sessionRaw: string | undefined | null,
   configured: ResponseUsageDefaultConfig | undefined,
@@ -170,7 +157,10 @@ export function resolveEffectiveResponseUsage(
   if (sessionNormalized !== undefined) {
     return sessionNormalized;
   }
-  const configDefault = resolveMessagesResponseUsageDefault(configured, channel);
+  const configDefault =
+    typeof configured === "string"
+      ? configured
+      : ((channel ? configured?.[channel] : undefined) ?? configured?.default);
   return resolveResponseUsageMode(configDefault);
 }
 

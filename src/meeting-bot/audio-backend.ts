@@ -147,54 +147,39 @@ export async function ensureMeetingAudioBackend(params: {
     info,
     "PipeWire-Pulse is unavailable. Start pipewire-pulse and install pulseaudio-utils",
   );
-  let sinks = await params.run(["pactl", "list", "short", "sinks"], params.timeoutMs);
-  if (!pulseListContains(sinks.stdout ?? "", PIPEWIRE_SINK_NAME)) {
-    const loaded = await params.run(
-      [
-        "pactl",
-        "load-module",
-        "module-null-sink",
-        `sink_name=${PIPEWIRE_SINK_NAME}`,
-        "rate=48000",
-        "channels=2",
-        "channel_map=front-left,front-right",
-        `sink_properties='device.description="${PIPEWIRE_MEETING_AUDIO_DEVICE_LABEL}"'`,
-      ],
-      params.timeoutMs,
-    );
+  const ensurePulseModule = async (kind: "sink" | "source", name: string, args: string[]) => {
+    const listed = await params.run(["pactl", "list", "short", `${kind}s`], params.timeoutMs);
+    if (pulseListContains(listed.stdout ?? "", name)) {
+      return;
+    }
+    const loaded = await params.run(["pactl", "load-module", ...args], params.timeoutMs);
     if (loaded.code !== 0) {
-      sinks = await params.run(["pactl", "list", "short", "sinks"], params.timeoutMs);
-      if (!pulseListContains(sinks.stdout ?? "", PIPEWIRE_SINK_NAME)) {
-        assertCommandSucceeded(loaded, "Could not create the OpenClaw PipeWire-Pulse sink");
+      const refreshed = await params.run(["pactl", "list", "short", `${kind}s`], params.timeoutMs);
+      if (!pulseListContains(refreshed.stdout ?? "", name)) {
+        assertCommandSucceeded(loaded, `Could not create the OpenClaw PipeWire-Pulse ${kind}`);
       }
     }
-  }
-  let sources = await params.run(["pactl", "list", "short", "sources"], params.timeoutMs);
-  if (!pulseListContains(sources.stdout ?? "", PIPEWIRE_SOURCE_NAME)) {
-    const loaded = await params.run(
-      [
-        "pactl",
-        "load-module",
-        "module-remap-source",
-        `source_name=${PIPEWIRE_SOURCE_NAME}`,
-        `master=${PIPEWIRE_MONITOR_NAME}`,
-        "channels=2",
-        "master_channel_map=front-left,front-right",
-        "channel_map=front-left,front-right",
-        "remix=no",
-        `source_properties='device.description="${PIPEWIRE_MEETING_AUDIO_DEVICE_LABEL}"'`,
-      ],
-      params.timeoutMs,
-    );
-    if (loaded.code !== 0) {
-      sources = await params.run(["pactl", "list", "short", "sources"], params.timeoutMs);
-      if (!pulseListContains(sources.stdout ?? "", PIPEWIRE_SOURCE_NAME)) {
-        assertCommandSucceeded(loaded, "Could not create the OpenClaw PipeWire-Pulse source");
-      }
-    }
-  }
-  sinks = await params.run(["pactl", "list", "short", "sinks"], params.timeoutMs);
-  sources = await params.run(["pactl", "list", "short", "sources"], params.timeoutMs);
+  };
+  await ensurePulseModule("sink", PIPEWIRE_SINK_NAME, [
+    "module-null-sink",
+    `sink_name=${PIPEWIRE_SINK_NAME}`,
+    "rate=48000",
+    "channels=2",
+    "channel_map=front-left,front-right",
+    `sink_properties='device.description="${PIPEWIRE_MEETING_AUDIO_DEVICE_LABEL}"'`,
+  ]);
+  await ensurePulseModule("source", PIPEWIRE_SOURCE_NAME, [
+    "module-remap-source",
+    `source_name=${PIPEWIRE_SOURCE_NAME}`,
+    `master=${PIPEWIRE_MONITOR_NAME}`,
+    "channels=2",
+    "master_channel_map=front-left,front-right",
+    "channel_map=front-left,front-right",
+    "remix=no",
+    `source_properties='device.description="${PIPEWIRE_MEETING_AUDIO_DEVICE_LABEL}"'`,
+  ]);
+  const sinks = await params.run(["pactl", "list", "short", "sinks"], params.timeoutMs);
+  const sources = await params.run(["pactl", "list", "short", "sources"], params.timeoutMs);
   if (
     !pulseListContains(sinks.stdout ?? "", PIPEWIRE_SINK_NAME) ||
     !pulseListContains(sources.stdout ?? "", PIPEWIRE_SOURCE_NAME)
