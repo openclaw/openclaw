@@ -208,6 +208,7 @@ Start agent work in the background: hook-dispatched turns for external content, 
     Bind Task Flow and Task Run state to a trusted, existing OpenClaw owner session.
 
     - `managedFlows` creates and mutates managed flow records. Bind with `fromToolContext(ctx)` or `bindSession({ sessionKey, requesterOrigin })` using host-resolved context, never raw user input.
+      Current Automation obligations use the host-supplied `ctx.runId`; `ctx.sessionId` identifies the conversation and does not grant a run capability. Retained bindings lose the capability when the run closes.
     - `flows` and `runs` provide owner-scoped DTO lookups (`get`, `list`, `findLatest`, `resolve`). `flows` also exposes `getTaskSummary`; `runs.cancel` cancels an existing task.
     - `managedFlows.get(flowId)` returns the record with its revision. The read-only `flows` DTO is not the revision-bearing mutation record.
 

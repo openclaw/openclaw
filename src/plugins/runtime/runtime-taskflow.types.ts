@@ -222,6 +222,7 @@ export type PluginRuntimeTaskFlow = {
       OpenClawPluginToolContext,
       | "sessionKey"
       | "sessionId"
+      | "runId"
       | "deliveryContext"
       | "config"
       | "runtimeConfig"

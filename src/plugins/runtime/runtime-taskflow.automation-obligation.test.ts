@@ -71,7 +71,8 @@ afterEach(async () => {
 function bound() {
   return createRuntimeTaskFlow().fromToolContext({
     sessionKey: ownerKey,
-    sessionId: runId,
+    sessionId: "persistent-conversation",
+    runId,
     getRuntimeConfig: () => ({ cron: { enabled: !paused } }),
   });
 }

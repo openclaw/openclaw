@@ -622,7 +622,7 @@ export function createRuntimeTaskFlow(): PluginRuntimeTaskFlow {
           "TaskFlow runtime requires tool context with a sessionKey.",
         ),
         requesterOrigin: ctx.deliveryContext,
-        currentRunId: ctx.sessionId,
+        currentRunId: ctx.runId,
         getRuntimeConfig: ctx.getRuntimeConfig ?? (() => ctx.runtimeConfig ?? ctx.config),
       }),
   };

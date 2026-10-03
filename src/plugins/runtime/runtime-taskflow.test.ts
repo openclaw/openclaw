@@ -65,7 +65,11 @@ describe("runtime TaskFlow", () => {
     const runId = "runtime-taskflow-scheduled-only";
     const runtime = createRuntimeTaskFlow();
     const makeBound = () =>
-      runtime.fromToolContext({ sessionKey: "agent:main:main", sessionId: runId });
+      runtime.fromToolContext({
+        sessionKey: "agent:main:main",
+        sessionId: "persistent-conversation",
+        runId,
+      });
     try {
       claimAgentRunContext(runId, {
         cronRunsByJobId: new Map([
@@ -96,6 +100,14 @@ describe("runtime TaskFlow", () => {
         ]),
       });
       expect(makeBound().hasCurrentAutomationObligationCapability()).toBe(true);
+      expect(
+        runtime
+          .fromToolContext({ sessionKey: "agent:main:main", sessionId: runId })
+          .hasCurrentAutomationObligationCapability(),
+      ).toBe(false);
+      const retained = makeBound();
+      clearAgentRunContext(runId);
+      expect(retained.hasCurrentAutomationObligationCapability()).toBe(false);
     } finally {
       clearAgentRunContext(runId);
     }

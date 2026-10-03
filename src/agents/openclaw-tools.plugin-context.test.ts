@@ -77,17 +77,19 @@ describe("openclaw plugin tool context", () => {
     expect(result.context.fsPolicy).toStrictEqual({ workspaceOnly: true });
   });
 
-  it("forwards ephemeral sessionId", () => {
+  it("keeps the conversation session separate from the current operational run", () => {
     const result = resolveOpenClawPluginToolInputs({
       options: {
         config: {} as never,
         agentSessionKey: "agent:main:telegram:direct:12345",
         sessionId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        runId: "current-operational-run",
       },
     });
 
     expect(result.context.sessionKey).toBe("agent:main:telegram:direct:12345");
     expect(result.context.sessionId).toBe("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+    expect(result.context.runId).toBe("current-operational-run");
   });
 
   it("forwards trusted private conversation recall context", () => {
