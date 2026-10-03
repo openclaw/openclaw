@@ -392,20 +392,22 @@ describe("gateway register option collisions", () => {
     });
   });
 
-  it("defers health presentation imports for successful JSON output", async () => {
+  it("loads health presentation only for text output", async () => {
     const program = new Command();
     program.exitOverride();
     const loadGatewayHealthModule = vi.fn(async () => ({
       emitReachableGatewayAuthDiagnostic: mocks.emitReachableGatewayAuthDiagnostic,
       formatHealthChannelLines: mocks.formatHealthChannelLines,
+      readNonObservingHealthConfig: async () => ({}),
     }));
     const loadHealthStyleModule = vi.fn(async () => ({
       styleHealthChannelLine: (line: string) => line,
     }));
-    registerGatewayCli(program, {
-      loadGatewayHealthModule: loadGatewayHealthModule as never,
-      loadHealthStyleModule: loadHealthStyleModule as never,
-    });
+    vi.resetModules();
+    vi.doMock("../../commands/health.js", loadGatewayHealthModule);
+    vi.doMock("../../../packages/terminal-core/src/health-style.js", loadHealthStyleModule);
+    const { registerGatewayCli: registerFreshGatewayCli } = await import("./register.js");
+    registerFreshGatewayCli(program);
 
     await program.parseAsync(["node", "openclaw", "gateway", "health", "--json"]);
 
@@ -417,5 +419,14 @@ describe("gateway register option collisions", () => {
     expect(loadGatewayHealthModule).not.toHaveBeenCalled();
     expect(loadHealthStyleModule).not.toHaveBeenCalled();
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ ok: true });
+
+    const textProgram = new Command();
+    textProgram.exitOverride();
+    registerFreshGatewayCli(textProgram);
+    await textProgram.parseAsync(["node", "openclaw", "gateway", "health"]);
+
+    expect(loadGatewayHealthModule).toHaveBeenCalledOnce();
+    expect(loadHealthStyleModule).toHaveBeenCalledOnce();
+    expect(defaultRuntime.log).toHaveBeenCalledWith("Gateway Health");
   });
 });

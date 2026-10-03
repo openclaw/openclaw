@@ -22,7 +22,6 @@ import {
 import { isTerminalInteractive } from "../../cli/terminal-interactivity.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../../wizard/prompts.js";
 import { normalizeExternalChannelSetupConfig } from "../channel-setup/config-compatibility.js";
@@ -32,11 +31,6 @@ import { parseAccountSelector } from "./account-selector.js";
 import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { channelLabel } from "./runtime-label.js";
 import { requireValidConfigForWrite } from "./shared.js";
-
-const loadChannelSetupPluginInstall = createLazyPromise(
-  () => import("../channel-setup/plugin-install.js"),
-);
-const loadOnboardChannels = createLazyPromise(() => import("../../flows/channel-setup.js"));
 
 export type ChannelsAddOptions = {
   agent?: string;
@@ -187,7 +181,7 @@ async function configureChannelAccount(
       return existing;
     }
     const { loadChannelSetupPluginRegistrySnapshotForChannel } =
-      await loadChannelSetupPluginInstall();
+      await import("../channel-setup/plugin-install.js");
     const snapshot = loadChannelSetupPluginRegistrySnapshotForChannel({
       cfg: nextConfig,
       runtime,
@@ -218,7 +212,8 @@ async function configureChannelAccount(
         workspaceDir,
       })
     ) {
-      const { ensureChannelSetupPluginInstalled } = await loadChannelSetupPluginInstall();
+      const { ensureChannelSetupPluginInstalled } =
+        await import("../channel-setup/plugin-install.js");
       const prompter = createClackPrompter();
       const result = await ensureChannelSetupPluginInstalled({
         cfg: nextConfig,
@@ -318,7 +313,8 @@ async function configureChannelAccount(
       );
       const afterAccountConfigWritten = applied.afterAccountConfigWritten;
       if (afterAccountConfigWritten) {
-        const { runCollectedChannelOnboardingPostWriteHooks } = await loadOnboardChannels();
+        const { runCollectedChannelOnboardingPostWriteHooks } =
+          await import("../../flows/channel-setup.js");
         await runCollectedChannelOnboardingPostWriteHooks({
           hooks: [
             {

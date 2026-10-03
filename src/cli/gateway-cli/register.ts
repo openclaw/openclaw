@@ -14,7 +14,6 @@ import type {
 } from "../../logging/diagnostic-stability.js";
 import type { WriteDiagnosticSupportExportResult } from "../../logging/diagnostic-support-export.js";
 import { defaultRuntime } from "../../runtime.js";
-import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import { formatCliJsonFailure, rethrowExpectedCliError } from "../failure-output.js";
@@ -35,35 +34,8 @@ import { runGatewayResume, runGatewaySuspend } from "./suspend-cli.js";
 
 type GatewayRpcOpts = Parameters<typeof callGatewayFromCliWithTransport>[1];
 
-const loadConfigModule = createLazyPromise(
-  () => import("../../config/read-best-effort-config.runtime.js"),
-);
-const loadGatewayStatusModule = createLazyPromise(() => import("../../commands/gateway-status.js"));
-const loadGatewayHealthModule = createLazyPromise(() => import("../../commands/health.js"));
-const loadBonjourDiscoveryModule = createLazyPromise(
-  () => import("../../infra/bonjour-discovery.js"),
-);
-const loadWideAreaDnsModule = createLazyPromise(() => import("../../infra/widearea-dns.js"));
-const loadHealthStyleModule = createLazyPromise(
-  () => import("../../../packages/terminal-core/src/health-style.js"),
-);
-const loadUsageFormatModule = createLazyPromise(() => import("../../utils/usage-format.js"));
-const loadStabilityBundleModule = createLazyPromise(
-  () => import("../../logging/diagnostic-stability-bundle.js"),
-);
-const loadSupportExportModule = createLazyPromise(
-  () => import("../../logging/diagnostic-support-export.js"),
-);
-const loadDaemonStatusGatherModule = createLazyPromise(
-  () => import("../daemon-cli/status.gather.js"),
-);
-
 const DEFAULT_GATEWAY_RPC_TIMEOUT_MS = 10_000;
 const SETUP_INFERENCE_DETECT_RPC_TIMEOUT_MS = 40_000;
-type GatewayCliDependencies = {
-  loadGatewayHealthModule?: typeof loadGatewayHealthModule;
-  loadHealthStyleModule?: typeof loadHealthStyleModule;
-};
 
 function gatewayCallOpts(cmd: Command, defaultTimeoutMs = DEFAULT_GATEWAY_RPC_TIMEOUT_MS): Command {
   return addGatewayClientOptions(cmd, { timeoutMs: defaultTimeoutMs }).option(
@@ -143,7 +115,8 @@ async function renderCostUsageSummaryAsync(
   rich: boolean,
 ): Promise<string[]> {
   const { formatMissingCostEntries } = await import("../../infra/session-cost-usage-totals.js");
-  const { formatCostUsageCachePrefix, formatTokenCount, formatUsd } = await loadUsageFormatModule();
+  const { formatCostUsageCachePrefix, formatTokenCount, formatUsd } =
+    await import("../../utils/usage-format.js");
   const totalCost = formatUsd(summary.totals.totalCost) ?? "$0.00";
   const totalTokens = formatTokenCount(summary.totals.totalTokens) ?? "0";
   const cachePrefix = formatCostUsageCachePrefix(summary.cacheStatus);
@@ -369,7 +342,8 @@ async function writeSupportExportFromCli(opts: {
   stabilityBundle?: string | false;
   rpc?: Pick<GatewayRpcOpts, "url" | "token" | "password" | "timeout">;
 }): Promise<void> {
-  const { writeDiagnosticSupportExport } = await loadSupportExportModule();
+  const { writeDiagnosticSupportExport } =
+    await import("../../logging/diagnostic-support-export.js");
   const rpc = {
     url: opts.rpc?.url,
     token: opts.rpc?.token,
@@ -383,7 +357,7 @@ async function writeSupportExportFromCli(opts: {
     logMaxBytes: parseOptionalPositiveIntegerOption(opts.logBytes, "--log-bytes"),
     stabilityBundle: opts.stabilityBundle,
     readStatusSnapshot: async () => {
-      const { gatherDaemonStatus } = await loadDaemonStatusGatherModule();
+      const { gatherDaemonStatus } = await import("../daemon-cli/status.gather.js");
       return await gatherDaemonStatus({
         rpc,
         probe: true,
@@ -403,7 +377,7 @@ async function writeSupportExportFromCli(opts: {
   }
 }
 
-export function registerGatewayCli(program: Command, deps: GatewayCliDependencies = {}) {
+export function registerGatewayCli(program: Command) {
   const gateway = addGatewayRunCommand(
     program
       .command("gateway")
@@ -566,9 +540,8 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
           try {
             result = await callGatewayReadOnlyCli("health", rpcOpts);
           } catch (error) {
-            const { emitReachableGatewayAuthDiagnostic, readNonObservingHealthConfig } = await (
-              deps.loadGatewayHealthModule ?? loadGatewayHealthModule
-            )();
+            const { emitReachableGatewayAuthDiagnostic, readNonObservingHealthConfig } =
+              await import("../../commands/health.js");
             const handled = await emitReachableGatewayAuthDiagnostic({
               error,
               config: rpcOpts.config ?? (await readNonObservingHealthConfig()),
@@ -591,8 +564,8 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
             return;
           }
           const [{ formatHealthChannelLines }, { styleHealthChannelLine }] = await Promise.all([
-            (deps.loadGatewayHealthModule ?? loadGatewayHealthModule)(),
-            (deps.loadHealthStyleModule ?? loadHealthStyleModule)(),
+            import("../../commands/health.js"),
+            import("../../../packages/terminal-core/src/health-style.js"),
           ]);
           const rich = isRich();
           const obj: Record<string, unknown> =
@@ -651,7 +624,7 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
             const {
               readDiagnosticStabilityBundleFileSync,
               readLatestDiagnosticStabilityBundleSync,
-            } = await loadStabilityBundleModule();
+            } = await import("../../logging/diagnostic-stability-bundle.js");
             const result =
               bundleTarget === "latest"
                 ? readLatestDiagnosticStabilityBundleSync()
@@ -755,7 +728,7 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
     .action(
       gatewayAction(async (opts, command) => {
         const rpcOpts = resolveGatewayRpcOptions(opts, command);
-        const { gatewayStatusCommand } = await loadGatewayStatusModule();
+        const { gatewayStatusCommand } = await import("../../commands/gateway-status.js");
         await gatewayStatusCommand(
           {
             ...rpcOpts,
@@ -780,9 +753,9 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
           { dedupeBeacons, renderBeaconLines },
           { withProgress },
         ] = await Promise.all([
-          loadConfigModule(),
-          loadBonjourDiscoveryModule(),
-          loadWideAreaDnsModule(),
+          import("../../config/read-best-effort-config.runtime.js"),
+          import("../../infra/bonjour-discovery.js"),
+          import("../../infra/widearea-dns.js"),
           import("./discover.js"),
           import("../progress.js"),
         ]);

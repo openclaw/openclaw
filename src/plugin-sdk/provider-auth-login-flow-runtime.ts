@@ -15,7 +15,6 @@ import {
   type ProviderChannelLoginChoice,
   type ProviderChannelLoginResolution,
 } from "../plugins/provider-login-options.js";
-import { createLazyRuntimeMethodBinder, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   ProviderAuthConfigApplyError,
   ProviderCredentialsSavedError,
@@ -82,15 +81,11 @@ export function createProviderLoginFlowRegistry(): ProviderLoginFlowRegistry {
   return { logins: new Map(), modelAccess: new Map() };
 }
 
-const loadProviderAuthLoginFlowRuntime = createLazyRuntimeModule(
-  () => import("../commands/models/auth.js"),
-);
-const bindProviderAuthLoginFlowRuntime = createLazyRuntimeMethodBinder(
-  loadProviderAuthLoginFlowRuntime,
-);
-
 export const runModelsAuthLoginFlow: ProviderAuthLoginFlowRuntime["runModelsAuthLoginFlowCore"] =
-  bindProviderAuthLoginFlowRuntime((runtime) => runtime.runModelsAuthLoginFlowCore);
+  async (...args) => {
+    const { runModelsAuthLoginFlowCore } = await import("../commands/models/auth.js");
+    return await runModelsAuthLoginFlowCore(...args);
+  };
 
 export function reserveProviderLoginFlow(params: {
   flows: ProviderLoginFlowRegistry;

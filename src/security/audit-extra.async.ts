@@ -14,7 +14,6 @@ import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
-import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 import type { ExecFn } from "./windows-acl.js";
 
@@ -26,22 +25,6 @@ type DockerProbeOptions = {
 };
 
 const DEFAULT_SANDBOX_BROWSER_DOCKER_PROBE_TIMEOUT_MS = 5000;
-
-const loadConfigModule = createLazyRuntimeModule(() => import("../config/config.js"));
-
-const loadAuditFsModule = createLazyRuntimeModule(() => import("./audit-fs.js"));
-
-const loadAgentScopeModule = createLazyRuntimeModule(() => import("../agents/agent-scope.js"));
-
-const loadExecDockerRaw = createLazyRuntimeNamedExport(
-  () => import("../agents/sandbox/docker.js"),
-  "execDockerRaw",
-) satisfies () => Promise<ExecDockerRawFn>;
-
-const loadSandboxBrowserSecurityHashEpoch = createLazyRuntimeNamedExport(
-  () => import("../agents/sandbox/constants.js"),
-  "SANDBOX_BROWSER_SECURITY_HASH_EPOCH",
-);
 
 function expandTilde(p: string, env: NodeJS.ProcessEnv): string | null {
   if (!p.startsWith("~")) {
@@ -165,9 +148,10 @@ export async function collectSandboxBrowserHashLabelFindings(params?: {
   const markTimedOut = () => {
     timedOut = true;
   };
-  const [execFn, browserHashEpoch] = await Promise.all([
-    params?.execDockerRawFn ? Promise.resolve(params.execDockerRawFn) : loadExecDockerRaw(),
-    loadSandboxBrowserSecurityHashEpoch(),
+  const [execFn, { SANDBOX_BROWSER_SECURITY_HASH_EPOCH: browserHashEpoch }] = await Promise.all([
+    params?.execDockerRawFn ??
+      import("../agents/sandbox/docker.js").then((mod) => mod.execDockerRaw),
+    import("../agents/sandbox/constants.js"),
   ]);
   const probeOptions: DockerProbeOptions = {
     execDockerRawFn: execFn,
@@ -319,7 +303,7 @@ export async function collectIncludeFilePermFindings(params: {
   }
 
   const { formatPermissionDetail, formatPermissionRemediation, inspectPathPermissions } =
-    await loadAuditFsModule();
+    await import("./audit-fs.js");
 
   for (const p of includePaths) {
     const perms = await inspectPathPermissions(p, {
@@ -380,7 +364,7 @@ export async function collectStateDeepFilesystemFindings(params: {
   const findings: SecurityAuditFinding[] = [];
   const oauthDir = resolveOAuthDir(params.env, params.stateDir);
   const { formatPermissionDetail, formatPermissionRemediation, inspectPathPermissions } =
-    await loadAuditFsModule();
+    await import("./audit-fs.js");
 
   const oauthPerms = await inspectPathPermissions(oauthDir, {
     env: params.env,
@@ -418,7 +402,7 @@ export async function collectStateDeepFilesystemFindings(params: {
     }
   }
 
-  const agentScope = await loadAgentScopeModule();
+  const agentScope = await import("../agents/agent-scope.js");
   const agentIds = agentScope.listAgentEntries(params.cfg).map((agent) => agent.id);
   let defaultAgentId: string | undefined;
   if (agentIds.length > 0) {
@@ -544,7 +528,7 @@ export async function readConfigSnapshotForAudit(params: {
   env: NodeJS.ProcessEnv;
   configPath: string;
 }): Promise<ConfigFileSnapshot> {
-  const { createConfigIO } = await loadConfigModule();
+  const { createConfigIO } = await import("../config/config.js");
   return await createConfigIO({
     env: params.env,
     configPath: params.configPath,

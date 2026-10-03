@@ -32,7 +32,6 @@ import {
   resolveAgentHarnessSessionStoreError,
   resolveAgentHarnessSessionStoreTransitionError,
 } from "../sessions/agent-harness-session-key.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
 import {
   deliveryContextFromChannelRoute,
@@ -55,12 +54,6 @@ type LegacySessionStoreSaveOptions = {
 };
 
 const log = createSubsystemLogger("sessions/legacy-importer");
-const loadSessionArchiveRuntime = createLazyRuntimeModule(
-  () => import("../gateway/session-archive.runtime.js"),
-);
-const loadTrajectoryCleanupRuntime = createLazyRuntimeModule(
-  () => import("../trajectory/cleanup.js"),
-);
 
 function normalizeOptionalDeliveryContext(value: unknown): DeliveryContext | undefined {
   if (!isRecord(value)) {
@@ -246,7 +239,8 @@ async function archiveRemovedSessionTranscripts(params: {
   reason: "deleted";
   restrictToStoreDir: true;
 }): Promise<Set<string>> {
-  const { archiveSessionTranscriptsDetailed } = await loadSessionArchiveRuntime();
+  const { archiveSessionTranscriptsDetailed } =
+    await import("../gateway/session-archive.runtime.js");
   const archivedDirs = new Set<string>();
   for (const [sessionId, sessionFile] of params.removedSessionFiles) {
     if (params.referencedSessionIds.has(sessionId)) {
@@ -306,11 +300,13 @@ async function writeLegacySessionStoreUnlocked(
       artifacts: {
         archiveRemovedSessionTranscripts,
         removeRemovedSessionTrajectoryArtifacts: async (params) => {
-          const { removeRemovedSessionTrajectoryArtifacts } = await loadTrajectoryCleanupRuntime();
+          const { removeRemovedSessionTrajectoryArtifacts } =
+            await import("../trajectory/cleanup.js");
           await removeRemovedSessionTrajectoryArtifacts(params);
         },
         cleanupArchivedSessionTranscripts: async (params) => {
-          const { cleanupArchivedSessionTranscripts } = await loadSessionArchiveRuntime();
+          const { cleanupArchivedSessionTranscripts } =
+            await import("../gateway/session-archive.runtime.js");
           await cleanupArchivedSessionTranscripts(params);
         },
       },

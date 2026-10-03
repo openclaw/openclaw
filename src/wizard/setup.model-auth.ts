@@ -12,7 +12,6 @@ import type { AuthChoice, OnboardOptions } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { t } from "./i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 
@@ -21,15 +20,6 @@ export type SetupModelAuthCandidate = {
   authProfiles: PreparedAuthChoiceResult["authProfiles"];
   persistAuthProfiles: PreparedAuthChoiceResult["persistAuthProfiles"];
 };
-
-const loadAuthChoiceModule = createLazyRuntimeModule(
-  () => import("../commands/auth-choice.apply.js"),
-);
-const loadModelCheckModule = createLazyRuntimeModule(
-  () => import("../commands/auth-choice.model-check.js"),
-);
-
-const loadModelPickerModule = createLazyRuntimeModule(() => import("../flows/model-picker.js"));
 
 async function resolveAuthChoiceModelSelectionPolicy(params: {
   authChoice: string;
@@ -224,7 +214,7 @@ export async function runSetupModelAuthStep(params: {
       // Explicit skip should stay cold: do not bootstrap auth/profile machinery
       // or run model/auth checks when the caller already chose to skip setup.
       if (authChoiceFromPrompt) {
-        const { promptDefaultModel } = await loadModelPickerModule();
+        const { promptDefaultModel } = await import("../flows/model-picker.js");
         const modelSelection = await promptDefaultModel({
           config: nextConfig,
           prompter,
@@ -244,7 +234,8 @@ export async function runSetupModelAuthStep(params: {
           nextConfig = applyOnboardingPrimaryModel(nextConfig, target, modelSelection.model);
         }
 
-        const { warnIfModelConfigLooksOff } = await loadModelCheckModule();
+        const { warnIfModelConfigLooksOff } =
+          await import("../commands/auth-choice.model-check.js");
         await warnIfModelConfigLooksOff(nextConfig, prompter, {
           agentId: target.agentId,
           agentDir: target.agentDir,
@@ -259,10 +250,10 @@ export async function runSetupModelAuthStep(params: {
       { resolvePreferredProviderForAuthChoice },
       { promptDefaultModel },
     ] = await Promise.all([
-      loadAuthChoiceModule(),
-      loadModelCheckModule(),
+      import("../commands/auth-choice.apply.js"),
+      import("../commands/auth-choice.model-check.js"),
       import("../plugins/provider-auth-choice-preference.js"),
-      loadModelPickerModule(),
+      import("../flows/model-picker.js"),
     ]);
     prompter.disableBackNavigation?.();
     const agentScopedModels = nextConfig.agents?.ownership === "explicit";

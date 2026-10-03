@@ -21,7 +21,6 @@ import { findStartupMaintenanceRequiredError } from "../../infra/startup-mainten
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithProcessCleanupBudget } from "../../process/supervisor/cleanup-budget.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { formatCliCommand } from "../command-format.js";
 import { createGatewayHostLifecycle } from "./host-lifecycle.js";
 import { installGatewayHostLifeline } from "./host-lifeline.js";
@@ -58,10 +57,6 @@ const HARD_EXIT_WATCHDOG_GRACE_MS = 2_000;
 
 type ShutdownFailure = { step: string; error: unknown };
 
-const gatewayLifecycleRuntimeLoader = createLazyImportLoader(
-  () => import("./lifecycle.runtime.js"),
-);
-
 export async function runGatewayLoop(params: {
   start: (
     params?: GatewayRunLoopStartOptions,
@@ -85,7 +80,7 @@ export async function runGatewayLoop(params: {
   // Prime the lifecycle graph before signals can run. An in-place update rotates
   // dist chunks; a late import can fail and leave the restart token unconsumed,
   // coalescing every subsequent restart.
-  const eagerLifecycleRuntime = await gatewayLifecycleRuntimeLoader.load();
+  const eagerLifecycleRuntime = await import("./lifecycle.runtime.js");
   // Keep admission transitions synchronous through this primed runtime so an
   // accepted signal cannot yield between token handling and closing root admission.
   const supervisor = eagerLifecycleRuntime.detectGatewayRespawnSupervisorIdentity(

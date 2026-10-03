@@ -8,7 +8,6 @@ import {
   type ConcreteConfigPathSegment,
 } from "../shared/dot-path.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
@@ -20,10 +19,6 @@ export type ConfigurablePlugin = {
   /** JSON schema from the plugin manifest (used for type/enum info). */
   jsonSchema?: JsonSchemaObject;
 };
-
-const loadPluginMetadataSnapshotModule = createLazyRuntimeModule(
-  () => import("../plugins/plugin-metadata-snapshot.js"),
-);
 
 type JsonSchemaProperty = {
   type?: string;
@@ -162,7 +157,7 @@ async function listEnabledConfigurableManifestPlugins(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
 }): Promise<readonly PluginManifestRecord[]> {
-  const { loadPluginMetadataSnapshot } = await loadPluginMetadataSnapshotModule();
+  const { loadPluginMetadataSnapshot } = await import("../plugins/plugin-metadata-snapshot.js");
   const snapshot = loadPluginMetadataSnapshot({
     config: params.config,
     workspaceDir: params.workspaceDir,

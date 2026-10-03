@@ -10,10 +10,7 @@ import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "../../agents/embedded-agent-helpers/bootstrap.js";
-import {
-  createMessageCharEstimateCache,
-  estimateMessageCharsCached,
-} from "../../agents/embedded-agent-runner/tool-result-char-estimator.js";
+import { estimateMessageChars } from "../../agents/embedded-agent-runner/tool-result-char-estimator.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
@@ -197,10 +194,9 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       };
     }
     const messages = await readContextTranscriptMessages(params, targetSessionEntry);
-    const estimateCache = createMessageCharEstimateCache();
     const conversationTotals = messages.reduce(
       (totals, message) => {
-        const chars = estimateMessageCharsCached(message, estimateCache);
+        const chars = estimateMessageChars(message);
         if (chars === 0) {
           return totals;
         }
