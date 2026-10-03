@@ -41,6 +41,7 @@ export function resolvePluginCapabilityCatalog(
   if (typeof entry === "function") {
     // Catalog results contain registrations whose callbacks retain their setup inventory's lifetime.
     getPluginValueInstance(entry)?.admitFactory(
+      // SAFETY: The checked callable accepts catalog host context; its unknown result is validated below.
       entry as (context: PluginCapabilityCatalogHostContext) => unknown,
     );
   }
