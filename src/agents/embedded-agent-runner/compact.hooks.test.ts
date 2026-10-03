@@ -1162,8 +1162,8 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       ["explicit model timeout", "request timed out", "cancel"],
       // A provider 408 is an actual summary timeout: commit without a summary, no model switch.
       ["provider 408", "408", "reduce"],
-      // A 408 during the corrective attempt keeps its provenance through safeguard cancellation.
-      ["corrective 408", "408", "reduce"],
+      // A failed corrective attempt stays a terminal quality cancellation, even on a 408.
+      ["corrective 408", "408", "cancel"],
       [
         "reasoning-mandatory rejection",
         "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
