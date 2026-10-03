@@ -23,7 +23,7 @@ import {
   type ExternalPluginCatalogEntry,
 } from "../../plugins/plugin-catalog-source.js";
 import type { PluginOrigin } from "../../plugins/plugin-origin.types.js";
-import { isRecord, resolveUserPath } from "../../utils.js";
+import { resolveUserPath } from "../../utils.js";
 import { buildManifestChannelMeta } from "./channel-meta.js";
 import type { ChannelMeta } from "./types.public.js";
 
