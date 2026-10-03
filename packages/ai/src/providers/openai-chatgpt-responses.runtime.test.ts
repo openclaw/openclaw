@@ -205,7 +205,11 @@ describe("ChatGPT Responses runtime transport ownership", () => {
         requiresManagedTransport: () => true,
         resolveSecretSentinel: (value) => (value === "opaque" ? firstToken : value),
       });
-      configureAiTransportHost(host);
+      const replacementHost = createAiTransportHost({
+        buildModelFetch: () => secondFetch,
+        requiresManagedTransport: () => true,
+      });
+      configureAiTransportHost(transport === "auto" ? host : replacementHost);
       const WebSocketFixture = vi.fn(() => {
         throw new Error("managed transport must not open a WebSocket");
       });
@@ -217,10 +221,7 @@ describe("ChatGPT Responses runtime transport ownership", () => {
           sessionId: `managed-${transport}`,
           transport,
           onPayload: (body) => {
-            configureAiTransportHost({
-              buildModelFetch: () => secondFetch,
-              requiresManagedTransport: () => true,
-            });
+            configureAiTransportHost(replacementHost);
             return body;
           },
         }).result();

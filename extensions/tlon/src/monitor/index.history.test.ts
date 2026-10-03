@@ -94,6 +94,7 @@ vi.mock("./ingress.js", () => ({
 }));
 
 import { monitorTlonProvider } from "./index.js";
+import { formatSummarizationHistoryText } from "./utils.js";
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -247,6 +248,40 @@ describe("monitorTlonProvider summary delivery", () => {
       expect(inboundRuntimeMock.buildContext).not.toHaveBeenCalled();
       expect(inboundRuntimeMock.dispatch).not.toHaveBeenCalled();
     }, nest);
+  });
+
+  it("dispatches the complete summary prompt for nonempty history", async () => {
+    await withMonitor(async (receive) => {
+      sseClientMock.scry.mockResolvedValueOnce([
+        {
+          essay: {
+            author: "~nec",
+            content: [{ inline: ["Keep the launch date."] }],
+            sent: sentAt,
+          },
+        },
+      ]);
+      await receive(summaryRequest, true);
+      const historyText = formatSummarizationHistoryText(
+        [{ author: "~nec", content: "Keep the launch date.", timestamp: sentAt }],
+        monitorFixture.config,
+      );
+      expect(inboundRuntimeMock.buildContext).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          message: expect.objectContaining({
+            bodyForAgent:
+              `Please summarize this channel conversation (1 recent messages):\n\n${historyText}\n\n` +
+              "Provide a concise summary highlighting:\n" +
+              "1. Main topics discussed\n" +
+              "2. Key decisions or conclusions\n" +
+              "3. Action items if any\n" +
+              "4. Notable participants",
+          }),
+        }),
+      );
+      expect(inboundRuntimeMock.dispatch).toHaveBeenCalledOnce();
+      expect(sseClientMock.poke).not.toHaveBeenCalled();
+    });
   });
 
   it.each([

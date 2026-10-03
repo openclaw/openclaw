@@ -58,6 +58,10 @@ it("validates canonical and attachment base64 dialects", () => {
     expect(canonicalizeBase64(input), input).toBe(canonical);
     expect(isValidBase64(input), input).toBe(accepted);
   }
+  for (const glyph of [":", "@", "[", "`", "{", "-", "_", "é", "\ud800"]) {
+    expect(canonicalizeBase64(`AA${glyph}A`), glyph).toBeUndefined();
+    expect(isValidBase64(`AA${glyph}A`), glyph).toBe(false);
+  }
 });
 
 it("validates padded and unpadded terminal bits", () => {
@@ -65,6 +69,11 @@ it("validates padded and unpadded terminal bits", () => {
     ["Q", "AQ==", "AAQ="],
     ["E", undefined, "AAE="],
     ["B", undefined, undefined],
+    ["g", "Ag==", "AAg="],
+    ["c", undefined, "AAc="],
+    ["0", undefined, "AA0="],
+    ["+", undefined, undefined],
+    ["/", undefined, undefined],
   ] as const) {
     expect(canonicalizeBase64(`A${glyph}==`)).toBe(byte);
     expect(canonicalizeBase64(`A${glyph}`)).toBe(byte);
