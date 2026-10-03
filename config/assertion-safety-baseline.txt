@@ -1272,7 +1272,7 @@ src/agents/auth-profiles/external-auth.ts	1
 src/agents/auth-profiles/oauth-refresh-failure.ts	2
 src/agents/auth-profiles/oauth-refresh-lock-errors.ts	1
 src/agents/auth-profiles/oauth.ts	2
-src/agents/auth-profiles/persisted.ts	9
+src/agents/auth-profiles/persisted.ts	4
 src/agents/auth-profiles/policy.ts	1
 src/agents/auth-profiles/portability.ts	1
 src/agents/auth-profiles/profiles.ts	1
@@ -1600,7 +1600,7 @@ src/agents/tools/system-agent-tool.ts	1
 src/agents/tools/task-suggestion-tools.ts	2
 src/agents/tools/terminal-tool.ts	1
 src/agents/tools/tts-tool.ts	1
-src/agents/tools/video-generate-tool.ts	2
+src/agents/tools/video-generate-tool.ts	1
 src/agents/tools/web-fetch.ts	2
 src/agents/tools/web-search-output.ts	3
 src/agents/tools/web-search-provider-common.ts	1
