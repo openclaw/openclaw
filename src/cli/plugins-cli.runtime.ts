@@ -743,14 +743,25 @@ export async function runPluginMarketplaceEntriesCommand(
   const entries: MarketplaceEntryPayload[] = result.entries.map((entry) => {
     const id = catalog.resolveOfficialExternalPluginId(entry);
     const install = catalog.resolveOfficialExternalPluginInstall(entry) ?? undefined;
-    return {
+    const payload: MarketplaceEntryPayload = {
       label: catalog.resolveOfficialExternalPluginLabel(entry),
-      ...(id ? { id } : {}),
-      ...(entry.kind ? { kind: entry.kind } : {}),
-      ...(entry.name ? { name: entry.name } : {}),
-      ...(entry.version ? { version: entry.version } : {}),
-      ...(install ? { install } : {}),
     };
+    if (id) {
+      payload.id = id;
+    }
+    if (entry.kind) {
+      payload.kind = entry.kind;
+    }
+    if (entry.name) {
+      payload.name = entry.name;
+    }
+    if (entry.version) {
+      payload.version = entry.version;
+    }
+    if (install) {
+      payload.install = install;
+    }
+    return payload;
   });
 
   emitMarketplaceFeedTelemetry({

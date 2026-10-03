@@ -151,7 +151,8 @@ function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntr
   if (parsed.length === 0) {
     throw new Error(`${sourceLabel} must contain at least one config update.`);
   }
-  return parsed.map((entry, index) => {
+  const entries: ConfigSetBatchEntry[] = [];
+  for (const [index, entry] of parsed.entries()) {
     if (!isRecord(entry)) {
       throw new Error(`${sourceLabel}[${index}] must be an object.`);
     }
@@ -168,13 +169,14 @@ function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntr
         `${sourceLabel}[${index}] must include exactly one of: value, ref, provider.`,
       );
     }
-    return {
+    entries.push({
       path,
       ...(hasValue ? { value: entry.value } : {}),
       ...(hasRef ? { ref: entry.ref } : {}),
       ...(hasProvider ? { provider: entry.provider } : {}),
-    };
-  });
+    });
+  }
+  return entries;
 }
 
 export function parseConfigSetCurrentExpectation(

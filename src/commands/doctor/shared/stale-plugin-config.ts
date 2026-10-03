@@ -548,7 +548,7 @@ function removeDanglingChannelReferences(config: OpenClawConfig, channelIds: rea
 
   for (const agent of [
     config.agents?.defaults,
-    ...listMutableCodexRouteAgentEntries(config).map(({ agent }) => agent),
+    ...listMutableCodexRouteAgentEntries(config).map((entry) => entry.agent),
   ]) {
     const heartbeat = asNullableRecord(agent?.heartbeat);
     if (

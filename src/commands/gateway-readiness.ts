@@ -187,7 +187,9 @@ export async function ensureDashboardGatewayReady(
 
   let recoveredStatus = await gatherStatus();
   for (let attempt = 1; attempt < 20 && !gatewayIsReady(recoveredStatus); attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
     recoveredStatus = await gatherStatus();
   }
   if (gatewayIsReady(recoveredStatus)) {

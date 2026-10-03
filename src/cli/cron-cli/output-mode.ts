@@ -36,7 +36,7 @@ const CRON_OUTPUT_COMMANDS = {
 
 type CronOutputCommandName = keyof typeof CRON_OUTPUT_COMMANDS;
 const MACHINE_OUTPUT_COMMANDS = new Set<string>(
-  Object.entries(CRON_OUTPUT_COMMANDS).flatMap(([name, aliases]) => [name, ...aliases]),
+  Object.entries(CRON_OUTPUT_COMMANDS).flatMap(([name, aliases]) => [name].concat(aliases)),
 );
 
 export function createCronOutputCommand(parent: Command, name: CronOutputCommandName): Command {
