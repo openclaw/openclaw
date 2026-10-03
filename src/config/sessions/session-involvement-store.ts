@@ -36,7 +36,8 @@ export async function updateSessionProfileInvolvementAsync(
       const identity = prepared.readCurrentIdentity(profileId);
       return {
         profileId: identity?.profileId ?? profileId,
-        aliases: [...new Set([profileId, ...(identity?.aliases ?? [])])].sort(),
+        // Preserve native ordering for mention generations with equal timestamps.
+        aliases: [...new Set([profileId, ...(identity?.aliases ?? [])])],
       };
     });
   try {

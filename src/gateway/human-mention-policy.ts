@@ -330,7 +330,7 @@ export function createHumanMentionPolicy(params: {
         if (!target || !profileIds.length) {
           return;
         }
-        await updateSessionProfileInvolvementAsync(
+        const accepted = await updateSessionProfileInvolvementAsync(
           { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath },
           {
             expectedSessionId: input.sessionId,
@@ -349,6 +349,9 @@ export function createHumanMentionPolicy(params: {
             },
           },
         );
+        if (!accepted) {
+          throw new Error("Committed mention involvement was refused for a changed session");
+        }
       } finally {
         facts.release();
       }

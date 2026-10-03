@@ -16,12 +16,17 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "./session-accessor.js";
 import { updateSessionProfileInvolvementAsync } from "./session-involvement-store.js";
 
-function createFixture() {
+function createFixture(canonicalGeneration?: string) {
   const scope = { agentId: "main", sessionKey: "agent:main:involvement-worker" };
   const sessionId = "involvement-worker";
-  const profile = ensureProfileForEmail("current@involvement.example.test");
-  const previousEmail = "previous@involvement.example.test";
-  const previous = ensureProfileForEmail(previousEmail);
+  const firstEmail = "current@involvement.example.test";
+  const secondEmail = "previous@involvement.example.test";
+  const first = ensureProfileForEmail(firstEmail);
+  const second = ensureProfileForEmail(secondEmail);
+  const firstIsAlias = first.id < second.id;
+  const profile = firstIsAlias ? second : first;
+  const previous = firstIsAlias ? first : second;
+  const previousEmail = firstIsAlias ? firstEmail : secondEmail;
   const source = { generation: "involvement-generation", sequence: 1, timestamp: 1 };
   replaceSessionEntrySync(scope, {
     sessionId,
@@ -30,6 +35,15 @@ function createFixture() {
       key: scope.sessionKey,
       profiles: {
         [previous.id]: { hidden: false, updatedAt: 1, lastMention: source },
+        ...(canonicalGeneration
+          ? {
+              [profile.id]: {
+                hidden: false,
+                updatedAt: 1,
+                lastMention: { ...source, generation: canonicalGeneration },
+              },
+            }
+          : {}),
       },
     },
   });
@@ -46,9 +60,11 @@ function createFixture() {
 
 it("serializes merged-profile mention and visibility writes without caller-thread entry or alias SQL", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = createFixture();
+    const f = createFixture("canonical-generation");
+    const canonicalSource = { ...f.source, generation: "canonical-generation" };
+    expect(f.read()?.[f.profile.id]?.lastMention).toEqual(canonicalSource);
     linkEmail(f.previousEmail, f.profile.id);
-    const next = { ...f.source, sequence: 2 };
+    const next = { ...canonicalSource, sequence: 2 };
     const sql = observeHostDataSql();
     try {
       expect(
@@ -63,7 +79,7 @@ it("serializes merged-profile mention and visibility writes without caller-threa
           }),
           updateSessionProfileInvolvementAsync(f.scope, {
             ...f.params,
-            change: { kind: "mention", source: f.source },
+            change: { kind: "mention", source: canonicalSource },
           }),
         ]),
       ).toEqual([true, true, true]);
