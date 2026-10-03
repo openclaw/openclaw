@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { runNodeMain } from "../../../scripts/run-node.mts";
+import { runNodeMain } from "../../../test/scripts/run-node-boundary.test-support.js";
 import * as serviceFiles from "../../daemon/inspect-files.js";
 import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";

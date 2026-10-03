@@ -1,31 +1,110 @@
-import { describe, expect, it, vi } from "vitest";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as onboardingPlugins from "../commands/onboarding-plugin-install.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as clawHubSkills from "../infra/clawhub-skills.js";
+import * as catalog from "../plugins/official-external-plugin-catalog.js";
 import type { RuntimeEnv } from "../runtime.js";
+import * as skillLifecycle from "../skills/lifecycle/clawhub.js";
+import * as recommendationsStore from "../state/onboarding-recommendations.js";
 import {
   createOnboardingRecommendationsStore,
   type OnboardingRecommendationsRecord,
   type OnboardingRecommendationsStore,
 } from "../state/onboarding-recommendations.js";
+import * as recommendations from "../system-agent/setup-app-recommendations.js";
 import type {
   SetupAppRecommendationsResult,
   SetupAppScanPhase,
 } from "../system-agent/setup-app-recommendations.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import type { WizardPrompter } from "./prompts.js";
-import { setupAppRecommendations as setupAppRecommendationsWithOutcome } from "./setup.app-recommendations.js";
+import { setupAppRecommendations as runAppRecommendations } from "./setup.app-recommendations.js";
 
-async function setupAppRecommendations(
-  params: Partial<Parameters<typeof setupAppRecommendationsWithOutcome>[0]>,
-): Promise<OpenClawConfig> {
-  const outcome = await setupAppRecommendationsWithOutcome({
-    config: {},
-    prompter: createPrompter(),
-    runtime,
-    workspaceDir: "/tmp/workspace",
-    modelRouteVerified: true,
-    platform: "darwin",
-    ...params,
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const createStore = createOnboardingRecommendationsStore;
+afterEach(() => vi.restoreAllMocks());
+
+beforeEach(() => {
+  vi.spyOn(skillLifecycle, "resolveClawHubSkillVerificationTarget").mockResolvedValue({
+    ok: false,
+    error: "Synthetic skill is not installed",
   });
+  vi.spyOn(catalog, "listOfficialExternalPluginCatalogEntries").mockReturnValue([
+    {
+      name: "@openclaw/chat-plugin",
+      openclaw: { plugin: { id: "chat-plugin", label: "Chat plugin" } },
+    },
+  ]);
+});
+
+type SetupFixture = Partial<Parameters<typeof runAppRecommendations>[0]> & {
+  platform?: NodeJS.Platform;
+  deps?: {
+    recommend?: (
+      onPhase?: (phase: SetupAppScanPhase) => void,
+    ) => Promise<SetupAppRecommendationsResult>;
+    ensurePlugin?: typeof onboardingPlugins.ensureOnboardingPluginInstalled;
+    installSkill?: typeof skillLifecycle.installSkillFromClawHub;
+    readStored?: OnboardingRecommendationsStore["read"];
+    writeOffer?: OnboardingRecommendationsStore["writeOffer"];
+    acknowledgeStored?: OnboardingRecommendationsStore["acknowledge"];
+    updatePendingStored?: OnboardingRecommendationsStore["updatePending"];
+    clearPendingStored?: OnboardingRecommendationsStore["clearPending"];
+    deferOfferToBootstrap?: () => boolean;
+  };
+};
+
+async function setupAppRecommendationsWithOutcome(params: SetupFixture) {
+  const { deps = {}, platform = "darwin", ...request } = params;
+  const workspaceDir = request.workspaceDir ?? tempDirs.make("openclaw-wizard-recommendations-");
+  if (deps.deferOfferToBootstrap?.()) {
+    writeFileSync(join(workspaceDir, "BOOTSTRAP.md"), "Synthetic bootstrap");
+  }
+  if (deps.recommend) {
+    const recommend = deps.recommend;
+    vi.spyOn(recommendations, "getSetupAppRecommendations").mockImplementation(({ onPhase }) =>
+      recommend(onPhase),
+    );
+  }
+  if (deps.ensurePlugin) {
+    vi.spyOn(onboardingPlugins, "ensureOnboardingPluginInstalled").mockImplementation(
+      deps.ensurePlugin,
+    );
+  }
+  if (deps.installSkill) {
+    vi.spyOn(skillLifecycle, "installSkillFromClawHub").mockImplementation(deps.installSkill);
+  }
+  vi.spyOn(recommendationsStore, "createOnboardingRecommendationsStore").mockImplementation(
+    (options) => {
+      const store = createStore(options);
+      return {
+        ...store,
+        read: deps.readStored ?? store.read,
+        writeOffer: deps.writeOffer ?? store.writeOffer,
+        acknowledge: deps.acknowledgeStored ?? store.acknowledge,
+        updatePending: deps.updatePendingStored ?? store.updatePending,
+        clearPending: deps.clearPendingStored ?? store.clearPending,
+      };
+    },
+  );
+  return await withMockedPlatform(platform, () =>
+    runAppRecommendations({
+      config: {},
+      prompter: createPrompter(),
+      runtime,
+      modelRouteVerified: true,
+      ...request,
+      workspaceDir,
+    }),
+  );
+}
+
+async function setupAppRecommendations(params: SetupFixture): Promise<OpenClawConfig> {
+  const outcome = await setupAppRecommendationsWithOutcome(params);
   await outcome.commitResult();
   return outcome.config;
 }
@@ -160,12 +239,6 @@ describe("setupAppRecommendations", () => {
         deps: {
           recommend,
           deferOfferToBootstrap: () => false,
-          isSkillInstalled: async () => false,
-          resolveOfficialEntry: (pluginId) => ({
-            pluginId,
-            label: "Chat plugin",
-            install: { npmSpec: "@openclaw/chat-plugin" },
-          }),
           ensurePlugin: async ({ cfg }) => {
             const pending = await store.read();
             expect(pending?.acceptedAt).toBeNull();
@@ -380,18 +453,45 @@ describe("setupAppRecommendations", () => {
     };
     const store = storeDeps(stored);
     const installSkill = vi.fn();
+    vi.mocked(skillLifecycle.resolveClawHubSkillVerificationTarget).mockResolvedValue({
+      ok: true,
+      slug: "chat-skill",
+      ownerHandle: "demo-owner",
+      baseUrl: "https://clawhub.ai",
+      version: "1.0.0",
+      tag: undefined,
+      resolution: {
+        source: "installed",
+        selector: "installed-version",
+        registry: "https://clawhub.ai",
+        skillDir: undefined,
+        installedVersion: "1.0.0",
+      },
+    });
+    vi.spyOn(clawHubSkills, "fetchClawHubSkillVerification").mockResolvedValue({
+      schema: "clawhub.skill.verify.v1",
+      ok: true,
+      decision: "pass",
+      reasons: [],
+      skill: null,
+      publisher: null,
+      version: null,
+      card: null,
+      artifact: null,
+      provenance: null,
+      security: null,
+      signature: null,
+    });
 
     const outcome = await setupAppRecommendationsWithOutcome({
       config: {},
       prompter: createPrompter(["recommendation:0"]),
       runtime,
-      workspaceDir: "/tmp/workspace",
       modelRouteVerified: true,
       platform: "darwin",
       deps: {
         ...store,
         installSkill,
-        isSkillInstalled: vi.fn(async ({ skillRef }) => skillRef === skill.candidate.id),
       },
     });
 

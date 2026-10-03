@@ -57,7 +57,7 @@ function sessionStore(initial: Record<string, unknown> | undefined): TestSession
 
 function leasedRuntime(
   record: Record<string, unknown> | undefined,
-  cleanup?: ConstructorParameters<typeof AcpxRuntime>[1],
+  cleanup?: Parameters<typeof makeRuntime>[2],
   wrapperRoot = "/tmp/openclaw/acpx",
 ) {
   const baseStore = sessionStore(record);

@@ -1,17 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
-import { installChromeExtensionBootstrap } from "./extension-install.js";
+import "./extension-install.fixture-test-support.js";
+import {
+  installChromeExtensionBootstrap,
+  inspectWindowsNativeHosts,
+  installWindowsNativeHost,
+  uninstallWindowsNativeHosts,
+  validateWindowsNativeContext,
+} from "./extension-install.fixture-test-support.js";
 import { useExtensionInstallFixture } from "./extension-install.test-support.js";
 import {
   WINDOWS_OFFICIAL_ORIGIN,
   type WindowsManagementRequest,
   type WindowsManagementResponse,
 } from "./extension-windows-contract.js";
-import {
-  inspectWindowsNativeHosts,
-  installWindowsNativeHost,
-  uninstallWindowsNativeHosts,
-  validateWindowsNativeContext,
-} from "./extension-windows-host.js";
 import { windowsFixture } from "./extension-windows.test-support.js";
 const localFixture = useExtensionInstallFixture();
 describe("delegated Windows registration and read-only native admission", () => {

@@ -1,12 +1,14 @@
 import fs from "node:fs/promises";
+import "./extension-install.fixture-test-support.js";
+
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { chromeProductRoots } from "./extension-install-layout.js";
 import {
+  chromeProductRoots,
   installChromeExtensionBootstrap,
   removeChromeStoreInstallRequests,
   uninstallChromeExtensionNativeHosts,
-} from "./extension-install.js";
+} from "./extension-install.fixture-test-support.js";
 import {
   FOUNDATION_STORE_ID,
   useExtensionInstallFixture,

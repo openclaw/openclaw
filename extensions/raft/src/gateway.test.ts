@@ -1,4 +1,4 @@
-import { EventEmitter } from "node:events";
+import { ChildProcess, spawn } from "node:child_process";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
@@ -23,14 +23,31 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
   killProcessTree: processRuntimeMocks.killProcessTree,
 }));
 
-class FakeBridge extends EventEmitter {
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawn: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/persistent-dedupe", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/persistent-dedupe")>();
+  return { ...actual, createChannelReplayGuard: vi.fn(actual.createChannelReplayGuard) };
+});
+
+class FakeBridge extends ChildProcess {
   pid = 4242;
   readonly started = createDeferred<{ endpoint: string; token: string }>();
+}
 
-  spawn = (params: { endpoint: string; token: string }) => {
-    this.started.resolve(params);
-    return this;
-  };
+function installBridge(bridge: FakeBridge) {
+  vi.mocked(spawn).mockImplementationOnce((_command, args, options) => {
+    const endpoint = args?.at(-1);
+    const token = options?.env?.RAFT_CHANNEL_TOKEN;
+    if (!endpoint || !token) {
+      throw new Error("Raft bridge spawn omitted its endpoint or token");
+    }
+    bridge.started.resolve({ endpoint, token });
+    return bridge;
+  });
 }
 
 const tempWorkspaces: TempWorkspaceSync[] = [];
@@ -137,7 +154,11 @@ async function withGateway(
   }) => Promise<void>,
 ) {
   const bridge = new FakeBridge();
-  const start = startRaftGatewayAccount(ctx, { spawnBridge: bridge.spawn, wakeDedupe });
+  installBridge(bridge);
+  vi.mocked(createChannelReplayGuard<{ accountId: string; key: string }>).mockReturnValueOnce(
+    wakeDedupe,
+  );
+  const start = startRaftGatewayAccount(ctx);
   void start.catch(bridge.started.reject);
   try {
     const { endpoint, token } = await withTimeout(
@@ -179,6 +200,8 @@ function createPersistentWakeDedupe(stateDir: string) {
 
 afterEach(() => {
   processRuntimeMocks.killProcessTree.mockReset();
+  vi.mocked(spawn).mockReset();
+  vi.mocked(createChannelReplayGuard).mockClear();
   resetPluginStateStoreForTests();
   for (const workspace of tempWorkspaces.splice(0)) {
     workspace.cleanup();
@@ -217,11 +240,13 @@ describe("Raft wake gateway", () => {
         return operation;
       };
       let stopped = false;
-      const start = startRaftGatewayAccount(ctx, { wakeDedupe, spawnBridge: bridge.spawn }).finally(
-        () => {
-          stopped = true;
-        },
+      installBridge(bridge);
+      vi.mocked(createChannelReplayGuard<{ accountId: string; key: string }>).mockReturnValueOnce(
+        wakeDedupe,
       );
+      const start = startRaftGatewayAccount(ctx).finally(() => {
+        stopped = true;
+      });
       try {
         const { endpoint, token } = await bridge.started.promise;
         const request = fetch(endpoint, {
@@ -249,11 +274,10 @@ describe("Raft wake gateway", () => {
   );
 
   it("keeps a disabled account quiescent until shutdown", async () => {
-    const { ctx, controller, wakeDedupe } = createContext();
+    const { ctx, controller } = createContext();
     ctx.account.enabled = false;
-    const spawnBridge = vi.fn(() => new FakeBridge());
     let settled = false;
-    const start = startRaftGatewayAccount(ctx, { spawnBridge, wakeDedupe }).then(() => {
+    const start = startRaftGatewayAccount(ctx).then(() => {
       settled = true;
     });
 
@@ -262,7 +286,7 @@ describe("Raft wake gateway", () => {
         setTimeout(resolve, 0);
       });
       expect(settled).toBe(false);
-      expect(spawnBridge).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
     } finally {
       controller.abort();
       await start;

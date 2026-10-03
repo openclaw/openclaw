@@ -1,24 +1,45 @@
-import "./cli-auth-epoch.js";
+import { vi } from "vitest";
+import * as authStore from "./auth-profiles/store-runtime.js";
+import * as credentials from "./cli-credentials.js";
 
 type CliAuthEpochDeps = {
-  readCodexCliCredentialsCached: typeof import("./cli-credentials.js").readCodexCliCredentialsCached;
-  readGeminiCliCredentialsCached: typeof import("./cli-credentials.js").readGeminiCliCredentialsCached;
-  ensureAuthProfileStore: typeof import("./auth-profiles/store-runtime.js").ensureAuthProfileStore;
-  loadAuthProfileStoreForRuntime: typeof import("./auth-profiles/store-runtime.js").loadAuthProfileStoreForRuntime;
+  readCodexCliCredentialsCached: typeof credentials.readCodexCliCredentialsCached;
+  readGeminiCliCredentialsCached: typeof credentials.readGeminiCliCredentialsCached;
+  ensureAuthProfileStore: typeof authStore.ensureAuthProfileStore;
+  loadAuthProfileStoreForRuntime: typeof authStore.loadAuthProfileStoreForRuntime;
 };
 
-type CliAuthEpochTestApi = {
-  setCliAuthEpochTestDeps(overrides: Partial<CliAuthEpochDeps>): void;
-  resetCliAuthEpochTestDeps(): void;
-};
+const restoreReaders: Array<() => void> = [];
 
-function getTestApi(): CliAuthEpochTestApi {
-  return (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.cliAuthEpochTestApi")
-  ] as CliAuthEpochTestApi;
+export function setCliAuthEpochTestDeps(overrides: Partial<CliAuthEpochDeps>): void {
+  if (overrides.readCodexCliCredentialsCached) {
+    const spy = vi
+      .spyOn(credentials, "readCodexCliCredentialsCached")
+      .mockImplementation(overrides.readCodexCliCredentialsCached);
+    restoreReaders.push(() => spy.mockRestore());
+  }
+  if (overrides.readGeminiCliCredentialsCached) {
+    const spy = vi
+      .spyOn(credentials, "readGeminiCliCredentialsCached")
+      .mockImplementation(overrides.readGeminiCliCredentialsCached);
+    restoreReaders.push(() => spy.mockRestore());
+  }
+  if (overrides.ensureAuthProfileStore) {
+    const spy = vi
+      .spyOn(authStore, "ensureAuthProfileStore")
+      .mockImplementation(overrides.ensureAuthProfileStore);
+    restoreReaders.push(() => spy.mockRestore());
+  }
+  if (overrides.loadAuthProfileStoreForRuntime) {
+    const spy = vi
+      .spyOn(authStore, "loadAuthProfileStoreForRuntime")
+      .mockImplementation(overrides.loadAuthProfileStoreForRuntime);
+    restoreReaders.push(() => spy.mockRestore());
+  }
 }
 
-export const setCliAuthEpochTestDeps = (overrides: Partial<CliAuthEpochDeps>): void =>
-  getTestApi().setCliAuthEpochTestDeps(overrides);
-
-export const resetCliAuthEpochTestDeps = (): void => getTestApi().resetCliAuthEpochTestDeps();
+export function resetCliAuthEpochTestDeps(): void {
+  for (const restore of restoreReaders.splice(0).reverse()) {
+    restore();
+  }
+}
