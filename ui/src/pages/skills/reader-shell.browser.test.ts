@@ -17,6 +17,59 @@ afterEach(() => {
 });
 
 describe.runIf(browserMode)("skill reader shell", () => {
+  it.each([390, 1440])("scrolls long Skill Card code inside its block at %i px", async (width) => {
+    const { page } = await import("vitest/browser");
+    await page.viewport(width, 844);
+    container = document.createElement("openclaw-skills-page");
+    document.body.append(container);
+    const code = "display_sample_".repeat(18);
+    render(
+      renderSkills(
+        createProps({
+          detailKey: "repo-skill",
+          detailTab: "card",
+          report: {
+            workspaceDir: "/fixture/workspace",
+            managedSkillsDir: "/fixture/skills",
+            skills: [
+              createSkill({
+                primaryEnv: undefined,
+                skillCard: {
+                  present: true,
+                  path: "/fixture/skill-card.md",
+                  sizeBytes: code.length,
+                },
+              }),
+            ],
+          },
+          skillCardContents: {
+            "repo-skill": `Read this ordinary paragraph without scrolling the reader sideways.\n\n\`\`\`text\n${code}\n\`\`\``,
+          },
+        }),
+      ),
+      container,
+    );
+    const { dialog } = await getRenderedModalDialog(container);
+    await Promise.all(dialog.getAnimations().map((animation) => animation.finished));
+    const body = container.querySelector<HTMLElement>(".skill-reader-dialog__body")!;
+    const pre = body.querySelector<HTMLPreElement>("pre")!;
+    const paragraph = body.querySelector<HTMLParagraphElement>("article p")!;
+    const tab = body.querySelector<HTMLElement>("#skill-detail-tab-card")!;
+    expect(body.clientWidth).toBeGreaterThan(0);
+    expect(body.scrollWidth).toBe(body.clientWidth);
+    expect(paragraph.getBoundingClientRect().right).toBeLessThanOrEqual(
+      body.getBoundingClientRect().right,
+    );
+    expect(pre.querySelector("code")?.textContent).toBe(`${code}\n`);
+    expect(pre.scrollWidth).toBeGreaterThan(pre.clientWidth);
+    const tabLeft = tab.getBoundingClientRect().left;
+    pre.scrollLeft = 100;
+    expect(pre.scrollLeft).toBeGreaterThan(0);
+    body.scrollLeft = 100;
+    expect(body.scrollLeft).toBe(0);
+    expect(tab.getBoundingClientRect().left).toBe(tabLeft);
+  });
+
   it.each(
     [390, 1440].flatMap((width) => ["error", "installed"].map((variant) => ({ width, variant }))),
   )("sizes $variant content within the viewport at $width px", async ({ width, variant }) => {
