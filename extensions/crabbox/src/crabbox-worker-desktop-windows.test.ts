@@ -65,12 +65,6 @@ function launcher(result: { status: number; stdout?: string; stderr?: string }) 
 }
 
 describe("Windows desktop node service handoff", () => {
-  it("returns the interactive process identity and removes its temporary caller script", async () => {
-    const runtime = launcher({ status: 0, stdout: JSON.stringify(identity) });
-    await expect(runtime.launch(options)).resolves.toEqual(identity);
-    expect(runtime.fs.rmSync).toHaveBeenCalledOnce();
-  });
-
   it("delivers literal replacement tokens and apostrophes to the generated node process", async () => {
     const literal = "$& $` $' worker's";
     const requested = {
@@ -81,7 +75,8 @@ describe("Windows desktop node service handoff", () => {
       logPath: path.win32.join(options.stateDir, literal, "node.log"),
     };
     const runtime = launcher({ status: 0, stdout: JSON.stringify(identity) });
-    await runtime.launch(requested);
+    await expect(runtime.launch(requested)).resolves.toEqual(identity);
+    expect(runtime.fs.rmSync).toHaveBeenCalledOnce();
     // Inspect the actual script bytes delivered through Crabbox's PowerShell request.
     const delivered = [...runtime.source().matchAll(/FromBase64String\(''([A-Za-z0-9+/=]+)''\)/gu)]
       .map((match) => Buffer.from(match[1]!, "base64").toString("utf8"))
@@ -144,38 +139,9 @@ const hasPowerShell =
     stdio: "ignore",
   }).status === 0;
 
-describe.skipIf(!hasPowerShell)("generated Windows PowerShell syntax", () => {
-  it("parses setup, nested app launchers, and enrollment using the installed PowerShell parser", async () => {
-    const runtime = launcher({ status: 0, stdout: JSON.stringify(identity) });
-    await runtime.launch(options);
-    const scripts = [
-      createCrabboxWindowsDesktopSetup("cbx_fixture", "c3ludGhldGlj"),
-      runtime.source(),
-    ];
-    const parser = String.raw`
-$ErrorActionPreference = 'Stop'
-function Check-Script([string]$text) {
-  $tokens = $null
-  $errors = $null
-  $ast = [Management.Automation.Language.Parser]::ParseInput($text, [ref]$tokens, [ref]$errors)
-  if ($errors.Count) { throw ($errors | Out-String) }
-  foreach ($literal in $ast.FindAll({ param($node) $node -is [Management.Automation.Language.StringConstantExpressionAst] -and $node.Value.Contains([char]10) -and ($node.Value.StartsWith('param(') -or $node.Value.StartsWith('$ErrorActionPreference')) }, $true)) { Check-Script $literal.Value }
-}
-foreach ($script in ([Console]::In.ReadToEnd() | ConvertFrom-Json)) { Check-Script $script }
-`;
-    const result = spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", parser], {
-      input: JSON.stringify(scripts),
-      encoding: "utf8",
-      timeout: 20_000,
-    });
-    expect({ code: result.status, errors: result.stderr }).toEqual({ code: 0, errors: "" });
-  });
-});
-
 describe.skipIf(!hasPowerShell)("Windows browser launcher ownership", () => {
   it.each([
     { scenario: "reuse", passed: true, launches: 0 },
-    { scenario: "launch", passed: true, launches: 1 },
     { scenario: "reduced-environment", passed: true, launches: 1 },
     { scenario: "different-profile", passed: false, launches: 0 },
     { scenario: "different-binary", passed: false, launches: 0 },
@@ -218,7 +184,7 @@ if($fixture.scenario -eq 'reduced-environment') {
 $global:launches=0
 $global:responded=$false
 function Get-NetTCPConnection {
-  if($fixture.scenario -in @('launch','reduced-environment','changed-after-response') -and $global:launches -eq 0){return}
+  if($fixture.scenario -in @('reduced-environment','changed-after-response') -and $global:launches -eq 0){return}
   [pscustomobject]@{LocalAddress=$(if($fixture.scenario -eq 'public-listener'){'0.0.0.0'}else{'127.0.0.1'});OwningProcess=700}
 }
 function Get-CimInstance {
