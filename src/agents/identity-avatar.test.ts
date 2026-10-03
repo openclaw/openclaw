@@ -221,12 +221,15 @@ describe("resolveAgentAvatar", () => {
     }
   });
 
-  it("preserves generic and oversized data URIs at the public resolution boundary", () => {
-    const oversized = `data:image/png;base64,${"A".repeat(AVATAR_MAX_DATA_URL_CHARS)}`;
+  it("bounds image data URIs at the public resolution boundary", () => {
+    const prefix = "data:image/png;base64,";
+    const atBoundary = `${prefix}${"A".repeat(AVATAR_MAX_DATA_URL_CHARS - prefix.length)}`;
+    const oversized = `${atBoundary}A`;
     const cfg: OpenClawConfig = {
       agents: {
         list: [
           { id: "generic", identity: { avatar: "data:text/plain,avatar" } },
+          { id: "boundary", identity: { avatar: atBoundary } },
           { id: "oversized", identity: { avatar: oversized } },
         ],
       },
@@ -236,9 +239,14 @@ describe("resolveAgentAvatar", () => {
       kind: "data",
       url: "data:text/plain,avatar",
     });
-    expect(resolveAgentAvatar(cfg, "oversized")).toMatchObject({
+    expect(resolveAgentAvatar(cfg, "boundary")).toMatchObject({
       kind: "data",
-      url: oversized,
+      url: atBoundary,
+    });
+    expect(resolveAgentAvatar(cfg, "oversized")).toMatchObject({
+      kind: "none",
+      reason: "unsupported_data_url",
+      source: oversized,
     });
   });
 });
