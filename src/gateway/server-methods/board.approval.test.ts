@@ -156,10 +156,30 @@ describe("board widget approval", () => {
     expect(reviewWidgetApproval).toHaveBeenCalledTimes(3);
   });
 
-  it.each(boardWidgetContentPermissionCases)(
-    "routes $contentKind through session $permissionMode / effective $mode ($grantState)",
+  it.each([
+    ...boardWidgetContentPermissionCases
+      .filter(
+        (row) =>
+          row.contentKind === "html" ||
+          ("permissionMode" in row &&
+            (row.permissionMode !== "workspace" ||
+              ("reviewDecision" in row &&
+                row.reviewDecision === "allow-once" &&
+                !("reviewRisk" in row)))),
+      )
+      .map((row) => Object.assign({}, row, { emptyTools: false })),
+    ...(
+      [
+        { permissionMode: "full", grantState: "granted" },
+        { permissionMode: "workspace", grantState: "granted", reviewDecision: "allow-once" },
+        { permissionMode: "guarded", grantState: "pending" },
+        { permissionMode: "read-only", grantState: "rejected" },
+      ] as const
+    ).map((row) => Object.assign({}, row, { contentKind: "mcp-app" as const, emptyTools: true })),
+  ])(
+    "routes $contentKind through session $permissionMode / effective $mode ($grantState, empty tools=$emptyTools)",
     async (testCase) => {
-      const { contentKind, grantState } = testCase;
+      const { contentKind, grantState, emptyTools } = testCase;
       const permissionMode = "permissionMode" in testCase ? testCase.permissionMode : undefined;
       const mode = "mode" in testCase ? testCase.mode : undefined;
       const reviewDecision = "reviewDecision" in testCase ? testCase.reviewDecision : undefined;
@@ -177,12 +197,21 @@ describe("board widget approval", () => {
       } else if (reviewFailure) {
         reviewWidgetApproval.mockRejectedValue(new Error("reviewer unavailable"));
       }
-      const { invoke, broadcast, store, mcpApp } = createHarness(undefined, undefined, undefined, {
-        getRuntimeConfig: () => ({
-          agents: { list: [{ id: "main" }] },
-          ...(mode ? { tools: { exec: { mode } } } : {}),
-        }),
-      });
+      const dependencies = emptyTools ? createMcpAppDependencies() : undefined;
+      if (dependencies) {
+        vi.mocked(dependencies.resolveAllowedToolNames).mockResolvedValue([]);
+      }
+      const { invoke, broadcast, store, mcpApp } = createHarness(
+        undefined,
+        dependencies,
+        undefined,
+        {
+          getRuntimeConfig: () => ({
+            agents: { list: [{ id: "main" }] },
+            ...(mode ? { tools: { exec: { mode } } } : {}),
+          }),
+        },
+      );
 
       const put = await invoke("board.widget.put", {
         sessionKey: "agent:main:session",
@@ -191,7 +220,9 @@ describe("board widget approval", () => {
           contentKind === "html"
             ? { kind: "html", html: "<p>weather</p>" }
             : { kind: "mcp-app", viewId: "mcp-app-source" },
-        declared: { netOrigins: ["https://api.example.com"], tools: ["health"] },
+        declared: emptyTools
+          ? undefined
+          : { netOrigins: ["https://api.example.com"], tools: ["health"] },
       });
 
       expect(put).toHaveBeenCalledWith(
@@ -206,14 +237,18 @@ describe("board widget approval", () => {
           ? await readBoardHtml(store, { sessionKey: "agent:main:session" }, "weather")
           : await store.readWidgetMcpApp({ sessionKey: "agent:main:session" }, "weather");
       expect(stored?.grantState).toBe(grantState);
+      if (emptyTools) {
+        expect(stored).toMatchObject({ grantState, interactive: true, declaredTools: [] });
+      }
       const reviewed = permissionMode === "workspace" || mode === "auto";
       expect(reviewWidgetApproval).toHaveBeenCalledTimes(reviewed ? 1 : 0);
       if (reviewed) {
         expect(reviewWidgetApproval).toHaveBeenCalledWith({
           kind: "board-widget",
           name: "weather",
-          declared:
-            contentKind === "html"
+          declared: emptyTools
+            ? {}
+            : contentKind === "html"
               ? { netOrigins: ["https://api.example.com"], tools: ["health"] }
               : { tools: ["server.refresh", "server.search"] },
           agent: { id: "main", sessionKey: "agent:main:session" },
@@ -241,50 +276,6 @@ describe("board widget approval", () => {
         { sessionKey, revision: grantState === "pending" ? 1 : 2, widget: "weather" },
         boardBroadcastScope,
       );
-    },
-  );
-
-  it.each([
-    { permissionMode: "full", grantState: "granted" },
-    { permissionMode: "workspace", grantState: "granted" },
-    { permissionMode: "guarded", grantState: "pending" },
-    { permissionMode: "read-only", grantState: "rejected" },
-  ] as const)(
-    "routes zero-tool interactive MCP Apps through $permissionMode ($grantState)",
-    async ({ permissionMode, grantState }) => {
-      readSessionEntry.mockReturnValue({ permissionMode });
-      reviewWidgetApproval.mockResolvedValue({
-        decision: "allow-once",
-        risk: "low",
-        rationale: "no tool capabilities",
-      });
-      const mcpApp = createMcpAppDependencies();
-      vi.mocked(mcpApp.resolveAllowedToolNames).mockResolvedValue([]);
-      const { invoke, store } = createHarness(undefined, mcpApp);
-
-      const response = await invoke("board.widget.put", {
-        sessionKey: "agent:main:main",
-        name: "message-app",
-        content: { kind: "mcp-app", viewId: "mcp-app-source" },
-      });
-
-      expect(response.mock.calls[0]?.[1]).toMatchObject({
-        widgets: [{ name: "message-app", grantState }],
-      });
-      expect(
-        await store.readWidgetMcpApp({ sessionKey: "agent:main:main" }, "message-app"),
-      ).toMatchObject({
-        grantState,
-        interactive: true,
-        declaredTools: [],
-      });
-      if (permissionMode === "workspace") {
-        expect(reviewWidgetApproval).toHaveBeenCalledWith(
-          expect.objectContaining({ kind: "board-widget", declared: {} }),
-        );
-      } else {
-        expect(reviewWidgetApproval).not.toHaveBeenCalled();
-      }
     },
   );
 });
