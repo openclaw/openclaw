@@ -57,15 +57,14 @@ export async function withTrustedWebSearchEndpoint<T>(
   params: WebSearchEndpointOptions,
   run: (response: Response) => Promise<T>,
 ): Promise<T> {
-  const { withTrustedWebToolsEndpoint, withOriginScopedSelfHostedWebToolsEndpoint } =
-    await loadWebGuardedFetch();
+  const endpoints = await loadWebGuardedFetch();
   if (params.selfHostedBaseUrl !== undefined) {
-    return withOriginScopedSelfHostedWebToolsEndpoint(
+    return endpoints.withOriginScopedSelfHostedWebToolsEndpoint(
       { ...params, selfHostedBaseUrl: params.selfHostedBaseUrl },
       async ({ response }) => run(response),
     );
   }
-  return withTrustedWebToolsEndpoint(params, async ({ response }) => run(response));
+  return endpoints.withTrustedWebToolsEndpoint(params, async ({ response }) => run(response));
 }
 
 export async function withSelfHostedWebSearchEndpoint<T>(
