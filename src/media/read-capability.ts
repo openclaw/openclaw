@@ -64,36 +64,6 @@ function isAgentScopedMediaReadAllowedByToolPolicy(
   return isToolAllowedByPolicies("read", [groupPolicy, senderPolicy]);
 }
 
-/** Creates a host reader bound to the agent workspace and configured local-file safety checks. */
-function createAgentScopedHostMediaReadFile(
-  params: {
-    cfg: OpenClawConfig;
-    agentId?: string;
-    localRoots: readonly string[];
-    workspaceDir?: string;
-    excludedLocalRoots?: readonly string[];
-    workspaceOnly?: boolean;
-  } & OutboundHostMediaPolicyContext,
-): OutboundMediaReadFile | undefined {
-  if (
-    !resolveEffectiveToolFsRootExpansionAllowed(params) ||
-    !isAgentScopedMediaReadAllowedByToolPolicy(params)
-  ) {
-    return undefined;
-  }
-  const inferredWorkspaceDir =
-    params.workspaceDir ??
-    (params.agentId ? resolveAgentWorkspaceDir(params.cfg, params.agentId) : undefined);
-  const workspaceRoot = resolveWorkspaceRoot(inferredWorkspaceDir);
-  return createBoundedOutboundMediaReadFile(async (filePath, options) => {
-    const resolvedPath = resolvePathFromInput(filePath, workspaceRoot);
-    return await readLocalMediaFile(resolvedPath, params.localRoots, {
-      maxBytes: options?.maxBytes ?? Number.MAX_SAFE_INTEGER,
-      excludedRoots: params.excludedLocalRoots,
-    });
-  });
-}
-
 function getManagedMediaLocalRoots(mediaSources?: readonly string[]): readonly string[] {
   const roots = new Set([path.join(resolveConfigDir(), "media", "outbound")]);
   for (const source of mediaSources ?? []) {
@@ -218,27 +188,17 @@ export function resolveAgentScopedOutboundMediaAccess(
     mediaReadAllowed && !registeredMedia
       ? appendWorkspaceDirToLocalRoots(baseLocalRoots, resolvedWorkspaceDir)
       : baseLocalRoots;
-  const hostReadFile =
-    params.mediaAccess?.readFile ??
-    params.mediaReadFile ??
-    createAgentScopedHostMediaReadFile({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      localRoots: localRoots ?? [],
-      workspaceDir: resolvedWorkspaceDir,
-      excludedLocalRoots: registeredRoots,
-      workspaceOnly: params.workspaceOnly,
-      sessionKey: params.sessionKey,
-      messageProvider: params.messageProvider,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      accountId: params.accountId,
-      requesterSenderId: params.requesterSenderId,
-      requesterSenderName: params.requesterSenderName,
-      requesterSenderUsername: params.requesterSenderUsername,
-      requesterSenderE164: params.requesterSenderE164,
+  let hostReadFile = params.mediaAccess?.readFile ?? params.mediaReadFile;
+  if (!hostReadFile && mediaReadAllowed && resolveEffectiveToolFsRootExpansionAllowed(params)) {
+    const workspaceRoot = resolveWorkspaceRoot(resolvedWorkspaceDir);
+    hostReadFile = createBoundedOutboundMediaReadFile(async (filePath, options) => {
+      const resolvedPath = resolvePathFromInput(filePath, workspaceRoot);
+      return await readLocalMediaFile(resolvedPath, localRoots ?? [], {
+        maxBytes: options?.maxBytes ?? Number.MAX_SAFE_INTEGER,
+        excludedRoots: registeredRoots,
+      });
     });
+  }
   const registeredReadFile =
     mediaReadAllowed && registeredMedia
       ? createWorkspaceAwareMediaReadFile({
