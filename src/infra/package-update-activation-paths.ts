@@ -71,8 +71,24 @@ export function packageActivationIdentity(file: string, directory: boolean | "la
 export function privatePackageActivationIdentity(file: string, directory: boolean): string {
   const value = packageActivationIdentity(file, directory);
   const stat = fs.lstatSync(file);
-  if ((stat.mode & 0o077) !== 0 || (!directory && stat.nlink !== 1)) {
-    throw new Error("Package publication recovery permissions are unsafe");
+  const modeUnsafe = (stat.mode & 0o077) !== 0;
+  const linkUnsafe = !directory && stat.nlink !== 1;
+  if (modeUnsafe || linkUnsafe) {
+    // Refusal stays unchanged; the diagnostic names the rejected recovery object
+    // and the observed metadata so an operator does not need a source read to
+    // find it. Only the basename is reported, so the private state layout never
+    // crosses the update-failure redaction boundary.
+    const observed = [
+      `object=${path.basename(file)}`,
+      `kind=${directory ? "directory" : "file"}`,
+      `mode=0o${(stat.mode & 0o777).toString(8).padStart(3, "0")}`,
+      ...(directory ? [] : [`nlink=${stat.nlink}`]),
+    ].join(", ");
+    throw new Error(
+      `Package publication recovery permissions are unsafe (${observed}; required mode with no group/other bits${
+        directory ? "" : " and nlink 1"
+      })`,
+    );
   }
   return value;
 }
