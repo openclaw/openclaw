@@ -5,7 +5,7 @@ import crypto from "node:crypto";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { filterStringRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { BundleMcpConfig, BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
+import type { BundleMcpConfig, BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
 import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
 import {
   buildMcpOAuthAuthorizationFetch,

@@ -10,7 +10,7 @@ import type {
   BundleMcpDataDirOwnership,
   BundleMcpDiagnostic,
   BundleMcpServerConfig,
-} from "../plugins/bundle-mcp.js";
+} from "../plugins/bundle-mcp.types.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { loadMergedBundleMcpConfig } from "./bundle-mcp-config.js";
 

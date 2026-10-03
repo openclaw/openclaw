@@ -7,13 +7,14 @@ import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import {
-  loadEnabledBundleMcpConfig,
-  type BundleMcpConfig,
-  type BundleMcpDataDirOwnership,
-  type BundleMcpDiagnostic,
-  type BundleMcpServerConfig,
-} from "../plugins/bundle-mcp.js";
+import { loadEnabledBundleMcpConfig } from "../plugins/bundle-mcp.js";
+import type {
+  BundleMcpConfig,
+  BundleMcpDataDirOwnership,
+  BundleMcpDiagnostic,
+  BundleMcpServerConfig,
+  EnabledBundleMcpConfigResult,
+} from "../plugins/bundle-mcp.types.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { partitionMcpServersByConnectionScope } from "./mcp-connection-resolver.js";
 
@@ -106,6 +107,17 @@ export function loadMergedBundleMcpConfig(params: {
     cfg: params.cfg,
     manifestRegistry: params.manifestRegistry,
   });
+  return mergeConfiguredBundleMcpServers(bundleMcp, params);
+}
+
+/** Apply the same operator overrides to prepared runtime and account-setup declarations. */
+export function mergeConfiguredBundleMcpServers(
+  bundleMcp: EnabledBundleMcpConfigResult,
+  params: {
+    cfg?: OpenClawConfig;
+    toolOverrides?: Pick<SessionToolOverrides, "mcpServers">;
+  },
+): MergedBundleMcpConfig {
   const configuredMcp = normalizeConfiguredMcpServers(params.cfg?.mcp?.servers);
   const serverOverrides = params.toolOverrides?.mcpServers;
   const readServerOverride = (name: string) =>

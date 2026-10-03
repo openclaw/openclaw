@@ -34,7 +34,7 @@ const pendingAuthorizations = resolveGlobalMap<string, PendingAuthorization>(
 export class ProviderBrowserSignInUnavailableError extends Error {
   constructor() {
     super(
-      "Browser sign-in needs a secure Gateway address reachable from your browser. Enable Gateway Tailscale Serve, then retry /login; or use the CLI sign-in flow.",
+      "Browser sign-in needs a secure Gateway address reachable from your browser. Open the dashboard on this Gateway's HTTPS address or its local loopback address, then retry; or use the CLI sign-in flow.",
     );
   }
 }
@@ -47,9 +47,14 @@ export function resolveBrowserAuthOrigin(
   if (!browser || browser.origin === published?.origin) {
     return published;
   }
-  if (browser.origin && browser.isLocalClient && isGatewayHostBrowserOrigin(browser)) {
+  if (browser.origin && isGatewayHostBrowserOrigin(browser)) {
     const url = new URL(browser.origin);
-    if ((url.protocol === "http:" || url.protocol === "https:") && isLoopbackHost(url.hostname)) {
+    // The authenticated browser connection already passed Gateway origin policy.
+    // Its served HTTPS origin also covers operator-managed reverse proxies.
+    if (
+      url.protocol === "https:" ||
+      (url.protocol === "http:" && browser.isLocalClient && isLoopbackHost(url.hostname))
+    ) {
       return { origin: url.origin, signal };
     }
   }

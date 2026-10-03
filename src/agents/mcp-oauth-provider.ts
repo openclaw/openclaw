@@ -190,7 +190,19 @@ export async function createMcpOAuthClientProvider(params: {
     async clientInformation() {
       const store = await readStore();
       params.login?.assertCurrent();
-      return store.clientInformation;
+      const clientInformation = store.clientInformation;
+      // Re-register an unused client when the callback changes. Saved tokens remain
+      // bound to their original client; metadata-document clients have no redirect list.
+      if (
+        !store.tokens &&
+        clientInformation &&
+        "redirect_uris" in clientInformation &&
+        Array.isArray(clientInformation.redirect_uris) &&
+        !clientInformation.redirect_uris.includes(resolveOAuthRedirectUrl(config, store))
+      ) {
+        return undefined;
+      }
+      return clientInformation;
     },
     async saveClientInformation(clientInformation) {
       await updateStore({ kind: "clientInformation", clientInformation });

@@ -11,11 +11,8 @@ import {
   OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_PROPOSAL_ENV,
   OPENCLAW_TOOLS_MCP_TOOLS_ENV,
 } from "../../mcp/openclaw-tools-serve-config.js";
-import {
-  extractMcpServerMap,
-  type BundleMcpConfig,
-  type BundleMcpServerConfig,
-} from "../../plugins/bundle-mcp.js";
+import { extractMcpServerMap } from "../../plugins/bundle-mcp.js";
+import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundle-mcp.types.js";
 import type { CliBackendConfig, CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import type { CliBundleMcpMode } from "../../plugins/types.js";
 import { acquireSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";

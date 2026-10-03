@@ -4,7 +4,7 @@ import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { readBundleJsonObject } from "../plugins/bundle-config-shared.js";
-import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
+import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
 import {
   normalizePluginsConfigWithResolver,
   resolvePolicyPluginActivationState,

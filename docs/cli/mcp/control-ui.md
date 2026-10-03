@@ -17,10 +17,15 @@ For a shorter setup walkthrough covering Settings, the composer path (**+** → 
 
 Use the page for operator edits and quick inventory. Use `openclaw mcp doctor --probe` or `openclaw mcp probe` when you need live server proof.
 
-Installed plugin detail pages show **Accounts** first for matching HTTP MCP
-servers configured with `auth: "oauth"`. **Connect** opens the existing OAuth flow; the page refreshes its saved status
-afterward. Saved authorization shows a checkmark and **Connected**, with **Edit**
-opening the existing MCP settings page. Sign-in requires an administrator connection.
+Enabled plugin detail pages show **Accounts** for their declared HTTP MCP servers
+with `auth: "oauth"`. Choose **Connect**, complete the provider's sign-in and consent,
+then return to OpenClaw. The page refreshes its saved status and shows **Connected**
+after authorization is saved. **Edit** opens the MCP settings page. Sign-in requires
+an administrator connection.
+
+Plugin declarations work directly after installation and enablement; no duplicate
+`mcp.servers` entry is needed. An explicit `mcp.servers.<name>` entry overrides the
+plugin's definition, including `enabled: false` to disable that server.
 
 Plugins with declared API-key fields also show **Credentials**, including their
 environment variable names. **Configure** opens the existing plugin Settings editor
