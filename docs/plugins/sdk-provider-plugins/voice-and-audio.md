@@ -390,6 +390,9 @@ Register each capability inside `register(api)` alongside your existing
     relay forwards it to the browser, which replaces the provisional text in place.
     Omit this metadata for incremental fragments. Publish one final per utterance
     at the provider's actual completion boundary, not for every provisional snapshot.
+    The same argument can carry the provider's `itemId` and `responseId`. Gateway
+    Talk control copies them to the `itemId` and `parentId` of the transcript and
+    output text events. Omit an id the provider does not report.
 
     A host `runAgentConsult` rejection named `AbortError` represents
     cancellation, even when the provider's own signal is still live. Do not
