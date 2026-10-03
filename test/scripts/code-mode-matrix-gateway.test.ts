@@ -1687,20 +1687,18 @@ describe("Gateway matrix interview evidence", () => {
           scenario === "uncaught-expiry",
         );
       }
+      for (const [index, event] of events.entries()) {
+        event.matrixSessionKey =
+          (scenario === "other-session-call-outcome" && index === 1) ||
+          (scenario === "other-session-wait" && index >= 2) ||
+          (scenario === "other-session-wait-outcome" && index === events.length - 1)
+            ? "child-session"
+            : "root-session";
+      }
       const checks = evaluateGatewayMatrixInterview(
         "invoices-auto-retention",
         taskTrace,
-        collectGatewayMatrixTrace(
-          events.map((event, index) => ({
-            ...event,
-            matrixSessionKey:
-              (scenario === "other-session-call-outcome" && index === 1) ||
-              (scenario === "other-session-wait" && index >= 2) ||
-              (scenario === "other-session-wait-outcome" && index === events.length - 1)
-                ? "child-session"
-                : "root-session",
-          })),
-        ),
+        collectGatewayMatrixTrace(events),
         answer,
       );
       expect(checks.priorReferenceProbed).toBe(true);

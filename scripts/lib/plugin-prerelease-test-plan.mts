@@ -170,7 +170,9 @@ export function createPluginPrereleaseTestPlan() {
   return {
     dockerLanes,
     staticChecks: staticChecks.map((entry) => ({
-      ...entry,
+      check: entry.check,
+      checkName: entry.checkName,
+      command: entry.command,
       surfaces: entry.surfaces.slice(),
     })),
     surfaces: [...new Set(allEntries.flatMap((entry) => entry.surfaces))].toSorted((a, b) =>

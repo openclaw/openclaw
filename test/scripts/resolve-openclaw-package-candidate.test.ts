@@ -102,18 +102,18 @@ function lookupAddresses(addresses: LookupAddress[]) {
 }
 
 function packageResponse(
-  bytes = new Uint8Array(),
+  bytes: Uint8Array | null = new Uint8Array(),
   statusCode = 200,
   headers: IncomingMessage["headers"] = {},
 ) {
   const response = new IncomingMessage(new Socket());
   response.statusCode = statusCode;
   response.headers = headers;
-  response._read = () => {
+  if (bytes !== null) {
     response.push(bytes);
     response.complete = true;
     response.push(null);
-  };
+  }
   return response;
 }
 
@@ -1111,10 +1111,9 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
     const responses: IncomingMessage[] = [];
     mockPackageRequests(() => {
       expect(responses.every((response) => response.destroyed)).toBe(true);
-      const response = packageResponse(undefined, 302, {
+      const response = packageResponse(null, 302, {
         location: "https://packages.example/redirected.tgz",
       });
-      response._read = () => {};
       responses.push(response);
       return response;
     });
@@ -1143,9 +1142,8 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
     ],
   ])("destroys %s response bodies without reading", async (_name, status, headers, error) => {
     const target = path.join(autoTempDirs.make("openclaw-package-download-"), "openclaw.tgz");
-    const response = packageResponse(undefined, status, headers);
-    const read = vi.fn();
-    response._read = read;
+    const response = packageResponse(null, status, headers);
+    const read = vi.spyOn(response, Symbol.asyncIterator);
     mockPackageRequests(() => response);
     await expect(
       downloadUrl("https://packages.example/openclaw.tgz", target, {
@@ -1208,9 +1206,13 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
       autoTempDirs.make("openclaw-package-download-timeout-"),
       "openclaw.tgz",
     );
-    const response = packageResponse();
-    const started = createDeferred<void>();
-    response._read = () => started.resolve();
+    const response = packageResponse(null);
+    const started = createDeferred();
+    const iterate = response[Symbol.asyncIterator].bind(response);
+    vi.spyOn(response, Symbol.asyncIterator).mockImplementation(() => {
+      started.resolve();
+      return iterate();
+    });
     mockPackageRequests(() => {
       if (phase === "headers") {
         started.resolve();
@@ -1247,7 +1249,7 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
     const response = packageResponse(new Uint8Array([1, 2, 3, 4]), 200, {
       "content-length": "1e3",
     });
-    const read = vi.spyOn(response, "_read");
+    const read = vi.spyOn(response, Symbol.asyncIterator);
     mockPackageRequests(() => response);
     await expect(
       downloadUrl("https://packages.example/openclaw.tgz", target, {
