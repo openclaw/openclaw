@@ -1,10 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { convertPcmToMulaw8k } from "openclaw/plugin-sdk/realtime-voice";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import type { VoiceCallTtsConfig } from "./config.js";
-import { convertPcmToMulaw8k } from "./telephony-audio.js";
-
-// Telephony TTS adapter that applies voice-call overrides and emits 8kHz mulaw audio.
 
 /** Core runtime TTS API used by the telephony adapter. */
 export type TelephonyTtsRuntime = Pick<
@@ -18,7 +16,6 @@ export type TelephonyTtsProvider = {
   synthesizeForTelephony: (text: string) => Promise<Buffer>;
 };
 
-/** Default timeout for one telephony synthesis request. */
 export const TELEPHONY_DEFAULT_TTS_TIMEOUT_MS = 8000;
 
 class UnsupportedTelephonyTtsOutputFormatError extends Error {

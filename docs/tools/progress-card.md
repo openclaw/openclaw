@@ -134,7 +134,11 @@ Call `progress_card` with both parts absent or empty to remove the current card:
 
 An empty plan plus empty or whitespace-only Markdown also clears it. A successful clear returns `Progress card cleared`. Channel previews remove the checklist and its status, keep other activity, and delete an otherwise empty draft. A later card update can create a new draft.
 
-In the Control UI, users with write access can clear the current card with **Dismiss progress card** (×), whether it is expanded or collapsed. The button is available for unfinished, paused, completed, and note-only cards. Dismissal clears the saved card, not the conversation or active agent run; a later progress update can create a new card. Dismissal clears only the revision the user saw; if the agent has written a newer revision, the newer card is kept and shown instead.
+In the Control UI, **Dismiss progress card** (×) hides the card only in the chat pane where it was clicked, whether expanded or collapsed. Anyone who can view the card can hide it, including for unfinished, paused, completed, and note-only cards.
+
+The click does not write to the Gateway or change the saved card, other clients, dashboard widgets, the conversation, or the active run. Updates to the same card stay hidden in that pane, including when switching away and back between sessions. A newly created card appears again after the Gateway confirms the previous card was cleared. Reloading the page or changing Gateway connections restores the saved card.
+
+Users with write access can instead select **Clear saved progress for everyone** (trash) beside X. This retains the revision-checked shared clear: if a newer card revision has arrived, it is kept rather than erased. Agents can also clear saved progress with the `progress_card` tool and both fields empty.
 
 A full in-place conversation reset (`/reset` without `soft`, or `sessions.reset`) also clears the previous task’s card. The clear commits with the reset boundary and refreshes subscribed clients; a fresh page load also sees no old card. Writes admitted before that reset cannot restore it. Reset preserves transcript history and dashboard layout. Automatic continuity resets that preserve prior context do not clear the card.
 

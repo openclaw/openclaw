@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   ErrorCodes,
   errorShape,
@@ -165,10 +165,6 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
   return { agentId, profileId, workspaceDir, name: `users/${profileId}/USER.md`, assertCurrent };
 }
 
-function hash(content: Buffer | string): string {
-  return createHash("sha256").update(content).digest("hex");
-}
-
 async function runPersonalFile(
   options: GatewayRequestHandlerOptions,
   params: { agentId: string },
@@ -193,7 +189,7 @@ async function runPersonalFile(
           profileId: target.profileId,
           missing: false,
           content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(loaded.buffer),
-          hash: hash(loaded.buffer),
+          hash: sha256Hex(loaded.buffer),
         };
       } catch (error) {
         target.assertCurrent();
@@ -251,7 +247,7 @@ async function runPersonalFile(
         profileId: target.profileId,
         missing: false,
         content: write.content,
-        hash: hash(write.content),
+        hash: sha256Hex(write.content),
       } satisfies UsersPersonalFileGetResult);
     });
   } catch (error) {

@@ -221,7 +221,8 @@
   }
 }
 
-.session-progress-card__dismiss {
+.session-progress-card__dismiss,
+.session-progress-card__clear-saved {
   width: 22px;
   min-width: 22px;
   height: 22px;

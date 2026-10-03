@@ -628,7 +628,7 @@ final class WebChatManager {
     static func promptForGatewayProfile(
         profiles: [MacGatewayProfile],
         preferredID: String?,
-        local: DashboardGatewayEntry? = nil) -> GatewayProfileSelection?
+        local: DashboardGatewayEntry? = nil) async -> GatewayProfileSelection?
     {
         let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 360, height: 28), pullsDown: false)
         if let local { popup.addItem(withTitle: local.name) }
@@ -644,7 +644,7 @@ final class WebChatManager {
         alert.addButton(withTitle: "Open Window")
         alert.addButton(withTitle: "Manage Gateways…")
         alert.addButton(withTitle: "Cancel")
-        switch alert.runModal() {
+        switch await AppActivation.shared.response(to: alert) {
         case .alertFirstButtonReturn:
             if local != nil, popup.indexOfSelectedItem == 0 { return .local }
             let index = popup.indexOfSelectedItem - offset
@@ -664,7 +664,7 @@ final class WebChatManager {
     private static func showProfileError(_ error: Error, message: String) {
         let alert = NSAlert(error: error)
         alert.messageText = message
-        alert.runModal()
+        AppActivation.shared.presentAlert(alert)
     }
 
     #if DEBUG

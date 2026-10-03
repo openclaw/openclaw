@@ -1,3 +1,4 @@
+import { DuplicateAgentError } from "../agents/agent-create-error.js";
 import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
 import { WorkspaceAliasRepointedError } from "../agents/workspace-state-identity.js";
 import {
@@ -54,6 +55,7 @@ export type ErrorIdentity =
         | "range-error"
         | "syntax-error"
         | "type-error"
+        | "duplicate-agent"
         | "skill-upload-request"
         | "mcp-oauth-corruption"
         | "session-pending-input-custody";
@@ -78,6 +80,9 @@ export type ErrorIdentity =
   | { type: "agent-media-migration"; pathname: string; schemaVersion: number };
 
 export function identifyError(error: Error): ErrorIdentity {
+  if (error instanceof DuplicateAgentError) {
+    return { type: "duplicate-agent" };
+  }
   if (error instanceof WorkerSessionAlreadyAttachedError) {
     return {
       type: "worker-session-already-attached",
@@ -218,6 +223,7 @@ export function parseIdentity(node: Record<string, unknown>): ErrorIdentity | un
     case "range-error":
     case "syntax-error":
     case "type-error":
+    case "duplicate-agent":
     case "skill-upload-request":
     case "mcp-oauth-corruption":
     case "session-pending-input-custody":
@@ -284,6 +290,8 @@ function unreachableErrorNode(node: never): never {
 
 export function createError(node: ErrorIdentity & { message: string }): Error {
   switch (node.type) {
+    case "duplicate-agent":
+      return new DuplicateAgentError(node.message);
     case "worker-session-already-attached":
       return new WorkerSessionAlreadyAttachedError(node.sessionId, node.environmentId);
     case "workspace-alias-repointed":

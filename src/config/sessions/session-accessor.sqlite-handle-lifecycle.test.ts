@@ -8,7 +8,6 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   closeOpenClawAgentDatabaseByPath,
-  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -217,14 +216,15 @@ describe("SQLite session handle lifecycle", () => {
   );
 
   it("commits a turn after its async predicate loses the cached handle", async () => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    const planningDatabase = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
     const result = await persistSessionTranscriptTurn(scope, {
       messages: [
         {
           message: { role: "user", content: "append after close" },
           shouldAppend: async () => {
-            closeCachedOpenClawAgentDatabase(database);
-            expect(database.db.isOpen).toBe(false);
+            // The callback owns writer admission; evict only its cached host handle.
+            closeCachedOpenClawAgentDatabase(planningDatabase);
+            expect(planningDatabase.db.isOpen).toBe(false);
             return true;
           },
         },
@@ -306,7 +306,7 @@ describe("SQLite session handle lifecycle", () => {
       sessionKeys: [scope.sessionKey],
       includeLabelOwners: "Renamed",
       update: async ([snapshot]) => {
-        expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
+        closeCachedOpenClawAgentDatabase(planningDatabase);
         expect(planningDatabase.db.isOpen).toBe(false);
         return {
           result: undefined,

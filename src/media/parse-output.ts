@@ -15,12 +15,9 @@ import { findCodeRegions } from "../shared/text/code-regions.js";
 import { parseInlineDirectives } from "../utils/directive-tags.js";
 import { parseInboundMediaUri } from "./inbound-media-uri.js";
 
-/** Captures legacy MEDIA: attachment directives from model/tool output. */
-// `main`'s own pattern, backtick stripping included: one optional backtick is consumed before the
-// payload is handed on, so `` MEDIA:`/tmp/a.png /tmp/b.png` `` still splits on the whitespace inside
-// instead of unwrapping as the single filename `/tmp/a.png /tmp/b.png`. A quote pair is only ever given
-// meaning by the code that reads references, never by the capture.
-const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
+// A MEDIA directive consumes its entire line. Keep the optional leading backtick:
+// removing it before parsing preserves the existing whitespace-split backtick syntax.
+const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/i;
 
 const RENDERABLE_ASSISTANT_MEDIA_PREFIX_RE =
   /^(?:https?:\/\/|data:(?:image|audio|video)\/|file:|~|\/|[a-z]:[\\/])/iu;
@@ -213,31 +210,12 @@ function beginsIndependentMediaSource(raw: string): boolean {
   return MEDIA_SOURCE_ROOT_RE.test(candidate) || SCHEME_RE.test(candidate);
 }
 
-// A reference that starts with a quote runs to the first quote of the same kind that is followed by
-// whitespace, the end of the payload, or the comma that introduces the next quoted reference. An earlier quote is
-// followed by more value, so it is part of that value rather than a delimiter: that keeps an inner quote
-// (`MEDIA:'…?token=it's'`), a real filename space (`MEDIA:"/tmp/album/photo.png copy.png"`), and both at
-// once (`MEDIA:'/tmp/team's.v1 final/image.png'`) inside one reference, while `MEDIA:"a" "b"` still
-// separates at the whitespace between the two. Finding that quote by hand keeps the search linear:
-// retrying the remaining suffix from every stray opening quote costs Θ(n²) on a payload such as
-// `MEDIA:'a 'a 'a …`, where every quote is followed by a non-space character and so no quote in the
-// payload ever closes (measured 0.79s / 3.01s / 11.65s for 48K / 96K / 192K characters, against 2–3ms for
-// `main`).
+// Scan quote boundaries once; retrying a regex at every stray quote is quadratic.
 const QUOTE_CHARS = new Set(['"', "'", "`"]);
 const MEDIA_DIRECTIVE_SPACE_RE = /\s/;
 
-// The comma belongs to the list only when a reference follows it: an unquoted line already reads it that
-// way, because `cleanCandidate` trims it from a reference's tail, so `MEDIA:/tmp/a.png, /tmp/b.png` attaches
-// both. A quoted reference takes the comma as its closing delimiter only once the scan has looked past the
-// comma's own whitespace for the opening quote of the next reference. Three shapes must not split here. A
-// comma inside one reference (`/tmp/Hello, World.png`) sits before that reference's closing quote, so it
-// never reaches this test. An apostrophe that belongs to the name (`MEDIA:'/tmp/Students', 2024/album.png'`)
-// is followed by a comma and then a value character, not a quote, so the reference keeps running to its real
-// closing quote. Prose after a comma (`MEDIA:"/tmp/a.png", the first one`) likewise reports no list, and the
-// whole-payload reading stands. The skip costs no extra pass: a whitespace run holds no quote, so only the
-// quote before that run can walk it and the runs one scan walks are disjoint, which keeps the scan linear
-// (measured 0.88s / 1.95s / 3.92s for 3.2M / 6.4M / 12.9M characters of a payload that walks one run per
-// apostrophe).
+// A comma closes a quoted reference only when another quoted reference follows it.
+// Apostrophes in filenames and prose after commas remain part of the current value.
 function isQuotedMediaReferenceBoundary(payload: string, afterQuote: number): boolean {
   if (afterQuote >= payload.length) {
     return true;
@@ -258,8 +236,6 @@ function isQuotedMediaReferenceBoundary(payload: string, afterQuote: number): bo
 
 function findQuotedMediaReferenceEnd(payload: string, start: number, quote: string): number {
   for (let index = start + 1; index < payload.length; index += 1) {
-    // A quote closes its chunk when whitespace, nothing at all, or a comma with a quoted reference behind
-    // it follows.
     if (payload.charAt(index) === quote && isQuotedMediaReferenceBoundary(payload, index + 1)) {
       return index;
     }
@@ -267,11 +243,7 @@ function findQuotedMediaReferenceEnd(payload: string, start: number, quote: stri
   return -1;
 }
 
-// A reply that serializes its references into a JSON array states each one with the same quote pair the
-// scan below already reads, so the wrapper comes off first and the members are read as a list. Only a whole
-// `[…]` qualifies: an unquoted payload still reports no list, and one bracketed reference reports no list
-// either, so `MEDIA:["/tmp/a.png"]` keeps `main`'s whole-payload reading and its salvage of a path followed
-// by serialized JSON.
+// Only a complete array wrapper participates in quoted-list parsing.
 function stripSerializedJsonArrayWrapper(payload: string): string {
   const trimmed = payload.trim();
   if (
@@ -284,19 +256,8 @@ function stripSerializedJsonArrayWrapper(payload: string): string {
   return trimmed.slice(1, -1);
 }
 
-// The references a payload lists, when every token in it is an explicitly quoted reference and there are
-// at least two of them; `null` otherwise, which sends the caller back to `main`'s reading. Counting
-// tokens is too weak a test for a list: `MEDIA:'/tmp/parents' photos/photo.png'` also starts and ends
-// with a quote, but its pair encloses one value whose name holds that quote, so the stray tail must not
-// pass for a second reference. With no list present a single quoted value still unwraps as a whole,
-// including one whose own text ends with that quote (`MEDIA:"https://example.com/video.mp4?token=ends""`).
-//
-// One scan answers both questions the caller asks — is this a list, and which references does it hold —
-// so the payload is tokenized once. A token that no quote pair bounds is a comma- or whitespace-delimited
-// token like any other, and it also settles the answer: the scan stops there instead of reading the rest.
-// A member of a list is a reference in its own right, so the caller validates it with the same contract a
-// standalone quoted reference gets — bare filenames included, since `MEDIA:"image.png"` is accepted on its
-// own — and a member the caller rejects stays out of its neighbours rather than being welded into one.
+// Require at least two fully quoted tokens. A single value or an unquoted tail
+// keeps whole-payload parsing, including apostrophes and filename whitespace.
 function readQuotedMediaReferenceList(rawPayload: string): string[] | null {
   const payload = stripSerializedJsonArrayWrapper(rawPayload);
   const tokens: string[] = [];
@@ -320,10 +281,7 @@ function readQuotedMediaReferenceList(rawPayload: string): string[] | null {
   return tokens.length >= 2 ? tokens : null;
 }
 
-// `main`'s own split, kept quote-blind on purpose: a payload that is not a list gives a quote pair no
-// authority, so a quote that is text inside one path (`/tmp/album 'best' photos/image.png`) cannot block
-// the join, and neither can a fragment that would be accepted as a reference on its own
-// (`'best/photos'` in `/tmp/album 'best/photos' final.png`).
+// Outside an explicit list, quotes inside a filename must not prevent joining its fragments.
 function splitMediaDirectiveParts(payload: string): string[] {
   const parts: string[] = [];
   let previousEnd = 0;
@@ -623,144 +581,81 @@ export function splitMediaOutput(
       continue;
     }
 
-    const matches = Array.from(line.matchAll(MEDIA_TOKEN_RE));
-    if (matches.length === 0) {
+    const match = MEDIA_TOKEN_RE.exec(line);
+    if (!match) {
       keptLines.push(line);
       pushTextSegment(line);
-      lineOffset += line.length + 1; // +1 for newline
+      lineOffset += line.length + 1;
       continue;
     }
 
-    const pieces: string[] = [];
-    const lineSegments: ParsedMediaOutputSegment[] = [];
-    let cursor = 0;
-
-    for (const match of matches) {
-      const start = match.index ?? 0;
-      pieces.push(line.slice(cursor, start));
-
-      const payload = expectDefined(match[1], "parse regex capture 1");
-      // A payload that lists separate quoted references keeps every reference as written, and each of
-      // them is admitted by the same contract a standalone quoted reference gets. Otherwise the payload
-      // reads the way `main` reads it: one quoted value unwraps as a whole, and anything else splits on
-      // whitespace. Both answers come from the one scan, so the payload is never tokenized twice.
-      const quotedList = readQuotedMediaReferenceList(payload);
-      // `main`'s whole-payload reading of this string, kept even when a list sends the references
-      // elsewhere: a list still carries the outer quote pair that reading takes off, and the decision
-      // whether an unreferenced payload is a local path to strip has to land on the string `main`
-      // decides on, not on the quotes still around it.
-      const stripped = unwrapQuoted(payload);
-      const unwrapped = quotedList ? undefined : stripped;
-      const payloadValue = unwrapped ?? payload;
-      const parts = quotedList ?? (unwrapped ? [unwrapped] : splitMediaDirectiveParts(payload));
-      const mediaStartIndex = media.length;
-      let validCount = 0;
-      const invalidParts: string[] = [];
-      let hasValidMedia = false;
-      for (const part of parts) {
-        // Matched quotes delimit the reference; punctuation inside them belongs to its value. That
-        // holds for every reference a split payload lists, not just for a payload that unwraps as a
-        // single value, so a quoted part keeps its own characters instead of being cleaned. Cleaning
-        // one would drop the signed suffix and leave the reference short at delivery time.
-        const quotedPart = unwrapped === undefined ? unwrapQuoted(part) : undefined;
-        const candidate = unwrapped ?? quotedPart ?? cleanCandidate(part);
-        const allowSpaces = Boolean(unwrapped ?? quotedPart) || /\s/.test(candidate);
-        // A member of an explicit list is validated as the standalone reference its own quote pair makes
-        // it, bare filenames included: `MEDIA:"image.png"` is accepted on its own, so rejecting
-        // `"image.png"` here would drop a reference the payload states. Outside a list the bare-filename
-        // fallback stays where `main` put it, on the whole payload, so a space-separated fragment is
-        // never promoted to a reference of its own.
-        if (isValidMedia(candidate, { allowSpaces, allowBareFilename: quotedList !== null })) {
-          media.push(candidate);
-          hasValidMedia = true;
-          foundMediaToken = true;
-          validCount += 1;
-        } else if (!/\s/.test(part) || !hasTraversalOrUnsupportedHomeDirPrefix(candidate)) {
-          invalidParts.push(part);
-        }
+    const payload = expectDefined(match[1], "parse regex capture 1");
+    const quotedList = readQuotedMediaReferenceList(payload);
+    const stripped = unwrapQuoted(payload);
+    const unwrapped = quotedList ? undefined : stripped;
+    const payloadValue = unwrapped ?? payload;
+    const parts = quotedList ?? (unwrapped ? [unwrapped] : splitMediaDirectiveParts(payload));
+    const mediaStartIndex = media.length;
+    const invalidParts: string[] = [];
+    for (const part of parts) {
+      // Quoted references preserve punctuation, including signed URL suffixes.
+      const quotedPart = unwrapped === undefined ? unwrapQuoted(part) : undefined;
+      const candidate = unwrapped ?? quotedPart ?? cleanCandidate(part);
+      if (isValidMedia(candidate, { allowSpaces: true, allowBareFilename: quotedList !== null })) {
+        media.push(candidate);
+      } else if (!/\s/.test(part) || !hasTraversalOrUnsupportedHomeDirPrefix(candidate)) {
+        invalidParts.push(part);
       }
-
-      const trimmedPayload = (stripped ?? payload).trim();
-      const looksLikeLocalPath =
-        looksLikeLocalFilePath(trimmedPayload) || FILE_URL_PREFIX_RE.test(trimmedPayload);
-      if (
-        quotedList === null &&
-        !unwrapped &&
-        validCount === 1 &&
-        invalidParts.length > 0 &&
-        !parts.slice(1).some(beginsIndependentMediaSource) &&
-        /\s/.test(payloadValue) &&
-        looksLikeLocalPath
-      ) {
-        // A single valid split plus invalid leftovers can be one local path containing spaces. A list is
-        // excluded: its quote pairs already fixed where each reference ends, so the leftovers are not
-        // fragments of the accepted one, and welding them on would turn `MEDIA:"/tmp/first.png" "second.png"`
-        // into `/tmp/first.png" "second.png` — a path that does not exist. This is the reconstruction
-        // `main` performs on a payload it reads as one quoted value, and it stays available for exactly
-        // those payloads.
-        const fallback = cleanCandidate(payloadValue);
-        if (isValidMedia(fallback, { allowSpaces: true })) {
-          media.splice(mediaStartIndex, media.length - mediaStartIndex, fallback);
-          hasValidMedia = true;
-          foundMediaToken = true;
-          invalidParts.length = 0;
-        }
-      }
-
-      // A list gets no whole-payload reading at all: its quote pairs already fixed where every reference
-      // ends, so a list whose members all failed states no reference and stays the text it was. Cleaning
-      // the payload anyway welded the rejects into `first.png," "second.png` for
-      // `MEDIA:"first.png," "second.png,"` — a name no member states, which the base rejects. Payloads
-      // `main` reads as one value keep this step, bare-filename fallback included.
-      if (quotedList === null && !hasValidMedia) {
-        const fallback = unwrapped ?? cleanCandidate(payloadValue);
-        if (isValidMedia(fallback, { allowSpaces: true, allowBareFilename: true })) {
-          media.push(fallback);
-          hasValidMedia = true;
-          foundMediaToken = true;
-          invalidParts.length = 0;
-        }
-      }
-
-      if (hasValidMedia) {
-        const beforeText = cleanLineText(pieces.join(""));
-        if (beforeText) {
-          lineSegments.push({ type: "text", text: beforeText });
-        }
-        pieces.length = 0;
-        for (const url of media.slice(mediaStartIndex)) {
-          lineSegments.push({ type: "media", url });
-        }
-        if (invalidParts.length > 0) {
-          pieces.push(invalidParts.join(" "));
-        }
-      } else if (looksLikeLocalPath) {
-        // Strip MEDIA: lines with local paths even when invalid (e.g. absolute paths
-        // from internal tools like TTS). They should never leak as visible text.
-        foundMediaToken = true;
-      } else {
-        pieces.push(match[0]);
-      }
-
-      cursor = start + match[0].length;
     }
 
-    pieces.push(line.slice(cursor));
+    const trimmedPayload = (stripped ?? payload).trim();
+    const looksLikeLocalPath =
+      looksLikeLocalFilePath(trimmedPayload) || FILE_URL_PREFIX_RE.test(trimmedPayload);
+    if (
+      quotedList === null &&
+      !unwrapped &&
+      media.length - mediaStartIndex === 1 &&
+      invalidParts.length > 0 &&
+      !parts.slice(1).some(beginsIndependentMediaSource) &&
+      /\s/.test(payloadValue) &&
+      looksLikeLocalPath
+    ) {
+      // Unquoted fragments can belong to one local filename; explicit list members cannot.
+      const fallback = cleanCandidate(payloadValue);
+      if (isValidMedia(fallback, { allowSpaces: true })) {
+        media.splice(mediaStartIndex, media.length - mediaStartIndex, fallback);
+        invalidParts.length = 0;
+      }
+    }
 
-    const cleanedLine = cleanLineText(pieces.join(""));
+    // Never weld rejected list members into a synthetic whole-payload filename.
+    if (quotedList === null && media.length === mediaStartIndex) {
+      const fallback = unwrapped ?? cleanCandidate(payloadValue);
+      if (isValidMedia(fallback, { allowSpaces: true, allowBareFilename: true })) {
+        media.push(fallback);
+        invalidParts.length = 0;
+      }
+    }
 
+    let cleanedLine: string;
+    if (media.length > mediaStartIndex) {
+      foundMediaToken = true;
+      for (const url of media.slice(mediaStartIndex)) {
+        segments.push({ type: "media", url });
+      }
+      cleanedLine = cleanLineText(invalidParts.join(" "));
+    } else if (looksLikeLocalPath) {
+      // Invalid local references must not leak internal tool paths as visible text.
+      foundMediaToken = true;
+      cleanedLine = "";
+    } else {
+      cleanedLine = cleanLineText(line);
+    }
     if (cleanedLine) {
       keptLines.push(cleanedLine);
-      lineSegments.push({ type: "text", text: cleanedLine });
+      pushTextSegment(cleanedLine);
     }
-    for (const segment of lineSegments) {
-      if (segment.type === "text") {
-        pushTextSegment(segment.text);
-        continue;
-      }
-      segments.push(segment);
-    }
-    lineOffset += line.length + 1; // +1 for newline
+    lineOffset += line.length + 1;
   }
 
   const visibleText = keptLines.join("\n").replace(/^(?:[ \t]*\n)+/, "");

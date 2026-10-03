@@ -82,6 +82,7 @@ export type SidebarLifecycleState = HTMLElement & {
   ) => void;
   dismissTransientMenus: () => boolean;
   readonly sessionData: SessionDataController;
+  readonly sidebarMenus: AppSidebarSessionNavigationElement["sidebarMenus"];
   findSidebarSessionByKey: AppSidebarSessionNavigationElement["findSidebarSessionByKey"];
   findSidebarHovercardRowByKey: AppSidebarSessionNavigationElement["findSidebarHovercardRowByKey"];
   readonly sessionOrganizer: SessionOrganizerController;
@@ -618,12 +619,11 @@ export async function mountSidebarContext(
   await sidebar.updateComplete;
   const sidebarWithPreloads = sidebar as unknown as {
     preloadCatalogRenderer: () => Promise<unknown>;
-    sidebarMenus: { preloadMenuRenderer: () => Promise<unknown> };
   };
   await Promise.all([
     import("../components/app-sidebar-session-narration.ts"),
     sidebarWithPreloads.preloadCatalogRenderer(),
-    sidebarWithPreloads.sidebarMenus.preloadMenuRenderer(),
+    sidebar.sidebarMenus.preloadMenuRenderer(),
   ]);
   await sidebar.updateComplete;
   if (sidebar.querySelector("openclaw-channel-avatar")) {

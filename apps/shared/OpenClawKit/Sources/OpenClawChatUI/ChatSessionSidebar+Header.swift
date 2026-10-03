@@ -55,7 +55,8 @@ extension ChatSessionSidebar {
             Text("Threads")
                 .font(OpenClawChatTypography.body(size: 12, weight: .semibold, relativeTo: .body))
             Spacer(minLength: 8)
-            Text(verbatim: self.viewModel.selectedAgent?.displayName ?? self.viewModel.selectedAgentID ?? "")
+            Text(verbatim: self.showsAllAgents ? String(localized: "All agents") :
+                self.viewModel.selectedAgent?.displayName ?? self.viewModel.selectedAgentID ?? "")
                 .font(OpenClawChatTypography.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -196,15 +197,45 @@ extension ChatSessionSidebar {
 struct ChatSidebarAgentAvatar: View {
     let agent: OpenClawChatAgentChoice
     var size: CGFloat = 28
+    @Environment(\.sidebarAgentAvatarProvider) private var provider
+    @State private var image: NSImage?
+    @State private var loadedRequest: Request?
+
+    private struct Request: Equatable {
+        let scope: ChatSidebarAgentAvatarProvider.Scope?
+        let agentID: String
+        let source: String?
+    }
 
     var body: some View {
-        Text(verbatim: self.agent.avatarText)
-            .font(OpenClawChatTypography.navigationAvatar(size: self.size * 0.5))
-            .lineLimit(1)
-            .minimumScaleFactor(0.7)
-            .frame(width: self.size, height: self.size)
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: self.size * 0.3))
-            .accessibilityHidden(true)
+        let request = Request(scope: self.provider?.scope, agentID: self.agent.id, source: self.agent.avatar)
+        ZStack {
+            if self.loadedRequest == request, let image {
+                Image(nsImage: image).resizable().scaledToFill()
+            } else {
+                Text(verbatim: self.agent.avatarText)
+                    .font(OpenClawChatTypography.navigationAvatar(size: self.size * 0.5))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+        }
+        .frame(width: self.size, height: self.size)
+        .background(.quaternary)
+        .clipShape(RoundedRectangle(cornerRadius: self.size * 0.3))
+        .accessibilityHidden(true)
+        .task(id: request) {
+            self.image = nil
+            self.loadedRequest = nil
+            guard let provider, let source = request.source else { return }
+            let data: Data? = if let inline = OpenClawSidebarAgentAvatarSource.inlineData(source) {
+                inline
+            } else {
+                await provider.transport.loadSidebarAgentAvatar(source)
+            }
+            guard let data, !Task.isCancelled else { return }
+            self.image = NSImage(data: data)
+            self.loadedRequest = request
+        }
     }
 }
 #endif

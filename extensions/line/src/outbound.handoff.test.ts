@@ -59,6 +59,7 @@ const to = "U0123456789abcdef0123456789abcdef";
 const mediaUrl = "https://93.184.216.34/picture.png";
 const routes = ["message-text", "message-media", "payload", "outbound-media"] as const;
 type Route = (typeof routes)[number];
+type HandoffChannel = Pick<ChannelPlugin, "id" | "message" | "outbound">;
 type WireRequest = {
   to: string;
   messages: Array<{ type: string; text?: string; quoteToken?: string }>;
@@ -66,7 +67,7 @@ type WireRequest = {
 
 describe("registered LINE send handoff", () => {
   let server: Server;
-  let plugin: ChannelPlugin;
+  let plugin: HandoffChannel;
   let controller: AbortController;
   let requests: WireRequest[];
   let onRequest: ((request: WireRequest) => number) | undefined;
@@ -135,7 +136,7 @@ describe("registered LINE send handoff", () => {
         },
       },
     } as unknown as PluginRuntime;
-    const registered: ChannelPlugin[] = [];
+    const registered: HandoffChannel[] = [];
     lineEntry.loadChannelPlugin(entryLoadOptions);
     loadBundledEntryExportSync(
       new URL("../index.js", import.meta.url).href,

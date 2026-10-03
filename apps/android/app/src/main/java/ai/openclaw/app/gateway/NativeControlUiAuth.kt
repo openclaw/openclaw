@@ -51,19 +51,7 @@ internal fun buildNativeControlUiConnectAuth(
   val signature = checkNotNull(identityStore.signPayload(payload, identity)) { "Native device signing unavailable" }
   val publicKey = checkNotNull(identityStore.publicKeyBase64Url(identity)) { "Native device identity unavailable" }
   return buildJsonObject {
-    put(
-      "client",
-      buildJsonObject {
-        put("id", client.id)
-        put("mode", client.mode)
-        put("platform", client.platform)
-        put("version", client.version)
-        client.deviceFamily?.let { put("deviceFamily", it) }
-        client.instanceId?.let { put("instanceId", it) }
-        client.displayName?.let { put("displayName", it) }
-        client.modelIdentifier?.let { put("modelIdentifier", it) }
-      },
-    )
+    put("client", client.toJsonObject())
     put("scopes", JsonArray(scopes.map(::JsonPrimitive)))
     put(
       "auth",

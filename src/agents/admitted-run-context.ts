@@ -21,6 +21,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
 
 /** Operational lifecycle correlation. This is never identity or authorization evidence. */
@@ -61,7 +62,11 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   onModelPolicyChanged?: (listener: () => void) => () => void;
 }>;
 
-const operatorAuthorityIssuers = new WeakSet<object>();
+// Source and bundled module instances must recognize the same host-issued object.
+const operatorAuthorityIssuers = resolveGlobalSingleton(
+  Symbol.for("openclaw.admittedRunOperatorAuthority.issuers"),
+  () => new WeakSet<object>(),
+);
 
 /** Host-only construction; public reply options cannot manufacture a source capability. */
 export function createAdmittedRunOperatorAuthority(

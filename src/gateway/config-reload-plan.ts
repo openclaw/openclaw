@@ -1,8 +1,5 @@
-import {
-  type ChannelId,
-  type ChannelPlugin,
-  listChannelPlugins,
-} from "../channels/plugins/index.js";
+import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginLifecycleReason } from "../plugins/lifecycle.js";
 import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../plugins/runtime.js";

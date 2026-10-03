@@ -246,10 +246,10 @@ describe("worker placement idle suspension", () => {
           },
         });
         if (kind === "pending-result") {
-          placements.markWorkspaceResultPending(claim);
+          await placements.markWorkspaceResultPending(claim);
           placements.clearLocalTurnClaimsAfterRestart();
           expect(placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
-          expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
         }
       } else if (kind === "reconciling-result") {
         const basePack = Buffer.from("idle workspace journal");

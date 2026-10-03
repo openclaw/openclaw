@@ -664,7 +664,7 @@ merge_run() {
     merge_outcome_resume "$pr"
     return
   fi
-  if [ "$auto_merge_requested" = true ] || [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ] || [ "${OPENCLAW_PR_MERGE_METHOD:-squash}" != squash ]; then
+  if [ -n "$recovery_record" ] || [ "$auto_merge_requested" = true ] || [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ] || [ "${OPENCLAW_PR_MERGE_METHOD:-squash}" != squash ]; then
     MERGE_TRANSPORT=graphql
   fi
   review_artifact_preflight "$pr" prepared || return 1

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
@@ -12,8 +13,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { addSessionSuggestion } from "../../config/sessions/session-suggestion-store.js";
 import { listSessionSuggestions } from "../../config/sessions/session-suggestion-store.read.js";
+import { observeSqliteWalPeriodicWork } from "../../infra/sqlite-wal-scheduler.test-support.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import * as agentWriteAdmission from "../../state/openclaw-agent-write-admission.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { getSessionSuggestionTestMocks } from "./sessions-suggestions.test-mocks.js";
@@ -39,6 +42,16 @@ describe("suggestions queued behind provider review", () => {
         const metadataWrites =
           await import("../../config/sessions/session-metadata-write.async.js");
         const scope = { agentId: "main", sessionKey, env: state.env };
+        openOpenClawStateDatabase({ env: state.env });
+        const scheduled = observeSqliteWalPeriodicWork();
+        const database = (() => {
+          try {
+            return openOpenClawAgentDatabase(scope);
+          } finally {
+            scheduled.restore();
+          }
+        })();
+        const periodic = scheduled.periodic;
         await upsertSessionEntryCore(scope, {
           sessionId: "provider-review-suggestion",
           lifecycleRevision: "provider-review-generation",
@@ -51,7 +64,6 @@ describe("suggestions queued behind provider review", () => {
         if (!originalSessionId) {
           throw new Error("expected a seeded suggestion session");
         }
-        const database = openOpenClawAgentDatabase(scope);
         const options = { ...scope, path: database.path };
         const id = "queued-provider-review-suggestion";
         if (action !== "add") {
@@ -63,6 +75,7 @@ describe("suggestions queued behind provider review", () => {
         const release = createDeferred();
         const metadataQueued = createDeferred();
         let blocker: Promise<void> | undefined;
+        let maintenance: Promise<unknown> | undefined;
         let review: ReturnType<typeof compareSessionProviderReview> | undefined;
         let request: ReturnType<typeof call> | undefined;
         const providerReview: SessionProviderReview = {
@@ -81,27 +94,35 @@ describe("suggestions queued behind provider review", () => {
           });
           await withinTest(entered.promise, signal);
           const reviewQueued = createDeferred();
+          // Target discovery yields before review admission; unrelated writers are not this gate.
+          const reviewScope = new AsyncLocalStorage<boolean>();
           const enqueueWrite = agentWriteAdmission.runOpenClawAgentWorkerWrite;
           const observeReview = vi
             .spyOn(agentWriteAdmission, "runOpenClawAgentWorkerWrite")
-            .mockImplementationOnce((...args) => {
+            .mockImplementation((...args) => {
               const pending = enqueueWrite(...args);
-              reviewQueued.resolve();
+              if (reviewScope.getStore()) {
+                reviewQueued.resolve();
+              }
               return pending;
             });
           try {
-            review = compareSessionProviderReview(
-              {
-                ...scope,
-                storePath: database.path,
-                sessionId: originalSessionId,
-                lifecycleRevision: originalEntry.lifecycleRevision,
-              },
-              {
-                expectedReview: undefined,
-                nextReview: providerReview,
-                assertCurrent: () => signal.throwIfAborted(),
-              },
+            // A real maintenance writer must not release the review-specific queue barrier.
+            maintenance = Promise.resolve(periodic());
+            review = reviewScope.run(true, () =>
+              compareSessionProviderReview(
+                {
+                  ...scope,
+                  storePath: database.path,
+                  sessionId: originalSessionId,
+                  lifecycleRevision: originalEntry.lifecycleRevision,
+                },
+                {
+                  expectedReview: undefined,
+                  nextReview: providerReview,
+                  assertCurrent: () => signal.throwIfAborted(),
+                },
+              ),
             );
             await withinTest(
               awaitGateBeforeSettlement(
@@ -113,6 +134,7 @@ describe("suggestions queued behind provider review", () => {
             );
           } finally {
             observeReview.mockRestore();
+            reviewScope.disable();
           }
         };
         if (action === "add") {
@@ -205,7 +227,7 @@ describe("suggestions queued behind provider review", () => {
           );
         } finally {
           release.resolve();
-          await Promise.allSettled([blocker, review, request]);
+          await Promise.allSettled([blocker, review, request, maintenance]);
         }
       });
     },

@@ -72,7 +72,8 @@ function sessionsPage(options: { boardId?: string; gatewayId?: string; profileId
         reason: "Reviewed",
       },
     ],
-    warning: "Utility model temporarily unavailable",
+    warning:
+      "Session facts are unavailable for 2 sessions: Gateway disconnected. Showing the last known placement.",
   };
   const page = mountPage({ boardId: board.id });
   const request = expectDefined(page.request.getMockImplementation(), "request");
@@ -290,6 +291,25 @@ function button(page: ReturnType<typeof mountPage>, label: string) {
   );
 }
 
+it("shows the facts failure reason on an empty board and rereads on plugin changes", async () => {
+  const page = sessionsPage();
+  const sessions = page.result.sessions.splice(0);
+  await page.connect();
+  const statuses = () =>
+    [...page.container.querySelectorAll('[role="status"]')].map((entry) =>
+      entry.textContent?.trim(),
+    );
+  expect(statuses()).toContain(page.result.warning);
+  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(0);
+
+  page.result.sessions.push(...sessions);
+  delete page.result.warning;
+  page.fixture.emit("plugin.workboard.changed", { epoch: "facts", revision: 1 });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(2);
+  expect(statuses()).toEqual([]);
+});
+
 it("renders session columns, owner avatars and canonical facts without card controls or an unavailable dock", async () => {
   const page = sessionsPage();
   await page.connect();
@@ -307,7 +327,7 @@ it("renders session columns, owner avatars and canonical facts without card cont
     page.container.querySelector('[data-session-key="agent:writer:done"]')?.getAttribute("title"),
   ).toContain("pinned");
   expect(page.container.querySelector('[role="status"]')?.textContent).toContain(
-    "Utility model temporarily unavailable",
+    "Gateway disconnected",
   );
   expect(page.fixture.host.components.mountAgentAvatar).toHaveBeenCalledWith(
     expect.any(HTMLElement),
@@ -315,7 +335,7 @@ it("renders session columns, owner avatars and canonical facts without card cont
   );
   expect(
     page.container.querySelector(
-      ".workboard-create, .workboard-dispatch, .workboard-card, .workboard-status-tabs, .workboard-board-agent",
+      ".workboard-create, .workboard-dispatch, .workboard-card, .workboard-status-tabs, .workboard-board-agent, .workboard-refresh",
     ),
   ).toBeNull();
   expectDefined(
@@ -338,7 +358,7 @@ it("renders session columns, owner avatars and canonical facts without card cont
   expect(page.container.textContent).not.toContain("Fix retries");
 });
 
-it("moves a dragged session through the placement RPC and refreshes through the board classifier", async () => {
+it("pins a dragged session and rereads the selected people view", async () => {
   const page = sessionsPage();
   await page.connect();
   peoplePicker(page).onSelect("me");
@@ -356,11 +376,6 @@ it("moves a dragged session through the placement RPC and refreshes through the 
     sessionKey: "agent:main:working",
     columnId: "done",
   });
-  button(page, "Refresh").click();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(page.request).toHaveBeenCalledWith("workboard.sessionsBoard.refresh", {
-    boardId: "sessions",
-  });
   expect(page.request).toHaveBeenLastCalledWith("workboard.sessionsBoard.read", {
     boardId: "sessions",
     view: { includePeople: true, involvingMe: true },
@@ -368,27 +383,20 @@ it("moves a dragged session through the placement RPC and refreshes through the 
   expect(page.request.mock.calls.some(([method]) => method === "workboard.cards.move")).toBe(false);
 });
 
-it("coalesces observer events for visible sessions and rereads canonical placements on board changes", async () => {
+it("rereads canonical facts through plugin changes without a second observer refresh", async () => {
   const page = sessionsPage();
   await page.connect();
   peoplePicker(page).onSelect("me");
   await vi.advanceTimersByTimeAsync(0);
   page.request.mockClear();
-  page.fixture.emit("session.observer", { sessionKey: "agent:other:unseen" });
-  await vi.advanceTimersByTimeAsync(1000);
-  expect(page.reads()).toBe(0);
   page.result.sessions[0]!.observerDigest!.headline = "New canonical headline";
-  for (let revision = 1; revision <= 3; revision += 1) {
-    page.fixture.emit("session.observer", { sessionKey: "agent:main:working", revision });
-  }
-  await vi.advanceTimersByTimeAsync(999);
-  expect(page.reads()).toBe(0);
-  await vi.advanceTimersByTimeAsync(1);
-  expect(page.reads()).toBe(1);
-  expect(page.container.textContent).toContain("New canonical headline");
+  page.fixture.emit("session.observer", { sessionKey: "agent:main:working", revision: 1 });
   page.fixture.emit("plugin.workboard.changed", { epoch: "current", revision: 1 });
   await vi.advanceTimersByTimeAsync(0);
-  expect(page.reads()).toBe(2);
+  expect(page.reads()).toBe(1);
+  expect(page.container.textContent).toContain("New canonical headline");
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(page.reads()).toBe(1);
   expect(page.request).toHaveBeenLastCalledWith("workboard.sessionsBoard.read", {
     boardId: "sessions",
     view: { includePeople: true, involvingMe: true },
@@ -446,6 +454,10 @@ it("creates a sessions board from the default Cards kind without submitting clie
 
 it("validates session columns inline and preserves their ids and rules when labels change", async () => {
   const page = sessionsPage();
+  expectDefined(page.board.sessions.columns[0], "working column").match = [
+    { run: ["active"] },
+    { health: ["on-track"] },
+  ];
   await page.connect();
   button(page, "Edit board").click();
   await vi.advanceTimersByTimeAsync(0);
@@ -467,12 +479,6 @@ it("validates session columns inline and preserves their ids and rules when labe
   );
   label.value = "Building";
   label.dispatchEvent(new Event("input", { bubbles: true }));
-  const instructions = expectDefined(
-    form.querySelector<HTMLTextAreaElement>('textarea[aria-label="Classification instructions"]'),
-    "instructions",
-  );
-  instructions.value = "Keep docs in review until checked";
-  instructions.dispatchEvent(new Event("input", { bubbles: true }));
   form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   await vi.advanceTimersByTimeAsync(0);
   expect(page.request).toHaveBeenCalledWith("workboard.sessionsBoard.update", {
@@ -482,7 +488,6 @@ it("validates session columns inline and preserves their ids and rules when labe
         { ...page.board.sessions.columns[0], label: "Building" },
         page.board.sessions.columns[1],
       ],
-      instructions: "Keep docs in review until checked",
     },
   });
 });

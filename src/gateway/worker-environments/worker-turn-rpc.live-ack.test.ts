@@ -30,8 +30,8 @@ async function recoveredTurn(ackedSeq = 5) {
     rejectExistingWorkerClaims: true,
   });
   expect(placementStore.validateWorkerTurn(previous.claim)).toBe(false);
-  placements.acceptWorkspaceResult(previous.claim);
-  placements.completeWorkspaceResultAndReleaseTurn(previous.claim);
+  await placements.acceptWorkspaceResult(previous.claim);
+  await placements.completeWorkspaceResultAndReleaseTurn(previous.claim);
   const target = {
     agentId: "main",
     sessionId,
@@ -87,7 +87,7 @@ describe("worker live ACK ownership", () => {
       ),
     ).resolves.toEqual({ ok: true, result: { ackedSeq: 7 } });
     expect(placements.get(identity.sessionId!)?.lastLiveEventAckCursor).toBe(7);
-    expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
   });
 
   it.each([0, 5])(
@@ -103,7 +103,7 @@ describe("worker live ACK ownership", () => {
         ok: false,
         details: { reason: "resync-required", ackedSeq, expectedSeq: ackedSeq + 1 },
       });
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.get(identity.sessionId!)?.lastLiveEventAckCursor).toBe(ackedSeq);
     },
   );
@@ -123,7 +123,7 @@ describe("worker live ACK ownership", () => {
           support.terminalEvent(identity, { seq: 5, lastAckedSeq: 5 }),
         ),
       ).resolves.toEqual({ ok: true, result: { ackedSeq: 5 } });
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       await expect(
         workerService.pushLiveEvent(
           identity,
@@ -158,7 +158,7 @@ describe("worker live ACK ownership", () => {
         ),
       ).resolves.toEqual({ ok: true, result: { ackedSeq: seq } });
     }
-    expect(placements.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
     await expect(
       workerService.pushLiveEvent(
         identity,

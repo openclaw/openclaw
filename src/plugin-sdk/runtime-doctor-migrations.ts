@@ -72,6 +72,7 @@ export { resolveLegacyMigrationSourcePath } from "../infra/state-migrations.sour
 export type { ChannelIngressLegacyEntry } from "../channels/message/ingress-queue.migration.js";
 export { buildLegacyMigrationPreview } from "../channels/plugins/legacy-state-migration-preview.js";
 export { definePluginDoctorMigrationFromPlans } from "./doctor-migration-plan-adapter.js";
+export { defineRetiredPluginStateMigration } from "../plugins/doctor-retired-state.js";
 export { createLegacyWebhookListenerDoctorContract } from "./legacy-webhook-listener-migration.js";
 export type { DoctorSessionRouteStateOwner } from "../plugins/doctor-session-route-state-owner-types.js";
 

@@ -124,6 +124,58 @@ describe("legacy state dir auto-migration", () => {
     },
   );
 
+  it.each(
+    (["explicit", "legacy"] as const).flatMap((location) =>
+      ["delivery-queue/pending.json", "session-delivery-queue/pending.json"].map(
+        (relativePath) => ({ location, relativePath }),
+      ),
+    ),
+  )(
+    "refuses retired $relativePath in the $location state dir without relocation or archival",
+    async ({ location, relativePath }) => {
+      await withStateDirFixture(async (root) => {
+        const legacyDir = path.join(root, ".clawdbot");
+        const targetDir = path.join(root, ".openclaw");
+        const stateDir = location === "explicit" ? path.join(root, "custom-state") : legacyDir;
+        const sourcePath = path.join(stateDir, relativePath);
+        const sourceBytes = Buffer.from('{"id":"retired","payloads":[{"text":"preserve"}]}\n');
+        fs.mkdirSync(legacyDir, { recursive: true });
+        fs.writeFileSync(path.join(legacyDir, "marker.txt"), "ok", "utf8");
+        fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+        fs.writeFileSync(sourcePath, sourceBytes);
+        const params = {
+          env: location === "explicit" ? { OPENCLAW_STATE_DIR: stateDir } : {},
+          homedir: () => root,
+        };
+
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const migration = autoMigrateLegacyStateDir(params);
+          await expect(migration).rejects.toMatchObject({
+            message: expect.stringContaining(sourcePath),
+          });
+          await expect(migration).rejects.toThrow(/July 1, 2026.*OpenClaw 2026\.9\.7/);
+          expect(fs.readFileSync(sourcePath)).toEqual(sourceBytes);
+          expect(fs.readdirSync(path.dirname(sourcePath))).toEqual([path.basename(sourcePath)]);
+          expect(fs.lstatSync(legacyDir).isSymbolicLink()).toBe(false);
+          expect(fs.readFileSync(path.join(legacyDir, "marker.txt"), "utf8")).toBe("ok");
+          expect(fs.existsSync(targetDir)).toBe(false);
+        }
+
+        fs.renameSync(sourcePath, path.join(root, "retired-source.backup.json"));
+        const recovered = await autoMigrateLegacyStateDir(params);
+        expect(recovered).toMatchObject({
+          migrated: location === "legacy",
+          skipped: location === "explicit",
+          warnings: [],
+        });
+        if (location === "legacy") {
+          expect(fs.realpathSync(legacyDir)).toBe(fs.realpathSync(targetDir));
+          expect(fs.readFileSync(path.join(targetDir, "marker.txt"), "utf8")).toBe("ok");
+        }
+      });
+    },
+  );
+
   it("only runs once per process until reset", async () => {
     await withStateDirFixture(async (root) => {
       const legacyDir = path.join(root, ".clawdbot");

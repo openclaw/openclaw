@@ -2521,6 +2521,23 @@ openclaw-settings-save-indicator:empty {
   border-radius: 0;
 }
 
+.sidebar-online__filter-toggle {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sidebar-online:where(:hover, :has(:focus-visible)) .sidebar-online__filter-toggle {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .sidebar-online__filter-toggle {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
 .sidebar-online__list {
   display: flex;
   flex-direction: column;
@@ -2639,6 +2656,10 @@ openclaw-settings-save-indicator:empty {
 .sidebar-online__person:hover .sidebar-online__counts,
 .sidebar-online__person:focus-visible .sidebar-online__counts {
   background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.sidebar-online__count {
+  font-variant-numeric: tabular-nums;
 }
 
 .sidebar-online__open,

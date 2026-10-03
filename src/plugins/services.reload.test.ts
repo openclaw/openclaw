@@ -13,10 +13,9 @@ import { resetPluginRuntimeStateForTest } from "./runtime.js";
 import { listPluginServiceHealthFailures } from "./service-health.js";
 import {
   PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
-  startPluginServices,
   type PluginServicesHandle,
 } from "./services.js";
-import { createRegistry } from "./services.test-support.js";
+import { createRegistry, startPluginServices } from "./services.test-support.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import type { OpenClawPluginServiceContext } from "./types.js";
 

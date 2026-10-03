@@ -50,7 +50,10 @@ export type SessionPendingInputOwner = {
   transcriptInputId: string;
   sessionId: string;
   sessionKey: string;
+  /** Native cache locator; may be the process-held incognito sentinel. */
   databasePath: string;
+  /** Prepared physical locator serialized only to a database worker. */
+  workerDatabasePath: string;
   idempotencyKey: string;
   lifecycleGeneration: string;
   messageJson: string;
@@ -102,7 +105,7 @@ export function captureSessionPendingInputWorkerCustody() {
     transcriptInputId: current.transcriptInputId,
     sessionId: current.sessionId,
     sessionKey: current.sessionKey,
-    databasePath: current.databasePath,
+    databasePath: current.workerDatabasePath,
     idempotencyKey: current.idempotencyKey,
     lifecycleGeneration: current.lifecycleGeneration,
     messageJson: current.messageJson,
@@ -134,6 +137,7 @@ export function runWithSessionPendingInputWorkerCustody<T>(
 ): { value: T; receipt: SessionPendingInputWorkerReceipt } {
   const hydrate = (current: SessionPendingInputWorkerFacts): SessionPendingInputOwner => ({
     ...current,
+    workerDatabasePath: current.databasePath,
     sources: current.sources?.map(hydrate),
     assertCurrent,
     finish: () => {

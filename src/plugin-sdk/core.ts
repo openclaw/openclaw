@@ -51,6 +51,8 @@ export type {
   OpenClawPluginDefinition,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
+  OpenClawPluginServiceContextV2,
+  OpenClawPluginServiceV2,
   PluginCommandContext,
   PluginCommandResult,
   PluginAgentEventEmitParams,
@@ -68,6 +70,7 @@ export type {
   PluginRunContextGetParams,
   PluginRunContextPatch,
   PluginRuntimeLifecycleRegistration,
+  PluginServiceSchedulerV1,
   PluginSessionActionContext,
   PluginSessionActionRegistration,
   PluginSessionActionResult,
@@ -565,16 +568,8 @@ export function defineSetupPluginEntry<TPlugin>(plugin: TPlugin) {
   return { plugin };
 }
 
-type ChatChannelPluginBase<TResolvedAccount, Probe, Audit> = Omit<
-  ChannelPlugin<TResolvedAccount, Probe, Audit>,
-  "capabilities" | "security" | "pairing" | "threading" | "outbound"
-> &
-  Partial<
-    Pick<
-      ChannelPlugin<TResolvedAccount, Probe, Audit>,
-      "capabilities" | "security" | "pairing" | "threading" | "outbound"
-    >
-  >;
+type ChatChannelPluginBase<Plugin> = Omit<Plugin, "capabilities"> &
+  Partial<Pick<ChannelPlugin, "capabilities">>;
 
 type ChatChannelSecurityOptions<TResolvedAccount extends { accountId?: string | null }> = {
   dm: {
@@ -712,15 +707,16 @@ export function createChatChannelPlugin<
   TResolvedAccount extends { accountId?: string | null },
   Probe = unknown,
   Audit = unknown,
+  GatewayVersion extends 1 | 2 = 1,
 >(params: {
-  base: ChatChannelPluginBase<TResolvedAccount, Probe, Audit>;
+  base: ChatChannelPluginBase<ChannelPlugin<TResolvedAccount, Probe, Audit, GatewayVersion>>;
   security?:
     | ChannelSecurityAdapter<TResolvedAccount>
     | ChatChannelSecurityOptions<TResolvedAccount>;
   pairing?: ChannelPairingAdapter | ChatChannelPairingOptions;
   threading?: ChannelThreadingAdapter | ChatChannelThreadingOptions<TResolvedAccount>;
   outbound?: ChannelOutboundAdapter | ChatChannelAttachedOutboundOptions;
-}): ChannelPlugin<TResolvedAccount, Probe, Audit> {
+}): ChannelPlugin<TResolvedAccount, Probe, Audit, GatewayVersion> {
   return {
     ...params.base,
     capabilities: params.base.capabilities ?? { chatTypes: ["direct"] },
@@ -732,7 +728,7 @@ export function createChatChannelPlugin<
     ...(params.pairing ? { pairing: resolveChatChannelPairing(params.pairing) } : {}),
     ...(params.threading ? { threading: resolveChatChannelThreading(params.threading) } : {}),
     ...(params.outbound ? { outbound: resolveChatChannelOutbound(params.outbound) } : {}),
-  } as ChannelPlugin<TResolvedAccount, Probe, Audit>;
+  };
 }
 
 /** Create the shared base object for channel plugins that override only selected surfaces. */
@@ -766,3 +762,8 @@ export function createChannelPluginBase<TResolvedAccount>(
   } as CreatedChannelPluginBase<TResolvedAccount>;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+export type {
+  ChannelGatewayContextV2,
+  ChannelGatewayAdapterV2,
+} from "../channels/plugins/types.adapters.js";

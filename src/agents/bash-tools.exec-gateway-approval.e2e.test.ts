@@ -93,7 +93,10 @@ describe("gateway-hosted exec approvals", () => {
         agents: {
           ownership: "explicit",
           defaults: { workspace: workspaceDir },
-          list: [{ id: "main", tools: { exec: { cleanupMs: 180_000 } } }, { id: "helper" }],
+          entries: {
+            main: { tools: { exec: { cleanupMs: 180_000 } } },
+            helper: {},
+          },
         },
         gateway: {
           port: claim.port,

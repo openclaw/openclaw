@@ -70,6 +70,17 @@ describe("tool terminal outcome observer", () => {
             providerRequests.length === 1
               ? {
                   content: [
+                    // A blocked call does not start the plan, so an executed call precedes it.
+                    ...(firstOutcome === "blocked"
+                      ? [
+                          {
+                            type: "toolCall" as const,
+                            id: "call-started",
+                            name: "exec",
+                            arguments: {},
+                          },
+                        ]
+                      : []),
                     { type: "toolCall", id: "call-first", name: "exec", arguments: {} },
                     { type: "toolCall", id: "call-second", name: "exec", arguments: {} },
                   ],
@@ -107,7 +118,7 @@ describe("tool terminal outcome observer", () => {
         await run;
         await subscription.waitForPendingEvents();
 
-        expect(execute).toHaveBeenCalledTimes(firstOutcome === "blocked" ? 0 : 1);
+        expect(execute).toHaveBeenCalledTimes(1);
         expect(providerRequests).toHaveLength(2);
         expect(providerRequests[1]?.slice(-2)).toMatchObject([
           {

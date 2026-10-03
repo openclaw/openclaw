@@ -24,7 +24,7 @@ import {
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../src/config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import type { WorkerConnectionIdentity } from "../src/gateway/worker-environments/connection-identity.js";
-import { createWorkerTranscriptCommitStore } from "../src/gateway/worker-environments/transcript-commit-store.js";
+import { createWorkerTranscriptCommitStore } from "../src/gateway/worker-environments/transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "../src/gateway/worker-environments/transcript-commit.js";
 import { onSessionTranscriptUpdate } from "../src/sessions/transcript-events.js";
 import { openOpenClawStateDatabase } from "../src/state/openclaw-state-db.js";

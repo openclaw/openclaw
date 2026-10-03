@@ -26,7 +26,7 @@ extension DashboardWindowController {
 
     func canUseDeviceSettings(sourceID: String) -> Bool {
         !Task.isCancelled && self.notificationSourceID == sourceID && self.isWindowOpen &&
-            !self.isShowingFailurePage && self.hasCurrentBrowserSession &&
+            !self.isShowingFailurePage && self.documentHost.hasCurrentBrowserSession &&
             ControlUIDocumentHost.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
     }
 

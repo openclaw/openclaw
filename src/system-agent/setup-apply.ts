@@ -502,7 +502,7 @@ export async function applySystemAgentSetup(
         agentId: effectiveAgentId,
         skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
         skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
-        beforePersistentApply,
+        guard: { assertHost: beforePersistentApply },
       }),
     (error) => lines.push(`Workspace files: ${formatErrorMessage(error)}`),
   );

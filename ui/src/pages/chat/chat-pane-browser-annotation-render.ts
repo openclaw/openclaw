@@ -13,7 +13,7 @@ export abstract class ChatPaneBrowserAnnotationRender extends ChatPaneHeader {
     const sourceSessionKey = state.sessionKey;
     removeBrowserAnnotationWithUndo(
       {
-        getOwner: () => this.browserAnnotationOwner(),
+        getOwner: () => this.stagedAttachmentGatewayOwner ?? undefined,
         getSessionKey: () => this.state?.sessionKey ?? "",
         getAttachments: () => this.state?.chatAttachments ?? [],
         setAttachments: (attachments) => {

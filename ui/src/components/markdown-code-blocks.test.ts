@@ -59,7 +59,7 @@ it("reobserves reused Markdown DOM while fencing scans queued before disconnect"
     },
   );
   const view = (active = true) =>
-    html`<section class="chat-text" ${markdownBlocks(active, presentation)}>
+    html`<section class="chat-text" ${markdownBlocks(active ? presentation : false)}>
       ${unsafeHTML(content)}
     </section>`;
   const part = render(view(), container);

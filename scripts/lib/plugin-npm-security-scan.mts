@@ -316,7 +316,7 @@ const CURRENT_NATIVE_PERSONA_FIXTURE = {
   path: "src/app-server/run-attempt.skills.native.test.ts",
   ruleId: "dangerous-exec",
   count: 1,
-  sha256: "ee2e9bc850d6b8eb43f1a506d82a9f9d8c7471acf45b20f29335c6065be61e18",
+  sha256: "111364dcbc09d239ddac974953b2fe4d587b32ebcba3da8ac579a0dc1768569a",
 };
 
 const FROZEN_RELEASE_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([

@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import {
   createPluginGatewayMethodDescriptor,
   type GatewayMethodProfileAccess,
@@ -28,7 +27,7 @@ import {
 } from "./runtime/gateway-request-scope.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import type {
-  OpenClawPluginChannelRegistration,
+  OpenClawPluginApi,
   OpenClawPluginHostedMediaResolver,
   OpenClawPluginHttpRouteParams,
   OpenClawPluginMcpServerConnectionResolver,
@@ -279,7 +278,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
 
   const registerChannel = (
     record: PluginRecord,
-    registration: OpenClawPluginChannelRegistration | ChannelPlugin,
+    registration: Parameters<OpenClawPluginApi["registerChannel"]>[0],
     mode: PluginRegistrationMode = "full",
     resolveChannelRuntime?: PluginChannelRegistration["resolveChannelRuntime"],
   ) => {
@@ -291,14 +290,11 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       return;
     }
     const registrationCapabilities = resolvePluginRegistrationCapabilities(mode);
-    const normalized =
-      typeof (registration as OpenClawPluginChannelRegistration).plugin === "object"
-        ? (registration as OpenClawPluginChannelRegistration)
-        : { plugin: registration as ChannelPlugin };
+    const pluginRegistration = "plugin" in registration ? registration.plugin : registration;
     const plugin = normalizeRegisteredChannelPlugin({
       pluginId: record.id,
       source: record.source,
-      plugin: normalized.plugin,
+      plugin: pluginRegistration,
       pushDiagnostic,
     });
     if (!plugin) {

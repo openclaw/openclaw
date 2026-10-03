@@ -15,15 +15,6 @@ const commentTypingReactionState = new Map<
   }
 >();
 
-type FeishuCommentReactionClient = ReturnType<typeof createFeishuClient> & {
-  request(params: {
-    method: "POST";
-    url: string;
-    data: unknown;
-    timeout: number;
-  }): Promise<unknown>;
-};
-
 function buildCommentTypingReactionKey(params: {
   fileToken: string;
   fileType: CommentFileType;
@@ -47,7 +38,7 @@ function ensureCommentTypingReactionState(key: string) {
 }
 
 async function requestCommentTypingReactionWithClient(params: {
-  client: FeishuCommentReactionClient;
+  client: ReturnType<typeof createFeishuClient>;
   fileToken: string;
   fileType: CommentFileType;
   replyId: string;
@@ -56,7 +47,12 @@ async function requestCommentTypingReactionWithClient(params: {
   logPrefix?: string;
 }): Promise<boolean> {
   try {
-    const response = (await params.client.request({
+    const response = await params.client.request<{
+      code?: number;
+      msg?: string;
+      log_id?: string;
+      error?: { log_id?: string };
+    }>({
       method: "POST",
       url:
         `/open-apis/drive/v2/files/${encodeURIComponent(params.fileToken)}/comments/reaction` +
@@ -69,12 +65,7 @@ async function requestCommentTypingReactionWithClient(params: {
         reaction_type: COMMENT_TYPING_REACTION_TYPE,
       },
       timeout: COMMENT_REACTION_TIMEOUT_MS,
-    })) as {
-      code?: number;
-      msg?: string;
-      log_id?: string;
-      error?: { log_id?: string };
-    };
+    });
     if (response.code === 0) {
       return true;
     }
@@ -107,9 +98,8 @@ async function requestCommentTypingReaction(params: {
   if (!account.configured || !(account.config.typingIndicator ?? true)) {
     return false;
   }
-  const client = createFeishuClient(account) as FeishuCommentReactionClient;
   return requestCommentTypingReactionWithClient({
-    client,
+    client: createFeishuClient(account),
     fileToken: params.fileToken,
     fileType: params.fileType,
     replyId: params.replyId,
@@ -155,7 +145,7 @@ async function cleanupCommentTypingReactionByKey(params: {
 }
 
 export async function cleanupAmbientCommentTypingReaction(params: {
-  client: FeishuCommentReactionClient;
+  client: ReturnType<typeof createFeishuClient>;
   deliveryContext?: {
     channel?: string;
     to?: string;

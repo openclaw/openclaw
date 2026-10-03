@@ -61,6 +61,41 @@ export type DurableComposerDraftAttachment = Omit<
   blob: Blob;
 };
 
+export type DurableComposerDraftScope = {
+  gatewayOwner: string;
+  recoveryScope: string;
+  scopeKey: string;
+};
+
+export type DurableChatDraftPresence = { revision: number; active: boolean };
+
+export type DurableQuestionDraft = {
+  itemId: string;
+  signature: string;
+  edited: boolean;
+  dismissed?: boolean;
+  answers: { selected: string[]; freeText: string }[];
+  reopenedAfterBoundary?: string;
+};
+
+export type DurableDraftModelSelection = {
+  agentId: string;
+  model: string;
+  agentRuntime?: string;
+  thinkingLevel: string;
+};
+
+export type DurableComposerDraft = {
+  revision: number;
+  text: string;
+  mentions?: readonly HumanMention[];
+  goalMode?: ChatGoalDraftMode;
+  replyTarget?: ChatReplyTarget;
+  modelSelection?: DurableDraftModelSelection;
+  attachments: DurableComposerDraftAttachment[];
+  questionDrafts?: DurableQuestionDraft[];
+};
+
 export type ChatComposerDraftRetry = {
   expectedDraftRevision: number;
   draftRevision: number;

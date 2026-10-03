@@ -5,6 +5,7 @@ import { probeTreeClone } from "@openclaw/fs-safe/copy";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import type { Result } from "@openclaw/normalization-core/result";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { hasErrnoCode } from "./errno.js";
 
 const LINUX_NFS_SUPER_MAGIC = 0x6969;
 const LINUX_SMB_SUPER_MAGIC = 0x517b;
@@ -87,12 +88,6 @@ function parseMountCommandEntries(contents: string): MountEntry[] {
   return entries;
 }
 
-function isMountCommandTimeout(error: unknown): boolean {
-  return (
-    error !== null && typeof error === "object" && "code" in error && error.code === "ETIMEDOUT"
-  );
-}
-
 function readMountEntries(): Result<MountEntry[], "timeout"> {
   try {
     return {
@@ -116,7 +111,9 @@ function readMountEntries(): Result<MountEntry[], "timeout"> {
       ),
     };
   } catch (error) {
-    return isMountCommandTimeout(error) ? { ok: false, error: "timeout" } : { ok: true, value: [] };
+    return hasErrnoCode(error, "ETIMEDOUT")
+      ? { ok: false, error: "timeout" }
+      : { ok: true, value: [] };
   }
 }
 

@@ -52,6 +52,8 @@ import {
 } from "./sidebar-attention-dismissals.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
 
+export { renderSidebarPeopleFilterMenuForController } from "./app-sidebar-people-filter-menu.ts";
+
 export function renderSidebarCustomizeMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
   const position = controller.customizeMenuPosition;

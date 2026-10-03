@@ -246,13 +246,15 @@ export function projectChatTranscript(
     isGlobalAliasKey,
   );
   const showLoadingSkeleton = props.loading && chatItems.length === 0 && !hasTypingActors;
+  const presented =
+    typeof props.presented === "object" ? props.presented.isPresented() : (props.presented ?? true);
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
   const turnRecapByGroupKey = new Map<string, TurnRecap>();
   const resolveReplyPreview = createReplyPreviewResolver(loadedReplySources, props);
   const sharedMessageRenderOptions = {
     entryRefFor: transcript.entryAnimations.refFor,
-    presented: props.presented,
+    presented,
     onReply: props.onSetReply
       ? (target) => state.transcriptRenderContext.onSetReply?.(target)
       : undefined,
@@ -310,7 +312,6 @@ export function projectChatTranscript(
       messageReactions: props.messageReactions,
       onReact: props.onReact,
       transcriptVisible: props.transcriptVisible,
-      transcriptPresentation: props.transcriptPresentation,
       latestBrowserTabs,
       showReasoning,
       showToolCalls: props.showToolCalls,
@@ -570,8 +571,10 @@ export function projectChatTranscript(
     Math.floor(Date.now() / 60_000),
     latestBrowserTabsKey,
     props.sessionKey,
-    props.presented,
-    props.transcriptVisible,
+    presented,
+    typeof props.transcriptVisible === "object"
+      ? props.transcriptVisible.isPresented()
+      : (props.transcriptVisible ?? true),
     // Invalidate settled rows when spawn metadata arrives, not on activity/title patches.
     avatarPlacement,
     props.boardProvider,

@@ -57,6 +57,7 @@ async function createFixture(ids: string[], damage: "missing" | "drifted" | "mis
     await replaceSessionEntry(session, { sessionId: `${agentId}-history`, updatedAt: 1 });
     agents.push({ agentId, path: agentPath, session, entry: loadSessionEntry(session) });
   }
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   const { DatabaseSync } = requireNodeSqlite();

@@ -1,8 +1,11 @@
 /* @vitest-environment node */
-import { IDBFactory } from "fake-indexeddb";
+import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  discardDurableComposerRecovery,
   listDurableChatDraftPresence,
+  prepareDurableComposerRecovery,
+  readDurableComposerDraft,
   retireDurableComposerDraft,
   subscribeDurableComposerDraftChanges,
   writeDurableComposerDraft,
@@ -56,6 +59,143 @@ afterEach(async () => {
   await requestResult(indexedDB.deleteDatabase("openclaw-control-ui"));
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+describe("durable recovery", () => {
+  const legacyScope = { ...owner, scopeKey: "global\u0000agent:main" };
+  async function recoveryEntry() {
+    const result = await prepareDurableComposerRecovery(owner);
+    if (result.status !== "ready" || result.entries.length !== 1) {
+      throw new Error("Expected one recovery draft");
+    }
+    return result.entries[0]!;
+  }
+
+  it("preserves textless draft metadata and ignores clear fences without deleting them", async () => {
+    const drafts = [
+      {
+        name: "attachment",
+        attachments: [{ blob: new Blob(["saved"]), mimeType: "text/plain", fileName: "saved.txt" }],
+      },
+      { name: "goal", goalMode: { action: "start" } },
+      { name: "reply", replyTarget: { messageId: "message", text: "quoted" } },
+    ];
+    await seedRecords([
+      ...drafts.map(({ name, ...draft }) =>
+        storedRecord("global\u0000agent:" + name, { text: "", ...draft }),
+      ),
+      storedRecord(legacyScope.scopeKey, { text: "" }),
+    ]);
+    const result = await prepareDurableComposerRecovery(owner);
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") {
+      throw new Error("Recovery unavailable");
+    }
+    expect(result.entries).toHaveLength(3);
+    expect(
+      result.entries.every(
+        (entry) =>
+          entry.updatedAt === now &&
+          entry.owner.gatewayOwner === owner.gatewayOwner &&
+          entry.owner.recoveryScope === owner.recoveryScope,
+      ),
+    ).toBe(true);
+    expect(result.entries.find((entry) => entry.attachmentNames.length)?.attachmentNames).toEqual([
+      "saved.txt",
+    ]);
+    expect(result.entries.find((entry) => entry.goalMode)?.goalMode).toEqual({ action: "start" });
+    expect(result.entries.find((entry) => entry.replyTarget)?.replyTarget).toEqual({
+      messageId: "message",
+      text: "quoted",
+    });
+    expect(await readDurableComposerDraft(legacyScope)).toEqual({
+      status: "not-found",
+      revision: 10,
+      writeId: "seed",
+    });
+  });
+
+  it("discards attachment bytes behind a higher clear fence and rejects stale writers", async () => {
+    await seedRecords([
+      storedRecord(legacyScope.scopeKey, {
+        attachments: [{ blob: new Blob(["private bytes"]), mimeType: "text/plain" }],
+      }),
+    ]);
+    const entry = await recoveryEntry();
+    expect(await discardDurableComposerRecovery(owner, entry, () => true)).toEqual({
+      status: "discarded",
+    });
+    expect(await prepareDurableComposerRecovery(owner)).toEqual({ status: "ready", entries: [] });
+    const database = await openControlUiDatabase();
+    const transaction = database.transaction("composerDrafts", "readonly");
+    const record = await requestResult(
+      transaction
+        .objectStore("composerDrafts")
+        .get(JSON.stringify([owner.gatewayOwner, owner.recoveryScope, legacyScope.scopeKey])),
+    );
+    await transactionComplete(transaction);
+    expect(record).toMatchObject({ text: "", attachments: [] });
+    expect(record.revision).toBeGreaterThan(entry.revision);
+    expect(
+      await writeDurableComposerDraft(
+        legacyScope,
+        { revision: 11, text: "stale draft", attachments: [] },
+        { expectedRevision: 10, expectedWriteId: "seed", writeId: "stale" },
+      ),
+    ).toEqual({ status: "conflict" });
+    expect(await discardDurableComposerRecovery(owner, entry, () => true)).toEqual({
+      status: "conflict",
+    });
+  });
+
+  it.each(["owner", "revision", "writeId", "current"] as const)(
+    "keeps recovery when its confirmed %s changes",
+    async (change) => {
+      await seedRecords([storedRecord(legacyScope.scopeKey)]);
+      const entry = await recoveryEntry();
+      if (change === "revision" || change === "writeId") {
+        await seedRecords([
+          storedRecord(
+            legacyScope.scopeKey,
+            change === "revision" ? { revision: 11 } : { writeId: "replacement" },
+          ),
+        ]);
+      }
+      const before = await readDurableComposerDraft(legacyScope);
+      let currentChecks = 0;
+      expect(
+        await discardDurableComposerRecovery(
+          change === "owner" ? { ...owner, recoveryScope: "principal-b" } : owner,
+          entry,
+          () => change !== "current" || ++currentChecks === 1,
+        ),
+      ).toEqual({ status: "conflict" });
+      expect(await readDurableComposerDraft(legacyScope)).toEqual(before);
+    },
+  );
+
+  it("aborts a failed discard without releasing attachment bytes", async () => {
+    await seedRecords([
+      storedRecord(legacyScope.scopeKey, {
+        attachments: [{ blob: new Blob(["keep bytes"]), mimeType: "text/plain" }],
+      }),
+    ]);
+    const entry = await recoveryEntry();
+    const write = vi.spyOn(IDBObjectStore.prototype, "put").mockImplementation(() => {
+      throw new DOMException("blocked", "QuotaExceededError");
+    });
+    expect(await discardDurableComposerRecovery(owner, entry, () => true)).toEqual({
+      status: "storage-failed",
+    });
+    write.mockRestore();
+    const retained = await readDurableComposerDraft(legacyScope);
+    expect(retained.status).toBe("found");
+    if (retained.status !== "found") {
+      throw new Error("Missing retained draft");
+    }
+    expect(await retained.draft.attachments[0]!.blob.text()).toBe("keep bytes");
+    expect(retained.draft.revision).toBe(entry.revision);
+  });
 });
 
 describe("durable chat draft presence", () => {

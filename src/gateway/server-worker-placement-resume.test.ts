@@ -193,7 +193,7 @@ describe("worker automatic resume", () => {
             turnClaim: null,
             workspaceBaseManifestRef: replacement.reconciledManifestRef,
           });
-          expect(placements.listPendingWorkspaceResults()).toEqual([]);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
           expect(controller.signal.aborted).toBe(false);
         } else {
           expect(await pending).toBe(termination);

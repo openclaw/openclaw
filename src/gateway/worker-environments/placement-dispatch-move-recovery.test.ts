@@ -32,7 +32,7 @@ describe("worker Gateway move recovery", () => {
     if (begun.placement.state !== "draining") {
       throw new Error("Move source did not enter draining state");
     }
-    const claim = placements.claimReclaimWorkspaceResult({
+    const claim = await placements.claimReclaimWorkspaceResult({
       ...REQUEST,
       claimId: "reclaim-gateway-recovery",
       runId: "reclaim-gateway-recovery",
@@ -41,13 +41,15 @@ describe("worker Gateway move recovery", () => {
     const restartedStore = createWorkerSessionPlacementStore({
       database: support.testState.stateDb,
     });
-    let acceptedPending: ReturnType<typeof restartedStore.listPendingWorkspaceResults> = [];
+    let acceptedPending: Awaited<
+      ReturnType<typeof restartedStore.listPendingWorkspaceResultsAsync>
+    > = [];
     const prepareGatewayMove = vi.fn<
       NonNullable<Parameters<typeof createWorkerPlacementDispatchService>[0]["prepareGatewayMove"]>
     >(async ({ assertCurrent }) => {
       assertCurrent();
       await Promise.resolve();
-      acceptedPending = restartedStore.listPendingWorkspaceResults();
+      acceptedPending = await restartedStore.listPendingWorkspaceResultsAsync();
       expect(acceptedPending).toMatchObject([
         { workspaceAcceptedAtMs: expect.any(Number), stagedResultRef: null },
       ]);
@@ -57,6 +59,9 @@ describe("worker Gateway move recovery", () => {
           "UPDATE worker_session_placements SET turn_claim_id = ?, turn_claim_run_id = ? WHERE session_id = ? AND turn_claim_id = ?",
         )
         .run("replacement-claim", "replacement-run", active.sessionId, claim.claimId);
+      await expect(restartedStore.prepareWorkspaceResultClaim(claim)).rejects.toThrow(
+        "workspace result authority changed",
+      );
       expect(restartedStore.validateWorkspaceResultClaim(claim)).toBe(false);
     });
     const restarted = createHarness(support.testState.stateDb, restartedStore, {
@@ -71,7 +76,7 @@ describe("worker Gateway move recovery", () => {
     expect(restarted.environments.destroy).not.toHaveBeenCalled();
     expect(restarted.environments.stopTunnel).not.toHaveBeenCalled();
     expect(restarted.environments.get(active.environmentId)?.state).toBe("attached");
-    expect(restartedStore.listPendingWorkspaceResults()).toEqual(acceptedPending);
+    expect(await restartedStore.listPendingWorkspaceResultsAsync()).toEqual(acceptedPending);
     expect(restartedStore.get(active.sessionId)).toMatchObject({
       state: "draining",
       turnClaim: { claimId: "replacement-claim", runId: "replacement-run" },
