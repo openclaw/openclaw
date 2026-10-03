@@ -65,8 +65,12 @@ function hasPackedFile(packageFiles: Set<string>, entryPath: string) {
   return packageFiles.has(normalizePackagePath(entryPath));
 }
 
-function isPluginTestFixturePath(packagePath: string) {
-  if (packagePath.startsWith("dist/") || packagePath.startsWith("skills/")) {
+export function isPluginTestFixturePath(packagePath: string) {
+  if (
+    packagePath.startsWith("dist/") ||
+    packagePath.startsWith("skills/") ||
+    packagePath.startsWith("node_modules/")
+  ) {
     return false;
   }
   if (/(?:^|\/)(?:test|tests|__fixtures__|__tests__)\//u.test(packagePath)) {

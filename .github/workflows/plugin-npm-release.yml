@@ -1,5 +1,5 @@
 name: Plugin NPM Release
-run-name: ${{ github.event_name == 'workflow_dispatch' && (inputs.preflight_only && inputs.trusted_publisher_preflight && format('Plugin NPM Trusted Publisher Preflight [{0}] {1}', inputs.npm_dist_tag, inputs.ref) || inputs.preflight_only && format('Plugin NPM Artifact Preflight [{0}] {1}', inputs.npm_dist_tag, inputs.ref) || format('Plugin NPM Release [{0}] {1}', inputs.npm_dist_tag, inputs.ref)) || format('Plugin NPM Release [default] {0}', github.sha) }}
+run-name: ${{ github.event_name == 'workflow_dispatch' && (inputs.preflight_only && inputs.trusted_publisher_preflight && format('Plugin NPM Trusted Publisher Preflight [{0}] {1}', inputs.npm_dist_tag, inputs.ref) || inputs.preflight_only && inputs.dispatch_id != '' && format('Plugin NPM Artifact Preflight [{0}] {1} ({2})', inputs.npm_dist_tag, inputs.ref, inputs.dispatch_id) || inputs.preflight_only && format('Plugin NPM Artifact Preflight [{0}] {1}', inputs.npm_dist_tag, inputs.ref) || format('Plugin NPM Release [{0}] {1}', inputs.npm_dist_tag, inputs.ref)) || format('Plugin NPM Release [default] {0}', github.sha) }}
 
 on:
   schedule:
@@ -58,6 +58,11 @@ on:
       ref:
         description: Exact commit SHA reachable from main/release ancestry or the canonical extended-stable branch
         required: true
+        type: string
+      dispatch_id:
+        description: Optional immutable parent dispatch identity for exact run recovery
+        required: false
+        default: ""
         type: string
       plugins:
         description: Comma-separated plugin package names to publish when publish_scope=selected
@@ -896,6 +901,19 @@ jobs:
           if (!readmes.get(findPackedPackageReadmePath(files))) throw new Error("Qualified plugin artifact must contain a non-empty README.");
           console.log(`Qualified packed runtime and README for ${manifest.package.name}@${manifest.package.version}.`);
           NODE
+
+      - name: Scan exact plugin npm artifact
+        env:
+          ARTIFACT_DIR: ${{ steps.preflight_artifact.outputs.dir }}
+          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
+          PACKAGE_VERSION: ${{ matrix.plugin.version }}
+        run: |
+          set -euo pipefail
+          tarball_name="$(jq -er '.artifact.tarballName' "${ARTIFACT_DIR}/preflight-manifest.json")"
+          node --import tsx .release-tooling/scripts/plugin-npm-security-scan.mts \
+            --package-name "$PACKAGE_NAME" \
+            --package-version "$PACKAGE_VERSION" \
+            --tarball "${ARTIFACT_DIR}/${tarball_name}"
 
       - name: Upload immutable npm preflight artifact
         id: upload_preflight_artifact
