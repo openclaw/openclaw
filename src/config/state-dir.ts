@@ -46,20 +46,8 @@ export function resolveStateDirFromHome(
   if (isFastTestRuntimeEnv(env)) {
     return newDir;
   }
-  const hasNew = fs.existsSync(newDir);
-  if (hasNew) {
+  if (fs.existsSync(newDir)) {
     return newDir;
   }
-  const legacyDirs = resolveLegacyStateDirs(effectiveHomedir);
-  const existingLegacy = legacyDirs.find((dir) => {
-    try {
-      return fs.existsSync(dir);
-    } catch {
-      return false;
-    }
-  });
-  if (existingLegacy) {
-    return existingLegacy;
-  }
-  return newDir;
+  return resolveLegacyStateDirs(effectiveHomedir).find((dir) => fs.existsSync(dir)) ?? newDir;
 }

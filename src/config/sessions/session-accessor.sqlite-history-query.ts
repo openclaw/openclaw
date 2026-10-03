@@ -121,7 +121,7 @@ function readVisibleHistoryRange(
   projection: CurrentTranscriptProjection,
   start: number,
   endExclusive: number,
-  history = resolveVisibleHistoryProjection(projection),
+  history: VisibleHistoryProjection,
 ): SessionTranscriptMessageEvent[] {
   const range = resolveVisibleHistoryRange(history, start, endExclusive);
   if (range.boundedEnd <= range.boundedStart) {
@@ -234,7 +234,7 @@ export type SessionTranscriptMessageByIdOptions =
 function resolveHistoryEventById(
   projection: CurrentTranscriptProjection,
   eventId: string,
-  history = resolveVisibleHistoryProjection(projection),
+  history: VisibleHistoryProjection,
   maxBytes?: number,
 ): HistoryEventById | undefined {
   const boundary = history.boundaries.find((candidate) => candidate.eventId === eventId);
@@ -387,27 +387,18 @@ function readRecentHistoryInSnapshot(
     max: MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
   });
   const maxLines = resolveIntegerOption(options.maxLines, 0, { min: 0 });
-  if (maxMessages === 0 || maxLines === 0) {
-    return {
-      activeLeafEntryId: projection.state.leafEventId,
-      ...(deltaCursor ? { deltaCursor } : {}),
-      events: [],
-      displaySource: history.displaySource,
-      totalMessages: history.total,
-      ...(captureReadWindow ? { readWindow: captureHistoryReadWindow(history, []) } : {}),
-      ...(windowChange ? { windowReset: true } : {}),
-    };
-  }
-  const maxBytes = resolveIntegerOption(options.maxBytes, 8 * 1024 * 1024, { min: 1024 });
-  const { start: selectedStart, bytes } = resolveRecentHistoryStart(
-    projection,
-    Math.max(0, history.total - maxLines),
-    history.total,
-    history,
-    maxBytes,
-    maxMessages,
-  );
-  const events = readVisibleHistoryRange(projection, selectedStart, history.total, history);
+  const empty = maxMessages === 0 || maxLines === 0;
+  const { start, bytes } = empty
+    ? { start: history.total, bytes: 0 }
+    : resolveRecentHistoryStart(
+        projection,
+        Math.max(0, history.total - maxLines),
+        history.total,
+        history,
+        resolveIntegerOption(options.maxBytes, 8 * 1024 * 1024, { min: 1024 }),
+        maxMessages,
+      );
+  const events = empty ? [] : readVisibleHistoryRange(projection, start, history.total, history);
   const page: SessionTranscriptMessageEventPage = {
     activeLeafEntryId: projection.state.leafEventId,
     ...(deltaCursor ? { deltaCursor } : {}),
@@ -417,7 +408,9 @@ function readRecentHistoryInSnapshot(
     ...(captureReadWindow ? { readWindow: captureHistoryReadWindow(history, events) } : {}),
     ...(windowChange ? { windowReset: true } : {}),
   };
-  remember?.(page, bytes);
+  if (!empty) {
+    remember?.(page, bytes);
+  }
   return page;
 }
 
