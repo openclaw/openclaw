@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
+import { hasRecordedModelFallbackStop } from "../../agents/failover-error.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
@@ -10,6 +12,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import {
   buildPersistedUserTurnMessage,
   createUserTurnTranscriptRecorder,
@@ -208,6 +211,36 @@ async function withAsyncReadHook<T>(
     return { result: await run(), calls };
   } finally {
     Object.defineProperty(SessionManager, "openModelContextAsync", descriptor);
+  }
+}
+
+// A second launch in one test must redispatch through the placement store,
+// which only admits dispatches from local, reclaimed, or failed placements.
+async function reclaimActivePlacement() {
+  const active = placements.get(SESSION_ID);
+  if (active?.state !== "active") {
+    throw new Error("expected an active placement to reclaim");
+  }
+  const draining = placements.startDrain({
+    sessionId: SESSION_ID,
+    environmentId: active.environmentId,
+    ownerEpoch: active.activeOwnerEpoch,
+    expectedGeneration: active.generation,
+  });
+  const reconciling = placements.startReconcile({
+    sessionId: SESSION_ID,
+    environmentId: active.environmentId,
+    ownerEpoch: active.activeOwnerEpoch,
+    expectedGeneration: draining.generation,
+  });
+  const reclaimed = placements.transition({
+    sessionId: SESSION_ID,
+    from: "reconciling",
+    to: "reclaimed",
+    expectedGeneration: reconciling.generation,
+  });
+  if (reclaimed.state !== "reclaimed") {
+    throw new Error("expected a reclaimed placement");
   }
 }
 
@@ -674,4 +707,187 @@ describe("worker detached model-context branch parity", () => {
       expect(observed.result.outcome.kind).toBe("rejected");
     },
   );
+
+  it("launches a fallback relaunch on the durable leaf the failed candidate committed", async () => {
+    seedPrevious();
+    const inputRecorder = recorder();
+    await launchProbe({
+      ...request("worker-fallback-stale-base"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    await reclaimActivePlacement();
+    const writer = SessionManager.open(sessionTarget);
+    const failedAssistant = makeAgentAssistantMessage({
+      content: [],
+      timestamp: 4,
+      stopReason: "error",
+    });
+    const committedTailId = writer.appendMessage(
+      attachSessionTranscriptRunId(failedAssistant, "worker-fallback-stale-base"),
+    );
+    const result = await launchProbe({
+      ...request("worker-fallback-stale-base"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    expect(result.launch?.baseLeafId).toBe(committedTailId);
+    expect(result.outcome).toEqual({ kind: "rejected", error: result.deliberateStop });
+  });
+
+  it("skips the durable relaunch inspection on the launch that persists its own admission", async () => {
+    seedPrevious();
+    const inputRecorder = recorder();
+    const originalOpenBounded = SessionManager.openBoundedAsync.bind(SessionManager);
+    const boundedReads = vi.spyOn(SessionManager, "openBoundedAsync");
+    boundedReads.mockImplementation(((...args: unknown[]) =>
+      // SAFETY: test-only passthrough to the real bounded opener.
+      (originalOpenBounded as (...a: unknown[]) => Promise<unknown>).apply(
+        SessionManager,
+        args,
+      )) as typeof SessionManager.openBoundedAsync);
+    await launchProbe({
+      ...request("worker-fallback-first-launch"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    // The initial leg persisted the admission itself: the failed candidate
+    // cannot have committed past it, so only the placement redispatch after
+    // the failed leg pays for the durable read.
+    expect(boundedReads).toHaveBeenCalledTimes(1);
+    await reclaimActivePlacement();
+    const writer = SessionManager.open(sessionTarget);
+    writer.appendMessage(
+      attachSessionTranscriptRunId(
+        makeAgentAssistantMessage({ content: [], timestamp: 4, stopReason: "error" }),
+        "worker-fallback-first-launch",
+      ),
+    );
+    await launchProbe({
+      ...request("worker-fallback-first-launch"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    // The model-fallback relaunch reads the durable suffix again.
+    expect(boundedReads.mock.calls.length).toBeGreaterThan(0);
+    boundedReads.mockRestore();
+  });
+
+  it("stops model fallback when the failed candidate already committed tool activity", async () => {
+    seedPrevious();
+    const inputRecorder = recorder();
+    await launchProbe({
+      ...request("worker-fallback-tool-tail"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    await reclaimActivePlacement();
+    const writer = SessionManager.open(sessionTarget);
+    writer.appendMessage(
+      attachSessionTranscriptRunId(
+        makeTextToolResult("call-1", "scratch", "failed candidate side effect", false, 4),
+        "worker-fallback-tool-tail",
+      ),
+    );
+    writer.appendMessage(
+      attachSessionTranscriptRunId(
+        makeAgentAssistantMessage({ content: [], timestamp: 5, stopReason: "error" }),
+        "worker-fallback-tool-tail",
+      ),
+    );
+    const result = await launchProbe({
+      ...request("worker-fallback-tool-tail"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    expect(result.launch).toBeUndefined();
+    expect(result.credentialCalls).toBe(0);
+    expect(result.tunnelCalls).toBe(0);
+    expect(result.outcome.kind).toBe("rejected");
+    if (result.outcome.kind === "rejected") {
+      expect(hasRecordedModelFallbackStop(result.outcome.error)).toBe(true);
+    }
+  });
+
+  it("stops model fallback when the failed candidate committed a bare assistant tool call", async () => {
+    seedPrevious();
+    const inputRecorder = recorder();
+    await launchProbe({
+      ...request("worker-fallback-bare-tool-call"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    await reclaimActivePlacement();
+    const writer = SessionManager.open(sessionTarget);
+    writer.appendMessage(
+      attachSessionTranscriptRunId(
+        makeAgentAssistantMessage({
+          content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+          timestamp: 4,
+          stopReason: "toolUse",
+        }),
+        "worker-fallback-bare-tool-call",
+      ),
+    );
+    const result = await launchProbe({
+      ...request("worker-fallback-bare-tool-call"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    expect(result.launch).toBeUndefined();
+    expect(result.credentialCalls).toBe(0);
+    expect(result.tunnelCalls).toBe(0);
+    expect(result.outcome.kind).toBe("rejected");
+    if (result.outcome.kind === "rejected") {
+      expect(hasRecordedModelFallbackStop(result.outcome.error)).toBe(true);
+    }
+  });
+
+  it("relaunches from the durable leaf when older history overflows the bounded window", async () => {
+    seedPrevious();
+    const fillerWriter = SessionManager.open(sessionTarget);
+    for (let index = 0; index < 120; index += 1) {
+      fillerWriter.appendMessage(
+        makeAgentUserMessage({ content: `filler ${index}`, timestamp: 10 + index }),
+      );
+    }
+    const inputRecorder = recorder();
+    await launchProbe({
+      ...request("worker-fallback-long-session"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    await reclaimActivePlacement();
+    const writer = SessionManager.open(sessionTarget);
+    const failedAssistant = makeAgentAssistantMessage({
+      content: [],
+      timestamp: 200,
+      stopReason: "error",
+    });
+    const committedTailId = writer.appendMessage(
+      attachSessionTranscriptRunId(failedAssistant, "worker-fallback-long-session"),
+    );
+    const result = await launchProbe({
+      ...request("worker-fallback-long-session"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    expect(result.launch?.baseLeafId).toBe(committedTailId);
+    expect(result.outcome).toEqual({ kind: "rejected", error: result.deliberateStop });
+  });
+
+  it("keeps the admission-pinned base for a foreign tail after the failed candidate", async () => {
+    seedPrevious();
+    const inputRecorder = recorder();
+    await launchProbe({
+      ...request("worker-fallback-foreign-tail"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    const admission = inputRecorder.getAdmissionReceipt();
+    expect(admission).toBeDefined();
+    await reclaimActivePlacement();
+    const writer = SessionManager.open(sessionTarget);
+    const foreignTailId = writer.appendMessage(
+      attachSessionTranscriptRunId(
+        makeAgentAssistantMessage({ content: [], timestamp: 4, stopReason: "error" }),
+        "a-different-run",
+      ),
+    );
+    expect(foreignTailId).not.toBe(admission?.entryId);
+    const result = await launchProbe({
+      ...request("worker-fallback-foreign-tail"),
+      userTurnTranscriptRecorder: inputRecorder,
+    });
+    expect(result.launch?.baseLeafId).toBe(admission?.entryId);
+  });
 });
