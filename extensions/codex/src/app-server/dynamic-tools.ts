@@ -8,9 +8,8 @@ import {
   finalizeToolTerminalPresentation,
   formatToolExecutionErrorMessage,
   getBeforeToolCallFailureDisposition,
-  buildToolAuthoredSourceReplyIdempotencyKey,
+  captureToolAuthoredSourceReply,
   embeddedAgentLog,
-  persistToolAuthoredSourceReply,
   getChannelAgentToolMeta,
   getPluginToolMeta,
   getPluginToolSideEffectOwnerKey,
@@ -35,8 +34,6 @@ import {
   copyInternalToolResultState,
   createAgentHarnessToolExecutionBoundaryRegistry,
   extractMessagingToolSourceReplyPayload,
-  extractToolAuthoredSourceReplyPayload,
-  resolveToolAuthoredSourceReplyFinal,
   getCoreTtsToolResultMediaUrls,
   normalizeAcceptedSessionSpawnResult,
   recordAgentHarnessToolResultTelemetry,
@@ -676,39 +673,26 @@ export function createCodexDynamicToolBridge(params: {
           // the Codex turn without another model step.
           const toolAuthoredSourceReply =
             toolEntry.tool.canDeliverSourceReply === true && !resultIsError
-              ? extractToolAuthoredSourceReplyPayload(rawResult)
+              ? captureToolAuthoredSourceReply({
+                  result: rawResult,
+                  toolName,
+                  toolCallId: call.callId,
+                  idempotencyScope: toolResultHookContext.runId ?? call.turnId,
+                  cfg: params.hookContext?.config,
+                  sessionKey: toolResultHookContext.sessionKey,
+                  sessionId: toolResultHookContext.sessionId,
+                  agentId: toolResultHookContext.agentId,
+                  runId: toolResultHookContext.runId,
+                  log: embeddedAgentLog,
+                })
               : undefined;
-          const toolAuthoredSourceReplyFinal = toolAuthoredSourceReply
-            ? resolveToolAuthoredSourceReplyFinal(rawResult)
-            : undefined;
+          // Result handling is synchronous here; the transcript write is best effort
+          // and delivery does not depend on it (the helper logs failures).
           if (toolAuthoredSourceReply) {
-            const idempotencyKey =
-              toolAuthoredSourceReply.idempotencyKey ??
-              buildToolAuthoredSourceReplyIdempotencyKey({
-                runId: toolResultHookContext.runId ?? call.turnId,
-                toolCallId: call.callId,
-              });
-            telemetry.messagingToolSourceReplyPayloads.push({
-              ...toolAuthoredSourceReply,
-              idempotencyKey,
-              sourceReplyFinal: toolAuthoredSourceReplyFinal,
-            });
-            // Result handling is synchronous here; the transcript row is best effort
-            // and delivery does not depend on it (the helper logs failures).
-            void persistToolAuthoredSourceReply({
-              cfg: params.hookContext?.config,
-              sessionKey: toolResultHookContext.sessionKey,
-              sessionId: toolResultHookContext.sessionId,
-              agentId: toolResultHookContext.agentId,
-              runId: toolResultHookContext.runId,
-              toolName,
-              toolCallId: call.callId,
-              payload: toolAuthoredSourceReply,
-              idempotencyKey,
-              sourceReplyFinal: toolAuthoredSourceReplyFinal === true,
-              log: embeddedAgentLog,
-            });
+            telemetry.messagingToolSourceReplyPayloads.push(toolAuthoredSourceReply.payload);
+            void toolAuthoredSourceReply.persistence;
           }
+          const toolAuthoredSourceReplyFinal = toolAuthoredSourceReply?.payload.sourceReplyFinal;
           const continuesSourceReplyProgress = confirmedSourceReply && sourceReplyFinal === false;
           response.terminate =
             toolAuthoredSourceReplyFinal === true ||

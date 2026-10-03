@@ -34,9 +34,7 @@ import {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
   extractMessagingToolSourceReplyPayload,
-  extractToolAuthoredSourceReplyPayload,
   isDeliveredMessagingToolSendToCurrentSource,
-  resolveToolAuthoredSourceReplyFinal,
 } from "./embedded-agent-messaging-extraction.js";
 import {
   isMessagingTool,
@@ -78,10 +76,7 @@ import {
   toolStartData,
 } from "./embedded-agent-subscribe.handlers.tools.start.js";
 import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
-import {
-  buildToolAuthoredSourceReplyIdempotencyKey,
-  persistToolAuthoredSourceReply,
-} from "./embedded-agent-tool-authored-source-reply.js";
+import { captureToolAuthoredSourceReply } from "./embedded-agent-tool-authored-source-reply.js";
 import {
   collectMessagingMediaUrlsFromRecord,
   collectMessagingMediaUrlsFromToolResult,
@@ -409,32 +404,24 @@ export async function handleToolExecutionEnd(
   // as the assistant turn, so no further model turn has to restate it.
   const toolAuthoredSourceReply =
     !isToolError && ctx.params.sourceReplyCapableToolNames?.has(toolName) === true
-      ? extractToolAuthoredSourceReplyPayload(result)
+      ? captureToolAuthoredSourceReply({
+          result,
+          toolName,
+          toolCallId,
+          idempotencyScope: runId,
+          cfg: ctx.params.config,
+          sessionKey: ctx.params.sessionKey,
+          sessionId: ctx.params.sessionId,
+          agentId: ctx.params.agentId,
+          runId,
+          log: ctx.log,
+        })
       : undefined;
   if (toolAuthoredSourceReply) {
-    const toolAuthoredFinal = resolveToolAuthoredSourceReplyFinal(result);
-    const idempotencyKey =
-      toolAuthoredSourceReply.idempotencyKey ??
-      buildToolAuthoredSourceReplyIdempotencyKey({ runId, toolCallId });
-    ctx.state.messagingToolSourceReplyPayloads.push({
-      ...toolAuthoredSourceReply,
-      idempotencyKey,
-      sourceReplyFinal: toolAuthoredFinal,
-    });
+    ctx.state.messagingToolSourceReplyPayloads.push(toolAuthoredSourceReply.payload);
     ctx.trimMessagingToolSent();
-    await persistToolAuthoredSourceReply({
-      cfg: ctx.params.config,
-      sessionKey: ctx.params.sessionKey,
-      sessionId: ctx.params.sessionId,
-      agentId: ctx.params.agentId,
-      runId,
-      toolName,
-      toolCallId,
-      payload: toolAuthoredSourceReply,
-      idempotencyKey,
-      sourceReplyFinal: toolAuthoredFinal,
-      log: ctx.log,
-    });
+    // Persist before the turn settles so the transcript row precedes delivery.
+    await toolAuthoredSourceReply.persistence;
   }
   // Track committed reminders only when cron.add completed successfully.
   if (

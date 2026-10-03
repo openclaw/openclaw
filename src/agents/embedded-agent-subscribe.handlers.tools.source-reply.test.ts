@@ -8,13 +8,11 @@ import {
   endTool,
 } from "./embedded-agent-subscribe.handlers.tools.test-support.js";
 
-const persistToolAuthoredSourceReply = vi.hoisted(() => vi.fn(async () => true));
+const persistInternalSourceReply = vi.hoisted(() => vi.fn(async () => undefined));
 
-vi.mock("./embedded-agent-tool-authored-source-reply.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("./embedded-agent-tool-authored-source-reply.js")>();
-  return { ...actual, persistToolAuthoredSourceReply };
-});
+vi.mock("../gateway/internal-source-reply-persistence.js", () => ({
+  persistInternalSourceReply,
+}));
 
 function createContext(sourceReplyCapableToolNames: ReadonlySet<string>) {
   const { ctx } = createTestContext();
@@ -55,7 +53,7 @@ async function completeTool(
 
 describe("tool-authored source replies at tool completion", () => {
   beforeEach(() => {
-    persistToolAuthoredSourceReply.mockClear();
+    persistInternalSourceReply.mockClear();
   });
 
   it("queues a deliverable reply for a capable tool and persists the assistant turn", async () => {
@@ -75,20 +73,22 @@ describe("tool-authored source replies at tool completion", () => {
     // Delivery is the host's job here, so message-tool delivery state is untouched.
     expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(false);
     expect(ctx.state.sourceReplyDeliveryState).not.toBe("delivered");
-    expect(persistToolAuthoredSourceReply).toHaveBeenCalledTimes(1);
-    expect(persistToolAuthoredSourceReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:unit-session",
-        sessionId: "session-test-id",
-        agentId: "agent-test-id",
-        runId: "run-test",
-        toolName: "order_status",
-        toolCallId: "tc-1",
-        idempotencyKey: "run-test:tool-source-reply:tc-1",
-        sourceReplyFinal: true,
-        payload: expect.objectContaining({ text: replyDetails.sourceReply.text }),
-      }),
-    );
+    // The reply is written to the transcript as the assistant turn before the turn settles.
+    expect(persistInternalSourceReply).toHaveBeenCalledTimes(1);
+    expect(persistInternalSourceReply).toHaveBeenCalledWith({
+      cfg: { agents: {} },
+      sessionKey: "agent:unit-session",
+      expectedSessionId: "session-test-id",
+      agentId: "agent-test-id",
+      payload: {
+        text: replyDetails.sourceReply.text,
+        mediaUrls: ["/tmp/albaran.pdf"],
+      },
+      idempotencyKey: "run-test:tool-source-reply:tc-1",
+      runId: "run-test",
+      sourceReplyFinal: true,
+      toolCallId: "tc-1",
+    });
   });
 
   it("ignores sourceReply details from a tool without the capability", async () => {
@@ -97,7 +97,7 @@ describe("tool-authored source replies at tool completion", () => {
     await completeTool(ctx, { toolName: "order_status", details: replyDetails });
 
     expect(ctx.state.messagingToolSourceReplyPayloads).toEqual([]);
-    expect(persistToolAuthoredSourceReply).not.toHaveBeenCalled();
+    expect(persistInternalSourceReply).not.toHaveBeenCalled();
   });
 
   it("ignores error results from a capable tool", async () => {
@@ -106,7 +106,7 @@ describe("tool-authored source replies at tool completion", () => {
     await completeTool(ctx, { toolName: "order_status", details: replyDetails, isError: true });
 
     expect(ctx.state.messagingToolSourceReplyPayloads).toEqual([]);
-    expect(persistToolAuthoredSourceReply).not.toHaveBeenCalled();
+    expect(persistInternalSourceReply).not.toHaveBeenCalled();
   });
 
   it("marks progress replies as not final", async () => {
@@ -120,8 +120,22 @@ describe("tool-authored source replies at tool completion", () => {
     expect(ctx.state.messagingToolSourceReplyPayloads).toEqual([
       expect.objectContaining({ text: "Comprobando stock…", sourceReplyFinal: false }),
     ]);
-    expect(persistToolAuthoredSourceReply).toHaveBeenCalledWith(
+    expect(persistInternalSourceReply).toHaveBeenCalledWith(
       expect.objectContaining({ sourceReplyFinal: false }),
+    );
+  });
+});
+
+describe("tool-authored source reply persistence failures", () => {
+  it("still queues the reply when the transcript write fails", async () => {
+    persistInternalSourceReply.mockRejectedValueOnce(new Error("transcript locked"));
+    const ctx = createContext(new Set(["order_status"]));
+
+    await completeTool(ctx, { toolName: "order_status", details: replyDetails });
+
+    expect(ctx.state.messagingToolSourceReplyPayloads).toHaveLength(1);
+    expect(ctx.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("tool-authored source reply not persisted"),
     );
   });
 });

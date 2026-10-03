@@ -1,41 +1,64 @@
-/** Transcript persistence for replies authored by `canDeliverSourceReply` tools. */
+/** Capture and transcript persistence for replies authored by `canDeliverSourceReply` tools. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import {
+  extractToolAuthoredSourceReplyPayload,
+  resolveToolAuthoredSourceReplyFinal,
+} from "./embedded-agent-messaging-extraction.js";
 import type { MessagingToolSourceReplyPayload } from "./embedded-agent-messaging.types.js";
 
 const loadInternalSourceReplyPersistence = createLazyRuntimeModule(
   () => import("../gateway/internal-source-reply-persistence.js"),
 );
 
-export type ToolAuthoredSourceReplyPersistenceParams = {
+export type CaptureToolAuthoredSourceReplyParams = {
+  /** Executed tool result; only `details.sourceReply` is read. */
+  result: unknown;
+  toolName: string;
+  toolCallId: string;
+  /** Stable scope for the idempotency key: the run id, or the harness turn id without one. */
+  idempotencyScope: string;
   cfg?: OpenClawConfig;
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
   runId?: string;
-  toolName: string;
-  toolCallId: string;
-  payload: MessagingToolSourceReplyPayload;
-  idempotencyKey: string;
-  sourceReplyFinal: boolean;
   log?: { warn: (message: string) => void };
 };
 
-/** Builds the idempotency key that ties a tool-authored reply to its tool call. */
-export function buildToolAuthoredSourceReplyIdempotencyKey(params: {
-  runId: string;
-  toolCallId: string;
-}): string {
-  return `${params.runId}:tool-source-reply:${params.toolCallId}`;
-}
+export type CapturedToolAuthoredSourceReply = {
+  /** Deliverable payload, marked `toolAuthored` with its idempotency key and finality. */
+  payload: MessagingToolSourceReplyPayload;
+  /** Transcript write; delivery never waits on it and a failure is only logged. */
+  persistence: Promise<boolean>;
+};
 
 /**
- * Records a tool-authored source reply as the run's assistant turn before the host
- * delivers it, so the next turn's context shows what the user actually received.
- * Delivery does not depend on this write; a failure only costs the transcript row.
+ * Reads the reply a `canDeliverSourceReply` tool authored and records it as the run's
+ * assistant turn, so the next turn's context shows what the user actually received.
+ * Callers must already have verified the tool's capability and that the result is not
+ * an error. Returns undefined when the result carries no visible reply.
  */
-export async function persistToolAuthoredSourceReply(
-  params: ToolAuthoredSourceReplyPersistenceParams,
+export function captureToolAuthoredSourceReply(
+  params: CaptureToolAuthoredSourceReplyParams,
+): CapturedToolAuthoredSourceReply | undefined {
+  const extracted = extractToolAuthoredSourceReplyPayload(params.result);
+  if (!extracted) {
+    return undefined;
+  }
+  const payload: MessagingToolSourceReplyPayload = {
+    ...extracted,
+    idempotencyKey:
+      extracted.idempotencyKey ??
+      `${params.idempotencyScope}:tool-source-reply:${params.toolCallId}`,
+    sourceReplyFinal: resolveToolAuthoredSourceReplyFinal(params.result),
+  };
+  return { payload, persistence: persistToolAuthoredSourceReply(params, payload) };
+}
+
+async function persistToolAuthoredSourceReply(
+  params: CaptureToolAuthoredSourceReplyParams,
+  payload: MessagingToolSourceReplyPayload,
 ): Promise<boolean> {
   if (!params.cfg || !params.sessionKey) {
     params.log?.warn(
@@ -51,15 +74,15 @@ export async function persistToolAuthoredSourceReply(
       expectedSessionId: params.sessionId,
       agentId: params.agentId,
       payload: {
-        ...(params.payload.text ? { text: params.payload.text } : {}),
-        ...(params.payload.mediaUrl ? { mediaUrl: params.payload.mediaUrl } : {}),
-        ...(params.payload.mediaUrls?.length ? { mediaUrls: params.payload.mediaUrls } : {}),
-        ...(params.payload.attachments?.length ? { attachments: params.payload.attachments } : {}),
-        ...(params.payload.channelData ? { channelData: params.payload.channelData } : {}),
+        ...(payload.text ? { text: payload.text } : {}),
+        ...(payload.mediaUrl ? { mediaUrl: payload.mediaUrl } : {}),
+        ...(payload.mediaUrls?.length ? { mediaUrls: payload.mediaUrls } : {}),
+        ...(payload.attachments?.length ? { attachments: payload.attachments } : {}),
+        ...(payload.channelData ? { channelData: payload.channelData } : {}),
       },
-      idempotencyKey: params.idempotencyKey,
+      idempotencyKey: payload.idempotencyKey,
       runId: params.runId,
-      sourceReplyFinal: params.sourceReplyFinal,
+      sourceReplyFinal: payload.sourceReplyFinal,
       toolCallId: params.toolCallId,
     });
     return true;
