@@ -74,7 +74,6 @@ type ReloadPolicy = {
   kind: "restart" | "hot" | "none";
   actions?: readonly ReloadAction[];
   channels?: readonly ChannelPlugin[];
-  services?: readonly string[];
   replaceChannelPlugins?: boolean;
   accountScoped?: boolean;
 };
@@ -108,16 +107,22 @@ const SHARED_CHANNEL_PREFIXES = [
   "diagnostics.flags",
 ];
 
-function matchesReloadPrefix(path: string, prefix: string): boolean {
+function matchesReloadPrefix(path: string, prefix: string, includeAncestors = false): boolean {
   if (prefix.includes("*")) {
     const segments = path.split(".");
     return prefix
       .split(".")
-      .every((segment, index) =>
-        segment === "*" ? Boolean(segments[index]) : segment === segments[index],
+      .every(
+        (segment, index) =>
+          (includeAncestors && index >= segments.length) ||
+          (segment === "*" ? Boolean(segments[index]) : segment === segments[index]),
       );
   }
-  return path === prefix || path.startsWith(`${prefix}.`);
+  return (
+    path === prefix ||
+    path.startsWith(`${prefix}.`) ||
+    (includeAncestors && prefix.startsWith(`${path}.`))
+  );
 }
 
 function compareReloadRules(left: ReloadRule, right: ReloadRule): number {
@@ -313,6 +318,7 @@ let cachedCatalog:
       registry: ReturnType<typeof getActivePluginRegistry>;
       version: number;
       rules: ReloadRule[];
+      servicePolicies: { id: string; prefixes: readonly string[] }[];
       refinementPrefixes: string[];
     }
   | undefined;
@@ -326,8 +332,8 @@ function getReloadPolicyCatalog() {
   }
   const channelPlugins = listChannelPlugins();
   const servicePolicies = (registry?.services ?? []).map(({ id, service }) => ({
+    id,
     prefixes: service.reload?.configPrefixes ?? [],
-    services: [id],
   }));
   const channelPolicies = channelPlugins.flatMap((plugin): ReloadPolicy[] => [
     {
@@ -395,13 +401,6 @@ function getReloadPolicyCatalog() {
       })),
     ),
   ];
-  for (const rule of rules) {
-    rule.services = servicePolicies
-      .filter((service) =>
-        service.prefixes.some((owner) => matchesReloadPrefix(rule.prefix, owner)),
-      )
-      .flatMap((service) => service.services);
-  }
   // Narrow config contracts must override broad owner fallbacks. Sort once per
   // registry snapshot so the hot path can retain first-match semantics.
   rules.sort(compareReloadRules);
@@ -409,6 +408,7 @@ function getReloadPolicyCatalog() {
     registry,
     version,
     rules,
+    servicePolicies,
     refinementPrefixes: rules.map((rule) => rule.prefix),
   };
   return cachedCatalog;
@@ -589,8 +589,11 @@ export function buildGatewayReloadPlan(
         }
       }
     }
-    for (const service of rule?.services ?? []) {
-      plan.restartServices?.add(service);
+    for (const service of getReloadPolicyCatalog().servicePolicies) {
+      // Match the actual change, including a removed parent of an owned field.
+      if (service.prefixes.some((prefix) => matchesReloadPrefix(path, prefix, true))) {
+        plan.restartServices?.add(service.id);
+      }
     }
     for (const plugin of rule?.channels ?? []) {
       const accountId = rule?.accountScoped ? extractAccountIdFromPath(plugin.id, path) : null;
