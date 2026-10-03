@@ -4669,7 +4669,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "extensions/codex/src/session-catalog-fallback-request.test.ts",
   "extensions/codex/src/session-catalog-native-performance.test.ts",
   "extensions/codex/src/session-catalog-resident-state.test.ts",
-  "extensions/codex/src/session-catalog-snapshot-recovery.test.ts",
   "extensions/copilot/harness.test.ts",
   "extensions/copilot/src/attempt.test.ts",
   "extensions/crabbox/src/crabbox-gateway-methods.test.ts",

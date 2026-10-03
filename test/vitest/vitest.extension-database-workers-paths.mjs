@@ -130,7 +130,6 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/session-catalog-adoption-recovery.test.ts",
   "extensions/codex/index-services.test.ts",
   "extensions/codex/src/session-catalog-resident-state.test.ts",
-  "extensions/codex/src/session-catalog-snapshot-recovery.test.ts",
   "extensions/codex/src/session-catalog-native-performance.test.ts",
   "extensions/codex/src/session-catalog-cold-native.test.ts",
   "extensions/codex/src/session-catalog-ephemeral.test.ts",

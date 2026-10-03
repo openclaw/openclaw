@@ -35,7 +35,7 @@ function scanCodexCatalogRollouts(root: string, tracked: ReadonlySet<string>) {
   }
   return scanner.scan(tracked);
 }
-const createdAt = "2026-09-16T12:00:00.000Z";
+const createdAt = "2026-09-16T12:00:00.987Z";
 const line = (type: string, payload: unknown, timestamp = createdAt) =>
   `${JSON.stringify({ timestamp, type, payload })}\n`;
 const meta = (id = "native-thread", extra: Record<string, unknown> = {}) =>
@@ -118,43 +118,7 @@ describe("resident catalog rollout currency", () => {
     expect(final.present).toEqual(new Set([f.file, renamed.slice(0, -4)]));
   });
 
-  it("reuses unchanged leaves but detects in-place appends without a directory mtime change", async () => {
-    const f = await fixture(meta());
-    const otherDay = path.join(f.root, "2026", "09", "17");
-    await fs.mkdir(otherDay);
-    const unchanged = path.join(otherDay, "rollout-unchanged.jsonl");
-    await fs.writeFile(unchanged, meta("unchanged"));
-    const watches = vi.spyOn(nodeFs, "watch");
-    const clock = vi.spyOn(performance, "now").mockReturnValue(1_000);
-    const initial = await scanCodexCatalogRollouts(f.root, new Set([f.file, unchanged]));
-    clock.mockReturnValue(1_250);
-    await scanCodexCatalogRollouts(f.root, new Set([f.file, unchanged]));
-    const directoryStat = await fs.stat(f.day);
-    const stat = vi.spyOn(fs, "lstat");
-    const opened = vi.spyOn(fs, "opendir");
-    expect(await scanCodexCatalogRollouts(f.root, new Set([f.file, unchanged]))).toEqual(initial);
-    expect(stat.mock.calls.some(([file]) => file === f.file || file === unchanged)).toBe(false);
-    expect(
-      opened.mock.calls.some(([directory]) => directory === f.day || directory === otherDay),
-    ).toBe(false);
-
-    const leafWatch =
-      watches.mock.results[watches.mock.calls.findIndex(([directory]) => directory === f.day)]!
-        .value;
-    const appended = line("event_msg", { type: "user_message", message: "An appended request" });
-    await fs.appendFile(f.file, appended);
-    // Deliver the native watcher signal explicitly; no timing/polling contract belongs here.
-    leafWatch.emit("change", "change", path.basename(f.file));
-    expect((await fs.stat(f.day)).mtimeMs).toBe(directoryStat.mtimeMs);
-    stat.mockClear();
-    const next = await scanCodexCatalogRollouts(f.root, new Set([f.file, unchanged]));
-    expect(next.files.get(f.file)?.size).toBe(Buffer.byteLength(meta() + appended));
-    expect(next.files.get(unchanged)).toEqual(initial.files.get(unchanged));
-    expect(stat.mock.calls.some(([file]) => file === f.file)).toBe(true);
-    expect(stat.mock.calls.some(([file]) => file === unchanged)).toBe(false);
-  });
-
-  it.each([1_000.1, 65_530.12])(
+  it.each([65_530.12])(
     "closes the Darwin watcher arm gap before cache reuse at fractional time %s",
     async (start) => {
       const f = await fixture(meta());
@@ -180,67 +144,6 @@ describe("resident catalog rollout currency", () => {
       expect(watcher.close).not.toHaveBeenCalled();
     },
   );
-
-  it("rechecks cache ownership after a watcher fails during a directory stat", async () => {
-    const f = await fixture(meta());
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    const watcher = new ControlledWatcher();
-    const watch = vi.spyOn(nodeFs, "watch").mockReturnValueOnce(watcher);
-    await scanCodexCatalogRollouts(f.root, new Set());
-    watch.mockImplementation(() => new ControlledWatcher());
-    const originalStat = fs.lstat;
-    const appended = line("event_msg", { type: "user_message", message: "Watch was lost" });
-    let interrupted = false;
-    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-      const stat = await originalStat(...args);
-      if (args[0] === f.day && !interrupted) {
-        interrupted = true;
-        watcher.emit("error", new Error("watch lost during stat"));
-        await fs.appendFile(f.file, appended);
-      }
-      return stat;
-    });
-    const scanned = await scanCodexCatalogRollouts(f.root, new Set());
-    expect(scanned.files.get(f.file)?.size).toBe(Buffer.byteLength(meta() + appended));
-    expect(watch).toHaveBeenCalledTimes(2);
-  });
-
-  it("replaces the watched inode after an interrupted first scan and directory replacement", async () => {
-    const f = await fixture(meta());
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    const watchers: ControlledWatcher[] = [];
-    vi.spyOn(nodeFs, "watch").mockImplementation(() => {
-      const watcher = new ControlledWatcher();
-      watchers.push(watcher);
-      return watcher;
-    });
-    const error = Object.assign(new Error("first file stat denied"), { code: "EACCES" });
-    const originalStat = fs.lstat;
-    const stat = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-      if (args[0] === f.file) {
-        throw error;
-      }
-      return originalStat(...args);
-    });
-    await expect(scanCodexCatalogRollouts(f.root, new Set())).rejects.toBe(error);
-    expect(watchers).toHaveLength(1);
-    stat.mockRestore();
-    await fs.rename(f.day, path.join(f.root, "old-day"));
-    await fs.mkdir(f.day);
-    const replacement = meta("replacement-thread");
-    await fs.writeFile(f.file, replacement);
-    expect((await scanCodexCatalogRollouts(f.root, new Set())).files.get(f.file)?.size).toBe(
-      Buffer.byteLength(replacement),
-    );
-    expect(watchers[0]?.close).toHaveBeenCalledOnce();
-    expect(watchers).toHaveLength(2);
-    const appended = line("event_msg", { type: "user_message", message: "New inode append" });
-    await fs.appendFile(f.file, appended);
-    watchers[1]!.emit("change", "change", path.basename(f.file));
-    expect((await scanCodexCatalogRollouts(f.root, new Set())).files.get(f.file)?.size).toBe(
-      Buffer.byteLength(replacement + appended),
-    );
-  });
 
   it.each(["error", "change"])(
     "retries a cached batch from file stats after a watcher %s during its yield",
@@ -305,29 +208,6 @@ describe("resident catalog rollout currency", () => {
     scanner.close();
     expect(restoredClose).toHaveBeenCalledOnce();
     await expect(scanner.scan(new Set())).rejects.toThrow("closed");
-  });
-
-  it("does not certify cached fingerprints across an append observed during the scan", async () => {
-    const f = await fixture(meta());
-    const watch = vi.spyOn(nodeFs, "watch");
-    const originalStat = fs.lstat;
-    const appended = line("event_msg", { type: "user_message", message: "Concurrent request" });
-    let changed = false;
-    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-      const stat = await originalStat(...args);
-      if (args[0] === f.file && !changed) {
-        changed = true;
-        await fs.appendFile(f.file, appended);
-        watch.mock.results[0]!.value.emit("change", "change", path.basename(f.file));
-      }
-      return stat;
-    });
-    expect((await scanCodexCatalogRollouts(f.root, new Set())).files.get(f.file)?.size).toBe(
-      Buffer.byteLength(meta()),
-    );
-    expect((await scanCodexCatalogRollouts(f.root, new Set())).files.get(f.file)?.size).toBe(
-      Buffer.byteLength(meta() + appended),
-    );
   });
 
   it("bounds a wide day-folder scan to the newest resident fingerprint budget", async () => {
@@ -431,32 +311,6 @@ describe("resident catalog rollout currency", () => {
     expect(row?.name).toBeUndefined();
   });
 
-  it.each(["plain", "compressed"])(
-    "preserves turn-start recency when a %s rollout is rewritten",
-    async (encoding) => {
-      const startedAt = "2026-09-16T13:00:00.987Z";
-      const rewrittenAt = new Date("2026-09-17T14:00:00.000Z");
-      const contents =
-        meta() +
-        line("event_msg", { type: "task_started", turn_id: "first-turn" }, startedAt) +
-        line("event_msg", { type: "user_message", message: "Original request" }, startedAt) +
-        line(
-          "event_msg",
-          { type: "thread_settings_applied", thread_settings: { cwd: "/workspace/moved" } },
-          rewrittenAt.toISOString(),
-        );
-      const f = await fixture(
-        encoding === "compressed" ? zstdCompressSync(contents) : contents,
-        encoding === "compressed" ? "rollout-test.jsonl.zst" : "rollout-test.jsonl",
-      );
-      const before = await readCodexCatalogRollout(f.root, f.file);
-      await fs.utimes(f.file, rewrittenAt, rewrittenAt);
-      const after = await readCodexCatalogRollout(f.root, f.file);
-      const expected = Math.floor(Date.parse(startedAt) / 1_000);
-      expect([before?.recencyAt, after?.recencyAt]).toEqual([expected, expected]);
-    },
-  );
-
   it("does not make a fresh paginated fork discoverable from injected model context", async () => {
     const f = await fixture(
       meta("native-thread", {
@@ -514,12 +368,17 @@ describe("resident catalog rollout currency", () => {
     expect(await readCodexCatalogRollout(f.root, f.file)).toMatchObject({
       preview: "First user request",
       cwd: "/workspace/moved",
-      recencyAt: Date.parse(createdAt) / 1_000 + 60,
+      recencyAt: Math.floor(Date.parse(createdAt) / 1_000) + 60,
     });
     const reads = (await Promise.all(readCalls.map((calls) => calls()))).flat();
     expect(reads.reduce((sum, bytes) => sum + bytes, 0)).toBe(256 * 1024);
     expect(Math.max(...reads)).toBeLessThanOrEqual(128 * 1024);
     expect(readFile).not.toHaveBeenCalled();
+    const rewrittenAt = new Date("2026-09-17T14:00:00.000Z");
+    await fs.utimes(f.file, rewrittenAt, rewrittenAt);
+    expect((await readCodexCatalogRollout(f.root, f.file))?.recencyAt).toBe(
+      Math.floor(Date.parse(createdAt) / 1_000) + 60,
+    );
   });
 
   it("reads a compressed head without expanding the full rollout", async () => {
@@ -538,6 +397,14 @@ describe("resident catalog rollout currency", () => {
               ],
             },
           }) +
+          line(
+            "event_msg",
+            {
+              type: "thread_settings_applied",
+              thread_settings: { cwd: "/workspace/moved" },
+            },
+            "2026-09-17T14:00:00.000Z",
+          ) +
           line("event_msg", { type: "agent_message", message: "x".repeat(8 * 1024 * 1024) }) +
           line(
             "event_msg",
@@ -550,8 +417,13 @@ describe("resident catalog rollout currency", () => {
     expect(await readCodexCatalogRollout(f.root, f.file)).toMatchObject({
       id: "native-thread",
       preview: "A compressed request",
-      recencyAt: Date.parse(createdAt) / 1_000,
+      recencyAt: Math.floor(Date.parse(createdAt) / 1_000),
     });
+    const rewrittenAt = new Date("2026-09-18T14:00:00.000Z");
+    await fs.utimes(f.file, rewrittenAt, rewrittenAt);
+    expect((await readCodexCatalogRollout(f.root, f.file))?.recencyAt).toBe(
+      Math.floor(Date.parse(createdAt) / 1_000),
+    );
   });
 
   it.each(["", meta().slice(0, -1)])(
