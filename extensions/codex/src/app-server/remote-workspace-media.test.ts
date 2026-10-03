@@ -1,14 +1,21 @@
 import { mkdtemp, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  createNativeSessionBindingAuthority,
+  prepareNativeSessionGenerationAuthority,
+} from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RemoteWorkspaceFileReader } from "openclaw/plugin-sdk/file-access-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createCodexRemoteWorkspaceFileReader,
   prepareCodexRemoteWorkspaceMessageMedia,
 } from "./remote-workspace-media.js";
+import { createClientHarness } from "./test-support.js";
 
 const remoteWorkspaceRoot = "/remote/codex-workspace";
 let localWorkspaceRoot: string;
@@ -58,7 +65,10 @@ describe("Codex remote file transport", () => {
         stderr: "",
       };
     });
-    const read = createCodexRemoteWorkspaceFileReader({ request }, vi.fn());
+    const read = createCodexRemoteWorkspaceFileReader(
+      { request },
+      createNativeSessionBindingAuthority([], vi.fn()),
+    );
     expect(await read({ path: "/remote/report.txt", maxBytes: bytes.length })).toEqual(bytes);
     expect(request).toHaveBeenCalledTimes(2);
     for (const [method, params] of request.mock.calls) {
@@ -74,7 +84,10 @@ describe("Codex remote file transport", () => {
       stdout: "",
       stderr: "ENOENT: missing report.txt",
     }));
-    const read = createCodexRemoteWorkspaceFileReader({ request }, vi.fn());
+    const read = createCodexRemoteWorkspaceFileReader(
+      { request },
+      createNativeSessionBindingAuthority([], vi.fn()),
+    );
     await expect(read({ path: "/remote/report.txt", maxBytes: 64 })).rejects.toThrow(
       "file read failed: ENOENT",
     );
@@ -84,11 +97,106 @@ describe("Codex remote file transport", () => {
     const request = vi.fn(async () => {
       throw new Error("failed to spawn command: No such file or directory");
     });
-    const read = createCodexRemoteWorkspaceFileReader({ request }, vi.fn());
+    const read = createCodexRemoteWorkspaceFileReader(
+      { request },
+      createNativeSessionBindingAuthority([], vi.fn()),
+    );
     await expect(read({ path: "/remote/report.txt", maxBytes: 64 })).rejects.toThrow(
       "requires Node.js on the remote app-server host",
     );
   });
+
+  it.each(["current", "before first chunk", "between chunks", "before final response"] as const)(
+    "checks persisted lineage at remote file dispatch and completion (%s)",
+    async (stage) => {
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:remote-file-authority",
+        storePath: path.join(openClawState.sessionsDir(), "sessions.json"),
+      };
+      await upsertSessionEntry({
+        ...scope,
+        entry: { sessionId: "reader-origin", updatedAt: 1 },
+      });
+      const captured = await prepareNativeSessionGenerationAuthority({
+        target: { ...scope, sessionId: "reader-origin" },
+        storePath: scope.storePath,
+        createSupersededError: () => new Error("Remote file source was replaced"),
+      });
+      expect(captured.state).toBe("current");
+      const replace = () =>
+        upsertSessionEntry({
+          ...scope,
+          entry: { sessionId: "reader-successor", updatedAt: 2 },
+        });
+      const bytes = Buffer.alloc(stage === "before final response" ? 17 : 512 * 1024 + 17, 0x61);
+      const firstReply = createDeferred<() => void>();
+      const harness = createClientHarness({
+        onWrite(line, send) {
+          const request = JSON.parse(line) as {
+            id: number;
+            method: string;
+            params: { command: string[] };
+          };
+          expect(request.method).toBe("command/exec");
+          const offset = Number(request.params.command[6]);
+          const reply = () =>
+            send({
+              id: request.id,
+              result: {
+                exitCode: 0,
+                stdout: JSON.stringify({
+                  dataBase64: bytes.subarray(offset, offset + 512 * 1024).toString("base64"),
+                  size: bytes.length,
+                  revision: "same-file",
+                }),
+                stderr: "",
+              },
+            });
+          if (offset === 0 && (stage === "between chunks" || stage === "before final response")) {
+            firstReply.resolve(reply);
+          } else {
+            reply();
+          }
+        },
+      });
+      let transfer: Promise<Buffer> | undefined;
+      try {
+        if (stage === "before first chunk") {
+          await replace();
+        }
+        const read = createCodexRemoteWorkspaceFileReader(harness.client, captured.authority);
+        transfer = read({ path: "/remote/report.txt", maxBytes: bytes.length });
+        const settled = transfer.then(
+          () => undefined,
+          () => undefined,
+        );
+        if (stage === "between chunks" || stage === "before final response") {
+          const reply = await Promise.race([
+            firstReply.promise,
+            settled.then(() => {
+              throw new Error("Remote file read settled before its first command");
+            }),
+          ]);
+          // The worker admission must end before awaiting the native response.
+          await replace();
+          reply();
+        }
+        if (stage === "current") {
+          await expect(transfer).resolves.toEqual(bytes);
+        } else {
+          await expect(transfer).rejects.toThrow("Remote file source was replaced");
+        }
+        expect(harness.writes).toHaveLength(
+          stage === "current" ? 2 : stage === "before first chunk" ? 0 : 1,
+        );
+        expect(harness.client.getCloseError()).toBeUndefined();
+      } finally {
+        harness.client.close();
+        await Promise.allSettled([transfer]);
+      }
+    },
+  );
 });
 
 describe("prepareCodexRemoteWorkspaceMessageMedia", () => {

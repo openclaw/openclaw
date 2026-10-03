@@ -39,6 +39,7 @@ import { backupRestoreCommand } from "./backup-restore.js";
 import { buildBackupArchivePath } from "./backup-shared.js";
 import * as backupVerify from "./backup-verify.js";
 import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
+import type { DoctorMaintenance, DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { guardUpdateDoctorSchemaUpgrade } from "./doctor-update-schema-guard.js";
 
@@ -116,87 +117,94 @@ async function legacyAgentFixture(postCore: boolean) {
 
 const runtime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
 
-it("admits only private rehearsal while the shipped package validator can roll back", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = await legacyAgentFixture(false);
-    expect(await guardUpdateDoctorSchemaUpgrade({ schemas: f.schemas })).toMatchObject({
-      updateSchemaRehearsal: { runId: f.runId, updaterVersion: "2026.9.2" },
-    });
-    expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
+async function withDoctorMaintenance(
+  options: Partial<Pick<DoctorMaintenanceParams, "runtime" | "assertCurrent">>,
+  run: (maintenance: DoctorMaintenance) => Promise<void>,
+) {
+  const maintenance = await beginDoctorMaintenance({
+    root: null,
+    options: { repair: true },
+    runtime: runtime(),
+    ...options,
   });
-});
+  try {
+    await run(expectDefined(maintenance, "Doctor maintenance"));
+  } finally {
+    await maintenance?.release();
+  }
+}
 
-it.each(["missing writable marker", "forged post-core marker"])(
-  "refuses %s without changing the agent database",
-  async (mode) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const f = await legacyAgentFixture(false);
+type AdmissionCase = {
+  name: string;
+  postCore?: true;
+  claim?: true | "different";
+  maintenance?: true;
+  marker?: "missing writable" | "post-core";
+};
+
+it.each<AdmissionCase>([
+  { name: "private rehearsal" },
+  { name: "missing writable marker", marker: "missing writable" },
+  { name: "forged post-core marker", marker: "post-core" },
+  { name: "post-core without claim or maintenance", postCore: true },
+  { name: "post-core claim without maintenance", postCore: true, claim: true },
+  { name: "rollback-phase claim", claim: true, maintenance: true, marker: "post-core" },
+  {
+    name: "different-update claim",
+    postCore: true,
+    claim: "different",
+    maintenance: true,
+    marker: "post-core",
+  },
+])("preserves live agent bytes during $name admission", async (scenario) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = await legacyAgentFixture(scenario.postCore === true);
+    if (scenario.marker) {
       vi.stubEnv(
-        mode === "missing writable marker"
+        scenario.marker === "missing writable"
           ? "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE"
           : "OPENCLAW_UPDATE_POST_CORE",
-        mode === "missing writable marker" ? undefined : "1",
+        scenario.marker === "missing writable" ? undefined : "1",
       );
-      await expect(guardUpdateDoctorSchemaUpgrade({ schemas: f.schemas })).rejects.toMatchObject({
-        code: "update-schema-bump-unfenced",
-      });
-      expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
-    });
-  },
-);
-
-it.each([false, true])(
-  "refuses post-core repair without maintenance (claim=%s) with committed-package recovery",
-  async (claim) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const f = await legacyAgentFixture(true);
-      const refusal = guardUpdateDoctorSchemaUpgrade({
+    }
+    const admit = () =>
+      guardUpdateDoctorSchemaUpgrade({
         schemas: f.schemas,
-        ...(claim ? { postCoreSchemaRepair: { runId: f.runId, assertCurrent() {} } } : {}),
+        ...(scenario.claim
+          ? {
+              postCoreSchemaRepair: {
+                runId: scenario.claim === "different" ? "different-update" : f.runId,
+                assertCurrent() {},
+              },
+            }
+          : {}),
       });
+    if (scenario.maintenance) {
+      const create = vi.spyOn(backupCreate, "createBackupArchive");
+      await withDoctorMaintenance({}, async (maintenance) => {
+        await expect(maintenance.run(admit)).rejects.toMatchObject({
+          code: "update-schema-bump-unfenced",
+        });
+        expect(create).not.toHaveBeenCalled();
+      });
+    } else if (scenario.postCore) {
+      const refusal = admit();
       await expect(refusal).rejects.toMatchObject({
         code: "update-schema-bump-unfenced",
         message: expect.stringContaining("already committed its package"),
         commands: ["openclaw doctor --fix", "openclaw gateway start"],
       });
       await expect(refusal).rejects.not.toThrow("Let the updater restore");
-      expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
-    });
-  },
-);
-
-it.each(["rollback phase", "different update"])(
-  "refuses a delegated claim for the %s even under maintenance",
-  async (mode) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const f = await legacyAgentFixture(mode !== "rollback phase");
-      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", "1");
-      const create = vi.spyOn(backupCreate, "createBackupArchive");
-      const maintenance = await beginDoctorMaintenance({
-        root: null,
-        options: { repair: true },
-        runtime: runtime(),
+    } else if (scenario.marker) {
+      await expect(admit()).rejects.toMatchObject({ code: "update-schema-bump-unfenced" });
+    } else {
+      expect(await admit()).toMatchObject({
+        updateSchemaRehearsal: { runId: f.runId, updaterVersion: "2026.9.2" },
       });
-      try {
-        await expect(
-          expectDefined(maintenance, "Doctor maintenance").run(() =>
-            guardUpdateDoctorSchemaUpgrade({
-              schemas: f.schemas,
-              postCoreSchemaRepair: {
-                runId: mode === "different update" ? "different-update" : f.runId,
-                assertCurrent() {},
-              },
-            }),
-          ),
-        ).rejects.toMatchObject({ code: "update-schema-bump-unfenced" });
-        expect(create).not.toHaveBeenCalled();
-      } finally {
-        await maintenance?.release();
-      }
-      expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
-    });
-  },
-);
+    }
+    expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
+  });
+});
 
 it("retains a verified canonical backup before permitting the normal schema migration", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -206,58 +214,53 @@ it("retains a verified canonical backup before permitting the normal schema migr
     const verify = vi.spyOn(backupVerify, "verifyBackupArchive");
     const onVerifiedBackup = vi.fn();
     const authority = { runId: f.runId, assertCurrent: vi.fn() };
-    const maintenance = await beginDoctorMaintenance({
-      root: null,
-      options: { repair: true },
-      runtime: logs,
-      assertCurrent: authority.assertCurrent,
-    });
-    expect(maintenance).toBeDefined();
-    try {
-      await expectDefined(maintenance, "Doctor maintenance").run(async () => {
-        await guardUpdateDoctorSchemaUpgrade({
-          schemas: f.schemas,
-          runtime: logs,
-          postCoreSchemaRepair: authority,
-          onVerifiedBackup,
-        });
-        expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
-        expect(verify).toHaveBeenCalledTimes(1);
-        const identity = fs.statSync(f.pathname);
-        expect(onVerifiedBackup).toHaveBeenCalledExactlyOnceWith([
-          expect.objectContaining({
-            role: "agent",
-            agentId: "main",
-            dev: identity.dev,
-            ino: identity.ino,
-          }),
-        ]);
-        await withAgentDatabaseMaintenanceLease({ env: state.env }, (lease) =>
-          migrateOpenClawAgentDatabaseForMaintenance(
-            { agentId: "main", pathname: f.pathname },
-            lease,
-          ),
-        );
-        // A current maintenance owner may publish a same-version rebuilt image
-        // after migration; the old backup cannot fence unrelated later repairs.
-        await withAgentDatabaseMaintenanceLease({ env: state.env }, async (lease) => {
-          const before = fs.statSync(f.pathname);
-          replaceFileAtomicSync({
-            filePath: f.pathname,
-            content: fs.readFileSync(f.pathname),
-            preserveExistingMode: true,
-            beforeRename: () => lease.assertOwned(),
+    await withDoctorMaintenance(
+      { runtime: logs, assertCurrent: authority.assertCurrent },
+      async (maintenance) => {
+        expect(maintenance).toBeDefined();
+        await maintenance.run(async () => {
+          await guardUpdateDoctorSchemaUpgrade({
+            schemas: f.schemas,
+            runtime: logs,
+            postCoreSchemaRepair: authority,
+            onVerifiedBackup,
           });
-          expect(fs.statSync(f.pathname).ino).not.toBe(before.ino);
-          await migrateOpenClawAgentDatabaseForMaintenance(
-            { agentId: "main", pathname: f.pathname },
-            lease,
+          expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
+          expect(verify).toHaveBeenCalledTimes(1);
+          const identity = fs.statSync(f.pathname);
+          expect(onVerifiedBackup).toHaveBeenCalledExactlyOnceWith([
+            expect.objectContaining({
+              role: "agent",
+              agentId: "main",
+              dev: identity.dev,
+              ino: identity.ino,
+            }),
+          ]);
+          await withAgentDatabaseMaintenanceLease({ env: state.env }, (lease) =>
+            migrateOpenClawAgentDatabaseForMaintenance(
+              { agentId: "main", pathname: f.pathname },
+              lease,
+            ),
           );
+          // A current maintenance owner may publish a same-version rebuilt image
+          // after migration; the old backup cannot fence unrelated later repairs.
+          await withAgentDatabaseMaintenanceLease({ env: state.env }, async (lease) => {
+            const before = fs.statSync(f.pathname);
+            replaceFileAtomicSync({
+              filePath: f.pathname,
+              content: fs.readFileSync(f.pathname),
+              preserveExistingMode: true,
+              beforeRename: () => lease.assertOwned(),
+            });
+            expect(fs.statSync(f.pathname).ino).not.toBe(before.ino);
+            await migrateOpenClawAgentDatabaseForMaintenance(
+              { agentId: "main", pathname: f.pathname },
+              lease,
+            );
+          });
         });
-      });
-    } finally {
-      await maintenance?.release();
-    }
+      },
+    );
     const backup = await expectDefined(create.mock.results[0], "canonical backup creation result")
       .value;
     expect(fs.existsSync(backup.archivePath)).toBe(true);
@@ -308,15 +311,9 @@ it.each([
       }
       return verified;
     });
-    const maintenance = await beginDoctorMaintenance({
-      root: null,
-      options: { repair: true },
-      runtime: runtime(),
-      assertCurrent,
-    });
-    try {
+    await withDoctorMaintenance({ assertCurrent }, async (maintenance) => {
       await expect(
-        expectDefined(maintenance, "Doctor maintenance").run(() =>
+        maintenance.run(() =>
           guardUpdateDoctorSchemaUpgrade({
             schemas: f.schemas,
             postCoreSchemaRepair: { runId: f.runId, assertCurrent },
@@ -332,9 +329,7 @@ it.each([
               ? "changed physical identity"
               : "retired update owner",
       );
-    } finally {
-      await maintenance?.release();
-    }
+    });
     expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
     expect(onVerifiedBackup).not.toHaveBeenCalled();
   });
@@ -357,15 +352,9 @@ it("revalidates the update owner after integrity work before committing an agent
         active = false;
       }
     });
-    const maintenance = await beginDoctorMaintenance({
-      root: null,
-      options: { repair: true },
-      runtime: runtime(),
-      assertCurrent,
-    });
-    try {
+    await withDoctorMaintenance({ assertCurrent }, async (maintenance) => {
       const result = await Promise.allSettled([
-        expectDefined(maintenance, "Doctor maintenance").run(() =>
+        maintenance.run(() =>
           withAgentDatabaseMaintenanceLease({ env: state.env }, (lease) =>
             migrateOpenClawAgentDatabaseForMaintenance(
               { agentId: "main", pathname: f.pathname },
@@ -380,9 +369,7 @@ it("revalidates the update owner after integrity work before committing an agent
         throw new Error("Expected retired owner refusal");
       }
       expect(collectNestedErrorCandidates(outcome.reason)).toContain(retired);
-    } finally {
-      await maintenance?.release();
-    }
+    });
     expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
   });
 });
@@ -428,14 +415,9 @@ it("refuses early unregistered WAL state and admits post-core repair after verif
       recordUpdateRunStep(f.runId, { step: "post-update verification", status: "in_progress" });
       vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", "1");
       const create = vi.spyOn(backupCreate, "createBackupArchive");
-      const maintenance = await beginDoctorMaintenance({
-        root: null,
-        options: { repair: true },
-        runtime: runtime(),
-      });
-      try {
+      await withDoctorMaintenance({}, async (maintenance) => {
         await expect(
-          expectDefined(maintenance, "Doctor maintenance").run(() =>
+          maintenance.run(() =>
             guardUpdateDoctorSchemaUpgrade({
               schemas,
               postCoreSchemaRepair: { runId: f.runId, assertCurrent() {} },
@@ -452,9 +434,7 @@ it("refuses early unregistered WAL state and admits post-core repair after verif
             },
           ],
         });
-      } finally {
-        await maintenance?.release();
-      }
+      });
       const archive = await expectDefined(create.mock.results[0], "canonical backup creation")
         .value;
       const restoredRoot = state.path("restored");
@@ -533,14 +513,8 @@ it("keeps verified backup identity bound until the actual agent schema write", a
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const f = await legacyAgentFixture(true);
     const assertCurrent = () => {};
-    const maintenance = await beginDoctorMaintenance({
-      root: null,
-      options: { repair: true },
-      runtime: runtime(),
-      assertCurrent,
-    });
-    try {
-      await expectDefined(maintenance, "Doctor maintenance").run(async () => {
+    await withDoctorMaintenance({ assertCurrent }, async (maintenance) => {
+      await maintenance.run(async () => {
         await guardUpdateDoctorSchemaUpgrade({
           schemas: f.schemas,
           postCoreSchemaRepair: { runId: f.runId, assertCurrent },
@@ -558,9 +532,7 @@ it("keeps verified backup identity bound until the actual agent schema write", a
         ).rejects.toThrow("physical identity");
         expect(fs.readFileSync(f.pathname)).toEqual(replacement);
       });
-    } finally {
-      await maintenance?.release();
-    }
+    });
   });
 });
 
@@ -688,16 +660,8 @@ it("retains disposable coverage through the real migration of a mixed backed-up 
       vi.stubEnv(key, value);
     }
     vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", undefined);
-    const maintenance = expectDefined(
-      await beginDoctorMaintenance({
-        root: null,
-        options: { repair: true },
-        runtime: runtime(),
-      }),
-      "real Doctor maintenance",
-    );
     const onVerifiedBackup = vi.fn();
-    try {
+    await withDoctorMaintenance({}, async (maintenance) => {
       await maintenance.run(async () => {
         const scope = expectDefined(
           getOpenClawDatabaseMaintenanceScope(),
@@ -718,9 +682,7 @@ it("retains disposable coverage through the real migration of a mixed backed-up 
           ),
         );
       });
-    } finally {
-      await maintenance.release();
-    }
+    });
     const migrated = new DatabaseSync(f.pathname, { readOnly: true });
     try {
       expect(migrated.prepare("PRAGMA user_version").get()?.user_version).toBe(

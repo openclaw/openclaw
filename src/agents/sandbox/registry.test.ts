@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as sqliteQueries from "../../infra/kysely-sync.js";
 
 const { TEST_STATE_DIR, PREVIOUS_OPENCLAW_STATE_DIR, SANDBOX_REGISTRY_PATH } = vi.hoisted(() => {
@@ -23,6 +24,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import {
   completeSandboxRegistryReservation,
@@ -37,6 +39,7 @@ import {
   updateBrowserRegistry,
   updateRegistry,
 } from "./registry.js";
+import { captureSandboxStateOwner } from "./state-owner.js";
 
 type SandboxBrowserRegistryEntry = import("./registry.js").SandboxBrowserRegistryEntry;
 type SandboxRegistryEntry = import("./registry.js").SandboxRegistryEntry;
@@ -95,6 +98,28 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 describe("registry race safety", () => {
+  it("refuses queued browser publication after hosted custody is released", async () => {
+    const owner = acquireGatewayStateOwner({
+      databasePath: resolveOpenClawStateSqlitePath(),
+      payload: {
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        configPath: path.join(TEST_STATE_DIR, "openclaw.json"),
+        role: "gateway",
+      },
+    });
+    try {
+      await updateRegistry(containerEntry());
+      const assertCurrent = await captureSandboxStateOwner();
+      const publication = updateBrowserRegistry(browserEntry(), assertCurrent);
+      owner.release();
+      await expect(publication).rejects.toMatchObject({ code: "GATEWAY_STATE_OWNER_REQUIRED" });
+      await expect(readBrowserRegistry()).resolves.toEqual({ entries: [] });
+    } finally {
+      owner.release();
+    }
+  });
+
   it("settles browser activity in workers while preserving captured fields and workspace custody", async () => {
     // Admit the schema before observing the runtime write boundary.
     await updateRegistry(containerEntry());

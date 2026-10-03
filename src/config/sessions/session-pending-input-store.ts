@@ -75,7 +75,7 @@ export async function preparePendingInputStore(
       assertExistingDatabaseIdentity(options.path, identity.key, identity.birthtime);
     }
   };
-  const { readPendingInputStage, mutatePendingInput } =
+  const { readPendingInput, mutatePendingInput } =
     await import("./session-pending-input-operations.kernel.js");
   assertSource();
   let revoked = false;
@@ -184,7 +184,7 @@ export async function preparePendingInputStore(
           assertOpen();
           assertCurrent();
           if (incognito) {
-            return readPendingInputStage(openOpenClawAgentDatabase(options), input);
+            return readPendingInput(openOpenClawAgentDatabase(options), input);
           }
           return withSessionEntryWorker(
             options,

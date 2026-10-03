@@ -74,8 +74,10 @@ export async function prepareCodexAttemptContext(
       ...(transcriptReadFence ? { admission: transcriptReadFence } : {}),
     });
     connection.runAbortController.signal.throwIfAborted();
-    connection.assertCurrent();
-    return messages;
+    return await connection.withCurrent(() => {
+      connection.assertCurrent();
+      return messages;
+    });
   };
   const historyState = {
     messages:

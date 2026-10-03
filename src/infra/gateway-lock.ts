@@ -301,15 +301,27 @@ type GatewayLockObservationOptions = Pick<
   "env" | "lockDir" | "platform" | "readProcessCmdline" | "readProcessStartTime" | "timeoutMs"
 > & { requireInspection?: boolean; signal?: AbortSignal };
 
+type GatewayLockOwnerIdentity = Omit<GatewayLockIdentity, "port"> & { port?: number };
+type GatewayStateOwnerObservationOptions = GatewayLockObservationOptions & {
+  /** Include embedded custody and Gateways that have not opened their listener yet. */
+  includeEmbedded?: boolean;
+};
+
 export async function readActiveGatewayLockPort(
   opts: GatewayLockObservationOptions = {},
 ): Promise<number | undefined> {
   return (await readActiveGatewayLockIdentity(opts))?.port;
 }
 
+export function readActiveGatewayLockIdentity(
+  opts: GatewayLockObservationOptions & { includeEmbedded: true },
+): Promise<GatewayLockOwnerIdentity | undefined>;
+export function readActiveGatewayLockIdentity(
+  opts?: GatewayLockObservationOptions & { includeEmbedded?: false },
+): Promise<GatewayLockIdentity | undefined>;
 export async function readActiveGatewayLockIdentity(
-  opts: GatewayLockObservationOptions = {},
-): Promise<GatewayLockIdentity | undefined> {
+  opts: GatewayStateOwnerObservationOptions = {},
+): Promise<GatewayLockOwnerIdentity | undefined> {
   const env = opts.env ?? process.env;
   const deadlineMs =
     opts.timeoutMs === undefined ? undefined : performance.now() + Math.max(0, opts.timeoutMs);
@@ -327,9 +339,9 @@ export async function readActiveGatewayLockIdentity(
 
 async function readVerifiedGatewayLockIdentity(
   lockPath: string,
-  opts: GatewayLockObservationOptions,
+  opts: GatewayStateOwnerObservationOptions,
   deadlineMs: number | undefined,
-): Promise<GatewayLockIdentity | undefined> {
+): Promise<GatewayLockOwnerIdentity | undefined> {
   const assertActive = () => {
     opts.signal?.throwIfAborted();
     if (deadlineMs !== undefined && performance.now() >= deadlineMs) {
@@ -339,7 +351,12 @@ async function readVerifiedGatewayLockIdentity(
   assertActive();
   const payload = await readLockPayload(lockPath, opts.requireInspection, opts.signal);
   assertActive();
-  if (!payload || (payload.role && payload.role !== "gateway")) {
+  if (
+    !payload ||
+    (payload.role &&
+      payload.role !== "gateway" &&
+      !(opts.includeEmbedded && payload.role === "agent-embedded"))
+  ) {
     return undefined;
   }
   const ownerStatus = await resolveGatewayOwnerStatus(
@@ -355,11 +372,11 @@ async function readVerifiedGatewayLockIdentity(
   if (
     opts.requireInspection &&
     ownerStatus !== "dead" &&
-    (ownerStatus === "unknown" || !payload.port)
+    (ownerStatus === "unknown" || (!opts.includeEmbedded && !payload.port))
   ) {
     throw new GatewayLockError("Gateway lock owner identity could not be verified");
   }
-  if (ownerStatus !== "alive" || !payload.port) {
+  if (ownerStatus !== "alive" || (!opts.includeEmbedded && !payload.port)) {
     return undefined;
   }
   return {

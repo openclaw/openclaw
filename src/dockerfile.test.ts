@@ -1,11 +1,13 @@
 // Tests Dockerfile metadata and expected install commands.
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { access, cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUNDLED_PLUGIN_ROOT_DIR } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
+import { collectPackageDistImportErrors } from "../scripts/lib/package-dist-imports.mjs";
 import { resolveTestNodeExecPath } from "./test-utils/node-process.js";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
@@ -542,6 +544,59 @@ describe("Dockerfile", () => {
     expect(runtimeStageIndex).toBeGreaterThan(-1);
     expect(templatesCopyIndex).toBeGreaterThan(runtimeStageIndex);
     expect(templatesCopyIndex).toBeLessThan(userIndex);
+  });
+
+  it("ships the declared bootstrap scripts and their relative import closure", async () => {
+    const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
+    const runtime = dockerfile.split(/^FROM /m).at(-1)!;
+    const copiedFiles = new Map<string, string>();
+    for (const [, sources, destination] of runtime.matchAll(
+      /^COPY (?:--\S+\s+)*([^\n]+) (\S+)$/gm,
+    )) {
+      if (!sources || !destination) {
+        continue;
+      }
+      for (const source of sources.split(/\s+/)) {
+        if (source.startsWith("/app/") && !source.includes("${")) {
+          copiedFiles.set(
+            posix.join(destination, posix.basename(source)),
+            source.slice("/app/".length),
+          );
+        }
+      }
+    }
+    const manifest = JSON.parse(await readFile(join(repoRoot, "package.json"), "utf8")) as {
+      files: string[];
+    };
+    const scripts = manifest.files.filter(
+      (file) => file.startsWith("scripts/") && !file.includes("*") && !file.endsWith("/"),
+    );
+    expect(dockerfile).toContain(
+      "node scripts/docker/copy-bootstrap-scripts.mjs /app/.runtime-bootstrap",
+    );
+    expect(runtime).toContain(
+      "COPY --from=runtime-assets --chown=node:node /app/.runtime-bootstrap/scripts ./scripts",
+    );
+    const output = await mkdtemp(join(tmpdir(), "docker-bootstrap-"));
+    try {
+      execFileSync(resolveTestNodeExecPath(), [
+        join(repoRoot, "scripts/docker/copy-bootstrap-scripts.mjs"),
+        output,
+      ]);
+      for (const file of scripts) {
+        expect(await readFile(join(output, file))).toEqual(await readFile(join(repoRoot, file)));
+        copiedFiles.set(file, file);
+      }
+      expect(
+        collectPackageDistImportErrors({
+          files: [...copiedFiles.keys()],
+          readText: (file: string) =>
+            scripts.includes(file) ? readFileSync(join(output, file), "utf8") : "",
+        }),
+      ).toEqual([]);
+    } finally {
+      await rm(output, { recursive: true, force: true });
+    }
   });
 
   it("keeps package manager metadata in runtime images", async () => {

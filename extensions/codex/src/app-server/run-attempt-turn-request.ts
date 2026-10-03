@@ -261,7 +261,7 @@ export async function prepareCodexAttemptTurnRequest(
         signal: runAbortController.signal,
         assertCurrent: () => {
           params.hostCapabilities.assertActive();
-          connection.assertCurrent();
+          connection.assertLegacyCurrent();
           if (
             resourceState.thread !== inferenceThread ||
             getCodexInferenceThread(resourceState.client, inferenceThread.threadId) !==
@@ -326,6 +326,7 @@ export async function prepareCodexAttemptTurnRequest(
         await turnClient.request("turn/start", turnStartParams, {
           timeoutMs: params.timeoutMs,
           signal: runAbortController.signal,
+          withCurrent: connection.withCurrent,
           assertCurrent: () => {
             assertTurnCurrent();
             continuation?.dispatch();

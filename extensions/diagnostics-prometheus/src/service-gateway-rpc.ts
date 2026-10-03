@@ -2,6 +2,13 @@ import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js"
 import { seconds } from "./prometheus-format.js";
 import type { PrometheusMetricStore } from "./prometheus-metric-store.js";
 
+const RESPONSE_BYTE_BUCKETS = Array.from({ length: 17 }, (_, index) => 1024 * 2 ** index);
+const HEAP_DELTA_BYTE_BUCKETS = [
+  ...RESPONSE_BYTE_BUCKETS.toReversed().map((bytes) => -bytes),
+  0,
+  ...RESPONSE_BYTE_BUCKETS,
+];
+
 const CATALOG_LIST_METHOD = "sessions.catalog.list";
 const CATALOG_LIST_PHASE_PREFIX = `${CATALOG_LIST_METHOD}.`;
 const CATALOG_LIST_PHASES = new Set([
@@ -56,6 +63,18 @@ export function recordGatewayRpcEvent(
         );
         return;
       }
+      if (evt.phase === "response" && (evt.outcome === "ok" || evt.outcome === "error")) {
+        store.histogram(
+          "openclaw_gateway_rpc_response_bytes",
+          "Encoded Gateway RPC response frame size in bytes, including later frames.",
+          labels,
+          evt.responseBytes,
+          RESPONSE_BYTE_BUCKETS,
+        );
+        if (evt.firstResponse === false) {
+          return;
+        }
+      }
       store.counter(
         "openclaw_gateway_rpc_outcomes_total",
         "Gateway RPC observations by phase and outcome.",
@@ -82,6 +101,13 @@ export function recordGatewayRpcEvent(
           seconds(evt.admissionMs),
         );
       } else if (evt.phase === "dispatch") {
+        store.histogram(
+          "openclaw_gateway_rpc_handler_heap_delta_bytes",
+          "Indicative main-thread heap change over an RPC request; GC can make it negative.",
+          labels,
+          evt.heapDeltaBytes,
+          HEAP_DELTA_BYTE_BUCKETS,
+        );
         store.histogram(
           "openclaw_gateway_rpc_queue_wait_seconds",
           "Gateway operator request start queue wait.",

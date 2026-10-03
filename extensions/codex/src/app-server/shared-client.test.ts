@@ -8,7 +8,7 @@ import { SemVer } from "semver";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
 import { createCodexAppServerAgentHarness } from "../../harness.js";
-import type { CodexAppServerAuthHandoff, CodexAppServerPreparedAuth } from "./auth-bridge.js";
+import type { CodexAppServerAuthHandoff, CodexAppServerPreparedAuth } from "./auth-types.js";
 import { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";

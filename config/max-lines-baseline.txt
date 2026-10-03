@@ -34,7 +34,6 @@ extensions/codex/src/app-server/plugin-thread-config.test.ts
 extensions/codex/src/app-server/run-attempt.test.ts
 extensions/codex/src/app-server/runtime-artifact.ts
 extensions/codex/src/app-server/session-binding.test.ts
-extensions/codex/src/app-server/session-binding.ts
 extensions/codex/src/app-server/shared-client.test.ts
 extensions/codex/src/app-server/shared-client.ts
 extensions/codex/src/app-server/side-question.test.ts
@@ -229,7 +228,6 @@ src/agents/agent-tools.before-tool-call.integration.e2e.test.ts
 src/agents/agent-tools.create-openclaw-coding-tools.test.ts
 src/agents/agent-tools.read.ts
 src/agents/auth-profiles/oauth-manager.ts
-src/agents/auth-profiles/persisted.ts
 src/agents/auth-profiles/profiles.test.ts
 src/agents/auth-profiles/store.ts
 src/agents/auth-profiles/usage.test.ts

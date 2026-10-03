@@ -236,3 +236,27 @@ it("does not publish a rejected old migration into a replacement identity scope"
   });
   expect(first.gateway.readPreference("main")).toMatchObject({ worktreeName: "replacement-task" });
 });
+
+it("keeps a private repository with person A instead of importing its browser mirror into person B", async () => {
+  const privateChoice = {
+    folder: "/repo",
+    remoteProject: {
+      identity: "acme/private",
+      cloneUrl: "https://ghe.example.test/acme/private.git",
+    },
+    defaultRepositoryOptOut: true,
+  };
+  const alice = identityPreferences(
+    true,
+    undefined,
+    { [migrationKey]: true, "new-session.v1:main": privateChoice },
+    "person-a",
+  );
+  const first = alice.make();
+  await alice.ready(first);
+  expect(alice.stored()).toEqual(privateChoice);
+  const bob = identityPreferences(true, undefined, {}, "person-b");
+  const second = bob.make();
+  await bob.ready(second);
+  expect(bob.stored()).toEqual({ folder: "/repo" });
+});

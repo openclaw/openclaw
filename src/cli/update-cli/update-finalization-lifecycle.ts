@@ -494,6 +494,11 @@ export class UpdateFinalizationLifecycle {
   }
 
   fail(): void {
+    // Restoration can wrap a deadline failure before triage exits on its nested cause.
+    if (this.reportTimeout) {
+      this.complete(1);
+      return;
+    }
     this.finishLedger(1);
   }
 

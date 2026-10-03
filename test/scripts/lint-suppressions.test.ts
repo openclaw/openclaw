@@ -212,8 +212,6 @@ describe("production lint suppressions", () => {
         "src/agents/auth-profiles/oauth-refresh-peers.ts|preserve-caught-error|1",
         "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|3",
         "src/agents/provider-http-errors.ts|preserve-caught-error|1",
-        // Canonical entries must honor toJSON and omit non-JSON values exactly as persistence does.
-        "src/agents/sessions/session-manager-persistence-entry.ts|unicorn/prefer-structured-clone|1",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
         // Account defaults and heterogeneous registries erase plugin-specific callback families;
@@ -228,6 +226,8 @@ describe("production lint suppressions", () => {
         "src/config/sessions/session-accessor.sqlite-worker-request.ts|no-warning-comments|1",
         "src/config/sessions/session-transcript-reconcile.close-failure.test-support.mjs|typescript/unbound-method|1",
         "src/config/sessions/session-transcript-reconcile.sql-observer.test-support.ts|typescript/unbound-method|1",
+        // Canonical entries must honor toJSON and omit non-JSON values exactly as persistence does.
+        "src/config/sessions/transcript-json.ts|unicorn/prefer-structured-clone|1",
         // Intl.Collator.compare is a getter returning a bound function.
         "src/cron/service/list-page-sort.ts|typescript/unbound-method|1",
         "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",

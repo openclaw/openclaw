@@ -15,7 +15,11 @@ import {
 import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { retryableGitNetworkOperation, withGitNetworkRetry } from "./git-network-retry.js";
+import {
+  retryableGitNetworkOperation,
+  withGitNetworkRetry,
+  type GitOperationStarter,
+} from "./git-network-retry.js";
 import { startGitOperationTiming } from "./git-operation-timing.js";
 
 export const GIT_TIMEOUT_MS = 120_000;
@@ -97,6 +101,17 @@ export function normalizeGitPathForFilesystem(
   return path.win32.normalize(`${drive.toUpperCase()}:/${match[2] ?? ""}`);
 }
 
+export function gitCommandArgv(cwd: string, args: string[], config: string[] = []): string[] {
+  return [
+    "git",
+    ...config.flatMap((value) => ["-c", value]),
+    ...(process.platform === "win32" ? ["-c", "core.longpaths=true"] : []),
+    "-C",
+    cwd,
+    ...args,
+  ];
+}
+
 function withForegroundGitMaintenance(argv: string[]): string[] {
   // Maintenance and legacy auto-GC must stay in their cancellable process tree.
   return argv[0] === "git"
@@ -121,6 +136,8 @@ export type GitCommandOptions = Pick<
   waitForExit?: boolean;
   /** Recheck caller authority immediately before each attempt. */
   beforeRun?: () => void;
+  /** Admit each attempt inside the caller's asynchronous credential owner. */
+  startRun?: GitOperationStarter;
 };
 export type GitCommandBytesResult = BufferSpawnResult & { timeoutMs: number };
 
@@ -152,13 +169,16 @@ async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSp
   options: GitCommandOptions,
 ): Promise<Result & { timeoutMs: number }> {
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
-  const argv = ["git", "-C", cwd, ...args];
+  const argv = gitCommandArgv(cwd, args);
   if (options.waitForExit === true) {
-    options.beforeRun?.();
-    const result = await run(options.killProcessTree ? withForegroundGitMaintenance(argv) : argv, {
-      ...options,
-      timeoutMs: undefined,
-    });
+    const start = () => {
+      options.beforeRun?.();
+      return run(options.killProcessTree ? withForegroundGitMaintenance(argv) : argv, {
+        ...options,
+        timeoutMs: undefined,
+      });
+    };
+    const result = await (options.startRun ? options.startRun(start) : start());
     return { ...result, timeoutMs: 0 };
   }
   const result = await withGitNetworkRetry(
@@ -175,6 +195,7 @@ async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSp
 
 export type GitBufferedCommandOptions = BufferedCommandOptions & {
   beforeRun?: () => void;
+  startRun?: GitOperationStarter;
   operation?: GitProcessOperation;
 };
 
@@ -183,7 +204,7 @@ export async function executeGitCommandBuffered(
   args: string[],
   options: GitBufferedCommandOptions = {},
 ): Promise<BufferedCommandResult> {
-  const argv = ["git", "-C", cwd, ...args];
+  const argv = gitCommandArgv(cwd, args);
   return await withGitProcessOperation(options.operation, () =>
     withGitNetworkRetry(
       retryableGitNetworkOperation(args),
@@ -238,15 +259,8 @@ export function requireGitCommandOutput(
   return result.stdout;
 }
 
-/**
- * Null device path that Git for Windows can open as a config file.
- *
- * `os.devNull` returns `\.\nul` on Windows, which Git rejects with
- * "unable to access '\.\nul': Invalid argument" (exit 128) when passed via
- * `GIT_CONFIG_GLOBAL` or `GIT_CONFIG_SYSTEM` — it must open and parse those
- * files. "NUL" is the path Git for Windows understands. Config *values* such
- * as `core.hooksPath` accept the device path and need no change.
- */
+// Git config filenames need "NUL" on Windows; os.devNull's device path is invalid.
+// Config values such as core.hooksPath still accept os.devNull.
 export function gitNullConfigPath(): string {
   return process.platform === "win32" ? "NUL" : "/dev/null";
 }

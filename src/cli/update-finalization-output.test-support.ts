@@ -16,7 +16,7 @@ await fs.writeFile(
 );
 const [runtimeProcessEntrypointsJson, scenario, ...args] = process.argv.slice(2);
 const borrowed = scenario?.startsWith("borrowed-");
-const repairDeadline = scenario === "repair-deadline";
+const repairDeadline = scenario?.startsWith("repair-deadline");
 const blockedChildSource = `
 const fs = require('node:fs');
 process.title = 'node fixture-private-argument';
@@ -321,7 +321,17 @@ export const resolveGatewayService = () => service;`,
 if (repairDeadline) {
   const { prepareRepairDeadlineFixture } =
     await import("./update-finalization-repair.test-support.js");
-  await prepareRepairDeadlineFixture(stubs, sourceUrl, root, installedEntry);
+  await prepareRepairDeadlineFixture(
+    stubs,
+    sourceUrl,
+    root,
+    installedEntry,
+    scenario === "repair-deadline-starting"
+      ? "starting"
+      : scenario === "repair-deadline-failed"
+        ? "failed"
+        : "ready",
+  );
 }
 registerHooks({
   resolve(specifier, context, nextResolve) {

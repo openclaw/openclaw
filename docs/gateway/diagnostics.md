@@ -555,6 +555,22 @@ match. Warm task workers still collect released payloads in place; critical
 pressure, cancellation, rotation, and shutdown retain their existing cleanup
 paths. No configuration setting is needed.
 
+## RPC response size and heap changes
+
+The [Prometheus exporter](/gateway/prometheus) records
+`openclaw_gateway_rpc_response_bytes` for each encoded JSON response frame accepted
+by the WebSocket sender (UTF-8 bytes, excluding transport framing/compression),
+with power-of-two buckets from 1 KiB to 64 MiB. Slow-response journal lines include
+`bytes=` for the same frame. `openclaw_gateway_rpc_handler_heap_delta_bytes` samples
+`process.memoryUsage().heapUsed` at request start and dispatch finish on the main
+thread only, using signed buckets around zero. A method with high heap delta per
+call is materializing large graphs on the main thread. Treat this as an indicative
+transient-allocation signal, not exact attribution: concurrent requests and GC
+also affect it, GC can make it negative, and worker heaps are excluded. Use bucket
+counts or quantiles; the signed `_sum` can decrease, so `rate()` on that sum is not
+valid. Both histograms use registered method labels and the existing exporter cap,
+without new configuration; disabled or uninterested diagnostics skip heap sampling.
+
 ## Related
 
 - [Health checks](/gateway/health)

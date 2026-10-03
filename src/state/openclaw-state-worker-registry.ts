@@ -17,6 +17,7 @@ import type { WorkerPlacementDispatchStoreOperations } from "../gateway/worker-e
 import type { PlacementSessionToolWorkerOperations } from "../gateway/worker-environments/placement-session-tool-operations.worker-contract.js";
 import type { PlacementTurnClaimWorkerOperations } from "../gateway/worker-environments/placement-turn-claims.worker-contract.js";
 import type { WorkspaceJournalWorkerOperations } from "../gateway/worker-environments/placement-workspace-journal.worker-contract.js";
+import type { PreparedPoolPresenceWorkerOperations } from "../gateway/worker-environments/prepared-pool-presence.worker.js";
 import type { WorkerEnvironmentWorkerOperations } from "../gateway/worker-environments/store-worker-contract.js";
 import type { WorkerTranscriptCommitOperations } from "../gateway/worker-environments/transcript-commit-store.worker-contract.js";
 import type { DeliveryQueueWorkerOperations } from "../infra/delivery-queue.worker-contract.js";
@@ -53,6 +54,7 @@ export type RegisteredStateWorkerOperations = ClawProvenanceWriteOperations &
   DiagnosticWorkerOperations &
   RestartSentinelWorkerOperations &
   WebPushWorkerOperations &
+  PreparedPoolPresenceWorkerOperations &
   ProjectRegistryWorkerOperations &
   ApnsRegistrationWorkerOperations &
   WorktreeWorkerOperations &
@@ -102,6 +104,10 @@ export const stateWorkerRegistry = createWorkerOperationRegistry<RegisteredState
     import("../infra/sqlite-audit-record.worker.js").then((m) => m.diagnosticOperations),
   restartSentinel: () =>
     import("../infra/restart-sentinel.worker.js").then((m) => m.restartSentinelOperations),
+  preparedPoolPresence: () =>
+    import("../gateway/worker-environments/prepared-pool-presence.worker.js").then(
+      (m) => m.preparedPoolPresenceOperations,
+    ),
   clawProvenance: () =>
     import("../claws/provenance-write.worker.js").then((m) => m.clawProvenanceOperations),
   projects: () =>

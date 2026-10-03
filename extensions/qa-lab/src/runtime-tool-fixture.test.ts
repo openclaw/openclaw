@@ -204,6 +204,7 @@ describe("runtime tool fixture", () => {
       "agent:qa:runtime-tool:read:happy",
     );
     const createdKeys: string[] = [];
+    const createdLabels: string[] = [];
     const promptKeys: string[] = [];
     const promptEvidence: Array<{
       requireSuccessfulTranscriptToolResult?: boolean;
@@ -225,8 +226,9 @@ describe("runtime tool fixture", () => {
         },
       },
       {
-        createSession: vi.fn(async (_env, _label, key) => {
+        createSession: vi.fn(async (_env, label, key) => {
           createdKeys.push(key);
+          createdLabels.push(label);
           return key;
         }),
         readEffectiveTools,
@@ -246,6 +248,10 @@ describe("runtime tool fixture", () => {
     expect(createdKeys).toEqual([
       "agent:qa:runtime-tool:read:happy",
       "agent:qa:runtime-tool:read:failure",
+    ]);
+    expect(createdLabels).toEqual([
+      "Runtime tool fixture: read happy",
+      "Runtime tool fixture: read failure",
     ]);
     expect(promptKeys).toEqual([
       "agent:qa:runtime-tool:read:happy",

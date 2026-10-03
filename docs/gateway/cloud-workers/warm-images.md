@@ -116,7 +116,13 @@ one unassigned worker per project and profile, with a Gateway-wide cap of four.
 The next matching dispatch consumes a ready worker once, then schedules refill;
 if no eligible worker is ready, dispatch uses ordinary provisioning.
 Paired-device dispatch does not use this pool.
-Repository admission, refill, and restart binding recheck current source access and visibility. Public and private repositories use separate preparation identities; a visibility change or lost access prevents reuse of earlier prepared capacity. Retention and cleanup use local ownership facts without requiring GitHub access. A changed repository instance or selected account cannot consume capacity prepared for the previous owner.
+When an authenticated Control UI browser authorized to create sessions is connected,
+the configured default repository and its worker profile keep the profile's
+`readyWorkers` target prepared. Read-only connections do not allocate workers.
+After the last eligible browser disconnects or loses authorization, presence-driven
+refill stops and unused reserves retire after 15 minutes. Changing the GitHub host or removing the default repository retires
+stale demand and unused reserves; active sessions keep their own workers.
+Repository admission, refill, and restart binding recheck current source access and visibility. Public and private repositories use separate preparation identities; a visibility change or lost access prevents reuse of earlier prepared capacity. Retention and cleanup use local ownership facts without requiring GitHub access. A slow or failed default-repository admission does not block unrelated reserve cleanup or refill from independently authorized session demand. A changed repository instance or selected account cannot consume capacity prepared for the previous owner.
 A ready-worker hit bypasses provisioning. A foreground miss provisions a worker
 from the compatible image when available. If only the project commit changed,
 it refreshes the checkout and continues to enrollment without waiting for a new

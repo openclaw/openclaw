@@ -345,17 +345,27 @@ export function writeGatewayBenchConfig(
   root: string,
   config: Record<string, unknown>,
   options: {
-    agentList?: Array<{ id: string; default?: boolean; workspace: string }> | undefined;
+    agentList?: Array<{ id: string; workspace: string }> | undefined;
     pluginFixtures?: PluginFixtureResult | null | undefined;
   },
 ): string {
+  const agents = config.agents as { defaults?: Record<string, unknown> } | undefined;
   const merged = {
     ...config,
     ...(options.agentList
       ? {
           agents: {
-            ...(config.agents as Record<string, unknown> | undefined),
-            list: options.agentList,
+            ...agents,
+            ownership: "explicit",
+            defaults: {
+              ...agents?.defaults,
+              systemAgent: {
+                agentId: expectDefined(options.agentList[0], "benchmark system agent").id,
+              },
+            },
+            entries: Object.fromEntries(
+              options.agentList.map(({ id, workspace }) => [id, { workspace }]),
+            ),
           },
         }
       : {}),

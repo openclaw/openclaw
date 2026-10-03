@@ -10,6 +10,7 @@ import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/age
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   appendTranscriptMessageSync,
   listSessionPendingInputs,
@@ -70,7 +71,6 @@ describe("ordinary chat input admission", () => {
       recorder.finishPendingInput?.("cancelled");
       expect(() => recorder.withPendingInput?.(() => {})).toThrow("ownership ended");
       await fixture.finishDispatch();
-      // Submitted-input comparison retains its read owner until the separate read cutover.
       const writes = sql.queries.filter((query) =>
         /\b(?:insert\s+into|update|delete\s+from)\s+["`]?session_(?:pending_inputs|input_completions)\b/i.test(
           query,
@@ -205,27 +205,52 @@ describe("ordinary chat input admission", () => {
     }
   });
 
-  it("rejects changed recipients on a same-ID retry while preserving the queued original", async () => {
-    const fixture = await createMentionFixture();
-    try {
-      await fixture.send();
-      fixture.params.mentions = [
-        { profileId: fixture.carolClient.authenticatedUserProfile.profileId, start: 0, end: 4 },
-      ];
-      const replay = await fixture.send();
-      expect(replay).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringMatching(/different|conflict|reused/i) }),
-      );
-      const recorder = await fixture.dispatchedRecorder;
-      await recorder.persistApproved();
-      expect(fixture.read()).toHaveLength(1);
-      expect(fixture.read(fixture.carolClient)).toEqual([]);
-    } finally {
-      await fixture.cleanup();
-    }
-  });
+  it.each(["retained", "expired"] as const)(
+    "rejects changed recipients with %s RAM identity while preserving the queued original",
+    async (identity) => {
+      const fixture = await createMentionFixture();
+      try {
+        await fixture.send();
+        const recorder = await fixture.dispatchedRecorder;
+        if (identity === "expired") {
+          fixture.context.dedupe.clear();
+        }
+        fixture.params.mentions = [
+          { profileId: fixture.carolClient.authenticatedUserProfile.profileId, start: 0, end: 4 },
+        ];
+        const originalRead = sessionAccessor.readSessionSubmittedInput;
+        const comparisonSql: string[] = [];
+        const read = vi
+          .spyOn(sessionAccessor, "readSessionSubmittedInput")
+          .mockImplementation(async (...args) => {
+            const sql = observeHostDataSql();
+            try {
+              return await originalRead(...args);
+            } finally {
+              comparisonSql.push(...sql.queries);
+              sql.restore();
+            }
+          });
+        try {
+          const replay = await fixture.send();
+          expect(replay).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({ details: { reason: "chat-request-conflict" } }),
+          );
+          expect(read).toHaveBeenCalledTimes(identity === "expired" ? 1 : 0);
+          expect(comparisonSql).toEqual([]);
+        } finally {
+          read.mockRestore();
+        }
+        await recorder.persistApproved();
+        expect(fixture.read()).toHaveLength(1);
+        expect(fixture.read(fixture.carolClient)).toEqual([]);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+  );
 
   it("retains pending-input custody while retrying a transient post-ACK projection failure", async () => {
     const fixture = await createBrowserFollowupFixture({ transientProjectionFailures: 1 });

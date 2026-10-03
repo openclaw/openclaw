@@ -7,6 +7,7 @@ read_when:
   - You need the durable admitted-turn contract for context engines
   - You are exposing memory embedding or public-artifact adapters
   - You need to authorize provider memory by owner or conversation audience
+  - You are implementing provider-owned pre-compaction persistence
 ---
 
 The registrars that allow only one active implementation at a time, and the
@@ -55,11 +56,88 @@ engine unchanged, and tries that engine again on the next logical turn.
   retaining ordinary memory hits. Keep transcript identity and visibility
   policy in the owning memory plugin; callers must not infer authorization from
   paths or duplicate plugin-specific rules.
-- `MemoryFlushPlan.model` can pin the flush turn to an exact `provider/model`
-  reference, such as `ollama/qwen3:8b`, without inheriting the active fallback
-  chain.
 - Embedding providers use `api.registerEmbeddingProvider(...)` and
   `contracts.embeddingProviders`; there is no separate memory-only registry.
+
+## Pre-compaction memory flush
+
+Register a flush resolver on `MemoryPluginCapability` to supply the silent
+turn that saves durable context before compaction. OpenClaw resolves flush
+timing first from `agents.defaults.compaction.memoryFlush` and the active
+context window. When `enabled` is `false`, the host does not invoke the
+resolver. Return `null` to skip the flush for provider-specific reasons.
+
+There are two resolver fields:
+
+- `flushPlanResolver` returns a complete `MemoryFlushPlan` or `null`. Its
+  contract is unchanged from earlier releases. Memory Core uses it.
+- `providerFlushPlanResolver` returns a plan the host completes: a
+  `MemoryFlushFilePlanDraft` (a complete `MemoryFlushPlan` is one such draft)
+  or a `MemoryFlushToolsPlan`. When a plugin registers both, the host uses
+  `providerFlushPlanResolver`.
+
+Each plan has `prompt`, `systemPrompt`, and one persistence arm. In plans from
+`providerFlushPlanResolver`, the `softThresholdTokens`,
+`forceFlushTranscriptBytes`, `reserveTokensFloor`, and `model` fields are
+deliberate provider overrides. The host fills omitted timing fields from its
+resolved timing, and fills an omitted `model` from `memoryFlush.model` for the
+tools arm only; a file plan without `model` keeps the session's model. A `model` override pins the turn
+to an exact `provider/model` reference, such as `ollama/qwen3:8b`, without
+inheriting the active fallback chain.
+
+Choose exactly one persistence arm:
+
+| Arm   | Plan fields                                                                                                      | Flush tools and storage                                                                                                                                                                                        |
+| ----- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| File  | `relativePath: string`                                                                                           | `read` and an append-only `write` restricted to the target file. The host creates the target and requires writable workspace access. Memory Core uses this arm.                                                |
+| Tools | `persistenceToolNames: readonly string[]` (non-empty), optional `lookupToolNames: readonly string[]` (read-only) | `read` plus the declared persistence and lookup tools owned by the selected memory plugin. The host creates no target file and does not require writable workspace access. Lookup tools cannot persist memory. |
+
+Only the selected memory slot owner may supply a tools-arm plan, through
+`providerFlushPlanResolver`. The host tracks which plugin supplied the effective
+resolver, including when sidecar capability fields are merged; an owner's
+resolver of either kind wins over a sidecar's. A tools-arm plan from a non-owner is skipped with a warning
+naming that plugin.
+
+For the tools arm, ownership comes from registered tool metadata. A same-named
+tool from another plugin is excluded. Normal message, model, sandbox, allowlist,
+and authorization policies still apply after this projection. Persistence and
+lookup tool names must not overlap; the host skips an overlapping plan and warns
+with the plugin name. If none of the declared persistence tools survives, the
+host skips inference and logs a warning naming the missing tools. If policy
+removes any lookup tools, the flush still runs with its surviving persistence
+tools and logs one warning naming the unavailable lookup tools. Compaction can
+continue after a skipped flush.
+
+### Audience and flush identity
+
+The flush runs in a detached internal session so its maintenance transcript does
+not enter later user turns. For a tools-arm turn, the host resolves the source
+turn's `memoryAudience` from its trusted session entry, session key, session ID,
+and the source turn's sender ownership, including for a flush scheduled after the
+turn completes. It delegates that audience to the detached session key,
+retaining the source lineage and revocation checks. Persistence and lookup tools
+receive this delegated audience and the source sandbox state. If the source has
+no valid audience, the host skips the tools-arm flush with a debug log. The
+maintenance copy still has `senderIsOwner: false`; providers authorize memory
+access through the supplied audience and its current-authority check.
+
+Only tools-arm flush contexts include `memoryFlush: { flushId: string }` on
+`OpenClawPluginToolContext`. The host derives `flushId` deterministically from
+the source session incarnation (its `sessionId` and lifecycle revision) and its
+pre-compaction `compactionCount` (zero when absent). The count advances after a
+completed compaction, so model fallback attempts and later retries within the
+same cycle share an ID; a later cycle or a new session incarnation, including a
+reset that keeps the session ID, gets a different ID. Providers can combine this ID with
+their mutation's identity to deduplicate retries. The ID does not grant authority.
+
+### Completion evidence
+
+A tools-arm flush succeeds only when at least one declared persistence tool
+completes without error, or the assistant's final output is the silent token
+`NO_REPLY`. A successful lookup call is not persistence evidence. Without either
+valid completion signal, the host records a failed flush with the reason `no
+persistence tool call succeeded`. Run errors still fail the flush. The file arm
+retains its file-writing and completion behavior.
 
 ## Provider-neutral memory runtime
 

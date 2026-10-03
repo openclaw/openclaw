@@ -613,7 +613,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                     prepared.activeRunAbort.entry.sessionId = sessionId;
                   }
                 },
-                workspaceDir: workspaceOverride,
+                workspaceDir: workspaceOverride ?? replyDispatchRuntime.workspaceDir,
                 cwd: resolveSessionRuntimeCwd({
                   requestedCwd: params.request.cwd,
                   sessionEntry: params.sessionEntry,

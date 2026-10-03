@@ -23,3 +23,9 @@ export type CodexAppServerResolvedPreparedAuth =
   | (Extract<CodexAppServerPreparedAuth, { kind: "profile" }> & {
       snapshot: CodexAppServerPreparedAuthProfileSnapshot;
     });
+
+export type CodexAppServerAuthRequirement = "api-key" | "subscription";
+export type CodexAppServerAuthHandoff = Readonly<{
+  accessFingerprint: string;
+  chatgptAccountId: string;
+}>;

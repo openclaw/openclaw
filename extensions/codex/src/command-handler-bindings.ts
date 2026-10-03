@@ -343,13 +343,14 @@ export async function resumeThread(
     agentId: scope.agentId,
     config: ctx.config,
   });
-  const { assertCurrent: assertHostGeneration } = await resolveCodexSessionBinding({
+  const { authority } = await resolveCodexSessionBinding({
     reclaimStale: true,
     bindingStore: deps.bindingStore,
     identity,
     config: ctx.config,
     storePath: ctx.sessionTarget?.storePath,
   });
+  const assertHostGeneration = authority.assertLegacyCurrent;
   return await withExclusiveCodexAppServerThread({
     bindingStore: deps.bindingStore,
     identity,

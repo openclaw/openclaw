@@ -244,9 +244,9 @@ export async function loadAgentPendingInputOperations() {
   const history = await import("../config/sessions/session-pending-input-history-reconcile.js");
   return {
     "session.pendingInputs.read": (
-      input: Parameters<typeof pending.readPendingInputStage>[1],
+      input: Parameters<typeof pending.readPendingInput>[1],
       { open },
-    ) => pending.readPendingInputStage(open(), input),
+    ) => pending.readPendingInput(open(), input),
     "session.pendingInputs.mutate": (
       input: Parameters<typeof pending.mutatePendingInput>[0],
       context,

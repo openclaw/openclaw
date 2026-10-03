@@ -2242,7 +2242,7 @@
     "undici"
   ],
   "dependencies": {
-    "@agentclientprotocol/sdk": "1.4.0",
+    "@agentclientprotocol/sdk": "1.5.0",
     "@anthropic-ai/sdk": "0.128.0",
     "@babel/generator": "8.0.6",
     "@babel/parser": "8.0.6",

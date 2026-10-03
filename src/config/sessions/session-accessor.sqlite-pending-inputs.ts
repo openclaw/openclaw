@@ -298,34 +298,6 @@ export function hasRegisteredSessionPendingInputOwner(
   );
 }
 
-/** Submitted-input recovery retains its transaction-local session check. */
-function readSessionPendingInputOwnerIds(
-  database: PendingInputDatabase,
-  rows: readonly Pick<
-    SessionPendingInputRow,
-    "input_id" | "session_key" | "session_id" | "lifecycle_generation"
-  >[],
-): Set<string> {
-  const databasePath = readOpenClawAgentDatabaseIdentity(database).canonicalPath || database.path;
-  const candidates = rows.filter((row) => hasRegisteredSessionPendingInputOwner(databasePath, row));
-  if (!candidates.length) {
-    return new Set();
-  }
-  const sessions = executeSqliteQuerySync(
-    database.db,
-    getSessionKysely(database.db)
-      .selectFrom("session_nodes")
-      .select(["session_key", "current_session_id"])
-      .where("session_key", "in", [...new Set(candidates.map((row) => row.session_key))]),
-  ).rows;
-  const current = new Map(sessions.map((row) => [row.session_key, row.current_session_id]));
-  return new Set(
-    candidates
-      .filter((row) => current.get(row.session_key) === row.session_id)
-      .map((row) => row.input_id),
-  );
-}
-
 export function parseSessionPendingInputMessage(messageJson: string): PersistedUserTurnMessage {
   const value: unknown = JSON.parse(messageJson);
   if (asOptionalRecord(value)?.role !== "user") {
@@ -438,41 +410,52 @@ export function projectSessionPendingInput(row: SessionPendingInputRow): Session
   };
 }
 
-/** Only a current recovered source can supersede its previous request receipt, once. */
-export function claimCurrentSessionPendingInputDedupeRecovery(
-  database: PendingInputDatabase,
+/** Capture the exact host owner before reading; claim it once in the consuming frame. */
+export function prepareCurrentSessionPendingInputDedupeRecovery(
   scope: Pick<ResolvedTranscriptScope, "sessionId" | "sessionKey">,
   runId: string,
-): boolean {
+) {
   const owner = owners.current.getStore();
   if (
     !owner ||
     owner.sources ||
     owner.restartRecovered !== true ||
     recoveredDedupeOwners.has(owner) ||
-    owner.workerDatabasePath !==
-      (readOpenClawAgentDatabaseIdentity(database).canonicalPath || database.path) ||
     owner.sessionId !== scope.sessionId ||
     owner.sessionKey !== scope.sessionKey ||
     owner.idempotencyKey !== `${runId}:user`
   ) {
-    return false;
+    return undefined;
   }
   assertPendingInputOwnerCurrent(owner);
-  const row = readSessionPendingInputByKey(database, scope, owner.idempotencyKey);
-  const current = Boolean(
-    row &&
-    row.input_id === owner.inputId &&
-    row.run_id === runId &&
-    row.message_json === owner.messageJson &&
-    row.state === "queued" &&
-    row.consumed_event_id == null &&
-    readSessionPendingInputOwnerIds(database, [row]).has(owner.inputId),
-  );
-  if (current) {
+  return (
+    path: string,
+    snapshot: { current: boolean; pending?: SessionPendingInputRow },
+  ): boolean => {
+    assertPendingInputOwnerCurrent(owner);
+    const row = snapshot.pending;
+    if (
+      owners.current.getStore() !== owner ||
+      recoveredDedupeOwners.has(owner) ||
+      owner.consumed ||
+      owner.workerDatabasePath !== path ||
+      !snapshot.current ||
+      !row ||
+      row.input_id !== owner.inputId ||
+      row.run_id !== runId ||
+      row.session_key !== owner.sessionKey ||
+      row.session_id !== owner.sessionId ||
+      row.lifecycle_generation !== owner.lifecycleGeneration ||
+      row.message_json !== owner.messageJson ||
+      row.state !== "queued" ||
+      row.consumed_event_id != null ||
+      !hasRegisteredSessionPendingInputOwner(path, row)
+    ) {
+      return false;
+    }
     recoveredDedupeOwners.add(owner);
-  }
-  return current;
+    return true;
+  };
 }
 
 /** Query only the exact physical transcript; copied keys cannot adopt another generation. */
