@@ -17,6 +17,7 @@ import type { FinalizedMsgContext } from "../templating.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import {
   loadSessionStoreEntry,
+  readSessionEntryReadOnlyInWorker,
   resolveSessionStorePathCore,
 } from "./dispatch-from-config.runtime.js";
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
@@ -42,16 +43,18 @@ export function shouldLetSlackRoutedThreadBypassBusyReplyOperation(params: {
   );
 }
 
-export function resolveSessionStoreLookup(
+export async function resolveSessionStoreLookup(
   ctx: FinalizedMsgContext,
   cfg: OpenClawConfig,
-): {
+  assertCurrent?: () => void,
+): Promise<{
   agentId?: string;
   sessionKey?: string;
   storePath?: string;
   entry?: SessionEntry;
   store?: Record<string, SessionEntry>;
-} {
+}> {
+  assertCurrent?.();
   const targetSessionKey = resolveCommandTurnTargetSessionKey(ctx);
   const sessionKey = normalizeOptionalString(targetSessionKey ?? ctx.SessionKey);
   if (!sessionKey) {
@@ -61,17 +64,18 @@ export function resolveSessionStoreLookup(
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const target = { agentId, sessionKey, storePath };
   try {
-    const entry = loadSessionStoreEntry({
-      ...target,
-      readConsistency: "latest",
-      clone: false,
-    });
+    const entry = await readSessionEntryReadOnlyInWorker(
+      { ...target, readConsistency: "latest", clone: false },
+      assertCurrent,
+    );
+    assertCurrent?.();
     return {
       ...target,
       entry,
       store: entry ? { [sessionKey]: entry } : undefined,
     };
   } catch {
+    assertCurrent?.();
     return target;
   }
 }

@@ -532,6 +532,7 @@ src/config/sessions/session-accessor.sqlite-entry-inventory.ts
 src/config/sessions/session-accessor.sqlite-owner-projection.ts
 src/config/sessions/session-accessor.sqlite-scope-helpers.ts
 src/config/sessions/session-accessor.sqlite-status.ts
+src/config/sessions/session-canonical-key-error.ts
 src/config/sessions/session-canonical-key.ts
 src/config/sessions/session-canonical-row.ts
 src/config/sessions/session-canonical-validation-deferral.ts

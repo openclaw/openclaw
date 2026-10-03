@@ -1,6 +1,6 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
+import type { HarnessCompletionRecovery } from "../../../config/sessions/restart-recovery-types.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
@@ -18,6 +18,7 @@ import {
 import { registerAgentRunContext } from "../../../infra/agent-run-registry.js";
 import * as workerAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import { createHarnessCompletionSourceAssertion } from "../../agent-harness-completion-recovery.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   type AgentRunTerminalOutcome,
@@ -317,59 +318,88 @@ describe("embedded run durable writer admission", () => {
     expect(staleAppend).toMatchObject({ ok: false, code: "session-rebound" });
   });
 
-  it.each(["transaction", "commit"] as const)(
-    "refuses a writer claim whose admitted source is revoked at the %s grant",
-    async (stage) => {
+  it.each([false, true])(
+    "keeps recovery-source SQL outside worker grants and checks the prepared read (revoked=%s)",
+    async (revoke) => {
       const scope = { agentId: "main", sessionKey, storePath: fixture.storePath() };
-      const incumbent: InternalSessionEntry = {
+      const claim: HarnessCompletionRecovery = {
+        taskId: "completion-task",
+        taskRunId: "completion-task-run",
+        taskStatus: "succeeded",
+        sourceRunId: "announce:completion",
+        requesterSessionKey: sessionKey,
+        requesterAgentId: "main",
+        sessionId,
+        lifecycleRevision,
+      };
+      await replaceSessionEntry(scope, {
         activeWriterRunId: "run-a",
         lifecycleRevision,
         sessionId,
         updatedAt: 1,
-      };
-      await replaceSessionEntry(scope, incumbent);
+        restartRecoveryHarnessCompletion: claim,
+        restartRecoveryDeliveryRunId: claim.sourceRunId,
+      } as InternalSessionEntry);
       let sourceCurrent = true;
-      let revokedAtGrant = false;
-      const prepared = prepareSystemAgentRunAdmission({}, "run-b", "main", "writer-test", () => {
-        if (!sourceCurrent) {
-          throw new Error("writer source authority revoked");
-        }
+      const revoked = new Error("recovery source retired during preparation");
+      const assertSourceCurrent = createHarnessCompletionSourceAssertion({
+        claim,
+        storePath: scope.storePath,
+        priorAssertion() {
+          if (!sourceCurrent) {
+            throw revoked;
+          }
+        },
       });
+      const prepared = prepareSystemAgentRunAdmission(
+        {},
+        "run-b",
+        "main",
+        "writer-test",
+        assertSourceCurrent,
+      );
       const admittedRunContext = await prepared.admit("embedded");
       const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+      const sameStoreQueriesInGrants: string[] = [];
       vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
         (callback, attachment) =>
           createAdmission((request, grant) => {
-            const publication = isRecord(request.facts) ? request.facts.publication : undefined;
-            const kind = isRecord(publication) ? publication.kind : undefined;
-            if (
-              request.stage === stage &&
-              kind ===
-                (stage === "transaction"
-                  ? "session-entry-patch-validated"
-                  : "session-entry-patch-committed")
-            ) {
-              revokedAtGrant = true;
+            const sql = observeHostDataSql();
+            try {
+              callback(request, grant);
+            } finally {
+              sameStoreQueriesInGrants.push(
+                ...sql.queries.filter((query) =>
+                  /\bsession_(?:nodes|windows|participants)\b/.test(query),
+                ),
+              );
+              sql.restore();
+            }
+            if (revoke) {
               sourceCurrent = false;
             }
-            callback(request, grant);
           }, attachment),
       );
       try {
-        await expect(
-          claimAgentSessionWriter({
-            ...scope,
-            admittedRunContext,
-            prompt: "replacement turn",
-            runId: "run-b",
-            sessionId,
-            sessionTarget: { ...scope, sessionId },
-            timeoutMs: 30_000,
-            workspaceDir: "/tmp",
-          }),
-        ).rejects.toThrow(/authority.*(?:revoked|active)/);
-        expect(revokedAtGrant).toBe(true);
-        expect(loadSessionEntry(scope)).toMatchObject({ activeWriterRunId: "run-a" });
+        const result = claimAgentSessionWriter({
+          ...scope,
+          admittedRunContext,
+          prompt: "completion turn",
+          runId: "run-b",
+          sessionId,
+          sessionTarget: { ...scope, sessionId },
+          timeoutMs: 30_000,
+          workspaceDir: "/tmp",
+        });
+        if (revoke) {
+          await expect(result).rejects.toThrow("admitted run authority is no longer active");
+        } else {
+          await result;
+        }
+        expect(loadSessionEntry(scope)).toMatchObject({
+          activeWriterRunId: revoke ? "run-a" : "run-b",
+        });
+        expect(sameStoreQueriesInGrants).toEqual([]);
       } finally {
         prepared.close();
       }

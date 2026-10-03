@@ -74,7 +74,8 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
             agentId: read.agentId ?? agentId,
             storePath: read.storePath,
             sessionKeys: read.options.exactKeys!,
-            projection: read.options.projection,
+            projection:
+              read.options.projection === "full" ? ("exact" as const) : read.options.projection,
             env: inventory.env,
           })),
           (loaded) => {

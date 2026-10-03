@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions.js";
+import { readResolvedSessionEntryInWorker } from "../config/sessions/session-accessor.entry.js";
 import {
   resolveSessionEntryAccessTarget,
   updateResolvedSessionEntry,
@@ -151,7 +152,7 @@ async function drainPluginNextTurnInjections(
     return [];
   }
   const scope = { cfg: params.cfg, sessionKey, agentId: params.agentId };
-  const { entry: selectedEntry } = resolveSessionEntryAccessTarget(scope);
+  const selectedEntry = await readResolvedSessionEntryInWorker(scope);
   // Empty queues need no qualified mutation target. Concurrent enqueues wait for the next turn.
   if (
     !selectedEntry?.pluginNextTurnInjections ||

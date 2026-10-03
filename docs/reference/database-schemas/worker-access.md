@@ -357,13 +357,18 @@ retain native transactions and yielding writer admission. Arbitrary async plugin
 updaters retain their existing nested-admission behavior. Schemas, durability,
 public callback contracts, and update behavior are unchanged.
 
-Per-turn model selection, harness admission, skill-snapshot refresh, completion
-metadata, and diff-baseline selection read durable entries through the existing
-session readers. Sandbox preparation retains its physical reader through workspace
+Per-turn model selection, harness admission, skill-snapshot refresh, dispatch,
+plugin injection probes, completion metadata, and diff-baseline selection read
+durable entries through the existing session readers. Exact candidate projections
+validate only the selected rows, preserving isolation from unrelated damaged rows.
+Sandbox preparation retains its physical reader through workspace
 preparation and rechecks the caller before returning. Gateway reply finalization
 and GitHub publication discovery prepare full entries through the same ordered
 store lookup used by worker metadata reads. Live delivery and publication guards
 still recheck their current owners; prepared metadata never grants authority.
+Source assertions that can read their own session store run before and after
+preparation, outside worker grants. Accepted writer settlement keeps its existing
+transaction-local predicates and does not inherit scheduler cancellation.
 Audited writer-claim, skill-snapshot, model-switch, model-revert, and unguarded reply
 patches use the existing agent executor. Opaque commit callbacks and process-held
 incognito retain their native paths. No schema, retention, durability, or update

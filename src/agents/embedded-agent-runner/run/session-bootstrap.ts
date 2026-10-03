@@ -382,6 +382,7 @@ export async function assertAgentHarnessRunAdmission(
   const assertActive = params.admittedRunContext
     ? resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)
     : undefined;
+  assertActive?.();
   const durableEntry = await readSessionEntryInWorker(
     {
       ...(admissionAgentId ? { agentId: admissionAgentId } : {}),
@@ -389,7 +390,7 @@ export async function assertAgentHarnessRunAdmission(
       sessionKey,
       storePath,
     },
-    assertActive,
+    () => params.abortSignal?.throwIfAborted(),
   );
   assertActive?.();
   const admissionError = resolveAgentHarnessRunAdmissionError({
@@ -419,10 +420,6 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
     }
   | undefined
 > {
-  params.abortSignal?.throwIfAborted();
-  const assertCurrent =
-    (params.admittedRunContext && resolveAdmittedRunActiveAssertion(params.admittedRunContext)) ??
-    params.preparedRunAdmission?.assertSourceCurrent;
   const snapshot = await assertAgentHarnessRunAdmission(params);
   if (!snapshot) {
     return undefined;
@@ -434,7 +431,6 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
   }
 
   const previousWriterRunId = normalizeOptionalString(snapshot.entry.activeWriterRunId);
-  params.abortSignal?.throwIfAborted();
   const claimed = await patchSessionEntryCore(
     {
       ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
@@ -452,10 +448,8 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
         activeWriterRunId: params.runId,
       });
     },
-    // Accepted persistence retains source authority without inheriting the lane's abort signal.
-    { skipMaintenance: true, workerGuard: { assertCurrent } },
+    { skipMaintenance: true, workerGuard: {} },
   );
-  assertCurrent?.();
   if (!claimed || (claimed as InternalSessionEntry).activeWriterRunId !== params.runId) {
     throw new Error(`Session writer claim was not persisted: ${snapshot.sessionKey}`);
   }

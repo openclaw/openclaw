@@ -7,6 +7,7 @@ import {
   SessionGoalOperationError,
   type SessionGoalOperationErrorCode,
 } from "../config/sessions/goals-operations.types.js";
+import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
 import { SqliteSessionMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
 import { SessionPendingInputCustodyError } from "../config/sessions/session-pending-input-custody-error.js";
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
@@ -46,6 +47,7 @@ type StateMigrationKind = ConstructorParameters<
 
 const MESSAGE_ONLY_ERRORS = {
   "duplicate-agent": DuplicateAgentError,
+  "session-canonical-key-migration": SessionCanonicalKeyMigrationRequiredError,
   "session-pending-input-custody": SessionPendingInputCustodyError,
   "skill-upload-request": SkillUploadRequestError,
   coordinator: SqliteCoordinatorError,

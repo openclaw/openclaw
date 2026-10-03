@@ -45,12 +45,22 @@ import type {
   SessionEntryPatchResult,
 } from "./session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
+import {
+  isNativeSessionEntryRead,
+  withSessionEntriesFromStoresInWorker,
+} from "./session-entry-read-runtime.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
+import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
+import { prepareSessionStoreTargetInventoryRead } from "./session-store-target-runtime.js";
 import {
   normalizeStoreSessionKey,
   resolveSessionStoreEntryCore as resolveSessionEntryFromStore,
 } from "./store-entry.js";
-import { resolveAllAgentSessionStoreTargetsSync, type SessionStoreTarget } from "./targets.js";
+import {
+  listConfiguredSessionStoreAgentIds,
+  resolveAllAgentSessionStoreTargetsSync,
+  type SessionStoreTarget,
+} from "./targets.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 export { hasSessionEntriesByStatusReadOnly } from "./session-entry-status-read.js";
 export { clearPluginOwnedSessionState } from "./plugin-host-cleanup.js";
@@ -119,16 +129,25 @@ function findCanonicalSessionEntryMatch(
   candidateKeys: readonly string[],
   options: { readOnly?: boolean } = {},
 ): (SessionEntrySummary & { readSource?: CapturedSessionEntryReadSource }) | undefined {
-  let selected: SessionEntrySummary | undefined;
   let readSource: CapturedSessionEntryReadSource | undefined;
-  for (const match of loadExactSessionEntryCandidates({
+  const entries = loadExactSessionEntryCandidates({
     ...scope,
     sessionKeys: candidateKeys,
     readOnly: options.readOnly !== false,
     onReadSource: (source) => {
       readSource = source;
     },
-  })) {
+  });
+  const selected = selectCanonicalSessionEntryMatch(entries, canonicalKey);
+  return selected ? { ...selected, readSource } : undefined;
+}
+
+function selectCanonicalSessionEntryMatch(
+  entries: readonly SessionEntrySummary[],
+  canonicalKey: string,
+): SessionEntrySummary | undefined {
+  let selected: SessionEntrySummary | undefined;
+  for (const match of entries) {
     if (selected) {
       throw canonicalSessionKeyMigrationRequiredError(
         `duplicate rows resolve to canonical session key ${canonicalKey}`,
@@ -141,7 +160,72 @@ function findCanonicalSessionEntryMatch(
     }
     selected = match;
   }
-  return selected ? { ...selected, readSource } : undefined;
+  return selected;
+}
+
+/** Read descriptive entry data with the logical accessor's existing candidate selection. */
+export async function readResolvedSessionEntryInWorker(
+  scope: LogicalSessionAccessScope,
+): Promise<SessionEntry | undefined> {
+  const { agentId, canonicalKey } = resolveSessionStoreIdentity({
+    cfg: scope.cfg,
+    sessionKey: scope.sessionKey.trim(),
+    agentId: scope.agentId,
+  });
+  const storePath = resolveSessionStorePathCore(scope.cfg.session?.store, {
+    agentId,
+    env: scope.env,
+  });
+  if (isNativeSessionEntryRead({ ...scope, sessionKey: canonicalKey, storePath }, agentId)) {
+    return resolveSessionEntryAccessTarget(scope).entry;
+  }
+  const sessionKeys = collectCanonicalSessionLookupKeys({
+    agentId,
+    canonicalKey,
+    mainKey: scope.cfg.session?.mainKey,
+    requestedKey: scope.sessionKey.trim(),
+  });
+  const perAgent = scope.cfg.session?.store?.includes("{agentId}") === true;
+  if (!perAgent) {
+    return withSessionEntriesFromStoresInWorker(
+      [{ agentId, storePath, sessionKeys, projection: "exact", env: scope.env }],
+      ([loaded]) => selectCanonicalSessionEntryMatch(loaded!.result.entries, canonicalKey)?.entry,
+    );
+  }
+  const inventory = prepareSessionStoreTargetInventory(
+    scope.cfg,
+    [agentId, ...listConfiguredSessionStoreAgentIds(scope.cfg)],
+    scope.env,
+    "recovery",
+  );
+  const read = prepareSessionStoreTargetInventoryRead(inventory);
+  return read.withRead(async (sources, assertCurrent) => {
+    const candidates = new Map<string, SessionStoreTarget>();
+    const fallback = inventory.paths.get(agentId)!.configured;
+    candidates.set(fallback, { agentId, storePath: fallback });
+    for (const source of sources.agents) {
+      if (source.agentId === agentId && source.result.available) {
+        for (const target of source.result.targets) {
+          candidates.set(target.storePath, target);
+        }
+      }
+    }
+    return withSessionEntriesFromStoresInWorker(
+      [...candidates.values()].map((target) => ({
+        ...target,
+        sessionKeys,
+        projection: "exact" as const,
+        env: inventory.env,
+      })),
+      (loaded) => {
+        assertCurrent();
+        return selectCanonicalSessionEntryMatch(
+          loaded.flatMap(({ result }) => result.entries),
+          canonicalKey,
+        )?.entry;
+      },
+    );
+  });
 }
 
 /** Resolves one canonical row across the prepared configured and discovered store targets. */

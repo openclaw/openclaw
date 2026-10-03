@@ -391,6 +391,17 @@ vi.mock("../../channels/plugins/session-thread-info-loaded.js", () => ({
 vi.mock("./dispatch-from-config.runtime.js", () => ({
   createInternalHookEvent: internalHookMocks.createInternalHookEvent,
   loadSessionStoreEntry: sessionStoreMocks.loadSessionStoreEntry,
+  readSessionEntryReadOnlyInWorker: async (
+    scope: Parameters<
+      typeof import("./dispatch-from-config.runtime.js").readSessionEntryReadOnlyInWorker
+    >[0],
+    assertCurrent?: () => void,
+  ) => {
+    assertCurrent?.();
+    const entry = await sessionStoreMocks.loadSessionStoreEntry(scope);
+    assertCurrent?.();
+    return entry;
+  },
   loadSessionStore: sessionStoreMocks.loadSessionStore,
   readSessionEntry: sessionStoreMocks.readSessionEntry,
   resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,

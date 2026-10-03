@@ -2,10 +2,12 @@ import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
-it("prepares complete Gateway entries through the worker while preserving main aliases", async () => {
+it("prepares complete Gateway entries while preserving main aliases and exact-row isolation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const cfg: OpenClawConfig = {
       agents: { ownership: "explicit", entries: { main: {} } },
@@ -22,6 +24,25 @@ it("prepares complete Gateway entries through the worker while preserving main a
     );
     const input = { cfg, key: "main", agentId: "main", env };
     await loadGatewaySessionEntryReadOnlyInWorker(input);
+    const sibling = "agent:main:matrix:channel:!mixed:example.org";
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: sibling, env },
+      { sessionId: sibling, updatedAt: 1 },
+    );
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
+      JSON.stringify({
+        sessionId: sibling,
+        updatedAt: 1,
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "matrix", to: "!Mixed:example.org" },
+        }),
+      }),
+      sibling,
+    );
+    database.db
+      .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+      .run(sibling);
     const sql = observeHostDataSql();
     try {
       const loaded = await loadGatewaySessionEntryReadOnlyInWorker(input);

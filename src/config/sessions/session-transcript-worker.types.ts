@@ -338,7 +338,7 @@ export type SessionExactEntriesWorkerSelection =
   | {
       sessionKeys: readonly string[];
       selection?: never;
-      projection?: "full" | "sharing" | "replacement" | "creation" | "list" | "lifecycle";
+      projection?: "full" | "sharing" | "replacement" | "creation" | "list" | "lifecycle" | "exact";
     }
   | {
       sessionKeys?: never;

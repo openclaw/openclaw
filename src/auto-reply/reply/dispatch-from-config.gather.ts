@@ -148,7 +148,9 @@ export async function gatherDispatchRequest(
     normalizeOptionalString(ctx.SessionKey) ?? normalizeOptionalString(ctx.CommandTargetSessionKey);
   const startTime = diagnosticsEnabled ? Date.now() : 0;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
-  const initialSessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
+  const assertRequestCurrent = () => params.replyOptions?.operatorAuthority?.assertCurrent();
+  const initialSessionStoreEntry = await resolveSessionStoreLookup(ctx, cfg, assertRequestCurrent);
+  assertRequestCurrent();
   // resolveSessionStoreLookup is command-target-aware (it prefers
   // resolveCommandTurnTargetSessionKey), whereas the lifecycle's sessionKey is
   // source-first (ctx.SessionKey). On a native command turn that targets a
@@ -288,15 +290,20 @@ export async function gatherDispatchRequest(
     sourceSessionKey &&
     initialSessionStoreEntry.sessionKey &&
     sourceSessionKey !== initialSessionStoreEntry.sessionKey
-      ? resolveSessionStoreLookup(
+      ? await resolveSessionStoreLookup(
           {
             ...ctx,
             // Strip target so store resolution follows the source SessionKey.
             CommandTargetSessionKey: undefined,
           },
           cfg,
+          assertRequestCurrent,
         )
       : initialSessionStoreEntry;
+  assertRequestCurrent();
+  if (params.replyOptions?.abortSignal?.aborted) {
+    return finishReplyOperationAborted();
+  }
   const initialDispatchReplyOperation = dispatchOperationSessionKey
     ? replyRunRegistry.get(dispatchOperationSessionKey)
     : undefined;
@@ -325,8 +332,16 @@ export async function gatherDispatchRequest(
     }
   };
   const sessionStoreEntry = boundAcpDispatchSessionKey
-    ? resolveSessionStoreLookup({ ...ctx, SessionKey: boundAcpDispatchSessionKey }, cfg)
+    ? await resolveSessionStoreLookup(
+        { ...ctx, SessionKey: boundAcpDispatchSessionKey },
+        cfg,
+        assertRequestCurrent,
+      )
     : initialSessionStoreEntry;
+  assertRequestCurrent();
+  if (params.replyOptions?.abortSignal?.aborted) {
+    return finishReplyOperationAborted();
+  }
   const dispatchKind = resolveSessionDispatchKind(acpDispatchSessionKey, sessionStoreEntry.entry);
   let preparedSessionBinding: ReplySessionBinding | undefined =
     sessionStoreEntry.sessionKey && sessionStoreEntry.entry?.sessionId

@@ -137,15 +137,14 @@ export async function createAgentPatchedSessionModelRunGuard(params: {
   let markerTs: number | undefined;
   let validatedFallback: AgentPatchedSessionModelFallback | undefined;
   if (params.sessionKey) {
+    params.assertReadCurrent?.();
     try {
-      const entry = await readSessionEntryInWorker(
-        {
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          storePath: params.storePath,
-        },
-        params.assertReadCurrent,
-      );
+      const entry = await readSessionEntryInWorker({
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      });
+      params.assertReadCurrent?.();
       const marker = entry?.modelFallback;
       markerTs = marker?.source === "agent-patch" ? marker.ts : undefined;
       if (entry && markerTs !== undefined) {
