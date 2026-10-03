@@ -1,4 +1,4 @@
-import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
+import { redactSensitiveText, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { escapeRegExp, sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { CRABBOX_STOP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
@@ -65,13 +65,27 @@ export async function runCrabboxCommand(params: {
       ...(params.input === undefined ? {} : { input: params.input }),
       ...(params.signal ? { signal: params.signal } : {}),
     });
-  } catch {
+  } catch (error) {
     params.signal?.throwIfAborted();
-    throw new Error(`Crabbox ${params.action} could not start`);
+    throw crabboxExecutionError(params.action, error);
   }
   // The runner owns child/tree settlement; cancellation must not release that custody early.
   params.signal?.throwIfAborted();
   return result;
+}
+
+export function crabboxExecutionError(action: string, cause: unknown): Error {
+  const message =
+    cause instanceof Error
+      ? cause.message
+      : typeof cause === "string"
+        ? cause
+        : "unknown runner failure";
+  const detail = redactToolPayloadText(message).replace(/\s+/gu, " ").trim();
+  return new Error(
+    `Crabbox ${action} execution failed: ${sliceUtf16Safe(detail, -MAX_COMMAND_DETAIL_CHARS)}`,
+    { cause },
+  );
 }
 
 function crabboxCommandDetail(result: SpawnResult): string {

@@ -393,6 +393,7 @@ export function buildCrabboxAllocationArgs(
     "public",
     "--tailscale=false",
     ...(profile.class ? ["--class", profile.class] : []),
+    ...(profile.target === "linux" ? ["--target", "linux"] : []),
     ...(profile.target === "windows/wsl2" ? ["--target", "windows", "--windows-mode", "wsl2"] : []),
     ...(profile.target === "windows/normal"
       ? ["--target", "windows", "--windows-mode", "normal"]

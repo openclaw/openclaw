@@ -1,6 +1,10 @@
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { isUnrecognizedLease, stopCrabboxLease } from "./crabbox-worker-command.js";
+import {
+  isUnrecognizedLease,
+  runCrabboxCommand,
+  stopCrabboxLease,
+} from "./crabbox-worker-command.js";
 
 const LEASE_ID = "cbx_absent_fixture";
 const readError = `coordinator GET /v1/leases/${LEASE_ID}: http 404: {"error":"not_found"}`;
@@ -14,6 +18,30 @@ const absentResult: SpawnResult = {
   killed: false,
   termination: "exit",
 };
+
+it.each(["output capture failed", "cleanup could not confirm process exit", "spawn ENOENT"])(
+  "preserves the redacted runner cause: %s",
+  async (message) => {
+    const cause = new Error(`${message} token=synthetic-command-secret-0123456789`);
+    const error = await runCrabboxCommand({
+      action: "warmup",
+      args: ["warmup"],
+      binary: "crabbox",
+      timeoutMs: 1_000,
+      runCommand: async () => {
+        throw cause;
+      },
+    }).catch((rejection: unknown) => rejection);
+    expect(error).toMatchObject({
+      message: expect.stringContaining(`Crabbox warmup execution failed: ${message}`),
+      cause,
+    });
+    expect(error).toHaveProperty(
+      "message",
+      expect.not.stringContaining("synthetic-command-secret"),
+    );
+  },
+);
 
 describe("Crabbox lease absence classification", () => {
   it.each<{

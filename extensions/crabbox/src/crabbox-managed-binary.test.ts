@@ -573,6 +573,21 @@ describe("managed Crabbox", () => {
 });
 
 describe("Crabbox version admission", () => {
+  it("retains a redacted version execution failure and its cause", async () => {
+    const cause = new Error("output capture failed token=synthetic-version-secret-0123456789");
+    const probe = await probeCrabboxVersion("crabbox", async () => {
+      throw cause;
+    });
+    expect(probe).toMatchObject({
+      status: "indeterminate",
+      reason: expect.stringContaining(
+        "Crabbox version command execution failed: output capture failed",
+      ),
+      cause,
+    });
+    expect(probe).toHaveProperty("reason", expect.not.stringContaining("synthetic-version-secret"));
+  });
+
   it.each([
     ["0.69.0-rc.1", "outdated"],
     ["0.69.0+build.1", "supported"],

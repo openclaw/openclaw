@@ -4,7 +4,7 @@ import path from "node:path";
 import type { root } from "openclaw/plugin-sdk/file-access-runtime";
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
+import { crabboxExecutionError, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
 
 export const CRABBOX_MIN_VERSION = "0.69.0";
 const RELEASE_URL = `https://github.com/openclaw/crabbox/releases/download/v${CRABBOX_MIN_VERSION}`;
@@ -19,7 +19,7 @@ export type CrabboxBinary = { binary: string; version: string };
 type CrabboxVersionProbe =
   | { status: "supported"; version: string }
   | { status: "outdated"; version: string }
-  | { status: "indeterminate"; reason: string };
+  | { status: "indeterminate"; reason: string; cause?: unknown };
 
 export async function probeCrabboxVersion(
   binary: string,
@@ -35,9 +35,13 @@ export async function probeCrabboxVersion(
       timeoutMs: VERSION_TIMEOUT_MS,
       ...(signal ? { signal } : {}),
     });
-  } catch {
+  } catch (error) {
     signal?.throwIfAborted();
-    return { status: "indeterminate", reason: "version command could not start" };
+    return {
+      status: "indeterminate",
+      reason: crabboxExecutionError("version command", error).message,
+      cause: error,
+    };
   }
   signal?.throwIfAborted();
   if (result.termination !== "exit" || result.code !== 0 || result.outputLimitExceeded) {
