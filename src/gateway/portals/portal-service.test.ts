@@ -329,6 +329,20 @@ describe("gateway portal service", () => {
     expect(closeCurrentForward).toHaveBeenCalledOnce();
   });
 
+  it("keeps worker portal ids bounded for the longest supported environment id", async () => {
+    const { service } = makeService(["127.0.0.1"]);
+    const environmentId = "w".repeat(256);
+    const portal = await service.open({
+      targetPort: 3000,
+      target: workerTarget(environmentId, 7),
+    });
+
+    expect(portal.id.length).toBeLessThanOrEqual(256);
+    expect(service.listWorkerPortals(environmentId, 7)).toEqual([portal]);
+    await service.close(portal.id);
+    expect(service.list()).toEqual([]);
+  });
+
   it("revalidates worker close authority immediately before queued removal", async () => {
     const { service } = makeService(["127.0.0.1"]);
     const owner = {
