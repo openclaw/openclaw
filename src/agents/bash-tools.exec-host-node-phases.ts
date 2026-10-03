@@ -314,17 +314,21 @@ export function buildNodeSystemRunInvoke(params: {
     params: {
       command: params.command,
       rawCommand: params.rawCommand,
-      systemRunPlan: params.systemRunPlan,
-      cwd: params.cwd ?? undefined,
+      ...(params.systemRunPlan ? { systemRunPlan: params.systemRunPlan } : {}),
+      ...(params.cwd != null ? { cwd: params.cwd } : {}),
       env: params.target.env,
       executionContext: params.target.executionContext,
       timeoutMs: params.target.runTimeoutMs,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
-      turnSourceChannel: params.turnSourceChannel ?? undefined,
-      turnSourceTo: params.turnSourceTo ?? undefined,
-      turnSourceAccountId: params.turnSourceAccountId ?? undefined,
-      turnSourceThreadId: params.turnSourceThreadId ?? undefined,
+      ...(params.turnSourceChannel != null ? { turnSourceChannel: params.turnSourceChannel } : {}),
+      ...(params.turnSourceTo != null ? { turnSourceTo: params.turnSourceTo } : {}),
+      ...(params.turnSourceAccountId != null
+        ? { turnSourceAccountId: params.turnSourceAccountId }
+        : {}),
+      ...(params.turnSourceThreadId != null
+        ? { turnSourceThreadId: params.turnSourceThreadId }
+        : {}),
       approved: params.approved,
       approvalDecision: params.approvalDecision ?? undefined,
       approvalSource: params.approvalSource,

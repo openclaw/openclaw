@@ -1041,7 +1041,6 @@ async function executeSystemRunPhase(
   );
 }
 
-/** Executes a validated system.run request, emitting lifecycle events and approvals. */
 export async function handleSystemRunInvoke(opts: HandleSystemRunInvokeOptions): Promise<void> {
   if (opts.signal?.aborted) {
     return;
