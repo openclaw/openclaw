@@ -553,6 +553,8 @@ export async function applySystemAgentSetup(
         if (gateway.status === "failed") {
           lines.push(`Gateway service: ${gateway.error}`);
         } else if (gateway.status === "ready") {
+          const { gatewayAuthUsesLocalPassword, resolveGatewayLocalPassword } =
+            await import("../wizard/setup.finalize-gateway-auth.js");
           const probeLinks = onboardHelpers.resolveLocalControlUiProbeLinks({
             bind: settings.bind,
             port: settings.port,
@@ -563,17 +565,12 @@ export async function applySystemAgentSetup(
           const probe = await onboardHelpers.waitForGatewayReachable({
             url: probeLinks.wsUrl,
             token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-            password:
-              settings.authMode === "password"
-                ? await (
-                    await import("../wizard/setup.secret-input.js")
-                  ).resolveSetupSecretInputString({
-                    config: nextConfig,
-                    value: nextConfig.gateway?.auth?.password,
-                    path: "gateway.auth.password",
-                    env: process.env,
-                  })
-                : undefined,
+            password: gatewayAuthUsesLocalPassword(settings.authMode)
+              ? await resolveGatewayLocalPassword({
+                  nextConfig,
+                  env: process.env,
+                })
+              : undefined,
             ...(gateway.action === "reused"
               ? { deadlineMs: 15_000 }
               : resolveGatewayStartupTiming()),

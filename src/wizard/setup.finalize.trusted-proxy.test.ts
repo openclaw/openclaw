@@ -439,14 +439,21 @@ describe("finalizeSetupWizard", () => {
     const previous = process.env.OPENCLAW_GATEWAY_PASSWORD;
     process.env.OPENCLAW_GATEWAY_PASSWORD = "resolved-gateway-password"; // pragma: allowlist secret
     resolveSetupSecretInputString.mockResolvedValueOnce("resolved-gateway-password");
+    probeGatewayReachable.mockResolvedValueOnce({ ok: true });
+    resolveLocalControlUiProbeLinks.mockReturnValue({
+      httpUrl: "http://127.0.0.1:19861/",
+      wsUrl: "ws://127.0.0.1:19861",
+    });
     const prompter = buildWizardPrompter({ confirm: vi.fn(async () => false) });
 
     try {
       await finalizeSetupWizard(
         createFinalizeArgs("quickstart", {
-          settings: { authMode: "trusted-proxy" },
+          opts: { skipHealth: false },
+          settings: { authMode: "trusted-proxy", port: 19861 },
           nextConfig: {
             gateway: {
+              port: 19861,
               auth: {
                 mode: "trusted-proxy",
                 trustedProxy: { userHeader: "x-forwarded-user" },
@@ -473,6 +480,13 @@ describe("finalizeSetupWizard", () => {
 
     const probeParams = requireMockArg(probeGatewayReachable) as { password?: string };
     expect(probeParams.password).toBe("resolved-gateway-password"); // pragma: allowlist secret
+    expect(healthCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        password: "resolved-gateway-password",
+        localPortOverride: 19861,
+      }),
+      expect.anything(),
+    );
   });
 
   // A configured local password may come only from the environment, the same

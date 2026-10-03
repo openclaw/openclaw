@@ -22,6 +22,8 @@ import {
   type OnboardGatewayHealthCall,
 } from "./onboard-non-interactive.test-helpers.js";
 
+const SETUP_GATEWAY_PORT = 19861;
+
 async function writeSecureFile(filePath: string, content: string): Promise<void> {
   await fs.writeFile(filePath, content, { mode: 0o600 });
   await fs.chmod(filePath, 0o600);
@@ -61,7 +63,12 @@ describe("onboard (non-interactive): gateway health auth", () => {
     );
     const { runtimeWithCapture, readCapturedJson } = createOnboardJsonCaptureRuntime();
     const setup = runNonInteractiveSetup(
-      { ...createOnboardLocalDaemonOptions(stateDir), installDaemon: false, json: true },
+      {
+        ...createOnboardLocalDaemonOptions(stateDir),
+        gatewayPort: SETUP_GATEWAY_PORT,
+        installDaemon: false,
+        json: true,
+      },
       runtimeWithCapture,
     );
     if (reachable) {
@@ -157,6 +164,10 @@ describe("onboard (non-interactive): gateway health auth", () => {
           password: "resolved-password",
         });
         expectAuthCall(healthCommandMock, "health", { password: "resolved-password" });
+        expect(healthCommandMock).toHaveBeenCalledWith(
+          expect.objectContaining({ localPortOverride: SETUP_GATEWAY_PORT }),
+          expect.anything(),
+        );
         expect(readTestConfig().gateway?.auth?.password).toEqual(passwordRef);
         expect(result).toMatchObject({ ok: true });
       });
