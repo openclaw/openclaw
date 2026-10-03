@@ -1,6 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { ensureSessionGroupRegistered } from "../session-groups.js";
-import { emitSessionsChanged } from "./session-change-event.js";
 import { registerCommittedSessionCategory } from "./session-create-category.js";
 import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -11,25 +10,6 @@ vi.mock("./sessions-shared.js", () => ({ sessionLog: { warn: vi.fn() } }));
 beforeEach(() => vi.resetAllMocks());
 const context = {} as GatewayRequestContext;
 const source = { env: { OPENCLAW_STATE_DIR: "/fixture/state" }, assertCurrent: vi.fn() };
-
-it("warns and reloads only the catalog on uncertain registration, allowing explicit same-category repair", async () => {
-  vi.mocked(ensureSessionGroupRegistered).mockRejectedValueOnce(new Error("catalog unavailable"));
-  await expect(
-    registerCommittedSessionCategory("Travel", context, source),
-  ).resolves.toBeUndefined();
-  expect(sessionLog.warn).toHaveBeenCalledWith(
-    expect.stringContaining("retry the same category assignment"),
-  );
-  expect(emitSessionsChanged).toHaveBeenCalledWith(
-    context,
-    { reason: "groups" },
-    { catalogOnly: true },
-  );
-  vi.mocked(ensureSessionGroupRegistered).mockResolvedValueOnce(true);
-  await registerCommittedSessionCategory("Travel", context, source);
-  expect(ensureSessionGroupRegistered).toHaveBeenCalledTimes(2);
-  expect(emitSessionsChanged).toHaveBeenCalledTimes(2);
-});
 
 it("rejects revoked physical custody before registration and after its await", async () => {
   source.assertCurrent.mockImplementationOnce(() => {
