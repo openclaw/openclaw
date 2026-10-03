@@ -1425,6 +1425,7 @@
                     "pages": [
                       "install/azure",
                       "install/digitalocean",
+                      "install/everpod",
                       "install/gcp",
                       "install/hetzner",
                       "install/hostinger",
