@@ -349,6 +349,7 @@ export function formatSystemAgentOnboardingWelcome(
     `- ${overview.gateway.reachable ? translate("gatewayRunning", { url: overview.gateway.url }) : translate("gatewayUnavailable")}`,
     `- ${translate("optionalSetup")}`,
     `- ${translate("channelCommands")}`,
+    `- ${translate("optionalSearch")}`,
     "",
     translate(overview.defaultModel ? "readyNext" : "readySetupNext"),
   ].join("\n");

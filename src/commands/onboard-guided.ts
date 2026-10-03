@@ -654,6 +654,14 @@ async function runGuidedOnboardingFlow(
     }
     await recommendationOutcome.commitResult();
   }
+  if (!alreadyConfigured) {
+    await prompter.note(
+      t("wizard.guided.optionalSearch", {
+        command: formatCliCommand("openclaw configure --section web"),
+      }),
+      t("wizard.setup.searchTitle"),
+    );
+  }
   const hatchWorkspace = handoffAgentId
     ? agentWorkspace
     : alreadyConfigured

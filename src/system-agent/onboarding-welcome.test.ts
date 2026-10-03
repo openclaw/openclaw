@@ -103,6 +103,9 @@ describe("buildOnboardingWelcome", () => {
         label: readyLabel,
         reply: "talk to agent",
       });
+      expect(ready.question.options).toContainEqual(
+        expect.objectContaining({ label: "Set up web search", reply: "configure search" }),
+      );
       expect(ready.question.skipAction).toBe("exit");
     },
   );
@@ -182,7 +185,7 @@ describe("buildOnboardingWelcome", () => {
       { reachable: true, url: "ws://127.0.0.1:18789" },
     );
     const { propose } = engine;
-    const { question } = await buildOnboardingWelcome({
+    const { text, question } = await buildOnboardingWelcome({
       engine: engine as never,
       localRecovery: true,
     });
@@ -193,6 +196,16 @@ describe("buildOnboardingWelcome", () => {
     );
     expect(propose).not.toHaveBeenCalled();
     expect(question.id).toBe("onboarding-next-step");
+    expect(question.options).toEqual([
+      expect.objectContaining({ reply: "talk to agent", recommended: true }),
+      expect.objectContaining({ label: "Set up web search", reply: "configure search" }),
+      { label: "See all channels", reply: "channels" },
+    ]);
+    expect(question.options.length).toBeLessThanOrEqual(4);
+    expect(question.isOther).toBe(true);
+    expect(question.skipAction).toBe("exit");
+    expect(text).toContain("`configure search` to choose a provider, or skip for now");
+    expect(text).toContain("`connect whatsapp`, `connect telegram`");
   });
 
   it("ignores a pending receipt from a replaced configuration", async () => {

@@ -40,6 +40,12 @@ describe("runGuidedOnboarding quick start", () => {
       await runGuidedOnboardingImpl({}, runtime, deps);
       expect(prompter.confirm).not.toHaveBeenCalled();
       expect(prompter.text).not.toHaveBeenCalled();
+      expect(prompter.note).toHaveBeenCalledWith(
+        expect.stringContaining("Web search setup is optional."),
+        "Search",
+      );
+      expect(localOnboarding.persisted.config?.tools?.web?.search).toBeUndefined();
+      expect(localOnboarding.persisted.config?.plugins?.installs).toBeUndefined();
       expect(localOnboarding.persisted.config?.telemetry).toBeUndefined();
       expect(localOnboarding.persisted.config?.wizard?.securityAcknowledgedAt).toEqual(
         acknowledgedAt ?? expect.any(String),

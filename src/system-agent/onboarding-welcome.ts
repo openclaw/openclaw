@@ -28,8 +28,11 @@ function readyWelcomeQuestion(translate: SetupTranslator): SystemAgentChatQuesti
         recommended: true,
         description: translate("meetAgent"),
       },
-      { label: translate("connectWhatsApp"), reply: "connect whatsapp" },
-      { label: translate("connectTelegram"), reply: "connect telegram" },
+      {
+        label: translate("setupSearch"),
+        reply: "configure search",
+        description: translate("chooseSearchProvider"),
+      },
       { label: translate("allChannels"), reply: "channels" },
     ],
     isOther: true,

@@ -279,6 +279,8 @@ export const en = {
       firstAction: "What would you like to do first?",
       talkToAgent: "Talk to my agent",
       meetAgent: "Meet your agent right here.",
+      setupSearch: "Set up web search",
+      chooseSearchProvider: "Choose a provider, or skip for now.",
       connectWhatsApp: "Connect WhatsApp",
       connectTelegram: "Connect Telegram",
       allChannels: "See all channels",
@@ -315,6 +317,8 @@ export const en = {
         "Connect how you want to talk: say `connect whatsapp`, `connect telegram`, `connect slack`, `connect discord` — or `channels` for the full list.",
       readyNext:
         "Say `talk to agent` to meet your agent right here, or `help` for everything I can do.",
+      optionalSearch:
+        "Web search setup is optional: say `configure search` to choose a provider, or skip for now.",
       readySetupNext:
         "Your setup model stays available here. Choose a primary model in Model Setup or run `openclaw onboard` before opening regular agent chat.",
     },
@@ -360,6 +364,8 @@ export const en = {
       custodianIntro: "Hi — I'm OpenClaw. I keep this system running. Let's get you set up.",
       findMeLater:
         "You can always find me later — run `openclaw` in a terminal, or open Settings in the dashboard.",
+      optionalSearch:
+        "Web search setup is optional. Choose a provider with `{command}`, or say `configure search` in Settings > Ask OpenClaw.",
       hatchingNow: "Hatching your agent now…",
       lookAroundManual: "No — I'll configure it manually",
       lookAroundQuestion: "May I look around to find your AI access?",
