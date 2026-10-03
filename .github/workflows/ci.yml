@@ -5372,6 +5372,10 @@ jobs:
             -only-testing:OpenClawTests/CloudflareAccessSessionStoreTests
             -only-testing:OpenClawTests/ChatTypingFocusTests
             -only-testing:OpenClawTests/ChatSendHydrationTests
+            -only-testing:OpenClawTests/GatewayIngressControllerTests
+            -only-testing:OpenClawTests/GatewayConnectionControllerTests
+            -only-testing:OpenClawTests/GatewayConnectionSecurityTests
+            -only-testing:OpenClawTests/GatewaySettingsStoreTests
           )
           if [[ "$IOS_CI_PHASE" == "tests" ]]; then
             test_args+=(

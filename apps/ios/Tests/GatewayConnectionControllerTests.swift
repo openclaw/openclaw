@@ -30,6 +30,7 @@ private func saveActiveManualGateway(
     return GatewaySettingsStore.upsertGatewayRegistryEntry(entry, activate: true)
 }
 
+@MainActor
 struct GatewayRegistryTestIsolation {
     private static let service = GatewaySettingsStore._testGatewayService
     private static let keychainAccounts = [
@@ -41,8 +42,8 @@ struct GatewayRegistryTestIsolation {
     private let previousKeychain: [String: String?]
     private let previousRelay: ShareGatewayRelayConfig?
 
-    init() {
-        gatewayPersistenceTestSemaphore.wait()
+    init() async {
+        await GatewayPersistenceTestGate.shared.acquire()
         self.previousKeychain = Dictionary(uniqueKeysWithValues: Self.keychainAccounts.map { account in
             (account, GenericPasswordKeychainStore.loadString(service: Self.service, account: account))
         })
@@ -63,11 +64,11 @@ struct GatewayRegistryTestIsolation {
         if let previousRelay {
             ShareGatewayRelaySettings.saveConfig(previousRelay)
         }
-        gatewayPersistenceTestSemaphore.signal()
+        GatewayPersistenceTestGate.shared.release()
     }
 }
 
-private struct TemporaryOpenClawState {
+struct TemporaryOpenClawState {
     private let previousStateDirectory: String?
     private let previousInstanceID: Any?
     private let instanceID: String?
@@ -1000,7 +1001,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `empty setup auth does not reuse stored gateway credentials`() async throws {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let instanceID = "ios-test-\(UUID().uuidString)"
         let temporaryState = try TemporaryOpenClawState(instanceID: instanceID)
@@ -1040,7 +1041,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `setup context path survives registry reconnect`() async throws {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let instanceID = "ios-context-path-\(UUID().uuidString)"
         let temporaryState = try TemporaryOpenClawState(instanceID: instanceID)
@@ -1079,8 +1080,8 @@ private func waitUntil(
         #expect(appModel.activeGatewayConnectConfig?.effectiveStableID == stored.stableID)
     }
 
-    @Test @MainActor func `legacy auth preserves proven relay credentials and otherwise requires full re-pair`() throws {
-        let registryIsolation = GatewayRegistryTestIsolation()
+    @Test @MainActor func `legacy auth preserves proven relay credentials and otherwise requires full re-pair`() async throws {
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let instanceID = "legacy-relay-\(UUID().uuidString)"
         let temporaryState = try TemporaryOpenClawState(instanceID: instanceID)
@@ -1510,7 +1511,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `target switch reset clears previous reconnect route`() async {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let reconnectDefaults: [String: Any?] = [
             "gateway.autoconnect": true,
@@ -1626,7 +1627,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `newer explicit connect immediately invalidates queued config`() async throws {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let host = "new-target.gateway.invalid"
         let stableID = "manual|\(host.lowercased())|443"
@@ -1667,7 +1668,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `trusted certificate keeps device auth route scoped`() async {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let host = "127.0.0.1"
         let stableID = "manual|\(host)|1"
@@ -1688,7 +1689,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `discovered connect preserves exact device auth owner bytes`() async {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let stableID = "\u{0085}gateway-e\u{0301}"
         let endpoint: NWEndpoint = .service(
@@ -1736,7 +1737,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `first trust aborts when certificate pin is not durable`() async {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let host = "127.0.0.1"
         let stableID = "manual|\(host)|2"
@@ -1802,7 +1803,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `cancel during forced reset restores current gateway`() async throws {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let host = "replacement.gateway.invalid"
         let stableID = "manual|\(host)|443"
@@ -1870,7 +1871,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `new connect waits for superseded forced reset`() async throws {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let forceHost = "192.168.1.39"
 
@@ -1913,7 +1914,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `new connect waits for model owned reset barrier`() async throws {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let resetRelease = AsyncStream<Void>.makeStream()
         let appModel = NodeAppModel()
@@ -1959,7 +1960,7 @@ private func waitUntil(
     @MainActor func `held reset retains recovery until replacement commits or cancels`(
         outcome: HeldResetOutcome) async throws
     {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         try await withUserDefaults(["gateway.autoconnect": false]) {
             let host = "replacement-\(UUID().uuidString).example.ts.net"
@@ -2075,7 +2076,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `trust decline releases suppression without reconnecting unpinned target`() async {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let updates: [String: Any?] = [
             "gateway.autoconnect": false,
@@ -2123,7 +2124,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `active manual TLS auto connect uses system trust before legacy defaults`() async {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let host = "manual-autoconnect-\(UUID().uuidString).example.com"
         let stableID = "manual|\(host.lowercased())|443"
@@ -2167,7 +2168,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `active local manual gateway auto connects without TLS pin`() async {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let stableID = "manual|127.0.0.1|1"
         defer {
@@ -2195,7 +2196,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `missing active discovered gateway auto connects to latest manual gateway`() async {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let manualID = "manual|127.0.0.1|1"
         saveActiveManualGateway(host: "127.0.0.1", port: 1, useTLS: false, stableID: manualID)
@@ -2229,8 +2230,8 @@ private func waitUntil(
         }
     }
 
-    @Test @MainActor func `share relay keeps credentials out of app group defaults`() throws {
-        let registryIsolation = GatewayRegistryTestIsolation()
+    @Test @MainActor func `share relay keeps credentials out of app group defaults`() async throws {
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let token = "relay-token-\(UUID().uuidString)"
         let password = "relay-password-\(UUID().uuidString)"
@@ -2262,8 +2263,8 @@ private func waitUntil(
         #expect(mismatched.password == nil)
     }
 
-    @Test @MainActor func `share relay migrates legacy defaults credentials into keychain`() throws {
-        let registryIsolation = GatewayRegistryTestIsolation()
+    @Test @MainActor func `share relay migrates legacy defaults credentials into keychain`() async throws {
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let token = "legacy-token-\(UUID().uuidString)"
         let password = "legacy-password-\(UUID().uuidString)"
@@ -2290,7 +2291,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `forget gateway clears matching share relay only`() async {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let stableID = "manual|forgotten.example.com|443"
         ShareGatewayRelaySettings.saveConfig(.init(
@@ -2309,7 +2310,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `forget manual gateway clears matching legacy auto connect defaults`() async {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let host = "forgotten.example.com"
         let port = 443
@@ -2335,7 +2336,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `forget gateway preserves legacy defaults for another manual gateway`() async {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         await withUserDefaults([
             "gateway.manual.enabled": true,
@@ -2358,7 +2359,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `forget connected gateway waits for disconnect before device auth cleanup`() async throws {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let connectedID = "manual|connected.example.com|443"
         let selectedID = "manual|selected.example.com|443"
@@ -2415,7 +2416,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `forget selected gateway preserves a different live route`() async throws {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let selectedID = "manual|selected.example.com|443"
         let connectedID = "manual|connected.example.com|443"
@@ -2444,7 +2445,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `forget gateway clears only matching legacy discovery selectors`() async {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let service = GatewaySettingsStore._testGatewayService
         let preferredAccount = "preferredStableID"
@@ -2473,7 +2474,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `forget gateway cancels its pending trust handoff`() async {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let host = "pending-trust.example.com"
         let port = 443
@@ -2495,7 +2496,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `manual trust handoff persists its context path`() async throws {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let host = "context-path-trust.example.com"
         let contextPath = "/openclaw-gateway"
@@ -2524,7 +2525,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `forget gateway preserves another gateway pending trust handoff`() async {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let pendingHost = "pending-kept.example.com"
         let pendingID = GatewayConnectionController.ManualAuthOverride.manualStableID(
@@ -2544,7 +2545,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `forget live gateway preserves replacement pending trust generation`() async throws {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let connectedID = "manual|connected-before-forget.example.com|443"
         let replacementHost = "replacement-after-forget.example.com"
@@ -2645,7 +2646,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `failed replacement restores inherited scanner reconnect state`() async throws {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let updates: [String: Any?] = [
             "gateway.autoconnect": true,
@@ -2679,7 +2680,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `foreground reconnect cannot replace queued explicit handoff`() async {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let updates: [String: Any?] = [
             "gateway.autoconnect": false,
@@ -2729,7 +2730,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `clearing trust prompt invalidates in flight probe`() async {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let probe = ControllableTLSProbe()
         let appModel = NodeAppModel()
@@ -2778,7 +2779,7 @@ private func waitUntil(
     private func `picker protection outlives acceptance until handoff or cancellation finishes`(
         outcome: PickerHandoffOutcome) async throws
     {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let currentID = "manual|127.0.0.1|1"
         let targetID = "manual|127.0.0.1|2"
@@ -2859,7 +2860,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `switch to manual gateway applies its stable I D and URL`() async {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let stableID = "manual|127.0.0.1|1"
         saveActiveManualGateway(host: "127.0.0.1", port: 1, useTLS: false, stableID: stableID)
@@ -2880,7 +2881,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `switch to undiscoverable gateway returns failure without changing active gateway`() async {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let activeID = "manual|127.0.0.1|1"
         let discoveredID = "bonjour|missing"
@@ -2905,7 +2906,7 @@ private func waitUntil(
 
     @Test @MainActor
     func `reconnect to active undiscoverable gateway returns failure without queuing connection`() async {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let discoveredID = "bonjour|missing-active"
         _ = GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
@@ -2927,7 +2928,7 @@ private func waitUntil(
     }
 
     @Test @MainActor func `chat cache remains isolated when active gateway switches`() async throws {
-        let registryIsolation = GatewayRegistryTestIsolation()
+        let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let temporaryState = try TemporaryOpenClawState()
         defer { temporaryState.restore() }
