@@ -11,7 +11,7 @@ import {
 } from "./code-mode-catalog.js";
 import {
   usableResumeBudgetMs,
-  waitForPending,
+  waitForCodeModePending,
   type CodeModeCallBudget,
 } from "./code-mode-execution-budget.js";
 import type {
@@ -277,7 +277,7 @@ function createInlineHost(
       }
       // Pressure parks the VM, never the cell-owned host operations.
       const signal = AbortSignal.any([params.signal, context.signal, context.yieldSignal]);
-      const ready = await waitForPending(
+      const ready = await waitForCodeModePending(
         pending,
         boundary.settlementMode,
         params.budget,
@@ -431,7 +431,7 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
         params.budget.deadlineMs = performance.now() + remainingBudgetMs;
         ready = true;
       } else {
-        ready = await waitForPending(
+        ready = await waitForCodeModePending(
           pending,
           result.settlementMode,
           params.budget,
@@ -627,7 +627,7 @@ export async function runWait(params: {
   try {
     // Active waits own their slot and call deadline; idle expiry applies only after parking.
     releaseActiveRunSlot = reserveActiveRunSlot(state.runId);
-    const ready = await waitForPending(
+    const ready = await waitForCodeModePending(
       state.pending,
       state.settlementMode,
       budget,

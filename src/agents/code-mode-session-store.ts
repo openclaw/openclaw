@@ -1,7 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sameSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
 import { stringifyCodeModeJsonSafe } from "./code-mode-json.js";
-import type { PendingBridgeRequest } from "./code-mode-runtime.js";
+import type { PendingBridgeRequest } from "./code-mode-worker-types.js";
 import type { SessionEntry, SessionManager } from "./sessions/session-manager.js";
 import type { ToolSearchCatalogRef, ToolSearchToolContext } from "./tool-search-types.js";
 

@@ -198,7 +198,7 @@ describe("Code Mode session store", () => {
         label: "Fixture",
         description: "Fixture tool",
         parameters: Type.Object({}),
-        execute: async () => ({ content: [] }),
+        execute: async () => ({ content: [], details: {} }),
       },
     });
     restrictToolSearchCatalog({ catalogRef: owner.catalogRef, allowedToolNames: new Set() });

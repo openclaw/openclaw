@@ -27,7 +27,7 @@ export function usableResumeBudgetMs(
   return remaining >= minimum ? remaining : undefined;
 }
 
-export async function waitForPending(
+export async function waitForCodeModePending(
   pending: readonly PendingBridgeState[],
   settlementMode: CodeModeSettlementMode,
   budget: CodeModeCallBudget,
