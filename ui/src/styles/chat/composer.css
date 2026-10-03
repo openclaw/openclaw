@@ -300,6 +300,19 @@
   scrollbar-gutter: auto;
 }
 
+.agent-chat__capability-menu[data-view="skills"]::part(menu),
+.agent-chat__capability-menu[data-view^="library:"]::part(menu) {
+  width: min(320px, calc(100vw - 24px));
+  min-width: 0;
+  max-width: min(320px, calc(100vw - 24px));
+}
+
+/* Only the Back row has a leading icon in the Skills view. */
+.agent-chat__capability-menu[data-view="skills"]
+  .agent-chat__capability-menu-item:not([value="back"])::part(icon) {
+  display: none;
+}
+
 .agent-chat__capability-menu-item[value="back"] {
   position: sticky;
   top: calc(-1 * var(--menu-padding));
@@ -327,6 +340,7 @@
 }
 
 .agent-chat__capability-menu-divider {
+  flex-shrink: 0;
   height: 1px;
   margin: 4px 6px;
   background: color-mix(in srgb, var(--border) 72%, transparent);
@@ -400,10 +414,25 @@
   line-height: 1.25;
 }
 
+.agent-chat__capability-menu[data-view="skills"]
+  .agent-chat__capability-menu-label
+  > span:first-child,
 .agent-chat__capability-menu-item[value^="library-"] .agent-chat__capability-menu-label > span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Touch cannot use the hover hint; reveal names before a tap changes a skill. */
+@media (hover: none), (any-pointer: coarse) {
+  .agent-chat__capability-menu[data-view="skills"]
+    .agent-chat__capability-menu-label
+    > span:first-child {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
 }
 
 .agent-chat__capability-menu-state {

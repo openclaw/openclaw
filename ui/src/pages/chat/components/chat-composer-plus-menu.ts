@@ -251,7 +251,7 @@ function renderSkillView(props: ChatComposerPlusMenuContentProps) {
               label: skill.name,
               checked: skill.enabled,
               disabled: skill.missingDeps || skill.blocked || disabledReason !== null,
-              title,
+              title: title ? `${skill.name}: ${title}` : skill.name,
               note:
                 skill.missingDeps || skill.blocked
                   ? html`<span class="agent-chat__capability-menu-note">${title}</span>`
