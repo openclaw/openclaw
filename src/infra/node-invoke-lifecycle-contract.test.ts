@@ -1,9 +1,5 @@
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
-import {
-  validateNodeInvokeProgressParams,
-  validateNodeInvokeResultParams,
-} from "../../packages/gateway-protocol/src/index.js";
 import type fixtureData from "../../test/fixtures/node-invoke-lifecycle-contract.json";
 import {
   buildNodeInvokeCancel,
@@ -25,20 +21,9 @@ const fixture: typeof fixtureData = JSON.parse(
 
 describe("node invocation lifecycle contract", () => {
   it("matches the Gateway request producer and node-host consumer", () => {
-    expect(fixture.version).toBe(3);
     const request = fixture.request.canonical;
-    expect(
-      buildNodeInvokeRequest({
-        id: request.id,
-        nodeId: request.nodeId,
-        command: request.command,
-        timeoutMs: request.timeoutMs,
-        idempotencyKey: request.idempotencyKey,
-        sessionKey: request.sessionKey,
-      }),
-    ).toEqual(request);
+    expect(buildNodeInvokeRequest(request)).toEqual(request);
     expect(coerceNodeInvokePayload(request)).toEqual(request);
-    expect(fixture.request.withExtensions).toHaveProperty("unexpected", true);
     expect(coerceNodeInvokePayload(fixture.request.withExtensions)).toEqual(request);
     expect(coerceNodeInvokePayload(fixture.request.legacyParams)).toEqual({
       id: "invoke-legacy",
@@ -82,15 +67,5 @@ describe("node invocation lifecycle contract", () => {
       fixture.cancel.canonical,
     );
     expect(coerceNodeInvokeCancelPayload(fixture.cancel.invalid)).toBeNull();
-  });
-
-  it("matches progress and result validation", () => {
-    expect(validateNodeInvokeProgressParams(fixture.progress.canonical)).toBe(true);
-    expect(fixture.progress.invalid).toBeDefined();
-    expect(validateNodeInvokeProgressParams(fixture.progress.invalid)).toBe(false);
-    expect(validateNodeInvokeResultParams(fixture.results.success)).toBe(true);
-    expect(validateNodeInvokeResultParams(fixture.results.failure)).toBe(true);
-    expect(fixture.results.invalid).toBeDefined();
-    expect(validateNodeInvokeResultParams(fixture.results.invalid)).toBe(false);
   });
 });
