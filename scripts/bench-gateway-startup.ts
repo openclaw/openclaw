@@ -5,13 +5,13 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
+import { CliArgumentError, reportCliError } from "./lib/error-format.mts";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
 import { getFreePort, readProcessRssMb, readProcessTreeCpuMs } from "./lib/gateway-bench-probes.ts";
 import {
   BASE_GATEWAY_BENCH_CONFIG,
   buildGatewayBenchChildArgs,
   classifyGatewayReadyLog,
-  CliArgumentError,
   collectOutputLines,
   collectTraceLine,
   createGatewayBenchEnv,
@@ -1078,13 +1078,5 @@ export const testing = {
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  main().catch((err: unknown) => {
-    if (err instanceof CliArgumentError) {
-      console.error(err.message);
-      process.exitCode = 1;
-      return;
-    }
-    console.error(err instanceof Error ? err.stack : String(err));
-    process.exitCode = 1;
-  });
+  main().catch(reportCliError);
 }

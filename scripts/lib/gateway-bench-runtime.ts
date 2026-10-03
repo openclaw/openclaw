@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { expectDefined } from "../../packages/normalization-core/src/expect.ts";
+import { CliArgumentError } from "./error-format.mts";
 import { delay } from "./gateway-bench-child.ts";
 import { requestProbeStatus } from "./gateway-bench-probes.ts";
 import { parseStrictIntegerOption } from "./strict-integer-option.ts";
@@ -51,10 +52,6 @@ export const BASE_GATEWAY_BENCH_CONFIG = {
   },
   plugins: { enabled: true, entries: { browser: { enabled: false } } },
 } satisfies Record<string, unknown>;
-
-export class CliArgumentError extends Error {
-  override name = "CliArgumentError";
-}
 
 function readRequiredFlagValue(argv: string[], index: number, flag: string): string {
   const value = argv[index + 1];

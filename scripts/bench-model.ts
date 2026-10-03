@@ -2,6 +2,7 @@
 import { pathToFileURL } from "node:url";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { CliArgumentError, reportCliError } from "./lib/error-format.mts";
 import { parseStrictIntegerOption } from "./lib/strict-integer-option.ts";
 
 type CliOptions = {
@@ -12,10 +13,6 @@ type CliOptions = {
 
 const DEFAULT_PROMPT = "Reply with a single word: ok. No punctuation or extra text.";
 const DEFAULT_RUNS = 10;
-
-class CliArgumentError extends Error {
-  override name = "CliArgumentError";
-}
 
 function readValue(argv: string[], index: number, flag: string): string {
   const value = argv[index + 1]?.trim() ?? "";
@@ -206,13 +203,5 @@ export const testing = {
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  main().catch((err: unknown) => {
-    if (err instanceof CliArgumentError) {
-      console.error(err.message);
-      process.exitCode = 1;
-      return;
-    }
-    console.error(err instanceof Error ? err.stack : String(err));
-    process.exitCode = 1;
-  });
+  main().catch(reportCliError);
 }

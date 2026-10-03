@@ -30,6 +30,7 @@ import {
   summarizeMockInferenceRequest,
   type MockInferenceFacts,
 } from "./e2e/lib/mock-inference-facts.ts";
+import { CliArgumentError } from "./lib/error-format.mts";
 import { createActivitySummaryDiagnostics } from "./lib/gateway-bench-activity-summary.ts";
 import {
   startGatewayBrowserProbe,
@@ -64,7 +65,6 @@ import {
 import {
   BASE_GATEWAY_BENCH_CONFIG,
   buildGatewayBenchChildArgs,
-  CliArgumentError,
   createGatewayBenchEnv,
   hasFlag,
   hasHelpFlag,

@@ -6,6 +6,7 @@ import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
+import { reportCliError } from "./lib/error-format.mts";
 import { delay, stopChild, type StopChildResult } from "./lib/gateway-bench-child.ts";
 import {
   getFreePort,
@@ -17,7 +18,6 @@ import {
   BASE_GATEWAY_BENCH_CONFIG,
   buildGatewayBenchChildArgs,
   classifyGatewayReadyLog,
-  CliArgumentError,
   collectOutputLines,
   collectTraceLine,
   createGatewayBenchEnv,
@@ -1239,13 +1239,5 @@ export const testing = {
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  main().catch((err: unknown) => {
-    if (err instanceof CliArgumentError) {
-      console.error(err.message);
-      process.exitCode = 1;
-      return;
-    }
-    console.error(err instanceof Error ? err.stack : String(err));
-    process.exitCode = 1;
-  });
+  main().catch(reportCliError);
 }
