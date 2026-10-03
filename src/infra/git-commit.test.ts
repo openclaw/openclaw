@@ -501,8 +501,9 @@ describe("git commit resolution", () => {
   it("keeps short-read retries within the bounded metadata window", async () => {
     const temp = await makeTempDir("git-commit-bounded-ref");
     const repoRoot = path.join(temp, "repo");
+    const head = "ref: refs/heads/main\n";
     await makeFakeGitRepo(repoRoot, {
-      head: "ref: refs/heads/main\n",
+      head,
       refs: {
         "refs/heads/main": `${"x".repeat(256)}abcdef0123456789`,
       },
@@ -510,7 +511,9 @@ describe("git commit resolution", () => {
     const totalBytesRead = limitPositionalReads(4);
 
     expect(resolveCommitHash({ cwd: repoRoot, env: {} })).toBeNull();
-    expect(totalBytesRead()).toBe(256);
+    // The loose ref is read through one 256-byte window; HEAD is read through its
+    // own bounded window, so the total is that window plus HEAD's real length.
+    expect(totalBytesRead()).toBe(256 + Buffer.byteLength(head, "utf-8"));
   });
 
   it("falls back to baked metadata when a bounded Git metadata read errors", async () => {

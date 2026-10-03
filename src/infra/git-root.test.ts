@@ -117,4 +117,139 @@ describe("git-root", () => {
       expect(readGitHead(nested, { maxDepth: 2 })).toBeUndefined();
     });
   });
+
+  it("bounds the HEAD read instead of slurping an oversized file", async () => {
+    await withTestDir({ prefix: "openclaw-git-root-head-bound-" }, async (temp) => {
+      const repoRoot = path.join(temp, "repo");
+      const gitDir = path.join(repoRoot, ".git");
+      await fs.mkdir(gitDir, { recursive: true });
+
+      // HEAD is one `ref:` line, but a corrupted or hostile file can be any size:
+      // the reader must not load the whole thing.
+      const headPath = path.join(gitDir, "HEAD");
+      const oversized = 2 * 1024 * 1024;
+      await fs.writeFile(headPath, `ref: refs/heads/trunk\n${"x".repeat(oversized)}\n`, "utf-8");
+
+      const read = readGitHead(repoRoot, { maxDepth: 1 });
+      // Trailing bytes beyond the first line never leak into the parsed ref.
+      expect(read?.ref).toBe("refs/heads/trunk");
+      expect(read?.headPath).toBe(headPath);
+      // The file really is far larger than the window that was read.
+      expect((await fs.stat(headPath)).size).toBeGreaterThan(oversized);
+    });
+  });
+
+  it("keeps a long branch name within the bounded HEAD window", async () => {
+    await withTestDir({ prefix: "openclaw-git-root-head-long-ref-" }, async (temp) => {
+      const repoRoot = path.join(temp, "repo");
+      const gitDir = path.join(repoRoot, ".git");
+      await fs.mkdir(gitDir, { recursive: true });
+      // Git does not length-cap branch names; a segmented name stays resolvable.
+      const longRef = `refs/heads/${"segment/".repeat(40)}main`;
+      await fs.writeFile(path.join(gitDir, "HEAD"), `ref: ${longRef}\n`, "utf-8");
+
+      const read = readGitHead(repoRoot, { maxDepth: 1 });
+      expect(read?.ref).toBe(longRef);
+    });
+  });
+
+  it("resolves a HEAD ref longer than the initial window", async () => {
+    await withTestDir({ prefix: "openclaw-git-root-head-over-window-" }, async (temp) => {
+      const repoRoot = path.join(temp, "repo");
+      const gitDir = path.join(repoRoot, ".git");
+      await fs.mkdir(gitDir, { recursive: true });
+      // Crosses the 1024-byte initial window, so the reader must grow it rather
+      // than accept a shortened ref as complete.
+      const longRef = `refs/heads/${"segment/".repeat(125)}abcdefghtail`;
+      expect(`ref: ${longRef}`.length).toBeGreaterThan(1024);
+      await fs.writeFile(path.join(gitDir, "HEAD"), `ref: ${longRef}\n`, "utf-8");
+
+      const read = readGitHead(repoRoot, { maxDepth: 1 });
+      expect(read?.ref).toBe(longRef);
+    });
+  });
+
+  it("never resolves a truncated prefix when a sibling ref exists", async () => {
+    await withTestDir({ prefix: "openclaw-git-root-head-prefix-collision-" }, async (temp) => {
+      const repoRoot = path.join(temp, "repo");
+      const gitDir = path.join(repoRoot, ".git");
+      await fs.mkdir(gitDir, { recursive: true });
+
+      // A *different*, shorter ref that exactly matches what a 1024-byte window
+      // would have produced. A silently shortened read resolves it and reports
+      // the wrong branch, so the two must never be confused.
+      const fullRef = `refs/heads/${"segment/".repeat(125)}abcdefghtail`;
+      const truncated = `ref: ${fullRef}`.slice(0, 1024).replace(/^ref:\s*/, "");
+      expect(truncated).not.toBe(fullRef);
+
+      const siblingPath = path.join(gitDir, "refs", "heads", ...truncated.split("/").slice(2));
+      await fs.mkdir(path.dirname(siblingPath), { recursive: true });
+      await fs.writeFile(siblingPath, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n", "utf-8");
+      await fs.writeFile(path.join(gitDir, "HEAD"), `ref: ${fullRef}\n`, "utf-8");
+
+      const read = readGitHead(repoRoot, { maxDepth: 1 });
+      expect(read?.ref).toBe(fullRef);
+      expect(read?.ref).not.toBe(truncated);
+    });
+  });
+
+  it("reports no ref for an unterminated HEAD past the hard ceiling", async () => {
+    await withTestDir({ prefix: "openclaw-git-root-head-unterminated-" }, async (temp) => {
+      const repoRoot = path.join(temp, "repo");
+      const gitDir = path.join(repoRoot, ".git");
+      await fs.mkdir(gitDir, { recursive: true });
+      // No newline and no `ref:` prefix anywhere: the reader must stop at the
+      // ceiling and report no parseable value rather than pass off a truncated
+      // window as the file's content.
+      const headPath = path.join(gitDir, "HEAD");
+      await fs.writeFile(headPath, "z".repeat(2 * 1024 * 1024), "utf-8");
+
+      const read = readGitHead(repoRoot, { maxDepth: 1 });
+      expect(read?.headPath).toBe(headPath);
+      expect(read?.ref).toBeNull();
+      expect(read?.value).toBeNull();
+    });
+  });
+
+  it("never truncates a Unicode branch name when the byte window is full", async () => {
+    await withTestDir({ prefix: "openclaw-git-root-head-unicode-" }, async (temp) => {
+      const repoRoot = path.join(temp, "repo");
+      const gitDir = path.join(repoRoot, ".git");
+      await fs.mkdir(gitDir, { recursive: true });
+
+      // `é` is 2 UTF-8 bytes but 1 UTF-16 code unit, so a decoded-string length
+      // check would undercount the window and falsely report end of file. The
+      // full ref crosses the 1024-byte window and must still resolve completely.
+      const fullRef = `refs/heads/é/${"segment/".repeat(126)}abcdefghtail`;
+      const fullLine = `ref: ${fullRef}`;
+      expect(Buffer.byteLength(fullLine, "utf-8")).toBeGreaterThan(1024);
+
+      // A sibling whose ref is exactly the first 1024 decoded characters of the
+      // window: a string-length-based EOF check would resolve it (wrong branch).
+      const truncated = fullLine.slice(0, 1024).replace(/^ref:\s*/, "");
+      expect(truncated).not.toBe(fullRef);
+      const siblingPath = path.join(gitDir, "refs", "heads", ...truncated.split("/").slice(2));
+      await fs.mkdir(path.dirname(siblingPath), { recursive: true });
+      await fs.writeFile(siblingPath, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n", "utf-8");
+      await fs.writeFile(path.join(gitDir, "HEAD"), `${fullLine}\n`, "utf-8");
+
+      const read = readGitHead(repoRoot, { maxDepth: 1 });
+      expect(read?.ref).toBe(fullRef);
+      expect(read?.ref).not.toBe(truncated);
+    });
+  });
+
+  it("keeps a normal HEAD value intact under the bound", async () => {
+    await withTestDir({ prefix: "openclaw-git-root-head-normal-" }, async (temp) => {
+      const repoRoot = path.join(temp, "repo");
+      const gitDir = path.join(repoRoot, ".git");
+      await fs.mkdir(gitDir, { recursive: true });
+      const sha = "a".repeat(40);
+      await fs.writeFile(path.join(gitDir, "HEAD"), `${sha}\n`, "utf-8");
+
+      const read = readGitHead(repoRoot, { maxDepth: 1 });
+      expect(read?.ref).toBeNull();
+      expect(read?.value).toBe(sha);
+    });
+  });
 });
