@@ -50,9 +50,7 @@ import {
   setWorkspaceFileSourceIdentity,
 } from "./workspace-file-read.js";
 import { ensureGitRepo } from "./workspace-git.js";
-import {
-  LEGACY_WORKSPACE_STATE_CURRENT_FILENAME,
-} from "./workspace-legacy-state.js";
+import { LEGACY_WORKSPACE_STATE_CURRENT_FILENAME } from "./workspace-legacy-state.js";
 import { runWorkspacePreparation } from "./workspace-preparation.js";
 import { captureWorkspaceStateFilesystemGuard } from "./workspace-state-guard.js";
 import { WorkspaceVanishedError } from "./workspace-state-identity.js";
