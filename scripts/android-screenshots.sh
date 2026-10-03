@@ -761,24 +761,19 @@ if [[ -z "$SNOOZE_PROOF" ]]; then
   rm -f "$OUTPUT_DIR"/*.png "$OUTPUT_DIR"/*.jpg "$OUTPUT_DIR"/*.jpeg
 fi
 
+if [[ "$SKIP_BUILD" != "1" ]]; then
+  (
+    cd "$ANDROID_DIR"
+    ./gradlew "$GRADLE_ASSEMBLE_TASK"
+  )
+fi
 if [[ "$SKIP_INSTALL" != "1" ]]; then
-  if [[ "$SKIP_BUILD" != "1" ]]; then
-    (
-      cd "$ANDROID_DIR"
-      ./gradlew "$GRADLE_ASSEMBLE_TASK"
-    )
-  fi
   APK_PATH="$(latest_debug_apk)"
   if [[ -z "$APK_PATH" ]]; then
     echo "No existing ${FORM_FACTOR} debug APK found. Run without --skip-build first." >&2
     exit 1
   fi
   "$ADB_BIN" -s "$ADB_SERIAL" install -r "$APK_PATH" >/dev/null
-elif [[ "$SKIP_BUILD" != "1" ]]; then
-  (
-    cd "$ANDROID_DIR"
-    ./gradlew "$GRADLE_ASSEMBLE_TASK"
-  )
 fi
 
 "$ADB_BIN" -s "$ADB_SERIAL" shell pm clear "$APP_PACKAGE" >/dev/null

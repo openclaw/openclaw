@@ -371,7 +371,7 @@ async function initSessionStateAttempt(params: InitSessionStateParams): Promise<
     let preparedOutcome: InitSessionStateAttemptOutcome | undefined;
     // Drain foreign owners before the rollover takes the writer lane. Holding
     // that lane while waiting would deadlock owners that release after a write.
-    const outcome = await runExclusiveSessionLifecycleMutation({
+    const outcome = await runExclusiveSessionLifecycleMutation("rollover", {
       scope: attemptContext.storePath,
       identities,
       signal: params.signal,

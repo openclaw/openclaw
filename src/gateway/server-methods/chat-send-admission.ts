@@ -32,7 +32,6 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { registerChatAbortController, resolveChatRunExpiresAtMs } from "../chat-abort.js";
-import { ExpectedProfileMismatchError } from "../expected-profile.js";
 import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
 import {
@@ -66,6 +65,7 @@ import {
   prepareChatSendAdmissionRetry,
   prepareCurrentChatSendRetry,
   releaseChatSendCallerAuthority,
+  respondChatSendWorkAdmissionFailure,
 } from "./chat-send-work-admission.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -206,7 +206,8 @@ export async function admitChatSend(
   let runInterruptTarget: ReturnType<typeof replyRunRegistry.resolveCurrentInterruptTarget>;
   let reservationSuperseded = false;
   let supersedingResult: DedupeEntry | undefined;
-  const commitChatWorkAdmission = async () => {
+  let preparedGoalEntry: Awaited<ReturnType<typeof prepareChatSendSessionEntry>> | undefined;
+  const commitChatWorkAdmission = async (): Promise<void> => {
     const current = prepareCurrentChatSendRetry(params, pendingAttemptId);
     retryComparison = current.comparison ? await current.comparison : undefined;
     const latestSession = current.readSession();
@@ -325,12 +326,17 @@ export async function admitChatSend(
     // Retain compaction lineage before attachment/context preparation can outlive this owner.
     expectedActiveReplyOperation = replyRunRegistry.get(activeRunScopeKey);
     if (request.goalOperation?.action === "start" && !latestEntry && !requestedSessionId) {
-      const prepared = prepareChatSendSessionEntry({
-        cfg: latestSession.cfg,
-        client,
-        agentId,
-        getRuntimeConfig: context.getRuntimeConfig,
-      });
+      if (!preparedGoalEntry) {
+        preparedGoalEntry = await prepareChatSendSessionEntry({
+          cfg: latestSession.cfg,
+          client,
+          agentId,
+          getRuntimeConfig: context.getRuntimeConfig,
+        });
+        // Preparation only read facts; re-enter all current reservation and authority checks once.
+        return commitChatWorkAdmission();
+      }
+      const prepared = preparedGoalEntry;
       initialSessionEntry = prepared.entry;
       assertInitialSkillSelection = prepared.assertSkillSelection;
       admittedSessionId = initialSessionEntry.sessionId;
@@ -422,26 +428,7 @@ export async function admitChatSend(
     clearPendingChatSendReservation();
     admittedRunAbort?.cleanup();
     gatewayWorkAdmission?.release();
-    if (err instanceof ExpectedProfileMismatchError) {
-      throw err;
-    }
-    try {
-      const requestConflict = resolveChatSendRequestConflict(params, retryComparison);
-      if (requestConflict) {
-        respond(false, undefined, requestConflict);
-        return { ok: false as const };
-      }
-    } catch {
-      // Preserve the original refusal when no current comparison evidence is available.
-    }
-    const aborted =
-      context.chatRunState.hasAbortMarker(clientRunId) &&
-      readChatSendDedupeResponse(context.dedupe, clientRunId);
-    if (aborted) {
-      respond(aborted.ok, aborted.payload, aborted.error, { cached: true, runId: clientRunId });
-      return { ok: false as const };
-    }
-    respondChatSendAdmissionError(err, respond);
+    respondChatSendWorkAdmissionFailure(params, err, retryComparison);
     return { ok: false as const };
   }
   if (retainedRequestConflict) {
@@ -702,6 +689,7 @@ export async function admitChatSend(
       messageInjectionTarget,
       originatingRoute,
       rejectSessionRoutingChanged,
+      releaseSourceWorkAdmission: retainedWork.release,
       retainGatewayWorkAdmission: retainedWork.retain,
       setPendingInputCleanup: retainedWork.setPendingInputCleanup,
       assertClientUploadAllowed: uploadAdmission.assertClientUploadAllowed,

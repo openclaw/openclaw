@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
+  assertSqliteSchemaContains,
   collectSqliteSchemaIssues,
   createSqliteTableContractReader,
   type SqliteTableContractReader,
@@ -59,6 +60,13 @@ export function assertCurrentStateRuntimeSchema(
 ): void {
   assertCanonicalStateSchemaShape(database, pathname);
   assertOpenClawStateDatabaseForMaintenance(database, { pathname }, readTable);
+  assertSqliteSchemaContains(
+    database,
+    pathname,
+    getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false }),
+    STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+    readTable,
+  );
 }
 
 /** Catalog presence is enough to refuse retired history without reading or rewriting its rows. */

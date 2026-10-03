@@ -96,7 +96,6 @@ type PromptDefaultModelParams = {
   config: OpenClawConfig;
   prompter: WizardPrompter;
   allowKeep?: boolean;
-  includeManual?: boolean;
   includeProviderPluginSetups?: boolean;
   ignoreAllowlist?: boolean;
   loadCatalog?: boolean;
@@ -266,29 +265,6 @@ function createModelRouteRuntimeResolver(params: {
   };
 }
 
-function resolveModelRouteHint(params: {
-  provider: string;
-  modelId: string;
-  api?: string | null;
-  baseUrl?: unknown;
-  resolveModelRouteRuntime: ModelRouteRuntimeResolver;
-}): string | undefined {
-  if (normalizeProviderId(params.provider) !== "openai") {
-    return undefined;
-  }
-  const runtime = params.resolveModelRouteRuntime({
-    provider: params.provider,
-    modelId: params.modelId,
-    api: params.api,
-    baseUrl: params.baseUrl,
-  });
-  return runtime === "codex"
-    ? "Codex runtime route"
-    : runtime === "openclaw"
-      ? "OpenClaw runtime route"
-      : undefined;
-}
-
 async function resolveLiteralPrefixProviderIds(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
@@ -349,7 +325,7 @@ async function addModelSelectOption(params: {
   resolveModelRouteRuntime: ModelRouteRuntimeResolver;
 }) {
   const normalizedRef = normalizeModelRef(params.entry.provider, params.entry.id);
-  const key = modelCatalogEntryKey(params.entry);
+  const key = modelKey(normalizedRef.provider, normalizedRef.model);
   if (
     params.seen.has(key) ||
     HIDDEN_ROUTER_MODELS.has(key) ||
@@ -371,15 +347,16 @@ async function addModelSelectOption(params: {
   if (aliases?.length) {
     hints.push(`alias: ${aliases.join(", ")}`);
   }
-  const routeHint = resolveModelRouteHint({
-    provider: normalizedRef.provider,
-    modelId: normalizedRef.model,
-    api: params.entry.api,
-    baseUrl: params.entry.baseUrl,
-    resolveModelRouteRuntime: params.resolveModelRouteRuntime,
-  });
-  if (routeHint) {
-    hints.push(routeHint);
+  if (normalizeProviderId(normalizedRef.provider) === "openai") {
+    const route = params.resolveModelRouteRuntime({
+      provider: normalizedRef.provider,
+      modelId: normalizedRef.model,
+      api: params.entry.api,
+      baseUrl: params.entry.baseUrl,
+    });
+    if (route) {
+      hints.push(route === "codex" ? "Codex runtime route" : "OpenClaw runtime route");
+    }
   }
   if (
     !(await params.hasAuth(normalizedRef.provider, {
@@ -480,18 +457,9 @@ async function promptManualModel(params: {
 }
 
 async function maybeFilterModelsByProvider(params: {
-  models: Array<{
-    provider: string;
-    id: string;
-    name?: string;
-    contextWindow?: number;
-    reasoning?: boolean;
-  }>;
-  preferredProvider?: string;
+  models: ModelCatalogEntry[];
+  matchesPreferredProvider?: (provider: string) => boolean;
   prompter: WizardPrompter;
-  cfg: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
   isVisibleProvider: (provider: string) => boolean;
 }): Promise<typeof params.models> {
   let next = params.models.filter((entry) => params.isVisibleProvider(entry.provider));
@@ -499,17 +467,9 @@ async function maybeFilterModelsByProvider(params: {
   for (const { provider } of next) {
     providerCounts.set(provider, (providerCounts.get(provider) ?? 0) + 1);
   }
-  const hasPreferredProvider = Boolean(params.preferredProvider);
+  const { matchesPreferredProvider } = params;
   const shouldPromptProvider =
-    !hasPreferredProvider && providerCounts.size > 1 && next.length > PROVIDER_FILTER_THRESHOLD;
-  const matchesPreferredProvider = params.preferredProvider
-    ? createPreferredProviderMatcher({
-        preferredProvider: params.preferredProvider,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-      })
-    : undefined;
+    !matchesPreferredProvider && providerCounts.size > 1 && next.length > PROVIDER_FILTER_THRESHOLD;
   if (shouldPromptProvider) {
     const selection = await params.prompter.select({
       message: t("wizard.model.filterByProvider"),
@@ -530,8 +490,8 @@ async function maybeFilterModelsByProvider(params: {
       next = next.filter((entry) => entry.provider === selection);
     }
   }
-  if (hasPreferredProvider && params.preferredProvider) {
-    const filtered = next.filter((entry) => matchesPreferredProvider?.(entry.provider));
+  if (matchesPreferredProvider) {
+    const filtered = next.filter((entry) => matchesPreferredProvider(entry.provider));
     if (filtered.length > 0) {
       next = filtered;
     }
@@ -546,7 +506,6 @@ export async function promptDefaultModel(
   const pickerConfig = resolveModelPickerConfig(cfg, params.agentId);
   const pickerAgentDir = params.agentDir ?? resolveDefaultAgentDir(cfg, params.env ?? process.env);
   const allowKeep = params.allowKeep ?? true;
-  const includeManual = params.includeManual ?? true;
   const includeProviderPluginSetups = params.includeProviderPluginSetups ?? false;
   const loadCatalog = params.loadCatalog ?? true;
   const browseCatalogOnDemand = params.browseCatalogOnDemand ?? false;
@@ -619,9 +578,7 @@ export async function promptDefaultModel(
             : undefined,
       });
     }
-    if (includeManual) {
-      options.push({ value: MANUAL_VALUE, label: t("wizard.model.enterManually") });
-    }
+    options.push({ value: MANUAL_VALUE, label: t("wizard.model.enterManually") });
     if (offerCatalogBrowse) {
       options.push({
         value: BROWSE_VALUE,
@@ -634,9 +591,6 @@ export async function promptDefaultModel(
         label: configuredKey,
         hint: t("wizard.model.current"),
       });
-    }
-    if (options.length === 0) {
-      return promptManual();
     }
     const selection = await params.prompter.select({
       message: params.message ?? t("wizard.model.defaultModel"),
@@ -712,18 +666,6 @@ export async function promptDefaultModel(
     env: params.env,
     includeSetupRegistry: !providerScopedCatalog,
   });
-  const filteredModels = await maybeFilterModelsByProvider({
-    models,
-    preferredProvider,
-    prompter: params.prompter,
-    cfg,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    isVisibleProvider,
-  });
-  if (filteredModels.length === 0) {
-    return promptManual();
-  }
   const matchesPreferredProvider = preferredProvider
     ? createPreferredProviderMatcher({
         preferredProvider,
@@ -732,6 +674,15 @@ export async function promptDefaultModel(
         env: params.env,
       })
     : undefined;
+  const filteredModels = await maybeFilterModelsByProvider({
+    models,
+    matchesPreferredProvider,
+    prompter: params.prompter,
+    isVisibleProvider,
+  });
+  if (filteredModels.length === 0) {
+    return promptManual();
+  }
   const literalPrefixProviders = await resolveCachedLiteralPrefixProviders();
 
   // Show the literal form (e.g. nvidia/nvidia/...) in the "Keep current" label
@@ -751,9 +702,7 @@ export async function promptDefaultModel(
       label: formatKeepCurrentModelLabel({ configuredRaw, configuredLabel, resolvedKey }),
     });
   }
-  if (includeManual) {
-    options.push({ value: MANUAL_VALUE, label: t("wizard.model.enterManually") });
-  }
+  options.push({ value: MANUAL_VALUE, label: t("wizard.model.enterManually") });
   if (includeProviderPluginSetups && params.agentDir && !providerScopedCatalog) {
     options.push(
       ...(await resolveProviderPluginSetupOptions({

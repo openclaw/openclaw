@@ -396,6 +396,54 @@ describe("worker transcript commit application", () => {
     expect(reopened.getLeafId()).toBe(outcome.result.newLeafId);
   });
 
+  it("commits through an alias of the admitted transcript database", async () => {
+    const aliasRoot = `${root}-alias`;
+    await fs.symlink(root, aliasRoot, process.platform === "win32" ? "junction" : "dir");
+    try {
+      const aliasStorePath = path.join(aliasRoot, path.relative(root, storePath));
+      const aliasTarget = await resolveSessionTranscriptRuntimeTarget({
+        agentId: "main",
+        sessionId: SESSION_ID,
+        sessionKey: SESSION_KEY,
+        storePath: aliasStorePath,
+      });
+      expect(aliasTarget.storePath).toBe(aliasStorePath);
+
+      const outcome = await committer.commit({
+        ...ADMITTED_OWNER,
+        sessionTarget: {
+          ...aliasTarget,
+          expectedLifecycleRevision: "worker-original-revision",
+        },
+        request: createRequest({
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "text", text: "Persist through the admitted owner" }],
+              timestamp: 100,
+            },
+          ],
+        }),
+      });
+
+      expect(outcome.ok).toBe(true);
+      if (!outcome.ok) {
+        throw new Error(`expected aliased transcript commit, received ${outcome.reason}`);
+      }
+      expect((await SessionManager.openAsync(sessionTarget)).getEntries()).toEqual([
+        expect.objectContaining({
+          id: outcome.result.newLeafId,
+          message: expect.objectContaining({
+            role: "user",
+            content: [{ type: "text", text: "Persist through the admitted owner" }],
+          }),
+        }),
+      ]);
+    } finally {
+      await fs.rm(aliasRoot, { force: true });
+    }
+  });
+
   it("commits a non-default agent's global session", async () => {
     const updates: Parameters<Parameters<typeof onSessionTranscriptUpdate>[0]>[0][] = [];
     unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));

@@ -11,21 +11,25 @@ import {
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
 import type { registerChatAbortController } from "../chat-abort.js";
+import { ExpectedProfileMismatchError } from "../expected-profile.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import { formatForLog } from "../ws-log.js";
 import { readPreRegisteredRun } from "./chat-abort-authorization.js";
 import {
   prepareChatSendRetryComparison,
+  readChatSendDedupeResponse,
+  resolveChatSendRequestConflict,
   respondChatSendAdmissionError,
   respondChatSendRetry,
   type ChatSendPreAdmissionParams,
 } from "./chat-send-pre-admission.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
+import type { ChatSendRetryComparison } from "./chat-send-retry-comparison.js";
 import { loadCurrentChatSendSession, type PreparedChatSendSession } from "./chat-send-session.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 /** Preparation returns facts; the caller consumes current retry ownership before reserving. */
@@ -87,6 +91,35 @@ export function prepareCurrentChatSendRetry(
     comparison,
     readSession: () => (comparison ? loadCurrentChatSendSession(params.session) : session),
   };
+}
+
+export function respondChatSendWorkAdmissionFailure(
+  params: ChatSendPreAdmissionParams,
+  error: unknown,
+  comparison?: ChatSendRetryComparison,
+) {
+  if (error instanceof ExpectedProfileMismatchError) {
+    throw error;
+  }
+  const { context, respond, session } = params;
+  const { clientRunId } = session;
+  try {
+    const conflict = resolveChatSendRequestConflict(params, comparison);
+    if (conflict) {
+      respond(false, undefined, conflict);
+      return;
+    }
+  } catch {
+    // Preserve the original refusal when no current comparison evidence is available.
+  }
+  const aborted =
+    context.chatRunState.hasAbortMarker(clientRunId) &&
+    readChatSendDedupeResponse(context.dedupe, clientRunId);
+  if (aborted) {
+    respond(aborted.ok, aborted.payload, aborted.error, { cached: true, runId: clientRunId });
+    return;
+  }
+  respondChatSendAdmissionError(error, respond);
 }
 
 /** New input is checked only after the chat owner has reconciled prior receipts. */

@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 // One managed update across the published-driver/candidate boundary, with synthetic state only.
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -15,6 +14,7 @@ import {
   compareReleaseVersions,
   parseReleaseVersion,
 } from "../../../lib/release-version.mjs";
+import { stampFixtureVersion } from "../update-first-hop-package-fixtures.mjs";
 import {
   assertPublishedDriverReclaimed,
   inspectPublishedDriverSqlite,
@@ -164,20 +164,7 @@ async function relabelCandidate(from, to) {
   const dir = path.join(runtime, "candidate-relabel");
   fs.mkdirSync(dir, { recursive: true });
   await run("candidate-relabel-extract", "tar", ["-xf", candidate, "-C", dir]);
-  for (const file of ["package/package.json", "package/dist/build-info.json"]) {
-    const target = path.join(dir, file);
-    fs.writeFileSync(target, `${JSON.stringify({ ...readJson(target), version: to }, null, 2)}\n`);
-  }
-  // build-info.json is inventoried; keep the packaged content inventory truthful
-  // so the candidate's own package-verify step still proves the dist bytes.
-  const buildInfo = fs.readFileSync(path.join(dir, "package/dist/build-info.json"));
-  const inventoryFile = path.join(dir, "package/dist/postinstall-content-inventory.json");
-  const inventory = readJson(inventoryFile);
-  const buildInfoEntry = inventory.find((entry) => entry.path === "dist/build-info.json");
-  assert(buildInfoEntry, "Candidate inventory does not list dist/build-info.json");
-  buildInfoEntry.sha256 = createHash("sha256").update(buildInfo).digest("hex");
-  buildInfoEntry.size = buildInfo.length;
-  fs.writeFileSync(inventoryFile, `${JSON.stringify(inventory, null, 2)}\n`);
+  stampFixtureVersion(path.join(dir, "package"), to);
   const relabeled = path.join(runtime, "openclaw-candidate-relabeled.tgz");
   await run("candidate-relabel-pack", "tar", ["-czf", relabeled, "-C", dir, "package"]);
   writeJson("candidate-relabel", { from, to, package: relabeled });

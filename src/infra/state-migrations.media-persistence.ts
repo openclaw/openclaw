@@ -53,16 +53,16 @@ import { formatErrorMessage } from "./errors.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
-  clearNodeSqliteKyselyCacheForDatabase,
   enableNodeSqliteKyselyStatementCache,
 } from "./kysely-sync.js";
-import { openNodeSqliteDatabase, readSqliteDataVersion } from "./node-sqlite.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { repairDoctorSqliteIndexCorruption } from "./sqlite-index-recovery.js";
 import { repairCanonicalSqliteIndexes } from "./sqlite-index-schema.js";
 import { runSqliteIntegrityOperationInWorker } from "./sqlite-integrity-operation.js";
 import { assertSqliteIntegrity, isTerminalSqliteIntegrityError } from "./sqlite-integrity.js";
 import { configureSqliteMaintenanceCache } from "./sqlite-maintenance-cache.js";
 import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
+import { readSqliteDataVersion } from "./sqlite-schema-facts.js";
 import {
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
@@ -111,7 +111,13 @@ async function migrateAgentDatabase(params: {
   preparedArchives?: ReadonlySet<string>;
 }) {
   const database = openNodeSqliteDatabase(params.pathname);
-  const schemaOptions = { agentId: params.agentId, path: params.pathname, env: params.env };
+  const schemaWarnings: string[] = [];
+  const schemaOptions = {
+    agentId: params.agentId,
+    path: params.pathname,
+    env: params.env,
+    onMigrationWarning: (warning: string) => schemaWarnings.push(warning),
+  };
   const runSchema = (operation: Parameters<typeof runSqliteIntegrityOperationInWorker>[0]) =>
     runSqliteIntegrityOperationInWorker(operation, {
       busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -268,6 +274,7 @@ async function migrateAgentDatabase(params: {
           rewrittenSessions: 0,
           rewrittenTrajectoryRows: 0,
           ...archives,
+          warnings: [...schemaWarnings, ...archives.warnings],
           initialVersion,
           finalVersion: userVersion,
         };
@@ -349,11 +356,11 @@ async function migrateAgentDatabase(params: {
     return {
       ...rewritten,
       ...archives,
+      warnings: [...schemaWarnings, ...archives.warnings],
       initialVersion,
       finalVersion: readSqliteUserVersion(database),
     };
   } finally {
-    clearNodeSqliteKyselyCacheForDatabase(database);
     database.close();
   }
 }

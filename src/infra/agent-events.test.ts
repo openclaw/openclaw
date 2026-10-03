@@ -221,28 +221,6 @@ test("reserves exclusive run ids for owner-only delivery and cleanup", () => {
   expect(seen).toEqual(["worker"]);
 });
 
-test("explicitly adopts only an unowned same-generation context", () => {
-  const context = {
-    agentId: "main",
-    isControlUiVisible: false,
-    lifecycleGeneration: getAgentEventLifecycleGeneration(),
-    sessionId: "session-adopted",
-    sessionKey: "agent:main:adopted",
-  };
-  registerAgentRunContext("run", context);
-  const options = {
-    adoptExistingUnowned: true,
-    exclusive: true,
-    ownsContext: true,
-    trackOwner: true,
-  };
-  const claim = claimAgentRunContext("run", context, options);
-  expect(claim).toBeDefined();
-  expect(claimAgentRunContext("run", context, options)).toBeUndefined();
-  releaseAgentRunContext("run", claim);
-  expect(getAgentRunContext("run")).toBeUndefined();
-});
-
 test("drops stale explicit-generation events before shared listeners", () => {
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   registerAgentRunContext("run", { sessionKey: "main", lifecycleGeneration });

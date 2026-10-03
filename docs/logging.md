@@ -556,8 +556,9 @@ holder sample.
 
 `operationId` and `holderOperationId` identify diagnostic operation instances
 within `diagnosticEpoch`, PID and thread. Operations use the fixed boundary
-labels `lifecycle`, `mutation` and `compaction`; they do not name arbitrary
-callers. Existing request traces appear in `operationTraceId`/`operationSpanId`
+labels `lifecycle`, `mutation` and `compaction`. Mutations also include the bounded
+`mutationKind` (for example, `create`, `archive`, `delete`, or `worktree-cleanup`);
+queue samples include `holderMutationKind`. Existing request traces appear in `operationTraceId`/`operationSpanId`
 and separate `holderTraceId`/`holderSpanId` fields when present. Missing trace
 fields remain unknown; no new trace or audit execution identity is created.
 
@@ -565,6 +566,10 @@ fields remain unknown; no new trace or audit execution identity is created.
 identity. It correlates only inside the same JavaScript runtime isolate and
 diagnostic epoch. Raw session keys and paths are omitted. The digest is
 operational correlation, not anonymization or authorization evidence.
+Both records include `sessionScopeHash`, the salted digest of the first normalized
+identity, and `identityCount`. For batches this names one scope, not every affected
+session. `holderSessionScopeHash` identifies that same scope for the current holder.
+No session titles, transcript content, repository names, or raw identities are logged.
 
 `slow session lifecycle operation` records operations taking at least one
 second through their actual queued work's settlement. It separates
@@ -587,7 +592,11 @@ capacity or after enablement. `omittedObservations` on a later record reports
 suppressed observations; missing records never prove no wait.
 
 Elapsed intervals can include asynchronous waits and nested work, so phase
-and queue totals need not form a disjoint partition. A holder sample identifies
+and queue totals need not form a disjoint partition. `isMainThread=true` identifies
+the emitting thread; a long `.run` interval does not establish event-loop blocking.
+Correlate it with event-loop delay or a CPU profile before attributing a stall.
+Work before lifecycle admission, including request preflight, is outside these intervals.
+A holder sample identifies
 who owns that queue at the sampled instant, not every predecessor responsible
 for the entire wait or which work consumed CPU. These are ordinary performance
 logs. They do not use or change [audit identity](/gateway/audit), decisions,

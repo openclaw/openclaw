@@ -65,7 +65,6 @@ import {
   prepareAgentRunUserTurn,
   recordAgentRunUserTurnParticipant,
   reconcileAgentRunUserTurnCompletion,
-  releasePreparedAgentRunUserTurn,
   releasePreparedAgentRunUserTurnAfterFailure,
   type PreparedAgentRunUserTurn,
 } from "./agent-run-user-turn.js";
@@ -536,13 +535,9 @@ export async function prepareAgentRunDispatch(
   } catch (err) {
     return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.UNAVAILABLE, err));
   }
-  const inputAdmission = revalidateAdmission();
+  const inputAdmission = revalidateAdmission(userTurn);
   if (inputAdmission !== true) {
-    try {
-      return await inputAdmission;
-    } finally {
-      await releasePreparedAgentRunUserTurn(userTurn, parentResume ? "cancelled" : "interrupted");
-    }
+    return inputAdmission;
   }
   const accepted = {
     runId: params.runId,

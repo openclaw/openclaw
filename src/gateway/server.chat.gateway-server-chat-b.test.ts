@@ -2515,8 +2515,7 @@ describe("gateway server chat", () => {
   });
 
   test("chat.send retains durably admitted media when later setup throws before the ACK", async () => {
-    const { storePath } = openDirectChatSession();
-    try {
+    await withDirectChatSession(async (_sessionDir, storePath) => {
       await writeStoredMainSession({
         modelProvider: "test-provider",
         model: "vision-model",
@@ -2567,6 +2566,7 @@ describe("gateway server chat", () => {
           error: expect.anything(),
         },
       ]);
+      await getDirectChatSessionWorkRelease();
       const pending = await listSessionPendingInputs({
         agentId: "main",
         sessionKey: "agent:main:main",
@@ -2589,9 +2589,7 @@ describe("gateway server chat", () => {
       expect(remaining.filter((name) => !inboundBaseline.has(name))).toEqual([
         path.basename(retainedPath),
       ]);
-    } finally {
-      await resetDirectChatSession();
-    }
+    });
   });
 
   test("chat.abort cancels chat.send while lifecycle admission waits", async () => {
@@ -2600,7 +2598,7 @@ describe("gateway server chat", () => {
     try {
       await writeStoredMainSession({});
       const mutationStarted = createDeferred();
-      const mutation = runExclusiveSessionLifecycleMutation({
+      const mutation = runExclusiveSessionLifecycleMutation("patch", {
         scope: storePath,
         identities: ["sess-main"],
         run: async () => {
@@ -2711,7 +2709,7 @@ describe("gateway server chat", () => {
     try {
       await writeStoredMainSession({});
       const mutationStarted = createDeferred();
-      const mutation = runExclusiveSessionLifecycleMutation({
+      const mutation = runExclusiveSessionLifecycleMutation("patch", {
         scope: storePath,
         identities: ["sess-main"],
         run: async () => {
@@ -2782,7 +2780,7 @@ describe("gateway server chat", () => {
       const seededSessionId = seededSession.entry?.sessionId;
       expect(seededSessionId).toBe("sess-main");
       const mutationStarted = createDeferred();
-      mutation = runExclusiveSessionLifecycleMutation({
+      mutation = runExclusiveSessionLifecycleMutation("delete", {
         scope: seededSession.storePath,
         identities: [seededSession.canonicalKey, seededSessionId],
         run: async () => {
@@ -2871,7 +2869,7 @@ describe("gateway server chat", () => {
         sessionId: "sess-before-reset",
       });
       const mutationStarted = createDeferred();
-      const mutation = runExclusiveSessionLifecycleMutation({
+      const mutation = runExclusiveSessionLifecycleMutation("reset", {
         scope: storePath,
         identities: ["agent:main:main", "sess-before-reset"],
         run: async () => {
@@ -2927,7 +2925,7 @@ describe("gateway server chat", () => {
     try {
       await writeStoredMainSession({});
       const mutationStarted = createDeferred();
-      const mutation = runExclusiveSessionLifecycleMutation({
+      const mutation = runExclusiveSessionLifecycleMutation("patch", {
         scope: storePath,
         identities: ["sess-main"],
         run: async () => {
@@ -2985,7 +2983,7 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 
       const terminalMutationStarted = createDeferred();
-      const terminalMutation = runExclusiveSessionLifecycleMutation({
+      const terminalMutation = runExclusiveSessionLifecycleMutation("patch", {
         scope: storePath,
         identities: ["sess-main"],
         run: async () => {
@@ -3687,7 +3685,7 @@ describe("gateway server chat", () => {
     try {
       await writeStoredMainSession(makeDoneSessionEntry());
       const mutationStarted = createDeferred();
-      mutation = runExclusiveSessionLifecycleMutation({
+      mutation = runExclusiveSessionLifecycleMutation("patch", {
         scope: storePath,
         identities: ["agent:main:main", "sess-main"],
         run: async () => {
@@ -4322,21 +4320,20 @@ describe("gateway server chat", () => {
       expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(false);
 
       turnAdoptionLifecycle?.onSettled?.();
+      await getDirectChatSessionWorkRelease();
       expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(false);
       expect(isSessionWorkAdmissionActive(storePath, ["agent:main:main", "sess-main"])).toBe(false);
-      await waitForFast(() => {
-        expect(context.removeChatRun).toHaveBeenCalledTimes(2);
-        expect(context.removeChatRun).toHaveBeenCalledWith(
-          "idem-queued-followup",
-          "idem-queued-followup",
-          "agent:main:main",
-        );
-        expect(context.removeChatRun).toHaveBeenCalledWith(
-          "queued-followup-agent-run",
-          "queued-followup-agent-run",
-          "agent:main:main",
-        );
-      }, FAST_WAIT_OPTS);
+      expect(context.removeChatRun).toHaveBeenCalledTimes(2);
+      expect(context.removeChatRun).toHaveBeenCalledWith(
+        "idem-queued-followup",
+        "idem-queued-followup",
+        "agent:main:main",
+      );
+      expect(context.removeChatRun).toHaveBeenCalledWith(
+        "queued-followup-agent-run",
+        "queued-followup-agent-run",
+        "agent:main:main",
+      );
 
       let failedDispatchLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
       dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
@@ -4378,6 +4375,7 @@ describe("gateway server chat", () => {
       });
       expect(context.chatQueuedTurns.has("idem-queued-followup-post-error")).toBe(true);
       failedDispatchLifecycle?.onSettled?.();
+      await getDirectChatSessionWorkRelease();
       expect(context.chatQueuedTurns.has("idem-queued-followup-post-error")).toBe(false);
     });
   });

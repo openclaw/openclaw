@@ -433,7 +433,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
         const gatewayContext = params.context.resolveGatewayContext?.();
         const skillLibraryAuthoring =
           gatewayContext && params.resolvedSessionKey
-            ? prepareGatewaySkillAuthoring(
+            ? await prepareGatewaySkillAuthoring(
                 {
                   client: params.client,
                   context: gatewayContext,

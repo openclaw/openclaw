@@ -168,9 +168,7 @@ export function auditGatewayInstallPreservation(
     }
     if (upper === "PATH" && replacement !== undefined) {
       const paths = (text: string) =>
-        text
-          .split(platform === "win32" ? ";" : ":")
-          .map((part) => normalizeServicePathEntry(part, platform));
+        text.split(":").map((part) => normalizeServicePathEntry(part, platform));
       if (retains(paths(value), paths(replacement))) {
         continue;
       }

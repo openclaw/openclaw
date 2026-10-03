@@ -379,33 +379,25 @@ async function scanGatewayServices(
   if (process.platform === "darwin") {
     try {
       const home = resolveDaemonHomeDir(env);
-      const userDir = path.join(home, "Library", "LaunchAgents");
-      for (const svc of await scanLaunchdDir({
-        dir: userDir,
-        scope: "user",
-        selectedName: resolveLaunchAgentLabel(env),
-        errors,
-      })) {
-        push(svc);
-      }
+      const scan = async (dir: string, scope: "user" | "system", managedLabel?: string) => {
+        for (const svc of await scanLaunchdDir({
+          dir,
+          scope,
+          managedLabel,
+          selectedName: resolveLaunchAgentLabel(env),
+          errors,
+        })) {
+          push(svc);
+        }
+      };
+      await scan(path.join(home, "Library", "LaunchAgents"), "user");
       if (opts.deep) {
-        for (const svc of await scanLaunchdDir({
-          dir: path.join(path.sep, "Library", "LaunchAgents"),
-          scope: "system",
-          selectedName: resolveLaunchAgentLabel(env),
-          errors,
-        })) {
-          push(svc);
-        }
-        for (const svc of await scanLaunchdDir({
-          dir: path.join(path.sep, "Library", "LaunchDaemons"),
-          scope: "system",
-          managedLabel: resolveLaunchAgentLabel(env),
-          selectedName: resolveLaunchAgentLabel(env),
-          errors,
-        })) {
-          push(svc);
-        }
+        await scan(path.join(path.sep, "Library", "LaunchAgents"), "system");
+        await scan(
+          path.join(path.sep, "Library", "LaunchDaemons"),
+          "system",
+          resolveLaunchAgentLabel(env),
+        );
       }
     } catch (error) {
       if (hasCommandProcessCleanupError(error)) {

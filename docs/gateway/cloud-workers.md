@@ -82,6 +82,8 @@ Node and SSH workspace access and reconciliation outlive worker RPC credential e
 
 ### Crabbox provider support
 
+A fresh allocation that exits with the exact `provider=<backend> does not support fixed idempotent lease IDs` capability refusal fails permanently without scheduling cleanup for a nonexistent lease. Choose a backend with fixed lease ID support. The same refusal during replay cannot disprove an earlier allocation, so its cleanup responsibility remains until release or absence is confirmed.
+
 Select a Crabbox backend with `settings.provider`. Use the [Crabbox provider reference](https://crabbox.sh/providers/index.html) for supported providers, authentication, sizing, snapshots, networking, and provider-specific limitations. OpenClaw does not maintain a separate backend catalog; accepting a profile does not establish that the backend can host a cloud session.
 
 The installed Crabbox version and selected backend must support fixed-ID `warmup --lease-id`, target-native script execution through `run --script-stdin` for setup and enrollment, lease inspection, and teardown by canonical lease ID. Scripts use PowerShell on native Windows and a POSIX shell on Linux, macOS, and Windows (WSL2). Never remove `--lease-id` to bypass a backend capability rejection: it prevents duplicate allocations after an interrupted dispatch. OpenClaw preserves unsupported-backend diagnostics; upgrading the CLI alone does not establish backend support. Heartbeat support keeps placed workers alive under the configured idle policy. Optional desktop and warm-image features have additional requirements described in [Warm images](/gateway/cloud-workers/warm-images) and [Cloud Worker Desktop](/gateway/cloud-workers/desktop).

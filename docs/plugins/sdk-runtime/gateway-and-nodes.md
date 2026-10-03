@@ -248,6 +248,11 @@ applicable policy also requires fresh publication admission.
     from a confirmed empty list. This lifecycle-bound read reuses the Gateway's
     session projection and context-bound PR snapshot owner, preserves current
     caller authority and session visibility, and omits incognito sessions.
+    It returns prepared facts without waiting for Git or transcript enrichment;
+    previews can be absent while enrichment is pending. Missing PR snapshots
+    refresh in the background. Use `api.runtime.gateway.subscribeSessionChanges`
+    to reread the affected `sessionKey` when facts change, and call the returned
+    unsubscribe function when finished. Unchanged facts need no age-based retry.
     Retained handles reject after their owner closes; no new SDK barrel export
     is needed.
 

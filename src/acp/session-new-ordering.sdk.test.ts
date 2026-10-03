@@ -168,53 +168,57 @@ function create(id: JsonRpcId, sessionId: string) {
 }
 
 describe("ACP SDK NDJSON ordering", () => {
-  it("streams chatty create/prompt/load/resume without waiting for a slow creation", async () => {
-    const wire = createWireHarness();
-    wire.send(create(null, "slow"));
-    await expect.poll(() => wire.entered, FAST_POLL).toContain("slow");
-    wire.send(create("", "chatty"));
-    await wire.waitResponse("");
-    wire.send(request(2, "session/prompt", { sessionId: "chatty", prompt: [] }));
-    await wire.waitResponse(2);
-    wire.send(request("2", "session/load", { sessionId: "loaded", cwd: "/tmp", mcpServers: [] }));
-    await wire.waitResponse("2");
-    wire.send(request(3, "session/resume", { sessionId: "resumed", cwd: "/tmp", mcpServers: [] }));
-    await wire.waitResponse(3);
-    expect(wire.responseIndex(null)).toBe(-1);
-    expect(wire.updateIndex("chatty")).toBeGreaterThan(wire.responseIndex(""));
-    const text = wire.frames.findIndex(
-      (frame) => "method" in frame && JSON.stringify(frame).includes('"answer"'),
-    );
-    expect(text).toBeGreaterThan(wire.responseIndex(""));
-    expect(text).toBeLessThan(wire.responseIndex(2));
-    expect(wire.updateIndex("loaded")).toBeLessThan(wire.responseIndex("2"));
-    expect(wire.updateIndex("resumed")).toBeLessThan(wire.responseIndex(3));
-    wire.slow.resolve();
-    await wire.waitResponse(null);
-    await expect
-      .poll(() => wire.updateIndex("slow"), FAST_POLL)
-      .toBeGreaterThan(wire.responseIndex(null));
-  });
-
-  it.each([
-    ["session/load", ""],
-    ["session/resume", null],
-  ] as const)("streams %s with accepted ID %j during an unrelated creation", async (method, id) => {
+  it("streams create/prompt/load/resume with empty and null IDs while a creation is pending", async () => {
     const wire = createWireHarness();
     wire.send(create(90, "slow"));
     await expect.poll(() => wire.entered, FAST_POLL).toContain("slow");
-    wire.send(request(id, method, { sessionId: "existing", cwd: "/tmp", mcpServers: [] }));
-    const response = await wire.waitResponse(id);
-    expect(wire.updateIndex("existing")).toBeGreaterThanOrEqual(0);
-    expect(wire.updateIndex("existing")).toBeLessThan(response);
+    wire.send(create(1, "chatty"));
+    await wire.waitResponse(1);
+    wire.send(request(2, "session/prompt", { sessionId: "chatty", prompt: [] }));
+    await wire.waitResponse(2);
+    wire.send(request("", "session/load", { sessionId: "loaded", cwd: "/tmp", mcpServers: [] }));
+    await wire.waitResponse("");
+    wire.send(
+      request(null, "session/resume", { sessionId: "resumed", cwd: "/tmp", mcpServers: [] }),
+    );
+    await wire.waitResponse(null);
     expect(wire.responseIndex(90)).toBe(-1);
+    expect(wire.updateIndex("chatty")).toBeGreaterThan(wire.responseIndex(1));
+    const text = wire.frames.findIndex(
+      (frame) => "method" in frame && JSON.stringify(frame).includes('"answer"'),
+    );
+    expect(text).toBeGreaterThan(wire.responseIndex(1));
+    expect(text).toBeLessThan(wire.responseIndex(2));
+    expect(wire.updateIndex("loaded")).toBeGreaterThanOrEqual(0);
+    expect(wire.updateIndex("loaded")).toBeLessThan(wire.responseIndex(""));
+    expect(wire.updateIndex("resumed")).toBeGreaterThanOrEqual(0);
+    expect(wire.updateIndex("resumed")).toBeLessThan(wire.responseIndex(null));
     wire.slow.resolve();
     await wire.waitResponse(90);
+    await expect
+      .poll(() => wire.updateIndex("slow"), FAST_POLL)
+      .toBeGreaterThan(wire.responseIndex(90));
   });
 
-  it("does not retain new correlations for a missing protocol version", async () => {
+  it.each([
+    {
+      failure: "missing protocol version",
+      message: { ...create(41, "invalid"), jsonrpc: undefined },
+    },
+    {
+      failure: "invalid parameters",
+      message: request(null, "session/new", { cwd: 1, mcpServers: [] }),
+    },
+    ...["session/load", "session/resume"].map((method) => ({
+      failure: `malformed ${method}`,
+      message: {
+        ...request(41, method, { sessionId: "slow", cwd: "/tmp", mcpServers: [] }),
+        jsonrpc: "1.0",
+      },
+    })),
+  ])("retires rejected session correlations after $failure", async ({ message }) => {
     const wire = createWireHarness();
-    wire.send({ ...create(41, "invalid"), jsonrpc: undefined });
+    wire.send(message);
     await wire.waitResponse(null);
     expect(wire.entered).toEqual([]);
     await wire.connection.sessionUpdate({
@@ -225,25 +229,14 @@ describe("ACP SDK NDJSON ordering", () => {
     await wire.waitResponse(42);
     expect(wire.updateIndex("unowned")).toBeGreaterThanOrEqual(0);
     expect(wire.updateIndex("unowned")).toBeLessThan(wire.responseIndex(42));
+    wire.send(create("", "slow"));
+    await expect.poll(() => wire.entered, FAST_POLL).toContain("slow");
+    wire.slow.resolve();
+    const response = await wire.waitResponse("");
+    await expect.poll(() => wire.updateIndex("slow"), FAST_POLL).toBeGreaterThan(response);
+    expect(wire.entered).toEqual(["slow"]);
+    expect(wire.updateIndex("unowned")).toBeGreaterThanOrEqual(0);
   });
-
-  it.each(["session/load", "session/resume"])(
-    "does not recognize malformed %s claims",
-    async (method) => {
-      const wire = createWireHarness();
-      wire.send({
-        ...request(41, method, { sessionId: "slow", cwd: "/tmp", mcpServers: [] }),
-        jsonrpc: "1.0",
-      });
-      await wire.waitResponse(null);
-      wire.send(create(42, "slow"));
-      await expect.poll(() => wire.entered, FAST_POLL).toContain("slow");
-      wire.slow.resolve();
-      const response = await wire.waitResponse(42);
-      await expect.poll(() => wire.updateIndex("slow"), FAST_POLL).toBeGreaterThan(response);
-      expect(wire.entered).toEqual(["slow"]);
-    },
-  );
 
   it("does not settle a null-ID creation on an uncorrelated protocol error", async () => {
     const wire = createWireHarness();
@@ -259,20 +252,6 @@ describe("ACP SDK NDJSON ordering", () => {
       .poll(() => wire.frames.some((frame) => "result" in frame && frame.id === null), FAST_POLL)
       .toBe(true);
     await expect.poll(() => wire.updateIndex("slow"), FAST_POLL).toBeGreaterThan(2);
-  });
-
-  it("retires SDK parameter-validation failures using their original request IDs", async () => {
-    const wire = createWireHarness();
-    wire.send(request(null, "session/new", { cwd: 1, mcpServers: [] }));
-    await wire.waitResponse(null);
-    expect(wire.entered).toEqual([]);
-    await wire.connection.sessionUpdate({
-      sessionId: "after-invalid-params",
-      update: { sessionUpdate: "session_info_update", title: "unblocked" },
-    });
-    wire.send(create("", "valid"));
-    await wire.waitResponse("");
-    expect(wire.updateIndex("after-invalid-params")).toBeGreaterThanOrEqual(0);
   });
 
   it("forgets recognition when the actual session store evicts an idle session", async () => {

@@ -512,10 +512,8 @@ function createAggregateCancellation(items: readonly FollowupRun[]): AggregateCa
     };
   }
   const controller = new AbortController();
-  const listeners = new Map<AbortSignal, () => void>();
+  const abort = () => controller.abort();
   for (const signal of signals) {
-    const abort = () => controller.abort();
-    listeners.set(signal, abort);
     if (signal.aborted) {
       abort();
     } else {
@@ -523,12 +521,8 @@ function createAggregateCancellation(items: readonly FollowupRun[]): AggregateCa
     }
   }
   const disposeSignal = (signal: AbortSignal) => {
-    const listener = listeners.get(signal);
-    if (!listener) {
-      return;
-    }
-    signal.removeEventListener("abort", listener);
-    listeners.delete(signal);
+    signal.removeEventListener("abort", abort);
+    signals.delete(signal);
   };
   return {
     signal: controller.signal,
@@ -542,7 +536,7 @@ function createAggregateCancellation(items: readonly FollowupRun[]): AggregateCa
       }
     },
     dispose: () => {
-      for (const signal of listeners.keys()) {
+      for (const signal of signals) {
         disposeSignal(signal);
       }
     },

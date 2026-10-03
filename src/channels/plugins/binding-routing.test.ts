@@ -1,4 +1,3 @@
-// Binding routing tests cover channel binding selection and message routing behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   testing,
@@ -19,15 +18,19 @@ import {
 import { registerStatefulBindingTargetDriver } from "./stateful-target-drivers.js";
 
 function createRoute(): ResolvedAgentRoute {
-  return {
-    agentId: "main",
-    channel: "demo",
-    accountId: "default",
-    sessionKey: "agent:main:main",
-    mainSessionKey: "agent:main:main",
-    lastRoutePolicy: "main",
-    matchedBy: "default",
+  const result: RuntimeConversationBindingRouteResult = {
+    bindingRecord: null,
+    route: {
+      agentId: "main",
+      channel: "demo",
+      accountId: "default",
+      sessionKey: "agent:main:main",
+      mainSessionKey: "agent:main:main",
+      lastRoutePolicy: "main",
+      matchedBy: "default",
+    },
   };
+  return result.route;
 }
 
 function createBinding(overrides?: Partial<SessionBindingRecord>): SessionBindingRecord {
@@ -93,6 +96,7 @@ describe("runtime conversation binding route", () => {
       groupScope: "main",
       lastRoutePolicy: target.targetSessionKey === "global" ? "session" : "main",
     });
+    expect(result.boundAgentId).toBe("review");
     expect(readConversationBindingRouteFacts(result.route)).toMatchObject({
       kind: "agent",
       agentId: "review",
@@ -198,15 +202,6 @@ describe("runtime conversation binding route", () => {
     expect(touch).not.toHaveBeenCalled();
   });
 
-  it("keeps the stable runtime-route result structurally assignable", () => {
-    const result: RuntimeConversationBindingRouteResult = {
-      bindingRecord: null,
-      route: createRoute(),
-    };
-
-    expect(result.bindingOwnerAvailable).toBeUndefined();
-  });
-
   it.each([
     { mode: "stable", change: { bindingId: "binding-2" }, label: "new ID" },
     { mode: "churn", change: { bindingId: "binding-2" }, label: "repeated replacement" },
@@ -266,98 +261,87 @@ describe("runtime conversation binding route", () => {
     ]);
   });
 
-  it("rewrites the route and touches only the owning channel account's binding", () => {
-    const binding = createBinding();
-    const { resolveByConversation, touch } = registerAdapter(binding);
-    const siblingTouches = [
-      { channel: "other", accountId: "default" },
-      { channel: "demo", accountId: "other" },
-    ].map(
-      (scope) =>
-        registerAdapter(createBinding({ conversation: { ...binding.conversation, ...scope } }))
-          .touch,
-    );
-
-    const result = resolveRuntimeConversationBindingRoute({
-      route: createRoute(),
-      conversation: {
-        channel: "demo",
-        accountId: "default",
-        conversationId: "room-1",
-      },
-    });
-
-    expect(resolveByConversation).toHaveBeenCalledWith({
-      channel: "demo",
-      accountId: "default",
-      conversationId: "room-1",
-    });
-    expect(touch).toHaveBeenCalledWith("binding-1", undefined);
-    for (const siblingTouch of siblingTouches) {
-      expect(siblingTouch).not.toHaveBeenCalled();
-    }
-    expect(result.boundSessionKey).toBe("agent:review:acp:session-1");
-    expect(result.boundAgentId).toBe("review");
-    expect(Object.fromEntries(Object.entries(result.route))).toEqual({
-      agentId: "review",
-      accountId: "default",
-      channel: "demo",
-      sessionKey: "agent:review:acp:session-1",
-      mainSessionKey: "agent:review:main",
-      lastRoutePolicy: "session",
-      matchedBy: "binding.channel",
-    });
-  });
-
-  it("touches plugin-owned bindings without rewriting the channel route", () => {
-    const route = createRoute();
-    const binding = createBinding({
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "demo-plugin",
-        pluginRoot: "/tmp/demo-plugin",
-      },
-    });
-    const { touch } = registerAdapter(binding);
-
-    const result = resolveRuntimeConversationBindingRoute({
-      route,
-      conversation: {
-        channel: "demo",
-        accountId: "default",
-        conversationId: "room-1",
-      },
-    });
-
-    expect(touch).toHaveBeenCalledWith("binding-1", undefined);
-    expect(result.bindingRecord).toBe(binding);
-    expect(result.boundSessionKey).toBeUndefined();
-    expect(Object.fromEntries(Object.entries(result.route))).toEqual(route);
-    expect(readConversationBindingRouteFacts(route)).toBeUndefined();
-    expect(Object.isFrozen(readConversationBindingRouteFacts(result.route))).toBe(true);
-    expect(readConversationBindingRouteFacts(result.route)?.kind).toBe("plugin");
-  });
-
   it.each([
-    { targetSessionKey: "global", metadata: { agentId: "review" }, agentId: "review" },
-    { targetSessionKey: "global", metadata: undefined, agentId: "main" },
+    { name: "agent session", binding: createBinding(), kind: "agent", agentId: "review" },
     {
-      targetSessionKey: "agent:review:session-1",
-      metadata: { agentId: "other" },
+      name: "inspection",
+      binding: createBinding(),
+      kind: "agent",
       agentId: "review",
+      touchBinding: false,
     },
-  ])("resolves $targetSessionKey to owner $agentId", ({ targetSessionKey, metadata, agentId }) => {
-    const binding = createBinding({ targetSessionKey, metadata });
-    registerAdapter(binding);
-
-    const result = resolveRuntimeConversationBindingRoute({
-      route: createRoute(),
-      conversation: binding.conversation,
-    });
-
-    expect(result.route).toMatchObject({ sessionKey: targetSessionKey, agentId });
-    expect(result.boundAgentId).toBe(agentId);
-  });
+    {
+      name: "global fallback",
+      binding: createBinding({ targetSessionKey: "global" }),
+      kind: "agent",
+      agentId: "main",
+    },
+    {
+      name: "plugin owner",
+      binding: createBinding({
+        metadata: {
+          pluginBindingOwner: "plugin",
+          pluginId: "demo-plugin",
+          pluginRoot: "/tmp/demo-plugin",
+        },
+      }),
+      kind: "plugin",
+    },
+    {
+      name: "isolated cron",
+      binding: createBinding({
+        targetSessionKey: "agent:youtube:cron:monthly-report:run:closed-run-1",
+      }),
+      kind: "none",
+    },
+  ])(
+    "projects $name and touches only its owning channel account",
+    ({ binding, kind, agentId, touchBinding }) => {
+      const route = createRoute();
+      const { resolveByConversation, touch } = registerAdapter(binding);
+      const siblingTouches = [
+        { channel: "other", accountId: "default" },
+        { channel: "demo", accountId: "other" },
+      ].map(
+        (scope) =>
+          registerAdapter(createBinding({ conversation: { ...binding.conversation, ...scope } }))
+            .touch,
+      );
+      const result = resolveRuntimeConversationBindingRoute({
+        route,
+        conversation: binding.conversation,
+        touchBinding,
+      });
+      expect(resolveByConversation).toHaveBeenCalledWith(binding.conversation);
+      if (kind !== "none" && touchBinding !== false) {
+        expect(touch).toHaveBeenCalledWith("binding-1", undefined);
+      } else {
+        expect(touch).not.toHaveBeenCalled();
+      }
+      for (const siblingTouch of siblingTouches) {
+        expect(siblingTouch).not.toHaveBeenCalled();
+      }
+      expect(result.bindingOwnerAvailable).toBe(true);
+      expect(result.bindingRecord).toBe(kind === "none" ? null : binding);
+      expect(result.boundSessionKey).toBe(kind === "agent" ? binding.targetSessionKey : undefined);
+      expect(result.boundAgentId).toBe(agentId);
+      expect(Object.fromEntries(Object.entries(result.route))).toEqual(
+        kind === "agent"
+          ? {
+              ...route,
+              agentId,
+              sessionKey: binding.targetSessionKey,
+              mainSessionKey: `agent:${agentId}:main`,
+              lastRoutePolicy: "session",
+              matchedBy: "binding.channel",
+            }
+          : route,
+      );
+      expect(readConversationBindingRouteFacts(route)).toBeUndefined();
+      expect(Object.isFrozen(readConversationBindingRouteFacts(result.route))).toBe(true);
+      expect(readConversationBindingRouteFacts(result.route)?.kind).toBe(kind);
+    },
+  );
 
   it("rejects an opaque target when its plugin ownership metadata is missing", () => {
     const binding = createBinding({
@@ -372,49 +356,6 @@ describe("runtime conversation binding route", () => {
         conversation: binding.conversation,
       }),
     ).toThrow();
-  });
-
-  it("inspects a runtime-bound route without touching the binding", () => {
-    const { touch } = registerAdapter(createBinding());
-
-    const result = resolveRuntimeConversationBindingRoute({
-      route: createRoute(),
-      touchBinding: false,
-      conversation: {
-        channel: "demo",
-        accountId: "default",
-        conversationId: "room-1",
-      },
-    });
-
-    expect(touch).not.toHaveBeenCalled();
-    expect(result.bindingOwnerAvailable).toBe(true);
-    expect(result.boundSessionKey).toBe("agent:review:acp:session-1");
-  });
-
-  it("ignores runtime bindings that target isolated cron run sessions", () => {
-    const route = createRoute();
-    const binding = createBinding({
-      targetSessionKey: "agent:youtube:cron:monthly-report:run:closed-run-1",
-    });
-    const { touch } = registerAdapter(binding);
-
-    const result = resolveRuntimeConversationBindingRoute({
-      route,
-      conversation: {
-        channel: "demo",
-        accountId: "default",
-        conversationId: "room-1",
-      },
-    });
-
-    expect(touch).not.toHaveBeenCalled();
-    expect(result.bindingRecord).toBeNull();
-    expect(result.boundSessionKey).toBeUndefined();
-    expect(Object.fromEntries(Object.entries(result.route))).toEqual(route);
-    expect(readConversationBindingRouteFacts(route)).toBeUndefined();
-    expect(Object.isFrozen(readConversationBindingRouteFacts(result.route))).toBe(true);
-    expect(readConversationBindingRouteFacts(result.route)?.kind).toBe("none");
   });
 });
 

@@ -466,6 +466,7 @@ describe("personal publication definitive outcomes", () => {
     const originalShared = readShared();
     const originalPersonal = readPersonalGitHubPublication(fixture.owner, { requestId });
     fixture.context.controlUiSessionPullRequests = {
+      readPrepared: vi.fn(),
       read: vi.fn(async () => {
         throw new Error("No session PR projection is installed in this fixture.");
       }),

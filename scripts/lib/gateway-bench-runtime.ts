@@ -56,69 +56,41 @@ export class CliArgumentError extends Error {
   override name = "CliArgumentError";
 }
 
-function readRequiredFlagValue(argv: string[], index: number, flag: string): string {
-  const value = argv[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new CliArgumentError(`${flag} requires a value`);
-  }
-  return value;
-}
-
-export function validateCliArgs(
+export function parseCliArgs(
   argv: string[],
   options: {
     booleanFlags: ReadonlySet<string>;
     repeatableValueFlags?: ReadonlySet<string>;
     valueFlags: ReadonlySet<string>;
   },
-): void {
-  const seenSingleValueFlags = new Set<string>();
+): Map<string, string[]> {
+  const flags = new Map<string, string[]>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? "";
     if (options.booleanFlags.has(arg)) {
+      flags.set(arg, []);
       continue;
     }
     if (options.valueFlags.has(arg)) {
-      if (!options.repeatableValueFlags?.has(arg)) {
-        if (seenSingleValueFlags.has(arg)) {
-          throw new CliArgumentError(`${arg} was provided more than once`);
-        }
-        seenSingleValueFlags.add(arg);
+      if (!options.repeatableValueFlags?.has(arg) && flags.has(arg)) {
+        throw new CliArgumentError(`${arg} was provided more than once`);
       }
-      readRequiredFlagValue(argv, index, arg);
-      index += 1;
+      const value = argv[++index];
+      if (!value || value.startsWith("-")) {
+        throw new CliArgumentError(`${arg} requires a value`);
+      }
+      const values = flags.get(arg) ?? [];
+      values.push(value);
+      flags.set(arg, values);
       continue;
     }
     throw new CliArgumentError(`Unknown argument: ${arg}`);
   }
-}
-
-export function parseFlagValue(argv: string[], flag: string): string | undefined {
-  for (let index = 0; index < argv.length; index += 1) {
-    if (argv[index] === flag) {
-      return readRequiredFlagValue(argv, index, flag);
-    }
-  }
-  return undefined;
-}
-
-export function hasFlag(argv: string[], flag: string): boolean {
-  return argv.includes(flag);
+  return flags;
 }
 
 export function hasHelpFlag(argv: string[]): boolean {
-  return hasFlag(argv, "--help") || hasFlag(argv, "-h");
-}
-
-export function parseRepeatableFlag(argv: string[], flag: string): string[] {
-  const values: string[] = [];
-  for (let index = 0; index < argv.length; index += 1) {
-    if (argv[index] === flag) {
-      values.push(readRequiredFlagValue(argv, index, flag));
-      index += 1;
-    }
-  }
-  return values;
+  return argv.includes("--help") || argv.includes("-h");
 }
 
 export function parsePositiveInt(raw: string | undefined, fallback: number, label: string): number {
@@ -189,36 +161,23 @@ export function resolveCases<T extends GatewayBenchCase>(
   });
 }
 
-function median(values: number[]): number {
-  const sorted = [...values].toSorted((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  if (sorted.length % 2 === 0) {
-    return (
-      (expectDefined(sorted[middle - 1], "lower middle gateway benchmark sample") +
-        expectDefined(sorted[middle], "upper middle gateway benchmark sample")) /
-      2
-    );
-  }
-  return sorted[middle] ?? 0;
-}
-
-function percentile(values: number[], p: number): number {
-  const sorted = [...values].toSorted((a, b) => a - b);
-  const index = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length));
-  return sorted[index] ?? 0;
-}
-
 export function summarizeNumbers(values: number[]): SummaryStats | null {
   if (values.length === 0) {
     return null;
   }
-  const total = values.reduce((sum, value) => sum + value, 0);
+  const sorted = values.toSorted((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
   return {
-    avg: total / values.length,
+    avg: values.reduce((sum, value) => sum + value, 0) / values.length,
     max: Math.max(...values),
     min: Math.min(...values),
-    p50: median(values),
-    p95: percentile(values, 95),
+    p50:
+      sorted.length % 2 === 0
+        ? (expectDefined(sorted[middle - 1], "lower middle gateway benchmark sample") +
+            expectDefined(sorted[middle], "upper middle gateway benchmark sample")) /
+          2
+        : (sorted[middle] ?? 0),
+    p95: sorted[Math.min(sorted.length - 1, Math.floor(0.95 * sorted.length))] ?? 0,
   };
 }
 

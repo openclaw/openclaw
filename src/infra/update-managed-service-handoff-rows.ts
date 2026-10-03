@@ -2,7 +2,11 @@ import fs from "node:fs";
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import { z } from "zod";
 import { hasErrnoCode } from "./errno.js";
-import { executeSqliteQuerySync, prepareSqliteQueryTakeFirstSync } from "./kysely-sync.js";
+import {
+  createSqliteQueryCache,
+  executeSqliteQuerySync,
+  prepareSqliteQueryTakeFirstSync,
+} from "./kysely-sync.js";
 import {
   leaseQueries,
   type createManagedHandoffLeaseDatabase,
@@ -49,23 +53,20 @@ export function createManagedHandoffLeaseRows(
   processes: Parameters<typeof isBorrowedLegacyHandoffParentCurrent>[2],
 ) {
   const { databasePath } = options;
-  const rowReaders = new WeakMap<HandoffDatabase, (root: string) => LeaseRow | undefined>();
+  const rowReader = createSqliteQueryCache((db) =>
+    prepareSqliteQueryTakeFirstSync<string, LeaseRow>(db, (parameter) =>
+      leaseQueries(db)
+        .selectFrom("managed_update_handoffs")
+        .select(["owner", "payload_json", "updated_at"])
+        .where(
+          "install_root",
+          "=",
+          parameter((key) => key),
+        ),
+    ),
+  );
   function row(db: HandoffDatabase, root: string) {
-    let readRow = rowReaders.get(db);
-    if (!readRow) {
-      readRow = prepareSqliteQueryTakeFirstSync<string, LeaseRow>(db, (parameter) =>
-        leaseQueries(db)
-          .selectFrom("managed_update_handoffs")
-          .select(["owner", "payload_json", "updated_at"])
-          .where(
-            "install_root",
-            "=",
-            parameter((key) => key),
-          ),
-      );
-      rowReaders.set(db, readRow);
-    }
-    return readRow(root);
+    return rowReader(db)(root);
   }
   function handle(root: string, value: LeaseRow): ManagedHandoffLease {
     const payload = parseManagedHandoffLeasePayload(value.payload_json);

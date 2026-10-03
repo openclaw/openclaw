@@ -1649,7 +1649,7 @@ describe("gateway agent handler chat.abort integration", () => {
     const dateNow = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     let releaseMutation = () => {};
     const { promise: mutationStarted, resolve: markMutationStarted } = createDeferred();
-    const mutation = runExclusiveSessionLifecycleMutation({
+    const mutation = runExclusiveSessionLifecycleMutation("drain", {
       scope: "/tmp/sessions.json",
       identities: [sessionKey, sessionId],
       run: async () => {

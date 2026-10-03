@@ -161,7 +161,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const cronCreatorToolAllowlistCaptureRef: CronToolsAllowCaptureRef = {};
   const inheritedToolAllowlist: string[] = [];
-  const runCleanups: Array<(reason: string) => Promise<void>> = [];
   const generationCleanups: Array<(reason: string) => Promise<void>> = [];
   const retiringGenerations = new Set<Promise<void>>();
   let retiredCleanupFailed = false;
@@ -392,7 +391,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       recordAgentCleanupFailure();
     }
   };
-  runCleanups.push(releaseTools);
 
   // Until preparation returns, the attempt cannot own these registered resources.
   try {
@@ -450,7 +448,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       localModelLeanPreserveToolNames,
       replaySafetyOptions,
       runtimeCapabilityProfile,
-      runCleanups,
+      releaseTools,
       toolSearchCatalogRef,
       toolSurfaceRuntime,
       toolSearchConfig,

@@ -204,39 +204,37 @@ async function withStaleResourceFixture(
   });
 }
 
-it("releases idle direct publication consumers before rebuilding the stale runtime", async () => {
-  await withStaleResourceFixture("direct", async ({ acquire, donor, useEngine }) => {
-    const lease = await acquire();
-    await useEngine(lease);
-    await lease[Symbol.asyncDispose]();
-    expect(donor.hasRetainedConsumers).toBe(true);
-
-    markPreparedModelRuntimeSnapshotsStale("plugin replacement", { waitForReplacement: true });
-
-    await expect.poll(() => donor.hasRetainedConsumers).toBe(false);
-    await expect(donor.drain({ includeConsumers: true })).resolves.toMatchObject({ errors: [] });
-  });
-});
-
-it("retains an active lease through staling and settles donor consumers on its final release", async () => {
-  await withStaleResourceFixture("gateway", async ({ acquire, donor, useEngine }) => {
-    const lease = await acquire();
-    markPreparedModelRuntimeSnapshotsStale("plugin replacement", { waitForReplacement: true });
-    let drained = false;
-    const draining = donor.drain({ includeConsumers: true }).then((result) => {
-      drained = true;
-      return result;
+it.each(["direct", "gateway"] as const)(
+  "releases stale %s publication consumers after the last active lease",
+  async (retention) => {
+    await withStaleResourceFixture(retention, async ({ acquire, donor, useEngine }) => {
+      const lease = await acquire();
+      if (retention === "direct") {
+        await useEngine(lease);
+        await lease[Symbol.asyncDispose]();
+        expect(donor.hasRetainedConsumers).toBe(true);
+      }
+      markPreparedModelRuntimeSnapshotsStale("plugin replacement", { waitForReplacement: true });
+      let draining: ReturnType<typeof donor.drain> | undefined;
+      if (retention === "gateway") {
+        let drained = false;
+        draining = donor.drain({ includeConsumers: true }).then((result) => {
+          drained = true;
+          return result;
+        });
+        await nextTurn();
+        expect(drained).toBe(false);
+        expect(donor.hasRetainedConsumers).toBe(true);
+        await useEngine(lease);
+        await lease[Symbol.asyncDispose]();
+      }
+      await expect.poll(() => donor.hasRetainedConsumers).toBe(false);
+      await expect(draining ?? donor.drain({ includeConsumers: true })).resolves.toMatchObject({
+        errors: [],
+      });
     });
-    await nextTurn();
-    expect(drained).toBe(false);
-    expect(donor.hasRetainedConsumers).toBe(true);
-    await useEngine(lease);
-    await lease[Symbol.asyncDispose]();
-
-    await expect.poll(() => donor.hasRetainedConsumers).toBe(false);
-    await expect(draining).resolves.toMatchObject({ errors: [] });
-  });
-});
+  },
+);
 
 it("preserves an unaffected agent's retained resources until that scope becomes stale", async () => {
   await withStaleResourceFixture("gateway", async ({ acquire, donor, useEngine }) => {

@@ -1,9 +1,18 @@
+import { buildEmbeddedRunBlockedResult } from "../../agents/embedded-agent-runner/run/blocked-run-result.js";
+import {
+  buildAgentRunBlockedUserMessage,
+  runBeforeAgentRunGate,
+} from "../../agents/harness/before-agent-run.js";
+import { buildAgentHookContext } from "../../agents/harness/hook-context.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
+import { convertToLlm } from "../../agents/sessions/messages.js";
 import { SessionTranscriptMessageCommittedError } from "../../agents/sessions/session-manager-message-error.js";
 import { withSessionManagerWrite } from "../../agents/sessions/session-manager-write-admission.js";
-import type { SessionManager } from "../../agents/sessions/session-manager.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
+import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import type { prepareWorkerTurnMedia } from "./worker-turn-media.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
@@ -61,4 +70,131 @@ export async function persistWorkerTurnUserMessage(params: {
     throw error;
   }
   return entryId ?? null;
+}
+
+type WorkerTurnInputParams = {
+  turn: SessionPlacementTurnParams;
+  transcriptTarget: BoundAgentRunSessionTarget;
+  identity: { agentId: string; sessionId: string; sessionKey: string };
+  modelRef: { provider: string; model: string };
+  startedAt: number;
+  assertCurrent: () => void;
+  onBlocked: () => void;
+};
+
+export async function gateWorkerTurnInput({
+  turn,
+  transcriptTarget,
+  identity,
+  modelRef,
+  startedAt,
+  assertCurrent,
+  onBlocked,
+}: WorkerTurnInputParams) {
+  const recorder = turn.userTurnTranscriptRecorder;
+  const runner = getGlobalHookRunner();
+  if (!runner?.hasHooks("before_agent_run")) {
+    return undefined;
+  }
+  const history = await SessionManager.openModelContextAsync(transcriptTarget, {
+    admission: recorder?.getAdmissionReceipt(),
+    signal: turn.abortSignal,
+  });
+  assertCurrent();
+  const channel = buildAgentHookContextChannelFields(turn);
+  const block = await runBeforeAgentRunGate(
+    runner,
+    {
+      prompt: turn.prompt,
+      messages: convertToLlm(history.buildSessionContext().messages),
+      channelId: channel.channelId,
+      accountId: turn.agentAccountId,
+      senderId: turn.senderId ?? undefined,
+      senderIsOwner: turn.senderIsOwner,
+    },
+    buildAgentHookContext({
+      ...turn,
+      ...identity,
+      ...channel,
+      senderId: turn.senderId ?? undefined,
+      modelProviderId: modelRef.provider,
+      modelId: modelRef.model,
+    }),
+  );
+  assertCurrent();
+  if (!block) {
+    return undefined;
+  }
+  onBlocked();
+  const message = buildAgentRunBlockedUserMessage(turn.runId, block);
+  await withSessionTranscriptWriteAssertion(transcriptTarget, assertCurrent, async () => {
+    if (recorder) {
+      const persisted = await recorder.persistBlocked(message);
+      assertCurrent();
+      if (persisted) {
+        turn.onUserMessagePersisted?.(persisted.message);
+      }
+    } else {
+      const manager = await SessionManager.openAsync(
+        transcriptTarget,
+        undefined,
+        undefined,
+        turn.abortSignal,
+      );
+      assertCurrent();
+      await withSessionManagerWrite(manager, () => manager.appendMessageAsync(message));
+      assertCurrent();
+      turn.onUserMessagePersisted?.(message);
+    }
+  });
+  assertCurrent();
+  return buildEmbeddedRunBlockedResult({
+    text: block.message,
+    errorKind: "hook_block",
+    errorMessage: block.message,
+    durationMs: Date.now() - startedAt,
+    agentMeta: { sessionId: identity.sessionId, ...modelRef },
+    replayInvalid: false,
+  });
+}
+
+export async function readWorkerTurnInputContext(params: WorkerTurnInputParams) {
+  const { turn, transcriptTarget, modelRef, assertCurrent } = params;
+  const recorder = turn.userTurnTranscriptRecorder;
+  const receipt = recorder?.getAdmissionReceipt();
+  const admission = receipt ? { ...receipt } : undefined;
+  if (recorder && !admission) {
+    throw new Error("Cloud worker turn has no readable canonical user admission");
+  }
+  const userMessageAlreadyPersisted =
+    admission !== undefined || turn.suppressNextUserMessagePersistence === true;
+  // Validate context after reentrant phase callbacks have finished.
+  turn.onExecutionPhase?.({
+    phase: "model_resolution",
+    backend: "cloud-worker",
+    provider: modelRef.provider,
+    model: modelRef.model,
+  });
+  const manager = userMessageAlreadyPersisted
+    ? await SessionManager.openModelContextAsync(transcriptTarget, {
+        admission,
+        signal: turn.abortSignal,
+      })
+    : await SessionManager.openAsync(transcriptTarget, undefined, undefined, turn.abortSignal);
+  assertCurrent();
+  const contextMessages = convertToLlm(manager.buildSessionContext().messages);
+  const leaf = manager.getLeafEntry();
+  const history =
+    !admission &&
+    userMessageAlreadyPersisted &&
+    leaf?.type === "message" &&
+    leaf.message.role === "user"
+      ? contextMessages.slice(0, -1)
+      : contextMessages;
+  return {
+    manager,
+    history,
+    userMessageAlreadyPersisted,
+    baseLeafId: admission?.entryId ?? manager.getLeafId(),
+  };
 }

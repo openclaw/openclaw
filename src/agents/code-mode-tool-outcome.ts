@@ -1,6 +1,6 @@
-import { stableStringify } from "@openclaw/normalization-core";
+import { digestToolOutcome } from "./tool-loop-outcome-hash.js";
 
-// These identities never cross the guest bridge or change the delivered receipt.
+// Retained receipts need only their digest, never a second copy of the guest payload.
 const outcomes = new WeakMap<object, string>();
 
 type PendingOperation = {
@@ -22,7 +22,7 @@ export function recordCodeModeToolOutcome<T extends object>(
   const { telemetry: _telemetry, runId: _runId, pendingToolCalls, ...outcome } = payload;
   outcomes.set(
     result,
-    stableStringify({
+    digestToolOutcome({
       ...outcome,
       // Compare the actual operation, not the fresh bridge request identifier.
       pending: pending

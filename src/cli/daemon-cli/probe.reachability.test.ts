@@ -2,7 +2,7 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import { ensureGatewayReadyForOperation } from "../../commands/gateway-readiness.js";
+import { ensureDashboardGatewayReady } from "../../commands/gateway-readiness.js";
 import {
   buildMinimalGatewayHelloOkPayload,
   closeMinimalGatewayServer,
@@ -28,10 +28,8 @@ async function checkDashboardReadiness(url: string, rpc: NonNullable<DaemonStatu
   const confirm = vi.fn();
   const startGateway = vi.fn();
   const installGateway = vi.fn();
-  const result = await ensureGatewayReadyForOperation({
+  const result = await ensureDashboardGatewayReady({
     runtime,
-    operation: "open the dashboard",
-    readyWhenReachable: true,
     interactive: true,
     deps: {
       confirm,

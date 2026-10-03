@@ -4,6 +4,7 @@ import type {
   FileEntry,
   SessionEntry,
   SessionHeader,
+  SessionMessageEntry,
 } from "../../agents/sessions/session-manager-types.js";
 import { MIN_READABLE_SESSION_VERSION } from "./version.js";
 
@@ -131,6 +132,15 @@ export function assertCurrentSessionTranscriptHeader(header: SessionHeader | und
       "Persisted legacy session transcripts require doctor/import migration before runtime use",
     );
   }
+}
+
+export function isReadableSessionMessage(
+  message: unknown,
+): message is Extract<
+  SessionMessageEntry["message"],
+  { role: z.infer<typeof readableMessageSchema>["role"] }
+> {
+  return readableMessageSchema.safeParse(message).success;
 }
 
 export function isIndexedSessionEntry(entry: unknown): entry is SessionEntry {

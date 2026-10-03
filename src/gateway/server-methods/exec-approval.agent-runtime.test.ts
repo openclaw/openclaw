@@ -156,7 +156,7 @@ describe("exec approval signed agent runtime", () => {
           ],
           ["active", { activeOwnerEpoch: 3 }],
         ] as const) {
-          placement = placements.transition({
+          placement = await placements.transition({
             sessionId: source.sessionId,
             from: placement.state,
             to,

@@ -2,6 +2,7 @@ import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { notifyListeners } from "../../shared/listeners.js";
 import type {
   Agent,
   AgentEvent,
@@ -567,19 +568,15 @@ export abstract class AgentSessionBase {
    * Call this when completely done with the session.
    */
   dispose(): void {
-    const abortOperations = [
-      () => this.abortRetry(),
-      () => this.abortCompaction(),
-      () => this.abortBranchSummary(),
-      () => this.agent.abort(),
-    ];
-    for (const abortOperation of abortOperations) {
-      try {
-        abortOperation();
-      } catch {
-        // One broken abort hook must not prevent the remaining work from being cancelled.
-      }
-    }
+    notifyListeners(
+      [
+        () => this.abortRetry(),
+        () => this.abortCompaction(),
+        () => this.abortBranchSummary(),
+        () => this.agent.abort(),
+      ],
+      undefined,
+    );
 
     this.currentExtensionRunner.invalidate();
     this.disconnectFromAgent();

@@ -366,6 +366,7 @@ function openAgentDatabaseBackend(
     "session.entry.patch.commit": loadAgentEntryPatchOperations,
     "session.turn.prepare": loadAgentCompoundOperations,
     "session.turn.commit": loadAgentCompoundOperations,
+    "session.lifecycle.reset": loadAgentCompoundOperations,
     "trajectory.events.append": loadAgentTrajectoryOperations,
     "session.archives.preparePublication": loadAgentArchiveOperations,
     "session.archives.recordPublication": loadAgentArchiveOperations,

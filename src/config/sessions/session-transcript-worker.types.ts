@@ -311,10 +311,10 @@ export type SessionDiagnosticTextWorkerInput = {
   admission?: UserTurnTranscriptAdmissionReceipt;
 };
 
-type SessionEntryListWorkerInput = {
+export type SessionEntryListWorkerInput = {
   kind: "session-entry-list";
   database: { agentId: string; path: string };
-  scope: SessionEntryListScope;
+  scope: SessionEntryListScope & { cleanupSession?: string };
   continuation?: CanonicalSessionReaderContinuation;
 };
 

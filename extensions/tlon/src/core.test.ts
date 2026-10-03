@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { tlonPlugin } from "./channel.js";
 import { tlonChannelConfigSchema } from "./config-schema.js";
+import { normalizeCompatibilityConfig } from "./doctor-contract.js";
 import { tlonSetupWizard } from "./setup-surface.js";
 import { resolveTlonOutboundTarget } from "./targets.js";
 import { listTlonAccountIds, resolveTlonAccount } from "./types.js";
@@ -328,6 +329,27 @@ describe("tlon core", () => {
     expect(resolved.groupInviteAllowlist).toEqual(["~bus"]);
     expect(resolved.defaultAuthorizedShips).toEqual(["~marzod"]);
     expect(resolved.configured).toBe(true);
+  });
+
+  it.each([
+    { legacy: true, canonical: undefined, before: null, after: true },
+    { legacy: false, canonical: undefined, before: null, after: false },
+    { legacy: true, canonical: false, before: false, after: false },
+    { legacy: false, canonical: true, before: true, after: true },
+  ])("requires Doctor for private-network aliases: %j", ({ legacy, canonical, before, after }) => {
+    const cfg = {
+      channels: {
+        tlon: {
+          ship: "~zod",
+          allowPrivateNetwork: legacy,
+          network: { dangerouslyAllowPrivateNetwork: canonical },
+        },
+      },
+    };
+
+    expect(resolveTlonAccount(cfg).dangerouslyAllowPrivateNetwork).toBe(before);
+    const repaired = normalizeCompatibilityConfig({ cfg });
+    expect(resolveTlonAccount(repaired.config).dangerouslyAllowPrivateNetwork).toBe(after);
   });
 
   it("keeps the default account on channel-level config only", () => {

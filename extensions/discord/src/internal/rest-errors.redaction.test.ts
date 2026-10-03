@@ -84,7 +84,7 @@ describe("Discord REST error redaction", () => {
       const client = new RequestClient(token, {
         baseUrl: `http://127.0.0.1:${address.port}`,
         apiVersion: 10,
-        scheduler: { maxRateLimitRetries: 0 },
+        queueRequests: false,
       });
 
       const voiceError = await captureError(client.get("/voice-state"));

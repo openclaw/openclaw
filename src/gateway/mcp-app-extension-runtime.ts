@@ -88,7 +88,6 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
   // Last-turn model/harness observations do not change the selected owner.
   // Resolve inherited choices from the same prepared facts used at launch.
   const selected = selectRuntime(initial.entry);
-  const expectedRuntimeSelection = selected.fingerprint;
   const current = (assertAccess = access.assertCurrent) => {
     assertAccess();
     if (options.context.getRuntimeConfig() !== cfg) {
@@ -98,7 +97,7 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
     if (!target || target.entry.sessionId !== sessionId) {
       throw new Error("MCP App session changed");
     }
-    if (selectRuntime(target.entry).fingerprint !== expectedRuntimeSelection) {
+    if (selectRuntime(target.entry).fingerprint !== selected.fingerprint) {
       throw new Error("MCP App session runtime selection changed; reopen the App");
     }
     return target;
@@ -167,7 +166,6 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
         preparationOwner.source = source;
         assertPreparationCurrent();
         const live = current();
-        const model = selectedModel;
         const { prepareAgentHarnessSessionRuntime } =
           await import("../agents/harness/session-preparation.js");
         const setup = await prepareAgentHarnessSessionRuntime({
@@ -182,8 +180,8 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
             sessionId,
             sessionKey,
             workspaceDir,
-            provider: model.provider,
-            modelId: model.model,
+            provider: selectedModel.provider,
+            modelId: selectedModel.model,
             authProfileId: live.entry.authProfileOverride,
             authProfileIdSource:
               live.entry.authProfileOverrideSource === "auto"

@@ -9,6 +9,7 @@ import { requireDirectorySync, syncDirectorySync } from "./directory-durability.
 import { hasErrnoCode } from "./errno.js";
 import { acquireFileLockSyncWithRetry } from "./file-lock-sync.js";
 import {
+  createSqliteQueryCache,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -277,20 +278,17 @@ export function createManagedHandoffLeaseDatabase(
     throw new Error("managed handoff lease database path changed");
   }
   const existingTransactions = new WeakMap<HandoffDatabase, ExistingSqliteTransaction>();
-  const validations = new WeakMap<HandoffDatabase, () => void>();
+  const validationQuery = createSqliteQueryCache((db) =>
+    prepareSqliteQuerySync<void, LeaseTable>(db, () =>
+      leaseQueries(db).selectFrom("managed_update_handoffs").selectAll().limit(0),
+    ),
+  );
   const existingOptions = existingIdentity
     ? {
         busyTimeoutMs: 5000,
         assertIdentity: () => assertManagedUpdateLeaseDatabaseIdentity(existingIdentity),
         validate: (db: HandoffDatabase) => {
-          let validate = validations.get(db);
-          if (!validate) {
-            validate = prepareSqliteQuerySync<void, LeaseTable>(db, () =>
-              leaseQueries(db).selectFrom("managed_update_handoffs").selectAll().limit(0),
-            );
-            validations.set(db, validate);
-          }
-          validate();
+          validationQuery(db)();
         },
       }
     : undefined;

@@ -3,11 +3,16 @@ import assert from "node:assert/strict";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { readSessionEntryResetRecallCutoff } from "../../packages/memory-host-sdk/src/host/session-files.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import type { IncognitoLifecycleEntry } from "../config/sessions/session-incognito-lifecycle-contract.js";
-import { createIncognitoSessionHistoryReader } from "../gateway/session-history-snapshot.js";
+import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence.js";
+import {
+  createIncognitoSessionComputeReader,
+  createIncognitoSessionHistoryReader,
+} from "../gateway/session-history-snapshot.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
@@ -20,10 +25,11 @@ let actor: IncognitoAgentDatabaseExecution;
 let lossActor: IncognitoAgentDatabaseExecution;
 let lossWorker: Worker;
 let mainStorePath: string;
+let env: NodeJS.ProcessEnv;
 let sql: ReturnType<typeof observeHostDataSql>;
 
 beforeAll(async () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("incognito-history-") };
+  env = { OPENCLAW_STATE_DIR: tempDirs.make("incognito-history-") };
   mainStorePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
   const posted = vi.spyOn(Worker.prototype, "postMessage");
   try {
@@ -127,6 +133,158 @@ async function hold(owner = actor) {
   await entered.promise;
   return { release, held };
 }
+
+async function computeReader(target: IncognitoLifecycleEntry, owner = actor, grant = authority) {
+  const scope = { ...targetInput(target), agentId: owner.agentId, storePath: owner.path };
+  const reader = await createIncognitoSessionComputeReader({
+    actor: owner,
+    authority: grant,
+    target: scope,
+  });
+  return { reader, scope };
+}
+
+it("projects Memory and Codex snapshots after committed actor writes without host SQL", async () => {
+  const target = await create("memory-codex-fifo");
+  const { reader, scope } = await computeReader(target);
+  const barrier = await hold();
+  try {
+    const write = append(target, "committed for Memory and Codex");
+    const memory = reader.memoryEntry("actor-memory", { sessionKind: "unknown" });
+    const recall = reader.memoryResetRecall();
+    const context = reader.nativeContext(scope, (messages, header) => ({
+      messages: [...messages],
+      header,
+    }));
+    barrier.release.resolve();
+    const [written, entry, cutoff, native] = await Promise.all([write, memory, recall, context]);
+    expect(written.ok).toBe(true);
+    assert(entry);
+    expect(entry.content).toBe("Assistant: committed for Memory and Codex");
+    expect(entry.lineMap).toEqual([2]);
+    expect(cutoff).toEqual({ state: "absent" });
+    expect(readSessionEntryResetRecallCutoff(entry)).toEqual(cutoff);
+    expect(native.header).toMatchObject({ type: "session", id: scope.sessionId });
+    expect(native.messages).toMatchObject([
+      { role: "assistant", content: [{ type: "text", text: "committed for Memory and Codex" }] },
+    ]);
+  } finally {
+    barrier.release.resolve();
+    await barrier.held;
+  }
+});
+
+it("refuses Memory and Codex disclosure when caller authority is revoked during a FIFO wait", async () => {
+  const target = await create("memory-codex-revoked");
+  let current = true;
+  const grant: IncognitoSessionAuthority = {
+    assertCurrent() {
+      if (!current) {
+        throw new Error("compute caller revoked");
+      }
+    },
+  };
+  const pending = computeReader(target, actor, grant);
+  current = false;
+  await expect(pending).rejects.toThrow("compute caller revoked");
+  current = true;
+  const { reader, scope } = await computeReader(target, actor, grant);
+  const barrier = await hold();
+  try {
+    const refused = [
+      reader.memoryEntry("actor-memory"),
+      reader.memoryResetRecall(),
+      reader.nativeContext(scope, () => "must not disclose"),
+    ].map((result) => expect(result).rejects.toThrow("compute caller revoked"));
+    current = false;
+    barrier.release.resolve();
+    await Promise.all(refused);
+  } finally {
+    barrier.release.resolve();
+    await barrier.held;
+  }
+});
+
+it("keeps Memory and Codex history isolated for identical session IDs in different agents", async () => {
+  const main = await create("memory-codex-shared");
+  const other = await create("memory-codex-shared", lossActor, "loss");
+  await append(main, "main private content");
+  await append(other, "other private content", lossActor);
+  const own = await computeReader(main);
+  const foreign = await computeReader(other, lossActor);
+  for (const [binding, content] of [
+    [own, "main private content"],
+    [foreign, "other private content"],
+  ] as const) {
+    expect((await binding.reader.memoryEntry("actor-memory"))?.content).toBe(
+      `Assistant: ${content}`,
+    );
+    expect(
+      await binding.reader.nativeContext(binding.scope, (messages) => [...messages]),
+    ).toMatchObject([{ content: [{ type: "text", text: content }] }]);
+  }
+  expect(() => own.reader.memoryEntry("actor-memory", foreign.scope)).toThrow(
+    "another session or store",
+  );
+  await expect(own.reader.nativeContext(foreign.scope, () => "foreign")).rejects.toThrow(
+    "another session or store",
+  );
+  for (const type of [
+    "session.history.memory-entry",
+    "session.history.memory-reset-recall",
+    "session.history.native-context",
+  ] as const) {
+    await expect(
+      actor.sessions.history(authority, { type, input: targetInput(other) }),
+    ).rejects.toThrow("refusing non-canonical session key write");
+  }
+});
+
+it("revalidates Codex history after asynchronous consumption and joins it before release", async () => {
+  const target = await create("codex-consumption");
+  await append(target, "snapshot content");
+  const { reader, scope } = await computeReader(target);
+  await expect(
+    reader.nativeContext(scope, async (messages) => {
+      const result = [...messages];
+      await append(target, "invalidates snapshot");
+      return result;
+    }),
+  ).rejects.toBeInstanceOf(SessionTranscriptReadFenceError);
+
+  const borrowed = await captureOpenClawAgentDatabaseExecution({
+    kind: "ephemeral",
+    agentId: actor.agentId,
+    env,
+    authority,
+    existingOnly: true,
+  });
+  assert(borrowed);
+  const bound = await computeReader(target, borrowed);
+  const ready = createDeferredCore();
+  const resume = createDeferredCore();
+  const work = bound.reader.nativeContext(bound.scope, async () => {
+    ready.resolve();
+    await resume.promise;
+    return "private result";
+  });
+  void work.catch(ready.reject);
+  const rejected = expect(work).rejects.toThrow("Incognito execution reference is released");
+  try {
+    await ready.promise;
+    let released = false;
+    const releasing = borrowed.release().then(() => {
+      released = true;
+    });
+    await append(target, "release barrier");
+    expect(released).toBe(false);
+    resume.resolve();
+    await Promise.all([releasing, rejected]);
+  } finally {
+    resume.resolve();
+    await Promise.allSettled([work, borrowed.release()]);
+  }
+});
 
 it("reads committed actor writes in FIFO order and retains the hydration snapshot", async () => {
   const target = await create("fifo");
@@ -411,10 +569,16 @@ it("composes matching RPC and HTTP pages while rechecking disclosure after displ
 
 it("ends queued history reads with the typed error when their actor is lost", async () => {
   const target = await create("actor-loss", lossActor, "loss");
+  const { reader, scope } = await computeReader(target, lossActor);
   const barrier = await hold(lossActor);
-  const rejected = expect(hydrate(target, lossActor)).rejects.toMatchObject({
-    code: "INCOGNITO_SESSION_ENDED",
-  });
+  const rejected = Promise.all(
+    [
+      hydrate(target, lossActor),
+      reader.memoryEntry("actor-memory"),
+      reader.memoryResetRecall(),
+      reader.nativeContext(scope, () => "private result"),
+    ].map((result) => expect(result).rejects.toMatchObject({ code: "INCOGNITO_SESSION_ENDED" })),
+  );
   try {
     await lossWorker.terminate();
   } finally {

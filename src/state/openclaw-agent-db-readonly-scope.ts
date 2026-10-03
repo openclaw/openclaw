@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
-import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import {
   registerSqliteCacheExitClose,
@@ -171,7 +170,6 @@ export class OpenClawAgentDatabaseReadOnlyScope {
           revoke: () => this.close(),
           close: () => this.close(),
         });
-        enableNodeSqliteKyselyStatementCache(this.database.db);
         retainedScopes.active.add(this);
         if (this.cached) {
           retainedScopes.paths.set(this.database.path, this);
