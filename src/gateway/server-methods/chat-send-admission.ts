@@ -700,6 +700,7 @@ export async function admitChatSend(
       messageInjectionTarget,
       originatingRoute,
       rejectSessionRoutingChanged,
+      releaseSourceWorkAdmission: retainedWork.release,
       retainGatewayWorkAdmission: retainedWork.retain,
       setPendingInputCleanup: retainedWork.setPendingInputCleanup,
       assertClientUploadAllowed: uploadAdmission.assertClientUploadAllowed,
