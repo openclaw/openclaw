@@ -19,7 +19,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import * as diagnostics from "./diagnostics.js";
 import { evaluateDecisionInRegistry, prepareDecisionProviderReload } from "./runtime.js";
 import { answer, batch, config, options, registered } from "./runtime.test-support.js";
-import type { DecisionProviderV1 } from "./types.js";
+import type { DecisionProviderV1, ProviderDecisionOutcome } from "./types.js";
 import { validateDecisionBatch, validateDecisionResult } from "./validation.js";
 
 afterEach(() => {
@@ -243,6 +243,28 @@ describe("registered decision capability", () => {
       activeRequests: 0,
     });
   });
+  it.each([
+    { yes: 0.49, unclear: 0.51 },
+    { yes: 0.49, unclear: 0.5 },
+    { yes: 0.5, unclear: 0.51 },
+  ])(
+    "preserves provider labels and independently rounded probability estimates: %j",
+    async (probabilities) => {
+      const independent: ProviderDecisionOutcome = {
+        status: "ok",
+        result: {
+          ...answer.result,
+          answers: {
+            ...answer.result.answers,
+            pick: { type: "choice", choice: "yes", probabilities },
+            rank: { type: "score", score: 1.01, probabilities: [0.33, 0.33, 0.33] },
+          },
+        },
+      };
+      const host = registered(async () => independent);
+      expect(await host.run()).toMatchObject(independent);
+    },
+  );
   it("propagates caller cancellation without fallback classification", async () => {
     const caller = new AbortController();
     const host = registered(async (_batch, { signal }) => {
