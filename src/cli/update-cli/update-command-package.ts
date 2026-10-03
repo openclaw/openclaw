@@ -362,7 +362,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   try {
     params.results?.push(...(processSettlement ? [processSettlement] : []), ...completedSteps);
     if (processSettlement) {
-      await params.progress?.onStepComplete?.({ ...processSettlement, index: 0, total: 0 });
+      params.progress?.onStepComplete?.({ ...processSettlement, index: 0, total: 0 });
       assertCurrent?.();
       context?.assertCurrent();
     }

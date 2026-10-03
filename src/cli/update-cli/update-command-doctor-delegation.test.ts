@@ -467,12 +467,7 @@ it.skipIf(process.platform === "win32").each([true, false])(
               if (identityAvailable || completedStep.name !== "doctor process settlement") {
                 return undefined;
               }
-              const reporting = Promise.resolve().then(() => {
-                throw reportingError;
-              });
-              // Observe the expected rejection without changing the Promise returned to its owner.
-              void reporting.catch(() => {});
-              return reporting;
+              throw reportingError;
             },
           },
         }).catch((error: unknown) => {

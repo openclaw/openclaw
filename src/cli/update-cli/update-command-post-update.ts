@@ -42,7 +42,7 @@ import type { UpdateServiceDefinitionRecovery } from "./update-command-service-c
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 import {
-  admitMigratedGatewayRecovery,
+  admitMigratedGatewayRecovery as admit,
   refuseUnsettledDoctorRecovery,
 } from "./update-command-service-recovery.js";
 import {
@@ -241,8 +241,7 @@ export async function finishUpdate(
         { env: params.opts.run.env },
       );
     }
-    recoverService ||=
-      !gatewayStartAttempted && (await admitMigratedGatewayRecovery(params, result, assertCurrent));
+    recoverService ||= !gatewayStartAttempted && (await admit(params, result, assertCurrent));
     if (isUpdateGatewayReadinessPending(result)) {
       triageAllowed = false;
       return { result, recoverService: false };
@@ -401,8 +400,6 @@ export async function finishUpdate(
       throw new UpdateCommandFailure(reportedResult, 1, detail, { cause: cleanupFailure });
     }
     if (restoreFailure) {
-      // Persist the unsafe outcome before unwinding. Keep both failures for
-      // recovery diagnostics, with the failed compensation as the primary cause.
       const priorDetail = [result.reason, params.failure?.detail].filter(Boolean).join(": ");
       const detail =
         `${priorDetail ? `${priorDetail}; ` : ""}Windows Scheduled Task autostart recovery failed: ` +

@@ -635,6 +635,7 @@ describe("post-activation failure settlement without inference", () => {
     "migration-required",
     "migration-incomplete",
     "migration-refused",
+    "rollback-failed-without-settlement",
   ] as const)(
     "recovers a migrated candidate only after proven Doctor settlement (%s)",
     async (receipt) => {
@@ -730,7 +731,7 @@ describe("post-activation failure settlement without inference", () => {
                 "Doctor timed out; all tracked process groups stopped. Run `openclaw update repair`.",
             },
       };
-      if (receipt !== "missing") {
+      if (receipt !== "missing" && receipt !== "rollback-failed-without-settlement") {
         params.result.steps.push(settledStep);
       }
       const unsettledReason =
@@ -750,7 +751,11 @@ describe("post-activation failure settlement without inference", () => {
           ],
         });
       }
-      if (receipt === "unsettled" || receipt === "database-restored") {
+      if (
+        receipt === "unsettled" ||
+        receipt === "database-restored" ||
+        receipt === "rollback-failed-without-settlement"
+      ) {
         params.result.steps.push({
           name: "database rollback",
           command: "restore database snapshot",

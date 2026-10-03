@@ -219,13 +219,15 @@ export async function admitMigratedGatewayRecovery(
   }
   const settlement = result.steps.findLast((step) => step.name === "doctor process settlement");
   const databaseRollback = result.steps.findLast((step) => step.name === "database rollback");
+  const doctor = result.steps.findLast((step) => step.command === "openclaw doctor");
+  const doctorInterrupted = doctor?.termination !== undefined && doctor.termination !== "exit";
   if (
     result.reason !== "state-migrated-no-rollback" ||
     params.originalManagedServiceRuntime ||
     !params.shouldRestart ||
     !params.preManagedServiceStop?.stopped ||
     databaseRollback?.exitCode === 0 ||
-    (!settlement && !databaseRollback) ||
+    (!settlement && (!databaseRollback || doctorInterrupted)) ||
     (result.recovery?.serviceRestartSafe === false &&
       result.recovery.reason === "source-rollback-failed")
   ) {
