@@ -15,6 +15,7 @@ import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import type { CodeModeReplyLease } from "./code-mode-program-data.js";
 import type { CodeModeResultsAccess } from "./code-mode-results.js";
 import { CODE_MODE_EXEC_YIELD_MARGIN_MS, type PendingBridgeRequest } from "./code-mode-runtime.js";
+import type { CodeModeSessionStoreAccess } from "./code-mode-session-store.js";
 import { createCodeModeToolApiFile } from "./code-mode-tool-api.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
@@ -235,6 +236,7 @@ export async function runBridgeRequest(params: {
   codeModeRunId: string;
   reply: CodeModeReplyLease;
   results: CodeModeResultsAccess;
+  sessionStore?: CodeModeSessionStoreAccess;
   remainingMs: number;
   completionRequired?: boolean;
   ctx: ToolSearchToolContext;
@@ -243,6 +245,11 @@ export async function runBridgeRequest(params: {
   onUpdate?: AgentToolUpdateCallback;
 }): Promise<void> {
   const catalogProjection = params.catalogProjection;
+  const sessionStoreRequest =
+    (params.request.method === "resultSave" ||
+      params.request.method === "resultLoad" ||
+      params.request.method === "resultDelete") &&
+    params.request.args[1] === "session";
   try {
     params.signal?.throwIfAborted();
     const values = Array.isArray(params.request.args) ? params.request.args : [];
@@ -251,7 +258,29 @@ export async function runBridgeRequest(params: {
       case "resultSave":
       case "resultLoad":
       case "resultDelete": {
-        if (params.request.method === "resultSave") {
+        if (sessionStoreRequest) {
+          if (!params.sessionStore) {
+            throw new ToolInputError(
+              "Code Mode store/load is unavailable in headless execution; use an interactive session-bound cell.",
+            );
+          }
+          if (params.request.method === "resultSave") {
+            await params.sessionStore.save(
+              values[2],
+              values[0],
+              params.runtime.hasNetworkContent(),
+            );
+          } else if (params.request.method === "resultLoad") {
+            const loaded = await params.sessionStore.load(values[0]);
+            if (loaded.networkContent) {
+              params.runtime.observeNetworkContent(params.parentToolCallId);
+            }
+            // An envelope preserves missing/undefined across the JSON bridge.
+            value = loaded.value === undefined ? {} : { value: loaded.value };
+          } else {
+            await params.sessionStore.delete(values[0]);
+          }
+        } else if (params.request.method === "resultSave") {
           value = params.results.save(values[0], params.runtime.hasNetworkContent());
         } else if (params.request.method === "resultLoad") {
           const loaded = params.results.load(values[0]);
@@ -515,8 +544,12 @@ export async function runBridgeRequest(params: {
     params.reply.settle(false, {
       message: redactCodeModeCatalogIds(formatErrorMessage(error), catalogProjection.bindings),
       code:
-        getToolContractFailureCode(classified) ??
-        (isTrustedToolInputError(classified) ? "invalid_input" : "tool_error"),
+        sessionStoreRequest && error instanceof RangeError
+          ? "store_range"
+          : sessionStoreRequest && error instanceof TypeError
+            ? "store_type"
+            : (getToolContractFailureCode(classified) ??
+              (isTrustedToolInputError(classified) ? "invalid_input" : "tool_error")),
       effectStatus: "unknown",
     });
   }

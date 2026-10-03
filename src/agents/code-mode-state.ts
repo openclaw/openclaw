@@ -26,6 +26,10 @@ import type {
   PendingBridgeRequest,
   SettledBridgeRequest,
 } from "./code-mode-runtime.js";
+import {
+  createCodeModeSessionStoreAccess,
+  type CodeModeSessionStoreAccess,
+} from "./code-mode-session-store.js";
 import { recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
@@ -85,6 +89,7 @@ export function createCodeModeRunOwner(
   ctx: ToolSearchToolContext,
   config: CodeModeConfig,
   initialRequired = false,
+  enableSessionStore = false,
 ) {
   let required = initialRequired;
   const inbox = new CodeModeProgramDataInbox(config);
@@ -98,6 +103,9 @@ export function createCodeModeRunOwner(
   const signal = ctx.abortSignal
     ? AbortSignal.any([closed.signal, ctx.abortSignal])
     : closed.signal;
+  const sessionStore = enableSessionStore
+    ? createCodeModeSessionStoreAccess(ctx, signal)
+    : undefined;
   const disposers = ctx.catalogRef
     ? (ctx.catalogRef.onDispose ??= new Set<() => void>())
     : undefined;
@@ -165,6 +173,7 @@ export function createCodeModeRunOwner(
       disposers?.delete(onCatalogDispose);
       closed.abort(reason);
       inbox.close();
+      sessionStore?.close();
       const parked = activeRuns.get(runId);
       if (parked?.owner === owner) {
         activeRuns.delete(runId);
@@ -220,6 +229,7 @@ export function createCodeModeRunOwner(
     signal,
     inbox,
     results: createCodeModeResultsAccess(ctx, config),
+    sessionStore,
     close,
     retainContinuation,
     runExecution(operation: () => Promise<CodeModeWorkerResult>): Promise<CodeModeWorkerResult> {
@@ -525,6 +535,7 @@ export function createPendingBridgeStates(
     config: CodeModeConfig;
     inbox: CodeModeProgramDataInbox;
     results: CodeModeResultsAccess;
+    sessionStore?: CodeModeSessionStoreAccess;
     runtime: ToolSearchRuntime;
     catalogProjection: CodeModeCatalogProjection;
     namespaceRuntime: CodeModeNamespaceRuntime;
@@ -562,6 +573,7 @@ export function createPendingBridgeStates(
     const bridgeCall = runBridgeRequest({
       runtime: params.runtime,
       results: params.results,
+      sessionStore: params.sessionStore,
       catalogProjection: params.catalogProjection,
       namespaceRuntime: params.namespaceRuntime,
       parentToolCallId: params.parentToolCallId,

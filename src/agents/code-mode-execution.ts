@@ -96,7 +96,7 @@ export async function runCodeModeExec(params: {
     mcpIds: namespaceRuntime.mcpBindings.keys(),
   });
   const apiFiles = createCodeModeApiFilesForRun(namespaceRuntime, swarmEnabled);
-  const owner = createCodeModeRunOwner(params.ctx, config, params.required);
+  const owner = createCodeModeRunOwner(params.ctx, config, params.required, !params.restartSafe);
   const { approvalWait } = owner;
   const signal = owner.bindCall(params.signal);
   const output = new CodeModeOutputState(config.maxOutputBytes, params.resultBudget);
@@ -305,6 +305,7 @@ function dispatchCodeModeRequests(
       config: params.config,
       inbox: params.owner.inbox,
       results: params.owner.results,
+      sessionStore: params.owner.sessionStore,
       runtime: params.runtime,
       catalogProjection: params.catalogProjection,
       namespaceRuntime: params.namespaceRuntime,
@@ -584,9 +585,17 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
           telemetry: telemetry(params.runtime),
         },
         {
-          error: result.pendingRequests.every((request) => request.method === "namespace")
-            ? "restart-safe code mode cannot call namespace tools."
-            : "restart-safe code mode cannot call tool surfaces that are not proven replay-safe; use audited read, grep, or find tools.",
+          error: result.pendingRequests.some(
+            (request) =>
+              (request.method === "resultSave" ||
+                request.method === "resultLoad" ||
+                request.method === "resultDelete") &&
+              request.args[1] === "session",
+          )
+            ? "Code Mode store/load is unavailable in restart-safe cells; start a new interactive cell."
+            : result.pendingRequests.every((request) => request.method === "namespace")
+              ? "restart-safe code mode cannot call namespace tools."
+              : "restart-safe code mode cannot call tool surfaces that are not proven replay-safe; use audited read, grep, or find tools.",
         },
         params.runtime.hasNetworkContent(),
       );
@@ -610,6 +619,15 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
   // Defensive cleanup covers aborts or terminal failures; successful runs have
   // already drained every dispatched call before releasing their snapshot.
   cancelPendingBridgeStates(pending);
+  let storeWarning: string | undefined;
+  if (result.status === "completed") {
+    try {
+      await params.owner.sessionStore?.commit();
+    } catch {
+      storeWarning =
+        "Code Mode session store persistence could not be confirmed. The cell completed; verify the session transcript before relying on these values in a later cell or reply.";
+    }
+  }
   const channels = {
     ...(result.status === "completed" ? { value: result.value } : {}),
     ...(result.status === "failed" ? { error: result.error } : {}),
@@ -625,6 +643,7 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
       : { status: result.status }),
     replaySafe: params.replaySafe,
     telemetry: telemetry(params.runtime),
+    ...(storeWarning ? { warnings: [storeWarning] } : {}),
   };
   const networkContent = params.runtime.hasNetworkContent();
   const delivered = output.takeResult(metadata, channels, networkContent, (source) =>
