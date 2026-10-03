@@ -37,6 +37,7 @@ import {
   recordPersistedContextEngineQuarantine,
 } from "./quarantine-health.js";
 import {
+  clearContextEngineRuntimeQuarantine,
   getContextEngineQuarantine,
   recordContextEngineQuarantine,
 } from "./registry-quarantine.js";
@@ -472,13 +473,16 @@ describe("context engine quarantine health", () => {
         }
         release.resolve();
         expect(await loading).toBe(publicationThrows ? failure : undefined);
-        expect(await listPersistedContextEngineQuarantines()).toEqual(
+        const persisted = await listPersistedContextEngineQuarantines();
+        expect(persisted).toEqual(
           mode === "new failure"
             ? [getContextEngineQuarantine(engineId)]
             : mode === "superseded" || publicationThrows
               ? [original]
               : [],
         );
+        // A refused cleanup keeps the health row, so the process quarantine must stay with it.
+        expect(getContextEngineQuarantine(engineId)).toEqual(persisted[0]);
       } finally {
         prepare.mockRestore();
         release.resolve();
@@ -489,6 +493,85 @@ describe("context engine quarantine health", () => {
         await resetContextEngineRuntimeQuarantineForTests();
         resetPluginLoaderTestStateForTest();
         restoreActivePluginRegistrySnapshot(previous);
+      }
+    });
+  });
+
+  it.each([
+    { refused: "older", settlesFirst: "older" },
+    { refused: "older", settlesFirst: "newer" },
+    { refused: "newer", settlesFirst: "older" },
+    { refused: "newer", settlesFirst: "newer" },
+  ] as const)(
+    "keeps overlapping cleanups cleared when one is accepted ($refused refused, $settlesFirst settles first)",
+    async ({ refused, settlesFirst }) => {
+      await withStateDirEnv("openclaw-overlapping-quarantine-clear-", async () => {
+        const engineId = "overlapping-clear";
+        await recordContextEngineQuarantine({
+          engineId,
+          operation: "resolve",
+          error: new Error("previous failure"),
+          defaultEngineId: "legacy",
+        });
+        expect(getContextEngineQuarantine(engineId)).toBeDefined();
+        const gates = [createDeferredCore(), createDeferredCore()];
+        const admissions = [...gates];
+        const clear = pluginStateWorker.clearRuntimeHealthInWorker;
+        const observer = vi
+          .spyOn(pluginStateWorker, "clearRuntimeHealthInWorker")
+          .mockImplementation(async (params) => {
+            await admissions.shift()?.promise;
+            await clear(params);
+          });
+        const authority = (role: "older" | "newer") => () => {
+          if (role === refused) {
+            throw new Error("Plugin registry activation was superseded");
+          }
+        };
+        try {
+          // A second activation starts its cleanup before the first one is admitted.
+          const settled = [
+            clearContextEngineRuntimeQuarantine(engineId, authority("older")),
+            clearContextEngineRuntimeQuarantine(engineId, authority("newer")),
+          ];
+          for (const index of settlesFirst === "older" ? [0, 1] : [1, 0]) {
+            gates[index]?.resolve();
+            await settled[index];
+          }
+
+          expect(await listPersistedContextEngineQuarantines()).toEqual([]);
+          expect(getContextEngineQuarantine(engineId)).toBeUndefined();
+        } finally {
+          for (const gate of gates) {
+            gate.resolve();
+          }
+          observer.mockRestore();
+          await resetContextEngineRuntimeQuarantineForTests();
+        }
+      });
+    },
+  );
+
+  it("keeps the engine cleared when the health store fails during cleanup", async () => {
+    await withStateDirEnv("openclaw-quarantine-clear-storage-failure-", async () => {
+      const engineId = "storage-failure";
+      await recordContextEngineQuarantine({
+        engineId,
+        operation: "resolve",
+        error: new Error("previous failure"),
+        defaultEngineId: "legacy",
+      });
+      const observer = vi
+        .spyOn(pluginStateWorker, "clearRuntimeHealthInWorker")
+        .mockRejectedValueOnce(new Error("state database unavailable"));
+      try {
+        await clearContextEngineRuntimeQuarantine(engineId, () => {});
+
+        // The health mirror is best-effort; only an authority refusal restores the quarantine.
+        expect(getContextEngineQuarantine(engineId)).toBeUndefined();
+      } finally {
+        observer.mockRestore();
+        await resetContextEngineRuntimeQuarantineForTests();
       }
     });
   });

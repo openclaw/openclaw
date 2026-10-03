@@ -26,6 +26,14 @@ function getContextEngineRegistryStateForTests(): ContextEngineRegistryStateForT
   );
 }
 
+// An abandoned overlapping clear must not restore its quarantine into the next test.
+function clearPendingQuarantineClearsForTests(): void {
+  resolveGlobalSingleton<Map<string, unknown>>(
+    Symbol.for("openclaw.contextEngineQuarantineClears"),
+    () => new Map(),
+  ).clear();
+}
+
 export function captureContextEngineRegistryStateForTests(): () => Promise<void> {
   const state = getContextEngineRegistryStateForTests();
   const registry = requireActivePluginRegistry();
@@ -39,6 +47,7 @@ export function captureContextEngineRegistryStateForTests(): () => Promise<void>
     }
 
     state.quarantinedEngines.clear();
+    clearPendingQuarantineClearsForTests();
     await clearPersistedContextEngineQuarantineForProcess(undefined, process.pid);
     for (const [engineId, quarantine] of quarantinedEngines) {
       state.quarantinedEngines.set(engineId, quarantine);
@@ -50,5 +59,6 @@ export function captureContextEngineRegistryStateForTests(): () => Promise<void>
 export async function resetContextEngineRuntimeQuarantineForTests(): Promise<void> {
   const state = getContextEngineRegistryStateForTests();
   state.quarantinedEngines.clear();
+  clearPendingQuarantineClearsForTests();
   await clearPersistedContextEngineQuarantineForProcess(undefined, process.pid);
 }

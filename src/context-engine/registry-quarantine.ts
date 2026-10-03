@@ -26,6 +26,19 @@ const contextEngineRegistryState = resolveGlobalSingleton<ContextEngineRegistryS
   }),
 );
 
+type PendingQuarantineClear = {
+  cleared: ContextEngineRuntimeQuarantine;
+  unsettled: number;
+  accepted: boolean;
+};
+
+// Overlapping clears of one removed quarantine settle together; the last one restores it
+// only when none of them was allowed to remove its health row.
+const pendingQuarantineClears = resolveGlobalSingleton<Map<string, PendingQuarantineClear>>(
+  Symbol.for("openclaw.contextEngineQuarantineClears"),
+  () => new Map(),
+);
+
 export async function recordContextEngineQuarantine(params: {
   engineId: string;
   owner?: string;
@@ -84,16 +97,46 @@ export async function clearContextEngineRuntimeQuarantine(
   engineId: string,
   assertCurrent: () => void,
 ): Promise<void> {
-  contextEngineRegistryState.quarantinedEngines.delete(engineId);
+  const { quarantinedEngines } = contextEngineRegistryState;
+  const current = quarantinedEngines.get(engineId);
+  const pending = current
+    ? { cleared: current, unsettled: 0, accepted: false }
+    : pendingQuarantineClears.get(engineId);
+  if (pending) {
+    pending.unsettled += 1;
+    pendingQuarantineClears.set(engineId, pending);
+  }
+  quarantinedEngines.delete(engineId);
+  let refused = false;
   await clearPersistedContextEngineQuarantineForProcess(engineId, process.pid, () => {
-    assertCurrent();
-    if (contextEngineRegistryState.quarantinedEngines.has(engineId)) {
-      throw new Error("Context engine quarantine changed during recovery");
+    try {
+      assertCurrent();
+      if (quarantinedEngines.has(engineId)) {
+        throw new Error("Context engine quarantine changed during recovery");
+      }
+    } catch (error) {
+      refused = true;
+      throw error;
     }
   });
+  if (!pending) {
+    return;
+  }
+  pending.unsettled -= 1;
+  // Storage failures count as accepted: the health mirror stays best-effort.
+  pending.accepted ||= !refused;
+  if (pending.unsettled > 0 || pendingQuarantineClears.get(engineId) !== pending) {
+    return;
+  }
+  pendingQuarantineClears.delete(engineId);
+  // Every clear was refused, so the health row still reports this quarantine.
+  if (!pending.accepted && !quarantinedEngines.has(engineId)) {
+    quarantinedEngines.set(engineId, pending.cleared);
+  }
 }
 
 export function clearContextEngineQuarantineForActivation(engineId: string): void {
+  pendingQuarantineClears.delete(engineId);
   contextEngineRegistryState.quarantinedEngines.delete(engineId);
   clearPersistedContextEngineQuarantineForActivation(engineId);
 }
