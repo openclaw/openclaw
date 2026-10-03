@@ -87,6 +87,40 @@ export async function processResponsesStream<TApi extends Api>(
   let rejectedToolCall: { error: unknown } | undefined;
   let lastTextBlock: TextBlockReference | null = null;
   const blocks = output.content;
+  const generatedImageIds = new Set<string>();
+  const projectGeneratedImage = async (
+    item: ResponseOutputItem | ResponsesStreamOutputMessage,
+    index?: number,
+  ): Promise<void> => {
+    if (item.type !== "image_generation_call" || !options?.onGeneratedImage) {
+      return;
+    }
+    const identity = item.id || (index === undefined ? undefined : `index:${index}`);
+    if (identity && generatedImageIds.has(identity)) {
+      return;
+    }
+    const result = item.result;
+    if (item.status !== "completed" || typeof result !== "string" || !result) {
+      return;
+    }
+    const path = await options.onGeneratedImage(result);
+    if (!path) {
+      return;
+    }
+    if (identity) {
+      generatedImageIds.add(identity);
+    }
+    const contentIndex = blocks.length;
+    const block: TextContent = {
+      type: "text",
+      text: `MEDIA:${path}`,
+      textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
+    };
+    blocks.push(block);
+    outputs.set(item, contentIndex, index, true);
+    stream.push({ type: "text_start", contentIndex, partial: output });
+    stream.push({ type: "text_end", contentIndex, content: block.text, partial: output });
+  };
   const compactionTracker = createCompactionTracker(output, model, options);
   const createOutputSlot = (
     event: object,
@@ -511,6 +545,7 @@ export async function processResponsesStream<TApi extends Api>(
 
         const existingOutputSlot = outputSlots.resolveOutputItem(event, item);
         materializeDeferredTextSlots(existingOutputSlot);
+        await projectGeneratedImage(item, readResponsesOutputIndex(event));
         const outputSlot = existingOutputSlot ?? createOutputSlot(event, item);
         compactionTracker.completed(item, blocks.length);
         if (item.type === "reasoning" && outputSlot?.type === "thinking") {
@@ -684,7 +719,11 @@ export async function processResponsesStream<TApi extends Api>(
           const items = event.response.output ?? [];
           const completeToolCall =
             event.type === "response.completed" ? prepareTerminalToolCalls(items) : undefined;
-          terminal.recoverTerminalOutput(items, completeToolCall);
+          await terminal.recoverTerminalOutput(
+            items,
+            completeToolCall,
+            options?.onGeneratedImage ? projectGeneratedImage : undefined,
+          );
         }
         terminalResponse = event.type === "response.completed" ? event.response : null;
         if (

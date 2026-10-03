@@ -43,6 +43,7 @@ export type OpenAIResponsesStreamEvent =
   | AzureResponsesTextDeltaEvent;
 
 export type ResponsesStreamOptions = FirstStreamEventInternalOptions & {
+  onGeneratedImage?: (base64: string) => Promise<string | undefined> | string | undefined;
   canRetryIdentityConflict?: () => boolean;
   asyncToolExecution?: boolean;
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];

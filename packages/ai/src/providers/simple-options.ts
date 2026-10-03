@@ -38,6 +38,7 @@ export function buildBaseOptions(
     headers: options?.headers,
     onPayload: options?.onPayload,
     onResponse: options?.onResponse,
+    onGeneratedImage: options?.onGeneratedImage,
     timeoutMs: options?.timeoutMs,
     firstEventTimeoutMs: firstEventOptions?.firstEventTimeoutMs,
     onFirstEventTimeout: firstEventOptions?.onFirstEventTimeout,

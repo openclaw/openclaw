@@ -128,6 +128,8 @@ export interface StreamOptions {
    * its body stream is consumed.
    */
   onResponse?: (response: ProviderResponse, model: Model) => void | Promise<void>;
+  /** Materialize a native Responses image outside the transcript and return its media path. */
+  onGeneratedImage?: (base64: string) => MaybePromise<string | undefined>;
   /**
    * Observe a live response that accepts user input before generation finishes.
    * `steer` resolves false only when the input was definitely not admitted;

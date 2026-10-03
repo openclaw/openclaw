@@ -2,12 +2,16 @@ import {
   isAnthropicServerToolClearingEnabled,
   resolveCompactionReplayEligibility,
 } from "@openclaw/ai/transports";
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import type { ModelCompatConfig } from "../../../config/types.models.js";
+import { generatedImageAssetFromBase64 } from "../../../image-generation/image-assets.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { createOpenAIServiceTierObservationWrapper } from "../../../llm/providers/stream-wrappers/openai-service-tier-observation.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import { resolveGeneratedMediaMaxBytes } from "../../../media/configured-max-bytes.js";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
+import { saveMediaBuffer } from "../../../media/store.js";
 import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { resolveProviderTextTransforms } from "../../../plugins/provider-runtime.js";
 import type { NestedToolActivity } from "../../../sessions/nested-tool-activity.js";
@@ -630,6 +634,35 @@ export async function prepareEmbeddedAttemptTransport(input: {
     );
   }
   session.agent.transport = effectiveAgentTransport;
+  if (attempt.model.api === "openai-responses") {
+    const baseStreamFn = session.agent.streamFn;
+    const maxBytes = resolveGeneratedMediaMaxBytes(attempt.config, "image");
+    session.agent.streamFn = (model, context, options) =>
+      baseStreamFn(model, context, {
+        ...options,
+        onGeneratedImage: async (base64) => {
+          if (estimateBase64DecodedBytes(base64) > maxBytes) {
+            throw new Error("Generated image exceeds the configured media size limit");
+          }
+          const asset = generatedImageAssetFromBase64({
+            base64,
+            index: 0,
+            sniffMimeType: true,
+          });
+          if (!asset) {
+            throw new Error("Generated image contains invalid base64 data");
+          }
+          const saved = await saveMediaBuffer(
+            asset.buffer,
+            asset.mimeType,
+            "tool-image-generation",
+            maxBytes,
+            asset.fileName,
+          );
+          return saved.path;
+        },
+      });
+  }
   const contextPruning = attempt.config?.agents?.defaults?.contextPruning;
   const serverToolClearingEnabled =
     contextPruning?.mode === "cache-ttl" &&

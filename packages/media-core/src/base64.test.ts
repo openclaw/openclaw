@@ -81,6 +81,8 @@ describe("base64 helpers", () => {
 
   it.each([
     ["SGV s bG8= \n", 5],
+    ["AA==", 1],
+    ["AAA=", 2],
     ["", 0],
   ] as const)("estimates decoded bytes for %j", (input, expected) => {
     expect(estimateBase64DecodedBytes(input)).toBe(expected);
