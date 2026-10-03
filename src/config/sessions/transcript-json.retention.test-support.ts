@@ -76,3 +76,16 @@ for (const [index, entry] of retained.entries()) {
   assert.equal(normalizeTranscriptJsonValue(entry.message, ""), entry.message);
   assert.equal(normalizeTranscriptJsonValue(entry, ""), entry);
 }
+
+// A live payload should not need a process-lifetime admission entry per descendant.
+const wide = { message: { values: Array.from({ length: 65_536 }, () => ({})) } };
+gc();
+gc();
+const beforeAdmission = process.memoryUsage().heapUsed;
+assert.equal(normalizeTranscriptJsonValue(wide, ""), wide);
+gc();
+gc();
+const admissionBytes = process.memoryUsage().heapUsed - beforeAdmission;
+console.log(JSON.stringify({ admissionBytes, descendants: wide.message.values.length }));
+assert.ok(admissionBytes < MIB, `payload admission retained ${admissionBytes} bookkeeping bytes`);
+assert.equal(normalizeTranscriptJsonValue(wide.message, ""), wide.message);

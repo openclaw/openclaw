@@ -1777,6 +1777,36 @@ describe("schema validator", () => {
     }
   });
 
+  it("shares compiled schemas across callers and default application", () => {
+    const schema = {
+      type: "object",
+      properties: { limit: { type: "integer", minimum: 1, default: 37 } },
+    };
+    expectSuccessfulValidationValue(
+      { schema, cacheKey: "schema-validator.test.shared.first", value: {} },
+      {},
+    );
+    const compile = vi.spyOn(globalThis, "Function");
+    try {
+      expectSuccessfulValidationValue(
+        {
+          schema: structuredClone(schema),
+          cacheKey: "schema-validator.test.shared.second",
+          value: {},
+          applyDefaults: true,
+        },
+        { limit: 37 },
+      );
+      expectSuccessfulValidationValue(
+        { schema, cacheKey: "schema-validator.test.shared.third", value: {} },
+        {},
+      );
+      expect(compile).not.toHaveBeenCalled();
+    } finally {
+      compile.mockRestore();
+    }
+  });
+
   it("recompiles when a stable cache key receives a different schema shape", () => {
     const cacheKey = "schema-validator.test.cache-key-drift";
     const schema = { type: "string" };
