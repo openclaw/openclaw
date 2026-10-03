@@ -46,6 +46,29 @@ Related:
 - [Exec tool](/tools/exec)
 - [Exec approvals](/tools/exec-approvals)
 
+## Channel and subagent context
+
+Nodes advertising `system.run.execution-context.v1` receive optional
+`executionContext` on both `system.run.prepare` and `system.run`. Its only fields
+are `senderId`, `chatId` (nonempty strings), and `subagent` (`true` when present).
+The node injects `OPENCLAW_CHANNEL_CONTEXT` with the sender/chat identity JSON and
+`OPENCLAW_SUBAGENT_EXEC=1` into the child environment. These routing hints do not
+grant session, turn, or command approval authority, and do not modify approved argv.
+
+Custom `env` overrides still follow the node's existing restrictions. Supporting
+this context does not enable arbitrary environment overrides on Windows companion
+nodes that reject them. A node must support the context through its preparation,
+approval, and launch paths before advertising the capability.
+
+Update both the Gateway and node to use this transport, and approve an updated
+node capability surface in **Devices** if requested after reconnecting. Older Gateways keep sending
+the markers through `env`; newer Gateways do the same for nodes without the
+capability. That compatibility path preserves existing behavior, including
+`custom-env-not-supported` on older Windows companions. The Gateway does not omit
+markers to bypass that rejection. An unsupported context request is rejected
+before dispatch; reconnecting a node without the capability does not silently
+downgrade a prepared request. No protocol-version or configuration change is needed.
+
 ## Invoking commands
 
 Low-level (raw RPC):

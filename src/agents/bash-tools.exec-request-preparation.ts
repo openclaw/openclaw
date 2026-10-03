@@ -1,6 +1,7 @@
 /** Prepares exec workdir and environment facts before policy and host dispatch. */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SystemRunExecutionContext } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { ExecHost } from "../infra/exec-approvals.js";
@@ -15,7 +16,7 @@ import {
   installationTargetEnv,
   LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
 } from "../infra/installation-target-context.js";
-import { OPENCLAW_CLI_ENV_VAR, SUBAGENT_EXEC_ENV_VAR } from "../infra/openclaw-exec-env.js";
+import { OPENCLAW_CLI_ENV_VAR, buildExecRoutingEnv } from "../infra/openclaw-exec-env.js";
 import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
@@ -61,7 +62,6 @@ type ResolvedExecWorkdirPreparedState = {
   resolution: ExecWorkdirResolution;
 };
 
-const CHANNEL_CONTEXT_ENV_KEY = "OPENCLAW_CHANNEL_CONTEXT";
 const resolvedExecEnvPreparedStates = new WeakMap<ExecToolArgs, ResolvedExecEnvPreparedState>();
 const execHookContexts = new WeakMap<ExecToolArgs, HookContext | undefined>();
 const resolvedExecWorkdirPreparedStates = new WeakMap<
@@ -91,22 +91,6 @@ export function assertSupportedExecParams(args: unknown): void {
   if (Object.hasOwn(args, "cwd")) {
     throw new ToolInputError('exec parameter "cwd" is unsupported; use "workdir" instead');
   }
-}
-
-function buildChannelContextEnv(
-  channelContext: PluginHookChannelContext | undefined,
-): Record<string, string> | undefined {
-  const senderId = normalizeOptionalString(channelContext?.sender?.id);
-  const chatId = normalizeOptionalString(channelContext?.chat?.id);
-  if (!senderId && !chatId) {
-    return undefined;
-  }
-  return {
-    [CHANNEL_CONTEXT_ENV_KEY]: JSON.stringify({
-      ...(senderId ? { sender: { id: senderId } } : {}),
-      ...(chatId ? { chat: { id: chatId } } : {}),
-    }),
-  };
 }
 
 function isExecToolArgsObject(value: unknown): value is ExecToolArgs {
@@ -405,17 +389,24 @@ export function resolvePreparedExecEnvironment(params: {
   managedLocalIdentity?: boolean;
   localProcessEnv?: Readonly<Record<string, string>>;
   warnings: string[];
-}): { env: Record<string, string>; requestedEnv?: Record<string, string> } {
+}): {
+  env: Record<string, string>;
+  requestedEnv?: Record<string, string>;
+  executionContext?: SystemRunExecutionContext;
+} {
   if (params.localProcessEnv && params.host !== "gateway") {
     throw new Error(LOCAL_INSTALLATION_TARGET_UNSUPPORTED);
   }
   const inheritedBaseEnv = coerceEnv(process.env);
-  const channelContextEnv = buildChannelContextEnv(params.channelContext);
+  const executionContext: SystemRunExecutionContext = {
+    senderId: normalizeOptionalString(params.channelContext?.sender?.id),
+    chatId: normalizeOptionalString(params.channelContext?.chat?.id),
+    ...(params.subagentExecution ? { subagent: true } : {}),
+  };
+  const routingEnv = buildExecRoutingEnv(executionContext);
   const explicitEnv: Record<string, string> | undefined =
-    params.execParams.env !== undefined ||
-    params.pluginEnv !== undefined ||
-    channelContextEnv !== undefined
-      ? { ...params.execParams.env, ...params.pluginEnv, ...channelContextEnv }
+    params.execParams.env !== undefined || params.pluginEnv !== undefined
+      ? { ...params.execParams.env, ...params.pluginEnv }
       : undefined;
   const storeEnvResult = params.storeEnv
     ? sanitizeHostExecEnvWithDiagnostics({
@@ -555,15 +546,13 @@ export function resolvePreparedExecEnvironment(params: {
   // Prepared values win locally; nodes sanitize their own base env and reject scrub override keys.
   Object.assign(env, preparedEnv);
 
-  const forwardedEnv = params.subagentExecution
-    ? { ...requestedEnv, [SUBAGENT_EXEC_ENV_VAR]: "1" }
-    : requestedEnv;
-  if (params.subagentExecution) {
-    env[SUBAGENT_EXEC_ENV_VAR] = "1";
-  }
+  Object.assign(env, routingEnv);
+  const forwardedEnv =
+    params.host === "node" || !routingEnv ? requestedEnv : { ...requestedEnv, ...routingEnv };
 
   return {
     env,
+    ...(params.host === "node" && routingEnv ? { executionContext } : {}),
     ...(params.host !== "node" && Object.keys(preparedEnv).length > 0
       ? { requestedEnv: { ...forwardedEnv, ...preparedEnv } }
       : { requestedEnv: forwardedEnv }),
