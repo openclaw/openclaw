@@ -459,6 +459,16 @@ function renderReplyPresentation() {
   elements.toggleReply.title = expanded ? "Collapse reply" : "Expand reply";
 }
 
+function expandReplyForAnnouncement() {
+  // A terminal status (stopped/interrupted/error) must reach the user even if they collapsed the
+  // reply mid-stream: the section carries aria-live, but a hidden ancestor never gets announced.
+  if (replyExpanded) return;
+  replyExpanded = true;
+  renderReplyPresentation();
+  void invoke("quickchat_set_expanded", { expanded: true });
+  scheduleWidgetSync();
+}
+
 function toggleReply() {
   if (!activeReply) return;
   disclosureRevision += 1;
@@ -777,6 +787,7 @@ function terminalizeDisconnectedReply() {
   activeReply.terminal = true;
   stopReplyThinking();
   elements.reply.classList.add("has-error", "is-terminal");
+  expandReplyForAnnouncement();
   elements.replyState.textContent = "Interrupted";
   elements.replyError.textContent = "Connection lost before the reply completed.";
   scrollReplyToEnd();
@@ -872,10 +883,12 @@ function applyChatEvent(payload) {
     }
   } else if (payload.state === "aborted") {
     activeReply.text = `${activeReply.text || ""}${activeReply.text ? "\n\n" : ""}(stopped)`;
+    expandReplyForAnnouncement();
     elements.replyState.textContent = "Stopped";
     renderReplyText();
   } else {
     elements.reply.classList.add("has-error");
+    expandReplyForAnnouncement();
     elements.replyState.textContent = "Error";
     elements.replyError.textContent =
       typeof payload.errorMessage === "string" && payload.errorMessage.trim()
