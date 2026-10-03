@@ -1,5 +1,6 @@
 import { expect, it, vi, type Mock } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
+import type { InternalAgentTurnPrincipalOptions } from "./agent-turn/internal-facade.types.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createLazyCoreHandlers } from "./server-methods/lazy-core-handlers.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
@@ -26,11 +27,14 @@ export function registerInProcessGatewayDispatchPreparationTests({
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const createFacade = context.createAgentTurnFacade!;
-      context.createAgentTurnFacade = async (principal) => {
-        entered.resolve();
-        await release.promise;
-        return createFacade(principal);
-      };
+      context.createAgentTurnFacade = Object.assign(
+        async (principal: InternalAgentTurnPrincipalOptions) => {
+          entered.resolve();
+          await release.promise;
+          return createFacade(principal);
+        },
+        { captureOperatorRunAuthority: createFacade.captureOperatorRunAuthority },
+      );
       const prepareDispatchCurrent = vi.fn(async () => {
         if (outcome === "replaced") {
           current = createContext();

@@ -20,7 +20,6 @@ import {
   readInProcessSubagentResume,
 } from "./in-process-subagent-resume.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import {
   readOperatorToolGatewayAuthority,
   runWithOperatorToolGatewayAuthority,
@@ -44,6 +43,21 @@ import {
   registerSubagentCompletionToolHandoff,
 } from "./subagent-completion-tool-handoff.js";
 
+export async function captureInProcessGatewayOperatorRunAuthority(input: {
+  client: ResolvedInProcessGatewayDispatch["operatorSourceClient"];
+  context: ResolvedInProcessGatewayDispatch["context"];
+  hasCurrentClientAuthority?: ResolvedInProcessGatewayDispatch["hasCurrentClientAuthority"];
+}) {
+  const capture = input.context.createAgentTurnFacade?.captureOperatorRunAuthority;
+  if (!capture) {
+    throw new Error("Gateway instance operator authority capture is unavailable.");
+  }
+  return await capture({
+    client: input.client,
+    hasCurrentClientAuthority: input.hasCurrentClientAuthority,
+  });
+}
+
 /** Retains operator attribution and authority only for the awaited tool invocation. */
 export async function withOperatorToolGatewayAuthority<T>(
   authority: Omit<OperatorToolGatewayAuthority, "signal">,
@@ -54,7 +68,7 @@ export async function withOperatorToolGatewayAuthority<T>(
   const context = scope?.resolveGatewayContext ? scope.resolveGatewayContext() : scope?.context;
   const captured =
     context && (authority.operatorRunAuthority || authority.operatorRoleActor?.kind !== "system")
-      ? await captureGatewayOperatorRunAuthority({
+      ? await captureInProcessGatewayOperatorRunAuthority({
           client:
             scope?.client && !authority.operatorRunAuthority
               ? scope.client
@@ -147,7 +161,7 @@ export function captureOperatorToolGatewayContinuationContext(target?: {
     resolveGatewayContext,
     syntheticScopeMode: "exact",
   });
-  return captureGatewayOperatorRunAuthority({
+  return captureInProcessGatewayOperatorRunAuthority({
     client: resolved.operatorSourceClient,
     context: resolved.context,
     hasCurrentClientAuthority: resolved.hasCurrentClientAuthority,

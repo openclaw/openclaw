@@ -3,7 +3,6 @@ import { captureGatewayToolCallerAssertion } from "../agents/tools/gateway-calle
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import {
   readOperatorToolGatewayAuthority,
   runOutsideOperatorToolGatewayAuthority,
@@ -15,7 +14,10 @@ import {
   unwrapGatewayMethodDispatchResponse,
 } from "./server-in-process-dispatch.js";
 import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
-import { resolveInProcessGatewayDispatch } from "./server-plugin-in-process-authority.js";
+import {
+  captureInProcessGatewayOperatorRunAuthority,
+  resolveInProcessGatewayDispatch,
+} from "./server-plugin-in-process-authority.js";
 import type {
   DispatchGatewayMethodInProcessOptions,
   PrepareInProcessAgentExecutionOptions,
@@ -47,7 +49,7 @@ export async function prepareInProcessAgentExecution(input: PrepareInProcessAgen
   // Profile verification updates the original connection. Sessionless work needs
   // that live principal, not the dispatch copy carrying session tracking metadata.
   const client = getPluginRuntimeGatewayRequestScope()?.client ?? resolved.client;
-  let operatorSource = await captureGatewayOperatorRunAuthority({
+  let operatorSource = await captureInProcessGatewayOperatorRunAuthority({
     client: resolved.operatorSourceClient,
     context: resolved.context,
     hasCurrentClientAuthority: resolved.hasCurrentClientAuthority,
@@ -108,7 +110,7 @@ export async function prepareInProcessAgentExecution(input: PrepareInProcessAgen
       if (error) {
         unwrapGatewayMethodDispatchResponse("agent", { ok: false, error });
       }
-      operatorSource ??= await captureGatewayOperatorRunAuthority({
+      operatorSource ??= await captureInProcessGatewayOperatorRunAuthority({
         client,
         context: resolved.context,
         hasCurrentClientAuthority: resolved.hasCurrentClientAuthority,
@@ -131,7 +133,7 @@ async function withInProcessGatewayDispatch<T>(
   const resolved = resolveInProcessGatewayDispatch(method, params, options);
   let releaseOperatorAuthority: (() => void) | undefined;
   try {
-    const captured = await captureGatewayOperatorRunAuthority({
+    const captured = await captureInProcessGatewayOperatorRunAuthority({
       client: resolved.operatorSourceClient,
       context: resolved.context,
       hasCurrentClientAuthority: resolved.hasCurrentClientAuthority,

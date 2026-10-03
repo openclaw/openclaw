@@ -6,11 +6,13 @@ import {
 } from "../agents/admitted-run-context.js";
 import { callAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { importFreshModule } from "../plugin-sdk/test-helpers/import-fresh.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { InternalAgentTurnPrincipalOptions } from "./agent-turn/internal-facade.types.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { resolveNodeInvokeRuntimeAuthorityError } from "./server-methods/nodes.invoke-authority.js";
 import type {
@@ -114,10 +116,45 @@ describe("typed in-process agent authorization", () => {
 
       delete context.createAgentTurnFacade;
       await expect(dispatchScopedMethod({ client, context, method, params })).rejects.toThrow(
-        "Gateway instance agent turn facade unavailable",
+        "Gateway instance operator authority capture is unavailable",
       );
     },
   );
+
+  it("refuses to upgrade a foreign operator authority at the host boundary", async () => {
+    const foreign = await importFreshModule<typeof import("../agents/admitted-run-context.js")>(
+      import.meta.url,
+      "../agents/admitted-run-context.js?foreign-agent-turn-authority",
+    );
+    const source = foreign.createAdmittedRunOperatorAuthority({
+      profileId: "cross-graph-owner",
+      scopes: ["operator.write"],
+      assertCurrent: () => {},
+    });
+    expect(() => assertAdmittedRunOperatorAuthority(source)).toThrow(
+      "operator run authority must be issued by the host",
+    );
+
+    const context = createContext();
+    const client = createOperatorClient({
+      profileId: source.profileId,
+      scopes: [...source.scopes],
+    });
+    client.internal = { operatorRunAuthority: source };
+    const untrustedFacade = await context.createAgentTurnFacade!({ client });
+    await expect(
+      untrustedFacade.dispatch({
+        message: "untrusted helper handoff",
+        idempotencyKey: "cross-graph-untrusted",
+      }),
+    ).rejects.toThrow("operator run authority must be issued by the host");
+    expect(startTurn).not.toHaveBeenCalled();
+
+    await expect(dispatchScopedAgent({ client, context })).rejects.toThrow(
+      "operator run authority must be issued by the host",
+    );
+    expect(startTurn).not.toHaveBeenCalled();
+  });
 
   it.each([
     ["agent", { message: "retired turn", idempotencyKey: "retired-host" }],
@@ -130,11 +167,14 @@ describe("typed in-process agent authorization", () => {
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const createFacade = context.createAgentTurnFacade!;
-      context.createAgentTurnFacade = async (principal) => {
-        entered.resolve();
-        await release.promise;
-        return createFacade(principal);
-      };
+      context.createAgentTurnFacade = Object.assign(
+        async (principal: InternalAgentTurnPrincipalOptions) => {
+          entered.resolve();
+          await release.promise;
+          return createFacade(principal);
+        },
+        { captureOperatorRunAuthority: createFacade.captureOperatorRunAuthority },
+      );
 
       const pending = dispatchGatewayMethodInProcess(method, params, {
         forceSyntheticClient: true,

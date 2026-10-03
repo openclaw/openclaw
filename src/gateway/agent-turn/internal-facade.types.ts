@@ -1,8 +1,10 @@
 import type { AgentWaitParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { GatewayMethodDispatchResponse } from "../server-in-process-dispatch.types.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { GatewayClient } from "../server-methods/client-types.js";
+import type { GatewayRequestOptions } from "../server-methods/shared-types.js";
 
 export type InternalAgentTurnPrincipalOptions = {
   // Authorization can await; the lifecycle owner must still be current before dispatch.
@@ -10,6 +12,11 @@ export type InternalAgentTurnPrincipalOptions = {
   client: GatewayClient;
   isWebchatConnect?: (params: ConnectParams | null | undefined) => boolean;
 };
+
+export type InternalAgentTurnOperatorAuthorityCapture = (params: {
+  client: GatewayClient;
+  hasCurrentClientAuthority?: GatewayRequestOptions["hasCurrentClientAuthority"];
+}) => Promise<{ authority: AdmittedRunOperatorAuthority; release: () => void } | undefined>;
 
 export type AgentTurnStartOwner = {
   observe: () => { executionStarted: boolean; expiresAtMs: number } | undefined;
@@ -58,6 +65,10 @@ export type InternalAgentTurnFacade = {
   ) => Promise<T>;
 };
 
-export type InternalAgentTurnFacadeFactory = (
-  principal: InternalAgentTurnPrincipalOptions,
-) => InternalAgentTurnFacade | Promise<InternalAgentTurnFacade>;
+export type InternalAgentTurnFacadeFactory = {
+  (
+    principal: InternalAgentTurnPrincipalOptions,
+  ): InternalAgentTurnFacade | Promise<InternalAgentTurnFacade>;
+  /** Captures retained authority in the same module graph that owns agent turns. */
+  captureOperatorRunAuthority?: InternalAgentTurnOperatorAuthorityCapture;
+};
