@@ -183,7 +183,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Retain emulator startup diagnostics
+      - name: Retain screenshot diagnostics
         if: always() && github.event_name == 'workflow_dispatch' && inputs.operation == 'release'
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -193,6 +193,8 @@ jobs:
             ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/emulator.log
             ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/emulator-args.txt
             ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/process-status.txt
+            ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/ui-dumps/openclaw-*.xml
+            ${{ runner.temp }}/android-release-recovery/source/.artifacts/android-screenshots/latest/*/activity-start/openclaw-*.txt
           if-no-files-found: ignore
           retention-days: 30
 

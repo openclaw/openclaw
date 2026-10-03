@@ -287,6 +287,11 @@ Authored `agents.list` and boolean entry `default` markers are rejected. Run
 `openclaw doctor --fix` to migrate stored legacy configs; Doctor also records
 explicit ownership for migrated multi-agent rosters.
 
+Entries also carry no `agentRuntime` or `compaction`. Validation rejects both, so
+the authored config type omits them and `resolveAgentConfig` no longer returns
+`agentRuntime`. Read runtime policy from per-model `models[ref].agentRuntime` and
+compaction settings from `agents.defaults.compaction`.
+
 Plugins built against stable SDK releases through 2026.9.x may still read the
 deprecated, non-enumerable runtime `agents.list` projection introduced in
 [#113146](https://github.com/openclaw/openclaw/pull/113146). It is no longer typed

@@ -119,18 +119,6 @@ export const handleDiagnosticsCommand: CommandHandler = async (input, allowTextC
   return reply ? { shouldContinue: false, reply } : { shouldContinue: false };
 };
 
-async function buildDiagnosticsReply(
-  params: HandleCommandsParams,
-  args: string,
-  options: {
-    diagnosticsPrivateRouted?: boolean;
-    privateApprovalTarget?: PrivateCommandRouteTarget;
-  } = {},
-): Promise<ReplyPayload | undefined> {
-  const codexDiagnostics = await buildCodexDiagnosticsApprovalIntegration(params, args, options);
-  return await requestGatewayDiagnosticsExportApproval(params, options, codexDiagnostics);
-}
-
 async function deliverGroupDiagnosticsReplyPrivately(
   params: HandleCommandsParams,
   reply: ReplyPayload,
@@ -191,11 +179,16 @@ function buildGatewayDiagnosticsExportJsonRequest() {
   return buildCurrentOpenClawCliExecRequest(["gateway", "diagnostics", "export", "--json"]);
 }
 
-async function requestGatewayDiagnosticsExportApproval(
+async function buildDiagnosticsReply(
   params: HandleCommandsParams,
-  options: { privateApprovalTarget?: PrivateCommandRouteTarget } = {},
-  codexDiagnostics: CodexDiagnosticsApprovalIntegration = {},
+  args: string,
+  options: {
+    diagnosticsPrivateRouted?: boolean;
+    privateApprovalTarget?: PrivateCommandRouteTarget;
+  } = {},
 ): Promise<ReplyPayload | undefined> {
+  const codexDiagnostics =
+    (await buildCodexDiagnosticsApprovalIntegration(params, args, options)) ?? {};
   const timeoutSec = params.cfg.tools?.exec?.timeoutSeconds;
   const agentId =
     params.agentId ??

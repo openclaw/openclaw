@@ -39,7 +39,10 @@ export function sameEntry(left: WorkspaceNode, right: WorkspaceNode): boolean {
 
 export function manifestNodes(manifest: WorkerWorkspaceManifest) {
   const staged = stagedInputDirectoriesFromEntries(manifest.entries);
-  const nodes = new Map<string, Exclude<WorkspaceNode, undefined>>();
+  const nodes = new Map<
+    string,
+    WorkerWorkspaceManifestEntry | { path: string; type: "directory" }
+  >();
   for (const directory of manifest.directories ?? []) {
     if (!isDerivedWorkspacePath(directory, isStagedInputPath(directory, staged))) {
       nodes.set(directory, { path: directory, type: "directory" });
@@ -91,27 +94,15 @@ export function parseChangedWorkspaceResult(
   enforceRecordLimit = true,
 ): { changed: boolean; entries: WorkerWorkspaceManifestEntry[] } {
   const remainingBase = manifestNodes(base);
-  const staged = stagedInputDirectoriesFromEntries(current.entries);
   let recordCount = 0;
-  for (const directory of current.directories ?? []) {
-    if (isDerivedWorkspacePath(directory, isStagedInputPath(directory, staged))) {
-      continue;
-    }
-    const previous = remainingBase.get(directory);
-    if (previous?.type !== "directory") {
-      recordCount += previous ? 2 : 1;
-    }
-    remainingBase.delete(directory);
-  }
   const entries: WorkerWorkspaceManifestEntry[] = [];
-  for (const entry of current.entries) {
-    if (isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, staged))) {
-      continue;
-    }
+  for (const entry of manifestNodes(current).values()) {
     const previous = remainingBase.get(entry.path);
     if (!sameEntry(previous, entry)) {
       recordCount += previous ? 2 : 1;
-      entries.push(entry);
+      if (entry.type !== "directory") {
+        entries.push(entry);
+      }
     }
     remainingBase.delete(entry.path);
   }

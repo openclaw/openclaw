@@ -23,6 +23,8 @@ const PICKER_ACTIONS = [
   "open",
   "provider",
   "model",
+  // Token-valued model selects use a distinct action from legacy raw-value menus.
+  "pick",
   "runtime",
   "submit",
   "quick",

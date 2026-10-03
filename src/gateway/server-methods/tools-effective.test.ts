@@ -5,14 +5,19 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { McpToolCatalog } from "../../agents/agent-bundle-mcp-types.js";
-import { applyFinalEffectiveToolPolicy } from "../../agents/embedded-agent-runner/effective-tool-policy.js";
 import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
 import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
-import { createToolsEffectiveHandlers, testing } from "./tools-effective.js";
+import { toolsEffectiveHandlers, testing } from "./tools-effective.js";
 
-type ToolsEffectiveDependencies = NonNullable<Parameters<typeof createToolsEffectiveHandlers>[0]>;
+type InventoryModule = typeof import("../../agents/tools-effective-inventory.js");
+type SessionMcpRuntimeView = Pick<
+  NonNullable<
+    ReturnType<typeof import("../../agents/agent-bundle-mcp-tools.js").peekSessionMcpRuntime>
+  >,
+  "configFingerprint" | "peekCatalog" | "workspaceDir"
+>;
 type AcquiredRuntimeModelContext = Awaited<
-  ReturnType<ToolsEffectiveDependencies["acquireEffectiveToolInventoryRuntimeModelContext"]>
+  ReturnType<InventoryModule["acquireEffectiveToolInventoryRuntimeModelContext"]>
 >;
 type RuntimeModelContext = Parameters<Parameters<AcquiredRuntimeModelContext["run"]>[0]>[0];
 
@@ -44,60 +49,61 @@ const runtimeMocks = vi.hoisted(() => ({
     accountId: "acct-1",
     threadId: "thread-2",
   })),
-  applyFinalEffectiveToolPolicy: vi.fn<ToolsEffectiveDependencies["applyFinalEffectiveToolPolicy"]>(
-    (params) => params.bundledTools,
-  ),
+  applyFinalEffectiveToolPolicy: vi.fn<
+    typeof import("../../agents/embedded-agent-runner/effective-tool-policy.js").applyFinalEffectiveToolPolicy
+  >((params) => params.bundledTools),
   buildBundleMcpToolsFromCatalog: vi.fn<
-    ToolsEffectiveDependencies["buildBundleMcpToolsFromCatalog"]
+    typeof import("../../agents/agent-bundle-mcp-tools.js").buildBundleMcpToolsFromCatalog
   >(() => []),
   getActivePluginChannelRegistryVersion: vi.fn(() => 1),
   getActivePluginRegistryVersion: vi.fn(() => 1),
   getRegisteredAgentHarness: vi.fn(),
   resolveRuntimeConfigCacheKey: vi.fn(() => "runtime:1:test"),
   resolveAgentDir: vi.fn(() => "/tmp/agents/main/agent"),
-  listAgentIds: vi.fn(() => ["main"]),
   getRuntimeConfig: vi.fn(() => ({})),
-  loadSessionEntry: vi.fn<ToolsEffectiveDependencies["loadGatewaySessionEntryReadOnly"]>(() => ({
-    cfg: {},
-    agentId: "main",
-    storePath: "/tmp/sessions.json",
-    store: {},
-    canonicalKey: "main:abc",
-    entry: {
-      sessionId: "session-1",
-      updatedAt: 1,
-      lastChannel: "telegram",
-      lastAccountId: "acct-1",
-      lastThreadId: "thread-2",
-      lastTo: "channel-1",
-      groupId: "group-4",
-      groupChannel: "#ops",
-      space: "workspace-5",
-      chatType: "group",
-      modelProvider: "openai",
-      model: "gpt-4.1",
-      spawnedBy: "agent:main:telegram:group:parent-group",
-      spawnedWorkspaceDir: undefined as string | undefined,
-    },
-    storeKeys: ["main:abc"],
-    legacyKey: undefined,
-  })),
-  peekSessionMcpRuntime: vi.fn<ToolsEffectiveDependencies["peekSessionMcpRuntime"]>(
-    () => undefined,
+  loadSessionEntry: vi.fn<typeof import("../session-utils.js").loadGatewaySessionEntryReadOnly>(
+    () => ({
+      cfg: {},
+      agentId: "main",
+      storePath: "/tmp/sessions.json",
+      store: {},
+      canonicalKey: "main:abc",
+      entry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastAccountId: "acct-1",
+        lastThreadId: "thread-2",
+        lastTo: "channel-1",
+        groupId: "group-4",
+        groupChannel: "#ops",
+        space: "workspace-5",
+        chatType: "group",
+        modelProvider: "openai",
+        model: "gpt-4.1",
+        spawnedBy: "agent:main:telegram:group:parent-group",
+        spawnedWorkspaceDir: undefined as string | undefined,
+      },
+      storeKeys: ["main:abc"],
+      legacyKey: undefined,
+    }),
   ),
+  peekSessionMcpRuntime: vi.fn<() => SessionMcpRuntimeView | undefined>(() => undefined),
   resolveSessionMcpConfigSummary: vi.fn(() => ({
     fingerprint: "mcp:1:test",
     serverNames: [] as string[],
   })),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace-main"),
   resolveEffectiveToolInventory: vi.fn(),
-  resolveReplyToMode: vi.fn<ToolsEffectiveDependencies["resolveReplyToMode"]>(() => "first"),
+  resolveReplyToMode: vi.fn<
+    typeof import("../../auto-reply/reply/reply-threading.js").resolveReplyToMode
+  >(() => "first"),
   resolveSessionAgentId: vi.fn(() => "main"),
   resolveSessionModelRef: vi.fn(() => ({ provider: "openai", model: "gpt-4.1" })),
   resolveEffectiveToolInventoryRuntimeModelContext:
     resolveEffectiveToolInventoryRuntimeModelContextMock,
   acquireEffectiveToolInventoryRuntimeModelContext: vi.fn<
-    ToolsEffectiveDependencies["acquireEffectiveToolInventoryRuntimeModelContext"]
+    InventoryModule["acquireEffectiveToolInventoryRuntimeModelContext"]
   >(async (params) =>
     createAcquiredRuntimeModelContext(resolveEffectiveToolInventoryRuntimeModelContextMock(params)),
   ),
@@ -108,31 +114,61 @@ const nodePluginToolSnapshotMocks = vi.hoisted(() => ({
   getConnectedNodePluginToolsVersion: vi.fn(() => nodePluginToolSnapshotMocks.version),
 }));
 
-const toolsEffectiveDependencies: ToolsEffectiveDependencies = {
-  applyFinalEffectiveToolPolicy: runtimeMocks.applyFinalEffectiveToolPolicy,
+vi.mock("../../agents/agent-bundle-mcp-tools.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/agent-bundle-mcp-tools.js")>()),
   buildBundleMcpToolsFromCatalog: runtimeMocks.buildBundleMcpToolsFromCatalog,
-  deliveryContextFromSession: runtimeMocks.deliveryContextFromSession,
-  getActivePluginChannelRegistryVersion: runtimeMocks.getActivePluginChannelRegistryVersion,
-  getActivePluginRegistryVersion: runtimeMocks.getActivePluginRegistryVersion,
-  getConnectedNodePluginToolsVersion:
-    nodePluginToolSnapshotMocks.getConnectedNodePluginToolsVersion,
-  getRegisteredAgentHarness: runtimeMocks.getRegisteredAgentHarness,
-  listAgentIds: runtimeMocks.listAgentIds,
-  loadGatewaySessionEntryReadOnly: runtimeMocks.loadSessionEntry,
   peekSessionMcpRuntime: runtimeMocks.peekSessionMcpRuntime,
+  resolveSessionMcpConfigSummary: runtimeMocks.resolveSessionMcpConfigSummary,
+}));
+vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
   resolveAgentDir: runtimeMocks.resolveAgentDir,
   resolveAgentWorkspaceDir: runtimeMocks.resolveAgentWorkspaceDir,
+  resolveSessionAgentId: runtimeMocks.resolveSessionAgentId,
+}));
+vi.mock("../../agents/embedded-agent-runner/effective-tool-policy.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../agents/embedded-agent-runner/effective-tool-policy.js")
+  >()),
+  applyFinalEffectiveToolPolicy: runtimeMocks.applyFinalEffectiveToolPolicy,
+}));
+vi.mock("../../agents/harness/registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/harness/registry.js")>()),
+  getRegisteredAgentHarness: runtimeMocks.getRegisteredAgentHarness,
+}));
+vi.mock("../../agents/tools-effective-inventory.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/tools-effective-inventory.js")>()),
   resolveEffectiveToolInventory: runtimeMocks.resolveEffectiveToolInventory,
   acquireEffectiveToolInventoryRuntimeModelContext:
     runtimeMocks.acquireEffectiveToolInventoryRuntimeModelContext,
+}));
+vi.mock("../../auto-reply/reply/reply-threading.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../auto-reply/reply/reply-threading.js")>()),
   resolveReplyToMode: runtimeMocks.resolveReplyToMode,
+}));
+vi.mock("../../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/config.js")>()),
   resolveRuntimeConfigCacheKey: runtimeMocks.resolveRuntimeConfigCacheKey,
-  resolveSessionAgentId: runtimeMocks.resolveSessionAgentId,
-  resolveSessionMcpConfigSummary: runtimeMocks.resolveSessionMcpConfigSummary,
+}));
+vi.mock("../../plugins/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/runtime.js")>()),
+  getActivePluginChannelRegistryVersion: runtimeMocks.getActivePluginChannelRegistryVersion,
+  getActivePluginRegistryVersion: runtimeMocks.getActivePluginRegistryVersion,
+}));
+vi.mock("../../utils/delivery-context.read.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/delivery-context.read.js")>()),
+  deliveryContextFromSession: runtimeMocks.deliveryContextFromSession,
+}));
+vi.mock("../session-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils.js")>()),
+  loadGatewaySessionEntryReadOnly: runtimeMocks.loadSessionEntry,
   resolveSessionModelRef: runtimeMocks.resolveSessionModelRef,
-};
+}));
+vi.mock("../node-plugin-tool-snapshot.js", () => nodePluginToolSnapshotMocks);
 
-const toolsEffectiveHandlers = createToolsEffectiveHandlers(toolsEffectiveDependencies);
+const { applyFinalEffectiveToolPolicy } = await vi.importActual<
+  typeof import("../../agents/embedded-agent-runner/effective-tool-policy.js")
+>("../../agents/embedded-agent-runner/effective-tool-policy.js");
 
 type RespondCall = [boolean, unknown?, { code: number; message: string }?];
 type ToolsEffectivePayload = {
@@ -305,6 +341,9 @@ function expectPayloadNotice(respond: ReturnType<typeof vi.fn>, id: string) {
 describe("tools.effective handler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    for (const mock of Object.values(runtimeMocks)) {
+      mock.mockReset();
+    }
     testing.resetToolsEffectiveCacheForTest();
     testing.setToolsEffectiveNowForTest();
     nodePluginToolSnapshotMocks.version = 1;
@@ -972,7 +1011,6 @@ describe("tools.effective handler", () => {
   });
 
   it("loads global sessions with the requested agent id before matching session agent", async () => {
-    runtimeMocks.listAgentIds.mockReturnValueOnce(["main", "work"]);
     runtimeMocks.loadSessionEntry.mockImplementationOnce(
       () =>
         ({
@@ -1043,7 +1081,6 @@ describe("tools.effective handler", () => {
   });
 
   it("does not let a requested agent override ownership of a non-global session key", async () => {
-    runtimeMocks.listAgentIds.mockReturnValueOnce(["main", "work"]);
     runtimeMocks.loadSessionEntry.mockReturnValueOnce({
       cfg: {},
       canonicalKey: "agent:main:abc",

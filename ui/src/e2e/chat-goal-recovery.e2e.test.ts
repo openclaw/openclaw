@@ -95,8 +95,7 @@ suite.define(() => {
         });
         await expect.poll(() => save.count()).toBe(0);
         // Release the Goal refresh after the ACK to exercise the losing read order.
-        const lists = (await gateway.getRequests("sessions.list")).length;
-        await gateway.deferNext("sessions.list");
+        const lists = await gateway.deferNext("sessions.list");
         await gateway.emitGatewayEvent("sessions.changed", {
           sessionKey: "agent:main:main",
           agentId: "main",

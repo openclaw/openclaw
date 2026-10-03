@@ -1,5 +1,6 @@
 // Verifies OpenAI model selections route between OpenClaw and Codex runtimes.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   listOpenAIAuthProfileProvidersForAgentRuntime,
@@ -271,7 +272,7 @@ describe("OpenAI runtime routing policy", () => {
         defaults: { agentRuntime: { id: "openclaw" } },
         entries: { worker: { agentRuntime: { id: "openclaw" } } },
       },
-    } satisfies OpenClawConfig;
+    } satisfies OpenClawConfigWithLegacyRoster;
 
     expect(modelSelectionShouldEnsureCodexPlugin({ model: "openai/gpt-5.5", config })).toBe(false);
     expect(

@@ -2,7 +2,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
-  ErrorCode,
   ListToolsResultSchema,
   type CallToolResult,
   type Tool,
@@ -10,6 +9,7 @@ import {
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { logWarn } from "../logger.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { projectBundleMcpCatalogTools } from "./agent-bundle-mcp-catalog-projection.js";
@@ -49,7 +49,7 @@ import {
   hashMcpResolvedConnections,
   partitionMcpServersByConnectionScope,
 } from "./mcp-connection-resolver.js";
-import { redactMcpDiagnosticError } from "./mcp-error.js";
+import { isMcpMethodNotFoundError, redactMcpDiagnosticError } from "./mcp-error.js";
 import { createMcpJsonSchemaValidator } from "./mcp-json-schema-validator.js";
 import { buildMcpClientCapabilities, summarizeServerCapabilities } from "./mcp-metadata.js";
 import { collectMcpPaginatedItems } from "./mcp-pagination.js";
@@ -101,14 +101,6 @@ type McpServerBackoffState = {
 };
 
 export { createMcpJsonSchemaValidator as createBundleMcpJsonSchemaValidator };
-
-function isMcpMethodNotFoundError(error: unknown): boolean {
-  if (isRecord(error) && error.code === ErrorCode.MethodNotFound) {
-    return true;
-  }
-  const message = String(error);
-  return message.includes("-32601") || /\b(?:method not found|unknown method)\b/i.test(message);
-}
 
 function hasConfiguredMcpRequestTimeout(rawServer: unknown): boolean {
   const record = asOptionalObjectRecord(rawServer);
@@ -976,21 +968,23 @@ function createServerMcpRuntime(
       const result = (await runGuardedMcpRequest(session, (signal, holdForHumanInput) => {
         options?.assertCurrent?.();
         const call = () =>
-          session.client.callTool(
-            {
-              name: toolName,
-              arguments: isRecord(input) ? input : {},
-              ...(options?._meta ? { _meta: options._meta } : {}),
-            },
-            undefined,
-            {
-              // The local deadline owns active work; the SDK bounds the total
-              // call, including one shared allowance for pending human input.
-              timeout:
-                session.requestTimeoutMs +
-                (session.withElicitation ? MCP_ELICITATION_TIMEOUT_MS : 0),
-              signal,
-            },
+          withGuardedFetchRequestAuthority(options?.assertCurrent, () =>
+            session.client.callTool(
+              {
+                name: toolName,
+                arguments: isRecord(input) ? input : {},
+                ...(options?._meta ? { _meta: options._meta } : {}),
+              },
+              undefined,
+              {
+                // The local deadline owns active work; the SDK bounds the total
+                // call, including one shared allowance for pending human input.
+                timeout:
+                  session.requestTimeoutMs +
+                  (session.withElicitation ? MCP_ELICITATION_TIMEOUT_MS : 0),
+                signal,
+              },
+            ),
           );
         return session.withElicitation
           ? session.withElicitation(signal, call, holdForHumanInput)

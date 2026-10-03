@@ -16,9 +16,9 @@ import {
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolveForeignMemorySlotOwner } from "./cli-memory-slot.js";
 import {
-  buildCliMemorySearchSessionKey,
   emitMemoryCoreSidecarNotice,
   formatAuditCounts,
   formatExtraPaths,
@@ -223,7 +223,12 @@ export async function runMemorySearch(
         pluginConfig: memoryPluginConfig,
         cfg,
       });
-      const sessionKey = buildCliMemorySearchSessionKey(agentId);
+      const sessionKey = buildAgentSessionKey({
+        agentId,
+        channel: "cli",
+        peer: { kind: "direct", id: "memory-search" },
+        dmScope: "per-channel-peer",
+      });
       let readRebuildWarning: () => string | undefined = () => undefined;
       let results: Awaited<ReturnType<typeof manager.search>>;
       try {

@@ -124,7 +124,7 @@ describe("gateway lock namespaces", () => {
   });
 
   it.each(["darwin", "win32"] as const)(
-    "uses PID evidence on %s when namespace identity is absent, unreadable, or Linux-owned",
+    "uses PID evidence on %s only for local or legacy namespace identity",
     async (platform) => {
       if (platform !== process.platform) {
         vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => ({
@@ -152,15 +152,16 @@ describe("gateway lock namespaces", () => {
           ...createLockPayload({ configPath: "/unused", startTime: 123 }),
           processNamespace,
         };
+        const comparable = !processNamespace || processNamespace.platform === platform;
         await expect(resolveGatewayOwnerStatus(2_147_483_647, payload, platform)).resolves.toBe(
-          "dead",
+          comparable ? "dead" : "unknown",
         );
         await expect(
           resolveGatewayOwnerStatus(process.pid, payload, platform, undefined, () => 123),
-        ).resolves.toBe("alive");
+        ).resolves.toBe(comparable ? "alive" : "unknown");
         await expect(
           resolveGatewayOwnerStatus(process.pid, payload, platform, undefined, () => 124),
-        ).resolves.toBe("dead");
+        ).resolves.toBe(comparable ? "dead" : "unknown");
       }
     },
   );

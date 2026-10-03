@@ -315,12 +315,32 @@ export type ManagedSessionList = ObservedSessionList & {
   key: string;
   query: ReturnType<typeof normalizeManagedSessionListQuery>;
   retainedLimit: number;
+  startupRetryAttempt: number;
   /** Invalidation retires remaining pages without cancelling the correlated RPC. */
   readGeneration: number;
   coordinator: ReturnType<typeof createSessionEventRefreshCoordinator>;
   pending: Promise<void> | null;
   queued: ManagedSessionListRefresh | null;
 };
+
+export function sessionListsNeedingEventRefresh(
+  lists: Iterable<ManagedSessionList>,
+  payload: unknown,
+  matches: ReturnType<typeof sessionListEventMatcher>,
+): Set<ManagedSessionList> {
+  const invalidated = new Set<ManagedSessionList>();
+  for (const entry of lists) {
+    if (
+      matches(entry.query, entry.snapshot.result) &&
+      (entry.pending !== null ||
+        entry.snapshot.error !== null ||
+        !canApplySessionListSnapshot(entry.snapshot.result, payload, entry.scope))
+    ) {
+      invalidated.add(entry);
+    }
+  }
+  return invalidated;
+}
 
 export function isPrimarySessionListQuery(options: SessionListScope): boolean {
   if (options.includeDerivedTitles === false || options.includeLastMessage === false) {

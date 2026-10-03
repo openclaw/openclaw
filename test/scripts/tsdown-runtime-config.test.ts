@@ -253,6 +253,7 @@ describe("tsdown config", () => {
       requireStandaloneRuntimeGraph("agents/harness/native-hook-relay-client.worker"),
       requireStandaloneRuntimeGraph("process/spawn-broker/worker"),
       requireStandaloneRuntimeGraph("state/openclaw-state-lease-heartbeat.worker"),
+      requireStandaloneRuntimeGraph("infra/gateway-state-owner-heartbeat.worker"),
       requireStandaloneRuntimeGraph("process/supervisor/service-child-relay"),
       requireStandaloneRuntimeGraph("process/supervisor/service-child-group-anchor"),
       requireStandaloneRuntimeGraph("tooling/managed-memory-launcher"),

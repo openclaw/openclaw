@@ -6,23 +6,14 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export type MemoryConfig = {
-  embedding: {
-    provider: string;
-    model: string;
-    apiKey?: string;
-    baseUrl?: string;
-    dimensions?: number;
+type ProducedMemoryConfig = ReturnType<typeof memoryConfigSchema.parse>;
+type OptionalMemoryFields = "dreaming" | "dbPath" | "autoCapture" | "autoRecall";
+type OptionalEmbeddingFields = "apiKey" | "baseUrl" | "dimensions";
+export type MemoryConfig = Omit<ProducedMemoryConfig, "embedding" | OptionalMemoryFields> &
+  Partial<Pick<ProducedMemoryConfig, OptionalMemoryFields>> & {
+    embedding: Omit<ProducedMemoryConfig["embedding"], OptionalEmbeddingFields> &
+      Partial<Pick<ProducedMemoryConfig["embedding"], OptionalEmbeddingFields>>;
   };
-  dreaming?: Record<string, unknown>;
-  dbPath?: string;
-  autoCapture?: boolean;
-  autoRecall?: boolean;
-  captureMaxChars: number;
-  customTriggers?: string[];
-  recallMaxChars: number;
-  storageOptions?: Record<string, string>;
-};
 
 export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
 export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
@@ -102,7 +93,7 @@ function resolveEmbeddingDimensions(embedding: Record<string, unknown>): number 
 }
 
 export const memoryConfigSchema = {
-  parse(value: unknown): MemoryConfig {
+  parse(value: unknown) {
     if (!isRecord(value)) {
       throw new Error("memory config required");
     }

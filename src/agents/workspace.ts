@@ -47,10 +47,7 @@ import {
   setWorkspaceFileSourceIdentity,
 } from "./workspace-file-read.js";
 import { ensureGitRepo } from "./workspace-git.js";
-import {
-  LEGACY_WORKSPACE_STATE_CURRENT_FILENAME,
-  LEGACY_WORKSPACE_STATE_DIRNAME,
-} from "./workspace-legacy-state.js";
+import { LEGACY_WORKSPACE_STATE_CURRENT_FILENAME } from "./workspace-legacy-state.js";
 import { runWorkspacePreparation } from "./workspace-preparation.js";
 import { captureWorkspaceStateFilesystemGuard } from "./workspace-state-guard.js";
 import { WorkspaceVanishedError } from "./workspace-state-identity.js";
@@ -250,7 +247,7 @@ async function hasSkipBootstrapWorkspaceContentEvidence(dir: string): Promise<bo
     for (const entry of entries) {
       if (
         entry.name === ".DS_Store" ||
-        entry.name === LEGACY_WORKSPACE_STATE_DIRNAME ||
+        entry.name === ".openclaw" ||
         entry.name === LEGACY_WORKSPACE_STATE_CURRENT_FILENAME
       ) {
         continue;

@@ -101,6 +101,7 @@ it.each(["completed", "interrupted"] as const)(
       const entered = createDeferred();
       const interrupted = new AbortController();
       const human = "Reply only FOREGROUND_READY. Preserve ünicode 🦞.\nThis is the human request.";
+      const runtimeContext = "Synthetic current runtime fact for the next human turn.";
       const requests: ModelRequest[] = [];
       const requestErrors: unknown[] = [];
       const runtimeBudgets: number[] = [];
@@ -345,6 +346,7 @@ it.each(["completed", "interrupted"] as const)(
           expect.soft(loadSessionEntry(scope)?.memoryFlush).toBeUndefined();
         }
         foreground.prompt = human;
+        foreground.currentInboundContext = { text: runtimeContext };
         const current = loadSessionEntry(scope)!;
         const result = await runReplyAgent({
           commandBody: human,
@@ -381,6 +383,9 @@ it.each(["completed", "interrupted"] as const)(
         const userIndex = humanMessages.findLastIndex(isHumanMessage);
         const nextUser = text(humanMessages[userIndex]?.content);
         expect(humanMessages.filter(isModelRuntimeContextCarrier)).toHaveLength(1);
+        expect(text(humanMessages.find(isModelRuntimeContextCarrier)?.content)).toContain(
+          runtimeContext,
+        );
         expect(humanMessages.findIndex(isModelRuntimeContextCarrier)).toBeGreaterThan(userIndex);
         const canonicalHuman = SessionManager.open(scope)
           .buildSessionContext()

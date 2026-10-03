@@ -33,7 +33,11 @@ import {
   readGatewayLockProcessCmdline,
   readGatewayLockProcessStartTime,
 } from "./gateway-lock-process.js";
-import { acquireGatewayOwnerLease, type GatewayOwnerLease } from "./gateway-owner-lease.js";
+import {
+  acquireGatewayOwnerLease,
+  assertGatewayOwnerLeaseStopped,
+  type GatewayOwnerLease,
+} from "./gateway-owner-lease.js";
 import type { GatewayOwnerSupervisor } from "./gateway-owner-lease.types.js";
 import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import {
@@ -542,6 +546,12 @@ export async function acquireGatewayLock(
               projection = previousOwner.retainProjection();
             }
             await assertHistoricalGatewayOwnerStopped(paths, opts, projection);
+            owner.run(() =>
+              assertGatewayOwnerLeaseStopped(
+                env,
+                role === "sqlite-maintenance" ? owner : undefined,
+              ),
+            );
             await previousOwner?.release();
             owner.assertCurrent();
             return owner;
