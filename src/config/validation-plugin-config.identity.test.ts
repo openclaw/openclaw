@@ -13,6 +13,7 @@ const manifestRegistry: PluginManifestRegistry = {
       manifestPath: "/tmp/mixed-demo/openclaw.plugin.json",
       channels: [],
       providers: [],
+      cliBackends: [],
       skills: [],
       hooks: [],
       configSchema: {

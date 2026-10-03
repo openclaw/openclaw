@@ -9,6 +9,8 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { prepareGatewayPluginLoad } from "./server-plugin-bootstrap.js";
+import { createGatewayRequestContext } from "./server-request-context.js";
+import { makeContextParams } from "./server-request-context.test-support.js";
 
 afterEach(async () => {
   await clearActivePluginRegistry();
@@ -87,9 +89,7 @@ it("dispatches mixed-case plugin methods after enablement and a cold start", asy
             },
           },
           isWebchatConnect: () => false,
-          context: { logGateway: { warn() {} } } as Parameters<
-            typeof handleGatewayRequest
-          >[0]["context"],
+          context: createGatewayRequestContext(makeContextParams()),
           methodRegistry: createGatewayMethodRegistry(
             loaded.pluginRegistry.gatewayMethodDescriptors,
             loaded.pluginRegistry,
