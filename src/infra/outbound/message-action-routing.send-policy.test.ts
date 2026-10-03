@@ -130,13 +130,12 @@ describe("runMessageAction core send routing", () => {
       },
       agents: {
         entries: {
-          main: {
-            ...(policy.agent === undefined
+          main:
+            policy.agent === undefined
               ? {}
               : {
                   tools: { message: { crossContext: { allowAcrossProviders: policy.agent } } },
-                }),
-          },
+                },
         },
       },
     };

@@ -227,7 +227,9 @@ vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
 
 const agentScopeMocks = vi.hoisted(() => ({
   listAgentEntries: (config: OpenClawConfig) =>
-    Object.entries(config.agents?.entries ?? {}).map(([id, entry]) => ({ ...entry, id })),
+    Object.entries(config.agents?.entries ?? {}).map(([id, entry]) =>
+      Object.assign({}, entry, { id }),
+    ),
   listAgentIds: () => {
     if (preparedModelRuntimeMocks.configuredAgentIdsError) {
       throw preparedModelRuntimeMocks.configuredAgentIdsError;

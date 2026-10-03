@@ -1212,7 +1212,7 @@ it.each(agentCases)(
     const config = {
       agents: {
         defaults: { model: "openai/global-model" },
-        entries: { ops: { ...(model !== undefined ? { model } : {}) } },
+        entries: { ops: model !== undefined ? { model } : {} },
       },
     } satisfies OpenClawConfig;
     const before = structuredClone(config);

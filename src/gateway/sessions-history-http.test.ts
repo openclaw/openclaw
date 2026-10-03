@@ -1,11 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
-import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import {
   replaceSessionEntry,
@@ -26,7 +23,11 @@ import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display
 import { readSseEvent } from "./session-history-fixtures.test-support.js";
 import * as sessionHistoryState from "./session-history-state.js";
 import { SessionHistorySseState } from "./session-history-state.js";
-import { closeHistoryHarness, withGatewayHarness } from "./sessions-history-http.test-support.js";
+import {
+  closeHistoryHarness,
+  makeTranscriptAssistantMessage,
+  withGatewayHarness,
+} from "./sessions-history-http.test-support.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectReq,
@@ -77,20 +78,6 @@ async function seedSession(params?: { text?: string }) {
     expect(appended.ok).toBe(true);
   }
   return { storePath };
-}
-
-function makeTranscriptAssistantMessage(params: {
-  text: string;
-  provider?: string;
-  model?: string;
-}): AssistantMessage {
-  return makeAgentAssistantMessage({
-    content: [{ type: "text", text: params.text }],
-    provider: params.provider ?? "openai",
-    model: params.model ?? "gpt-5.5",
-    usage: createZeroUsageFixture(),
-    timestamp: Date.now(),
-  });
 }
 
 async function appendText(storePath: string, text: string, emitInlineMessage = true) {

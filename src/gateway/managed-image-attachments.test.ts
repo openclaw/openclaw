@@ -60,6 +60,7 @@ import {
   requireManagedOriginalPath,
   TINY_PNG_BASE64,
   usePreparedManagedImageState,
+  writeSource,
   type RequestResult,
 } from "./managed-image-attachments.test-support.js";
 import {
@@ -189,11 +190,6 @@ function mockSessionEntry(storePath: string, sessionId = "sess-1", sessionFile =
 
 function mediaPath(fixture: { sessionKey: string; attachmentId: string }) {
   return `/api/chat/media/outgoing/${encodeURIComponent(fixture.sessionKey)}/${fixture.attachmentId}/full`;
-}
-
-async function writeSource(sourcePath: string, body: string | Buffer) {
-  await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-  await fs.writeFile(sourcePath, body);
 }
 
 function useManagedImageState(prefix: string, bindState: (stateDir: string) => void): void {

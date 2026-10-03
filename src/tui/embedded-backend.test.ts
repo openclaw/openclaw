@@ -22,7 +22,10 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerEmbeddedHistoryProjectionTests } from "./embedded-backend.history.test-support.js";
 import type { EmbeddedTuiBackend as EmbeddedTuiBackendType } from "./embedded-backend.js";
-import { registerEmbeddedBackendStreamTests } from "./embedded-backend.stream.test-support.js";
+import {
+  captureBackendEvents,
+  registerEmbeddedBackendStreamTests,
+} from "./embedded-backend.stream.test-support.js";
 import {
   registerEmbeddedModelCatalogTests,
   withEmbeddedModelCatalogOwnerFixture,
@@ -390,14 +393,6 @@ function emitRegisteredAgentEvent(evt: unknown) {
   if (registeredListener) {
     notifyListeners([registeredListener], evt);
   }
-}
-
-function captureBackendEvents(backend: EmbeddedTuiBackendType) {
-  const events: Array<{ event: string; payload: unknown }> = [];
-  backend.onEvent = ({ event, payload }) => {
-    events.push({ event, payload });
-  };
-  return events;
 }
 
 function sendMainChat(backend: EmbeddedTuiBackendType, message: string, runId: string) {
@@ -3280,7 +3275,6 @@ describe("EmbeddedTuiBackend", () => {
     createPendingReply: () => deferred<EmbeddedAgentResult>(),
     prepareReply: (reply) => agentCommandFromIngressMock.mockReturnValueOnce(reply),
     emitAgentEvent: (event) => registeredListener?.(event),
-    captureBackendEvents,
     flushMicrotasks,
     embeddedEventTimestamp,
   });

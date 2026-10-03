@@ -35,6 +35,7 @@ import {
 import {
   createPluginIncludeFixture,
   createSnapshot,
+  includeSnapshot,
   mockIncludeRollbackRename,
   resolveIncludeTarget,
 } from "./mutate.test-support.js";
@@ -108,15 +109,6 @@ vi.mock("../infra/file-lock.js", async (importOriginal) => ({
 const allowConfigPathWrite = () => {};
 const json = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
 const enabledPlugin = { plugins: { entries: { demo: { enabled: true } } } };
-
-function includeSnapshot(configPath: string, sourceConfig: OpenClawConfig): ConfigFileSnapshot {
-  return createSnapshot({
-    hash: "include-hash",
-    path: configPath,
-    parsed: { plugins: { $include: "./config/plugins.json5" } },
-    sourceConfig,
-  });
-}
 
 function includeIO(configPath: string) {
   return createActualConfigIO({

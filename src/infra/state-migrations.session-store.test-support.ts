@@ -8,6 +8,20 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 
+export function createEnv(stateDir: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    HOME: path.dirname(stateDir),
+    OPENCLAW_STATE_DIR: stateDir,
+  };
+}
+
+export function createMigrationContext(root: string) {
+  const stateDir = path.join(root, ".openclaw");
+  const env = createEnv(stateDir);
+  return { root, stateDir, env };
+}
+
 export async function drainSessionMigrationFixture(root: string): Promise<void> {
   await closeOpenClawAgentDatabasesAsync(root);
   closeOpenClawAgentDatabasesForTest();

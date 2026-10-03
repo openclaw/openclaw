@@ -62,6 +62,14 @@ import {
 
 const mocks = getAgentTestMocks();
 
+function mockGlobalSessionAgentRoster() {
+  mocks.listAgentIds.mockReturnValue(["main", "work"]);
+  mocks.loadConfigReturn = {
+    agents: { entries: { main: {}, work: {} } },
+    session: { scope: "global" },
+  };
+}
+
 describe("gateway agent handler", () => {
   afterEach(describe0AfterEach0);
 
@@ -2183,11 +2191,7 @@ describe("gateway agent handler", () => {
   });
 
   it("infers selected-global agent id from agent-prefixed session aliases", async () => {
-    mocks.listAgentIds.mockReturnValue(["main", "work"]);
-    mocks.loadConfigReturn = {
-      agents: { entries: { main: {}, work: {} } },
-      session: { scope: "global" },
-    };
+    mockGlobalSessionAgentRoster();
     mocks.loadSessionEntry.mockReturnValue({
       cfg: mocks.loadConfigReturn,
       storePath: "/tmp/sessions.json",
@@ -2230,11 +2234,7 @@ describe("gateway agent handler", () => {
   });
 
   it("registers tool event recipients for active selected-global alias runs", async () => {
-    mocks.listAgentIds.mockReturnValue(["main", "work"]);
-    mocks.loadConfigReturn = {
-      agents: { entries: { main: {}, work: {} } },
-      session: { scope: "global" },
-    };
+    mockGlobalSessionAgentRoster();
     mocks.loadSessionEntry.mockReturnValue({
       cfg: mocks.loadConfigReturn,
       storePath: "/tmp/sessions.json",
@@ -2287,11 +2287,7 @@ describe("gateway agent handler", () => {
   registerCompactionSessionSettlementCase();
 
   it("honors selected-global agent id when the request uses the main alias", async () => {
-    mocks.listAgentIds.mockReturnValue(["main", "work"]);
-    mocks.loadConfigReturn = {
-      agents: { entries: { main: {}, work: {} } },
-      session: { scope: "global" },
-    };
+    mockGlobalSessionAgentRoster();
     mocks.loadSessionEntry.mockReturnValue({
       cfg: mocks.loadConfigReturn,
       storePath: "/tmp/sessions.json",
@@ -2336,11 +2332,7 @@ describe("gateway agent handler", () => {
 
   it("preserves accepted session and runtime metadata on cached responses", async () => {
     const context = makeContext();
-    mocks.listAgentIds.mockReturnValue(["main", "work"]);
-    mocks.loadConfigReturn = {
-      agents: { entries: { main: {}, work: {} } },
-      session: { scope: "global" },
-    };
+    mockGlobalSessionAgentRoster();
     mocks.agentCommand.mockClear();
     context.dedupe.set("agent:cached-global-work", {
       ts: Date.now(),

@@ -48,7 +48,7 @@ describe("resolveModelDirectiveSelection", () => {
         cfg: {
           agents: {
             defaults: { modelPolicy: { allow } },
-            entries: { ops: { ...(agentAllow ? { modelPolicy: { allow: agentAllow } } : {}) } },
+            entries: { ops: agentAllow ? { modelPolicy: { allow: agentAllow } } : {} },
           },
         },
         raw,

@@ -11,7 +11,7 @@ import {
 import { readMemoryHostEventRecords } from "openclaw/plugin-sdk/memory-host-events";
 import { openOpenClawStateDatabase } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 import { createDoctorContext, resetDoctorPluginState } from "./doctor-contract-api.test-support.js";
 import { bm25RankToScore, buildFtsQuery } from "./src/memory/keyword-query.js";

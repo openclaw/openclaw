@@ -8,7 +8,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCallConfig } from "./config.js";
 import { registerFastContextMemoryProvider } from "./runtime.fast-context.test-support.js";
-import { createVoiceCallBaseConfig } from "./test-fixtures.js";
+import { createExternalProviderConfig, createVoiceCallBaseConfig } from "./test-fixtures.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 
 const mocks = vi.hoisted(() => ({
@@ -141,33 +141,6 @@ import { createVoiceCallRuntime } from "./runtime.js";
 
 function createBaseConfig(): VoiceCallConfig {
   return createVoiceCallBaseConfig({ tunnelProvider: "ngrok" });
-}
-
-function createExternalProviderConfig(params: {
-  provider: "twilio" | "telnyx" | "plivo";
-  publicUrl?: string;
-}): VoiceCallConfig {
-  const config = createVoiceCallBaseConfig({
-    provider: params.provider,
-    tunnelProvider: "none",
-  });
-  config.twilio = {
-    accountSid: "AC123",
-    authToken: "secret",
-  };
-  config.telnyx = {
-    apiKey: "key",
-    connectionId: "conn",
-    publicKey: "pub",
-  };
-  config.plivo = {
-    authId: "MA123",
-    authToken: "secret",
-  };
-  if (params.publicUrl) {
-    config.publicUrl = params.publicUrl;
-  }
-  return config;
 }
 
 type MockSessionEntry = {

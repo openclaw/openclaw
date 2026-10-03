@@ -223,7 +223,7 @@ describe("config defaults", () => {
         helper: { model: "google/gemini-3.1-pro-preview" },
       });
       expect(Object.keys(next.agents ?? {})).not.toContain("list");
-      expect(JSON.parse(JSON.stringify(next))).not.toHaveProperty("agents.list");
+      expect(structuredClone(next)).not.toHaveProperty("agents.list");
     },
   );
 });
@@ -272,7 +272,6 @@ describe("applyModelDefaults catalog seeding", () => {
   ])(
     "seeds $providerId models (normalizer supplies rows: $generatedRows)",
     async ({ providerId, generatedRows }) => {
-      const { applyModelDefaults } = await import("./defaults.js");
       const { normalizeProviderConfigForConfigDefaults } = await import("./provider-policy.js");
       // SAFETY: config schema accepts omitted model metadata before materialization.
       const models = [
@@ -315,8 +314,7 @@ describe("applyModelDefaults catalog seeding", () => {
     },
   );
 
-  it("keeps authored metadata authoritative over the catalog row", async () => {
-    const { applyModelDefaults } = await import("./defaults.js");
+  it("keeps authored metadata authoritative over the catalog row", () => {
     const cfg = applyModelDefaults(
       {
         models: {
@@ -349,8 +347,7 @@ describe("applyModelDefaults catalog seeding", () => {
     expect(model.maxTokens).toBe(4_096);
   });
 
-  it("keeps catalog-seeded compatibility out of authored route overrides", async () => {
-    const { applyModelDefaults } = await import("./defaults.js");
+  it("keeps catalog-seeded compatibility out of authored route overrides", () => {
     const sourceConfig: OpenClawConfig = {
       models: {
         providers: {
@@ -446,8 +443,7 @@ describe("applyModelDefaults catalog seeding", () => {
       expectedCost: { ...authoredFlatCost, tieredPricing: [] },
       expectedUsd: 0.00327,
     },
-  ])("$name", async ({ authoredCost, expectedCost, expectedUsd }) => {
-    const { applyModelDefaults } = await import("./defaults.js");
+  ])("$name", ({ authoredCost, expectedCost, expectedUsd }) => {
     const tieredRegistry = {
       plugins: [
         {
@@ -491,7 +487,7 @@ describe("applyModelDefaults catalog seeding", () => {
     ).toBeCloseTo(expectedUsd, 10);
   });
 
-  it("copies frozen catalog metadata before downstream normalization", async () => {
+  it("copies frozen catalog metadata before downstream normalization", () => {
     const supportedReasoningEfforts = Object.freeze(["low", "high"]);
     const compat = Object.freeze({ supportedReasoningEfforts });
     const frozenRegistry = {
@@ -518,7 +514,6 @@ describe("applyModelDefaults catalog seeding", () => {
       ],
       // SAFETY: minimal frozen manifest record reproducing production registry ownership.
     } as never;
-    const { applyModelDefaults } = await import("./defaults.js");
     const cfg = applyModelDefaults(
       {
         models: {
@@ -543,8 +538,7 @@ describe("applyModelDefaults catalog seeding", () => {
     expect(compat.supportedReasoningEfforts).toEqual(["low", "high"]);
   });
 
-  it("falls back to generic defaults when no catalog row matches", async () => {
-    const { applyModelDefaults } = await import("./defaults.js");
+  it("falls back to generic defaults when no catalog row matches", () => {
     const cfg = applyModelDefaults(
       {
         models: {

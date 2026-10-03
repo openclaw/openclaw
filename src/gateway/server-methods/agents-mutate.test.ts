@@ -542,8 +542,8 @@ type MockConfig = {
 };
 
 function getAgentList(cfg: unknown): MockAgentEntry[] {
-  return Object.entries((cfg as MockConfig | undefined)?.agents?.entries ?? {}).map(
-    ([id, entry]) => ({ ...entry, id }),
+  return Object.entries((cfg as MockConfig | undefined)?.agents?.entries ?? {}).map(([id, entry]) =>
+    Object.assign({}, entry, { id }),
   );
 }
 

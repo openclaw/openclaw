@@ -903,22 +903,14 @@ describe("runSetupWizard", () => {
     async (accepted) => {
       const currentWorkspace = await makeCaseDir("fleet-current-");
       const requestedWorkspace = await makeCaseDir("fleet-requested-");
-      const config: OpenClawConfig = accepted
-        ? {
-            wizard: { securityAcknowledgedAt: "2026-06-30T00:00:00.000Z" },
-            agents: {
-              ownership: "explicit",
-              defaults: { workspace: currentWorkspace, systemAgent: { agentId: "main" } },
-              entries: { main: {}, ops: {} },
-            },
-          }
-        : {
-            agents: {
-              ownership: "explicit",
-              defaults: { workspace: currentWorkspace, systemAgent: { agentId: "main" } },
-              entries: { main: {}, ops: {} },
-            },
-          };
+      const config: OpenClawConfig = {
+        ...(accepted ? { wizard: { securityAcknowledgedAt: "2026-06-30T00:00:00.000Z" } } : {}),
+        agents: {
+          ownership: "explicit",
+          defaults: { workspace: currentWorkspace, systemAgent: { agentId: "main" } },
+          entries: { main: {}, ops: {} },
+        },
+      };
       if (accepted) {
         readConfigFileSnapshot.mockResolvedValueOnce(configSnapshot(config));
       } else {

@@ -87,6 +87,7 @@ import {
 import {
   detectManagedWorktreeStateMigration,
   prepareDoctorAgentDatabaseDiscovery,
+  resolveConcreteBindingAccountId,
 } from "./state-migrations.doctor-discovery.js";
 import {
   detectLegacyExecApprovals,
@@ -228,11 +229,6 @@ import {
 } from "./update-rehearsal-paths.js";
 
 const autoMigrateChecked = new Set<string>();
-
-function resolveConcreteBindingAccountId(value: unknown): string | undefined {
-  const accountId = normalizeOptionalString(value);
-  return accountId && accountId !== "*" ? accountId : undefined;
-}
 
 export async function detectLegacyStateMigrations(params: {
   cfg: OpenClawConfigWithLegacyRoster;

@@ -9,7 +9,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaProviderMode } from "../../extensions/qa-lab/src/run-config.ts";
 import type { QaSuiteRoundTripProbe } from "../../extensions/qa-lab/src/suite-round-trip.ts";
 import { normalizeCsvOrLooseStringList } from "../../packages/normalization-core/src/string-normalization.ts";
-import type { OpenClawConfigWithLegacyRoster } from "../../src/config/legacy.roster.ts";
 import { isStrictAffirmativeValue } from "../lib/arg-utils.mts";
 import { compareReleaseVersions } from "../lib/release-version.mjs";
 
@@ -54,7 +53,15 @@ const EXTENDED_STABLE_2026_7_34 = "2026.7.34";
 const EXTENDED_STABLE_2026_7_35 = "2026.7.35";
 const LEGACY_CONFIG_CUTOFF = "2026.7.2-beta.4";
 
-function projectFrozenExtendedStableQaConfig(cfg: OpenClawConfig): OpenClawConfigWithLegacyRoster {
+type HistoricalPackageConfig = OpenClawConfig & {
+  agents?: {
+    list?: Array<
+      NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string] & { id: string }
+    >;
+  };
+};
+
+function projectFrozenExtendedStableQaConfig(cfg: OpenClawConfig): HistoricalPackageConfig {
   const { entries, ...agents } = cfg.agents ?? {};
   const { mediaModels, modelPolicy: _modelPolicy, ...defaults } = agents.defaults ?? {};
   const memory: NonNullable<OpenClawConfig["memory"]> & { backend: "builtin" } = {
@@ -82,7 +89,7 @@ function projectFrozenExtendedStableQaConfig(cfg: OpenClawConfig): OpenClawConfi
   };
 }
 
-function projectLegacyPackageQaConfig(cfg: OpenClawConfig): OpenClawConfigWithLegacyRoster {
+function projectLegacyPackageQaConfig(cfg: OpenClawConfig): HistoricalPackageConfig {
   const { entries, ...agents } = cfg.agents ?? {};
   const { modelPolicy: _modelPolicy, ...legacyDefaults } = agents.defaults ?? {};
   const memory:

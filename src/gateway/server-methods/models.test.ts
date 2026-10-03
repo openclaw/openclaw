@@ -2165,9 +2165,7 @@ describe("models.list", () => {
             models: { "openai/gpt-5.6-luna": { params: { fastMode: modelDefault } } },
           },
           entries: {
-            main: {
-              ...(agentDefault === undefined ? {} : { fastModeDefault: agentDefault }),
-            },
+            main: agentDefault === undefined ? {} : { fastModeDefault: agentDefault },
           },
         },
       },

@@ -31,17 +31,15 @@ function createExecHostDefaultsConfig(
       entries: Object.fromEntries(
         agents.map((agent) => [
           agent.id,
-          {
-            ...(agent.execHost
-              ? {
-                  tools: {
-                    exec: {
-                      host: agent.execHost,
-                    },
+          agent.execHost
+            ? {
+                tools: {
+                  exec: {
+                    host: agent.execHost,
                   },
-                }
-              : {}),
-          },
+                },
+              }
+            : {},
         ]),
       ),
     },

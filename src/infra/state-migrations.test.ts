@@ -72,7 +72,9 @@ import {
 } from "./state-migrations.runtime-state.js";
 import {
   createConfig,
+  createEnv,
   createLegacyAcpSessionEntry,
+  createMigrationContext,
   drainSessionMigrationFixture,
 } from "./state-migrations.session-store.test-support.js";
 import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
@@ -417,20 +419,6 @@ function insertCurrentConversationBindingRow(
       updated_at: 1,
     }),
   );
-}
-
-function createEnv(stateDir: string): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    HOME: path.dirname(stateDir),
-    OPENCLAW_STATE_DIR: stateDir,
-  };
-}
-
-function createMigrationContext(root: string) {
-  const stateDir = path.join(root, ".openclaw");
-  const env = createEnv(stateDir);
-  return { root, stateDir, env };
 }
 
 function seedSchemaOnlyLegacyAgentDatabase(
