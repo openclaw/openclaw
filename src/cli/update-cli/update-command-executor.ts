@@ -140,6 +140,7 @@ export async function withUpdateCommandExecutor<T>(
           if (!store || !lease || !databasePath) {
             throw new UpdateCommandRecoveryPendingError("Child executor admission is closed.");
           }
+          const authority = admittedAuthorities.get(fence)?.authority;
           const spawner = legacyChild ?? lease;
           if (spawner.version === 1) {
             throw new UpdateCommandRecoveryPendingError("Borrowed parent has no child lifetime.");
@@ -160,7 +161,13 @@ export async function withUpdateCommandExecutor<T>(
               : {}),
             ...(serviceLease ? { retainedParent: serviceLease } : {}),
             databasePath,
-            databaseIdentity: admittedAuthorities.get(fence)?.authority,
+            databaseIdentity: authority
+              ? {
+                  databasePath: authority.databasePath,
+                  databaseIdentity: authority.databaseIdentity,
+                  parentIdentity: authority.parentIdentity,
+                }
+              : undefined,
           };
         },
       });
