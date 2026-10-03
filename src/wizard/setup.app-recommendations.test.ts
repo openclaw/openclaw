@@ -20,7 +20,6 @@ import type {
   SetupAppScanPhase,
 } from "../system-agent/setup-app-recommendations.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import type { WizardPrompter } from "./prompts.js";
 import { setupAppRecommendations as runAppRecommendations } from "./setup.app-recommendations.js";
 
@@ -91,16 +90,21 @@ async function setupAppRecommendationsWithOutcome(params: SetupFixture) {
       };
     },
   );
-  return await withMockedPlatform(platform, () =>
-    runAppRecommendations({
-      config: {},
-      prompter: createPrompter(),
-      runtime,
-      modelRouteVerified: true,
-      ...request,
-      workspaceDir,
-    }),
-  );
+  const runParams = {
+    config: {},
+    prompter: createPrompter(),
+    runtime,
+    modelRouteVerified: true,
+    ...request,
+    workspaceDir,
+  };
+  // Override only the wizard gate; SQLite workers must keep the real OS identity.
+  const platformMock = vi.spyOn(process, "platform", "get").mockReturnValueOnce(platform);
+  try {
+    return runAppRecommendations(runParams);
+  } finally {
+    platformMock.mockRestore();
+  }
 }
 
 async function setupAppRecommendations(params: SetupFixture): Promise<OpenClawConfig> {
