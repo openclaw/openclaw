@@ -12,6 +12,7 @@ export const gatewayPluginTestFiles = [
 // Native database consumers retain lifecycle cleanup within each forked process.
 export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/approval-fixture.test.ts",
+  "src/gateway/auth-token-store-ref.test.ts",
   "src/gateway/board-http.test.ts",
   "src/gateway/board-store.test.ts",
   "src/gateway/chat-display-projection.cron.test.ts",
@@ -165,6 +166,8 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server-methods/sessions-read-visibility.test.ts",
   "src/gateway/server-methods/sessions-read.test.ts",
   "src/gateway/server-methods/sessions-sharing.test.ts",
+  "src/gateway/server-methods/skills-library.test.ts",
+  "src/gateway/server-methods/skills.remote.test.ts",
   "src/gateway/server-methods/worktrees.authorization.test.ts",
   "src/gateway/server-methods/worktrees.test.ts",
   "src/gateway/server-startup-restart-sentinel.test.ts",
@@ -243,6 +246,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/sessions-history-http.physical-source.test.ts",
   "src/gateway/sessions-resolve-store.test.ts",
   "src/gateway/setup-inference.first-signin.integration.test.ts",
+  "src/gateway/skill-library-authoring.test.ts",
   "src/gateway/startup-local-cli-pairing.test.ts",
   "src/gateway/talk/client-authority.test.ts",
   "src/gateway/talk/client-spoken-confirmation.test.ts",

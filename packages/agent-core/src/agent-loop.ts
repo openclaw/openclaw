@@ -7,6 +7,7 @@ import {
   type ToolPlanState,
 } from "./agent-loop-steering.js";
 import {
+  emitToolResultMessage,
   streamAgentResponse,
   type AgentEventSink,
   type AsyncToolBatchScheduling,
@@ -40,12 +41,7 @@ import {
   createFailureMessage,
   isTurnHandoffAbort,
 } from "./turn-interruption.js";
-import {
-  isActiveTurnTainted,
-  toolResultTaintsTurn,
-  withAssistantTurnTaint,
-  withToolResultContentSource,
-} from "./turn-taint.js";
+import { isActiveTurnTainted, toolResultTaintsTurn, withAssistantTurnTaint } from "./turn-taint.js";
 import type {
   ToolResultContentSource,
   AgentContext,
@@ -1464,30 +1460,6 @@ async function emitToolExecutionEnd(
     ...(finalized.errorKind ? { errorKind: finalized.errorKind } : {}),
     ...(finalized.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
   });
-}
-
-async function emitToolResultMessage(
-  finalized: FinalizedToolCallOutcome,
-  emit: AgentEventSink,
-): Promise<ToolResultMessage> {
-  const message = copyInternalToolResultState(
-    finalized.result,
-    withToolResultContentSource(
-      {
-        role: "toolResult",
-        toolCallId: finalized.toolCall.id,
-        toolName: finalized.toolCall.name,
-        content: finalized.result.content ?? [],
-        details: finalized.result.details,
-        isError: finalized.isError,
-        timestamp: Date.now(),
-      },
-      finalized.resultContentSource,
-    ),
-  );
-  await emit({ type: "message_start", message });
-  await emit({ type: "message_end", message });
-  return message;
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

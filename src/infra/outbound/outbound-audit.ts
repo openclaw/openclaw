@@ -65,16 +65,6 @@ function outcomesByPayload(
   return indexed;
 }
 
-function sentResults(
-  history: readonly OutboundPayloadDeliveryOutcome[],
-): readonly OutboundDeliveryResult[] {
-  const sent = history.findLast(
-    (outcome): outcome is Extract<OutboundPayloadDeliveryOutcome, { status: "sent" }> =>
-      outcome.status === "sent",
-  );
-  return sent?.results ?? [];
-}
-
 function projectRecordedOutboundAuditTerminal(
   history: readonly OutboundPayloadDeliveryOutcome[],
 ): OutboundAuditTerminal | undefined {
@@ -96,10 +86,7 @@ function projectRecordedOutboundAuditTerminal(
       ...(latest.deliveryKind ? { deliveryKind: latest.deliveryKind } : {}),
     };
   }
-  if (latest?.status === "suppressed") {
-    if (latest.reason === "adapter_returned_no_identity") {
-      return { outcome: "unknown", failureStage: "platform_send" };
-    }
+  if (latest?.status === "suppressed" && latest.reason !== "adapter_returned_no_identity") {
     return {
       outcome: "suppressed",
       reasonCode:
@@ -148,7 +135,10 @@ export function failedOutboundAuditTerminals(params: {
     }
     const latest = history.at(-1);
     const failedResults = latest?.status === "failed" ? (latest.results ?? []) : [];
-    const payloadResults = failedResults.length > 0 ? failedResults : sentResults(history);
+    const payloadResults =
+      failedResults.length > 0
+        ? failedResults
+        : (history.findLast((outcome) => outcome.status === "sent")?.results ?? []);
     const fallbackResults = params.payloadCount === 1 ? params.results : [];
     const results = payloadResults.length > 0 ? payloadResults : fallbackResults;
     return {
@@ -409,7 +399,7 @@ export function emitOutboundAuditLifecycle(params: {
       if (!Number.isSafeInteger(payloadIndex) || payloadIndex < 0 || payloadIndex >= payloadCount) {
         continue;
       }
-      const common = {
+      emitTrustedMessageAuditEvent({
         sourceId: outboundQueueAuditSourceId(params.queueId, payloadIndex, params.outcome),
         occurredAt: Date.now(),
         status: "started" as const,
@@ -419,22 +409,14 @@ export function emitOutboundAuditLifecycle(params: {
           : {}),
         durationMs: Math.max(0, Date.now() - params.startedAt),
         resultCount: 0,
-      };
-      if (params.outcome === "queued") {
-        emitTrustedMessageAuditEvent({
-          ...common,
-          kind: "message",
-          action: "message.outbound.queued",
-          outcome: "queued",
-        });
-      } else {
-        emitTrustedMessageAuditEvent({
-          ...common,
-          kind: "message",
-          action: "message.outbound.platform-started",
-          outcome: "platform_started",
-        });
-      }
+        kind: "message",
+        ...(params.outcome === "queued"
+          ? { action: "message.outbound.queued" as const, outcome: "queued" as const }
+          : {
+              action: "message.outbound.platform-started" as const,
+              outcome: "platform_started" as const,
+            }),
+      });
     }
   } catch {
     // Audit observers cannot alter delivery or queue semantics.

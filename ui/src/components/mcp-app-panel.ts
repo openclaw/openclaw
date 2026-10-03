@@ -295,6 +295,8 @@ export class McpAppPanel extends OpenClawLightDomElement {
                   .viewId=${this.viewId}
                   .title=${launch.entrypoint.title}
                   .deepLink=${launch.deepLink}
+                  .onRelaunch=${() => void this.open()}
+                  .relaunching=${this.busy}
                 ></mcp-app-view>`,
               )
             : nothing,

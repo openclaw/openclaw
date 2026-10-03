@@ -547,9 +547,8 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       const hostDocument = async () =>
         (document ??= await createCanvasDocument(
           {
-            kind: "html_bundle",
             title,
-            entrypoint: { type: "html", value: wrappedDocument },
+            html: wrappedDocument,
             surface: "assistant_message",
             retentionScope: resolveRetentionScope(options),
             // Direct navigation must not run widget script as the Control UI origin.

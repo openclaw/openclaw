@@ -128,6 +128,7 @@ function parseArgs(argv) {
     scenario: null,
     sourceGateway: false,
     gatewayReadyTimeoutMs: undefined,
+    recorderReadyTimeoutMs: undefined,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -168,6 +169,12 @@ function parseArgs(argv) {
         throw new Error("--gateway-ready-timeout-ms takes a positive integer.");
       }
       args.gatewayReadyTimeoutMs = value;
+    } else if (arg === "--recorder-ready-timeout-ms") {
+      const value = Number(argv[++i]);
+      if (!Number.isInteger(value) || value <= 0) {
+        throw new Error("--recorder-ready-timeout-ms takes a positive integer.");
+      }
+      args.recorderReadyTimeoutMs = value;
     } else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
@@ -233,6 +240,9 @@ Runtime:
                        plugins use built output when present (rebuild to refresh)
   --gateway-ready-timeout-ms N
                        Gateway startup budget (default 45000 built, 900000 source);
+                       raise it on a heavily loaded host
+  --recorder-ready-timeout-ms N
+                       Recorder readiness budget (default 30000);
                        raise it on a heavily loaded host
 
 Chat selection:
@@ -1328,7 +1338,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
     currentTelegramRun().preserveEvidence(persistRecorderLogs);
     let recorderReady;
     if (args.scenario) {
-      const readiness = waitForRecorderReady(recorderReadyPath, probe);
+      const readiness = waitForRecorderReady(recorderReadyPath, probe, args.recorderReadyTimeoutMs);
       try {
         recorderReady = await readiness;
         leaseHealth.assertHealthy();

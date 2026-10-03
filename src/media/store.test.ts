@@ -433,14 +433,26 @@ describe("media store", () => {
   });
 
   it("retries local-source writes when cleanup prunes the target directory", async () => {
-    await expectRetryAfterPrunedWriteCase({
-      segment: "race-source",
-      run: async (storeLocal2, homeEntry) => {
-        const srcFile = path.join(homeEntry, "tmp-src-race.txt");
-        await fs.writeFile(srcFile, "local file");
-        return await storeLocal2.saveMediaSource(srcFile, undefined, "race-source");
-      },
+    const srcFile = path.join(home, "tmp-src-race.txt");
+    const targetDir = path.join(await store.ensureMediaDir(), "race-source");
+    await fs.writeFile(srcFile, "local file");
+    const open = fs.open;
+    let injectedEnoent = false;
+    vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+      if (
+        !injectedEnoent &&
+        typeof filePath === "string" &&
+        filePath.startsWith(`${targetDir}${path.sep}`)
+      ) {
+        injectedEnoent = true;
+        await fs.rm(targetDir, { recursive: true, force: true });
+        throw Object.assign(new Error("missing dir"), { code: "ENOENT" });
+      }
+      return open(filePath, flags, mode);
     });
+    const saved = await store.saveMediaSource(srcFile, undefined, "race-source");
+    expect(injectedEnoent).toBe(true);
+    await expect(fs.readFile(saved.path, "utf8")).resolves.toBe("local file");
   });
 
   it("rejects directory sources with typed error code", async () => {

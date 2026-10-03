@@ -66,9 +66,9 @@ vi.mock("./registry.js", () => ({
   removeSandboxRegistryGeneration: (
     _kind: string,
     entry: SandboxRegistryEntry,
-    assertCurrent: () => void,
+    assertCurrent?: () => void,
   ) => {
-    assertCurrent();
+    assertCurrent?.();
     return registryMocks.removeBrowserRegistryEntry(entry.containerName);
   },
   removeSandboxRegistryRuntime: async (

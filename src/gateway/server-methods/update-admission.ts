@@ -18,16 +18,18 @@ import {
   createFreeBsdPkgOwnershipInspection,
   FreeBsdPkgOwnershipError,
 } from "../../infra/update-freebsd-pkg-ownership.js";
+import { inspectImmutableInstall } from "../../infra/update-immutable-install.js";
 import { resolveStartupInstallStatus } from "../../infra/update-install-status.js";
 import type { UpdateRequester } from "../../infra/update-requester-authority.js";
 import {
   recordUpdateRunDiagnostics,
   recordUpdateRunPhase,
   recordUpdateRunStep,
+  finishUpdateRun,
 } from "../../infra/update-run-ledger.js";
 import { summarizeUpdateStepFailure, type UpdateRunRecord } from "../../infra/update-run-record.js";
 import { resolveUpdateInstallSurface } from "../../infra/update-runner-install-surface.js";
-import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateInstallSurface, UpdateRunResult } from "../../infra/update-runner-types.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -40,19 +42,29 @@ export async function admitGatewayUpdateRequest(request: GatewayRequestHandlerOp
     return null;
   }
   const authority = readGatewayRequestMutationAuthority(request);
-  const installOwner = await readInstallOwner(
-    await resolveOpenClawPackageRoot({
-      moduleUrl: import.meta.url,
-      argv1: process.argv[1],
-      cwd: tryProcessCwd(),
-    }),
-  );
+  const root = await resolveOpenClawPackageRoot({
+    moduleUrl: import.meta.url,
+    argv1: process.argv[1],
+    cwd: tryProcessCwd(),
+  });
+  const installOwner = await readInstallOwner(root);
   if (installOwner) {
     respond(
       false,
       undefined,
       errorShape(ErrorCodes.UNAVAILABLE, formatInstallOwnerMessage(installOwner), {
         details: { reason: "host-owned-install", installOwner },
+        retryable: false,
+      }),
+    );
+    return null;
+  }
+  if (root && (await inspectImmutableInstall(root))) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, IMMUTABLE_PREPARATION_GUIDANCE, {
+        details: { reason: "immutable-activation-unavailable" },
         retryable: false,
       }),
     );
@@ -95,6 +107,35 @@ export async function admitGatewayUpdateRequest(request: GatewayRequestHandlerOp
     message: "OCM owns this update. Use the Update status view to follow its progress and result.",
   });
   return null;
+}
+
+const IMMUTABLE_PREPARATION_GUIDANCE =
+  "Immutable activation is not available yet. Run openclaw update as the installation owner to prepare a sealed generation while the current Gateway keeps serving.";
+
+export function reportImmutableGatewayUpdateRefusal(
+  runId: string,
+  installSurface: Extract<UpdateInstallSurface, { kind: "immutable" }>,
+  respond: GatewayRequestHandlerOptions["respond"],
+): void {
+  const reason = "immutable-activation-unavailable";
+  recordUpdateRunPhase(runId, "requested", {
+    origin: { nextAction: IMMUTABLE_PREPARATION_GUIDANCE },
+  });
+  finishUpdateRun(runId, { status: "skipped", reason });
+  respond(true, {
+    runId,
+    ok: false,
+    message: IMMUTABLE_PREPARATION_GUIDANCE,
+    result: {
+      status: "skipped",
+      mode: installSurface.mode,
+      root: installSurface.root,
+      reason,
+      steps: [],
+      durationMs: 0,
+    },
+    restart: null,
+  });
 }
 
 export function retainUpdateRequesterAuthority(

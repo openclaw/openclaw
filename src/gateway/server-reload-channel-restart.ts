@@ -19,7 +19,6 @@ export async function restartGatewayChannels(options: {
   restartChannelAccounts: ReadonlyMap<ChannelKind, Set<string>>;
   activePluginChannelsAfterReload: ReadonlySet<ChannelKind> | null;
   shouldSkipChannelRestart: boolean;
-  skipChannelRestartLogMessage: string;
   isLifecycleReloadAborted: () => boolean;
   getChannelAutostartSuppression: () => unknown;
   channelReloadTargets: () => Set<ChannelKind>;
@@ -32,7 +31,6 @@ export async function restartGatewayChannels(options: {
     restartChannelAccounts,
     activePluginChannelsAfterReload,
     shouldSkipChannelRestart,
-    skipChannelRestartLogMessage,
     isLifecycleReloadAborted,
     getChannelAutostartSuppression,
     channelReloadTargets,
@@ -85,7 +83,9 @@ export async function restartGatewayChannels(options: {
     return;
   }
   if (shouldSkipChannelRestart) {
-    params.logChannels.info(skipChannelRestartLogMessage);
+    params.logChannels.info(
+      "skipping channel reload (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
+    );
     return;
   }
   const accountTargets = await collectChannelAccountTargets();

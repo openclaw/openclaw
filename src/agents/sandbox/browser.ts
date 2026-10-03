@@ -414,10 +414,7 @@ async function ensureSandboxBrowserContainer(
     // Reserve the mount before allocation; a bridge/port failure must not hide
     // an already-running writer from reconciliation or lifecycle cleanup.
     params.assertCurrent?.();
-    await updateBrowserRegistry({
-      ...registryEntry,
-      cdpPort: 0,
-    });
+    await updateBrowserRegistry({ ...registryEntry, cdpPort: 0 }, params.assertCurrent);
     params.assertCurrent?.();
   }
 
@@ -554,8 +551,8 @@ async function ensureSandboxBrowserContainer(
           authToken: cdpAuthToken,
           timeoutMs: params.cfg.browser.autoStartTimeoutMs,
         });
+        params.assertCurrent?.();
         if (!ok) {
-          params.assertCurrent?.();
           await execDocker(["rm", "-f", containerName], { allowFailure: true });
           throw new Error(
             `Sandbox browser CDP did not become reachable on 127.0.0.1:${mappedCdp} within ${params.cfg.browser.autoStartTimeoutMs}ms. The hung container has been forcefully removed.`,
@@ -592,11 +589,14 @@ async function ensureSandboxBrowserContainer(
     }
 
     params.assertCurrent?.();
-    await updateBrowserRegistry({
-      ...registryEntry,
-      cdpPort: mappedCdp,
-      noVncPort: mappedNoVnc ?? undefined,
-    });
+    await updateBrowserRegistry(
+      {
+        ...registryEntry,
+        cdpPort: mappedCdp,
+        noVncPort: mappedNoVnc ?? undefined,
+      },
+      params.assertCurrent,
+    );
     params.assertCurrent?.();
 
     const noVncUrl =

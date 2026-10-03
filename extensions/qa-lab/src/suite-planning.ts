@@ -331,6 +331,7 @@ function scenarioRequiresIsolatedQaSuiteWorker(scenario: QaSeedScenario) {
   return (
     scenario.execution.suiteIsolation === "isolated" ||
     scenario.execution.runtime !== undefined ||
+    scenario.execution.liveConfiguredRuntime !== undefined ||
     // Transport policy is fixed when the gateway starts; sharing it would leak routing rules.
     scenario.execution.transportPolicy !== undefined ||
     scenario.execution.config?.agentE2e === true ||

@@ -631,7 +631,7 @@ describe("shared repository receipt observation", () => {
       async () => await coordinator.sharedStatus(session, row.request_id),
     ).rejects.toThrow(/corrupt/);
   });
-  it("searches repository history in bounded pages before selecting the current lifecycle", async () => {
+  it("searches past retired repository history to select the current lifecycle", async () => {
     const workspace = await sharedRepositoryWorkspace();
     const coordinator = sharedPublicationCoordinator();
     insertRepositoryGitHubPublication(

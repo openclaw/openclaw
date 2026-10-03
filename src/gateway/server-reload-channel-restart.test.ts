@@ -40,7 +40,6 @@ async function reloadChannels(
     restartChannelAccounts: new Map(),
     activePluginChannelsAfterReload: null,
     shouldSkipChannelRestart: false,
-    skipChannelRestartLogMessage: "",
     isLifecycleReloadAborted: () => false,
     getChannelAutostartSuppression: () => null,
     channelReloadTargets: () => channels,
@@ -160,8 +159,8 @@ it("the config watcher restarts a channel that can save provider settings after 
       log,
     });
     try {
-      await withTestTimeout(watcherReady.promise, 10_000, "config watcher did not start");
       await reloader.ready;
+      await withTestTimeout(watcherReady.promise, 10_000, "config watcher did not start");
       await state.writeConfig({ ...initialConfig, commands: { ownerAllowFrom: ["telegram:2"] } });
       await withTestTimeout(
         restarted.promise,
@@ -330,7 +329,6 @@ it.each(
       restartChannelAccounts: accounts,
       activePluginChannelsAfterReload: null,
       shouldSkipChannelRestart: false,
-      skipChannelRestartLogMessage: "",
       isLifecycleReloadAborted: () => false,
       getChannelAutostartSuppression: () => null,
       channelReloadTargets: () => channels,

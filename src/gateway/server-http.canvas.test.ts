@@ -59,8 +59,7 @@ async function withHostedDocumentServer<T>(
   const document = await createCanvasDocument(
     {
       id: "host-switch-test",
-      kind: "html_bundle",
-      entrypoint: { type: "html", value: "<html><body>hosted</body></html>" },
+      html: "<html><body>hosted</body></html>",
     },
     { stateDir },
   );

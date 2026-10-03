@@ -5,6 +5,7 @@ import {
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import type { ChatMetadataParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
+import { notifyListeners } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogResult } from "../../api/types.ts";
 import {
@@ -35,13 +36,9 @@ import {
 } from "./chat-metadata-cache.ts";
 
 function notifyChatMetadataListeners(entry: ChatMetadataEntry, update: ChatMetadataUpdate): void {
-  for (const listener of Array.from(entry.listeners.keys())) {
-    try {
-      listener(update);
-    } catch (error) {
-      console.error("[chat-metadata] listener error:", error);
-    }
-  }
+  notifyListeners(Array.from(entry.listeners.keys()), update, (error) =>
+    console.error("[chat-metadata] listener error:", error),
+  );
 }
 
 function metadataScopeKey({ agentId, sessionKey, authProfileId }: ChatMetadataParams): string {

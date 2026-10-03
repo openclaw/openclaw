@@ -115,47 +115,84 @@ describe("Responses cumulative message snapshots", () => {
   });
 
   it.each([
-    ["identical", "Hello world.", "Hello world."],
-    ["shrinking", "Step one. Step two.", "Step one."],
-  ])("keeps %s adjacent same-phase message items as distinct blocks", async (_label, a, b) => {
-    const output = createAssistantOutput();
-    const stream = new AssistantMessageEventStream();
-    const events: AssistantMessageEvent[] = [];
-    const collect = (async () => {
-      for await (const event of stream) {
-        events.push(event);
-      }
-    })();
-    await processResponsesStream(
-      responseEvents([
-        messageAdded("msg_1"),
-        messageDone("msg_1", a),
-        messageAdded("msg_2"),
-        { type: "response.output_text.delta", delta: b.slice(0, 4) },
-        { type: "response.output_text.delta", delta: b.slice(4) },
-        messageDone("msg_2", b),
-        completed,
-      ]),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
-    stream.end();
-    await collect;
+    ["identical", "Hello world.", "Hello world.", "final_answer", false],
+    ["shrinking", "Step one. Step two.", "Step one.", "final_answer", false],
+    ["different phase", "Done", "Done.", "commentary", false],
+    ["intervening reasoning", "Step one.", "Step one. Step two.", "final_answer", true],
+  ] as const)(
+    "keeps %s message items as distinct blocks",
+    async (_label, a, b, phase, reasoning) => {
+      const output = createAssistantOutput();
+      const stream = new AssistantMessageEventStream();
+      const events: AssistantMessageEvent[] = [];
+      const collect = (async () => {
+        for await (const event of stream) {
+          events.push(event);
+        }
+      })();
+      await processResponsesStream(
+        responseEvents([
+          messageAdded("msg_1", phase),
+          messageDone("msg_1", a, phase),
+          ...(reasoning
+            ? [
+                { type: "response.output_item.added", item: { type: "reasoning" } },
+                {
+                  type: "response.output_item.done",
+                  item: { type: "reasoning", id: "rs_1", summary: [] },
+                },
+              ]
+            : []),
+          messageAdded("msg_2"),
+          { type: "response.output_text.delta", delta: b.slice(0, 4) },
+          { type: "response.output_text.delta", delta: b.slice(4) },
+          messageDone("msg_2", b),
+          completed,
+        ]),
+        output,
+        stream,
+        nativeOpenAIModel,
+      );
+      stream.end();
+      await collect;
 
-    // Only strict extensions collapse; equal or shrinking items are real,
-    // independently identified messages and must never be removed.
-    expect(output.content).toEqual([textBlock("msg_1", a), textBlock("msg_2", b)]);
-    // The deferred second item still opens and closes its own block.
-    expect(
-      events.map((event) => [event.type, "contentIndex" in event ? event.contentIndex : undefined]),
-    ).toEqual([
-      ["text_start", 0],
-      ["text_end", 0],
-      ["text_start", 1],
-      ["text_end", 1],
-    ]);
-  });
+      expect(output.content).toEqual([
+        textBlock("msg_1", a, phase),
+        ...(reasoning
+          ? [
+              {
+                type: "thinking",
+                thinking: "",
+                thinkingSignature: JSON.stringify({ type: "reasoning", id: "rs_1", summary: [] }),
+              },
+            ]
+          : []),
+        textBlock("msg_2", b),
+      ]);
+      expect(
+        events.map((event) => [
+          event.type,
+          "contentIndex" in event ? event.contentIndex : undefined,
+        ]),
+      ).toEqual([
+        ["text_start", 0],
+        ["text_end", 0],
+        ...(reasoning
+          ? [
+              ["thinking_start", 1],
+              ["thinking_end", 1],
+              ["text_start", 2],
+              ["text_delta", 2],
+              ["text_delta", 2],
+              ["text_end", 2],
+            ]
+          : [
+              ["text_start", 1],
+              ["text_end", 1],
+            ]),
+      ]);
+    },
+  );
 
   it.each([
     ["first delta", "Hello.", "", "Good", "bye"],
@@ -224,56 +261,4 @@ describe("Responses cumulative message snapshots", () => {
       ]);
     },
   );
-
-  it("keeps prefix-nested message items separated by a reasoning item as separate blocks", async () => {
-    const output = createAssistantOutput();
-    const stream = new AssistantMessageEventStream();
-    await processResponsesStream(
-      responseEvents([
-        messageAdded("msg_1"),
-        messageDone("msg_1", "Step one."),
-        { type: "response.output_item.added", item: { type: "reasoning" } },
-        {
-          type: "response.output_item.done",
-          item: { type: "reasoning", id: "rs_1", summary: [] },
-        },
-        messageAdded("msg_2"),
-        messageDone("msg_2", "Step one. Step two."),
-        completed,
-      ]),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
-    stream.end();
-
-    // Collapsing across the reasoning block would orphan it for replay.
-    expect(output.content.map((block) => block.type)).toEqual(["text", "thinking", "text"]);
-    expect(output.content[2]).toMatchObject({ type: "text", text: "Step one. Step two." });
-  });
-
-  it("keeps prefix-nested message items with different phases as separate blocks", async () => {
-    const output = createAssistantOutput();
-    const stream = new AssistantMessageEventStream();
-    await processResponsesStream(
-      responseEvents([
-        messageAdded("msg_1", "commentary"),
-        messageDone("msg_1", "Done", "commentary"),
-        messageAdded("msg_2"),
-        { type: "response.output_text.delta", delta: "Do" },
-        { type: "response.output_text.delta", delta: "ne." },
-        messageDone("msg_2", "Done."),
-        completed,
-      ]),
-      output,
-      stream,
-      nativeOpenAIModel,
-    );
-    stream.end();
-
-    expect(output.content).toEqual([
-      textBlock("msg_1", "Done", "commentary"),
-      textBlock("msg_2", "Done."),
-    ]);
-  });
 });

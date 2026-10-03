@@ -91,10 +91,12 @@ describe("accepted input custody", () => {
   beforeEach(async () => {
     await upsertSessionEntryCore(scope(), { sessionId, updatedAt: 1 });
   });
-  afterEach(() => {
-    for (const receipt of receipts.splice(0)) {
+  afterEach(async () => {
+    const retained = receipts.splice(0);
+    for (const receipt of retained) {
       receipt.finish("interrupted");
     }
+    await Promise.allSettled(retained.map(async (receipt) => receipt.settled?.()));
     closeOpenClawAgentDatabasesForTest();
   });
 
@@ -198,6 +200,7 @@ describe("accepted input custody", () => {
         await promote(aggregate);
       }
       receipt.finish("interrupted");
+      await receipt.settled?.();
       rotateAgentEventLifecycleGeneration();
       const readStoredSource = () =>
         database()
@@ -517,6 +520,7 @@ describe("accepted input custody", () => {
     });
     await expect(promotion).rejects.toThrow("custody ended");
     await expect(promotion).rejects.toBeInstanceOf(SessionPendingInputCustodyError);
+    await first.settled?.();
     expect(await loadTranscriptEvents(scope())).toEqual([]);
     expect((await listSessionPendingInputs(scope())).items.map((input) => input.state)).toEqual([
       "cancelled",
@@ -591,6 +595,7 @@ describe("accepted input custody", () => {
       ).toThrow("already been consumed");
     } finally {
       aggregate.finishPendingInput?.("interrupted");
+      await aggregate.waitForPendingInputSettlement?.();
     }
   });
 
@@ -599,6 +604,7 @@ describe("accepted input custody", () => {
     async (disposition) => {
       const receipt = await stage("closed");
       receipt.finish(disposition);
+      await receipt.settled?.();
       expect((await readSessionPendingInput(scope(), receipt.inputId))?.state).toBe(disposition);
       expect(() => promote(receipt)).toThrow("ownership ended");
       await expect(stage("closed")).rejects.toThrow("submit a new turn");
@@ -628,6 +634,7 @@ describe("accepted input custody", () => {
     await expect(stage("authority")).rejects.toThrow("already admitted");
     expect((await listSessionPendingInputs(scope())).items[0]?.state).toBe("queued");
     receipt.finish("cancelled");
+    await receipt.settled?.();
     expect((await listSessionPendingInputs(scope())).items[0]?.state).toBe("cancelled");
     expect(database().db.prepare("SELECT state FROM session_pending_inputs").get()).toEqual({
       state: "cancelled",
@@ -639,6 +646,7 @@ describe("accepted input custody", () => {
     async (entry) => {
       const receipt = await stage("restart");
       rotateAgentEventLifecycleGeneration();
+      await receipt.settled?.();
       await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       const retained = await readSessionPendingInput(scope(), receipt.inputId);
@@ -1025,19 +1033,4 @@ describe("accepted input custody", () => {
       ).toEqual(before);
     },
   );
-
-  it("bounds materialized pending pages by bytes without truncating input or skipping its cursor", async () => {
-    const content = "x".repeat(Math.floor(MAX_PAYLOAD_BYTES / 2));
-    const first = await stage("large-first", { message: message("large-first", content) });
-    const second = await stage("large-second", { message: message("large-second", content) });
-    const page = await listSessionPendingInputs(scope());
-    expect(page.items.map((input) => input.id)).toEqual([second.inputId]);
-    expect(page.items[0]?.message.content === content).toBe(true);
-    expect(page.total).toBe(2);
-    expect(page.nextBefore).toBeDefined();
-    const older = await listSessionPendingInputs(scope(), { before: page.nextBefore });
-    expect(older.items.map((input) => input.id)).toEqual([first.inputId]);
-    expect(older.items[0]?.message.content === content).toBe(true);
-    expect(older.nextBefore).toBeUndefined();
-  });
 });

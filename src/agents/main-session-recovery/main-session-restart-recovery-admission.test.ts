@@ -128,7 +128,7 @@ describe("startup recovery admission", () => {
     const { storePath, sessionKey } = await makeMainSessionFixture();
     const mutationEntered = createDeferred();
     const releaseMutation = createDeferred();
-    const mutation = runExclusiveSessionLifecycleMutation({
+    const mutation = runExclusiveSessionLifecycleMutation("recover", {
       scope: storePath,
       identities: [sessionKey, "main-session"],
       run: async () => {
@@ -327,108 +327,97 @@ describe("startup recovery admission", () => {
     }
   });
 
-  it("tombstones when the final startup retry consumes the last charge", async ({ signal }) => {
-    const { storePath, sessionKey } = await makeMainSessionFixture({
-      mainRestartRecovery: {
-        cycleId: "cycle-final-startup-attempt",
-        revision: 1,
-        chargedAttempts: 2,
-      },
-      pendingFinalDelivery: makePendingFinalDelivery(),
-    });
-    vi.mocked(callGateway)
-      .mockImplementationOnce(async () => {
-        await replaceSessionEntry(
-          { sessionKey: "agent:main:fresh", storePath },
-          {
-            sessionId: "fresh-session",
-            updatedAt: Date.now(),
-            status: "running",
-            abortedLastRun: true,
-            mainRestartRecovery: {
-              cycleId: "cycle-fresh-exhausted",
-              revision: 1,
-              chargedAttempts: 3,
-            },
-          },
-        );
-        throw new Error("final ambiguous dispatch failure");
-      })
-      .mockResolvedValueOnce({ runId: "run-resumed" });
-
-    const recovery = scheduleRestartAbortedMainSessionRecovery({
-      getConfig: () => ({ agents: { entries: { main: { default: true } } } }),
-      delayMs: 0,
-      maxRetries: 1,
-      stateDir: tmpDir,
-      gatewayRuntime,
-    });
-
-    const target = { sessionKey, storePath };
-    await gatewayRuntime.expectFailedRecovery(2, recovery, signal, target);
-    expect(loadSessionEntry(target)).toMatchObject({
-      status: "failed",
-      mainRestartRecovery: { tombstone: expect.any(Object) },
-    });
-    const freshEntry = loadSessionEntry({ sessionKey: "agent:main:fresh", storePath });
-    expect(freshEntry).toMatchObject({
-      sessionId: "fresh-session",
-      status: "running",
-      abortedLastRun: true,
-      mainRestartRecovery: { chargedAttempts: 3 },
-    });
-    expect(freshEntry?.mainRestartRecovery?.tombstone).toBeUndefined();
-  });
-
-  it("observes final exhaustion in distinct stores for the same logical session", async ({
-    signal,
-  }) => {
-    await withEnvAsync({ OPENCLAW_STATE_DIR: tmpDir }, async () => {
-      const sessionKey = "agent:ops:main";
+  it.for([
+    { name: "the final startup retry consumes the last charge", agentId: "main", dirs: ["main"] },
+    {
+      name: "distinct stores contain the same logical session",
+      agentId: "ops",
+      dirs: ["ops", " ops "],
+    },
+  ])("tombstones exhausted targets when $name", async ({ agentId, dirs }, { signal }) => {
+    const run = async () => {
+      const multipleStores = dirs.length > 1;
+      const sessionKey = `agent:${agentId}:main`;
       const targets: Array<{ agentId: string; sessionKey: string; storePath: string }> = [];
-      for (const [index, directory] of ["ops", " ops "].entries()) {
+      for (const [index, directory] of dirs.entries()) {
         const fixture = await makeMainSessionFixture({
           agentId: directory,
           sessionKey,
-          sessionId: `ops-session-${index}`,
+          sessionId: multipleStores ? `ops-session-${index}` : "main-session",
           mainRestartRecovery: {
-            cycleId: `cycle-ops-${index}`,
+            cycleId: multipleStores ? `cycle-ops-${index}` : "cycle-final-startup-attempt",
             revision: 1,
             chargedAttempts: 2,
           },
           pendingFinalDelivery: makePendingFinalDelivery(),
         });
-        targets.push({ agentId: "ops", sessionKey, storePath: fixture.storePath });
+        targets.push({ agentId, sessionKey, storePath: fixture.storePath });
       }
-      vi.mocked(callGateway).mockImplementation(async ({ method }) => {
-        if (method === "agent") {
-          throw new Error("final ambiguous dispatch failure");
-        }
-        return { status: "timeout" };
-      });
+      const { storePath } = targets[0]!;
+      if (multipleStores) {
+        vi.mocked(callGateway).mockImplementation(async ({ method }) => {
+          if (method === "agent") {
+            throw new Error("final ambiguous dispatch failure");
+          }
+          return { status: "timeout" };
+        });
+      } else {
+        vi.mocked(callGateway)
+          .mockImplementationOnce(async () => {
+            await replaceSessionEntry(
+              { sessionKey: "agent:main:fresh", storePath },
+              {
+                sessionId: "fresh-session",
+                updatedAt: Date.now(),
+                status: "running",
+                abortedLastRun: true,
+                mainRestartRecovery: {
+                  cycleId: "cycle-fresh-exhausted",
+                  revision: 1,
+                  chargedAttempts: 3,
+                },
+              },
+            );
+            throw new Error("final ambiguous dispatch failure");
+          })
+          .mockResolvedValueOnce({ runId: "run-resumed" });
+      }
       const recovery = scheduleRestartAbortedMainSessionRecovery({
-        getConfig: () => ({ agents: { entries: { ops: { default: true } } } }),
+        getConfig: () => ({ agents: { entries: { [agentId]: { default: true } } } }),
         delayMs: 0,
         maxRetries: 1,
         stateDir: tmpDir,
         gatewayRuntime,
       });
-      await gatewayRuntime.expectFailedRecovery(4, recovery, signal, ...targets);
+      await gatewayRuntime.expectFailedRecovery(2 * targets.length, recovery, signal, ...targets);
       for (const [index, target] of targets.entries()) {
         const entry = loadSessionEntry(target);
-        expect(entry?.mainRestartRecovery?.chargedAttempts).toBe(3);
-        expect(entry?.mainRestartRecovery?.reservation).toBeUndefined();
         expect(entry).toMatchObject({
-          sessionId: `ops-session-${index}`,
           status: "failed",
-          abortedLastRun: false,
           mainRestartRecovery: { tombstone: expect.any(Object) },
         });
+        if (multipleStores) {
+          expect(entry?.mainRestartRecovery?.chargedAttempts).toBe(3);
+          expect(entry?.mainRestartRecovery?.reservation).toBeUndefined();
+          expect(entry).toMatchObject({ sessionId: `ops-session-${index}`, abortedLastRun: false });
+        }
       }
-      expect(
-        vi.mocked(callGateway).mock.calls.filter(([call]) => call.method === "agent"),
-      ).toHaveLength(2);
-    });
+      if (multipleStores) {
+        expect(
+          vi.mocked(callGateway).mock.calls.filter(([call]) => call.method === "agent"),
+        ).toHaveLength(2);
+      } else {
+        const freshEntry = loadSessionEntry({ sessionKey: "agent:main:fresh", storePath });
+        expect(freshEntry).toMatchObject({
+          sessionId: "fresh-session",
+          status: "running",
+          abortedLastRun: true,
+          mainRestartRecovery: { chargedAttempts: 3 },
+        });
+        expect(freshEntry?.mainRestartRecovery?.tombstone).toBeUndefined();
+      }
+    };
+    await (dirs.length > 1 ? withEnvAsync({ OPENCLAW_STATE_DIR: tmpDir }, run) : run());
   });
 
   it("stops exhaustion reconciliation while its Gateway admission is suspended", async () => {

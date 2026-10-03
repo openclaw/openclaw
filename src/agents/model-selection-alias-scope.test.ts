@@ -27,11 +27,6 @@ it.each([
     expected: { provider: "openai", model: "gpt-4o-mini" },
   },
   {
-    defaultProvider: "anthropic",
-    raw: "openai/gpt-4o-mini",
-    expected: { provider: "openai", model: "gpt-4o-mini" },
-  },
-  {
     defaultProvider: "openai",
     raw: "anthropic/claude-sonnet-4-6",
     expected: { provider: "anthropic", model: "claude-sonnet-4-6" },
@@ -61,49 +56,49 @@ it.each([
   },
 );
 
-it("retains configured provider authority in an alias index used without config", () => {
-  const cfg: OpenClawConfig = {
-    models: { providers: { acme: { baseUrl: "https://acme.example/v1", models: [] } } },
-    agents: { defaults: { models: { "openai/gpt-4o-mini": { alias: "acme/small" } } } },
-  };
-  const aliasIndex = buildModelAliasIndex({ ...context, cfg, defaultProvider: "openai" });
-  expect(
-    resolveModelRefFromString({
+it.each(["config", "manifest"])(
+  "retains %s provider authority in a config-free index",
+  (source) => {
+    const cfg: OpenClawConfig = {
+      ...(source === "config"
+        ? { models: { providers: { acme: { baseUrl: "https://acme.example/v1", models: [] } } } }
+        : {}),
+      agents: { defaults: { models: { "openai/gpt-4o-mini": { alias: "acme/small" } } } },
+    };
+    const aliasIndex = buildModelAliasIndex({
       ...context,
-      raw: "acme/small",
+      cfg,
       defaultProvider: "openai",
-      aliasIndex,
-    })?.ref,
-  ).toEqual({ provider: "acme", model: "small" });
-});
+      manifestPlugins: source === "manifest" ? [{ providers: ["acme"] }] : context.manifestPlugins,
+    });
+    expect(
+      resolveModelRefFromString({
+        ...context,
+        raw: "acme/small",
+        defaultProvider: "openai",
+        aliasIndex,
+      })?.ref,
+    ).toEqual({ provider: "acme", model: "small" });
+  },
+);
 
-it("uses the supplied manifest generation to scope model aliases", () => {
-  const cfg: OpenClawConfig = {
-    agents: { defaults: { models: { "openai/gpt-4o-mini": { alias: "acme/small" } } } },
-  };
-  const aliasIndex = buildModelAliasIndex({
-    ...context,
-    cfg,
-    defaultProvider: "openai",
-    manifestPlugins: [{ providers: ["acme"] }],
-  });
-  expect(
-    resolveModelRefFromString({
-      ...context,
-      raw: "acme/small",
-      defaultProvider: "openai",
-      aliasIndex,
-    })?.ref,
-  ).toEqual({ provider: "acme", model: "small" });
-});
-
-it("resolves a profile-suffixed colliding alias through its own provider", () => {
-  const raw = "openai/anthropic/small@work";
+it.each([
+  {
+    raw: "openai/anthropic/small@work",
+    target: "openai/gpt-4o-mini",
+    alias: "anthropic/small@work",
+  },
+  {
+    raw: "openai/gpt-4o-mini@work",
+    target: "openrouter/openai/gpt-4o-mini",
+    alias: "openai/gpt-4o-mini",
+  },
+])("resolves profile-qualified primary $raw in its own provider", ({ raw, target, alias }) => {
   const cfg: OpenClawConfig = {
     agents: {
       defaults: {
         model: raw,
-        models: { "openai/gpt-4o-mini": { alias: "anthropic/small@work" } },
+        models: { [target]: { alias } },
       },
     },
   };
@@ -114,18 +109,6 @@ it("resolves a profile-suffixed colliding alias through its own provider", () =>
     provider: "openai",
     model: "gpt-4o-mini",
   });
-  expect(resolveConfiguredRefForTest(cfg)).toEqual({ provider: "openai", model: "gpt-4o-mini" });
-});
-
-it("keeps an explicit profile-qualified primary on its named provider", () => {
-  const cfg: OpenClawConfig = {
-    agents: {
-      defaults: {
-        model: "openai/gpt-4o-mini@work",
-        models: { "openrouter/openai/gpt-4o-mini": { alias: "openai/gpt-4o-mini" } },
-      },
-    },
-  };
   expect(resolveConfiguredRefForTest(cfg)).toEqual({ provider: "openai", model: "gpt-4o-mini" });
 });
 

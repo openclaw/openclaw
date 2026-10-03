@@ -61,37 +61,30 @@ export function prepareSqliteSnapshotFromLiveOwner(
         sourceWalBytes: sqliteSnapshotSourceFileSize(`${identity.canonicalPath}-wal`),
       };
       const started = performance.now();
+      const report = (outcome: "error" | "success", copiedBytes: number, error?: unknown) =>
+        emitSqliteSnapshotTelemetry(
+          {
+            ...sizes,
+            attempt: 1,
+            copiedBytes,
+            durationMs: Math.max(0, performance.now() - started),
+            operation: "online-backup",
+            outcome,
+            owner: owner.owner,
+            waitMs: 0,
+          },
+          error,
+        );
       try {
         const prepared = await prepareSqliteReadOnlyLocationFromOwnedDatabase(
           owner.database,
           owner.assertCurrent,
           flightSignal,
         );
-        emitSqliteSnapshotTelemetry({
-          ...sizes,
-          attempt: 1,
-          copiedBytes: fs.statSync(prepared.location).size,
-          durationMs: Math.max(0, performance.now() - started),
-          operation: "online-backup",
-          outcome: "success",
-          owner: owner.owner,
-          waitMs: 0,
-        });
+        report("success", fs.statSync(prepared.location).size);
         return prepared;
       } catch (error) {
-        emitSqliteSnapshotTelemetry(
-          {
-            ...sizes,
-            attempt: 1,
-            copiedBytes: 0,
-            durationMs: Math.max(0, performance.now() - started),
-            operation: "online-backup",
-            outcome: "error",
-            owner: owner.owner,
-            waitMs: 0,
-          },
-          error,
-        );
+        report("error", 0, error);
         throw error;
       }
     },

@@ -115,6 +115,7 @@ async function ensureSandboxWorkspaceLayout(
   workspaceDir: string;
 }> {
   const { rawSessionKey, runtime, localWorkspace } = selected;
+  const assertCurrent = localWorkspace?.assertCurrent ?? params.assertCurrent;
   const cfg = localWorkspace ? { ...selected.cfg, workspaceAccess: "rw" as const } : selected.cfg;
   const { agentWorkspaceDir, sandboxWorkspaceDir, scopeKey, skillsWorkspaceDir, workspaceDir } =
     resolveSandboxWorkspaceLayoutPaths({
@@ -128,7 +129,7 @@ async function ensureSandboxWorkspaceLayout(
       workspaceDir: localWorkspace?.workspaceDir ?? params.workspaceDir,
     });
 
-  params.assertCurrent?.();
+  assertCurrent?.();
   if (cfg.workspaceAccess !== "rw") {
     await ensureSandboxWorkspace(
       sandboxWorkspaceDir,
@@ -140,7 +141,7 @@ async function ensureSandboxWorkspaceLayout(
   } else {
     await fs.mkdir(workspaceDir, { recursive: true });
   }
-  params.assertCurrent?.();
+  assertCurrent?.();
   const syncedSkills = await syncSandboxSkillsToWorkspace({
     sourceWorkspaceDir: agentWorkspaceDir,
     targetWorkspaceDir: cfg.workspaceAccess === "rw" ? skillsWorkspaceDir : sandboxWorkspaceDir,
@@ -149,7 +150,7 @@ async function ensureSandboxWorkspaceLayout(
     rawSessionKey,
     execOverrides: params.execOverrides,
     skillsSnapshot: params.skillsSnapshot,
-    assertCurrent: params.assertCurrent,
+    assertCurrent,
   });
 
   return {

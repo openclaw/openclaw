@@ -27,10 +27,7 @@ function toWorkerRuntimeError(value: unknown, fallback: string): Error {
 }
 
 function fencedResult(state: WorkerConnectionState): WorkerRuntimeResult | undefined {
-  if (
-    state.kind === "fenced" &&
-    (state.reason === "credential-replaced" || state.reason === "owner-epoch-mismatch")
-  ) {
+  if (state.kind === "fenced") {
     return { status: "fenced", reason: state.reason };
   }
   return undefined;

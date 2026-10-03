@@ -15,7 +15,6 @@ import {
   runSqliteImmediateTransactionSync,
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -71,18 +70,14 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
   constructor(private readonly db: DatabaseSync) {}
 
   private matchesUpdatedAt(key: string, expectedUpdatedAt: number): boolean {
-    const { compiled, bind } = compileSqliteQueryBindings<string>((parameter) =>
+    const current = executeSqliteQueryTakeFirstSync(
+      this.db,
       getNodeSqliteKysely<WorkboardCardDatabase>(this.db)
         .selectFrom("workboard_cards")
         .select("updated_at")
-        .where(
-          "id",
-          "=",
-          parameter((value) => value),
-        ),
+        .where("id", "=", key),
     );
-    const current = this.db.prepare(compiled.sql).get(...bind(key));
-    return isRecord(current) && numberValue(current, "updated_at") === expectedUpdatedAt;
+    return current !== undefined && numberValue(current, "updated_at") === expectedUpdatedAt;
   }
 
   private validatePayload(key: string, value: PersistedWorkboardCard): void {

@@ -6,6 +6,7 @@ import {
   type WorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 
 export type WorkspaceNode =
@@ -53,9 +54,8 @@ export function manifestNodes(manifest: WorkerWorkspaceManifest) {
 }
 
 export function hasPathAncestor(paths: ReadonlySet<string>, entryPath: string): boolean {
-  const segments = entryPath.split("/");
-  for (let index = 1; index < segments.length; index += 1) {
-    if (paths.has(segments.slice(0, index).join("/"))) {
+  for (const ancestor of workspacePathAncestors(entryPath)) {
+    if (paths.has(ancestor)) {
       return true;
     }
   }

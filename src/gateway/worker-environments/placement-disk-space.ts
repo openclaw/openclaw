@@ -4,7 +4,10 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { StaleWorkerBuildError } from "./admission.js";
-import type { WorkerPlacementDiskSpaceReader } from "./placement-projector.js";
+import type {
+  WorkerPlacementDiskSpaceReader,
+  WorkerPlacementRunnerAvailabilityReader,
+} from "./placement-projector.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -29,18 +32,12 @@ fs.statfs(process.argv[1], { bigint: true }, (error, stats) => {
 
 type ActivePlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
 
-type DiskSpaceObservation = {
-  sessionId: string;
-  generation: number;
-  environmentId: string;
-  activeOwnerEpoch: number;
+type DiskSpaceObservation = ActivePlacement & {
   snapshot: SessionPlacementDiskSpace;
 };
 
-type PlacementBinding = Omit<DiskSpaceObservation, "snapshot">;
-
 function hasExactBinding(
-  observation: PlacementBinding,
+  observation: ActivePlacement,
   placement: WorkerSessionPlacementRecord | undefined,
 ): placement is ActivePlacement {
   return (
@@ -108,11 +105,12 @@ function parseDiskSpaceProbe(stdout: string, observedAtMs: number): SessionPlace
 export function createWorkerPlacementDiskSpaceMonitor(params: {
   placements: Pick<WorkerSessionPlacementStore, "get" | "readChangeSnapshot" | "readProjection">;
   environments: Pick<WorkerEnvironmentService, "startTunnel">;
+  runnerAvailability: Pick<WorkerPlacementRunnerAvailabilityReader, "read">;
   warn: (message: string) => void;
   now?: () => number;
 }) {
   const observations = new Map<string, DiskSpaceObservation>();
-  const staleBindings = new Map<string, PlacementBinding>();
+  const staleBindings = new Map<string, ActivePlacement>();
   const now = params.now ?? Date.now;
   let observationVersion = 0;
 
@@ -127,6 +125,9 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
     // A stale worker build cannot recover until its placement binding changes.
     const stale = staleBindings.get(placement.sessionId);
     if (stale && hasExactBinding(stale, placement)) {
+      return;
+    }
+    if (params.runnerAvailability.read(placement)?.status === "offline") {
       return;
     }
     const tunnel = await params.environments.startTunnel({
@@ -152,21 +153,16 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
       return;
     }
     const previous = read(current);
-    const previousStatus = previous?.status;
-    const snapshotChanged =
+    observations.set(placement.sessionId, candidate);
+    if (
       !previous ||
-      previous.status !== snapshot.status ||
       previous.availableBytes !== snapshot.availableBytes ||
       previous.totalBytes !== snapshot.totalBytes ||
-      previous.observedAtMs !== snapshot.observedAtMs;
-    observations.set(placement.sessionId, candidate);
-    if (snapshotChanged) {
+      previous.observedAtMs !== snapshot.observedAtMs
+    ) {
       observationVersion += 1;
     }
-    if (
-      previousStatus !== snapshot.status &&
-      (previousStatus !== undefined || snapshot.status !== "ok")
-    ) {
+    if (previous?.status !== snapshot.status && (previous || snapshot.status !== "ok")) {
       emitSessionLifecycleEvent({
         sessionKey: placement.sessionKey,
         agentId: placement.agentId,

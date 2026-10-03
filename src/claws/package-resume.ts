@@ -4,8 +4,8 @@ import {
   openExistingOpenClawStateDatabaseReadOnly,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { readClawInstallRecordFromDatabase } from "./provenance-read.kernel.js";
 import {
-  readClawInstallRecordFromDatabase,
   readClawPackageRefs,
   type PersistedClawInstall,
   type PersistedClawPackageRef,
@@ -96,17 +96,14 @@ export async function readClawResumeStateReadOnly(
     }
   | undefined
 > {
-  const database = await openExistingOpenClawStateDatabaseReadOnly(options);
+  const database = await openExistingOpenClawStateDatabaseReadOnly({
+    ...options,
+    requireCanonicalSchema: true,
+  });
   if (!database) {
     return undefined;
   }
   try {
-    const hasInstallTable = database.db
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claw_installs'")
-      .get();
-    if (!hasInstallTable) {
-      return undefined;
-    }
     const record = readClawInstallRecordFromDatabase(database.db, agentId);
     if (!record) {
       return undefined;

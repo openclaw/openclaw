@@ -100,7 +100,7 @@ describe("forced worker environment abandonment", () => {
 
   it("releases a pending reclaim claim when its workspace is already gone", async () => {
     const { store, environmentId, active } = await createActiveAbandonmentFixture(database);
-    store.startDrain({
+    await store.startDrain({
       sessionId: active.sessionId,
       environmentId,
       ownerEpoch: active.activeOwnerEpoch,
@@ -150,7 +150,7 @@ describe("forced worker environment abandonment", () => {
       basePackSha256: createHash("sha256").update("").digest("hex"),
       basePack: Buffer.alloc(0),
     });
-    const draining = store.startDrain({
+    const draining = await store.startDrain({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
@@ -159,7 +159,7 @@ describe("forced worker environment abandonment", () => {
     if (draining.state !== "draining") {
       throw new Error("draining placement fixture was not draining");
     }
-    store.startReconcile({
+    await store.startReconcile({
       sessionId: draining.sessionId,
       environmentId: draining.environmentId,
       ownerEpoch: draining.activeOwnerEpoch,

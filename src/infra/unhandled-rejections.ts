@@ -2,6 +2,7 @@ import process from "node:process";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { restoreRuntimeTerminalState } from "../runtime.js";
+import { registerListener } from "../shared/listeners.js";
 import { isAbortError } from "./abort-signal.js";
 import { collectNestedErrorCandidates, extractErrorCodeOrErrno } from "./error-graph-internal.js";
 import { extractErrorCode, formatUncaughtError, readErrorCause, readErrorName } from "./errors.js";
@@ -27,10 +28,7 @@ function createErrorHandlerRegistry(globalKey: symbol, failureMessage: string) {
   }
   return {
     register(handler: UnhandledRejectionHandler): () => void {
-      handlers.add(handler);
-      return () => {
-        handlers.delete(handler);
-      };
+      return registerListener(handlers, handler);
     },
     isHandled(error: unknown): boolean {
       for (const handler of handlers) {
@@ -187,9 +185,6 @@ export function isTransientSqliteError(err: unknown): boolean {
     const messageParts = [candidate.message, candidate.errstr];
     for (const rawMessage of messageParts) {
       const message = normalizeLowercaseStringOrEmpty(rawMessage);
-      if (!message) {
-        continue;
-      }
       if (TRANSIENT_SQLITE_MESSAGE_CODE_RE.test(message)) {
         return true;
       }
@@ -241,9 +236,6 @@ function isTransientFileWatchError(err: unknown): boolean {
 
     // Without an ENOSPC code, only classify explicit watcher resource exhaustion.
     // Generic "file watcher failed" labels can wrap permission/config/runtime failures.
-    if (!message) {
-      continue;
-    }
     if (
       (message.includes("no space left on device") && hasFileWatchSignal(message)) ||
       hasFileWatchExhaustionSignal(message)

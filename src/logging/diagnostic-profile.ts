@@ -3,6 +3,7 @@ import type { Session } from "node:inspector/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { getHeapSpaceStatistics, type HeapSpaceInfo } from "node:v8";
 import { parseNodeOptionsEnvVar } from "../infra/node-options.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 
@@ -28,11 +29,12 @@ export type DiagnosticProfileOutcome<Result> =
   | { status: "complete"; result: Result }
   | { status: "unavailable"; reason: FailureReason; cleanupFailed: boolean };
 
+type ProfileMemoryUsage = NodeJS.MemoryUsage & { heapSpaces: HeapSpaceInfo[] };
 type ProfileMeasurement = {
   durationMs: number;
   startBlockedMs: number;
-  before: NodeJS.MemoryUsage;
-  after: NodeJS.MemoryUsage;
+  before: ProfileMemoryUsage;
+  after: ProfileMemoryUsage;
 };
 
 export class ProfileFailure extends Error {
@@ -173,8 +175,8 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
   let failure: FailureReason | undefined;
   let cleanupFailed = false;
   let profile: Profile | undefined;
-  let before: NodeJS.MemoryUsage | undefined;
-  let after: NodeJS.MemoryUsage | undefined;
+  let before: ProfileMemoryUsage | undefined;
+  let after: ProfileMemoryUsage | undefined;
   let durationMs = 0;
   let startBlockedMs = 0;
   let packageRoot: string | null = null;
@@ -215,7 +217,7 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
     await options.setup(session);
     assertActive();
     assertTracingInactive();
-    before = process.memoryUsage();
+    before = { ...process.memoryUsage(), heapSpaces: getHeapSpaceStatistics() };
     const startedAt = performance.now();
     startAttempted = true;
     // Inspector dispatch can synchronously scan V8's heap before returning a promise.
@@ -229,7 +231,7 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
     stopAttempted = true;
     ({ profile } = await options.stop(session));
     durationMs = performance.now() - startedAt;
-    after = process.memoryUsage();
+    after = { ...process.memoryUsage(), heapSpaces: getHeapSpaceStatistics() };
   } catch (error) {
     failure =
       error instanceof ProfileFailure

@@ -358,15 +358,13 @@ export function createNodeWorkspaceRetainCoordinator(
         const currentStatusTarget = requestedBundleHash
           ? (hostBuild ?? bundleStatusTargetForNode(options, node.nodeId))
           : undefined;
-        const statusTargetMatches =
-          currentStatusTarget != null &&
-          requestedBundleHash !== undefined &&
-          currentStatusTarget.bundleHash === requestedBundleHash;
-        const statusMatches =
+        if (
           retained.applied &&
-          statusTargetMatches &&
-          bundleStatus?.bundleHash === requestedBundleHash;
-        if (statusMatches && currentStatusTarget && bundleStatus) {
+          currentStatusTarget &&
+          bundleStatus &&
+          currentStatusTarget.bundleHash === requestedBundleHash &&
+          bundleStatus.bundleHash === requestedBundleHash
+        ) {
           currentTransport.acceptBundleStatus?.(node, {
             bundleHash: currentStatusTarget.bundleHash,
             status:

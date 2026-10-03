@@ -236,10 +236,16 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
               throw new Error("MCP App connection limit reached");
             }
             const connId = client.connId;
-            const unsubscribe = subscribeMcpAppModelContext(view, () => {
+            let updateId = getMcpAppModelContext(active.runtime, view)?.updateId;
+            const unsubscribe = subscribeMcpAppModelContext(view, (state) => {
+              const clearedUpdateId = updateId;
+              updateId = state?.updateId;
               context.broadcastToConnIds(
                 "mcp.app.hostContextChanged",
-                { viewId: view.viewId },
+                {
+                  viewId: view.viewId,
+                  ...(state === null ? { modelContext: null, updateId: clearedUpdateId } : {}),
+                },
                 new Set([connId]),
               );
             });

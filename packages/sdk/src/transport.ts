@@ -43,8 +43,7 @@ export function observeGatewayReconnects(
   listeners.add(listener);
   reconnectObservers.set(transport, listeners);
   return () => {
-    listeners.delete(listener);
-    if (listeners.size === 0) {
+    if (listeners.delete(listener) && listeners.size === 0) {
       reconnectObservers.delete(transport);
     }
   };

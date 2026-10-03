@@ -253,34 +253,54 @@ it("restores the destination board's saved people filter when boards change whil
   page.dispose();
 });
 
-it("ignores a stale view response and keeps filtering when browser storage is unavailable", async () => {
-  const page = sessionsPage();
-  const unavailable = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
-    throw new Error("Storage unavailable");
-  });
-  await page.connect();
-  unavailable.mockRestore();
-  const pending = createDeferred<WorkboardSessionsBoardRead>();
-  const request = expectDefined(page.request.getMockImplementation(), "request");
-  page.request.mockImplementation((method, params) =>
-    method === "workboard.sessionsBoard.read" &&
-    (params as { view?: { involvingMe?: boolean } }).view?.involvingMe
-      ? pending.promise
-      : request(method, params),
-  );
-  const blockedWrite = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-    throw new Error("Storage unavailable");
-  });
-  peoplePicker(page).onSelect("me");
-  await vi.advanceTimersByTimeAsync(0);
-  peoplePicker(page).onSelect("profile:ada");
-  await vi.advanceTimersByTimeAsync(0);
-  pending.resolve({ ...page.result, sessions: [] });
-  await vi.advanceTimersByTimeAsync(0);
-  expect(peoplePicker(page).value).toBe("profile:ada");
-  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(2);
-  blockedWrite.mockRestore();
-});
+it.each(["people", "cards"] as const)(
+  "discards a stale sessions read after switching %s",
+  async (destination) => {
+    const page = sessionsPage();
+    const pending = createDeferred<WorkboardSessionsBoardRead>();
+    const request = expectDefined(page.request.getMockImplementation(), "request");
+    const unavailable =
+      destination === "people"
+        ? vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+            throw new Error("Storage unavailable");
+          })
+        : undefined;
+    page.request.mockImplementation((method, params) =>
+      method === "workboard.sessionsBoard.read" &&
+      (destination === "cards" ||
+        (params as { view?: { involvingMe?: boolean } }).view?.involvingMe)
+        ? pending.promise
+        : request(method, params),
+    );
+    await page.connect();
+    unavailable?.mockRestore();
+    const blockedWrite =
+      destination === "people"
+        ? vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+            throw new Error("Storage unavailable");
+          })
+        : undefined;
+    if (destination === "people") {
+      peoplePicker(page).onSelect("me");
+      await vi.advanceTimersByTimeAsync(0);
+      peoplePicker(page).onSelect("profile:ada");
+    } else {
+      page.navigate("default");
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    pending.resolve(destination === "people" ? { ...page.result, sessions: [] } : page.result);
+    await vi.advanceTimersByTimeAsync(0);
+    if (destination === "people") {
+      expect(peoplePicker(page).value).toBe("profile:ada");
+      expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(2);
+    } else {
+      expect(page.container.querySelector(".workboard-sessions")).toBeNull();
+      expect(page.container.textContent).not.toContain("Fix retries");
+      expect(page.container.querySelector(".workboard-create")).not.toBeNull();
+    }
+    blockedWrite?.mockRestore();
+  },
+);
 
 function button(page: ReturnType<typeof mountPage>, label: string) {
   return expectDefined(
@@ -291,7 +311,7 @@ function button(page: ReturnType<typeof mountPage>, label: string) {
   );
 }
 
-it("shows the facts failure reason on an empty board and rereads on plugin changes", async () => {
+it("recovers empty-board facts through one plugin refresh of the selected people view", async () => {
   const page = sessionsPage();
   const sessions = page.result.sessions.splice(0);
   await page.connect();
@@ -302,12 +322,25 @@ it("shows the facts failure reason on an empty board and rereads on plugin chang
   expect(statuses()).toContain(page.result.warning);
   expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(0);
 
+  peoplePicker(page).onSelect("me");
+  await vi.advanceTimersByTimeAsync(0);
+  page.request.mockClear();
   page.result.sessions.push(...sessions);
+  page.result.sessions[0]!.observerDigest!.headline = "New canonical headline";
   delete page.result.warning;
+  page.fixture.emit("session.observer", { sessionKey: "agent:main:working", revision: 1 });
   page.fixture.emit("plugin.workboard.changed", { epoch: "facts", revision: 1 });
   await vi.advanceTimersByTimeAsync(0);
   expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(2);
   expect(statuses()).toEqual([]);
+  expect(page.reads()).toBe(1);
+  expect(page.container.textContent).toContain("New canonical headline");
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(page.reads()).toBe(1);
+  expect(page.request).toHaveBeenLastCalledWith("workboard.sessionsBoard.read", {
+    boardId: "sessions",
+    view: { includePeople: true, involvingMe: true },
+  });
 });
 
 it("renders session columns, owner avatars and canonical facts without card controls or an unavailable dock", async () => {
@@ -381,43 +414,6 @@ it("pins a dragged session and rereads the selected people view", async () => {
     view: { includePeople: true, involvingMe: true },
   });
   expect(page.request.mock.calls.some(([method]) => method === "workboard.cards.move")).toBe(false);
-});
-
-it("rereads canonical facts through plugin changes without a second observer refresh", async () => {
-  const page = sessionsPage();
-  await page.connect();
-  peoplePicker(page).onSelect("me");
-  await vi.advanceTimersByTimeAsync(0);
-  page.request.mockClear();
-  page.result.sessions[0]!.observerDigest!.headline = "New canonical headline";
-  page.fixture.emit("session.observer", { sessionKey: "agent:main:working", revision: 1 });
-  page.fixture.emit("plugin.workboard.changed", { epoch: "current", revision: 1 });
-  await vi.advanceTimersByTimeAsync(0);
-  expect(page.reads()).toBe(1);
-  expect(page.container.textContent).toContain("New canonical headline");
-  await vi.advanceTimersByTimeAsync(1000);
-  expect(page.reads()).toBe(1);
-  expect(page.request).toHaveBeenLastCalledWith("workboard.sessionsBoard.read", {
-    boardId: "sessions",
-    view: { includePeople: true, involvingMe: true },
-  });
-});
-
-it("discards a sessions read completed after navigating to a card board", async () => {
-  const page = sessionsPage();
-  const pending = createDeferred<WorkboardSessionsBoardRead>();
-  const request = expectDefined(page.request.getMockImplementation(), "request");
-  page.request.mockImplementation((method, params) =>
-    method === "workboard.sessionsBoard.read" ? pending.promise : request(method, params),
-  );
-  await page.connect();
-  page.navigate("default");
-  await vi.advanceTimersByTimeAsync(0);
-  pending.resolve(page.result);
-  await vi.advanceTimersByTimeAsync(0);
-  expect(page.container.querySelector(".workboard-sessions")).toBeNull();
-  expect(page.container.textContent).not.toContain("Fix retries");
-  expect(page.container.querySelector(".workboard-create")).not.toBeNull();
 });
 
 it("creates a sessions board from the default Cards kind without submitting client-owned default columns", async () => {

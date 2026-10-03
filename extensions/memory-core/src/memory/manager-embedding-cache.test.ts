@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   collectMemoryCachedEmbeddings,
   loadMemoryEmbeddingCache,
+  pruneMemoryEmbeddingCache,
   upsertMemoryEmbeddingCache,
 } from "./manager-embedding-cache.js";
 
@@ -308,6 +309,150 @@ describe("memory embedding cache", () => {
       ).toEqual([
         { hash: "a", embedding: encodeMemoryEmbedding([4]) },
         { hash: "b", embedding: encodeMemoryEmbedding([2]) },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it.each([
+    { name: "below capacity", maxEntries: 7, oldRows: 2, evicted: 0 },
+    { name: "exact capacity", maxEntries: 6, oldRows: 2, evicted: 0 },
+    { name: "overflow with equal timestamps", maxEntries: 5, oldRows: 2, evicted: 1 },
+    { name: "overflow beyond a prune batch", maxEntries: 5, oldRows: 102, evicted: 101 },
+  ])("reserves only missing capacity: $name", ({ maxEntries, oldRows, evicted }) => {
+    const db = createDb();
+    const provider = { id: "local", model: "fixture" };
+    const readCache = () => db.prepare("SELECT * FROM memory_embedding_cache ORDER BY rowid").all();
+    try {
+      for (const identity of [
+        {
+          ...provider,
+          key: "fixture",
+          hashes: ["a", ...Array.from({ length: oldRows - 1 }, (_, index) => `old-${index}`)],
+        },
+        { ...provider, id: "other", key: "fixture", hashes: ["a"] },
+        { ...provider, model: "other", key: "fixture", hashes: ["a"] },
+        { ...provider, key: "other", hashes: ["a"] },
+      ]) {
+        upsertMemoryEmbeddingCache({
+          db,
+          enabled: true,
+          provider: identity,
+          providerKey: identity.key,
+          entries: () => identity.hashes.map((hash) => ({ hash, embedding: [1] })),
+          now: 1,
+        });
+      }
+      const before = readCache();
+      db.exec(`CREATE TEMP TRIGGER reject_cache_overflow BEFORE INSERT ON memory_embedding_cache
+        WHEN (SELECT COUNT(*) FROM memory_embedding_cache) >= ${maxEntries}
+        BEGIN SELECT RAISE(ABORT, 'cache overflow'); END;`);
+      db.exec("BEGIN IMMEDIATE");
+      const executions = (["get", "all", "run", "iterate"] as const).map((method) =>
+        vi.spyOn(StatementSync.prototype, method),
+      );
+      let queries: string[];
+      try {
+        upsertMemoryEmbeddingCache({
+          db,
+          enabled: true,
+          provider,
+          providerKey: "fixture",
+          maxEntries,
+          entries: () => [
+            { hash: "a", embedding: [2] },
+            { hash: "c", embedding: [3] },
+            { hash: "a", embedding: [4] },
+          ],
+          now: 2,
+        });
+        queries = executions.flatMap(({ mock }) =>
+          mock.contexts.flatMap((statement) =>
+            statement instanceof StatementSync ? [statement.sourceSQL] : [],
+          ),
+        );
+      } finally {
+        for (const execution of executions) {
+          execution.mockRestore();
+        }
+      }
+      expect(readCache()).toEqual([
+        ...before.slice(1 + evicted),
+        ...[
+          { hash: "c", embedding: encodeMemoryEmbedding([3]) },
+          { hash: "a", embedding: encodeMemoryEmbedding([4]) },
+        ].map(({ hash, embedding }) => ({
+          provider: "local",
+          model: "fixture",
+          provider_key: "fixture",
+          hash,
+          embedding,
+          dims: 1,
+          updated_at: 2,
+        })),
+      ]);
+      const deletes = queries.filter((query) => /^delete\b/iu.test(query));
+      expect(deletes).toHaveLength(evicted > 0 ? 2 : 1);
+      expect(queries.filter((query) => /^insert\b/iu.test(query))).toHaveLength(2);
+      const count = queries.find((query) => /^select count\(\*\)/iu.test(query));
+      expect(count).toBeDefined();
+      expect(db.prepare(`EXPLAIN ${count}`).all()).toEqual(
+        expect.arrayContaining([expect.objectContaining({ opcode: "Count" })]),
+      );
+      if (evicted) {
+        const eviction = deletes.find((query) => /\browid\b/iu.test(query));
+        expect(eviction).toBeDefined();
+        const plan = db.prepare(`EXPLAIN QUERY PLAN ${eviction}`).all(evicted);
+        expect(plan).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              detail: expect.stringContaining(
+                "USING COVERING INDEX idx_memory_embedding_cache_updated_at",
+              ),
+            }),
+          ]),
+        );
+        expect(plan.some((row) => String(row.detail).includes("TEMP B-TREE"))).toBe(false);
+        const opcodes = db
+          .prepare(`EXPLAIN ${eviction}`)
+          .all(evicted)
+          .map((row) => row.opcode);
+        expect(opcodes).toContain("DecrJumpZero");
+        expect(opcodes).not.toContain("OffsetLimit");
+      }
+      db.exec("ROLLBACK");
+      expect(readCache()).toEqual(before);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("prunes at most 100 oldest rows per transaction", () => {
+    const db = createDb();
+    try {
+      upsertMemoryEmbeddingCache({
+        db,
+        enabled: true,
+        provider: { id: "local", model: "fixture" },
+        providerKey: "fixture",
+        entries: () =>
+          Array.from({ length: 103 }, (_, index) => ({ hash: String(index), embedding: [1] })),
+        now: 1,
+      });
+      db.exec("BEGIN IMMEDIATE");
+      pruneMemoryEmbeddingCache(db, 2);
+      expect(db.prepare("SELECT hash FROM memory_embedding_cache ORDER BY rowid").all()).toEqual([
+        { hash: "100" },
+        { hash: "101" },
+        { hash: "102" },
+      ]);
+      db.exec("COMMIT; BEGIN IMMEDIATE");
+      pruneMemoryEmbeddingCache(db, 2);
+      db.exec("COMMIT");
+      expect(db.prepare("SELECT hash FROM memory_embedding_cache ORDER BY rowid").all()).toEqual([
+        { hash: "101" },
+        { hash: "102" },
       ]);
     } finally {
       db.close();

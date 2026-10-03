@@ -31,26 +31,34 @@ export function capturedPluginModuleUrl(
   return url;
 }
 
+function isPackageMapError(error: unknown, code: string): error is Error & { url?: unknown } {
+  return error instanceof Error && "code" in error && error.code === code;
+}
+
 /** Package metadata selects a target before its deferred body has been captured. */
 export function resolvePluginPackageMapTarget(
   specifier: string,
   importer: string,
   conditions: readonly string[],
-): string | undefined {
+): URL | undefined {
   let selected: URL;
   try {
     selected = moduleResolve(specifier, pathToFileURL(importer), new Set(conditions));
   } catch (error) {
-    if (!(error instanceof Error) || !("code" in error) || error.code !== "ERR_MODULE_NOT_FOUND") {
+    // Bun owns its built-in target exception and validation of other URL-shaped targets.
+    if (conditions.includes("bun") && isPackageMapError(error, "ERR_INVALID_PACKAGE_TARGET")) {
+      return undefined;
+    }
+    if (!isPackageMapError(error, "ERR_MODULE_NOT_FOUND")) {
       throw error;
     }
-    if (!("url" in error) || typeof error.url !== "string") {
+    if (typeof error.url !== "string") {
       return undefined;
     }
     // Node chose this target from immutable metadata; only its body is still uncaptured.
     selected = new URL(error.url);
   }
-  return selected.protocol === "file:" ? fileURLToPath(selected) : undefined;
+  return selected.protocol === "file:" ? selected : undefined;
 }
 
 /** Missing physical inputs stay absent without poisoning another condition's selected target. */
@@ -66,13 +74,7 @@ export function createPluginPackageMapReferences() {
       try {
         return moduleResolve(specifier, pathToFileURL(importer), new Set(conditions)).href;
       } catch (error) {
-        if (
-          error instanceof Error &&
-          "code" in error &&
-          error.code === "ERR_MODULE_NOT_FOUND" &&
-          "url" in error &&
-          typeof error.url === "string"
-        ) {
+        if (isPackageMapError(error, "ERR_MODULE_NOT_FOUND") && typeof error.url === "string") {
           const target = new URL(error.url);
           if (target.protocol === "file:") {
             recordMissingTarget(fileURLToPath(target));

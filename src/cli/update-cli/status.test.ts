@@ -209,6 +209,46 @@ describe("update status service definition facts", () => {
   );
 });
 
+it.each([true, false])(
+  "reports current and prepared immutable generations without offering package updates (JSON: %s)",
+  async (json) => {
+    const immutable = {
+      root: "/opt/openclaw",
+      currentSha: "a".repeat(40),
+      currentPath: `/opt/openclaw/releases/${"a".repeat(40)}`,
+      prepared: {
+        sha: "b".repeat(40),
+        path: `/opt/openclaw/releases/${"b".repeat(40)}`,
+        buildDigest: "c".repeat(64),
+        preparedAtMs: 123,
+      },
+    };
+    vi.spyOn(updateCheck, "checkUpdateStatus").mockResolvedValue({
+      root: immutable.currentPath,
+      installKind: "immutable",
+      packageManager: "unknown",
+      immutable,
+      registry: { latestVersion: "99.0.0" },
+    });
+
+    await updateStatusCommand({ json });
+
+    if (json) {
+      expect(runtime.writeJson.mock.lastCall?.[0]).toMatchObject({
+        update: { installKind: "immutable", immutable },
+        availability: { available: false, hasRegistryUpdate: false },
+      });
+    } else {
+      const output = runtime.log.mock.calls.flat().join("\n");
+      expect(output).toContain("immutable (/opt/openclaw)");
+      expect(output).toContain("aaaaaaaaaaaa");
+      expect(output).toContain("prepared bbbbbbbbbbbb");
+      expect(output).toContain("activation unavailable");
+      expect(output).not.toContain("npm update");
+    }
+  },
+);
+
 describe("update status channel failures", () => {
   it.each([true, false])("shows the Gateway's recorded trust refusal (JSON: %s)", async (json) => {
     const issue = {

@@ -15,7 +15,10 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
-import { loadSkillLibrarySelection, readSelectedSkillLibraryFiles } from "../library/selection.js";
+import {
+  prepareSkillLibrarySelection,
+  readSelectedSkillLibraryFiles,
+} from "../library/selection.js";
 import { getSkillsSnapshotVersion, getSkillsResourceVersion } from "../runtime/refresh-state.js";
 import { resolveSkillSnapshotExecutionFileHost } from "../runtime/skill-snapshot-provenance.js";
 import { fingerprintSkillSnapshotConfig } from "../runtime/snapshot-config-fingerprint.js";
@@ -273,11 +276,13 @@ export async function syncWorkspaceSkills(params: {
     }
     if (skillsSnapshot?.librarySelections?.length) {
       const selectedNames = new Set(skillsSnapshot.skills.map((skill) => skill.name));
-      entries.push(
-        ...loadSkillLibrarySelection(skillsSnapshot.librarySelections).filter((entry) =>
-          selectedNames.has(entry.skill.name),
-        ),
+      const selectedEntries = await prepareSkillLibrarySelection(
+        skillsSnapshot.librarySelections,
+        {},
+        assertCurrent ?? (() => {}),
       );
+      assertCurrent?.();
+      entries.push(...selectedEntries.filter((entry) => selectedNames.has(entry.skill.name)));
     }
 
     const usedDirNames = new Set<string>();

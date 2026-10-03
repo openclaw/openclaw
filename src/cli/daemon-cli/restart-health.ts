@@ -26,7 +26,11 @@ import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
 } from "./restart-health.constants.js";
-import type { GatewayRestartSnapshot, GatewayRestartWaitOutcome } from "./restart-health.types.js";
+import type {
+  GatewayRestartResult,
+  GatewayRestartSnapshot,
+  GatewayRestartWaitOutcome,
+} from "./restart-health.types.js";
 import {
   allListenersOwnedByRuntimePid,
   listenerOwnedByRuntimePid,
@@ -54,8 +58,10 @@ function withWaitContext(
   snapshot: GatewayRestartSnapshot,
   waitOutcome: GatewayRestartWaitOutcome,
   elapsedMs: number,
-): GatewayRestartSnapshot {
-  return { ...snapshot, waitOutcome, elapsedMs };
+): GatewayRestartResult {
+  const outcome =
+    waitOutcome === "healthy" ? "ready" : waitOutcome === "still-starting" ? "starting" : "failed";
+  return { ...snapshot, outcome, waitOutcome, elapsedMs };
 }
 
 export function isSameGatewayRestartGeneration(
@@ -104,7 +110,7 @@ export async function waitForGatewayHealthyRestart(
       | { service: Pick<GatewayService, "readCommand" | "readRuntime">; child?: never }
       | { child: Pick<ChildProcess, "pid" | "exitCode" | "signalCode">; service?: never }
     ),
-): Promise<GatewayRestartSnapshot> {
+): Promise<GatewayRestartResult> {
   const signal = params.deadline?.signal ?? params.signal;
   const read = <T>(phase: string, operation: () => Promise<T>) =>
     params.deadline
@@ -197,13 +203,19 @@ export async function waitForGatewayHealthyRestart(
     }
     if (
       snapshot.runtime.status !== "running" ||
-      (snapshot.runtime.pid === undefined && snapshot.gatewayBootId === undefined) ||
       snapshot.versionMismatch ||
       snapshot.buildIdMismatch ||
       snapshot.channelProbeErrors?.length ||
       (params.requirePluginHealth !== false && snapshot.activatedPluginErrors?.length) ||
       snapshot.staleGatewayPids.length > 0
     ) {
+      return "timeout";
+    }
+    // The service manager still owns a running startup; a closed port is not an exit.
+    if (snapshot.portUsage.status === "free") {
+      return "still-starting";
+    }
+    if (snapshot.runtime.pid === undefined && snapshot.gatewayBootId === undefined) {
       return "timeout";
     }
     const ownedStartup =

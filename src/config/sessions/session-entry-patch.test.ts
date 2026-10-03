@@ -34,6 +34,7 @@ import { commitSessionEntryPatch } from "./session-entry-patch.worker.js";
 import { readSessionEntryInWorker } from "./session-entry-read-runtime.js";
 import { markSessionTranscriptIndexDirtyInTransaction } from "./session-transcript-index.js";
 import * as reconcile from "./session-transcript-reconcile.js";
+import type { SessionEntry } from "./types.js";
 
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
   kickSessionEntryMaintenanceAfterWrite() {},
@@ -99,6 +100,83 @@ function patchSessionEntryCore(
 ) {
   return patchInternalSessionEntry(scope, update, { workerGuard: {}, ...options });
 }
+
+it("skips unchanged cold serialization and preserves snapshot bytes and revisions on metadata patches", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const cold = {
+      sessionDiffBaseline: {
+        version: 1,
+        sessionId: "original",
+        root: "/synthetic/workspace",
+        files: Array.from({ length: 128 }, (_, index) => ({
+          path: `src/fixture-${index}.ts`,
+          fingerprint: "a".repeat(64),
+        })),
+      },
+      skillsSnapshot: { prompt: "synthetic instructions ".repeat(4096), skills: [] },
+      systemPromptReport: {
+        source: "run",
+        generatedAt: 1,
+        systemPrompt: { chars: 100_000, projectContextChars: 0, nonProjectContextChars: 100_000 },
+        injectedWorkspaceFiles: [],
+        skills: { promptChars: 90_000, entries: [] },
+        tools: { listChars: 0, schemaChars: 0, entries: [] },
+      },
+    } satisfies Partial<SessionEntry>;
+    replaceSessionEntrySync(f.scope, { sessionId: "original", updatedAt: 1, ...cold });
+    const snapshots = () =>
+      f.database.db
+        .prepare(
+          "SELECT field, value_json FROM session_entry_snapshots WHERE session_key = ? ORDER BY field",
+        )
+        .all(f.scope.sessionKey);
+    const revision = () =>
+      f.database.db
+        .prepare("SELECT snapshot_revision FROM session_nodes WHERE session_key = ?")
+        .get(f.scope.sessionKey)?.snapshot_revision;
+    const saved = snapshots();
+    const initialRevision = revision();
+    const stringify = vi.spyOn(JSON, "stringify");
+    const serializedColdFields = () =>
+      stringify.mock.calls.filter(
+        ([value]) =>
+          value !== null &&
+          typeof value === "object" &&
+          ("prompt" in value || "files" in value || "systemPrompt" in value),
+      ).length;
+    // The native patch path executes this writer in-process, so this spy observes its JSON work.
+    const patch = (update: Partial<SessionEntry>) =>
+      patchInternalSessionEntry(f.scope, () => update, { skipMaintenance: true });
+    await patch({ label: "metadata only" });
+    expect(serializedColdFields()).toBe(0);
+    expect(snapshots()).toEqual(saved);
+    expect(revision()).toBe(initialRevision);
+    expect(f.read()?.label).toBe("metadata only");
+
+    stringify.mockClear();
+    const changedSkills = { ...cold.skillsSnapshot, prompt: "changed instructions" };
+    await patch({ skillsSnapshot: changedSkills });
+    expect(serializedColdFields()).toBe(3);
+    expect(snapshots()).toEqual(
+      saved.map((row) =>
+        row.field === "skillsSnapshot"
+          ? { ...row, value_json: JSON.stringify(changedSkills) }
+          : row,
+      ),
+    );
+    expect(revision()).toBe(Number(initialRevision) + 1);
+
+    stringify.mockClear();
+    await patch({ skillsSnapshot: undefined });
+    expect(serializedColdFields()).toBe(2);
+    expect(snapshots()).toEqual(saved.filter((row) => row.field !== "skillsSnapshot"));
+    expect(revision()).toBe(Number(initialRevision) + 2);
+    await patch({ sessionDiffBaseline: undefined, systemPromptReport: undefined });
+    expect(snapshots()).toEqual([]);
+    expect(revision()).toBe(Number(initialRevision) + 4);
+  });
+});
 
 it("evaluates the active-leaf predicate on the patch transaction's uncommitted transcript", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

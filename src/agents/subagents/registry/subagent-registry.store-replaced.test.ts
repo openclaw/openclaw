@@ -239,7 +239,14 @@ it("keeps an observed late-result store retirement after the original selector r
   ).toEqual([]);
 });
 
-it.each(["same", "restore", "unknown retry", "failed", "delivered"] as const)(
+it.each([
+  "same",
+  "restore",
+  "unknown retry",
+  "failed",
+  "delivered",
+  "pending acknowledgment",
+] as const)(
   "keeps automatic child notification disposition through store publication: %s",
   async (change) => {
     const input = change === "failed" ? failedRecords("failed", { status: "error" }) : records();
@@ -268,7 +275,64 @@ it.each(["same", "restore", "unknown retry", "failed", "delivered"] as const)(
         "CREATE TRIGGER reject_store_retirement BEFORE UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'retirement write rejected'); END",
       );
     }
-    if (change === "restore") {
+    if (change === "pending acknowledgment") {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const runWorker = stateWorker.runOpenClawStateWorkerOperation;
+      let observed = false;
+      let settling: Promise<void> | undefined;
+      const held = vi
+        .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+        .mockImplementation((context, operation, options) =>
+          runWorker(
+            context,
+            (scope) =>
+              operation({
+                execute: async (command, executeOptions) => {
+                  const result = await scope.execute(command, executeOptions);
+                  if (command.type === "sessionDelivery.mutateSubagentCompletion") {
+                    observed = true;
+                    entered.resolve();
+                    await release.promise;
+                  }
+                  return result;
+                },
+              }),
+            options,
+          ),
+        );
+      try {
+        publishSystemEventStoreResolver(() => "replacement-store");
+        publishSystemEventStoreResolver(() => "original-store");
+        expect(subagentRuns.isCompletionAuthorityRetired(input.subagent)).toBe(true);
+        settling = settleRootWork(true);
+        await Promise.race([entered.promise, settling]);
+        expect(observed).toBe(true);
+        expect(() => subagentRuns.runWithCompletionAuthority(input.subagent, () => "send")).toThrow(
+          /store was retired/,
+        );
+        expect(() =>
+          subagentRuns.runWithCompletionBatchAuthority([input.subagent], () => "send"),
+        ).toThrow(/store was retired/);
+        const successor = { ...structuredClone(input.subagent), runId: "replacement-completion" };
+        subagentRuns.transferCompletionAuthority(input.subagent, successor);
+        expect(() => subagentRuns.runWithCompletionAuthority(successor, () => "send")).toThrow(
+          /store was retired/,
+        );
+        expect(subagentRuns.isCompletionAuthorityRetired(input.subagent)).toBe(true);
+        expect(subagentRuns.isCompletionAuthorityRetired(successor)).toBe(true);
+      } finally {
+        release.resolve();
+        await settling;
+        await settleRootWork(true);
+        held.mockRestore();
+      }
+      expect(subagentRuns.get(input.subagent.runId)?.delivery).toMatchObject({
+        status: "suspended",
+        disposition: "intentional_non_delivery",
+      });
+      expect(subagentRuns.isCompletionAuthorityRetired(input.subagent)).toBe(true);
+    } else if (change === "restore") {
       await resetSubagentRegistryForTests({ persist: false });
       publishSystemEventStoreResolver(() => "replacement-store");
       await initSubagentRegistry();
@@ -338,71 +402,3 @@ it.each(["same", "restore", "unknown retry", "failed", "delivered"] as const)(
     }
   },
 );
-
-it("keeps retirement authority closed when the original selector returns before the worker acknowledgment", async () => {
-  const input = records();
-  input.subagent.requesterStorePath = "original-store";
-  input.subagent.delivery = {
-    status: "pending",
-    payload: loadPendingFinalDeliveryPayload(input.subagent),
-  };
-  seedSubagentCompletionDelivery({ subagent: input.subagent });
-  subagentRuns.set(input.subagent.runId, input.subagent);
-  await initSubagentRegistry();
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const runWorker = stateWorker.runOpenClawStateWorkerOperation;
-  let observed = false;
-  let settling: Promise<void> | undefined;
-  const held = vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementation((context, operation, options) =>
-      runWorker(
-        context,
-        (scope) =>
-          operation({
-            execute: async (command, executeOptions) => {
-              const result = await scope.execute(command, executeOptions);
-              if (command.type === "sessionDelivery.mutateSubagentCompletion") {
-                observed = true;
-                entered.resolve();
-                await release.promise;
-              }
-              return result;
-            },
-          }),
-        options,
-      ),
-    );
-  try {
-    publishSystemEventStoreResolver(() => "replacement-store");
-    publishSystemEventStoreResolver(() => "original-store");
-    expect(subagentRuns.isCompletionAuthorityRetired(input.subagent)).toBe(true);
-    settling = settleRootWork(true);
-    await Promise.race([entered.promise, settling]);
-    expect(observed).toBe(true);
-    expect(() => subagentRuns.runWithCompletionAuthority(input.subagent, () => "send")).toThrow(
-      /store was retired/,
-    );
-    expect(() =>
-      subagentRuns.runWithCompletionBatchAuthority([input.subagent], () => "send"),
-    ).toThrow(/store was retired/);
-    const successor = { ...structuredClone(input.subagent), runId: "replacement-completion" };
-    subagentRuns.transferCompletionAuthority(input.subagent, successor);
-    expect(() => subagentRuns.runWithCompletionAuthority(successor, () => "send")).toThrow(
-      /store was retired/,
-    );
-    expect(subagentRuns.isCompletionAuthorityRetired(input.subagent)).toBe(true);
-    expect(subagentRuns.isCompletionAuthorityRetired(successor)).toBe(true);
-  } finally {
-    release.resolve();
-    await settling;
-    await settleRootWork(true);
-    held.mockRestore();
-  }
-  expect(subagentRuns.get(input.subagent.runId)?.delivery).toMatchObject({
-    status: "suspended",
-    disposition: "intentional_non_delivery",
-  });
-  expect(subagentRuns.isCompletionAuthorityRetired(input.subagent)).toBe(true);
-});

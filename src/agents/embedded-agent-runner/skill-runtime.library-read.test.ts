@@ -148,7 +148,7 @@ describe("manual library resources through embedded and host-bound reads", () =>
         files: supporting,
         expectedRevision: null,
       });
-      const pins = changeSkillLibrarySelection(alice, [], {
+      const pins = await changeSkillLibrarySelection(alice, [], {
         action: "attach",
         sessionKey: "agent:main:manual",
         skillId: saved.entry.skillId,
@@ -378,7 +378,7 @@ describe("manual library resources through embedded and host-bound reads", () =>
 
         // Pin survival across unshare/removal is intentional; current library defaults are not revocation.
         for (const action of ["share", "unshare", "remove"] as const) {
-          mutateSkillLibrary(alice, {
+          await mutateSkillLibrary(alice, {
             skillId: saved.entry.skillId,
             expectedRevision: newer.entry.revision,
             action,

@@ -32,7 +32,7 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
       agentId,
       readOnly: true,
       projection: "list",
-      listCandidatesOnly: true,
+      exactRead: true,
     });
   }
   const parsedAgent = parseAgentSessionKey(params.key)?.agentId;

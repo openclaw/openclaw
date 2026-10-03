@@ -9,6 +9,7 @@ import {
 import { GatewayBrowserClient, GatewayRequestError } from "../../api/gateway.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { requestSharedHistory } from "./chat-history-request.ts";
+import { formatChatHistoryLoadError } from "./chat-history-retry.ts";
 import { getChatHistoryLoadState, isChatHistoryRetrying } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -20,6 +21,40 @@ afterEach(() => {
 });
 
 describe("shared chat history transient recovery", () => {
+  it("presents pending agent database inspection as normal startup", () => {
+    const error = new GatewayRequestError({
+      code: "UNAVAILABLE",
+      message:
+        "Agent main has not completed startup inspection and preparation.\nSessions remain unavailable until background inspection finishes.",
+      details: {
+        agentId: "main",
+        paths: ["/private/state/agents/main/openclaw-agent.sqlite"],
+        code: "agent-database-inspection-pending",
+        reason: "Agent main has not completed startup inspection and preparation.",
+        repairHint: "Run Doctor if inspection cannot complete.",
+      },
+      retryable: true,
+      retryAfterMs: 250,
+    });
+
+    expect(formatChatHistoryLoadError(error)).toBe(
+      "This agent is still starting. Retry in a moment.",
+    );
+  });
+
+  it("preserves settled agent database inspection diagnostics", () => {
+    const error = new GatewayRequestError({
+      code: "UNAVAILABLE",
+      message: "Agent database inspection failed. Run Doctor.",
+      details: {
+        code: "agent-database-inspection-failed",
+      },
+      retryable: false,
+    });
+
+    expect(formatChatHistoryLoadError(error)).toBe("Agent database inspection failed. Run Doctor.");
+  });
+
   it.each([false, true])(
     "keeps manual Retry after the recovery deadline (startup=%s)",
     async (startup) => {

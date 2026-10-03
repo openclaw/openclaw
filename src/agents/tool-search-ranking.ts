@@ -25,9 +25,11 @@ function collectParameterText(parameters: unknown, depth: number, parts: string[
       collectParameterText(child, depth + 1, parts);
     }
   }
-  const items = parameters.items;
-  if (items !== undefined) {
-    collectParameterText(items, depth + 1, parts);
+  for (const keyword of ["items", "anyOf", "oneOf", "allOf"]) {
+    const schemas = parameters[keyword];
+    for (const child of Array.isArray(schemas) ? schemas : [schemas]) {
+      collectParameterText(child, depth + 1, parts);
+    }
   }
 }
 
@@ -198,12 +200,13 @@ function stripOneSuffix(token: string): string {
 }
 
 // Keep acronyms and their plural s together: "URLs" must not split into "UR"/"Ls".
+const WORD_SEPARATORS = /[^\p{L}\p{N}_]+/u;
 const WORD_PARTS = /\p{Lu}+s?(?![\p{Ll}])|\p{Lu}?\p{Ll}+|\p{N}+/gu;
 
 // Index whole identifiers plus underscore/camelCase parts; retain non-Latin words.
 function splitWords(input: string): string[] {
   const words: string[] = [];
-  for (const raw of input.split(/[^\p{L}\p{N}_]+/u)) {
+  for (const raw of input.split(WORD_SEPARATORS)) {
     if (!raw) {
       continue;
     }

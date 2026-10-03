@@ -186,7 +186,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
       let compactionNoopReason: string | undefined;
       let blockedByActiveRun = false;
       let blockedByQueuedWork = false;
-      await runExclusiveSessionLifecycleMutation({
+      await runExclusiveSessionLifecycleMutation("compact", {
         scope: storePath,
         identities: lifecycleIdentities,
         kind: "compaction",

@@ -103,7 +103,7 @@ describe("followup queue durable input consumption", () => {
     await persistQueuedRun(first.run);
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope()))).db;
     database.exec(
-      "CREATE TEMP TRIGGER fail_second_source BEFORE INSERT ON transcript_events WHEN instr(NEW.event_json, 'second:user') > 0 BEGIN SELECT RAISE(ABORT, 'injected second source failure'); END",
+      "CREATE TRIGGER fail_second_source BEFORE INSERT ON transcript_events WHEN instr(NEW.event_json, 'second:user') > 0 BEGIN SELECT RAISE(ABORT, 'injected second source failure'); END",
     );
     try {
       await expect(persistQueuedRun(second.run)).rejects.toThrow("injected second source failure");

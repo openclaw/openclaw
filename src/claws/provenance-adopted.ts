@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { assertAgentDeletionAllowsMutation } from "../agents/agent-lifecycle-registry.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -40,7 +41,9 @@ export function persistClawMigrationOwnershipWithInstallRecordReader(
   const agentConfigDigest = digestClawValue(plan.agent.config);
   const ownedPaths = agentOwnedPaths(plan);
   const ownership = encodeClawAgentOwnership(ownedPaths, "adopted");
-  const record = runOpenClawStateWriteTransaction(({ db }) => {
+  const record = runOpenClawStateWriteTransaction((database) => {
+    assertAgentDeletionAllowsMutation(database, plan.agent.finalId);
+    const { db } = database;
     if (readInstallRecord(db, plan.agent.finalId)) {
       throw new Error(
         `Agent ${JSON.stringify(plan.agent.finalId)} already has Claw ownership; inspect claws status before migrating.`,
@@ -161,7 +164,9 @@ export function releaseAdoptedClawInstallRecordWithInstallRecordReader(
   readInstallRecord: (db: DatabaseSync, agentId: string) => PersistedClawInstall | undefined,
   options: OpenClawStateDatabaseOptions = {},
 ): void {
-  runOpenClawStateWriteTransaction(({ db }) => {
+  runOpenClawStateWriteTransaction((database) => {
+    assertAgentDeletionAllowsMutation(database, agentId);
+    const { db } = database;
     const record = readInstallRecord(db, agentId);
     if (!record) {
       throw new Error(`No Claw install record exists for agent ${JSON.stringify(agentId)}.`);

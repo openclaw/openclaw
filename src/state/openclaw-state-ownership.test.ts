@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runDoctorConfigPreflight } from "../commands/doctor-config-preflight.js";
 import { runDoctorStateSqliteCompact } from "../commands/doctor-state-sqlite-compact.js";
@@ -850,6 +851,26 @@ describe("external shared-state ownership", () => {
     const unmarkedEnv = withoutExternalMarker(externalEnv);
     const opened = openOpenClawStateDatabase({ env: unmarkedEnv });
     expect(openOpenClawStateDatabase({ env: unmarkedEnv })).toBe(opened);
+    const indexedOwnershipSql =
+      "SELECT value_json FROM config_machine_state WHERE state_key = ? LIMIT 1";
+    const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    try {
+      expect(openOpenClawStateDatabase({ env: unmarkedEnv, database: opened })).toBe(opened);
+      expect(reads.queries).toEqual([indexedOwnershipSql]);
+      reads.queries.length = 0;
+      runOpenClawStateWriteTransaction(() => undefined, { env: unmarkedEnv, database: opened });
+      expect(reads.queries).toEqual([indexedOwnershipSql, indexedOwnershipSql]);
+    } finally {
+      reads.restore();
+    }
+    expect(
+      opened.db.prepare(`EXPLAIN QUERY PLAN ${indexedOwnershipSql}`).all(STATE_SUPERVISION_KEY),
+    ).toEqual([
+      expect.objectContaining({
+        detail:
+          "SEARCH config_machine_state USING INDEX sqlite_autoindex_config_machine_state_1 (state_key=?)",
+      }),
+    ]);
     const ownership = {
       version: 1 as const,
       mode: "external" as const,

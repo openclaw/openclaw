@@ -420,7 +420,7 @@ export class ComposedGatewayHarness {
       throw new Error("fault placement has no active worker claim to reclaim");
     }
     await this.settleRun(staleClaim.runId);
-    this.placementLifecycle.reclaimPlacement(placement, staleClaim.owner.ownerEpoch);
+    await this.placementLifecycle.reclaimPlacement(placement, staleClaim.owner.ownerEpoch);
     const attached = this.store.get(ENVIRONMENT_ID);
     if (!attached || attached.state !== "attached") {
       throw new Error("fault environment is not attached");

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -144,6 +145,35 @@ describe("executeAgentTurn: message tool progress", () => {
       expect.objectContaining({ outcome: "mute", runStatus: "completed" }),
     );
   });
+
+  it.each([false, true])(
+    "settles failed recording without replaying the turn (runFailed=%s)",
+    async (runFailed) => {
+      const original = new Error("invalid image metadata");
+      if (runFailed) {
+        state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(original);
+      } else {
+        state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+      }
+      state.recordMessageToolRunOutcomeMock.mockRejectedValueOnce(
+        new SqliteWorkerError("Outcome could not be confirmed", "outcome-unknown"),
+      );
+      const followupRun = createFollowupRun();
+      followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const execution = executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+      if (runFailed) {
+        await expect(execution).rejects.toBe(original);
+      } else {
+        await expect(execution).resolves.toMatchObject({
+          kind: "success",
+          runResult: { payloads: [] },
+        });
+      }
+      expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledTimes(1);
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(runFailed ? 0 : 1);
+    },
+  );
 
   it.each([false, true])(
     "records failed execution independently of delivery (%s)",

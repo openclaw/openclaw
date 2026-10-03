@@ -78,7 +78,7 @@ describe("worker placement workspace journal", () => {
     const { active, owner } = await seedJournal();
 
     expect(await prune()).toEqual([]);
-    const draining = store.startDrain({
+    const draining = await store.startDrain({
       sessionId: REQUEST.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
@@ -87,7 +87,7 @@ describe("worker placement workspace journal", () => {
     if (draining.state !== "draining") {
       throw new Error("expected draining placement");
     }
-    store.startReconcile({
+    await store.startReconcile({
       sessionId: draining.sessionId,
       environmentId: draining.environmentId,
       ownerEpoch: draining.activeOwnerEpoch,
@@ -100,7 +100,7 @@ describe("worker placement workspace journal", () => {
 
   it("retains a failed owner whose forced rollback is retryable", async () => {
     const { active, owner } = await seedJournal();
-    const draining = store.startDrain({
+    const draining = await store.startDrain({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
@@ -109,13 +109,13 @@ describe("worker placement workspace journal", () => {
     if (draining.state !== "draining") {
       throw new Error("expected draining placement");
     }
-    const reconciling = store.startReconcile({
+    const reconciling = await store.startReconcile({
       sessionId: draining.sessionId,
       environmentId: draining.environmentId,
       ownerEpoch: draining.activeOwnerEpoch,
       expectedGeneration: draining.generation,
     });
-    store.fail({
+    await store.fail({
       sessionId: reconciling.sessionId,
       expectedGeneration: reconciling.generation,
       recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
@@ -142,6 +142,17 @@ describe("worker placement workspace journal", () => {
       },
     });
     await store.markWorkspaceResultPending(claim);
+    const pendingResult = store.preparedWorkspaceResult(claim)!;
+    const placement = store.preparedWorkspaceResultPlacement(claim)!;
+    expect(store.preparedWorkspaceResult(claim)).toBe(pendingResult);
+    expect(store.preparedWorkspaceResultPlacement(claim)).toBe(placement);
+    expect(() => {
+      pendingResult.claimId = "different-claim";
+    }).toThrow(TypeError);
+    expect(() => {
+      placement.turnClaim!.claimId = "different-claim";
+    }).toThrow(TypeError);
+    expect(store.validateWorkspaceResultClaim(claim)).toBe(true);
     const queries = observeHostDataSql();
     try {
       expect(await store.getWorkspaceReconciliationPlacement(owner)).toMatchObject({
@@ -160,6 +171,11 @@ describe("worker placement workspace journal", () => {
         manifestRef: journal.currentManifestRef,
       });
       expect(accepted.workspaceBaseManifestRef).toBe(journal.currentManifestRef);
+      expect(store.preparedWorkspaceResultPlacement(claim)).not.toBe(placement);
+      expect(store.preparedWorkspaceResultPlacement(claim)?.workspaceBaseManifestRef).toBe(
+        journal.currentManifestRef,
+      );
+      expect(placement.workspaceBaseManifestRef).toBe(active.workspaceBaseManifestRef);
       expect((await store.loadWorkspaceReconciliation(owner))?.appliedManifestRef).toBe(
         journal.currentManifestRef,
       );

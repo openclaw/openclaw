@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { createGatewaySession } from "../session-create-service.js";
-import type { TrustedSessionCreation } from "./session-creation-provenance.js";
+import type { TrustedSessionCreation } from "../session-creation-provenance.js";
 import type { GatewayClient } from "./types.js";
 
 export function resolveSessionCreateSpawnContext(params: {

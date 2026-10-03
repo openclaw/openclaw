@@ -60,9 +60,6 @@ export function createSessionObserverCompletion(params: {
     try {
       const execute = async () => {
         const prepared = await ensurePrepared(state);
-        if (!params.isCurrent(state) || controller.signal.aborted) {
-          throw new Error("session observer state is no longer active");
-        }
         let lastRejectedText = "";
         for (let attempt = 0; attempt < 2; attempt += 1) {
           if (!params.isCurrent(state) || controller.signal.aborted) {
