@@ -85,7 +85,10 @@ const NODES_REPLAY_SAFE_ACTIONS = new Set(["status", "describe", "pending"]);
 const PRESENCE_REPLAY_SAFE_ACTIONS = new Set(["list", "person", "device"]);
 
 const READ_ONLY_SHELL_COMMANDS = new Set([
+  "basename",
   "cat",
+  "cut",
+  "dirname",
   "grep",
   "head",
   "ls",
@@ -93,6 +96,7 @@ const READ_ONLY_SHELL_COMMANDS = new Set([
   "rg",
   "stat",
   "tail",
+  "tr",
   "wc",
 ]);
 
@@ -149,7 +153,7 @@ function tokenizeReadOnlyShellCommands(command: string): string[][] | undefined 
     // Quoted regex syntax is literal, not a shell pipeline or glob. Double quotes
     // still expand substitutions; keep those and all escape syntax unclassified.
     if (
-      char === "\\" ||
+      (char === "\\" && quote !== "'") ||
       char === "\n" ||
       char === "\r" ||
       (quote === '"' && (char === "$" || char === "`")) ||
@@ -200,6 +204,8 @@ function isReadOnlySedCommand(tokens: readonly string[]): boolean {
         token.startsWith("-") &&
         token !== "-" &&
         token !== "-n" &&
+        token !== "-E" &&
+        token !== "-r" &&
         token !== "--quiet" &&
         token !== "--silent",
     )
@@ -213,10 +219,39 @@ function isReadOnlySedCommand(tokens: readonly string[]): boolean {
       sawSuppressAutoPrint = true;
       continue;
     }
+    if (token === "-E" || token === "-r") {
+      continue;
+    }
     expression = token;
     break;
   }
-  return sawSuppressAutoPrint && expression != null && /^(\d+|\$)(,(\d+|\$))?p$/.test(expression);
+  if (expression == null) {
+    return false;
+  }
+  // One substitution to stdout. The flag set excludes `w` (write file) and `e`
+  // (execute); an escaped delimiter does not match and stays unclassified.
+  if (/^s([^\w\s\\])(?:(?!\1).)*\1(?:(?!\1).)*\1[gpiI\d]*$/.test(expression)) {
+    return true;
+  }
+  return sawSuppressAutoPrint && /^(\d+|\$)(,(\d+|\$))?p$/.test(expression);
+}
+
+// Filters that read stdin or named files, minus the options that write or execute.
+// getopt accepts abbreviated long options, so those are matched by prefix or refused.
+function isReadOnlyFilterCommand(executable: string, args: readonly string[]): boolean | undefined {
+  switch (executable) {
+    case "sort":
+      // -o writes a file, -T picks a temp directory, --compress-program runs one.
+      return !args.some((arg) => /^-[^-]*[oT]|^--/.test(arg));
+    case "uniq":
+      // A second operand is the output file: admit the stdin form only.
+      return args.every((arg) => /^--?[a-z]/i.test(arg));
+    case "file":
+      // -C/--compile writes a compiled magic file.
+      return !args.some((arg) => /^-[^-]*C|^--($|c)/.test(arg));
+    default:
+      return undefined;
+  }
 }
 
 function hasUnsafeRipgrepFlag(tokens: readonly string[]): boolean {
@@ -307,6 +342,10 @@ function isReadOnlyShellTokens(tokens: readonly string[]): boolean {
   }
   if (executable === "sed") {
     return isReadOnlySedCommand(tokens);
+  }
+  const filter = isReadOnlyFilterCommand(executable, tokens.slice(1));
+  if (filter !== undefined) {
+    return filter;
   }
   if (executable === "gh") {
     return isReadOnlyGhCommand(tokens);
