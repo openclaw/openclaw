@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import {
@@ -6,7 +5,6 @@ import {
   finishClawHeartbeatMigration,
 } from "../claws/heartbeat-migration.js";
 import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
-import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   readDefaultProactiveJobReceiptInDatabase,
@@ -20,6 +18,7 @@ import { ensureHeartbeatMonitorJobs } from "./doctor-heartbeat-cadence-migration
 import { decodeDoctorHeartbeatJobRows } from "./doctor-heartbeat-jobs.js";
 import {
   migrateHeartbeatPrompt,
+  projectRetiredHeartbeatConfig,
   resolveHeartbeatConfig,
   validateLegacyHeartbeatConfig,
 } from "./doctor-heartbeat-legacy.js";
@@ -30,40 +29,7 @@ import {
   maybeMigrateHeartbeatTasksToCron,
   migrateStoredHeartbeatTaskJobs,
 } from "./doctor-heartbeat-task-migration.js";
-import { migrateHeartbeatVisibility } from "./doctor/shared/channel-legacy-config-migrate.js";
-
-/** Validation-only candidate; durable retirement must finish before this config is written. */
-export function projectRetiredHeartbeatConfig(
-  cfg: OpenClawConfigWithLegacyRoster,
-): OpenClawConfig {
-  const next = inheritLegacyDefaultAgentId(cfg, structuredClone(cfg));
-  migrateHeartbeatVisibility(next, []);
-  validateLegacyHeartbeatConfig(next);
-  if (next.agents?.defaults) {
-    delete next.agents.defaults.heartbeat;
-  }
-  for (const entry of Object.values(next.agents?.entries ?? {})) {
-    delete entry.heartbeat;
-  }
-  for (const entry of next.agents?.list ?? []) {
-    delete entry.heartbeat;
-  }
-  for (const [channel, value] of Object.entries(next.channels ?? {})) {
-    if (channel === "modelByChannel" || !isRecord(value)) {
-      continue;
-    }
-    delete value.heartbeatVisibility;
-    if (isRecord(value.accounts)) {
-      for (const account of Object.values(value.accounts)) {
-        if (!isRecord(account)) {
-          continue;
-        }
-        delete account.heartbeatVisibility;
-      }
-    }
-  }
-  return next;
-}
+import { migrateHeartbeatVisibility } from "./doctor-heartbeat-visibility.js";
 
 /** Data commits first. Any ambiguous input prevents config removal and remains retryable. */
 export async function retireHeartbeatWithDoctor(

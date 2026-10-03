@@ -10,6 +10,7 @@ import {
 } from "../config/validation.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { assertPreflightConfigUnchanged } from "./config-preflight-snapshot.js";
+import { projectRetiredHeartbeatConfig } from "./doctor-heartbeat-legacy.js";
 import type { DoctorOptions } from "./doctor.types.js";
 import {
   canPlanAutomaticConfigRepair,
@@ -50,7 +51,6 @@ export async function projectHeartbeatConfigForUpdateAdmission(
   ) {
     return undefined;
   }
-  const { projectRetiredHeartbeatConfig } = await import("./doctor-heartbeat-retirement.js");
   let config: OpenClawConfig;
   try {
     config = projectRetiredHeartbeatConfig(snapshot.sourceConfig);
@@ -126,7 +126,6 @@ export async function prepareAutomaticHeartbeatRepair(
   ) {
     return undefined;
   }
-  const { projectRetiredHeartbeatConfig } = await import("./doctor-heartbeat-retirement.js");
   const config = projectRetiredHeartbeatConfig(snapshot.sourceConfig);
   if (
     isDeepStrictEqual(config, snapshot.sourceConfig) &&
@@ -151,8 +150,7 @@ export async function commitAutomaticHeartbeatRepair(
   }
   maintenance.assertAdmission();
   assertPreflightConfigUnchanged(admission.snapshot, snapshot);
-  const { projectRetiredHeartbeatConfig, retireHeartbeatWithDoctor } =
-    await import("./doctor-heartbeat-retirement.js");
+  const { retireHeartbeatWithDoctor } = await import("./doctor-heartbeat-retirement.js");
   maintenance.assertAdmission();
   const projected = projectRetiredHeartbeatConfig(snapshot.sourceConfig);
   const plan = planAutomaticConfigRepair(snapshot, {

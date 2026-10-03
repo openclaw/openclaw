@@ -9,10 +9,15 @@ import {
   withAgentRosterFactsBatch,
 } from "../agents/agent-scope-config.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import type { LegacyHeartbeatConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { LegacyHeartbeatVisibilitySchema } from "./doctor-heartbeat-visibility.js";
+import {
+  LegacyHeartbeatVisibilitySchema,
+  migrateHeartbeatVisibility,
+} from "./doctor-heartbeat-visibility.js";
 
 export type HeartbeatConfig = LegacyHeartbeatConfig;
 
@@ -191,4 +196,35 @@ export function validateLegacyHeartbeatConfig(cfg: OpenClawConfig): void {
       }
     }
   }
+}
+
+/** Validation-only candidate; durable retirement must finish before this config is written. */
+export function projectRetiredHeartbeatConfig(cfg: OpenClawConfigWithLegacyRoster): OpenClawConfig {
+  const next = inheritLegacyDefaultAgentId(cfg, structuredClone(cfg));
+  migrateHeartbeatVisibility(next, []);
+  validateLegacyHeartbeatConfig(next);
+  if (next.agents?.defaults) {
+    delete next.agents.defaults.heartbeat;
+  }
+  for (const entry of Object.values(next.agents?.entries ?? {})) {
+    delete entry.heartbeat;
+  }
+  for (const entry of next.agents?.list ?? []) {
+    delete entry.heartbeat;
+  }
+  for (const [channel, value] of Object.entries(next.channels ?? {})) {
+    if (channel === "modelByChannel" || !isRecord(value)) {
+      continue;
+    }
+    delete value.heartbeatVisibility;
+    if (isRecord(value.accounts)) {
+      for (const account of Object.values(value.accounts)) {
+        if (!isRecord(account)) {
+          continue;
+        }
+        delete account.heartbeatVisibility;
+      }
+    }
+  }
+  return next;
 }
