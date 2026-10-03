@@ -71,6 +71,13 @@ openclaw plugins disable workboard
 
 ## Board appearance
 
+While Workboard is open, its sidebar entry expands to show both Cards and
+Sessions boards, with the open board highlighted. Select a nested board to open it.
+Boards you create in the Control UI are pinned in the sidebar immediately.
+Use **Customize** to pin any other board or remove a pin; removed pins stay removed.
+Pinned boards remain available as top-level entries when you leave Workboard,
+and you can drag them to reorder them.
+
 Choose **New board**, then **Cards** (the default) or **Sessions**. A Sessions
 board starts with the columns described below. A board's kind is permanent;
 create another board to use the other kind. Existing boards remain Cards boards.
