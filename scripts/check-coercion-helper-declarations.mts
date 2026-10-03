@@ -475,11 +475,7 @@ function hasExportModifier(node: ts.ModifiersBase) {
 }
 
 /** Finds directly declared callable exports in one selected canonical module. */
-export function findExportedCallableNames(
-  _source: string,
-  _file: string,
-  sourceFile: ts.SourceFile,
-) {
+export function findExportedCallableNames(sourceFile: ts.SourceFile) {
   const callableLocals = new Set<string>();
   const exportedNames = new Set<string>();
 
@@ -624,11 +620,7 @@ function auditDefaultCanonicalExports(repoRoot: string, parser: API): CanonicalC
   const exportsByFile = new Map(
     auditedModules.map((file) => {
       const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
-      const exportedNames = findExportedCallableNames(
-        source,
-        file,
-        parser.createSourceFile(file, source),
-      );
+      const exportedNames = findExportedCallableNames(parser.createSourceFile(file, source));
       if (!mixedModules.has(file)) {
         return [file, exportedNames] as const;
       }

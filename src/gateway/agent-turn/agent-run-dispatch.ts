@@ -28,6 +28,7 @@ import { agentCommandFromGatewayIngress } from "../../commands/agent.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { errorShapeFromError } from "../error-shape.js";
 import type { GatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
@@ -61,7 +62,7 @@ export function dispatchAgentRunFromGateway(params: {
    * touching a same-runId entry owned by a concurrent chat.send.
    */
   abortController: AbortController;
-  cleanupAbortController: () => void;
+  cleanupAbortController: () => void | Promise<void>;
   io: AgentTurnIo;
   context: AgentTurnContext;
   canonicalSkillWorkspaceDir?: string;
@@ -82,13 +83,20 @@ export function dispatchAgentRunFromGateway(params: {
   const assertSettlementCurrent = params.assertSettlementCurrent;
   const registeredRunEntry = params.admittedRunEntry;
   const jobSessionBinding = registeredRunEntry ?? params.ingressOpts;
-  const publishReplay = (entry: DedupeEntry) =>
+  let runOwnerSettled = false;
+  let pendingReplay: DedupeEntry | undefined;
+  const publishReplay = (entry: DedupeEntry) => {
+    if (!runOwnerSettled) {
+      pendingReplay = entry;
+      return;
+    }
     setGatewayDedupeEntries({
       dedupe: params.context.dedupe,
       keys: params.dedupeKeys,
       session: captureAgentJobSession(jobSessionBinding),
       entry: diagnostics.forReplay(entry),
     });
+  };
   const registeredRunInstance = registeredRunEntry?.operationalRunInstance;
   const registeredLifecycleGeneration = registeredRunEntry?.lifecycleGeneration;
   const registeredSessionKey = registeredRunEntry?.sessionKey;
@@ -144,15 +152,24 @@ export function dispatchAgentRunFromGateway(params: {
     }
   };
   let runOwnerCleanedUp = false;
+  let runOwnerCleanup: Promise<void> | undefined;
   const cleanupRunOwner = () => {
     if (runOwnerCleanedUp) {
-      return;
+      return runOwnerCleanup;
     }
     runOwnerCleanedUp = true;
     if (ownsRunRegistration()) {
       clearAgentRunContext(params.runId, params.ingressOpts.lifecycleGeneration);
     }
-    params.cleanupAbortController();
+    return (runOwnerCleanup = Promise.resolve(params.cleanupAbortController()).then(() => {
+      runOwnerSettled = true;
+      // Recovery can replace the replay while finish is pending; publish through this same owner.
+      if (pendingReplay) {
+        const entry = pendingReplay;
+        pendingReplay = undefined;
+        publishReplay(entry);
+      }
+    }));
   };
   const cronCreatorAuthorityCapability = params.cronCreatorAuthority
     ? createCronCreatorAuthorityCapability(
@@ -229,7 +246,7 @@ export function dispatchAgentRunFromGateway(params: {
   // Startup failures may never enter command finalization; delivery already joined this boundary.
   const agentRun = terminalProducer.settle(agentExecution);
   let inputCompletionWriteFailed = false;
-  const runCompletion = agentRun
+  const dispatchCompletion = agentRun
     .then(async (result) => {
       const recordedOutcome = readAgentRunTerminalOutcome(result);
       const signalStopReason = resolveResolvedAgentTimeoutStopReason(
@@ -261,8 +278,10 @@ export function dispatchAgentRunFromGateway(params: {
       });
       let recordedInputCompletion: AgentRunTerminalOutcome | undefined;
       try {
-        recordedInputCompletion =
-          params.ingressOpts.userTurnTranscriptRecorder?.completeProcessing?.(terminalOutcome);
+        recordedInputCompletion = await completeUserTurnProcessing(
+          params.ingressOpts.userTurnTranscriptRecorder,
+          terminalOutcome,
+        );
         terminalOutcome = recordedInputCompletion ?? terminalOutcome;
       } catch (error) {
         inputCompletionWriteFailed = true;
@@ -325,7 +344,7 @@ export function dispatchAgentRunFromGateway(params: {
           payload: failedPayload,
           error,
         });
-        cleanupRunOwner();
+        await cleanupRunOwner();
         params.io.emitFinal([false, failedPayload, error], {
           runId: params.runId,
           error: summary,
@@ -335,7 +354,7 @@ export function dispatchAgentRunFromGateway(params: {
       persistTerminalDedupe();
       // A final response resumes durable delivery cleanup. Release the terminal
       // run owner first so exact-session deletion cannot race this admission.
-      cleanupRunOwner();
+      await cleanupRunOwner();
       // Send a second res frame (same id) so TS clients with expectFinal can wait.
       // Swift clients will typically treat the first res as the result and ignore this.
       params.io.emitFinal([true, { ...payload }, undefined], { runId: params.runId });
@@ -361,8 +380,10 @@ export function dispatchAgentRunFromGateway(params: {
       if (!inputCompletionWriteFailed) {
         try {
           terminalOutcome =
-            params.ingressOpts.userTurnTranscriptRecorder?.completeProcessing?.(terminalOutcome) ??
-            terminalOutcome;
+            (await completeUserTurnProcessing(
+              params.ingressOpts.userTurnTranscriptRecorder,
+              terminalOutcome,
+            )) ?? terminalOutcome;
         } catch (completionError) {
           diagnostics.warning("input completion persistence failed")(completionError);
         }
@@ -400,21 +421,25 @@ export function dispatchAgentRunFromGateway(params: {
         onRecovered: () => persistTerminalDedupe(true),
       });
       persistTerminalDedupe(settled);
-      cleanupRunOwner();
+      await cleanupRunOwner();
       const responseError = aborted && settled ? undefined : error;
       params.io.emitFinal([aborted && settled, payload, responseError], {
         runId: params.runId,
         ...diagnostics.errorMeta(responseError?.message, !aborted),
       });
       return { terminalOutcome, settled };
-    })
-    .finally(() => {
+    });
+  const runCompletion = (async () => {
+    try {
+      return await dispatchCompletion;
+    } finally {
       try {
-        cleanupRunOwner();
+        await cleanupRunOwner();
       } finally {
         followupCompletion?.finishExecution(params.runId);
       }
-    });
+    }
+  })();
 
   // Gateway shutdown must join this execution, not just its admission.
   return runCompletion;

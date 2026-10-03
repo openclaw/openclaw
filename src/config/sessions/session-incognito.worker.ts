@@ -167,7 +167,7 @@ export function createIncognitoSessionWorker(
             stage: "prepare",
             facts: { identity, sessions: facts },
           });
-          return { value: history.execute(command.input), facts };
+          return history.execute(command, facts);
         });
       }
       if (isIncognitoLifecycleCommand(command)) {

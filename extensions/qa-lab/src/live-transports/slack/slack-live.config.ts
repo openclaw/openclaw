@@ -136,18 +136,13 @@ export function buildSlackQaConfig(
           : {}),
       }
     : codexAgentDefaults;
-  const qaAgentList = progressOverrides
-    ? baseCfg.agents?.list?.map((agent) => {
-        if (agent.id !== "qa") {
-          return agent;
-        }
-        // Slack draft edits cannot preserve custom authorship. Remove the
-        // synthetic QA identity so progress scenarios reach the draft path.
-        const qaAgent = { ...agent };
-        delete qaAgent.identity;
-        return qaAgent;
-      })
-    : baseCfg.agents?.list;
+  const qaAgentEntries = { ...baseCfg.agents?.entries };
+  if (progressOverrides && qaAgentEntries.qa) {
+    // Slack draft edits cannot preserve custom authorship. Remove the
+    // synthetic QA identity so progress scenarios reach the draft path.
+    qaAgentEntries.qa = { ...qaAgentEntries.qa };
+    delete qaAgentEntries.qa.identity;
+  }
   const execApprovalsConfig = approvalOverrides
     ? {
         enabled: true,
@@ -210,7 +205,7 @@ export function buildSlackQaConfig(
           agents: {
             ...baseCfg.agents,
             ...(qaAgentDefaults ? { defaults: qaAgentDefaults } : {}),
-            ...(qaAgentList ? { list: qaAgentList } : {}),
+            ...(baseCfg.agents?.entries ? { entries: qaAgentEntries } : {}),
           },
         }
       : {}),

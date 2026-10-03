@@ -12,6 +12,11 @@ import {
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  codeModeCommandFailed,
+  readCodeModeNativeCall,
+  type CodeModeNativeCall,
+} from "./event-projector-code-mode.js";
+import {
   isMutatingNativeToolItem,
   isNonSuccessItemStatus,
   isProjectedNativeToolItem,
@@ -26,7 +31,6 @@ import {
   itemToolError,
   itemToolResult,
   itemTranscriptResultText,
-  readCodeModeNativePatchInput,
   readInterceptedNativePatchInput,
 } from "./event-projector-tool-items.js";
 import {
@@ -92,7 +96,13 @@ export class CodexToolTranscriptProjection {
   private readonly rawNativeToolOutputByCallId = new Map<string, string>();
   private readonly pendingRawOutputIds = new Set<string>();
   private readonly rawCallsById = new Map<string, ToolTranscriptCallInput>();
-  private readonly codeModeNativePatchInputsByCallId = new Map<string, string>();
+  private readonly codeModeNativeCallsByCallId = new Map<
+    string,
+    {
+      call: CodeModeNativeCall;
+      nativeItemObserved: boolean;
+    }
+  >();
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
@@ -179,41 +189,60 @@ export class CodexToolTranscriptProjection {
   }
 
   recordNativeToolCall(item: CodexThreadItem | undefined): void {
-    if (!item || !isProjectedNativeToolItem(item)) {
-      return;
-    }
-    const name = itemName(item);
-    if (name) {
-      this.recordToolCall({ id: item.id, name, arguments: itemToolArgs(item) });
+    if (item) {
+      const call = this.nativeTranscriptCall(item);
+      if (!call) {
+        return;
+      }
+      const name = call.name;
+      // Native items have independent IDs, so never guess which concurrent
+      // cell owns one. A possible native receipt suppresses fallback synthesis.
+      for (const pending of this.codeModeNativeCallsByCallId.values()) {
+        if (pending.call.name === name) {
+          pending.nativeItemObserved = true;
+        }
+      }
+      this.recordToolCall(call);
     }
   }
 
   recordNativeToolResult(item: CodexThreadItem | undefined, details?: unknown): void {
-    if (!item || !isProjectedNativeToolItem(item) || this.resultIds.has(item.id)) {
+    if (!item || this.resultIds.has(item.id)) {
       return;
     }
-    const name = itemName(item);
-    if (name) {
-      const status = itemStatus(item);
-      const approvalTimeoutExplanation = this.progress.approvalTimeoutExplanation(item.id, status);
-      this.recordToolResult({
-        id: item.id,
-        name,
-        text:
-          approvalTimeoutExplanation ??
-          this.rawNativeToolOutputByCallId.get(item.id) ??
-          itemTranscriptResultText(item, this.progress.outputTextByItem),
-        isError: isNonSuccessItemStatus(status),
-        ...(item.type === "commandExecution" &&
-        item.aggregatedOutput == null &&
-        this.progress.isOutputTruncated(item.id)
-          ? { captureTruncated: true }
-          : {}),
-        details,
-        ...(item.type === "webSearch" ? { resultContentSource: "network" } : {}),
-      });
-      this.progress.approvalTimeoutKinds.delete(item.id);
+    const call = this.nativeTranscriptCall(item);
+    if (!call) {
+      return;
     }
+    const status = itemStatus(item);
+    const approvalTimeoutExplanation = this.progress.approvalTimeoutExplanation(item.id, status);
+    this.recordToolResult({
+      id: item.id,
+      name: call.name,
+      text:
+        approvalTimeoutExplanation ??
+        this.rawNativeToolOutputByCallId.get(item.id) ??
+        itemTranscriptResultText(item, this.progress.outputTextByItem),
+      isError: isNonSuccessItemStatus(status),
+      ...(item.type === "commandExecution" &&
+      item.aggregatedOutput == null &&
+      this.progress.isOutputTruncated(item.id)
+        ? { captureTruncated: true }
+        : {}),
+      details,
+      ...(item.type === "webSearch" ? { resultContentSource: "network" } : {}),
+    });
+    this.progress.approvalTimeoutKinds.delete(item.id);
+  }
+
+  private nativeTranscriptCall(item: CodexThreadItem): ToolTranscriptCallInput | undefined {
+    if (item.type === "collabAgentToolCall" || item.type === "subAgentActivity") {
+      return this.rawCallsById.get(item.id);
+    }
+    const name = itemName(item);
+    return isProjectedNativeToolItem(item) && name
+      ? { id: item.id, name, arguments: itemToolArgs(item) }
+      : undefined;
   }
 
   recordRawNativeToolItem(item: JsonObject): void {
@@ -246,11 +275,9 @@ export class CodexToolTranscriptProjection {
       ) {
         args = { input: item.input };
       } else if (type === "custom_tool_call" && item.name === "exec") {
-        const input = readCodeModeNativePatchInput(item.input);
-        if (input) {
-          // Successful code-mode patches already emit their own FileChange;
-          // retain only the outer call so a pre-emission denial can be linked.
-          this.codeModeNativePatchInputsByCallId.set(callId, input);
+        const call = readCodeModeNativeCall(item.input);
+        if (call) {
+          this.codeModeNativeCallsByCallId.set(callId, { call, nativeItemObserved: false });
         }
         return;
       } else if (type === "function_call" && typeof item.arguments === "string") {
@@ -297,22 +324,33 @@ export class CodexToolTranscriptProjection {
       typeof item.output === "string"
         ? item.output
         : collectDynamicToolContentText(item.output as CodexThreadItem["contentItems"]);
-    const execution = rawCall?.name === "exec" ? CODE_MODE_RESULT_RE.exec(responseText) : null;
-    const codeModePatchInput = this.codeModeNativePatchInputsByCallId.get(callId);
-    if (codeModePatchInput) {
-      this.codeModeNativePatchInputsByCallId.delete(callId);
-      if (execution?.[1]?.toLowerCase() === "failed") {
-        const failure = execution[2]?.replace(/^Script error:\s*/iu, "").trim() || text;
+    const execution =
+      rawCall?.name === "exec" || rawCall?.name === "wait"
+        ? CODE_MODE_RESULT_RE.exec(responseText)
+        : null;
+    const codeModeCall = this.codeModeNativeCallsByCallId.get(callId);
+    this.codeModeNativeCallsByCallId.delete(callId);
+    if (codeModeCall && !codeModeCall.nativeItemObserved) {
+      const failed =
+        execution?.[1]?.toLowerCase() === "failed" ||
+        (execution?.[1]?.toLowerCase() === "completed" &&
+          codeModeCall.call.name === "bash" &&
+          codeModeCommandFailed(execution[2] ?? ""));
+      if (failed) {
+        const failure = execution?.[2]?.replace(/^Script error:\s*/iu, "").trim() || text;
         this.recordToolCall({
           id: callId,
-          name: "apply_patch",
-          arguments: { input: codeModePatchInput },
+          ...codeModeCall.call,
         });
-        this.recordToolResult({ id: callId, name: "apply_patch", text: failure, isError: true });
+        this.recordToolResult({
+          id: callId,
+          name: codeModeCall.call.name,
+          text: failure,
+          isError: true,
+        });
         return;
       }
-      // The nested FileChange owns patch success. Keep every outer response
-      // as exec, including unknown formats, without inventing patch success.
+      // Native items own success; unknown formats remain outer exec evidence.
     }
     const result = this.messages.find(
       (message): message is Extract<AgentMessage, { role: "toolResult" }> =>

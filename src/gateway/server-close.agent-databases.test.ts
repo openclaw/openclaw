@@ -52,8 +52,89 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import * as mentionWorker from "./mention-inbox-worker.js";
+import { readMentionInbox } from "./mention-inbox.test-support.js";
+import type { MentionCommittedInput } from "./mention-inbox.types.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
+import { identifiedClient } from "./server-methods/sessions-sharing.test-support.js";
 import type { GatewayServer } from "./server-public.js";
+
+it("persists accepted mentions before Gateway worker close and rejects records after the close prelude", async ({
+  signal,
+}) => {
+  const fixture = await createGatewayMetadataCloseFixture("gateway-mention-close");
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const parentClosed = createDeferredCore();
+  let closing: Promise<void> | undefined;
+  let accepted: Promise<void> | undefined;
+  try {
+    const port = await fixture.reservePort();
+    const server = await fixture.start(port);
+    const kernel = fixture.kernels.get(port);
+    assert(kernel);
+    const alice = ensureProfileForEmail("alice@mentions.example.test");
+    const bob = ensureProfileForEmail("bob@mentions.example.test");
+    const sessionKey = "agent:main:mention-close";
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey },
+      {
+        sessionId: "mention-close-session",
+        updatedAt: 1,
+        visibility: "shared",
+        createdActor: { type: "human", source: "profile", id: alice.id },
+      },
+    );
+    await kernel.mentionInbox.invalidateAsync();
+    const input: MentionCommittedInput = {
+      sourceId: "accepted-before-close",
+      committedSource: { generation: "mention-close", sequence: 1, timestamp: 1 },
+      sessionKey,
+      agentId: "main",
+      sessionId: "mention-close-session",
+      messageId: "accepted-before-close",
+      senderProfileId: alice.id,
+      recipientProfileIds: [bob.id],
+      excerpt: "@Bob review this change",
+    };
+    const readSnapshot = mentionWorker.readMentionSnapshot;
+    vi.spyOn(mentionWorker, "readMentionSnapshot").mockImplementationOnce(async (...args) => {
+      const snapshot = await readSnapshot(...args);
+      entered.resolve();
+      await release.promise;
+      return snapshot;
+    });
+    accepted = kernel.mentionInbox.recordCommittedInputAsync(input);
+    await withinTest(entered.promise, signal);
+    const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
+    kernel.scheduler.signal.addEventListener("abort", () => parentClosed.resolve(), { once: true });
+    closing = server.close({ reason: "mention close regression" });
+    await withinTest(parentClosed.promise, signal);
+    await kernel.mentionInbox.recordCommittedInputAsync({
+      ...input,
+      sourceId: "refused-after-close",
+      messageId: "refused-after-close",
+    });
+    expect(shared.isOpen).toBe(true);
+    release.resolve();
+    await accepted;
+    await closing;
+    expect(shared.isOpen).toBe(false);
+
+    const reopenedPort = await fixture.reservePort();
+    await fixture.start(reopenedPort);
+    const reopened = fixture.kernels.get(reopenedPort);
+    assert(reopened);
+    const result = await readMentionInbox(reopened.mentionInbox, identifiedClient(bob.id, "Bob"));
+    expect(result.items.map((item) => item.messageId)).toEqual(["accepted-before-close"]);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([accepted, closing]);
+    vi.restoreAllMocks();
+    await fixture.cleanup();
+  }
+});
 
 it("joins scheduled plugin work before closing stores while retaining a deleted agent store", async ({
   signal,

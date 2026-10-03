@@ -1,7 +1,20 @@
-import { mediaKindFromMime, type MediaKind } from "@openclaw/media-core/constants";
+import { maxBytesForKind, mediaKindFromMime, type MediaKind } from "@openclaw/media-core/constants";
 import { normalizeMimeType } from "@openclaw/media-core/mime";
+import { WEBCHAT_LOCAL_MEDIA_MAX_BYTES } from "../media/configured-max-bytes.js";
 
 export type ManagedMediaKind = Extract<MediaKind, "image" | "audio" | "video" | "document">;
+
+export function maxBytesForManagedMediaKind(
+  kind: ManagedMediaKind,
+  imageMaxBytes: number,
+  local = false,
+): number {
+  return kind === "image"
+    ? imageMaxBytes
+    : local && (kind === "audio" || kind === "video")
+      ? WEBCHAT_LOCAL_MEDIA_MAX_BYTES
+      : maxBytesForKind(kind);
+}
 
 const MANAGED_DOCUMENT_MIME_TYPES = new Set([
   "application/json",
@@ -31,4 +44,13 @@ export function resolveManagedMediaKind(contentType: string | undefined): Manage
     return kind;
   }
   return normalized && MANAGED_DOCUMENT_MIME_TYPES.has(normalized) ? "document" : null;
+}
+
+export function formatLimitMiB(bytes: number): string {
+  if (bytes < 1024 * 1024) {
+    return `${bytes} bytes`;
+  }
+  return Number.isInteger(bytes / (1024 * 1024))
+    ? `${bytes / (1024 * 1024)} MiB`
+    : `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }

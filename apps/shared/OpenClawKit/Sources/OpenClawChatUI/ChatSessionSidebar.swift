@@ -44,6 +44,7 @@ struct ChatSessionSidebar: View {
     @State var observedOrder = ChatSessionSidebarModel.ObservedOrder()
     @State var batch = ChatSessionSidebarBatch()
     @State private var lastSnoozeWake = Date.distantPast
+    @State var catalogData = ChatSessionSidebarCatalogs()
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
@@ -97,7 +98,10 @@ struct ChatSessionSidebar: View {
             {
                 self.childLoadState(selectedTreeSession)
             }
-            if sections.allSatisfy(\.nodes.isEmpty), self.rosterData?.isSettled != false {
+            self.catalogSections(now: now, ownership: ownership, previewRequest: previewRequest)
+            if sections.allSatisfy(\.nodes.isEmpty), self.catalogPresentation.catalogs.isEmpty,
+               self.rosterData?.isSettled != false
+            {
                 Text(self.query
                     .isEmpty ? (self.sessionStatus == .archived ? String(localized: "No archived threads") :
                         String(localized: "No threads yet")) : String(localized: "No matching threads"))
@@ -109,6 +113,7 @@ struct ChatSessionSidebar: View {
             }
         }
         .listStyle(.sidebar)
+        .modifier(ChatSidebarCatalogLifecycle(data: self.catalogData, viewModel: self.viewModel))
         .listItemTint(.monochrome)
         .sidebarAgentAvatars(owner: self.viewModel.sidebarData, transport: self.viewModel.transport)
         .searchable(

@@ -32,14 +32,6 @@ type PackageJson = {
   peerDependenciesMeta?: Record<string, { optional?: boolean }>;
 };
 
-type ParsedReleaseTag = {
-  version: string;
-  packageVersion: string;
-  baseVersion: string;
-  channel: "stable" | "alpha" | "beta";
-  correctionNumber?: number;
-};
-
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const FS_SAFE_PACKAGE = "@openclaw/fs-safe";
 const REQUIRED_PACKED_PATHS = [
@@ -126,26 +118,6 @@ function shouldSkipPackedTarballValidation(env = process.env): boolean {
     return false;
   }
   return !/^(0|false)$/i.test(raw);
-}
-
-function parseReleaseTagVersion(version: string): ParsedReleaseTag | null {
-  const trimmed = version.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const parsedVersion = parseReleaseVersion(trimmed);
-  if (parsedVersion !== null) {
-    return {
-      version: trimmed,
-      packageVersion: parsedVersion.version,
-      baseVersion: parsedVersion.baseVersion,
-      channel: parsedVersion.channel,
-      correctionNumber: parsedVersion.correctionNumber,
-    };
-  }
-
-  return null;
 }
 
 export function resolveNpmReleaseCheckCommandTimeoutMs(
@@ -250,7 +222,7 @@ export function collectReleaseTagErrors(params: {
   }
 
   const tagVersion = releaseTag.startsWith("v") ? releaseTag.slice(1) : releaseTag;
-  const parsedTag = parseReleaseTagVersion(tagVersion);
+  const parsedTag = parseReleaseVersion(tagVersion);
   if (parsedTag === null) {
     errors.push(
       `Release tag must match vYYYY.M.PATCH, vYYYY.M.PATCH-beta.N, or fallback correction tag vYYYY.M.PATCH-N; found "${releaseTag || "<missing>"}".`,
@@ -266,7 +238,7 @@ export function collectReleaseTagErrors(params: {
     parsedTag !== null &&
     parsedVersion !== null &&
     parsedTag.channel === parsedVersion.channel &&
-    (parsedTag.packageVersion === parsedVersion.version ||
+    (parsedTag.version === parsedVersion.version ||
       (parsedVersion.channel === "stable" &&
         parsedVersion.correctionNumber === undefined &&
         parsedTag.correctionNumber !== undefined &&
@@ -314,12 +286,6 @@ function portableBasename(value: string): string {
   return value.split(/[/\\]/u).at(-1) ?? value;
 }
 
-type NpmCommandInvocation = {
-  command: string;
-  args: string[];
-  windowsVerbatimArguments?: boolean;
-};
-
 export function resolveNpmCommandInvocation(
   params: {
     comSpec?: string;
@@ -328,7 +294,7 @@ export function resolveNpmCommandInvocation(
     nodeExecPath?: string;
     platform?: NodeJS.Platform;
   } = {},
-): NpmCommandInvocation {
+): ReleaseCheckCommandInvocation {
   const npmArgs = params.npmArgs ?? [];
   const npmExecPath = params.npmExecPath ?? process.env.npm_execpath;
   const nodeExecPath = params.nodeExecPath ?? process.execPath;

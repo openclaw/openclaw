@@ -59,7 +59,9 @@ describe("gateway hooks helpers", () => {
         allowedAgentIds,
       },
       agents: {
-        list: [{ id: "main", default: true }, { id: "hooks" }],
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, hooks: {} },
       },
     }) as OpenClawConfig;
 
@@ -373,7 +375,9 @@ describe("gateway hooks helpers", () => {
     const cfg = {
       hooks: { enabled: true, token: "secret" },
       agents: {
-        list: [{ id: "main", default: true }, { id: "hooks" }],
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, hooks: {} },
       },
     } as OpenClawConfig;
     const resolved = resolveHooksConfigOrThrow(cfg);
@@ -424,13 +428,18 @@ describe("gateway hooks helpers", () => {
         agents: {
           ownership,
           defaults: { systemAgent: { agentId: "research" } },
-          entries: { ops: { default: true }, research: {} },
+          entries: { ops: {}, research: {} },
         },
       });
-      expect(resolveEffectiveHookTargetAgentId(resolved, undefined, "request")).toEqual({
-        ok: true,
-        effectiveAgentId: ownership === "explicit" ? "research" : "ops",
-      });
+      expect(resolveEffectiveHookTargetAgentId(resolved, undefined, "request")).toEqual(
+        ownership === "explicit"
+          ? { ok: true, effectiveAgentId: "research" }
+          : {
+              ok: false,
+              code: "agent-required",
+              error: "agentId is required when multiple agents are configured",
+            },
+      );
     },
   );
 

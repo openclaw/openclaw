@@ -124,7 +124,6 @@ async function dispatch(
       transcriptPrompt: "",
       systemPrompt: "",
       runtimeOnly: true,
-      sessionPromptState,
       toolResultMaxChars: resolveLiveToolResultMaxChars({
         contextWindowTokens,
       }),

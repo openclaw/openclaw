@@ -186,7 +186,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
       let compactionNoopReason: string | undefined;
       let blockedByActiveRun = false;
       let blockedByQueuedWork = false;
-      await runExclusiveSessionLifecycleMutation({
+      await runExclusiveSessionLifecycleMutation("compact", {
         scope: storePath,
         identities: lifecycleIdentities,
         kind: "compaction",
@@ -297,6 +297,14 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             const trimResult = await trimSessionTranscriptForManualCompact(transcriptScope, {
               maxLines,
             });
+            if (trimResult.compacted) {
+              await recordSessionCompacted({
+                sessionKey: target.canonicalKey,
+                operationId,
+                sessionId,
+                agentId: target.agentId ?? requestedAgentId,
+              });
+            }
             respond(
               true,
               {
@@ -308,12 +316,6 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               undefined,
             );
             if (trimResult.compacted) {
-              recordSessionCompacted({
-                sessionKey: target.canonicalKey,
-                operationId,
-                sessionId,
-                agentId: target.agentId ?? requestedAgentId,
-              });
               emitSessionsChanged(context, {
                 sessionKey: target.canonicalKey,
                 agentId: target.agentId,
@@ -426,7 +428,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               );
               return;
             }
-            recordSessionCompacted({
+            await recordSessionCompacted({
               sessionKey: target.canonicalKey,
               operationId,
               sessionId: expectedEntry.sessionId,

@@ -6,7 +6,7 @@ read_when:
   - You need to select a SQLite library for Bun on macOS
 ---
 
-Bun is an explicit opt-in runtime for OpenClaw's CLI, Gateway, and managed node host. Node remains the primary and recommended runtime for those installations. The macOS app uses the OpenClaw Bun fork for its bundled private runtime, described below. This reference covers Bun requirements and compatibility; see [Bun](/install/bun) for installation and opt-in steps, or [Node.js compatibility](/install/node-compatibility) for Node requirements.
+Bun is an explicit opt-in runtime for standalone OpenClaw CLI, Gateway, and managed node host installations. Node remains their primary and recommended runtime. The native macOS app and fresh local Tauri installations on Linux use the OpenClaw Bun fork for their app-managed runtime. This reference covers Bun requirements and compatibility; see [Bun](/install/bun) for standalone installation and opt-in steps, or [Node.js compatibility](/install/node-compatibility) for Node requirements.
 
 Plugin resolution stays with Bun's native/Jiti loader and `Bun.plugin` on Bun, even when `Module.registerHooks` is available; Node uses `Module.registerHooks`.
 
@@ -24,6 +24,17 @@ The platform defaults come from [Bun's SQLite build policy](https://github.com/o
 
 ## macOS app private runtime
 
+Both desktop apps and CI consume the single `scripts/lib/openclaw-bun.json` pin.
+Every repin requires both CI's paired Bun replay and Bun-only smoke, and the
+native macOS app's probes and two-binary test set; a failure in either blocks the
+pin for all consumers. See [shared runtime pin](/platforms/mac/dev-setup#shared-bun-pin-and-repin-gate).
+The Linux Tauri app leaves existing Gateway services unchanged on startup and
+updates. Switching to its current bundled Bun requires **Use bundled runtime…**;
+see [explicit runtime selection](/platforms/linux#adopt-the-bundled-runtime).
+macOS Tauri keeps its existing runtime behavior, separate from the native macOS
+app. Windows Tauri retains its existing runtime until a signed fork Windows build
+is available; an unsigned dry-run is not shippable.
+
 OpenClaw.app bundles a pinned [OpenClaw Bun fork](https://github.com/openclaw/bun),
 the full matching OpenClaw package, and a signed SQLite library that meets the
 WAL safety floor and supports extension loading. Its private `node worker` and
@@ -33,10 +44,12 @@ Node or Homebrew SQLite installation. Bundled native libraries remain Team-signe
 only the Bun executable disables library validation to load runtime-installed
 plugin addons. See the [signing tradeoff](/platforms/mac/signing).
 
-The package includes the CLI, Gateway, Control UI, npm, and `sqlite-vec`, but the
-app's Gateway still runs externally. Bundled Gateway hosting is a separate
-subsequent change; the app's external CLI installation and launchd management
-remain unchanged. See [Gateway on macOS](/platforms/mac/bundled-gateway) and
+The package includes the CLI, Gateway, Control UI, npm, and `sqlite-vec`. Fresh
+local profiles use the bundled Gateway. Eligible app-managed Node services
+migrate through the installed updater before a same-version switch to Bun,
+with verified Node rollback. Independently managed services and saved operator
+runtime pins remain with their existing owner. See
+[Gateway on macOS](/platforms/mac/bundled-gateway) and
 [macOS developer setup](/platforms/mac/dev-setup).
 
 <a id="sqlite-library-selection" />

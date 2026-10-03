@@ -55,7 +55,10 @@ vi.mock("../mcp-app-standalone.js", () => ({
 }));
 
 import type { McpToolCatalog, SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
-import { getMcpAppModelContext } from "../../agents/mcp-app-model-context.js";
+import {
+  getMcpAppModelContext,
+  leaseMcpAppModelContextForTurn,
+} from "../../agents/mcp-app-model-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { McpServerConfig } from "../../config/types.mcp.js";
 
@@ -63,6 +66,9 @@ const policyEntry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
 let policyServer: McpServerConfig | undefined;
 import type { McpAppPrepareToolCall } from "../../agents/mcp-ui-resource.js";
 import { resolveMcpAppAllowedToolNames } from "../mcp-app-operations.js";
+import { createGatewayBroadcaster } from "../server-broadcast.js";
+import { makeClient } from "../server-broadcast.test-helpers.js";
+import { GatewayClientRegistry } from "../server/client-registry.js";
 import { mcpAppHandlers } from "./mcp-app.js";
 
 const view = {
@@ -257,6 +263,65 @@ describe("MCP App gateway bridge", () => {
     expect(removed.mock.calls[0]?.[1].state.content).toEqual([content[1]]);
     const stale = await invoke("mcp.app.removeModelContext", { ...params, updateId, index: 0 });
     expect(stale.mock.calls[0]?.[0]).toBe(false);
+  });
+  it("delivers the latest clearing receipt after two context updates and accepts late removal", async () => {
+    const params = { sessionKey: "agent:main:main", viewId: "cv_app" };
+    const activeRuntime = runtime();
+    mocks.peekSessionMcpRuntime.mockReturnValue(activeRuntime);
+    const owner = makeClient("context-client", "operator", ["operator.read"]);
+    const observer = makeClient("observer", "operator", ["operator.read"]);
+    const { broadcastToConnIds } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([owner.client, observer.client]),
+    });
+    const connection = new AbortController();
+    const respond = vi.fn();
+    try {
+      await mcpAppHandlers["mcp.app.view"]!({
+        params,
+        respond,
+        client: {
+          ...owner.client,
+          connectionSignal: connection.signal,
+        },
+        context: {
+          getMcpAppSandboxPort: () => 18790,
+          getRuntimeConfig: () => ({ mcp: { apps: { enabled: true } } }),
+          broadcastToConnIds,
+        },
+      } as never);
+      expect(respond.mock.calls[0]?.[0]).toBe(true);
+      await invoke("mcp.app.updateModelContext", {
+        ...params,
+        content: [
+          { type: "text", text: "selected hex bolt" },
+          { type: "image", mimeType: "image/png", data: "aGVsbG8=" },
+        ],
+      });
+      const written = await invoke("mcp.app.updateModelContext", {
+        ...params,
+        content: [
+          { type: "text", text: "selected hex bolt" },
+          { type: "image", mimeType: "image/png", data: "aGVsbG8=" },
+          { type: "resource_link", uri: "parts://bolt", name: "Bolt" },
+        ],
+      });
+      const updateId = written.mock.calls[0]?.[1]._meta["openai/modelContext"].updateId;
+      owner.socket.send.mockClear();
+      const turn = leaseMcpAppModelContextForTurn({ runtime: activeRuntime });
+      expect(turn).toBeDefined();
+      turn!.commit();
+      expect(owner.socket.send.mock.calls.map(([frame]) => JSON.parse(frame))).toEqual([
+        expect.objectContaining({
+          event: "mcp.app.hostContextChanged",
+          payload: { viewId: "cv_app", modelContext: null, updateId },
+        }),
+      ]);
+      expect(observer.socket.send).not.toHaveBeenCalled();
+      const removed = await invoke("mcp.app.removeModelContext", { ...params, updateId, index: 0 });
+      expect(removed.mock.calls[0]?.slice(0, 2)).toEqual([true, { state: null }]);
+    } finally {
+      connection.abort();
+    }
   });
   beforeEach(() => {
     policyEntry.sessionId = "session-1";
@@ -492,7 +557,7 @@ describe("MCP App gateway bridge", () => {
     const config = {
       agents: {
         ownership: "explicit",
-        list: [{ id: "ops" }, { id: "research" }],
+        entries: { ops: {}, research: {} },
       },
     };
     const missing = await invoke(
@@ -601,7 +666,7 @@ describe("MCP App gateway bridge", () => {
       {
         agents: {
           ownership: "explicit",
-          list: [{ id: "ops" }, { id: "research" }],
+          entries: { ops: {}, research: {} },
         },
       },
     );

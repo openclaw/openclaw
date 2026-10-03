@@ -543,7 +543,7 @@ describe("runHeartbeatOnce", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { heartbeat: { every: "30m" } },
-        list: [{ id: "main" }, { id: "ops", heartbeat: { every: "1h" } }],
+        entries: { main: {}, ops: { heartbeat: { every: "1h" } } },
       },
     };
 
@@ -563,7 +563,7 @@ describe("runHeartbeatOnce", () => {
           workspace: tmpDir,
           heartbeat: { every: "0m", target: "none" },
         },
-        list: [{ id: "main" }],
+        entries: { main: {} },
       },
       channels: { whatsapp: { allowFrom: ["*"] } },
       session: { store: storePath },

@@ -1135,12 +1135,7 @@ export function withAugmentedPluginNpmManifestForPackage<T>(
   try {
     fs.cpSync(packageDir, stagedPackageDir, {
       recursive: true,
-      // Historical candidates contain npm shrinkwraps. npm ci prefers them to
-      // the fresh pnpm-policy lock, so exclude only the bundle's root shrinkwrap
-      // from staging; preserve the frozen source and dependency-owned locks.
-      filter: (source) =>
-        path.basename(source) !== "node_modules" &&
-        (!bundleDependencies || source !== path.join(packageDir, "npm-shrinkwrap.json")),
+      filter: (source) => path.basename(source) !== "node_modules",
     });
     return withPluginNpmManifestOverlay(
       { ...resolvedParams, repoRoot, packageDir: stagedPackageDir },

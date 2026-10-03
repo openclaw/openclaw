@@ -144,12 +144,29 @@ export async function loadAgentEntryPatchOperations() {
 
 export async function loadAgentCompoundOperations() {
   const turn = await import("../config/sessions/session-turn.worker.js");
+  const reset = await import("../config/sessions/session-reset.worker.js");
   const predicates = await import("../config/sessions/session-turn-predicate.js");
   await predicates.prepareSessionTurnPredicates();
   return {
     "session.turn.prepare": turn.prepareSessionTurn,
     "session.turn.commit": turn.commitSessionTurn,
+    "session.lifecycle.reset": reset.commitSessionReset,
   } satisfies Handlers;
+}
+
+export async function loadAgentNativeBindingOperations() {
+  const kernel = await import("../config/sessions/session-native-binding.worker.js");
+  return {
+    "session.nativeBindings.delete": kernel.deleteSessionWithNativeBindings,
+  } satisfies Handlers;
+}
+
+export async function prepareAgentNativeBindingOperation(
+  input: import("../config/sessions/session-native-binding.types.js").SessionNativeBindingDeletion,
+  env?: NodeJS.ProcessEnv,
+) {
+  const kernel = await import("../config/sessions/session-native-binding.worker.js");
+  await kernel.prepareSessionNativeBindingDeletion(input, env);
 }
 
 export async function loadAgentTrajectoryOperations() {
@@ -237,9 +254,18 @@ export async function loadAgentReactionOperations() {
 }
 
 export async function loadAgentPendingInputOperations() {
+  const pending = await import("../config/sessions/session-pending-input-operations.kernel.js");
   const kernel = await import("../config/sessions/session-pending-input-withdrawal.worker.js");
   const history = await import("../config/sessions/session-pending-input-history-reconcile.js");
   return {
+    "session.pendingInputs.read": (
+      input: Parameters<typeof pending.readPendingInput>[1],
+      { open },
+    ) => pending.readPendingInput(open(), input),
+    "session.pendingInputs.mutate": (
+      input: Parameters<typeof pending.mutatePendingInput>[0],
+      context,
+    ) => pending.mutatePendingInput(input, context, deferSqliteWorkerCommitReceipt),
     "session.pendingInputs.interruptHistory": (
       input: Parameters<typeof history.interruptPendingInputHistoryInDatabase>[2],
       { open, options, admit },
@@ -356,6 +382,7 @@ export type RegisteredAgentWorkerOperations = WorkerOperations<
     Awaited<ReturnType<typeof loadAgentEntryReadOperations>> &
     Awaited<ReturnType<typeof loadAgentEntryPatchOperations>> &
     Awaited<ReturnType<typeof loadAgentCompoundOperations>> &
+    Awaited<ReturnType<typeof loadAgentNativeBindingOperations>> &
     Awaited<ReturnType<typeof loadAgentRestartRecoveryOperations>> &
     Awaited<ReturnType<typeof loadAgentTrajectoryOperations>> &
     Awaited<ReturnType<typeof loadAgentArchiveOperations>> &

@@ -34,7 +34,6 @@ import {
   skillLibraryRevisionDir,
   SkillTreeDirectoryError,
 } from "../library/bundle.js";
-import { SkillLibraryError } from "../library/errors.js";
 import { readSkillLibrarySelectionManifests } from "../library/selection-read.js";
 import {
   captureSkillLibrarySelection,
@@ -49,6 +48,7 @@ import {
   recordSkillFileHost,
   resolveSkillFileHost,
 } from "../skill-file-host.js";
+import { SkillLibraryError } from "../skill-library-error.js";
 import type { ExplicitSkillSelection, SkillSnapshot, SkillResourceSourceReader } from "../types.js";
 import { resolveSkillReadPath } from "../workspace-skill-read-path.js";
 import { resolveSkillResourceCandidates } from "./resource-candidates.js";

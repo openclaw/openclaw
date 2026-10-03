@@ -43,6 +43,16 @@ through before retrying. Retirement must leave persisted source data untouched.
 Legacy normalization belongs to Doctor and migration owners, with the existing
 backup and verification flow. Runtime readers consume canonical state.
 
+### Workspace setup
+
+The nested `<workspace>/.openclaw/workspace-state.json` layout is retired. Its
+last stable writer was `2026.6.8`, published to npm on June 16, 2026. Later
+preservation rewrites wrote `<workspace>/openclaw-workspace-state.json` instead.
+Upgrade through `2026.9.7` and run `openclaw doctor --fix` before updating to
+import the nested file. Current Doctor leaves it untouched.
+The root-level setup file and workspace attestations remain supported migration
+inputs because July releases still wrote them.
+
 ### Session settings
 
 Global and project `settings.json` readers refuse retired settings before
@@ -174,6 +184,7 @@ Doctor also refuses these retired config inputs:
 - `channels.telegram.requireMention`, `channels.feishu.accounts.<id>.botName`,
   and the retired `channels.webchat` section.
 - `channels.telegram.groupMentionsOnly`; use `channels.telegram.groups["*"].requireMention`.
+- `channels.whatsapp.exposeErrorText`, including account overrides.
 - `session.threadBindings.ttlHours` and Discord/LINE/Matrix/Telegram `threadBindings.ttlHours`,
   including per-account settings.
 - Telegram `dm`, `direct.*.threadReplies`, native draft preview settings, and scalar
@@ -190,6 +201,11 @@ succeed. Doctor preserves the config and stops with recovery guidance instead
 of stripping these settings or replacing them with a backup. For an older installation,
 [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
 and run its Doctor migrations before installing the latest version.
+
+WhatsApp's `exposeErrorText` has been ignored since April 2026. Remove it from
+the reported channel or account path before retrying; removing this no-op does
+not change error delivery. Doctor leaves the authored config unchanged, or you
+can use the intermediate release above to remove it.
 
 OAuth credential sidecars under `credentials/auth-profiles/` are retired. Their
 last writer shipped in `2026.5.16-beta.3` on May 16, 2026; `2026.5.16-beta.4`
@@ -269,6 +285,19 @@ guidance for a legacy row without replacing it. The update-time Doctor pass
 runs the same migration. Repeating Doctor leaves the normalized row and its IDs
 unchanged. Published SDK and operator input normalization remain available at
 the input boundary.
+
+## Claw provenance schema
+
+Claw update plans and resume previews require the current provenance columns.
+Older SQLite databases that lack bootstrap or extension provenance columns now
+stop with `openclaw doctor --fix` guidance. Read-only planning leaves those
+databases unchanged instead of projecting absent columns as empty values.
+
+Doctor and the update-time Doctor pass use the existing shared-state schema
+repair. Doctor preserves a verified pre-migration database snapshot even when
+the numeric schema version is already current, then adds the missing nullable
+columns. Install records, package references, timestamps, and consent-bound v1
+resume plans retain their values. Repeating the repair is idempotent.
 
 ## Channel account routing during an update
 
@@ -352,6 +381,21 @@ After repair completes and `openclaw config validate` succeeds, split the
 canonical config back into includes if desired, then validate it again. Keep
 the backups until the repaired config and migrated state have been verified.
 
+## Channel private-network opt-ins
+
+Matrix, Mattermost, and Tlon runtime paths read only
+`network.dangerouslyAllowPrivateNetwork` at the channel or account scope.
+Tlon retains its plugin-owned Doctor transform for the older flat
+`allowPrivateNetwork` key. It preserves an explicit canonical boolean, including
+`false`. Run `openclaw doctor --fix` before using that legacy config with a
+directly replaced binary. Updates invoke the same transform through Doctor and
+the normal config backup flow. Deferred plugin migrations retain their inputs
+for Doctor after installation; those inputs do not enable runtime private-network
+access.
+
+The Matrix and Mattermost flat-key migrations are retired. Repair their old
+config with `openclaw doctor --fix` on `2026.9.7` before upgrading.
+
 ## Channel webhook listeners
 
 Feishu, Microsoft Teams, Nextcloud Talk, and Telegram receive webhooks on Gateway
@@ -369,7 +413,7 @@ configured path cannot be served by the Gateway. Disabled accounts, Telegram pol
 Feishu WebSocket transport receive no pin. Explicit objects and `false` settings
 remain authoritative.
 
-Startup and update-time Doctor use the same migration owner. Doctor validates
+Explicit and update-time Doctor use the same migration owner. Doctor validates
 and backs up the config through the normal write flow. Pins and the
 `meta.migrations.webhookListeners` completion marker are saved together, including
 when channel settings come from `$include` files. Fresh installations record
@@ -387,13 +431,14 @@ the installer's backed-up config publication before its new runtime starts.
 Update a retained older standalone plugin before removing its pin; older plugin
 versions can still open their historical default port.
 
-For a read-only external config source, startup records completion in canonical
-SQLite machine state only when the completion marker is the sole required change.
-If endpoints or other channel settings need repair, update that external source
-and its completion marker as directed by the startup error. Startup refuses to
-drop an unmigrated endpoint. A fresh read-only installation needs no pins.
-When no config file exists yet, startup can record the same marker-only completion
-without creating a config file that would interfere with `gateway --dev` setup.
+Startup leaves config bytes unchanged. When the completion marker is the sole
+required change, startup records it in canonical SQLite machine state, including
+when no config file exists yet. If endpoints or other channel settings need
+repair, startup refuses with `openclaw doctor --fix` guidance. For a read-only
+external config source, update that source and its completion marker as directed
+by the startup error. Startup refuses to drop an unmigrated endpoint. A fresh
+installation needs no pins or a new config file that would interfere with
+`gateway --dev` setup.
 
 The existing explicit-key migrations remain supported: `webhookPort` and
 `webhookHost` become `legacyWebhook: { port, host? }`; Teams `webhook.port` becomes

@@ -47,6 +47,7 @@ function hasWorkerEntry(config: TsdownConfig, name: string, source: string): boo
 
 const workerBuildTargets = [
   ["worker", "worker/worker", "src/worker/worker-deploy-entry.ts"],
+  ["code-mode-node", "worker/code-mode-node.worker", "src/agents/code-mode-node.worker.ts"],
   [
     "file-tool-planning",
     "worker/file-tool-planning.worker",
@@ -507,6 +508,7 @@ describe("tsdown config", () => {
             .split("/")
             .slice(0, specifier.startsWith("@") ? 2 : 1)
             .join("/");
+          expect(packageName, specifier).not.toBe("@openclaw/ai");
           expect(Object.hasOwn(dependencies, packageName), specifier).toBe(true);
           const destination = path.join(root, "node_modules", packageName);
           if (!fs.existsSync(destination)) {
@@ -524,6 +526,11 @@ describe("tsdown config", () => {
         const renderedModules = Object.entries(chunk.modules)
           .filter(([, module]) => module.renderedLength > 0)
           .map(([module]) => module.replaceAll("\\", "/"));
+        expect(
+          renderedModules.filter((module) =>
+            /\/(?:packages\/ai|node_modules\/@openclaw\/ai)\//u.test(module),
+          ),
+        ).toEqual([]);
         expect(
           renderedModules.filter((module) =>
             /\/extensions\/[^/]+\/(?:doctor-contract-api|runtime|index|channel-entry|setup-entry)\.[cm]?[jt]s$/u.test(

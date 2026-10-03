@@ -15,7 +15,7 @@ import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-k
 import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { runtimeMemorySecretOwnerId } from "./runtime-memory-secret-owner.js";
 import {
-  collectSecretInputAssignment,
+  collectCanonicalSecretInputAssignment as collectSecretInputAssignment,
   type ResolverContext,
   type SecretAssignmentOwner,
   type SecretDefaults,
@@ -101,7 +101,7 @@ export function collectAgentMemorySearchAssignments(params: {
     configuredEntries.length === 0 && !hasAgentRosterProperty(params.config)
       ? [
           {
-            entry: { id: LEGACY_IMPLICIT_AGENT_ID, default: true },
+            entry: { id: LEGACY_IMPLICIT_AGENT_ID },
             source: { kind: "entries", key: LEGACY_IMPLICIT_AGENT_ID },
           },
         ]

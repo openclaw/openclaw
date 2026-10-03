@@ -8,11 +8,16 @@ read_when:
   - You are deciding which memory surface a new feature or plugin should write to
 ---
 
-OpenClaw memory is a set of plain files and one SQLite index, organized into
-tiers with different trust levels, write rules, and injection behavior. This
+Memory Core, OpenClaw's default memory plugin, uses plain files and one SQLite
+index, organized into tiers with different trust levels, write rules, and injection behavior. This
 page explains the whole system: what gets written where, how content earns its
 way into long-term memory, how recall works on every turn, and how the system
 defends itself against junk and poisoning.
+
+Other selected memory plugins can own their storage and save pre-compaction
+context through their tools. Their flush receives the source turn's memory
+audience and sandbox state; the file and dreaming pipeline below describes
+Memory Core. See [Automatic memory flush](/concepts/memory#automatic-memory-flush).
 
 If you want task-oriented guides instead, start with
 [Memory overview](/concepts/memory), [Dreaming](/concepts/dreaming),

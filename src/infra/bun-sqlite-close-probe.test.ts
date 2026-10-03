@@ -63,57 +63,41 @@ async function start() {
   return { worker, result };
 }
 
-it("joins the probe before deleting its private files or accepting success", async () => {
-  const join = createDeferredCore<number>();
-  state.join = join.promise;
-  const { worker, result } = await start();
-  worker.emit("message", "");
-  await vi.advanceTimersByTimeAsync(0);
-  expect(worker.terminate).toHaveBeenCalledOnce();
-  expect(state.remove).not.toHaveBeenCalled();
-  join.resolve(1);
-  expect(await result).toMatchObject({ explicitSqliteCloseReleasesNativeResources: true });
-  expect(state.remove).toHaveBeenCalledExactlyOnceWith("/private/close-probe", {
-    recursive: true,
-    force: true,
-  });
-  expect(vi.getTimerCount()).toBe(0);
-  expect(worker.unref).not.toHaveBeenCalled();
-  expect(state.warn).not.toHaveBeenCalled();
-});
-
-it("times out conservatively and joins before cleanup", async () => {
-  const { worker, result } = await start();
-  await vi.advanceTimersByTimeAsync(10_000);
-  expect(await result).toMatchObject({
-    explicitSqliteCloseReleasesNativeResources: false,
-    reason: expect.stringContaining("timed out"),
-  });
-  expect(worker.terminate).toHaveBeenCalledOnce();
-  expect(state.remove).toHaveBeenCalledOnce();
-});
-
-it.each(["timeout", "error"] as const)(
-  "returns a conservative %s decision without waiting for native termination",
-  async (failure) => {
+it.each([
+  ["timeout", undefined, "timed out", false],
+  ["error", new Error("native probe failed"), "native probe failed", false],
+  ["exit", 1, "exited before its reply", false],
+  ["message", undefined, "Invalid SQLite close probe reply", false],
+  ["message", "SQLite close probe cannot establish WAL mode", "WAL", false],
+  ["timeout", undefined, "timed out", true],
+  ["error", new Error("probe failed"), "probe failed", true],
+] as const)(
+  "returns a conservative %s decision (%s / %s, stuck termination: %s)",
+  async (event, value, reason, stuck) => {
     const join = createDeferredCore<number>();
-    state.join = join.promise;
+    if (stuck) {
+      state.join = join.promise;
+    }
     const { worker, result } = await start();
     const settled = vi.fn();
     void result.then(settled);
-    if (failure === "timeout") {
+    if (event === "timeout") {
       await vi.advanceTimersByTimeAsync(9_999);
       expect(settled).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
     } else {
-      worker.emit("error", new Error("probe failed"));
+      worker.emit(event, value);
       await vi.advanceTimersByTimeAsync(0);
     }
     expect(settled).toHaveBeenCalledExactlyOnceWith({
       explicitSqliteCloseReleasesNativeResources: false,
-      reason: expect.stringContaining(failure === "timeout" ? "timed out" : "probe failed"),
+      reason: expect.stringContaining(reason),
     });
     expect(worker.terminate).toHaveBeenCalledOnce();
+    if (!stuck) {
+      expect(state.remove).toHaveBeenCalledOnce();
+      return;
+    }
     expect(worker.unref).toHaveBeenCalled();
     expect(state.remove).not.toHaveBeenCalled();
     expect(state.warn).not.toHaveBeenCalled();
@@ -123,7 +107,7 @@ it.each(["timeout", "error"] as const)(
       { code: "SQLITE_CLOSE_PROBE_CLEANUP" },
     );
     expect(state.remove).not.toHaveBeenCalled();
-    if (failure === "error") {
+    if (event === "error") {
       join.reject(new Error("late termination failure"));
     } else {
       join.resolve(1);
@@ -134,59 +118,53 @@ it.each(["timeout", "error"] as const)(
   },
 );
 
-it("bounds native termination after a successful reply and retains unconfirmed files", async () => {
-  const join = createDeferredCore<number>();
-  state.join = join.promise;
-  const { worker, result } = await start();
-  const settled = vi.fn();
-  void result.then(settled);
-  worker.emit("message", "");
-  await vi.advanceTimersByTimeAsync(4_999);
-  expect(settled).not.toHaveBeenCalled();
-  expect(state.remove).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(1);
-  expect(settled).toHaveBeenCalledExactlyOnceWith({
-    explicitSqliteCloseReleasesNativeResources: false,
-    reason: expect.stringContaining("termination timed out"),
-  });
-  expect(worker.unref).toHaveBeenCalledOnce();
-  expect(state.warn).toHaveBeenCalledExactlyOnceWith(
-    expect.stringContaining("retained /private/close-probe"),
-    { code: "SQLITE_CLOSE_PROBE_CLEANUP" },
-  );
-  join.resolve(1);
-  await vi.advanceTimersByTimeAsync(0);
-  expect(state.remove).not.toHaveBeenCalled();
-  expect(vi.getTimerCount()).toBe(0);
-});
-
-it.each([
-  ["error", new Error("native probe failed"), "native probe failed"],
-  ["exit", 1, "exited before its reply"],
-  ["message", undefined, "Invalid SQLite close probe reply"],
-  ["message", "SQLite close probe cannot establish WAL mode", "WAL"],
-] as const)(
-  "records conservative %s failures and cleans up after joining",
-  async (event, value, reason) => {
+it.each(["joined", "timeout", "rejection"] as const)(
+  "accepts a successful reply only after native termination: %s",
+  async (failure) => {
+    const join = createDeferredCore<number>();
+    state.join = join.promise;
     const { worker, result } = await start();
-    worker.emit(event, value);
-    expect(await result).toMatchObject({
-      explicitSqliteCloseReleasesNativeResources: false,
-      reason: expect.stringContaining(reason),
-    });
+    const settled = vi.fn();
+    void result.then(settled);
+    worker.emit("message", "");
     await vi.advanceTimersByTimeAsync(0);
     expect(worker.terminate).toHaveBeenCalledOnce();
-    expect(state.remove).toHaveBeenCalledOnce();
+    expect(state.remove).not.toHaveBeenCalled();
+    if (failure === "joined") {
+      join.resolve(1);
+      expect(await result).toMatchObject({ explicitSqliteCloseReleasesNativeResources: true });
+      expect(state.remove).toHaveBeenCalledExactlyOnceWith("/private/close-probe", {
+        recursive: true,
+        force: true,
+      });
+      expect(vi.getTimerCount()).toBe(0);
+      expect(worker.unref).not.toHaveBeenCalled();
+      expect(state.warn).not.toHaveBeenCalled();
+      return;
+    }
+    if (failure === "timeout") {
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(settled).not.toHaveBeenCalled();
+      expect(state.remove).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+    } else {
+      join.reject(new Error("native join failed"));
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(settled).toHaveBeenCalledExactlyOnceWith({
+      explicitSqliteCloseReleasesNativeResources: false,
+      reason: expect.stringContaining(
+        failure === "timeout" ? "termination timed out" : "native join failed",
+      ),
+    });
+    expect(worker.unref).toHaveBeenCalledOnce();
+    expect(state.warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("retained /private/close-probe"),
+      { code: "SQLITE_CLOSE_PROBE_CLEANUP" },
+    );
+    join.resolve(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(state.remove).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
   },
 );
-
-it("retains files and refuses success when native termination fails", async () => {
-  const { worker, result } = await start();
-  worker.terminate.mockRejectedValueOnce(new Error("native join failed"));
-  worker.emit("message", "");
-  expect(await result).toMatchObject({
-    explicitSqliteCloseReleasesNativeResources: false,
-    reason: expect.stringContaining("native join failed"),
-  });
-  expect(state.remove).not.toHaveBeenCalled();
-});

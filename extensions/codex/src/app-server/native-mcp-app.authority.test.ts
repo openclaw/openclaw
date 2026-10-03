@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createNativeMcpRuntime } from "./native-mcp-app.js";
+import { CodexAppServerScopedRequestRejectedError } from "./rpc-error.js";
 import { createClientHarness } from "./test-support.js";
 
 const clients: ReturnType<typeof createClientHarness>["client"][] = [];
@@ -28,6 +29,7 @@ it.each([
     vi.spyOn(Math, "random").mockReturnValue(0);
     const harness = createClientHarness();
     clients.push(harness.client);
+    const revocationError = new Error(`App ${revoke} revoked`);
     let ownerCurrent = true;
     let grantCurrent = true;
     const runtime = createNativeMcpRuntime({
@@ -37,7 +39,7 @@ it.each([
       attempt: { sessionId: "app-session", workspaceDir: "/workspace" },
       assertCurrent: () => {
         if (!ownerCurrent) {
-          throw new Error("App owner revoked");
+          throw revocationError;
         }
       },
     });
@@ -53,7 +55,7 @@ it.each([
             {
               assertCurrent: () => {
                 if (!grantCurrent) {
-                  throw new Error("App grant revoked");
+                  throw revocationError;
                 }
               },
             },
@@ -107,7 +109,9 @@ it.each([
     if (revoke === "none") {
       expect(result.error).toBeUndefined();
     } else {
-      expect(result.error).toEqual(new Error(`App ${revoke} revoked`));
+      expect(result.error).toBeInstanceOf(CodexAppServerScopedRequestRejectedError);
+      expect(result.error).toMatchObject({ message: revocationError.message });
+      expect(result.error instanceof Error ? result.error.cause : undefined).toBe(revocationError);
     }
     expect(harness.client.getCloseError()).toBeUndefined();
   },

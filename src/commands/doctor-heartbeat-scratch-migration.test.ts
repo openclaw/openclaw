@@ -62,7 +62,7 @@ async function createFixture() {
   const cfg = {
     agents: {
       defaults: { heartbeat: { every: "30m" } },
-      list: [{ id: "main", workspace }],
+      entries: { main: { workspace } },
     },
   } as OpenClawConfig;
   return { root, stateDir, workspace, cfg, heartbeatPath: path.join(workspace, "HEARTBEAT.md") };
@@ -84,10 +84,10 @@ function sharedHeartbeatConfig(workspace: string, ollamaEvery = "0m") {
   return {
     agents: {
       defaults: { workspace },
-      list: [
-        { id: "main", workspace, heartbeat: { every: "30m" } },
-        { id: "ollama", workspace, heartbeat: { every: ollamaEvery } },
-      ],
+      entries: {
+        main: { workspace, heartbeat: { every: "30m" } },
+        ollama: { workspace, heartbeat: { every: ollamaEvery } },
+      },
     },
   } as OpenClawConfig;
 }
@@ -178,10 +178,10 @@ describe("HEARTBEAT.md cron scratch migration", () => {
       {
         agents: {
           defaults: { heartbeat: { every: "30m" } },
-          list: [
-            { id: "main", workspace: fixture.workspace },
-            { id: "ops", workspace: fixture.workspace },
-          ],
+          entries: {
+            main: { workspace: fixture.workspace },
+            ops: { workspace: fixture.workspace },
+          },
         },
       } as OpenClawConfig,
       "main",
@@ -211,10 +211,10 @@ describe("HEARTBEAT.md cron scratch migration", () => {
     const cfg = {
       agents: {
         defaults: { heartbeat: { every: "30m" }, workspace: fixture.workspace },
-        list: [
-          { id: "main", workspace: fixture.workspace },
-          { id: "ollama", workspace: fixture.workspace, heartbeat: { every: "0m" } },
-        ],
+        entries: {
+          main: { workspace: fixture.workspace },
+          ollama: { workspace: fixture.workspace, heartbeat: { every: "0m" } },
+        },
       },
     } as OpenClawConfig;
     await fs.writeFile(fixture.heartbeatPath, "shared checklist\n", "utf8");

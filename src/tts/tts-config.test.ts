@@ -108,15 +108,14 @@ describe("shouldAttemptTtsPayload", () => {
         mode: "final",
       },
       agents: {
-        list: [
-          {
-            id: "voice",
+        entries: {
+          voice: {
             tts: {
               auto: "always",
               mode: "all",
             },
           },
-        ],
+        },
       },
     } as OpenClawConfig;
 
@@ -132,7 +131,7 @@ describe("shouldAttemptTtsPayload", () => {
     writeFileSync(voicePrefsPath, JSON.stringify({ tts: { auto: "always" } }));
     const cfg = {
       agents: {
-        list: [{ id: "voice", tts: { prefsPath: voicePrefsPath } }],
+        entries: { voice: { tts: { prefsPath: voicePrefsPath } } },
       },
     } as OpenClawConfig;
 
@@ -154,9 +153,8 @@ describe("shouldAttemptTtsPayload", () => {
         },
       },
       agents: {
-        list: [
-          {
-            id: "reader",
+        entries: {
+          reader: {
             tts: {
               providers: {
                 openai: {
@@ -165,7 +163,7 @@ describe("shouldAttemptTtsPayload", () => {
               },
             },
           },
-        ],
+        },
       },
       channels: {
         feishu: {
@@ -215,7 +213,7 @@ describe("shouldAttemptTtsPayload", () => {
           },
         },
       },
-      agents: { list: [{ id: "reader", tts: agentTts }] },
+      agents: { entries: { reader: { tts: agentTts } } },
     } as OpenClawConfig;
 
     expect(resolveEffectiveTtsConfig(cfg, "reader").providers?.custom).toEqual({

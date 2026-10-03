@@ -14,7 +14,7 @@ import { normalizeProviderTransportWithPlugin } from "../../plugins/provider-run
 import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { createProviderErrorTextRedactor } from "../provider-http-errors.js";
-import type { ModelProviderRequestTransportOverrides } from "../provider-request-config.js";
+import type { ModelProviderRequestTransportOverrides } from "../provider-request-config.types.js";
 import { unwrapSecretSentinelsForProviderEgress } from "../provider-secret-egress.js";
 import { resolveProviderTransportSsrFPolicy } from "../provider-transport-fetch.js";
 

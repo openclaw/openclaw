@@ -15,7 +15,10 @@ import {
   createWorkerEnvironmentAccess,
   createWorkerEnvironmentTransportLifecycle,
 } from "./environment-access.js";
-import { createWorkerEnvironmentErrorRecorder } from "./environment-errors.js";
+import {
+  createWorkerEnvironmentErrorRecorder,
+  workerEnvironmentServiceError as serviceError,
+} from "./environment-errors.js";
 import {
   joinInferenceOperations,
   registerWorkerInferenceSessionControl,
@@ -30,7 +33,6 @@ import type { WorkerEnvironmentAbandonment } from "./provider-lifecycle.types.js
 import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 import type {
   WorkerEnvironmentCreateRequest,
-  WorkerEnvironmentServiceErrorCode,
   WorkerEnvironmentServiceOptions,
   WorkerEnvironmentReconcileGuard,
 } from "./service.types.js";
@@ -42,18 +44,6 @@ import type {
 } from "./store.js";
 import { joinWorkerTunnelStops } from "./tunnel-contract.js";
 import { createWorkerTurnRpc } from "./worker-turn-rpc.js";
-
-class WorkerEnvironmentServiceError extends Error {
-  constructor(
-    readonly code: WorkerEnvironmentServiceErrorCode,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
-const serviceError = (code: WorkerEnvironmentServiceErrorCode, message: string) =>
-  new WorkerEnvironmentServiceError(code, message);
 
 export function createWorkerEnvironmentService(options: WorkerEnvironmentServiceOptions) {
   const { store, scheduler } = options;
@@ -93,9 +83,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const guardedReconcileInFlight = new Map<string, Promise<void>>();
   let stopping = false;
   let maintenanceInFlight: Promise<void> | undefined;
-
-  const inState = (record: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) =>
-    states.includes(record.state);
 
   const trackOperation = <T>(operation: Promise<T>) => {
     activeOperations.add(operation);
@@ -197,9 +184,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     now,
     isStopping: () => stopping,
     cancelInferenceEnvironment: (environmentId) => inference.cancelEnvironment(environmentId),
-    inState,
     move,
-    serviceError,
     withLock,
   });
 
@@ -213,13 +198,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     warn,
     callBootstrap,
     callProvider,
-    inState,
-    isServiceError: (error, code) =>
-      error instanceof WorkerEnvironmentServiceError && error.code === code,
     isStopping: () => stopping,
     move,
     saveError,
-    serviceError,
     withLock,
   });
 
@@ -230,10 +211,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     prepareCurrentBundle: async () => await prepareInstallation("bundle"),
     now,
     identityResolverFor: providerLifecycle.identityResolverFor,
-    inState,
     isStopping: () => stopping,
     providerFor: providerLifecycle.providerFor,
-    serviceError,
     withLock,
   });
 
@@ -261,6 +240,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     now,
     signal: scope.signal,
     warn,
+    resolveHumanPresenceDemand: options.resolveHumanPresenceDemand,
+    presenceDemandStore: options.presenceDemandStore,
   });
   const schedulePreparedRefill = (environmentId?: string) =>
     void trackOperation(preparedPool.maintain(environmentId));
@@ -286,7 +267,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     await withLock(environmentId, async () => {
       await store.ready();
       const current = store.get(environmentId);
-      if (!current || inState(current, "destroyed", "failed", "orphaned")) {
+      if (!current || ["destroyed", "failed", "orphaned"].includes(current.state)) {
         return;
       }
       // Conversation cleanup has one retry owner, including its backoff and parked budget.
@@ -551,7 +532,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     providerLifecycle,
     signal: scope.signal,
     now,
-    serviceError,
     configuredProfileProviderId,
     requireProviderExecutionMode,
     schedulePreparedRefill,
@@ -630,6 +610,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     getPreparedCandidates: (intent: WorkerProviderPreparedIntent) =>
       preparedPool.candidates(intent).map(environmentAccess.project),
     schedulePreparedRefill,
+    setHumanPresence: preparedPool.setHumanPresence,
     inventoryVersion: store.inventoryVersion,
     machineShapeVersion: providerLifecycle.machineShapeVersion,
     subscribeMachineShapeChanged: providerLifecycle.subscribeMachineShapeChanged,

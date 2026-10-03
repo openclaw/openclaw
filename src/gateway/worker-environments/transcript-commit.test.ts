@@ -41,13 +41,15 @@ import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-stat
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { prepareAgentRunUserTurn } from "../agent-turn/agent-run-user-turn.js";
 import type { AgentTurnContext } from "../agent-turn/types.js";
-import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import {
   createWorkerTranscriptCommitStore,
   type WorkerTranscriptCommitStore,
 } from "./transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
-import { createInterruptedCommitter } from "./transcript-commit.test-support.js";
+import {
+  createInterruptedCommitter,
+  createTranscriptCommitIdentity,
+} from "./transcript-commit.test-support.js";
 
 type WorkerTranscriptCommitter = ReturnType<typeof createWorkerTranscriptCommitter>;
 
@@ -55,24 +57,7 @@ const SESSION_ID = "session-worker-transcript";
 const SESSION_KEY = "agent:main:worker-transcript";
 const RUN_EPOCH = 7;
 
-const IDENTITY: WorkerConnectionIdentity = {
-  environmentId: "environment-a",
-  credentialHash: ["credential", "hash", "a"].join("-"),
-  bundleHash: "b".repeat(64),
-  sessionId: SESSION_ID,
-  runId: "run-worker-transcript",
-  turnClaim: {
-    sessionId: SESSION_ID,
-    claimId: "claim-worker-transcript",
-    runId: "run-worker-transcript",
-    placementGeneration: 4,
-    owner: { kind: "worker", environmentId: "environment-a", ownerEpoch: RUN_EPOCH },
-  },
-  ownerEpoch: RUN_EPOCH,
-  rpcSetVersion: 1,
-  protocolFeatures: ["worker-transcript-commit-v1"],
-  credentialExpiresAtMs: 10_000,
-};
+const IDENTITY = createTranscriptCommitIdentity(SESSION_ID, RUN_EPOCH);
 
 const ZERO_USAGE = createZeroUsageFixture();
 const PROVIDER_REPLAY = {
@@ -188,7 +173,7 @@ describe("worker transcript commit application", () => {
     sessionsDir = path.join(root, "agents", "main", "sessions");
     storePath = path.join(sessionsDir, "sessions.json");
     cfg = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       session: {
         mainKey: "main",
         store: path.join(root, "agents", "{agentId}", "sessions", "sessions.json"),
@@ -396,13 +381,62 @@ describe("worker transcript commit application", () => {
     expect(reopened.getLeafId()).toBe(outcome.result.newLeafId);
   });
 
-  it("commits a non-default agent's global session", async () => {
+  it("commits through an alias of the admitted transcript database", async () => {
+    const aliasRoot = `${root}-alias`;
+    await fs.symlink(root, aliasRoot, process.platform === "win32" ? "junction" : "dir");
+    try {
+      const aliasStorePath = path.join(aliasRoot, path.relative(root, storePath));
+      const aliasTarget = await resolveSessionTranscriptRuntimeTarget({
+        agentId: "main",
+        sessionId: SESSION_ID,
+        sessionKey: SESSION_KEY,
+        storePath: aliasStorePath,
+      });
+      expect(aliasTarget.storePath).toBe(aliasStorePath);
+
+      const outcome = await committer.commit({
+        ...ADMITTED_OWNER,
+        sessionTarget: {
+          ...aliasTarget,
+          expectedLifecycleRevision: "worker-original-revision",
+        },
+        request: createRequest({
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "text", text: "Persist through the admitted owner" }],
+              timestamp: 100,
+            },
+          ],
+        }),
+      });
+
+      expect(outcome.ok).toBe(true);
+      if (!outcome.ok) {
+        throw new Error(`expected aliased transcript commit, received ${outcome.reason}`);
+      }
+      expect((await SessionManager.openAsync(sessionTarget)).getEntries()).toEqual([
+        expect.objectContaining({
+          id: outcome.result.newLeafId,
+          message: expect.objectContaining({
+            role: "user",
+            content: [{ type: "text", text: "Persist through the admitted owner" }],
+          }),
+        }),
+      ]);
+    } finally {
+      await fs.rm(aliasRoot, { force: true });
+    }
+  });
+
+  it("commits a global session for an explicitly selected agent", async () => {
     const updates: Parameters<Parameters<typeof onSessionTranscriptUpdate>[0]>[0][] = [];
     unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
     const workStorePath = path.join(root, "agents", "work", "sessions", "sessions.json");
     cfg = {
       agents: {
-        list: [{ id: "main", default: true }, { id: "work" }],
+        ownership: "explicit",
+        entries: { main: {}, work: {} },
       },
       session: {
         scope: "global",

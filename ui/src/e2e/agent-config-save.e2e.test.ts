@@ -31,7 +31,7 @@ suite.define(() => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
       async ({ page }) => {
-        const config = { agents: { entries: { main: { default: true } } } };
+        const config = { agents: { entries: { main: {} } } };
         const gateway = await installMockGateway(page, {
           assistantName: "Main agent",
           defaultAgentId: "main",
@@ -116,7 +116,7 @@ suite.define(() => {
         const interruptedParams = requireRecord(interrupted.params);
         expect(interruptedParams.baseHash).toBe("recovered-agent-config");
         expect(JSON.parse(String(interruptedParams.raw))).toEqual({
-          agents: { entries: { main: { default: true, model: "openai/reconnect-draft" } } },
+          agents: { entries: { main: { model: "openai/reconnect-draft" } } },
         });
 
         // An unacknowledged save keeps the draft dirty without racing the debounce.
@@ -164,7 +164,7 @@ suite.define(() => {
           });
           const params = requireRecord(saved.params);
           const savedConfig = {
-            agents: { entries: { main: { default: true, model: "openai/after-reload" } } },
+            agents: { entries: { main: { model: "openai/after-reload" } } },
           };
           expect(params.baseHash).toBe("reloaded-agent-config");
           expect(JSON.parse(String(params.raw))).toEqual(savedConfig);
@@ -220,7 +220,6 @@ suite.define(() => {
         agents: {
           entries: {
             main: {
-              default: true,
               tools: scenario.tools,
             },
           },
@@ -301,7 +300,6 @@ suite.define(() => {
         agents: {
           entries: {
             main: {
-              default: true,
               tools: scenario.expectedTools,
             },
           },
@@ -331,7 +329,7 @@ suite.define(() => {
       const config = {
         agents: {
           defaults: { skills: ["github"] },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
       };
       const skill = (name: string, blockedByAgentFilter: boolean) => ({
@@ -397,7 +395,7 @@ suite.define(() => {
       expect(JSON.parse(String(params.raw))).toEqual({
         agents: {
           defaults: { skills: ["github"] },
-          entries: { main: { default: true, skills: [] } },
+          entries: { main: { skills: [] } },
         },
       });
       expect(params.baseHash).toBe("agent-config-hash-1");

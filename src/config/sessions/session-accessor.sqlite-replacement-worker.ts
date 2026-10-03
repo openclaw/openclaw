@@ -11,6 +11,7 @@ import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identi
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
+  type SqliteWorkerAdmissionRequest,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { getChildLogger } from "../../logging/logger.js";
@@ -35,7 +36,7 @@ import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 
 type ReplacementDatabaseOptions = OpenClawAgentDatabaseOptions & { path: string };
 
-type SessionEntryWorkerPreparation = (
+export type SessionEntryWorkerPreparation = (
   execution: OpenClawAgentDatabaseExecution,
   source: AgentDatabaseRequestExecutionSource,
 ) => {
@@ -71,6 +72,12 @@ export async function withSessionEntryWorker<T>(
   signal?: AbortSignal,
   prepare?: SessionEntryWorkerPreparation,
   onTransaction?: (facts: unknown) => void,
+  onAdmission?: (
+    admission: SqliteWorkerOperationAdmission,
+    retained: RetainedWorkerTransactionAdmission,
+    request: SqliteWorkerAdmissionRequest,
+    grant: () => boolean,
+  ) => boolean,
 ): Promise<T> {
   const execution =
     retainedExecution ??
@@ -131,6 +138,9 @@ export async function withSessionEntryWorker<T>(
         const admission = createSqliteWorkerOperationAdmission((request, grant) => {
           binding.authorize(request);
           assertHeld();
+          if (onAdmission?.(admission, retained, request, grant)) {
+            return;
+          }
           if (request.stage === "commit") {
             onCommit?.(admission, retained, request.facts);
           } else if (request.stage === "transaction") {
@@ -152,7 +162,10 @@ export async function withSessionEntryWorker<T>(
       // Cold native admission still owns the writer; snapshot planning releases it.
       const opened = await runOpenClawAgentWorkerWrite(
         options,
-        () => execution.runExisting(source, async () => true),
+        async () => {
+          await execution.prepare(source);
+          return execution.runExisting(source, async () => true);
+        },
         undefined,
         signal,
       );

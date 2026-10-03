@@ -118,44 +118,46 @@ describe("worker inference provider runtime", () => {
     expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
   });
 
-  it("reuses the Gateway's boundary cache key across calls and rotates it after a boundary", async () => {
+  it.each([
+    {
+      name: "boundary rotation",
+      boundaries: [0, 0, 2],
+      explicitKey: undefined,
+      keys: [`${SESSION_ID}:0`, `${SESSION_ID}:0`, `${SESSION_ID}:2`],
+    },
+    {
+      name: "explicit key",
+      boundaries: [3],
+      explicitKey: " gateway-explicit-cache ",
+      keys: ["gateway-explicit-cache"],
+    },
+  ])("uses the Gateway cache owner for $name", async ({ boundaries, explicitKey, keys }) => {
     const runtime = setup();
-    for (const boundaryCount of [0, 0, 2]) {
-      runtime.readPromptCacheContext.mockReturnValue({ boundaryCount });
+    for (const boundaryCount of boundaries) {
+      runtime.readPromptCacheContext.mockReturnValue({
+        boundaryCount,
+        ...(explicitKey ? { promptCacheKey: explicitKey } : {}),
+      });
       const inferenceRequest = request();
-      Object.assign(inferenceRequest.options, { promptCacheKey: "worker-chosen-key" });
+      if (!explicitKey) {
+        Object.assign(inferenceRequest.options, { promptCacheKey: "worker-chosen-key" });
+      }
       await expect(runtime.executor(params(inferenceRequest, vi.fn()))).resolves.toMatchObject({
         type: "done",
       });
     }
-    expect(runtime.stream.mock.calls.map((call) => call[2]?.promptCacheKey)).toEqual([
-      `${SESSION_ID}:0`,
-      `${SESSION_ID}:0`,
-      `${SESSION_ID}:2`,
-    ]);
-    expect(runtime.stream.mock.calls.map((call) => call[2]?.sessionId)).toEqual([
-      SESSION_ID,
-      SESSION_ID,
-      SESSION_ID,
-    ]);
-  });
-
-  it("preserves an explicit Gateway cache key and refuses a missing prepared owner", async () => {
-    const runtime = setup();
-    runtime.readPromptCacheContext.mockReturnValue({
-      boundaryCount: 3,
-      promptCacheKey: " gateway-explicit-cache ",
-    });
-    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
-      type: "done",
-    });
-    expect(runtime.stream.mock.calls[0]?.[2]?.promptCacheKey).toBe("gateway-explicit-cache");
-    runtime.readPromptCacheContext.mockReturnValue(undefined);
-    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
-      type: "error",
-      reason: "session-not-attached",
-    });
-    expect(runtime.stream).toHaveBeenCalledOnce();
+    expect(runtime.stream.mock.calls.map((call) => call[2]?.promptCacheKey)).toEqual(keys);
+    expect(runtime.stream.mock.calls.map((call) => call[2]?.sessionId)).toEqual(
+      boundaries.map(() => SESSION_ID),
+    );
+    if (explicitKey) {
+      runtime.readPromptCacheContext.mockReturnValue(undefined);
+      await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+        type: "error",
+        reason: "session-not-attached",
+      });
+      expect(runtime.stream).toHaveBeenCalledOnce();
+    }
   });
 
   it("prepares an approved model available only from the bundled static catalog", async () => {
@@ -201,16 +203,32 @@ describe("worker inference provider runtime", () => {
     expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
   });
 
-  it.each(["insufficient_quota", "invalid_api_key", "context_length_exceeded"])(
-    "preserves a streamed provider failure identified only by %s",
-    async (errorCode) => {
+  it.each([
+    { errorCode: "insufficient_quota", detailed: false },
+    { errorCode: "invalid_api_key", detailed: false },
+    { errorCode: "context_length_exceeded", detailed: false },
+    { errorCode: "rate_limit_exceeded", detailed: true },
+  ])(
+    "preserves bounded, redacted streamed provider failure $errorCode",
+    async ({ errorCode, detailed }) => {
       const runtime = setup();
+      const secret = `stream-secret-${"a".repeat(48)}`;
       runtime.stream.mockImplementation(() => {
         const stream = createAssistantMessageEventStream();
         stream.push({
           type: "error",
           reason: "error",
-          error: { ...finalMessage(), stopReason: "error", errorCode },
+          error: {
+            ...finalMessage(),
+            stopReason: "error",
+            errorCode,
+            ...(detailed
+              ? {
+                  errorMessage: `429: Authorization: Bearer ${secret} ${'diagnostic " \\ '.repeat(80)}`,
+                  errorType: "rate_limit_error",
+                }
+              : {}),
+          },
         });
         return stream;
       });
@@ -222,43 +240,18 @@ describe("worker inference provider runtime", () => {
         throw new Error("expected provider failure");
       }
       expect(parseApiErrorInfo(outcome.message)?.code).toBe(errorCode);
+      if (detailed) {
+        expect(parseApiErrorInfo(outcome.message)).toMatchObject({
+          httpCode: "429",
+          code: errorCode,
+          type: "rate_limit_error",
+        });
+        expect(outcome.message).not.toContain(secret);
+        expect(outcome.message.length).toBeLessThanOrEqual(256);
+      }
       expect(validateWorkerInferenceTerminalOutcome(outcome)).toBe(true);
     },
   );
-
-  it("bounds streamed provider details without losing structured failure facts", async () => {
-    const runtime = setup();
-    const secret = `stream-secret-${"a".repeat(48)}`;
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      stream.push({
-        type: "error",
-        reason: "error",
-        error: {
-          ...finalMessage(),
-          stopReason: "error",
-          errorMessage: `429: Authorization: Bearer ${secret} ${'diagnostic " \\ '.repeat(80)}`,
-          errorCode: "rate_limit_exceeded",
-          errorType: "rate_limit_error",
-        },
-      });
-      return stream;
-    });
-
-    const outcome = await runtime.executor(params(request(), vi.fn()));
-
-    if (outcome.type !== "error") {
-      throw new Error("expected provider failure");
-    }
-    expect(parseApiErrorInfo(outcome.message)).toMatchObject({
-      httpCode: "429",
-      code: "rate_limit_exceeded",
-      type: "rate_limit_error",
-    });
-    expect(outcome.message).not.toContain(secret);
-    expect(outcome.message.length).toBeLessThanOrEqual(256);
-    expect(validateWorkerInferenceTerminalOutcome(outcome)).toBe(true);
-  });
 
   it.each([
     { name: "short body", status: 503, code: "upstream_unavailable", detail: "Unavailable" },
@@ -313,63 +306,63 @@ describe("worker inference provider runtime", () => {
     expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
   });
 
-  it("projects the gateway-owned auth profile onto the provider route", async () => {
-    const oauthRuntime = setup();
-    oauthRuntime.resolveAuthSelection.mockResolvedValue({
-      profileId: PROFILE,
+  it.each([
+    {
       source: "user",
       routeRequirement: "subscription",
-    });
-    await expect(oauthRuntime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
-      type: "done",
-    });
-    const oauth = oauthRuntime.prepareModel.mock.calls[0]?.[0].cfg ?? {};
-
-    const apiKeyRuntime = setup();
-    apiKeyRuntime.resolveAuthSelection.mockResolvedValue({
-      profileId: PROFILE,
-      source: "user",
-      routeRequirement: "api-key",
-    });
-    await apiKeyRuntime.executor(params(request(), vi.fn()));
-    const apiKey = apiKeyRuntime.prepareModel.mock.calls[0]?.[0].cfg ?? {};
-
-    expect(oauth.models?.providers?.openai).toMatchObject({
       auth: "oauth",
       api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
-    });
-    expect(apiKey.models?.providers?.openai).toMatchObject({
+    },
+    {
+      source: "user",
+      routeRequirement: "api-key",
       auth: "api-key",
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
-    });
-  });
-
-  it("pins an automatic profile to the route projected from that profile", async () => {
-    const runtime = setup({
-      ...sessionEntry,
-      authProfileOverrideSource: "auto",
-      authProfileOverrideCompactionCount: 1,
-    });
-    runtime.resolveAuthSelection.mockResolvedValue({
-      profileId: PROFILE,
+    },
+    {
       source: "auto",
       routeRequirement: "subscription",
-    });
-
-    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
-      type: "done",
-    });
-
-    expect(runtime.prepareModel).toHaveBeenCalledWith(
-      expect.objectContaining({
+      auth: "oauth",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    },
+  ] as const)(
+    "pins the $source profile to its $routeRequirement route",
+    async ({ source, routeRequirement, auth, api, baseUrl }) => {
+      const runtime = setup(
+        source === "auto"
+          ? {
+              ...sessionEntry,
+              authProfileOverrideSource: "auto",
+              authProfileOverrideCompactionCount: 1,
+            }
+          : sessionEntry,
+      );
+      runtime.resolveAuthSelection.mockResolvedValue({
         profileId: PROFILE,
-        preferredProfile: PROFILE,
-        bindAuthOwner: true,
-      }),
-    );
-  });
+        source,
+        routeRequirement,
+      });
+
+      await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+        type: "done",
+      });
+      expect(runtime.prepareModel.mock.calls[0]?.[0].cfg?.models?.providers?.openai).toMatchObject({
+        auth,
+        api,
+        baseUrl,
+      });
+      expect(runtime.prepareModel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          profileId: PROFILE,
+          preferredProfile: PROFILE,
+          bindAuthOwner: true,
+        }),
+      );
+    },
+  );
 
   it("keeps approved alias routing, endpoint, headers, and auth gateway-owned", async () => {
     const runtime = setup();
@@ -524,6 +517,74 @@ describe("worker inference provider runtime", () => {
     },
   );
 
+  it("canonicalizes fresh reasoning before continuation without rewriting approved history", async () => {
+    const runtime = setup();
+    const signature =
+      '{"type":"reasoning","id":"rs_fresh","encrypted_content":"gAAAA-synthetic==","summary":[{"type":"summary_text","text":"fresh summary"}]}';
+    const canonical =
+      '{"id":"rs_fresh","type":"reasoning","summary":[],"encrypted_content":"gAAAA-synthetic=="}';
+    const message = finalMessage();
+    const toolCall = {
+      type: "toolCall" as const,
+      id: TOOL_CALL.id,
+      name: TOOL_CALL.name,
+      arguments: { token: "synthetic-tool-input" },
+    };
+    message.content = [
+      { type: "thinking", thinking: "fresh summary", thinkingSignature: signature },
+      { type: "text", text: "Calling lookup" },
+      toolCall,
+    ];
+    const original = structuredClone(message);
+    runtime.stream.mockImplementation(() => {
+      const stream = createAssistantMessageEventStream();
+      stream.push({ type: "toolcall_start", contentIndex: 2, partial: message });
+      stream.push({
+        type: "toolcall_delta",
+        contentIndex: 2,
+        delta: JSON.stringify(toolCall.arguments),
+        partial: message,
+      });
+      stream.push({ type: "toolcall_end", contentIndex: 2, toolCall, partial: message });
+      stream.push({ type: "done", reason: "toolUse", message });
+      return stream;
+    });
+
+    const outcome = await runtime.executor(params(request(), vi.fn()));
+
+    expect(outcome.type).toBe("done");
+    if (outcome.type !== "done") {
+      throw new Error("expected successful worker inference");
+    }
+    expect(outcome.message.content).toEqual([
+      { type: "thinking", thinking: "fresh summary", thinkingSignature: canonical },
+      { type: "text", text: "Calling lookup" },
+      toolCall,
+    ]);
+    expect(message).toEqual(original);
+
+    const continuation = request();
+    continuation.context.messages.push(
+      {
+        ...outcome.message,
+        content: [{ type: "thinking", thinking: "approved history", thinkingSignature: signature }],
+      },
+      outcome.message,
+      {
+        role: "toolResult",
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        content: [{ type: "text", text: "found" }],
+        isError: false,
+        timestamp: 30,
+      },
+    );
+    const approvedHistory = structuredClone(continuation.context.messages);
+    await runtime.executor(params(continuation, vi.fn()));
+    expect(runtime.stream.mock.calls[1]?.[1].messages).toEqual(approvedHistory);
+    expect(continuation.context.messages).toEqual(approvedHistory);
+  });
+
   it("returns a typed error when authoritative replay cannot be persisted", async () => {
     const runtime = setup();
     const message = finalMessage();
@@ -588,41 +649,69 @@ describe("worker inference provider runtime", () => {
     expect(isWorkerTranscriptMessageFrameSafe(outcome.message)).toBe(true);
   });
 
-  it("rejects an incomplete final argument stream", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      const message = finalMessage();
-      const completeToolCall = { ...TOOL_CALL, arguments: { query: "alpha" } };
-      message.content = [...message.content.slice(0, -1), completeToolCall];
-      stream.push({ type: "toolcall_start", contentIndex: 1, partial: message });
-      stream.push({
-        type: "toolcall_delta",
-        contentIndex: 1,
-        delta: '{"query":',
-        partial: message,
+  it.each([
+    {
+      name: "incomplete JSON",
+      arguments: { query: "alpha" },
+      deltas: ['{"query":'],
+      outcome: "error",
+    },
+    {
+      name: "oversized arguments",
+      arguments: {},
+      deltas: ["x".repeat(1024 * 1024 + 1)],
+      outcome: "error",
+    },
+    {
+      name: "fragmented valid JSON",
+      arguments: {},
+      deltas: [...Array<string>(4096).fill(" "), "{}"],
+      outcome: "done",
+    },
+  ])(
+    "validates $name in the final argument stream",
+    async ({ name, arguments: toolArguments, deltas, outcome }) => {
+      const runtime = setup();
+      runtime.stream.mockImplementation(() => {
+        const stream = createAssistantMessageEventStream();
+        const message = finalMessage();
+        message.content = [
+          ...message.content.slice(0, -1),
+          { ...TOOL_CALL, arguments: toolArguments },
+        ];
+        stream.push({ type: "toolcall_start", contentIndex: 1, partial: message });
+        for (const delta of deltas) {
+          stream.push({ type: "toolcall_delta", contentIndex: 1, delta, partial: message });
+        }
+        stream.push({ type: "done", reason: "toolUse", message });
+        return stream;
       });
-      stream.push({ type: "done", reason: "toolUse", message });
-      return stream;
-    });
-    const emitted: Parameters<Execution["emit"]>[0][] = [];
+      const emitted: Parameters<Execution["emit"]>[0][] = [];
 
-    await expect(
-      runtime.executor(params(request(), (event) => emitted.push(event))),
-    ).resolves.toMatchObject({ type: "error", reason: "provider-error" });
-    expect(
-      emitted.flatMap((event) => (event.type === "toolcall_delta" ? [event.delta] : [])),
-    ).toEqual(['{"query":']);
-    expect(emitted.some((event) => event.type === "toolcall_end")).toBe(false);
-  });
+      await expect(
+        runtime.executor(params(request(), (event) => emitted.push(event))),
+      ).resolves.toMatchObject(
+        outcome === "done" ? { type: "done" } : { type: "error", reason: "provider-error" },
+      );
+      if (name === "incomplete JSON") {
+        expect(
+          emitted.flatMap((event) => (event.type === "toolcall_delta" ? [event.delta] : [])),
+        ).toEqual(deltas);
+        expect(emitted.some((event) => event.type === "toolcall_end")).toBe(false);
+      } else if (name === "oversized arguments") {
+        expect(emitted.map((event) => event.type)).toEqual(["toolcall_start"]);
+      }
+    },
+  );
 
   it.each([
-    { ended: false, omitted: false },
-    { ended: true, omitted: false },
-    { ended: true, omitted: true },
+    { ended: false, omitted: false, unidentified: false },
+    { ended: true, omitted: false, unidentified: false },
+    { ended: true, omitted: true, unidentified: false },
+    { ended: false, omitted: true, unidentified: true },
   ])(
-    "rejects terminal tool identity mismatch (ended=$ended, omitted=$omitted)",
-    async ({ ended, omitted }) => {
+    "rejects terminal tool identity mismatch (ended=$ended, omitted=$omitted, unidentified=$unidentified)",
+    async ({ ended, omitted, unidentified }) => {
       const runtime = setup();
       runtime.stream.mockImplementation(() => {
         const stream = createAssistantMessageEventStream();
@@ -631,7 +720,11 @@ describe("worker inference provider runtime", () => {
         terminal.content = omitted
           ? terminal.content.slice(0, 1)
           : [...terminal.content.slice(0, -1), { ...TOOL_CALL, id: "call-2" }];
-        stream.push({ type: "toolcall_start", contentIndex: 1, partial });
+        if (unidentified) {
+          partial.content = [...partial.content.slice(0, -1), { ...TOOL_CALL, id: "", name: "" }];
+        } else {
+          stream.push({ type: "toolcall_start", contentIndex: 1, partial });
+        }
         stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
         if (ended) {
           stream.push({ type: "toolcall_end", contentIndex: 1, toolCall: TOOL_CALL, partial });
@@ -677,69 +770,6 @@ describe("worker inference provider runtime", () => {
     ).toEqual(["{}"]);
   });
 
-  it("rejects unresolved pre-identity tool deltas omitted from the terminal message", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      const terminal = finalMessage();
-      terminal.content = terminal.content.slice(0, 1);
-      const partial = {
-        ...terminal,
-        content: [...terminal.content, { ...TOOL_CALL, id: "", name: "" }],
-      } satisfies AssistantMessage;
-      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
-      stream.push({ type: "done", reason: "stop", message: terminal });
-      return stream;
-    });
-
-    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
-      type: "error",
-      reason: "provider-error",
-    });
-  });
-
-  it("rejects retained tool arguments above the stream bound", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      const partial = finalMessage();
-      stream.push({ type: "toolcall_start", contentIndex: 1, partial });
-      stream.push({
-        type: "toolcall_delta",
-        contentIndex: 1,
-        delta: "x".repeat(1024 * 1024 + 1),
-        partial,
-      });
-      stream.push({ type: "done", reason: "toolUse", message: partial });
-      return stream;
-    });
-    const emitted: Parameters<Execution["emit"]>[0][] = [];
-
-    await expect(
-      runtime.executor(params(request(), (event) => emitted.push(event))),
-    ).resolves.toMatchObject({ type: "error", reason: "provider-error" });
-    expect(emitted.map((event) => event.type)).toEqual(["toolcall_start"]);
-  });
-
-  it("accepts valid tool arguments split across many small fragments", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      const message = finalMessage();
-      stream.push({ type: "toolcall_start", contentIndex: 1, partial: message });
-      for (let index = 0; index < 4096; index += 1) {
-        stream.push({ type: "toolcall_delta", contentIndex: 1, delta: " ", partial: message });
-      }
-      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial: message });
-      stream.push({ type: "done", reason: "toolUse", message });
-      return stream;
-    });
-
-    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
-      type: "done",
-    });
-  });
-
   it("bounds nonempty streamed argument work and ignores empty fragments", () => {
     const message = finalMessage();
     let emitted = 0;
@@ -783,59 +813,49 @@ describe("worker inference provider runtime", () => {
     ]);
   });
 
-  it("fences terminal tool-call synthesis after owner rotation", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => providerStream(finalMessage(), { omitToolEnd: true }));
-    const emitted: Parameters<Execution["emit"]>[0][] = [];
-    let current = true;
-    const execution = params(request(), (event) => {
-      emitted.push(event);
-      if (event.type === "toolcall_delta") {
-        current = false;
-      }
-    });
-    execution.isCurrent = () => current;
+  it.each([
+    {
+      phase: "toolcall_delta",
+      provider: () => providerStream(finalMessage(), { omitToolEnd: true }),
+      events: ["text_delta", "toolcall_start", "toolcall_delta"],
+    },
+    {
+      phase: "toolcall_start",
+      provider: () => {
+        const stream = createAssistantMessageEventStream();
+        const message = finalMessage();
+        const fragmented = {
+          ...message,
+          content: [...message.content.slice(0, -1), { ...TOOL_CALL, id: "", name: "" }],
+        } satisfies AssistantMessage;
+        stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial: fragmented });
+        stream.push({ type: "done", reason: "stop", message });
+        return stream;
+      },
+      events: ["toolcall_start"],
+    },
+  ])(
+    "fences terminal synthesis when $phase rotates ownership",
+    async ({ phase, provider, events }) => {
+      const runtime = setup();
+      runtime.stream.mockImplementation(provider);
+      const emitted: Parameters<Execution["emit"]>[0][] = [];
+      let current = true;
+      const execution = params(request(), (event) => {
+        emitted.push(event);
+        if (event.type === phase) {
+          current = false;
+        }
+      });
+      execution.isCurrent = () => current;
 
-    await expect(runtime.executor(execution)).resolves.toMatchObject({
-      type: "error",
-      reason: "cancelled",
-    });
-    expect(emitted.map((event) => event.type)).toEqual([
-      "text_delta",
-      "toolcall_start",
-      "toolcall_delta",
-    ]);
-  });
-
-  it("stops terminal synthesis when its start event rotates ownership", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      const message = finalMessage();
-      const fragmented = {
-        ...message,
-        content: [...message.content.slice(0, -1), { ...TOOL_CALL, id: "", name: "" }],
-      } satisfies AssistantMessage;
-      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial: fragmented });
-      stream.push({ type: "done", reason: "stop", message });
-      return stream;
-    });
-    const emitted: Parameters<Execution["emit"]>[0][] = [];
-    let current = true;
-    const execution = params(request(), (event) => {
-      emitted.push(event);
-      if (event.type === "toolcall_start") {
-        current = false;
-      }
-    });
-    execution.isCurrent = () => current;
-
-    await expect(runtime.executor(execution)).resolves.toMatchObject({
-      type: "error",
-      reason: "cancelled",
-    });
-    expect(emitted.map((event) => event.type)).toEqual(["toolcall_start"]);
-  });
+      await expect(runtime.executor(execution)).resolves.toMatchObject({
+        type: "error",
+        reason: "cancelled",
+      });
+      expect(emitted.map((event) => event.type)).toEqual(events);
+    },
+  );
 
   it.each([
     { name: "token usage", tokens: true, cost: 0.0033, billed: false },
@@ -890,42 +910,43 @@ describe("worker inference provider runtime", () => {
     }
   });
 
-  it("projects worker options and isolates provider policy mutations", async () => {
-    const runtime = setup();
-    runtime.applyStreamPolicy.mockImplementation((_agent, _cfg, _provider, _model, options) => {
-      Object.assign(options?.thinkingBudgets ?? {}, { low: 1 });
-      return { effectiveExtraParams: {}, nativeWebSearchAllowedByToolPolicy: undefined };
-    });
-    const inferenceRequest = request();
-    Object.assign(inferenceRequest.options, {
-      extra_body: { mode: "worker" },
-      transport: "sse",
-      response_format: { type: "json_object" },
-    });
+  it.each([
+    { reasoning: "low", streamReasoning: "low", mutate: true },
+    { reasoning: "adaptive", streamReasoning: "high", mutate: false },
+  ] as const)(
+    "projects $reasoning reasoning without leaking provider policy mutations",
+    async ({ reasoning, streamReasoning, mutate }) => {
+      const runtime = setup();
+      const inferenceRequest = request();
+      Object.assign(inferenceRequest.options, { reasoning });
+      if (mutate) {
+        runtime.applyStreamPolicy.mockImplementation((_agent, _cfg, _provider, _model, options) => {
+          Object.assign(options?.thinkingBudgets ?? {}, { low: 1 });
+          return { effectiveExtraParams: {}, nativeWebSearchAllowedByToolPolicy: undefined };
+        });
+        Object.assign(inferenceRequest.options, {
+          extra_body: { mode: "worker" },
+          transport: "sse",
+          response_format: { type: "json_object" },
+        });
+      }
 
-    expect(await runtime.executor(params(inferenceRequest, vi.fn()))).toMatchObject({
-      type: "done",
-    });
-    expect(runtime.applyStreamPolicy.mock.calls[0]?.[4]).toEqual({
-      temperature: 0.25,
-      maxTokens: 256,
-      reasoning: "low",
-      thinkingBudgets: { low: 1 },
-      fastMode: false,
-    });
-    expect(runtime.stream.mock.calls[0]?.[2]?.thinkingBudgets).toEqual({ low: 96 });
-    expect(inferenceRequest.options.thinkingBudgets).toEqual({ low: 96 });
-  });
-
-  it("preserves adaptive provider policy while lowering the core stream effort", async () => {
-    const runtime = setup();
-    const inferenceRequest = request();
-    Object.assign(inferenceRequest.options, { reasoning: "adaptive" });
-
-    expect(await runtime.executor(params(inferenceRequest, vi.fn()))).toMatchObject({
-      type: "done",
-    });
-    expect(runtime.applyStreamPolicy.mock.calls[0]?.[5]).toBe("adaptive");
-    expect(runtime.stream.mock.calls[0]?.[2]).toMatchObject({ reasoning: "high" });
-  });
+      expect(await runtime.executor(params(inferenceRequest, vi.fn()))).toMatchObject({
+        type: "done",
+      });
+      expect(runtime.applyStreamPolicy.mock.calls[0]?.[5]).toBe(reasoning);
+      expect(runtime.stream.mock.calls[0]?.[2]).toMatchObject({ reasoning: streamReasoning });
+      if (mutate) {
+        expect(runtime.applyStreamPolicy.mock.calls[0]?.[4]).toEqual({
+          temperature: 0.25,
+          maxTokens: 256,
+          reasoning,
+          thinkingBudgets: { low: 1 },
+          fastMode: false,
+        });
+        expect(runtime.stream.mock.calls[0]?.[2]?.thinkingBudgets).toEqual({ low: 96 });
+        expect(inferenceRequest.options.thinkingBudgets).toEqual({ low: 96 });
+      }
+    },
+  );
 });

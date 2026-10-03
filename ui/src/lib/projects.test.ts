@@ -20,6 +20,7 @@ const project: ProjectRecord = {
 function harness() {
   const request = vi.fn(async (): Promise<ProjectsListResult> => ({ projects: [project] }));
   const listeners = new Set<() => void>();
+  const eventListeners = new Set<Parameters<ApplicationGateway["subscribeEvents"]>[0]>();
   const snapshot: ApplicationGatewaySnapshot = {
     client: createTestGatewayClient(request),
     phase: "connected",
@@ -58,7 +59,12 @@ function harness() {
         listeners.delete(notify);
       };
     },
-    subscribeEvents: () => () => {},
+    subscribeEvents: (listener) => {
+      eventListeners.add(listener);
+      return () => {
+        eventListeners.delete(listener);
+      };
+    },
     subscribeEventLog: () => () => {},
   };
   const store = projectsForGateway(gateway);
@@ -71,6 +77,11 @@ function harness() {
     store,
     listeners,
     detach,
+    emitConfigChanged: () => {
+      for (const listener of eventListeners) {
+        listener({ type: "event", event: "config.changed", payload: {} });
+      }
+    },
     emit: () => {
       for (const listener of listeners) {
         listener();
@@ -80,6 +91,18 @@ function harness() {
 }
 
 describe("registered project catalog", () => {
+  it("retires project facts on config publication and reads the current GitHub host", async () => {
+    const h = harness();
+    await h.store.refresh();
+    expect(h.store.snapshot.ready).toBe(true);
+    h.request.mockResolvedValueOnce({ projects: [], githubHost: "new.ghe.example.test" });
+    h.emitConfigChanged();
+    expect(h.store.snapshot.ready).toBe(false);
+    expect(h.store.snapshot.result).toBeNull();
+    await h.store.refresh();
+    expect(h.store.snapshot.result?.githubHost).toBe("new.ghe.example.test");
+  });
+
   it("shares one cold read across chat and the picker, preserving recents", async () => {
     const h = harness();
     const picker = projectsForGateway(h.gateway);

@@ -173,6 +173,21 @@ type SqliteQueryBindingBuilder<Params, Row> = (
   parameter: <Value extends SQLInputValue>(read: (params: Params) => Value) => RawBuilder<Value>,
 ) => Compilable<Row>;
 
+/** Cache compiled query functions or bundles by native connection. */
+export function createSqliteQueryCache<Queries extends object>(
+  create: (database: DatabaseSync) => Queries,
+): (database: DatabaseSync) => Queries {
+  const queriesByDatabase = new WeakMap<DatabaseSync, Queries>();
+  return (database) => {
+    let queries = queriesByDatabase.get(database);
+    if (queries === undefined) {
+      queries = create(database);
+      queriesByDatabase.set(database, queries);
+    }
+    return queries;
+  };
+}
+
 /** Compile fixed SQL and fresh bindings without taking ownership of a native statement. */
 export function compileSqliteQueryBindings<Params, Row = unknown>(
   build: SqliteQueryBindingBuilder<Params, Row>,

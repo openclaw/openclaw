@@ -11,6 +11,7 @@ import {
   defaultRuntime,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { getActiveWebListener } from "./active-listener.js";
 import {
@@ -548,15 +549,14 @@ export async function waitForWebLogin(
         message: "Still waiting for the QR scan. Let me know when you’ve scanned it.",
       };
     }
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<"timeout">((resolve) => {
-      timer = setTimeout(() => resolve("timeout"), remaining);
-    });
-    const result = await Promise.race([
-      login.waitPromise.then(() => "done" as const),
-      login.qrUpdate.promise.then(() => "qr-update" as const),
-      timeout,
-    ]).finally(() => clearTimeout(timer));
+    const result = await raceWithTimeout(
+      Promise.race([
+        login.waitPromise.then(() => "done" as const),
+        login.qrUpdate.promise.then(() => "qr-update" as const),
+      ]),
+      remaining,
+      () => "timeout" as const,
+    );
 
     if (result === "timeout") {
       return {

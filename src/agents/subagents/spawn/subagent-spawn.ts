@@ -362,13 +362,13 @@ export async function spawnSubagentDirect(
         swarmMaxConcurrent: swarmConfig.maxConcurrent,
       });
     if (childEntry) {
-      recordSessionCreated(cfg, {
+      await recordSessionCreated(cfg, {
         sessionKey: childSessionKey,
         agentId: targetAgentId,
         entry: childEntry,
       });
     }
-    recordSubagentSpawned({
+    await recordSubagentSpawned({
       childSessionKey,
       childRunId: childIdem,
       requesterSessionKey: requesterInternalKey,

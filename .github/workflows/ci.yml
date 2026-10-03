@@ -749,7 +749,7 @@ jobs:
               action = ".github/actions/setup-node-env/action.yml"
               node_setup_scripts = ("scripts/lib/pnpm-lockfile-documents.mjs",)
               evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs", "scripts/ci-static-step.sh")
-              platform_scripts = ("scripts/lib/swift-toolchain.sh", "scripts/lib/ci-ios-smoke-plan.mjs")
+              platform_scripts = ("scripts/lib/swift-toolchain.sh", "scripts/lib/ci-ios-smoke-plan.mjs", "scripts/ci-xcodebuild.py")
               upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs")
               # Preflight imports these siblings by file-relative paths.
               preflight_scripts = (
@@ -765,7 +765,10 @@ jobs:
                   "scripts/changed-lanes.mts",
                   "scripts/lib/merge-head-diff-base.mjs",
               )
-              linux_node_scripts = (*upgrade_scripts, *npm_lock_scripts, "scripts/ci-additional-checks.sh")
+              linux_node_scripts = (
+                  *upgrade_scripts, *npm_lock_scripts, "scripts/ci-additional-checks.sh",
+                  "scripts/stage-openclaw-bun.sh", "scripts/lib/openclaw-bun.json",
+              )
               if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
                   raise GitFailure(1)
               harness = os.path.join(workspace, ".ci-harness")
@@ -5061,6 +5064,7 @@ jobs:
       HISTORICAL_TARGET: *historical_target
       IOS_CI_PHASE: ${{ matrix.phase }}
       IOS_MAIN_TIER: ${{ needs.preflight.outputs.validation_tier == 'main' }}
+      IOS_FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
       IOS_SIMULATOR_SELECTION: ${{ needs.preflight.outputs.ios_simulator_selection }}
     steps:
       - *platform_checkout_step
@@ -5247,16 +5251,18 @@ jobs:
               ./scripts/ios-simulator-prepare.sh "$IOS_SIMULATOR_ID"
           fi
           '''], stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-                  if os.environ["IOS_CI_PHASE"] == "smoke" and os.environ["HISTORICAL_TARGET"] != "true":
+                  if os.environ["HISTORICAL_TARGET"] != "true" and (
+                      os.environ["IOS_CI_PHASE"] == "smoke" or os.environ.get("IOS_FROZEN_TARGET") != "true"
+                  ):
                       subprocess.run(["pnpm", "ios:gen"], check=True)
                       subprocess.run([
-                          "xcodebuild",
+                          "python3", ".ci-harness/scripts/ci-xcodebuild.py",
                           "-project", "apps/ios/OpenClaw.xcodeproj",
                           "-scheme", "OpenClaw",
                           "-configuration", "Debug",
-                          "-destination", os.environ["IOS_DEST"],
+                          "-destination", os.environ.get("IOS_DEST") or "generic/platform=iOS Simulator",
                           "-showBuildTimingSummary",
-                          "build-for-testing",
+                          "build-for-testing" if os.environ["IOS_CI_PHASE"] == "smoke" else "build",
                       ], check=True)
                   else:
                       subprocess.run(["pnpm", "ios:build"], check=True)

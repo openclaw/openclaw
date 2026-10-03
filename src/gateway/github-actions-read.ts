@@ -90,6 +90,7 @@ export async function prepareBoardGitHubIdentity(
       config,
       sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? config,
       agentId: authority.boardSession.agentId,
+      issuer: "github.com",
       getCurrentConfig: () => context.getRuntimeConfig(),
       assertActive: authority.assertActive,
       startActive: authority.useCurrent,
@@ -153,6 +154,11 @@ export async function readBoardGitHubActions(
                 "GitHub Actions redirected the request; verify the repository/workflow, update the widget grant if needed, and retry.",
               );
             },
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            gitHubPublicApi.GITHUB_API_ORIGIN,
           );
           const raw = await gitHubPublicApi.readGitHubJsonResponse(
             response,

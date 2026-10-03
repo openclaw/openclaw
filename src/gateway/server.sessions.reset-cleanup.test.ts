@@ -406,34 +406,29 @@ test("sessions.reset rejects an active lifecycle mutation without interrupting a
       interrupted = true;
     },
   });
-  let releaseMutation = () => {};
+  const { promise: mutationReleased, resolve: releaseMutation } = createDeferred();
   const { promise: mutationStarted, resolve: markMutationStarted } = createDeferred();
-  const blocker = runExclusiveSessionLifecycleMutation({
+  const blocker = runExclusiveSessionLifecycleMutation("reset", {
     scope: storePath,
     identities: ["agent:main:main", "sess-main"],
     run: async () => {
       markMutationStarted();
-      await new Promise<void>((resolve) => {
-        releaseMutation = resolve;
-      });
+      await mutationReleased;
     },
   });
-  await mutationStarted;
-  const { performGatewaySessionReset } = await import("./session-reset-service.js");
-  const assertCurrent = vi.fn(() => {
-    throw new Error("stale lifecycle");
-  });
-  const reset = await performGatewaySessionReset({
-    key: "main",
-    reason: "reset",
-    commandSource: "gateway:agent",
-    workerPlacementContext: {},
-    assertCurrent,
-  });
-  releaseMutation();
-
   try {
-    await blocker;
+    await mutationStarted;
+    const { performGatewaySessionReset } = await import("./session-reset-service.js");
+    const assertCurrent = vi.fn(() => {
+      throw new Error("stale lifecycle");
+    });
+    const reset = await performGatewaySessionReset({
+      key: "main",
+      reason: "reset",
+      commandSource: "gateway:agent",
+      workerPlacementContext: {},
+      assertCurrent,
+    });
     expect(reset).toMatchObject({
       ok: false,
       error: {
@@ -444,7 +439,9 @@ test("sessions.reset rejects an active lifecycle mutation without interrupting a
     expect(assertCurrent).not.toHaveBeenCalled();
     expect(interrupted).toBe(false);
   } finally {
+    releaseMutation();
     admissionLease.release();
+    await blocker;
   }
 });
 
@@ -632,7 +629,7 @@ test("sessions.patch rejects an archive queued behind a rotated session", async 
     },
   });
   await blockerStarted;
-  const queuedReset = runExclusiveSessionLifecycleMutation({
+  const queuedReset = runExclusiveSessionLifecycleMutation("reset", {
     scope: storePath,
     identities: [sessionKey, initialSessionId],
     run: async () => {
@@ -794,8 +791,10 @@ test("sessions.reset closes a spawned ACP child that lives in a different agent 
     store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
   };
   testState.agentsConfig = {
-    list: [{ id: "main", default: true }, { id: "codex" }],
+    ownership: "explicit",
+    entries: { main: {}, codex: {} },
   };
+  testState.agentConfig = { systemAgent: { agentId: "main" } };
   const mainStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
   const codexStorePath = path.join(stateDir, "agents", "codex", "sessions", "sessions.json");
   await writeSessionStore({

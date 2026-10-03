@@ -173,32 +173,17 @@ async function heldPlacementReads(
   };
 }
 
-it("serves overlapping cold descriptions within bounded placement-read admission", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const fixture = await heldPlacementReads(8);
-    const requests = Array.from({ length: 24 }, (_, index) =>
-      fixture.describe(fixture.rows[index % fixture.rows.length]!),
-    );
-    const completed = Promise.allSettled(requests.map((request) => request.completion));
-    try {
-      await fixture.entered.promise;
-      fixture.release.resolve();
-      expect(await completed).toEqual(
-        requests.map(() => ({ status: "fulfilled", value: undefined })),
-      );
-      for (const { row, respond } of requests) {
-        expectPlacementResponse(respond, row);
-      }
-    } finally {
-      fixture.release.resolve();
-      await completed;
-      fixture.dispose();
-    }
-  });
-});
-
 it.for([
   {
+    name: "serves overlapping cold descriptions within bounded placement-read admission",
+    count: 8,
+    idLength: 0,
+    accepted: 24,
+    maxPendingBytes: undefined,
+    copies: 3,
+  },
+  {
+    copies: 1,
     name: "serves more than 128 descriptions without joining inputs beyond reader capacity",
     count: 160,
     idLength: 4 * 1024,
@@ -206,13 +191,14 @@ it.for([
     maxPendingBytes: 128 * 1024,
   },
   {
+    copies: 1,
     name: "refuses only new descriptions at retained-batch capacity and admits them after drain",
     count: 130,
     idLength: 12 * 1024,
     accepted: 128,
     maxPendingBytes: undefined,
   },
-])("$name", async ({ count, idLength, accepted, maxPendingBytes }, { signal }) => {
+])("$name", async ({ count, idLength, accepted, maxPendingBytes, copies }, { signal }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const fixture = await heldPlacementReads(count, {
       sessionId: (index) => `placement-${index}-${"x".repeat(idLength)}`,
@@ -246,28 +232,35 @@ it.for([
       pending.push(Promise.allSettled([request.completion]));
     };
     try {
-      describe(fixture.rows[0]!);
-      // Bind waits to the test signal so a stall still releases the held placement reads.
-      await withinTest(
-        awaitGateBeforeSettlement(
-          fixture.entered.promise,
-          requests[0]!.completion,
-          "First placement read did not enter",
-        ),
-        signal,
-      );
-      describe(fixture.rows[1]!);
-      await withinTest(
-        awaitGateBeforeSettlement(
-          fixture.atCapacity.promise,
-          requests[1]!.completion,
-          "Second placement read did not enter",
-        ),
-        signal,
-      );
-      for (const row of fixture.rows.slice(2)) {
-        describe(row);
+      if (copies > 1) {
+        for (let index = 0; index < count * copies; index++) {
+          describe(fixture.rows[index % count]!);
+        }
+      } else {
+        describe(fixture.rows[0]!);
+        // Bind waits to the test signal so a stall still releases the held placement reads.
+        await withinTest(
+          awaitGateBeforeSettlement(
+            fixture.entered.promise,
+            requests[0]!.completion,
+            "First placement read did not enter",
+          ),
+          signal,
+        );
+        describe(fixture.rows[1]!);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            fixture.atCapacity.promise,
+            requests[1]!.completion,
+            "Second placement read did not enter",
+          ),
+          signal,
+        );
+        for (const row of fixture.rows.slice(2)) {
+          describe(row);
+        }
       }
+      await withinTest(fixture.entered.promise, signal);
       await withinTest(allSelected.promise, signal);
       fixture.release.resolve();
       expect(await Promise.all(pending)).toEqual(
@@ -283,7 +276,9 @@ it.for([
       for (const { respond } of requests.slice(accepted)) {
         expect(respond).not.toHaveBeenCalled();
       }
-      expect(fixture.peakPending).toBe(2);
+      if (copies === 1) {
+        expect(fixture.peakPending).toBe(2);
+      }
       expect(fixture.readProjection.mock.calls.flatMap(([ids]) => ids)).toEqual(
         fixture.rows.slice(0, accepted).map(({ sessionId }) => sessionId),
       );
@@ -452,7 +447,7 @@ it.for([false, true])("keeps exact reads independent of bulk %s", async (categor
         );
       }
       holdBulk = true;
-      bulkRow.placement = placements.transition({
+      bulkRow.placement = await placements.transition({
         sessionId: bulkRow.sessionId,
         from: "requested",
         to: "provisioning",
@@ -475,7 +470,7 @@ it.for([false, true])("keeps exact reads independent of bulk %s", async (categor
           { sessionId: exactRow.sessionId, updatedAt: 2, label: "Fresh exact description" },
         );
       }
-      exactRow.placement = placements.transition({
+      exactRow.placement = await placements.transition({
         sessionId: exactRow.sessionId,
         from: "requested",
         to: "provisioning",

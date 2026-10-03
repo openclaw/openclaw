@@ -93,7 +93,7 @@ describe("sessions.groups.put", () => {
   });
 
   it("replaces the catalog using the runtime config and authorization guards", async () => {
-    const cfg = { agents: { list: [{ id: "main" }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const names = ["Keep"];
     const sectionOrder = ["category:Keep", "ungrouped"];
     const groups = [{ name: "Keep", position: 0 }];

@@ -28,7 +28,7 @@ describe("SystemAgentChatEngine facade", () => {
     const config: OpenClawConfig = {
       agents: {
         defaults: { model: "openai/gpt-5.5" },
-        list: [{ id: "alternate", default: true, model: "openai/gpt-5.5" }],
+        entries: { alternate: { model: "openai/gpt-5.5" } },
       },
     };
     const inference = await createSystemAgentVerifiedInferenceTestFixture(config);

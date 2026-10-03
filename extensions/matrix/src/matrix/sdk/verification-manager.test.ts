@@ -371,10 +371,9 @@ describe("MatrixVerificationManager", () => {
       roomId: "!dm:example.org",
       verifier: undefined,
     });
-    const manager = new MatrixVerificationManager();
-    const summaries: ReturnType<typeof manager.listVerifications> = [];
-    manager.onSummaryChanged((summary) => {
-      summaries.push(summary);
+    const summaries: ReturnType<MatrixVerificationManager["listVerifications"]> = [];
+    const manager = new MatrixVerificationManager({
+      onSummaryChanged: (summary) => summaries.push(summary),
     });
 
     manager.trackVerificationRequest(request);

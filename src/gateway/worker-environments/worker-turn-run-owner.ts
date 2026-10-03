@@ -33,7 +33,7 @@ export type ActiveWorkerTurn = {
   claim: WorkerSessionTurnClaim;
   sessionKey: string;
   signal: AbortSignal;
-  recoverTerminal?: () => string | undefined;
+  recoverTerminal?: (assertCurrent?: () => void) => Promise<string | undefined>;
   dispose: () => void;
 };
 

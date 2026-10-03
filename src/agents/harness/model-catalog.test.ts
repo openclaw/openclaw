@@ -11,13 +11,11 @@ import {
 const cfg = {
   agents: {
     defaults: { model: { primary: "openai/gpt-5.6-sol" } },
-    list: [
-      {
-        id: "main",
-        default: true,
+    entries: {
+      main: {
         models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
       },
-    ],
+    },
   },
 } as OpenClawConfig;
 

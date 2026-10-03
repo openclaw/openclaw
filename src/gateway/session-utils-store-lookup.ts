@@ -52,7 +52,6 @@ type GatewaySessionStoreLookupParams = {
   readConsistency?: SessionEntryListScope["readConsistency"];
   readOnly?: boolean;
   exactRead?: boolean;
-  listCandidatesOnly?: boolean;
   includeStoreChildEntries?: boolean;
   store?: Record<string, SessionEntry>;
   storeCache?: GatewaySessionStoreCache;
@@ -74,7 +73,6 @@ function storeReadOptions(
     env: params.env,
     readOnly,
     ...(params.exactRead || params.preserveQualifiedAddress ? { exactKeys: keys } : {}),
-    ...(params.listCandidatesOnly ? { listKeys: keys } : {}),
     ...(params.projection ? { projection: params.projection } : {}),
     ...(params.readConsistency ? { readConsistency: params.readConsistency } : {}),
     ...(params.storeCache ? { cache: params.storeCache } : {}),
@@ -528,7 +526,7 @@ export function resolveGatewaySessionStoreTarget(params: {
   clone?: boolean;
   store?: Record<string, SessionEntry>;
 }): GatewaySessionStoreTarget {
-  // Keep listing validation and read mode while avoiding unrelated entry clones.
+  // Routing needs canonical candidates, not a listing's unrelated rows and participants.
   const {
     store: _store,
     readSource: _readSource,
@@ -538,7 +536,8 @@ export function resolveGatewaySessionStoreTarget(params: {
   } = resolveGatewaySessionStoreTargetWithStore({
     ...params,
     projection: "list",
-    listCandidatesOnly: true,
+    exactRead: true,
+    readOnly: false,
   });
   return target;
 }

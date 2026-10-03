@@ -135,7 +135,7 @@ struct GatewayConnectionControlUIAuthTests {
                 // request owner, which also makes a fresh native route ready.
                 #expect(session.snapshotMakeCount() == 0)
                 let configuration = try await manager.dashboardConfiguration(
-                    endpoint: endpoint, mode: .remote, target: .profile("reconnect"), token: nil)
+                    endpoint: endpoint, mode: .remote, target: .profile("reconnect"), token: nil).configuration
                 let expectedLegacy = switch method {
                 case "token": ["token": "accepted-token"]
                 case "password": ["password": "accepted-password"]

@@ -21,6 +21,7 @@ import {
 } from "./sqlite-error-diagnostics.js";
 import { discardSqliteTransactionState } from "./sqlite-post-commit.js";
 import { captureSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
+import type { SqliteWorkerDatabaseContext } from "./sqlite-worker-database-context.js";
 import { normalizeDatabasePath } from "./sqlite-worker-identity.js";
 
 const DEFAULT_SLOW_BUSY_WAIT_MS = 1_000;
@@ -460,6 +461,28 @@ export function runSqliteImmediateTransactionSync<T>(
   options?: SqliteTransactionOptions,
 ): T {
   return runSqliteTransactionSync(db, operation, "immediate", options);
+}
+
+/** Admit the borrowed worker connection after BEGIN and before its physical commit. */
+export function runSqliteWorkerTransactionSync<T>(
+  context: SqliteWorkerDatabaseContext,
+  operation: () => T,
+  options?: SqliteTransactionOptions,
+): T {
+  return runSqliteImmediateTransactionSync(
+    context.database,
+    () => {
+      context.admit("transaction");
+      return operation();
+    },
+    {
+      ...options,
+      withCommit(commit) {
+        context.admit("commit");
+        return options?.withCommit ? options.withCommit(commit) : commit();
+      },
+    },
+  );
 }
 
 /** Prepare outside the transaction; yield for admission without replaying admitted writes. */

@@ -19,6 +19,7 @@ const buildOwners = [
   /^\.github\/(?:workflows\/ci\.yml|actions\/)/u,
   /^config\/swift(?:lint\.yml|format)$/u,
   /^scripts\/(?:ci-build-manifest\.mjs|ci-changed-scope\.mjs|prepare-apple-mermaid\.mjs|select-ios-simulator\.mjs)$/u,
+  /^scripts\/ci-xcodebuild\.py$/u,
   /^scripts\/lib\/(?:ci-ios-smoke-plan\.mjs|swift-toolchain\.sh|(?:ios|mobile)-version\.ts|release-version\.mjs|version-script-args\.ts)$/u,
   /^scripts\/(?:check-swift-tools|format-swift|install-simslim|install-swift-tools|install-xcodegen|lint-swift|ios-configure-signing|ios-simulator-prepare|ios-team-id|ios-write-version-xcconfig)\.sh$/u,
   /^scripts\/(?:ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$/u,

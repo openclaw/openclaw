@@ -22,7 +22,7 @@ import { resolveIMessageConversationRoute } from "./conversation-route.js";
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
   agents: {
-    list: [{ id: "main" }, { id: "codex" }],
+    entries: { main: {}, codex: {} },
   },
   bindings: [{ agentId: "main", match: { channel: "imessage", accountId: "default" } }],
 } satisfies OpenClawConfig;

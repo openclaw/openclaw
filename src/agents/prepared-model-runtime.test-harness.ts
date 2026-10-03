@@ -226,7 +226,10 @@ vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
 }));
 
 const agentScopeMocks = vi.hoisted(() => ({
-  listAgentEntries: (config: { agents?: { list?: unknown[] } }) => config.agents?.list ?? [],
+  listAgentEntries: (config: OpenClawConfig) =>
+    Object.entries(config.agents?.entries ?? {}).map(([id, entry]) =>
+      Object.assign({}, entry, { id }),
+    ),
   listAgentIds: () => {
     if (preparedModelRuntimeMocks.configuredAgentIdsError) {
       throw preparedModelRuntimeMocks.configuredAgentIdsError;
@@ -239,11 +242,11 @@ const agentScopeMocks = vi.hoisted(() => ({
     (agentId === "default" ? "/tmp/unused-workspace" : `/tmp/workspace-${agentId}`),
   tryResolveConfiguredAgentWorkspaceDir: () => "/tmp/unused-workspace",
   tryResolveSystemAgentWorkspaceDir: () => "/tmp/unused-workspace",
-  resolveAmbientOwnerAgentId: () => "default",
+  resolveAmbientOwnerAgentId: (_config: OpenClawConfig, agentId?: string) => agentId ?? "default",
   resolveDefaultAgentDir: vi.fn<() => string>(),
   resolveDefaultAgentId: () => "default",
-  resolveAgentConfig: (config: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
-    config.agents?.list?.find((entry) => entry.id === agentId),
+  resolveAgentConfig: (config: OpenClawConfig, agentId: string) =>
+    config.agents?.entries?.[agentId],
   resolveNativeModelPrimary: preparedModelRuntimeMocks.resolveNativeModelPrimary,
   resolveAgentModelFallbacksOverride: () => undefined,
   resolveEffectiveModelFallbacks: () => undefined,

@@ -191,6 +191,10 @@ inter-session user turns that only have provenance metadata.
 - Preserve replayable OpenAI Responses reasoning item payloads, including
   encrypted empty-summary items, so manual/WebSocket replay keeps required
   `rs_*` state paired with assistant output items.
+- Node turns canonicalize fresh reasoning signatures before returning the
+  completed assistant message, so live continuation and transcript storage use
+  the same signature bytes. Encrypted reasoning bytes, executable tool arguments,
+  and previously approved history remain unchanged.
 - Native ChatGPT Codex Responses follows Codex wire parity by replaying
   prior Responses reasoning/message/function payloads without prior item
   IDs while preserving session `prompt_cache_key`.
@@ -229,12 +233,15 @@ inter-session user turns that only have provenance metadata.
   as hidden custom messages immediately after their user turn and replay them in
   place. Inline inbound metadata on older user turns is also retained. This
   model-scoped append-only policy includes Bedrock, Vertex, and Foundry routes.
-  Carriers contain only the delimited context body; the shared instruction lives
-  once in the stable system prompt. Carriers remain user-role context and
-  are excluded from chat history and compaction summarization. Other Claude
-  models and Anthropic-compatible models keep transient carriers, avoiding
-  repeated cache-read charges and context use for old carriers when nothing
-  binds the prefix.
+  Agent core marks carriers with typed runtime-context metadata on a user-role
+  compatibility message. Provider adapters project the message at the strongest
+  authority their protocol supports; Anthropic-family and external plugin adapters
+  retain the labeled user representation, while OpenAI-compatible adapters use
+  system or developer authority.
+  Carriers are excluded from chat history and compaction summarization. Other
+  Claude models and Anthropic-compatible models keep transient carriers, avoiding
+  repeated cache-read charges and context use for old carriers when nothing binds
+  the prefix.
 - Tool result pairing repair and synthetic tool results.
 - Turn validation (merge consecutive user turns to satisfy strict
   alternation). For prefix-binding models on the Messages API, append-only replay keeps

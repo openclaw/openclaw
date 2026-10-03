@@ -32,7 +32,7 @@ describe("memory forget curated writes", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     await configureMemoryCoreDreamingStateForTests();
     cfg = {
-      agents: { defaults: { workspace: workspaceDir }, list: [{ id: "main", default: true }] },
+      agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } },
     } as OpenClawConfig;
   });
 

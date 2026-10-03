@@ -19,6 +19,8 @@ import { readConnectPairingRequiredMessage } from "../../packages/gateway-protoc
 import { clearActiveProgressLine } from "../../packages/terminal-core/src/progress-line.js";
 import { createSafeStreamWriter } from "../../packages/terminal-core/src/stream-writer.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
+import { readGatewayDispatchConfig } from "../config/gateway-dispatch-config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildGatewayConnectionDetails,
   isGatewayTransportError,
@@ -31,13 +33,13 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { readConfiguredLogTail } from "../logging/log-tail.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { redactSensitiveLines, resolveRedactOptions } from "../logging/redact.js";
-import { formatTimestamp } from "../logging/timestamps.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
 import { resolveGatewayLocalPortOverride } from "./gateway-port-option.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 import { formatDocsHelp } from "./help-format.js";
+import { formatLogsCliLine } from "./logs-cli.format.js";
 import { parseLogsPositiveInt } from "./logs-cli.options.js";
 
 type LogsTailPayload = {
@@ -58,12 +60,6 @@ type LogsTailPayload = {
 };
 
 type LogsCliRuntimeModule = typeof import("./logs-cli.runtime.js");
-
-type LogCursorState = {
-  gateway?: number;
-  journal?: string;
-  journalSince?: string;
-};
 
 type GatewayRecoveryResult =
   | { ok: true; payload: LogsTailPayload; startedAt: string }
@@ -92,6 +88,8 @@ type LogsCliOptions = GatewayRpcOpts & {
 type LogsRequestOptions = LogsCliOptions & {
   localPortOverride?: number;
   connection: GatewayConnectionDetails;
+  config?: OpenClawConfig;
+  localConfigUnavailable?: boolean;
 };
 
 const LOCAL_FALLBACK_NOTICE = "Local Gateway RPC unavailable; reading configured file log instead.";
@@ -153,40 +151,6 @@ async function fetchGatewayLogs(
     throw new Error("Unexpected logs.tail response");
   }
   return payload as LogsTailPayload;
-}
-
-async function fetchLogs(
-  opts: LogsRequestOptions,
-  cursors: LogCursorState,
-  showProgress: boolean,
-  params: { limit: number; maxBytes: number },
-): Promise<LogsTailPayload> {
-  const { limit, maxBytes } = params;
-  try {
-    return await fetchGatewayLogs(opts, cursors.gateway, showProgress, params);
-  } catch (error) {
-    if (!shouldUseLocalLogsFallback(opts, error)) {
-      throw error;
-    }
-    if (opts.follow) {
-      const journalPayload = await readSystemdJournalFallback({
-        cursor: cursors.journal,
-        since: cursors.journalSince,
-        limit,
-        maxBytes,
-      });
-      if (journalPayload) {
-        return journalPayload;
-      }
-      throw error;
-    }
-    // Match the Gateway logs.tail source when implicit local RPC is unavailable.
-    return {
-      ...(await readConfiguredLogTail({ cursor: cursors.gateway, limit, maxBytes })),
-      sourceKind: "file",
-      localFallback: true,
-    };
-  }
 }
 
 function shouldUseLocalLogsFallback(opts: LogsRequestOptions, error: unknown): boolean {
@@ -365,59 +329,6 @@ function isTransientFollowError(error: unknown): boolean {
   return isPlainGatewayRequestUnavailableError(message);
 }
 
-function formatLogTimestamp(value?: string, mode: "pretty" | "plain" = "plain", localTime = true) {
-  if (!value) {
-    return "";
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-
-  if (mode === "pretty") {
-    return formatTimestamp(parsed, { style: "short", timeZone: localTime ? undefined : "UTC" });
-  }
-  return localTime ? formatTimestamp(parsed, { style: "long" }) : parsed.toISOString();
-}
-
-function formatLogLine(
-  raw: string,
-  opts: {
-    pretty: boolean;
-    rich: boolean;
-    localTime: boolean;
-  },
-): string {
-  const parsed = parseLogLine(raw);
-  if (!parsed) {
-    return raw;
-  }
-  const label = parsed.subsystem ?? parsed.module ?? parsed.plugin ?? "";
-  const time = formatLogTimestamp(parsed.time, opts.pretty ? "pretty" : "plain", opts.localTime);
-  const level = parsed.level ?? "";
-  const message = parsed.message || parsed.raw;
-
-  if (!opts.pretty) {
-    return [time, level, label, message].filter(Boolean).join(" ").trim();
-  }
-
-  const timeLabel = colorize(opts.rich, theme.muted, time);
-  const labelValue = colorize(opts.rich, theme.accent, label);
-  const levelStyle =
-    level === "error" || level === "fatal"
-      ? theme.error
-      : level === "warn"
-        ? theme.warn
-        : level === "debug" || level === "trace"
-          ? theme.muted
-          : theme.info;
-  const levelValue = colorize(opts.rich, levelStyle, level);
-  const messageValue = colorize(opts.rich, levelStyle, message);
-
-  const head = [timeLabel, levelValue, labelValue].filter(Boolean).join(" ");
-  return [head, messageValue].filter(Boolean).join(" ").trim();
-}
-
 function createLogWriters(onOutputClosed?: () => void) {
   const writer = createSafeStreamWriter({
     beforeWrite: () => clearActiveProgressLine(),
@@ -499,11 +410,26 @@ export function registerLogsCli(program: Command) {
 
   logs.action(async (rawOpts: LogsCliOptions) => {
     const localPortOverride = resolveGatewayLocalPortOverride(rawOpts);
+    let config: OpenClawConfig;
+    let configUnavailable = false;
+    try {
+      config = readGatewayDispatchConfig();
+    } catch {
+      config = {};
+      configUnavailable = true;
+    }
     // Client identity, fallback, and diagnostics must describe the same selected target.
+    const connection = buildGatewayConnectionDetails({
+      config,
+      url: rawOpts.url,
+      localPortOverride,
+    });
     const opts: LogsRequestOptions = {
       ...rawOpts,
       localPortOverride,
-      connection: buildGatewayConnectionDetails({ url: rawOpts.url, localPortOverride }),
+      connection,
+      ...(configUnavailable ? { config } : {}),
+      localConfigUnavailable: configUnavailable && isImplicitLoopbackGatewayConnection(connection),
     };
     let gatewayRecovery: GatewayRecoveryState = { kind: "idle" };
     const abortGatewayRecoveryProbe = () => {
@@ -547,6 +473,12 @@ export function registerLogsCli(program: Command) {
       jsonMode
         ? emitJsonLine({ type: "notice", message }, true)
         : errorLine(colorize(rich, style, message));
+    if (configUnavailable) {
+      emitConnectionNotice(
+        `Warning: Configuration could not be read. ${opts.localConfigUnavailable ? "Reading local file logs. " : ""}Run \`${formatCliCommand("openclaw doctor --fix")}\`.`,
+        theme.warn,
+      );
+    }
 
     const startGatewayRecoveryProbe = () => {
       if (!preferJournal || gatewayRecovery.kind !== "idle") {
@@ -615,18 +547,47 @@ export function registerLogsCli(program: Command) {
       const showProgress = first && !opts.follow;
       let gatewayPollStartedAt = new Date().toISOString();
       try {
-        if (preferJournal) {
+        if (opts.localConfigUnavailable) {
+          payload = {
+            ...(await readConfiguredLogTail({ cursor: gatewayCursor, limit, maxBytes })),
+            sourceKind: "file",
+            localFallback: true,
+          };
+        } else if (preferJournal) {
           startGatewayRecoveryProbe();
           const result = await readJournalWhileProbingRecovery();
           payload = result.payload;
           gatewayPollStartedAt = result.gatewayPollStartedAt ?? gatewayPollStartedAt;
         } else {
-          payload = await fetchLogs(
-            opts,
-            { gateway: gatewayCursor, journal: journalCursor, journalSince },
-            showProgress,
-            { limit, maxBytes },
-          );
+          try {
+            payload = await fetchGatewayLogs(opts, gatewayCursor, showProgress, {
+              limit,
+              maxBytes,
+            });
+          } catch (error) {
+            if (!shouldUseLocalLogsFallback(opts, error)) {
+              throw error;
+            }
+            if (opts.follow) {
+              const journalPayload = await readSystemdJournalFallback({
+                cursor: journalCursor,
+                since: journalSince,
+                limit,
+                maxBytes,
+              });
+              if (!journalPayload) {
+                throw error;
+              }
+              payload = journalPayload;
+            } else {
+              // Match the Gateway logs.tail source when implicit local RPC is unavailable.
+              payload = {
+                ...(await readConfiguredLogTail({ cursor: gatewayCursor, limit, maxBytes })),
+                sourceKind: "file",
+                localFallback: true,
+              };
+            }
+          }
         }
       } catch (err) {
         if (opts.follow && followRetryAttempt < MAX_FOLLOW_RETRIES && isTransientFollowError(err)) {
@@ -711,7 +672,7 @@ export function registerLogsCli(program: Command) {
         for (const line of lines) {
           if (
             !logLine(
-              formatLogLine(line, {
+              formatLogsCliLine(line, {
                 pretty,
                 rich,
                 localTime,
@@ -767,4 +728,3 @@ export function registerLogsCli(program: Command) {
     }
   });
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

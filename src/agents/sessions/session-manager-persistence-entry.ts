@@ -3,6 +3,7 @@ import type {
   SessionTranscriptContextVersion,
   TranscriptMessageAppendResult,
 } from "../../config/sessions/session-accessor.sqlite-contract.js";
+import { normalizeTranscriptJsonValue } from "../../config/sessions/transcript-json.js";
 import { copyPreparedModelVisibleToolText } from "../../logging/redact-internal.js";
 import {
   copyCodeModeSourceAppend,
@@ -53,7 +54,7 @@ export function adoptCommittedMessagePayload(
   entry: SessionMessageEntry,
   receipt: TranscriptMessageAppendResult<SessionMessageEntry["message"]>,
   idempotencyLookup: AppendPersistenceOptions["idempotencyLookup"],
-): void {
+): string | null {
   if (receipt.effectiveParentId === undefined) {
     throw new Error(`Session transcript parent entry was not persisted: ${entry.id}`);
   }
@@ -73,18 +74,19 @@ export function adoptCommittedMessagePayload(
   if (idempotencyLookup === "caller-checked" && !receipt.appended) {
     throw new Error(`Session transcript append was not persisted: ${entry.id}`);
   }
+  return receipt.effectiveParentId;
 }
 
 export function canonicalizeSessionEntry<T extends SessionEntry>(
   entry: T,
   options?: AppendPersistenceOptions,
 ): T {
-  // oxlint-disable-next-line unicorn/prefer-structured-clone -- Match the persisted JSON/toJSON shape exactly.
-  const canonicalEntry: unknown = JSON.parse(JSON.stringify(entry));
+  const sourceAppend = getCodeModeSourceAppend(options);
+  const canonicalEntry = normalizeTranscriptJsonValue(entry, "", Boolean(sourceAppend));
   if (!isIndexedSessionEntry(canonicalEntry) || canonicalEntry.type !== entry.type) {
     throw new Error(`Invalid session transcript entry: ${entry.type}`);
   }
-  if (entry.type === "message" && canonicalEntry.type === "message") {
+  if (entry !== canonicalEntry && entry.type === "message" && canonicalEntry.type === "message") {
     if (
       entry.message.role === "toolResult" &&
       canonicalEntry.message.role === "toolResult" &&
@@ -102,7 +104,7 @@ export function canonicalizeSessionEntry<T extends SessionEntry>(
     copyCodeModeSourceAppend(
       entry.message,
       canonicalEntry.message,
-      getCodeModeSourceAppend(options),
+      sourceAppend,
       (source) => source,
     );
   }

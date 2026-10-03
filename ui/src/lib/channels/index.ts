@@ -1,4 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { registerListener } from "../../../../src/shared/listeners.js";
 import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.ts";
 import type { GatewayEventListener } from "../../api/gateway.ts";
 import type {
@@ -600,10 +601,7 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
     startWhatsApp: (force, accountId) => runWhatsApp(() => startWhatsAppLogin(force, accountId)),
     waitWhatsApp: (accountId) => runWhatsApp(() => waitWhatsAppLogin(accountId)),
     logoutWhatsApp: (accountId) => runWhatsApp(() => logoutWhatsApp(accountId)),
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
       if (disposed) {
         return;

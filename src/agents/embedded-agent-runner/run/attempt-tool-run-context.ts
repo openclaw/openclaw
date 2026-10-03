@@ -53,6 +53,7 @@ export function buildEmbeddedAttemptToolRunContext(
     trigger?: EmbeddedRunTrigger;
     jobId?: string;
     memoryFlushWritePath?: string;
+    memoryFlushTools?: RunEmbeddedAgentParams["memoryFlushTools"];
     toolsAllow?: string[];
     forceMessageTool?: boolean;
     swarmCollector?: boolean;
@@ -109,6 +110,7 @@ export function buildEmbeddedAttemptToolRunContext(
     trigger: params.trigger,
     jobId: params.jobId,
     memoryFlushWritePath: params.memoryFlushWritePath,
+    memoryFlushTools: params.memoryFlushTools,
     swarmCollector: params.swarmCollector,
     swarmOutputSchema: params.swarmOutputSchema,
     currentInboundAudio,

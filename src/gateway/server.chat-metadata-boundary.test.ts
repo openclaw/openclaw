@@ -55,11 +55,13 @@ afterAll(async () => {
 
 const CHAT_METADATA_BOUNDARY_CONFIG = {
   agents: {
+    ownership: "explicit",
     defaults: {
+      systemAgent: { agentId: "main" },
       model: { primary: "openai/gpt-boundary" },
       models: { "openai/gpt-boundary": {} },
     },
-    entries: { main: { default: true }, healthy: {} },
+    entries: { main: {}, healthy: {} },
   },
   models: {
     providers: {

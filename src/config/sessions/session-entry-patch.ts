@@ -4,7 +4,10 @@ import {
   SqliteWorkerError,
   hasSqliteWorkerOutcomeUnknown,
 } from "../../infra/sqlite-worker-contract.js";
-import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
+import type {
+  SqliteWorkerOperationAdmission,
+  SqliteWorkerAdmissionRequest,
+} from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import {
   createSqliteWorkerTransferReceiver,
@@ -20,13 +23,15 @@ import { retainSessionEntryWorkerPublication } from "./session-accessor.sqlite-e
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
-import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
+import {
+  withSessionEntryWorker,
+  type SessionEntryWorkerPreparation,
+} from "./session-accessor.sqlite-replacement-worker.js";
 import type {
   SessionEntryPatchCommit,
   SessionEntryPatchCommitted,
   SessionEntryPatchGuard,
   SessionEntryPatchSelection,
-  SessionEntryPatchReceipt,
 } from "./session-entry-patch.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -99,9 +104,25 @@ export async function runSessionEntryWorkerOperation<
   assertCandidate?: (candidate: Candidate) => void;
   candidateKind: Candidate["kind"];
   retainedExecution?: OpenClawAgentDatabaseExecution;
+  prepareWorker?: SessionEntryWorkerPreparation;
+  nativeSettlement?: {
+    readonly failure?: unknown;
+    onAdmission(
+      this: void,
+      admission: SqliteWorkerOperationAdmission,
+      retained: RetainedWorkerTransactionAdmission,
+      request: SqliteWorkerAdmissionRequest,
+      grant: () => boolean,
+    ): boolean;
+    readCommitReceipt(receipt: unknown): unknown;
+    settle(
+      outcome: { ok: true; value: unknown } | { ok: false; error: unknown },
+      acknowledged: boolean,
+    ): Promise<"committed" | "rolled-back" | "not-entered" | "unknown">;
+  };
   run(
     worker: AgentDatabaseExecutionScope,
-    commit: (send: () => Promise<SessionEntryPatchReceipt>) => Promise<Result>,
+    commit: (send: () => Promise<unknown>) => Promise<Result>,
   ): Promise<Result>;
   onAcknowledged?: (candidate: Candidate) => void;
   onTransactionFacts?: (facts: unknown) => boolean;
@@ -120,11 +141,15 @@ export async function runSessionEntryWorkerOperation<
   let admitted:
     | { admission: SqliteWorkerOperationAdmission; retained: RetainedWorkerTransactionAdmission }
     | undefined;
-  const matchesReceipt = (receipt: unknown) =>
-    isRecord(receipt) &&
-    receipt.kind === "session-entry-patch-committed" &&
-    transferred &&
-    receipt.transferId === transferId;
+  const matchesReceipt = (raw: unknown) => {
+    const receipt = params.nativeSettlement ? params.nativeSettlement.readCommitReceipt(raw) : raw;
+    return (
+      isRecord(receipt) &&
+      receipt.kind === "session-entry-patch-committed" &&
+      transferred &&
+      receipt.transferId === transferId
+    );
+  };
   return withSessionEntryWorker(
     params.database,
     params.databaseIdentity,
@@ -154,8 +179,12 @@ export async function runSessionEntryWorkerOperation<
           if (admitted) {
             await admitted.retained.settled;
             acknowledged ||= matchesReceipt(admitted.admission.committed?.facts);
-            unknown = admitted.admission.settlement?.kind !== "completed" || !acknowledged;
+            unknown = admitted.admission.settlement?.kind !== "completed";
           }
+          const nativeOutcome = await params.nativeSettlement?.settle(outcome, acknowledged);
+          unknown ||=
+            nativeOutcome === "unknown" ||
+            Boolean(admitted && !acknowledged && nativeOutcome !== "rolled-back");
           const committed = acknowledged ? candidate : undefined;
           let publicationError: unknown;
           let publishedResult: { value: Result } | undefined;
@@ -191,7 +220,10 @@ export async function runSessionEntryWorkerOperation<
               "Session patch has no confirmed native completion and commit receipt",
               "outcome-unknown",
             );
-            error.cause = publicationError ?? (outcome.ok ? undefined : outcome.error);
+            error.cause =
+              publicationError ??
+              params.nativeSettlement?.failure ??
+              (outcome.ok ? undefined : outcome.error);
             throw error;
           }
           if (!outcome.ok && !committed) {
@@ -231,7 +263,7 @@ export async function runSessionEntryWorkerOperation<
     },
     params.retainedExecution,
     undefined,
-    undefined,
+    params.prepareWorker,
     (facts) => {
       if (!isRecord(facts)) {
         return;
@@ -281,5 +313,6 @@ export async function runSessionEntryWorkerOperation<
         throw new Error("Session patch returned unexpected transaction facts");
       }
     },
+    params.nativeSettlement?.onAdmission,
   );
 }

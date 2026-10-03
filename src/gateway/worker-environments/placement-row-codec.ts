@@ -240,11 +240,15 @@ export function transitionValues(
   nowMs: number,
 ): PlacementRow {
   const clearsWorkerMetadata = to === "local" || to === "requested";
-  const environmentId = clearsWorkerMetadata
-    ? null
-    : patch.environmentId === undefined
-      ? current.environmentId
-      : nullableRequired(patch.environmentId, "environment id");
+  const text = (value: string | null | undefined, previous: string | null, field: string) =>
+    clearsWorkerMetadata ? null : value === undefined ? previous : nullableRequired(value, field);
+  const cursor = (value: number | null | undefined, previous: number | null, field: string) =>
+    clearsWorkerMetadata
+      ? null
+      : value === undefined
+        ? previous
+        : normalizeNonNegativeInteger(value, field);
+  const environmentId = text(patch.environmentId, current.environmentId, "environment id");
   const activeOwnerEpoch =
     clearsWorkerMetadata || to === "provisioning" || to === "syncing" || to === "starting"
       ? null
@@ -263,36 +267,32 @@ export function transitionValues(
     environment_id: environmentId,
     transition_generation: generation,
     active_owner_epoch: activeOwnerEpoch,
-    workspace_base_manifest_ref: clearsWorkerMetadata
-      ? null
-      : patch.workspaceBaseManifestRef === undefined
-        ? current.workspaceBaseManifestRef
-        : nullableRequired(patch.workspaceBaseManifestRef, "workspace base manifest ref"),
-    remote_workspace_dir: clearsWorkerMetadata
-      ? null
-      : patch.remoteWorkspaceDir === undefined
-        ? current.remoteWorkspaceDir
-        : nullableRequired(patch.remoteWorkspaceDir, "remote workspace directory"),
-    worker_bundle_hash: clearsWorkerMetadata
-      ? null
-      : patch.workerBundleHash === undefined
-        ? current.workerBundleHash
-        : nullableRequired(patch.workerBundleHash, "worker bundle hash"),
-    last_transcript_ack_cursor: clearsWorkerMetadata
-      ? null
-      : patch.lastTranscriptAckCursor === undefined
-        ? current.lastTranscriptAckCursor
-        : normalizeNonNegativeInteger(patch.lastTranscriptAckCursor, "transcript ACK cursor"),
-    last_live_event_ack_cursor: clearsWorkerMetadata
-      ? null
-      : patch.lastLiveEventAckCursor === undefined
-        ? current.lastLiveEventAckCursor
-        : normalizeNonNegativeInteger(patch.lastLiveEventAckCursor, "live ACK cursor"),
-    recovery_error: clearsWorkerMetadata
-      ? null
-      : patch.recoveryError === undefined
-        ? current.recoveryError
-        : nullableRequired(patch.recoveryError, "recovery error"),
+    workspace_base_manifest_ref: text(
+      patch.workspaceBaseManifestRef,
+      current.workspaceBaseManifestRef,
+      "workspace base manifest ref",
+    ),
+    remote_workspace_dir: text(
+      patch.remoteWorkspaceDir,
+      current.remoteWorkspaceDir,
+      "remote workspace directory",
+    ),
+    worker_bundle_hash: text(
+      patch.workerBundleHash,
+      current.workerBundleHash,
+      "worker bundle hash",
+    ),
+    last_transcript_ack_cursor: cursor(
+      patch.lastTranscriptAckCursor,
+      current.lastTranscriptAckCursor,
+      "transcript ACK cursor",
+    ),
+    last_live_event_ack_cursor: cursor(
+      patch.lastLiveEventAckCursor,
+      current.lastLiveEventAckCursor,
+      "live ACK cursor",
+    ),
+    recovery_error: text(patch.recoveryError, current.recoveryError, "recovery error"),
     terminal_reason:
       to === "failed"
         ? patch.terminalReason === undefined
@@ -333,6 +333,7 @@ export function updateTransition(
   to: WorkerSessionPlacementState,
   patch: WorkerSessionPlacementTransitionPatch,
   nowMs: number,
+  onEnvironmentActivated?: (environmentId: string, lastActivatedAtMs: number) => void,
 ): WorkerSessionPlacementRecord {
   const values = transitionValues(current, to, patch, nowMs);
   const result = executeSqliteQuerySync(
@@ -371,14 +372,16 @@ export function updateTransition(
         .where("attached_session_ids_json", "=", JSON.stringify([updated.sessionId]))
         .returning("last_activated_at_ms"),
     );
-    if (activated.rows.length !== 1) {
+    const lastActivatedAtMs = activated.rows[0]?.last_activated_at_ms;
+    if (activated.rows.length !== 1 || lastActivatedAtMs == null) {
       throw new Error(
         `Worker session placement ${current.sessionId} lost its attached environment`,
       );
     }
     publishWorkerEnvironmentNativeMutation(db, updated.environmentId!, {
-      lastActivatedAtMs: activated.rows[0]!.last_activated_at_ms,
+      lastActivatedAtMs,
     });
+    onEnvironmentActivated?.(updated.environmentId!, lastActivatedAtMs);
   }
   publishPlacementTurnClaimState(db, updated);
   return updated;

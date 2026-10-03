@@ -7,7 +7,7 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 // Compiles plugin manifest schemas for validation without runtime loading.
 import { Format } from "typebox/format";
-import { Compile, Pointer, type Validator as TypeBoxValidator } from "typebox/schema";
+import { Check, Compile, Pointer, type Validator as TypeBoxValidator } from "typebox/schema";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
 import { LruCache } from "../infra/lru-cache.js";
@@ -24,7 +24,6 @@ type CachedValidator = {
   hasDefaults: boolean;
   validate: TypeBoxValidator;
   schema: JsonSchemaValue;
-  schemaFingerprint: string;
 };
 
 /**
@@ -151,21 +150,6 @@ function checkSchemaWithCurrentFormats(
   }
   // The schema-only compiler returns [valid, errors], without loading value codecs.
   return normalizeTypeBoxValidationErrors(validate.Errors(value)[1]);
-}
-
-function isDefaultActivatedConditionalFailure(params: {
-  schema: JsonSchemaValue;
-  validate: TypeBoxValidator;
-  originalValue: unknown;
-  defaultedValue: unknown;
-}): boolean {
-  const relaxedConditionalValidator = compileSchema(
-    relaxConditionalRequiredKeywords(params.schema),
-  );
-  if (checkSchemaWithCurrentFormats(relaxedConditionalValidator, params.defaultedValue)) {
-    return false;
-  }
-  return checkSchemaWithCurrentFormats(params.validate, params.originalValue) === null;
 }
 
 /**
@@ -366,10 +350,11 @@ export function validatePluginSchemaValue(
 
 /**
  * Validate a plugin-owned value against a JSON Schema, optionally hydrating schema defaults.
- * Callers can supply a stable cache key; otherwise the schema fingerprint owns cache identity.
+ * Schema contents own compiled-validator identity, independently of callers and default application.
  */
 export function validateJsonSchemaValue(params: {
   schema: JsonSchemaValue;
+  /** Accepted for SDK compatibility; schema contents now own cache identity. */
   cacheKey?: string;
   value: unknown;
   /** Persisted input paired with this runtime value, before secret resolution. */
@@ -377,8 +362,13 @@ export function validateJsonSchemaValue(params: {
   applyDefaults?: boolean;
   cache?: boolean;
 }): { ok: true; value: unknown } | { ok: false; errors: JsonSchemaValidationError[] } {
-  const schemaKey = params.cacheKey ?? JSON.stringify(params.schema);
-  const cacheKey = params.applyDefaults ? `${schemaKey}::defaults` : schemaKey;
+  let cacheKey: string;
+  try {
+    cacheKey = JSON.stringify(params.schema);
+  } catch (error) {
+    const schemaError = findJsonSchemaShapeError(params.schema);
+    throw schemaError ? new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`)) : error;
+  }
   let cached = params.cache === false ? undefined : schemaCache.get(cacheKey);
   if (!cached || cached.schema !== params.schema) {
     const schemaError = findJsonSchemaShapeError(params.schema);
@@ -386,18 +376,11 @@ export function validateJsonSchemaValue(params: {
       throw new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`));
     }
   }
-  const schemaFingerprint =
-    !cached || cached.schema !== params.schema ? JSON.stringify(params.schema) : undefined;
-  if (
-    !cached ||
-    (cached.schema !== params.schema && cached.schemaFingerprint !== schemaFingerprint)
-  ) {
-    const validate = compileSchema(params.schema);
+  if (!cached) {
     cached = {
-      hasDefaults: params.applyDefaults ? schemaHasDefaults(params.schema) : false,
-      validate,
+      hasDefaults: schemaHasDefaults(params.schema),
+      validate: compileSchema(params.schema),
       schema: params.schema,
-      schemaFingerprint: schemaFingerprint ?? JSON.stringify(params.schema),
     };
     if (params.cache !== false) {
       schemaCache.set(cacheKey, cached);
@@ -419,12 +402,11 @@ export function validateJsonSchemaValue(params: {
       !(
         params.applyDefaults &&
         value !== originalValue &&
-        isDefaultActivatedConditionalFailure({
-          schema: params.schema,
-          validate: cached.validate,
-          originalValue,
-          defaultedValue: value,
-        })
+        Check(
+          normalizeJsonSchemaForTypeBox(relaxConditionalRequiredKeywords(params.schema)),
+          value,
+        ) &&
+        cached.validate.Check(originalValue)
       )
     ) {
       return { ok: false, errors: formatValidationErrors(errors) };

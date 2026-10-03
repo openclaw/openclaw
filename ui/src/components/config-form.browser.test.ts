@@ -1,6 +1,6 @@
 // Control UI tests cover config form behavior.
 import { render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
 import { renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.ts";
@@ -230,6 +230,55 @@ describe("config form renderer", () => {
     expect(container.innerHTML).not.toContain("encrypt-value");
     expect(container.innerHTML).not.toContain("private-value");
     expect(container.innerHTML).not.toContain("env-value");
+  });
+
+  it.each([
+    ["string", { type: "string" }],
+    ["string or SecretRef", { type: ["string", "object"] }],
+  ])("keeps a masked sensitive %s field editable across keystrokes", async (_name, tokenSchema) => {
+    const { userEvent } = await import("vitest/browser");
+    const container = document.createElement("div");
+    document.body.append(container);
+    onTestFinished(() => container.remove());
+    const analysis = analyzeConfigSchema({ type: "object", properties: { token: tokenSchema } });
+    const revealed = new Set<string>();
+    let value: Record<string, unknown> = {};
+    const draw = () =>
+      render(
+        renderConfigForm({
+          schema: analysis.schema,
+          unsupportedPaths: analysis.unsupportedPaths,
+          uiHints: { token: { sensitive: true } },
+          value,
+          maskSensitive: true,
+          isSensitivePathRevealed: (path) => revealed.has(path.join(".")),
+          onToggleSensitivePath: (path) => {
+            revealed.add(path.join("."));
+            draw();
+          },
+          onPatch: (_path, next) => {
+            value = { token: next };
+            draw();
+          },
+        }),
+        container,
+      );
+    const token = () =>
+      expectElement(
+        container.querySelector<HTMLInputElement>("input[aria-label='Token']"),
+        "token",
+      );
+
+    draw();
+    await userEvent.click(token());
+    await userEvent.keyboard("xy");
+    await userEvent.click(token());
+
+    expect(value).toEqual({ token: "xy" });
+    expect(document.activeElement).toBe(token());
+    expect(token().readOnly).toBe(false);
+    expect(token().type).toBe("password");
+    expect(revealed.size).toBe(0);
   });
 
   it("renders inputs and patches values", () => {

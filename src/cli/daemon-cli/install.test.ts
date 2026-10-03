@@ -9,6 +9,7 @@ const {
   buildGatewayInstallPlanMock,
   expectFields,
   expectLastEmittedResult,
+  ensureConfigReadyMock,
   installDaemonServiceAndEmitMock,
   isGatewayDaemonRuntimeMock,
   pinSnapshotMock,
@@ -27,6 +28,66 @@ const {
 
 describe("runDaemonInstall", () => {
   setupInstallTests();
+
+  it.each([
+    { change: "operator pin", revision: "previous-pin", definition: "current-service" },
+    { change: "service definition", revision: "current-pin", definition: "previous-service" },
+    { change: "new service", revision: "current-pin", definition: null },
+    { change: "none", revision: "current-pin", definition: "current-service" },
+    { change: "none-absent", revision: "current-pin", definition: null },
+  ])(
+    "checks caller custody before config preparation when change is $change",
+    async ({ change, revision, definition }) => {
+      // The operator's change completed before this install subprocess captured its own snapshot.
+      const current = {
+        revision: "current-pin",
+        definition: change === "none-absent" ? undefined : "current-service",
+        stored: true,
+      };
+      pinSnapshotMock.mockReturnValue(current);
+      installDaemonServiceAndEmitMock.mockImplementationOnce(async (params) => {
+        await (params as { install: () => Promise<void> }).install();
+      });
+      await runDaemonInstall({
+        json: true,
+        force: true,
+        runtime: "node",
+        expectedRuntimePin: JSON.stringify({ revision, definition }),
+      });
+      if (!change.startsWith("none")) {
+        expect(actionState.failed[0]?.message).toContain("newer selection was preserved");
+        expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+        expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+        expect(replaceConfigFileMock).not.toHaveBeenCalled();
+        expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+        expect(service.install).not.toHaveBeenCalled();
+        return;
+      }
+      expect(actionState.failed).toEqual([]);
+      expect(ensureConfigReadyMock).toHaveBeenCalledOnce();
+      expect(service.install).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimePinUpdate: {
+            expected: current,
+            pin: undefined,
+            requireDefinitionMatch: true,
+            ...(definition !== null ? { requireRunning: true } : {}),
+          },
+        }),
+      );
+    },
+  );
+
+  it.each(["invalid JSON", "{}", '{"revision":"current-pin"}'])(
+    "rejects malformed runtime custody before preparation: %s",
+    async (expectedRuntimePin) => {
+      await runDaemonInstall({ json: true, force: true, expectedRuntimePin });
+      expect(actionState.failed[0]?.message).toContain("Invalid expected runtime pin snapshot");
+      expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+      expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+      expect(service.install).not.toHaveBeenCalled();
+    },
+  );
 
   it("refuses update-owned gateway defaults when authority expires during write preparation", async () => {
     const snapshot = await readConfigFileSnapshotMock();

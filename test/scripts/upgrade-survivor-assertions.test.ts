@@ -35,9 +35,8 @@ const ASSERTIONS_PATH = "scripts/e2e/lib/upgrade-survivor/assertions.mjs";
 function selectFrozenUpgradeOracle(
   root: string,
   version: string,
-  baseline = "openclaw@2026.6.35",
+  baseline = "openclaw@2026.8.35",
   workingVersion?: string,
-  legacyClawHub = false,
 ) {
   const selectedRoot = join(root, "selected");
   const selectedScenario = join(selectedRoot, "scripts/e2e/lib/upgrade-survivor");
@@ -49,13 +48,6 @@ function selectFrozenUpgradeOracle(
     'throw new Error("selected oracle has no serving-turn command");\n',
   );
   writeFileSync(join(selectedScenario, "run.sh"), "# selected scenario runner\n");
-  if (legacyClawHub) {
-    mkdirSync(join(selectedRoot, "src/plugins"), { recursive: true });
-    writeFileSync(
-      join(selectedRoot, "src/plugins/clawhub.ts"),
-      'import { install } from "../infra/clawhub.js";\n',
-    );
-  }
   for (const path of [
     "scripts/lib/npm-publish-plan.mjs",
     "scripts/windows-cmd-helpers.mjs",
@@ -82,7 +74,6 @@ function selectFrozenUpgradeOracle(
     "selected release contract",
   );
   const selectedSha = git("rev-parse", "HEAD");
-  const modePath = join(root, "clawhub-mode");
   if (workingVersion) {
     writeFileSync(join(selectedRoot, "package.json"), JSON.stringify({ version: workingVersion }));
   }
@@ -105,7 +96,6 @@ printf '%s\\n' "$UPGRADE_RUNNER"
 printf '%s\\n' "$UPGRADE_TRUSTED_ASSERTIONS"
 printf '%s\\n' "$UPGRADE_TRUSTED_DIAGNOSTICS"
 printf '%s\\n' \${UPGRADE_SCENARIO_ARGS[@]+"\${UPGRADE_SCENARIO_ARGS[@]}"}
-printf '%s' "$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE" > "$MODE_PATH"
 `,
     ],
     {
@@ -118,7 +108,6 @@ printf '%s' "$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE" > "$MODE_PATH"
         OPENCLAW_TOOLING_SHA: "f".repeat(40),
         OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
         OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: baseline,
-        MODE_PATH: modePath,
         TMPDIR: root,
       },
     },
@@ -127,7 +116,6 @@ printf '%s' "$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE" > "$MODE_PATH"
     .trim()
     .split("\n")
     .filter(Boolean);
-  const clawhubMode = existsSync(modePath) ? readFileSync(modePath, "utf8") : undefined;
   const stagedScenario = mounts[0] === "-v" ? mounts[1]?.split(":", 1)[0] : undefined;
   return {
     result,
@@ -139,7 +127,6 @@ printf '%s' "$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE" > "$MODE_PATH"
     selectedOracle,
     selectedScenario,
     stagedScenario,
-    clawhubMode,
   };
 }
 
@@ -1298,12 +1285,11 @@ function assertCompanionPluginRecords(
 
 describe("upgrade survivor assertions", () => {
   it.each([
-    ["2026.9.3", false, "openclaw@2026.6.35", ""],
-    ["2026.9.3-beta.1", false, "openclaw@2026.6.35", ""],
-    ["2026.4.25", false, "openclaw@2026.6.35", ""],
-    ["2026.6.35", true, "openclaw@2026.9.2", ""],
-    ["2026.7.33", true, "openclaw@2026.9.2", ""],
-    ["2026.9.3", false, "openclaw@2026.6.35", "2026.6.35"],
+    ["2026.9.3", false, "openclaw@2026.8.35", ""],
+    ["2026.9.3-beta.1", false, "openclaw@2026.8.35", ""],
+    ["2026.4.25", false, "openclaw@2026.8.35", ""],
+    ["2026.8.35", true, "openclaw@2026.9.2", ""],
+    ["2026.9.3", false, "openclaw@2026.8.35", "2026.8.35"],
   ])(
     "selects upgrade assertion ownership from immutable target %s",
     (version, selected, baseline, workingVersion) => {
@@ -1417,29 +1403,12 @@ publishDiagnostics(artifacts, destination, value => value, "passed");`,
     },
   );
 
-  it.each(["invalid", "2026.6.35-1"])("rejects invalid frozen target train %s", (version) => {
+  it.each(["invalid", "2026.8.33-1"])("rejects invalid frozen target train %s", (version) => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-invalid-oracle-"));
     try {
       const proof = selectFrozenUpgradeOracle(root, version);
       expect(proof.result.status).not.toBe(0);
       expect(proof.oracle).toBeUndefined();
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("derives the shipped ClawHub request contract from the authorized selected source", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-clawhub-mode-"));
-    try {
-      const proof = selectFrozenUpgradeOracle(
-        root,
-        "2026.6.35",
-        "openclaw@2026.6.34",
-        undefined,
-        true,
-      );
-      expect(proof.result.status, proof.result.stderr).toBe(0);
-      expect(proof.clawhubMode).toBe("legacy");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1997,7 +1966,7 @@ process.stdout.write(sessionDir + "\\n");
         execFileSync(testNodeExecPath, [ASSERTIONS_PATH, "seed"], { env, stdio: "pipe" });
 
         expect(existsSync(join(workspace, "IDENTITY.md"))).toBe(true);
-        expect(existsSync(join(workspace, ".openclaw", "workspace-state.json"))).toBe(true);
+        expect(existsSync(join(workspace, "openclaw-workspace-state.json"))).toBe(true);
         for (const relative of [
           "sessions/sessions.json",
           "agents/main/sessions/sessions.json",

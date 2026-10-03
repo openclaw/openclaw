@@ -8,6 +8,7 @@ import {
   prepareTranscriptMessageAppend,
   prepareTranscriptMessageAppendForWorker,
 } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
+import { transcriptEventContextEligibility } from "../../config/sessions/session-transcript-projection-append.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
@@ -16,6 +17,7 @@ import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/
 import type { Message } from "../../llm/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { readNestedToolActivity } from "../../sessions/nested-tool-activity.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { copyCodeModeSourceAppendOptions } from "../transcript-code-mode-source.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
@@ -300,14 +302,14 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       }
       // A native SDK append can publish a later view before the worker receipt arrives.
       return {
-        entry: {
+        entry: freezeJsonSnapshot({
           ...entry,
           id: committed.result?.adoptedMessageId ?? entry.id,
           parentId:
             committed.result?.effectiveParentId !== undefined
               ? committed.result.effectiveParentId
               : entry.parentId,
-        },
+        }),
         anchor: committed.result?.anchor,
         lifecycleRevision: committed.result?.lifecycleRevision,
         appended: committed.result?.appended ?? true,
@@ -373,6 +375,28 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       } else {
         this.reloadPersistedTranscriptSync();
       }
+    } else if (
+      this.boundedContextIncomplete &&
+      transcriptEventContextEligibility(canonicalEntry) === 0
+    ) {
+      // Match bounded hydration: SQLite owns display payloads; only the tail's ancestry is live.
+      const parentId =
+        !isSessionTranscriptSideAppendEntry(canonicalEntry) &&
+        canonicalEntry.parentId === this.appendParentId &&
+        this.leafId !== this.appendParentId
+          ? this.leafId
+          : this.resolveCanonicalParentId(canonicalEntry.parentId);
+      if (this.appendParentId && this.appendParentId !== this.leafId && !this.appendMode) {
+        this.opaqueParentsById.delete(this.appendParentId);
+      }
+      this.opaqueParentsById.set(canonicalEntry.id, parentId);
+      this.appendParentId = canonicalEntry.id;
+      if (isSessionTranscriptSideAppendEntry(canonicalEntry)) {
+        this.appendMode = "side";
+      } else {
+        this.leafId = parentId;
+        this.appendMode = undefined;
+      }
     } else {
       if (
         !isSessionTranscriptSideAppendEntry(canonicalEntry) &&
@@ -408,6 +432,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       }
     }
     this.pendingDeliberateAppend = false;
+    freezeJsonSnapshot(canonicalEntry);
     return {
       entry: canonicalEntry,
       anchor: persistenceResult?.anchor,

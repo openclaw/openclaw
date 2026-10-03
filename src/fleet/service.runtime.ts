@@ -409,8 +409,9 @@ export function createFleetService(options: FleetServiceOptions = {}) {
     async list(): Promise<FleetListEntry[]> {
       const records = await listFleetCells(env);
       const localityChecks = new Map<FleetContainerRuntimeName, Promise<void>>();
-      const inspections = await Promise.all(
+      const entries = await Promise.all(
         records.map(async (record) => {
+          let state = "unknown";
           try {
             let locality = localityChecks.get(record.runtime);
             if (!locality) {
@@ -418,26 +419,19 @@ export function createFleetService(options: FleetServiceOptions = {}) {
               localityChecks.set(record.runtime, locality);
             }
             await locality;
-            return await containers.inspect(record.runtime, record.containerName);
-          } catch (error) {
-            return {
-              kind: "unavailable" as const,
-              state: "unknown" as const,
-              error: error instanceof Error ? error.message : String(error),
-            };
+            state = inspectionState(
+              record,
+              await containers.inspect(record.runtime, record.containerName),
+            );
+          } catch {
+            // Listing retains cells whose container runtime is unavailable.
           }
+          return { record, state };
         }),
       );
-      return records.map((record, index) => ({
+      return entries.map(({ record, state }) => ({
         tenant: record.tenantId,
-        state: inspectionState(
-          record,
-          inspections[index] ?? {
-            kind: "unavailable",
-            state: "unknown",
-            error: "inspect result missing",
-          },
-        ),
+        state,
         port: record.hostPort,
         image: record.image,
         created: new Date(record.createdAtMs).toISOString(),

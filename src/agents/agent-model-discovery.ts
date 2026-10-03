@@ -118,14 +118,6 @@ function createOpenClawModelRegistry(
   return registry;
 }
 
-/** Builds auth storage for model discovery without prompting for secrets. */
-export function discoverAuthStorage(
-  agentDir: string,
-  options?: DiscoverAuthStorageOptions,
-): AuthStorage {
-  return discoverAuthStorageFacts(agentDir, options).authStorage;
-}
-
 /** Captures the effective profile store and its AuthStorage projection as one generation. */
 export function discoverAuthStorageFacts(
   agentDir: string,

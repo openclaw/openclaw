@@ -423,9 +423,8 @@ describe("runMessageAction context isolation", () => {
       cfg: {
         ...workspaceConfig,
         agents: {
-          list: [
-            {
-              id: "sandbox",
+          entries: {
+            sandbox: {
               tools: {
                 message: {
                   actions: {
@@ -434,7 +433,7 @@ describe("runMessageAction context isolation", () => {
                 },
               },
             },
-          ],
+          },
         },
       } as OpenClawConfig,
       agentId: "sandbox",

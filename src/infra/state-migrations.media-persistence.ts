@@ -53,7 +53,6 @@ import { formatErrorMessage } from "./errors.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
-  clearNodeSqliteKyselyCacheForDatabase,
   enableNodeSqliteKyselyStatementCache,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -63,6 +62,7 @@ import { runSqliteIntegrityOperationInWorker } from "./sqlite-integrity-operatio
 import { assertSqliteIntegrity, isTerminalSqliteIntegrityError } from "./sqlite-integrity.js";
 import { configureSqliteMaintenanceCache } from "./sqlite-maintenance-cache.js";
 import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
+import { readSqliteDataVersion } from "./sqlite-schema-facts.js";
 import {
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
@@ -71,8 +71,6 @@ import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import { createMigrationDatabaseHandle } from "./state-migrations.agent-database.js";
 import { recoverMisplacedAgentDatabaseCopies } from "./state-migrations.agent-owner-recovery.js";
 import {
-  mediaSourceDriftMessage,
-  readMediaSourceVersion,
   scanTranscriptRows,
   scanTrajectoryRows,
 } from "./state-migrations.media-persistence-database.js";
@@ -113,7 +111,13 @@ async function migrateAgentDatabase(params: {
   preparedArchives?: ReadonlySet<string>;
 }) {
   const database = openNodeSqliteDatabase(params.pathname);
-  const schemaOptions = { agentId: params.agentId, path: params.pathname, env: params.env };
+  const schemaWarnings: string[] = [];
+  const schemaOptions = {
+    agentId: params.agentId,
+    path: params.pathname,
+    env: params.env,
+    onMigrationWarning: (warning: string) => schemaWarnings.push(warning),
+  };
   const runSchema = (operation: Parameters<typeof runSqliteIntegrityOperationInWorker>[0]) =>
     runSqliteIntegrityOperationInWorker(operation, {
       busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -270,13 +274,14 @@ async function migrateAgentDatabase(params: {
           rewrittenSessions: 0,
           rewrittenTrajectoryRows: 0,
           ...archives,
+          warnings: [...schemaWarnings, ...archives.warnings],
           initialVersion,
           finalVersion: userVersion,
         };
       }
     }
 
-    const sourceVersion = readMediaSourceVersion(database, legacyTextStorage);
+    const sourceVersion = readSqliteDataVersion(database);
     const changedLegacySessions = new Set<string>();
     params.beforeTransaction?.();
     const owner = createMigrationDatabaseHandle(database, params.agentId, params.pathname);
@@ -284,11 +289,8 @@ async function migrateAgentDatabase(params: {
       database,
       () => {
         assertMediaSchemaMigration();
-        const currentSourceVersion = readMediaSourceVersion(database, legacyTextStorage);
-        if (currentSourceVersion.dataVersion !== sourceVersion.dataVersion) {
-          throw new Error(
-            mediaSourceDriftMessage(params.pathname, sourceVersion, currentSourceVersion),
-          );
+        if (readSqliteDataVersion(database) !== sourceVersion) {
+          throw new Error(`${params.pathname} source changed before migration transaction`);
         }
         const rewrittenSessions = scanTranscriptRows({
           database,
@@ -354,11 +356,11 @@ async function migrateAgentDatabase(params: {
     return {
       ...rewritten,
       ...archives,
+      warnings: [...schemaWarnings, ...archives.warnings],
       initialVersion,
       finalVersion: readSqliteUserVersion(database),
     };
   } finally {
-    clearNodeSqliteKyselyCacheForDatabase(database);
     database.close();
   }
 }

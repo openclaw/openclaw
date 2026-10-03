@@ -47,7 +47,7 @@ async function withTitleRows(
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
         defaults: { model: { primary: "openai/gpt-5" }, thinkingDefault: "off" },
       },
     };

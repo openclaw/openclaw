@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
+import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { sha256Hex } from "./crypto-digest.js";
@@ -21,38 +22,22 @@ type LegacyDebugProxyCaptureDetection = {
   hasLegacy: boolean;
 };
 
-type LegacyCaptureSessionRow = {
-  id: string;
+type LegacyCaptureSessionRow = Pick<
+  DB["capture_sessions"],
+  "id" | "mode" | "source_scope" | "source_process" | "proxy_url"
+> & {
   started_at: number | bigint;
   ended_at: number | bigint | null;
-  mode: string;
-  source_scope: string;
-  source_process: string;
-  proxy_url: string | null;
   blob_dir: string;
 };
 
-type LegacyCaptureEventRow = {
-  session_id: string;
+type LegacyCaptureEventRow = Omit<
+  Pick<DB["capture_events"], (typeof CAPTURE_EVENT_COLUMNS)[number]>,
+  "ts" | "status" | "close_code"
+> & {
   ts: number | bigint;
-  source_scope: string;
-  source_process: string;
-  protocol: string;
-  direction: string;
-  kind: string;
-  flow_id: string;
-  method: string | null;
-  host: string | null;
-  path: string | null;
   status: number | bigint | null;
   close_code: number | bigint | null;
-  content_type: string | null;
-  headers_json: string | null;
-  data_text: string | null;
-  data_blob_id: string | null;
-  data_sha256: string | null;
-  error_text: string | null;
-  meta_json: string | null;
 };
 
 const CAPTURE_EVENT_COLUMNS = [
@@ -76,7 +61,7 @@ const CAPTURE_EVENT_COLUMNS = [
   "data_sha256",
   "error_text",
   "meta_json",
-] as const satisfies readonly (keyof LegacyCaptureEventRow)[];
+] as const satisfies readonly (keyof DB["capture_events"])[];
 
 type LegacyCaptureBlobRow = {
   blobId: string;

@@ -8,6 +8,7 @@ import {
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { testVideoGenerationDeadlines } from "../test-support/video-generation-deadline.test-support.js";
 
 const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
 
@@ -242,4 +243,11 @@ describe("together video generation provider", () => {
     expect(media.reference_images).toHaveLength(1);
     expect(body).not.toHaveProperty("reference_images");
   });
+});
+
+testVideoGenerationDeadlines({
+  providerId: "together",
+  model: "Wan-AI/Wan2.2-T2V-A14B",
+  pendingStatus: "in_progress",
+  loadPlugin: async () => (await import("./index.js")).default,
 });

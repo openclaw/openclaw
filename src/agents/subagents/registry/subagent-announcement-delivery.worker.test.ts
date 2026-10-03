@@ -460,7 +460,11 @@ it("keeps a delivered announcement fenced when its committed native receipt is u
     if (!(result.error instanceof Error)) {
       throw new Error("Expected the retained registry write failure");
     }
-    await fixture.settle();
+    await expect(fixture.settle()).rejects.toMatchObject({
+      name: "AggregateError",
+      message: "Failed to settle subagent cleanup roots",
+      errors: [result.error],
+    });
     expect(lost).toBe(true);
     expect(loadSubagentRegistryFromSqlite().get(run.runId)?.delivery?.status).toBe("delivered");
     expect(subagentRuns.get(run.runId)?.delivery?.status).toBe("pending");

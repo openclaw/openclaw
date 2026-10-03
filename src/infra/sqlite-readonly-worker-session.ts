@@ -4,6 +4,7 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { BrokerChild } from "../process/spawn-broker/child.js";
 import type { SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { recordChildProcessSpawn } from "../process/spawn-diagnostics.js";
+import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import { tryProcessCwd } from "./safe-cwd.js";
@@ -164,6 +165,7 @@ export function createSqliteReadOnlyWorkerSession(
     if (pending) {
       const request = pending;
       pending = undefined;
+      pendingOperation = undefined;
       request.cleanup();
       request.reject(
         request.failure ??
@@ -239,6 +241,7 @@ export function createSqliteReadOnlyWorkerSession(
       }
       const request = pending;
       pending = undefined;
+      pendingOperation = undefined;
       request.cleanup();
       request.resolve(value);
     } catch (error) {
@@ -251,6 +254,7 @@ export function createSqliteReadOnlyWorkerSession(
       ) {
         const request = pending;
         pending = undefined;
+        pendingOperation = undefined;
         request.cleanup();
         request.reject(error);
         return;
@@ -269,13 +273,15 @@ export function createSqliteReadOnlyWorkerSession(
       return child instanceof BrokerChild ? child.notStarted : nativeClosed && !spawned;
     },
     createNativeReplacement() {
-      return createSqliteReadOnlyWorkerSession({
-        ...host,
-        env,
-        cwd,
-        argv,
-        transport: { kind: "native" },
-      });
+      return runInDetachedAsyncContext(() =>
+        createSqliteReadOnlyWorkerSession({
+          ...host,
+          env,
+          cwd,
+          argv,
+          transport: { kind: "native" },
+        }),
+      );
     },
     compatible(launch: SqliteReadOnlyWorkerLaunch) {
       return !retired && isSameSqliteReadOnlyWorkerLaunch(capturedLaunch, launch);

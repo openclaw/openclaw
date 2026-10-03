@@ -27,13 +27,14 @@ type FollowupRunFixture = Pick<FollowupRun, "prompt" | "summaryLine" | "enqueued
   };
 
 export function isModelRuntimeContextCarrier(message: { role: string; content: unknown }): boolean {
+  // These non-reasoning OpenAI fixtures receive privileged context as a system message.
   const text =
     extractTextFromChatContent(message.content, {
       joinWith: "\n",
       normalizeText: (value) => value,
     }) ?? "";
   return (
-    message.role === "user" &&
+    message.role === "system" &&
     hasInternalRuntimeContext(text) &&
     !stripInternalRuntimeContext(text).trim()
   );

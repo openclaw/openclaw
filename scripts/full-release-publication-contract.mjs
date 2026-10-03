@@ -161,9 +161,6 @@ export function normalizePublicationIntent(purpose, selectionJson = "") {
     if (selected.route === "extended-stable") {
       throw new Error("extended-stable does not select Windows assets");
     }
-    if (!["beta", "latest"].includes(selected.npmDistTag)) {
-      throw new Error("Windows assets require a stable publication");
-    }
     windows.windowsNodeTag = text(selected.windowsNodeTag, "Windows source tag", 256);
     if (
       !/^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$/u.test(

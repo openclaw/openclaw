@@ -43,10 +43,14 @@ Cloud workers are opt-in. Until you configure a profile, clients hide the Cloud 
 | Concern                            | OpenClaw `worker-turn` mode                          | Codex `remote-exec` mode                                |
 | ---------------------------------- | ---------------------------------------------------- | ------------------------------------------------------- |
 | Agent runtime and turn loop        | Cloud box (`openclaw worker`)                        | Gateway (Codex app-server)                              |
-| Command, filesystem, and HTTP work | Cloud box                                            | Cloud node, paired device, or SSH-backed provider       |
+| Shell commands and workspace files | Cloud box                                            | Cloud node, paired device, or SSH-backed provider       |
 | Model inference and provider auth  | Gateway, proxied by `{provider, model}` reference    | Gateway, including ChatGPT subscription or API-key auth |
 | Transcript and live session state  | Gateway, fed by the worker's replayable event stream | Gateway through the normal local harness path           |
 | Workspace file state               | Changed on the box; reconciled by the Gateway        | Changed remotely; reconciled by the Gateway             |
+
+OpenClaw tools for web search, web fetch, memory, and messaging execute on the
+Gateway under the session's prepared policy and live authority. HTTP requests
+made by commands or applications still execute at their placement.
 
 Applications that make their own model API calls need a separate credential
 route. For an exclusively owned coordinator-backed Linux lease, use
@@ -82,6 +86,8 @@ Node and SSH workspace access and reconciliation outlive worker RPC credential e
 
 ### Crabbox provider support
 
+A fresh allocation that exits with the exact `provider=<backend> does not support fixed idempotent lease IDs` capability refusal fails permanently without scheduling cleanup for a nonexistent lease. Choose a backend with fixed lease ID support. The same refusal during replay cannot disprove an earlier allocation, so its cleanup responsibility remains until release or absence is confirmed.
+
 Select a Crabbox backend with `settings.provider`. Use the [Crabbox provider reference](https://crabbox.sh/providers/index.html) for supported providers, authentication, sizing, snapshots, networking, and provider-specific limitations. OpenClaw does not maintain a separate backend catalog; accepting a profile does not establish that the backend can host a cloud session.
 
 The installed Crabbox version and selected backend must support fixed-ID `warmup --lease-id`, target-native script execution through `run --script-stdin` for setup and enrollment, lease inspection, and teardown by canonical lease ID. Scripts use PowerShell on native Windows and a POSIX shell on Linux, macOS, and Windows (WSL2). Never remove `--lease-id` to bypass a backend capability rejection: it prevents duplicate allocations after an interrupted dispatch. OpenClaw preserves unsupported-backend diagnostics; upgrading the CLI alone does not establish backend support. Heartbeat support keeps placed workers alive under the configured idle policy. Optional desktop and warm-image features have additional requirements described in [Warm images](/gateway/cloud-workers/warm-images) and [Cloud Worker Desktop](/gateway/cloud-workers/desktop).
@@ -108,7 +114,7 @@ Manage profiles in the Control UI under **Settings → Connections → Cloud wor
 
 The **Operating system** select sets `settings.target` using the profile's advertised operating systems. It appears when at least two systems are advertised, or when a saved target is no longer advertised so you can clear it with **Provider default**. The bundled Crabbox provider defaults to Linux and also accepts Windows (WSL2), native Windows, and macOS; see [operating-system selection](/gateway/cloud-workers/placement-and-machine-selection#choose-an-operating-system-and-machine-class-per-session). Unavailable choices remain visible with the provider's repair hint and cannot be selected. New profiles without an advertised catalog show no selector. Advanced JSON preserves the same setting.
 
-Add a profile under `cloudWorkers.profiles` in `openclaw.json`. This Debian/Ubuntu setup example preserves supported Node.js installations, installs Node.js 24 when Node is missing or unsupported (including downgrading unsupported newer APT packages), and installs GitHub CLI when missing. It rechecks Node and npm before enrollment. The current runtime requires Node.js 24.16.0 or newer on the 24.x line, or 26.1.0 or newer; Node.js 22 and 25 are unsupported.
+Add a profile under `cloudWorkers.profiles` in `openclaw.json`. This Debian/Ubuntu setup example preserves supported Node.js installations, waits for first-boot cloud-init before touching packages, installs Node.js 24 when Node is missing or unsupported (including downgrading unsupported newer APT packages), and installs GitHub CLI when missing. The apt lock timeout keeps a package manager that is still running at first boot from failing the dispatch. It rechecks Node and npm before enrollment. The current runtime requires Node.js 24.16.0 or newer on the 24.x line, or 26.1.0 or newer; Node.js 22 and 25 are unsupported.
 
 ```json
 {
@@ -124,7 +130,7 @@ Add a profile under `cloudWorkers.profiles` in `openclaw.json`. This Debian/Ubun
           "ttl": "8h",
           "idleTimeout": "45m",
           "warmImage": true,
-          "setup": "#!/usr/bin/env bash\nset -euo pipefail\nnode_supported() { command -v node >/dev/null && node -e 'const [major, minor, patch] = process.versions.node.split(\".\").map(Number); process.exit([major, minor, patch].every(Number.isInteger) && ((major === 24 && minor >= 16) || (major === 26 && minor >= 1) || major > 26) ? 0 : 1)'; }\nif ! node_supported; then\n  curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -\n  sudo apt-get install -y --allow-downgrades 'nodejs=24.*'\nfi\nnode_supported || { printf '%s\\n' 'Worker setup requires a supported Node.js version; inspect PATH and the package installation above.' >&2; exit 1; }\nnpm --version\ncommand -v gh >/dev/null || { sudo apt-get update && sudo apt-get install -y gh; }"
+          "setup": "#!/usr/bin/env bash\nset -euo pipefail\nnode_supported() { command -v node >/dev/null && node -e 'const [major, minor, patch] = process.versions.node.split(\".\").map(Number); process.exit([major, minor, patch].every(Number.isInteger) && ((major === 24 && minor >= 16) || (major === 26 && minor >= 1) || major > 26) ? 0 : 1)'; }\nif ! node_supported; then\n  if command -v cloud-init >/dev/null; then sudo cloud-init status --wait >/dev/null || true; fi\n  curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -\n  sudo apt-get -o DPkg::Lock::Timeout=600 install -y --allow-downgrades 'nodejs=24.*'\nfi\nnode_supported || { printf '%s\\n' 'Worker setup requires a supported Node.js version; inspect PATH and the package installation above.' >&2; exit 1; }\nnpm --version\ncommand -v gh >/dev/null || { sudo apt-get -o DPkg::Lock::Timeout=600 update && sudo apt-get -o DPkg::Lock::Timeout=600 install -y gh; }"
         }
       }
     }

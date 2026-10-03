@@ -166,7 +166,7 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
   executionMode: WorkerPlacementExecutionMode;
   action: "activation" | "recovery";
   signal?: AbortSignal;
-  run: (workspace: WorkerSessionWorkspace) => T | Promise<T>;
+  run: (workspace: WorkerSessionWorkspace, assertCurrent: () => void) => T | Promise<T>;
 }): Promise<T> {
   const target = params.sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
     cfg: params.getConfig(),
@@ -176,13 +176,13 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
     clone: false,
     exactRead: true,
   });
-  return await runExclusiveSessionLifecycleMutation({
+  const operation = params.action === "activation" ? "placement-activate" : "placement-recover";
+  return await runExclusiveSessionLifecycleMutation(operation, {
     scope: target.storePath,
     identities: [params.sessionKey, target.canonicalKey, ...target.storeKeys, params.sessionId],
     signal: params.signal,
     run: async () => {
       const {
-        config,
         target: currentTarget,
         entry,
         workspace,
@@ -203,21 +203,27 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
           `Session ${params.sessionKey} was archived before cloud worker ${params.action}. Retry.`,
         );
       }
-      const currentRuntime = params.sessionRuntime.resolveWorkerPlacementSessionRuntime({
-        cfg: config,
-        entry,
-        agentId: currentTarget.agentId,
-        sessionKey: currentTarget.canonicalKey,
-      });
-      if (
-        params.sessionRuntime.resolveWorkerPlacementExecutionMode(currentRuntime) !==
-        params.executionMode
-      ) {
-        throw new WorkerDispatchTargetChangedError(
-          `Session ${params.sessionKey} runtime changed to ${currentRuntime} before cloud worker ${params.action}. Retry.`,
-        );
-      }
-      return await params.run(workspace);
+      const assertPlacementCurrent = () => {
+        params.signal?.throwIfAborted();
+        const config = params.getConfig();
+        assertCurrent(config);
+        const currentRuntime = params.sessionRuntime.resolveWorkerPlacementSessionRuntime({
+          cfg: config,
+          entry,
+          agentId: currentTarget.agentId,
+          sessionKey: currentTarget.canonicalKey,
+        });
+        if (
+          params.sessionRuntime.resolveWorkerPlacementExecutionMode(currentRuntime) !==
+          params.executionMode
+        ) {
+          throw new WorkerDispatchTargetChangedError(
+            `Session ${params.sessionKey} runtime changed to ${currentRuntime} before cloud worker ${params.action}. Retry.`,
+          );
+        }
+      };
+      assertPlacementCurrent();
+      return await params.run(workspace, assertPlacementCurrent);
     },
   });
 }

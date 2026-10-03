@@ -196,7 +196,7 @@ it.each([
     `const { DatabaseSync } = require('node:sqlite');
      const prepare = DatabaseSync.prototype.prepare;
      DatabaseSync.prototype.prepare = function(sql) {
-       if (sql.startsWith('PRAGMA table_list(') &&
+       if (sql === 'PRAGMA table_list' &&
            prepare.call(this, 'SELECT role FROM schema_meta').get()?.role === 'agent' &&
            ${JSON.stringify(unavailable)}.includes(prepare.call(this, 'SELECT agent_id FROM schema_meta').get()?.agent_id)) {
          throw Object.assign(new Error('synthetic schema read unavailable'), {code: 'SQLITE_IOERR', errcode: 10});
@@ -213,7 +213,12 @@ it.each([
       operation: "gateway-startup",
       config:
         scope === "scoped"
-          ? { agents: { entries: { main: { default: true }, worker: {} } } }
+          ? {
+              agents: {
+                entries: { main: {}, worker: {} },
+                defaults: { systemAgent: { agentId: "main" } },
+              },
+            }
           : config,
     });
   const failure = await (

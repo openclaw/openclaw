@@ -25,8 +25,8 @@ import {
   selectResolvedUserProfileMetadataById,
   userProfilesDb,
 } from "../../state/user-profiles-internal.js";
+import { SkillLibraryError } from "../skill-library-error.js";
 import { managedSkillCommandName } from "./command-name.js";
-import { SkillLibraryError } from "./errors.js";
 
 export type SkillLibraryAuthority = {
   /** Host-authenticated profile only. Neither session attribution nor model arguments qualify. */
@@ -38,6 +38,8 @@ export type SkillLibraryAuthority = {
   assertCurrent: () => void;
   /** Additional pure, synchronous admission for client bytes; must not perform database reads. */
   assertFileMutationAllowed?: () => void;
+  /** Worker-local profile dependencies bound to the host identity owner before disclosure. */
+  profileDependencies?: Set<string>;
 };
 export type SkillLibraryRow = StateDatabase["skill_library_entries"];
 export type SkillLibraryRevisionRow = StateDatabase["skill_library_revisions"];
@@ -51,7 +53,10 @@ export type SkillLibraryDatabase = Pick<
 export const skillLibraryDb = (db: DatabaseSync) => getNodeSqliteKysely<SkillLibraryDatabase>(db);
 const ensured = new WeakSet<DatabaseSync>();
 
-export function ensureSkillLibrarySchema(options: OpenClawStateDatabaseOptions): void {
+export function ensureSkillLibrarySchema(
+  options: OpenClawStateDatabaseOptions,
+  admit: (stage: "transaction" | "commit") => void,
+): void {
   const { db } = openOpenClawStateDatabase(options);
   if (ensured.has(db)) {
     return;
@@ -65,7 +70,9 @@ export function ensureSkillLibrarySchema(options: OpenClawStateDatabaseOptions):
   }
   runOpenClawStateWriteTransaction(
     ({ db: transactionDb }) => {
+      admit("transaction");
       transactionDb.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(start, end)); // sqlite-allow-raw -- canonical first-use additive DDL.
+      admit("commit");
     },
     options,
     { operationLabel: "skills.library.schema" },
@@ -91,6 +98,9 @@ export function readSkillLibraryStore<T>(
 export function resolveSkillLibraryActor(db: DatabaseSync, authority: SkillLibraryAuthority) {
   authority.assertCurrent();
   const config = authority.getConfig();
+  if (authority.profileId) {
+    authority.profileDependencies?.add(authority.profileId);
+  }
   const profile =
     authority.profileId && tableExists(db, "user_profiles")
       ? selectResolvedUserProfileMetadataById(db, authority.profileId)
@@ -100,6 +110,9 @@ export function resolveSkillLibraryActor(db: DatabaseSync, authority: SkillLibra
       "AUTHORITY_EXPIRED",
       "Your Gateway profile is no longer available. Sign in again before accessing the library.",
     );
+  }
+  if (profile) {
+    authority.profileDependencies?.add(profile.id);
   }
   const ceiling = resolveOperatorRolePolicyForAssignment(
     profile?.id,
@@ -147,11 +160,14 @@ function requireSelectedSkillLibraryUpload<
 ) {
   const actor = requireSkillLibraryProfile(db, authority);
   const upload = executeSqliteQueryTakeFirstSync(db, query.where("upload_id", "=", uploadId));
-  if (
-    !upload ||
-    upload.expires_at <= Date.now() ||
-    selectSkillLibraryOwner(db, upload.owner_profile_id)?.id !== actor
-  ) {
+  const owner = upload && selectSkillLibraryOwner(db, upload.owner_profile_id)?.id;
+  if (upload) {
+    authority.profileDependencies?.add(upload.owner_profile_id);
+  }
+  if (owner) {
+    authority.profileDependencies?.add(owner);
+  }
+  if (!upload || upload.expires_at <= Date.now() || owner !== actor) {
     throw new SkillLibraryError(
       "NOT_FOUND",
       "Upload not found for your profile, or expired. Start a new import.",
@@ -253,6 +269,12 @@ export function projectSkillLibraryEntry(
 ): SkillLibraryEntry | undefined {
   const actor = resolveSkillLibraryActor(db, authority);
   const owner = canonicalOwner(db, row.owner_profile_id);
+  if (row.owner_profile_id) {
+    authority.profileDependencies?.add(row.owner_profile_id);
+  }
+  if (owner) {
+    authority.profileDependencies?.add(owner);
+  }
   if (
     !actor.read ||
     (!selectedBySession &&

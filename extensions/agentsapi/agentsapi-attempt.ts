@@ -453,15 +453,18 @@ export async function runAgentsApiAttempt(
       },
     });
     lifecycle.emitLifecycleStart({ provider: "openai", model: params.model.id });
+    const turnInput = await buildAgentsApiTurnInput(
+      params,
+      surface.declarations,
+      promptBuild.prompt,
+      inputs.mappingText,
+      environment.type,
+      assertCurrent,
+      inputs.feedbackText,
+    );
+    assertCurrent();
     const result = await native.run(
-      buildAgentsApiTurnInput(
-        params,
-        surface.declarations,
-        promptBuild.prompt,
-        inputs.mappingText,
-        environment.type,
-        inputs.feedbackText,
-      ),
+      turnInput,
       async () => {
         await params.userTurnTranscriptRecorder?.persistApproved();
       },

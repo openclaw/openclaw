@@ -179,13 +179,13 @@ describe("monitorDiscordProvider", () => {
   const getConstructedClientOptions = (): {
     clientId?: string;
     eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
-    requestOptions?: { timeout?: number; maxQueueSize?: number };
+    requestOptions?: { timeout?: number };
   } => {
     expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
     return firstMockArg(clientConstructorOptionsMock, "Discord client constructor") as {
       clientId?: string;
       eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
-      requestOptions?: { timeout?: number; maxQueueSize?: number };
+      requestOptions?: { timeout?: number };
     };
   };
 
@@ -296,8 +296,7 @@ describe("monitorDiscordProvider", () => {
           patch: vi.fn(async () => undefined),
           delete: vi.fn(async () => undefined),
         },
-        deployCommands: async (deployOptions?: { mode?: string }) =>
-          await clientDeployCommandsMock(deployOptions),
+        deployCommands: async () => await clientDeployCommandsMock(),
         fetchUser: async (target: string) => await clientFetchUserMock(target),
         getPlugin: (name: string) =>
           clientGetPluginMock(name) ?? pluginRegistry.find((plugin) => plugin.id === name),
@@ -714,7 +713,6 @@ describe("monitorDiscordProvider", () => {
     await runProvider({ runtime });
 
     await vi.waitFor(() => expect(clientDeployCommandsMock).toHaveBeenCalledTimes(1));
-    expect(clientDeployCommandsMock).toHaveBeenCalledWith({ mode: "reconcile" });
     expect(clientFetchUserMock).toHaveBeenCalledWith("@me");
     expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
   });

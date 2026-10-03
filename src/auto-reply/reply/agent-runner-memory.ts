@@ -4,9 +4,9 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { resolveEffectiveCompactionReserveTokens } from "../../agents/agent-compaction-constants.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
+import { MemoryFlushToolsUnavailableError } from "../../agents/agent-tools.memory-flush.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
@@ -51,7 +51,7 @@ import { isAbortError } from "../../infra/abort-signal.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveMemoryFlushPlan, type MemoryFlushPlan } from "../../plugins/memory-state.js";
+import { isMemoryFlushPlanNativeProviderOwned } from "../../plugins/memory-state.js";
 import { CommandLane } from "../../process/lanes.js";
 import { isIncognitoSessionKey, isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
@@ -66,16 +66,20 @@ import {
 } from "./agent-runner-memory-transcript-context.js";
 import {
   buildEmbeddedRunExecutionParams,
-  resolveModelFallbackOptions,
   resolveRunThinkingLevelForFallbackCandidate,
 } from "./agent-runner-utils.js";
 import type { CompactionNoticePhase } from "./compaction-notice.js";
 import {
-  buildMemoryFlushErrorPayload,
   buildVisibleMemoryFlushFailure,
   resolveVisibleMemoryFlushErrorPayloads,
   truncateMemoryFlushErrorMessage,
 } from "./memory-flush-errors.js";
+import {
+  isToolsMemoryFlushPlan,
+  memoryFlushResultIsSilent,
+  resolveMemoryFlushPlanForRun,
+  type MemoryFlushPlanForRunResolution,
+} from "./memory-flush-plan.js";
 import {
   estimatePromptTokensForMemoryFlush,
   hasAlreadyFlushedForCurrentCompaction,
@@ -101,8 +105,8 @@ const memoryFlushLog = createSubsystemLogger("auto-reply/memory-flush");
 const embeddedAgentRuntimeLoader = createLazyImportLoader(
   () => import("../../agents/embedded-agent.js"),
 );
-const memoryFlushSessionRuntimeLoader = createLazyImportLoader(
-  () => import("./memory-flush-session.js"),
+const memoryFlushPreparationLoader = createLazyImportLoader(
+  () => import("./memory-flush-prepare.js"),
 );
 const toolResultTruncationRuntimeLoader = createLazyImportLoader(
   () => import("../../agents/embedded-agent-runner/tool-result-truncation.js"),
@@ -120,40 +124,6 @@ function hasMatchingTranscriptByteCompactionLatch(
     activeBytes >= maxBytes &&
     activeBytes - latch.activeBytes < maxBytes
   );
-}
-
-function resolveMemoryFlushModelFallbackOptions(
-  run: FollowupRun["run"],
-  model?: string,
-  configOverride: FollowupRun["run"]["config"] = run.config,
-) {
-  const options = resolveModelFallbackOptions(run, configOverride);
-  const override = normalizeOptionalString(model);
-  if (!override) {
-    return options;
-  }
-  // A memory-flush maintenance model is an exact override: do not let a failed
-  // local flush silently fall through to the paid active conversation fallback.
-  const slashIdx = override.indexOf("/");
-  if (slashIdx > 0) {
-    const overrideProvider = override.slice(0, slashIdx).trim();
-    const overrideModel = override.slice(slashIdx + 1).trim();
-    if (overrideProvider && overrideModel) {
-      return {
-        ...options,
-        provider: overrideProvider,
-        model: overrideModel,
-        requestedRouteResolution: "raw" as const,
-        fallbacksOverride: [],
-      };
-    }
-  }
-  return {
-    ...options,
-    model: override,
-    requestedRouteResolution: "raw" as const,
-    fallbacksOverride: [],
-  };
 }
 
 type FollowupRuntimeParams = {
@@ -443,7 +413,10 @@ export async function runSessionCompactionIfNeeded(params: {
   };
 
   const contextWindowTokens = resolveFollowupContextTokens(params, runtimeId);
-  const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg, contextWindowTokens });
+  const memoryFlushPlan = resolveMemoryFlushPlanForRun({
+    cfg: params.cfg,
+    contextWindowTokens,
+  })?.plan;
   const reserveTokensFloor =
     memoryFlushPlan?.reserveTokensFloor ??
     resolveEffectiveCompactionReserveTokens({
@@ -917,7 +890,6 @@ export async function runMemoryFlushIfNeeded(params: {
   isHeartbeat: boolean;
   replyOperation?: ReplyOperation;
   abortSignal?: AbortSignal;
-  onVisibleErrorPayloads?: (payloads: ReplyPayload[]) => void;
 }): Promise<MemoryFlushResult> {
   const abortSignal = resolveFollowupAbortSignal({
     abortSignal: params.replyOperation?.abortSignal ?? params.abortSignal,
@@ -954,7 +926,12 @@ export async function runMemoryFlushIfNeeded(params: {
   const isCli =
     followupUsesCliRuntime(runtimeParams, runtimeId) ||
     followupOwnsNativeCompaction(runtimeParams, runtimeId);
-  const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat && !isCli;
+  // Only a native provider's flush can persist without a writable workspace, so other
+  // resolvers are never called for a session whose workspace cannot be written.
+  const canAttemptFlush =
+    (memoryFlushWritable || isMemoryFlushPlanNativeProviderOwned()) &&
+    !params.isHeartbeat &&
+    !isCli;
   if (!canAttemptFlush) {
     return { sessionEntry: entry, outcome: "skipped" };
   }
@@ -965,13 +942,17 @@ export async function runMemoryFlushIfNeeded(params: {
   const recordFailure = (error: unknown) =>
     recordMemoryFlushFailure(error, params, activeSessionEntry);
   const contextWindowTokens = resolveFollowupContextTokens(params, runtimeId);
-  let memoryFlushPlan: MemoryFlushPlan | null;
+  let memoryFlushResolution: MemoryFlushPlanForRunResolution | null;
   try {
-    memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg, contextWindowTokens });
+    memoryFlushResolution = resolveMemoryFlushPlanForRun({ cfg: params.cfg, contextWindowTokens });
   } catch (error) {
     return await recordFailure(error);
   }
-  if (!memoryFlushPlan) {
+  if (!memoryFlushResolution) {
+    return { sessionEntry: activeSessionEntry, outcome: "skipped" };
+  }
+  const memoryFlushPlan = memoryFlushResolution.plan;
+  if (!isToolsMemoryFlushPlan(memoryFlushPlan) && !memoryFlushWritable) {
     return { sessionEntry: activeSessionEntry, outcome: "skipped" };
   }
 
@@ -1133,72 +1114,25 @@ export async function runMemoryFlushIfNeeded(params: {
         ? params.sessionStore?.[params.sessionKey]?.systemPromptReport
         : undefined),
   );
-  const prepareMemoryFlushAttempt = async () => {
-    assertMemoryFlushCurrent();
-    const plan = resolveMemoryFlushPlan({
-      cfg: params.cfg,
-      nowMs: Date.now(),
-      contextWindowTokens,
-    });
-    if (!plan) {
-      return null;
-    }
-    const writePath = plan.relativePath;
-    if (!params.sessionKey || !activeSessionEntry) {
-      throw new Error("Memory flush has no current transcript target.");
-    }
-    const agentId = params.followupRun.run.agentId ?? resolveDefaultAgentId(params.cfg);
-    const runtime = await memoryFlushSessionRuntimeLoader.load();
-    assertMemoryFlushCurrent();
-    const memorySession = await runtime.prepareMemoryFlushSession({
-      admission: params.preflightAdmission,
-      source: {
-        agentId,
-        sessionId: activeSessionEntry.sessionId,
-        sessionKey: params.sessionKey,
-        storePath: resolveSessionStorePathForScope(
-          { agentId, sessionKey: params.sessionKey, storePath: params.storePath },
-          params.cfg,
-        ),
-      },
-      runId: flushRunId,
-      workspaceDir: params.followupRun.run.workspaceDir,
-      signal: abortSignal,
-    });
-    await runtime.ensureMemoryFlushTargetFile({
-      workspaceDir: params.followupRun.run.workspaceDir,
-      relativePath: writePath,
-      assertCurrent: assertMemoryFlushCurrent,
-    });
-    const systemPrompt = [params.followupRun.run.extraSystemPrompt, plan.systemPrompt]
-      .filter(Boolean)
-      .join("\n\n");
-    const selection = resolveMemoryFlushModelFallbackOptions(
-      params.followupRun.run,
-      plan.model,
-      params.cfg,
-    );
-    abortSignal?.throwIfAborted();
-    const preparedRunAdmission = prepareSystemAgentRunAdmission(
-      params.cfg,
-      flushRunId,
-      params.followupRun.run.agentId,
-      "auto-reply.memory-flush",
-      undefined,
-      params.followupRun.operatorAuthority,
-    );
-    return {
-      plan,
-      writePath,
-      systemPrompt,
-      selection,
-      preparedRunAdmission,
-      memorySession,
-    };
-  };
-  let preparedAttempt: Awaited<ReturnType<typeof prepareMemoryFlushAttempt>>;
+  let persistenceToolCallSucceeded = false;
+  let preparedAttempt: Awaited<
+    ReturnType<typeof import("./memory-flush-prepare.js").prepareMemoryFlushAttempt>
+  >;
   try {
-    preparedAttempt = await prepareMemoryFlushAttempt();
+    assertMemoryFlushCurrent();
+    const runtime = await memoryFlushPreparationLoader.load();
+    preparedAttempt = await runtime.prepareMemoryFlushAttempt({
+      ...params,
+      sessionEntry: activeSessionEntry,
+      flushRunId,
+      contextWindowTokens,
+      memoryFlushWritable,
+      abortSignal,
+      assertCurrent: assertMemoryFlushCurrent,
+      recordPersistenceToolSuccess: () => {
+        persistenceToolCallSucceeded = true;
+      },
+    });
   } catch (error) {
     return await recordFailure(error);
   }
@@ -1212,6 +1146,8 @@ export async function runMemoryFlushIfNeeded(params: {
     selection,
     preparedRunAdmission,
     memorySession,
+    memoryAudience: flushMemoryAudience,
+    memoryFlushTools,
   } = preparedAttempt;
   const sourcePolicySessionKey =
     params.runtimePolicySessionKey ??
@@ -1271,7 +1207,7 @@ export async function runMemoryFlushIfNeeded(params: {
       sourceSessionKey: params.sessionKey,
       sourceSessionId: activeSessionEntry?.sessionId,
     });
-    await runEmbeddedAgentEntry({
+    const flushExecution = await runEmbeddedAgentEntry({
       preparedRunAdmission,
       selection: {
         cfg: selection.cfg,
@@ -1349,6 +1285,7 @@ export async function runMemoryFlushIfNeeded(params: {
           agentHarnessId: resolveSessionPinnedHarnessId(activeSessionEntry),
           agentHarnessRuntimeOverride: sessionRuntimeOverride,
           sandboxSessionKey: sourcePolicySessionKey,
+          memoryAudience: flushMemoryAudience,
           allowGatewaySubagentBinding: true,
           silentExpected: true,
           allowEmptyAssistantReplyAsSilent: true,
@@ -1356,6 +1293,7 @@ export async function runMemoryFlushIfNeeded(params: {
           trigger: "memory",
           contextTokenBudget: contextWindowTokens,
           memoryFlushWritePath,
+          memoryFlushTools,
           initialTurnTainted:
             !params.followupRun.run.senderIsOwner || sessionLogSnapshot?.turnTainted === true,
           prompt: activeMemoryFlushPlan.prompt,
@@ -1385,6 +1323,13 @@ export async function runMemoryFlushIfNeeded(params: {
       // Do not stamp memory-flush success for a resolved run that returned an error.
       throw buildVisibleMemoryFlushFailure(visibleErrorPayloads);
     }
+    if (
+      memoryFlushTools &&
+      !persistenceToolCallSucceeded &&
+      !memoryFlushResultIsSilent(flushExecution.result)
+    ) {
+      throw new Error("no persistence tool call succeeded");
+    }
     if (params.storePath && params.sessionKey) {
       try {
         const updatedEntry = await updateSessionEntry(
@@ -1403,6 +1348,10 @@ export async function runMemoryFlushIfNeeded(params: {
     }
     return { sessionEntry: activeSessionEntry, outcome: "completed" };
   } catch (error) {
+    if (error instanceof MemoryFlushToolsUnavailableError) {
+      memoryFlushLog.warn(error.message);
+      return { sessionEntry: activeSessionEntry, outcome: "skipped" };
+    }
     return await recordFailure(error);
   } finally {
     stopHeartbeat?.();
@@ -1418,6 +1367,7 @@ export async function runMemoryFlushIfNeeded(params: {
       clearAgentRunContext(flushRunId);
     }
     preparedRunAdmission.close();
+    preparedAttempt.release();
   }
 }
 
@@ -1480,22 +1430,12 @@ async function recordMemoryFlushFailure(
           },
         }));
         adoptEntry(exhaustedEntry);
-        run.onVisibleErrorPayloads?.([
-          {
-            text: `⚠️ Memory flush failed after ${MAX_FLUSH_FAILURES} attempts; skipping for this cycle. It will retry after the next compaction.`,
-            isError: true,
-          },
-        ]);
       }
     } catch (persistError) {
       logVerbose(`failed to persist memory flush failure metadata: ${String(persistError)}`);
     }
   } else {
     logVerbose(`memory flush run failed: ${String(error)}`);
-  }
-  const visibleErrorPayload = buildMemoryFlushErrorPayload(error);
-  if (visibleErrorPayload) {
-    run.onVisibleErrorPayloads?.([visibleErrorPayload]);
   }
   return { sessionEntry, outcome };
 }

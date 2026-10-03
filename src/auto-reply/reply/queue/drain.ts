@@ -512,10 +512,8 @@ function createAggregateCancellation(items: readonly FollowupRun[]): AggregateCa
     };
   }
   const controller = new AbortController();
-  const listeners = new Map<AbortSignal, () => void>();
+  const abort = () => controller.abort();
   for (const signal of signals) {
-    const abort = () => controller.abort();
-    listeners.set(signal, abort);
     if (signal.aborted) {
       abort();
     } else {
@@ -523,12 +521,8 @@ function createAggregateCancellation(items: readonly FollowupRun[]): AggregateCa
     }
   }
   const disposeSignal = (signal: AbortSignal) => {
-    const listener = listeners.get(signal);
-    if (!listener) {
-      return;
-    }
-    signal.removeEventListener("abort", listener);
-    listeners.delete(signal);
+    signal.removeEventListener("abort", abort);
+    signals.delete(signal);
   };
   return {
     signal: controller.signal,
@@ -542,7 +536,7 @@ function createAggregateCancellation(items: readonly FollowupRun[]): AggregateCa
       }
     },
     dispose: () => {
-      for (const signal of listeners.keys()) {
+      for (const signal of signals) {
         disposeSignal(signal);
       }
     },
@@ -901,32 +895,33 @@ async function runSyntheticOverflowSummary(params: {
   });
 }
 
-async function drainElidedOverflowSummary(params: {
-  queue: FollowupQueueSummaryState;
-  runFollowup: (run: FollowupRun) => Promise<void>;
-}): Promise<boolean> {
-  const entry = params.queue.summaryElisions[0];
-  if (!entry) {
-    return false;
-  }
-  const retainedSources =
-    params.queue.summaryElisions.length === 1
+async function drainOverflowSummarySources(
+  params: {
+    queue: FollowupQueueSummaryState;
+    runFollowup: (run: FollowupRun) => Promise<void>;
+  },
+  entry?: FollowupQueueSummaryState["summaryElisions"][number],
+): Promise<boolean> {
+  const retainedSources = !entry
+    ? resolveOverflowSummarySourceGroup(params.queue)
+    : params.queue.summaryElisions.length === 1
       ? resolveOverflowSummarySourceGroup(params.queue).filter(
           (source) => resolveFollowupDeliveryContextKey(source) === entry.contextKey,
         )
       : [];
-  const source = retainedSources.at(-1) ?? entry.sources.at(-1);
+  const source = retainedSources.at(-1) ?? entry?.sources.at(-1);
   if (!source) {
     return false;
   }
-  const elidedCount = entry.sources.length;
-  const elidedSources = [...entry.sources];
-  const droppedCount = elidedCount + retainedSources.length;
+  const elidedCount = entry?.sources.length ?? 0;
+  const sources = [...(entry?.sources ?? []), ...retainedSources];
   const retainedSummaryLines = resolveQueueSummaryLines(params.queue, retainedSources);
-  const summaryLines = [...entry.summaryLines, ...retainedSummaryLines].slice(-params.queue.cap);
+  const summaryLines = entry
+    ? [...entry.summaryLines, ...retainedSummaryLines].slice(-params.queue.cap)
+    : retainedSummaryLines;
   const prompt = previewQueueSummaryPrompt({
     state: {
-      droppedCount,
+      droppedCount: sources.length,
       summaryLines,
     },
     noun: "message",
@@ -943,15 +938,15 @@ async function drainElidedOverflowSummary(params: {
     ({ abortSignal, onAdmitted }) =>
       runSyntheticOverflowSummary({
         source,
-        sources: [...elidedSources, ...retainedSources],
+        sources,
         prompt,
         abortSignal,
         onAdmitted,
         runFollowup: params.runFollowup,
       }),
-    [...elidedSources, ...retainedSources],
+    sources,
   );
-  if (!delivered) {
+  if (!delivered || !entry) {
     return true;
   }
   const entryIndex = params.queue.summaryElisions.indexOf(entry);
@@ -990,38 +985,11 @@ async function drainOverflowSummaryGroup(params: {
     );
     return true;
   }
-  if (await drainElidedOverflowSummary(params)) {
-    return true;
-  }
-  const sources = resolveOverflowSummarySourceGroup(params.queue);
-  const source = sources.at(-1);
-  if (!source) {
-    return false;
-  }
-  const prompt = previewQueueSummaryPrompt({
-    state: {
-      droppedCount: sources.length,
-      summaryLines: resolveQueueSummaryLines(params.queue, sources),
-    },
-    noun: "message",
-  });
-  if (!prompt) {
-    return false;
-  }
-  await runQueueSummaryDelivery(
-    params.queue,
-    { droppedCount: sources.length, sources },
-    ({ abortSignal, onAdmitted }) =>
-      runSyntheticOverflowSummary({
-        source,
-        sources,
-        prompt,
-        abortSignal,
-        onAdmitted,
-        runFollowup: params.runFollowup,
-      }),
+  const entry = params.queue.summaryElisions[0];
+  return (
+    (entry !== undefined && (await drainOverflowSummarySources(params, entry))) ||
+    (await drainOverflowSummarySources(params))
   );
-  return true;
 }
 
 export function scheduleFollowupDrain(

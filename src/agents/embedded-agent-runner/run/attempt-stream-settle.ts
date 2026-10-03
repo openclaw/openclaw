@@ -10,7 +10,6 @@ import type { AssistantMessage } from "../../../llm/types.js";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
 import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { resolveProviderTextTransforms } from "../../../plugins/provider-runtime.js";
-import type { NestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
@@ -55,6 +54,7 @@ import {
   findLatestUncompactedAttemptUsageSnapshot,
   resolvePromptCacheTouchTimestamp,
 } from "./attempt-context-engine-helpers.js";
+import type { AttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 import { appendAttemptCacheTtlIfNeeded } from "./attempt-thread-helpers.js";
 import { normalizeCompactionRecoveryTranscriptTail } from "./attempt-transcript-helpers.js";
 import {
@@ -115,7 +115,7 @@ export async function settleEmbeddedAttemptStream(input: {
   }) => Promise<void> | void;
   abortable: <T>(promise: Promise<T>) => Promise<T>;
   prePromptMessageCount: number;
-  nestedToolActivities: readonly NestedToolActivity[];
+  nestedToolActivityState: AttemptNestedToolActivityState;
   cache: {
     getObservation?: () => PromptCacheRequestObservation | undefined;
     retention: PromptCacheRetention;
@@ -388,13 +388,7 @@ export async function settleEmbeddedAttemptStream(input: {
     lastAssistant,
     currentAttemptAssistant,
     currentAttemptCompletedAssistant,
-    successfulNestedToolNames: [
-      ...new Set(
-        input.nestedToolActivities.flatMap(({ details }) =>
-          details.isError ? [] : [details.toolName],
-        ),
-      ),
-    ],
+    successfulNestedToolNames: [...input.nestedToolActivityState.successfulToolNames],
     attemptUsage,
     lastCallUsage,
     promptCache,

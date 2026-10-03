@@ -239,9 +239,13 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
 export async function withCurrentDevicePairingSnapshot<T>(
   baseDir: string | undefined,
   prepare: (paired: readonly PairedDevice[]) => { start: () => T | Promise<T> } | undefined,
+  preparePublication?: () => Promise<void>,
 ): Promise<T | undefined> {
   const begun = await withDevicePairingLock(async () => {
     const { paired } = await listDevicePairingStoreRecordsReadOnly(baseDir, true);
+    if (preparePublication) {
+      await preparePublication();
+    }
     const action = prepare(paired);
     return { value: action?.start() };
   });

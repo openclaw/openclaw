@@ -131,7 +131,11 @@ it("retains original and unpublished cleanup failures until the snapshot registr
     "async",
   ).catch((error: unknown) => error);
   expect(failure).toBeInstanceOf(AggregateError);
-  expect(failure).toMatchObject({ errors: [original, cleanup], cause: original });
+  expect(failure).toMatchObject({
+    message: expect.stringContaining("native backup failed"),
+    errors: [original, cleanup],
+    cause: original,
+  });
   expect(fs.existsSync(directory)).toBe(true);
   expect(database.isOpen).toBe(true);
   await cleanupSnapshotOperations();

@@ -249,6 +249,7 @@ flow:
                   - channel: telegram
                     accountId: { ref: transport.accountId }
                     action: edit
+                    conversationReadOrigin: direct-operator
                     params:
                       chatId: { ref: delivery.to }
                       messageId:

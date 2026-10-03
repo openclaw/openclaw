@@ -145,7 +145,7 @@ function normalizeOllamaThinkValue(
   return undefined;
 }
 
-export function resolveOllamaThinkParamValue(
+function resolveOllamaThinkParamValue(
   params: Record<string, unknown> | undefined,
   nativeMax = false,
 ): OllamaThinkValue | undefined {
@@ -166,13 +166,22 @@ export function supportsNativeOllamaMax(
   return sendsToOllamaCloud && supportsOllamaCloudFullThinkingEffort(model?.id ?? "");
 }
 
-export function shouldForwardNativeOllamaThink(
+function shouldForwardNativeOllamaThink(
   model: ProviderRuntimeModel | undefined,
   think: OllamaThinkValue,
 ): boolean {
   // Ollama accepts top-level `think` as the native chat contract, but rejects
   // truthy values for models known not to expose thinking support.
   return think === false || model?.reasoning !== false;
+}
+
+/** Configured `think` that the native transport sends, when the model accepts it. */
+export function resolveOllamaConfiguredThink(
+  model: ProviderRuntimeModel,
+  nativeMax: boolean,
+): OllamaThinkValue | undefined {
+  const think = resolveOllamaThinkParamValue(model.params, nativeMax);
+  return think !== undefined && shouldForwardNativeOllamaThink(model, think) ? think : undefined;
 }
 
 export function resolveOllamaConfiguredNumCtx(model: ProviderRuntimeModel): number | undefined {

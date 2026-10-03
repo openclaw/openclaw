@@ -199,13 +199,12 @@ describe("installTestEnv", () => {
             workspace: "/Users/peter/Projects",
             agentDir: "/Users/peter/.openclaw/agents/main/agent",
           },
-          list: [
-            {
-              id: "dev",
+          entries: {
+            dev: {
               workspace: "/Users/peter/dev-workspace",
               agentDir: "/Users/peter/.openclaw/agents/dev/agent",
             },
-          ],
+          },
         },
         models: {
           providers: {
@@ -333,7 +332,7 @@ describe("installTestEnv", () => {
     const copiedConfig = JSON.parse(fs.readFileSync(copiedConfigPath, "utf8")) as {
       agents?: {
         defaults?: Record<string, unknown>;
-        list?: Array<Record<string, unknown>>;
+        entries?: Record<string, Record<string, unknown>>;
       };
       models?: { providers?: Record<string, unknown> };
       channels?: {
@@ -351,7 +350,7 @@ describe("installTestEnv", () => {
     expect(providers.custom).toEqual({ baseUrl: "https://example.test/v1" });
 
     const agentDefaults = requireRecord(copiedConfig.agents?.defaults, "agent defaults");
-    const agentConfig = requireRecord(copiedConfig.agents?.list?.[0], "agent");
+    const agentConfig = requireRecord(copiedConfig.agents?.entries?.dev, "agent");
     expect(agentDefaults.workspace).toBeUndefined();
     expect(agentDefaults.agentDir).toBeUndefined();
     expect(agentConfig.workspace).toBeUndefined();

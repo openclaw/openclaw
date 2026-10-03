@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { StatementSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -25,6 +26,7 @@ import {
   isSessionWorkAdmissionActive,
 } from "../sessions/session-lifecycle-admission.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
+import * as skillLibrarySelection from "../skills/library/selection.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
@@ -36,6 +38,7 @@ import type {
   GatewayRequestHandlerOptions,
   RespondFn,
 } from "./server-methods/types.js";
+import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { seedDeletedSessionTranscript } from "./session-history-fixture.test-support.js";
 import {
   bindSessionRowProjection,
@@ -53,6 +56,7 @@ import {
 } from "./test-helpers.js";
 import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
+import { loseSessionSignalAcknowledgement } from "./test/session-signal-failure.test-support.js";
 
 const runEmbeddedAgent = vi.spyOn(embeddedAgent, "runEmbeddedAgent");
 
@@ -273,6 +277,7 @@ describe("Goal chat admission and continuation", () => {
       );
     let eventsAtAck: ReturnType<typeof creationEvents> = Promise.resolve([]);
     await withHeldModel(async () => {
+      const signal = loseSessionSignalAcknowledgement();
       const started = await rpc(
         "chat.send",
         request,
@@ -284,8 +289,9 @@ describe("Goal chat admission and continuation", () => {
           }
         },
         requestClient,
-      );
+      ).finally(signal.restore);
       const acknowledgedEvents = await eventsAtAck;
+      expect(signal.attempts()).toBe(2);
       expect(started.mock.calls).toEqual([
         [
           true,
@@ -590,6 +596,65 @@ describe("Goal chat admission and continuation", () => {
         release.resolve();
         await pending.catch(() => undefined);
         lookupSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each(["expired", "replaced"] as const)(
+    "does not register a fresh Goal after its reservation is %s during skill selection",
+    async (change) => {
+      await useFreshSessionStore();
+      const profile = ensureProfileForEmail(`goal-selection-${change}@example.test`);
+      const entered = createDeferred();
+      const release = createDeferred();
+      const seed = skillLibrarySelection.seedSkillLibrarySelection;
+      const seedSpy = vi
+        .spyOn(skillLibrarySelection, "seedSkillLibrarySelection")
+        .mockImplementationOnce(async (...args) => {
+          const selected = await seed(...args);
+          entered.resolve();
+          await release.promise;
+          return selected;
+        });
+      const request = freshGoalStart("Keep this fresh Goal bound to its pending reservation");
+      const pending = rpc("chat.send", request, undefined, profileClient(profile.id));
+      const key = pendingChatSendDedupeKey(request.idempotencyKey);
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          pending,
+          "Fresh Goal skipped skill selection.",
+        );
+        const reservation = context.dedupe.get(key);
+        if (!reservation || !isRecord(reservation.payload)) {
+          throw new Error("Expected the fresh Goal's pending reservation.");
+        }
+        context.dedupe.set(key, {
+          ...reservation,
+          payload: {
+            ...reservation.payload,
+            ...(change === "expired" ? { expiresAtMs: 1 } : { attemptId: "successor-attempt" }),
+          },
+        });
+        release.resolve();
+        const response = await pending;
+        expect(response.mock.calls[0]?.[1]).toMatchObject(
+          change === "expired"
+            ? { status: "timeout", summary: "aborted" }
+            : { status: "in_flight" },
+        );
+        expect(loadSessionEntry(scope())).toBeUndefined();
+        expectNoDispatch();
+        expect(isSessionWorkAdmissionActive(storePath, [sessionKey])).toBe(false);
+        if (change === "replaced") {
+          expect(context.dedupe.get(key)?.payload).toMatchObject({
+            attemptId: "successor-attempt",
+          });
+        }
+      } finally {
+        release.resolve();
+        await pending;
+        seedSpy.mockRestore();
       }
     },
   );

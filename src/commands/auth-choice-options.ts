@@ -87,13 +87,12 @@ function resolveProviderChoiceOptions(params?: {
  * them before any surface sees them.
  */
 export function formatAuthChoiceChoicesForCli(params?: {
-  includeSkip?: boolean;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): string {
   const values = [
-    ...formatStaticAuthChoiceChoicesForCli(params).split("|"),
+    ...formatStaticAuthChoiceChoicesForCli().split("|"),
     ...resolveProviderSetupFlowContributions({ ...params, scope: "all" }).map(
       (contribution) => contribution.option.value,
     ),

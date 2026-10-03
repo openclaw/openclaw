@@ -347,10 +347,13 @@ function shouldPreserveOpaqueProviderPayload(
   );
 }
 
-function sanitizeOpenAIReasoningSignature(
+export function sanitizeOpenAIReasoningSignature(
   value: string,
   route: TranscriptAssistantRoute | undefined,
 ): string | undefined {
+  if (!isOpenAIResponsesRoute(route) && !isCustomProviderRoute(route)) {
+    return undefined;
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(value);
@@ -587,8 +590,6 @@ function redactTranscriptStructuredValue(
     }
     if (
       location === "assistant-content-block" &&
-      (isOpenAIResponsesRoute(currentAssistantRoute) ||
-        isCustomProviderRoute(currentAssistantRoute)) &&
       source.type === "thinking" &&
       key === "thinkingSignature" &&
       typeof item === "string"

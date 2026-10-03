@@ -1,3 +1,4 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { WorkerTranscriptMessage } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
@@ -36,6 +37,7 @@ import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { SpawnResult } from "../../process/exec.js";
+import type { ReplyPayload } from "../../shared/reply-payload.types.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import {
   windowWorkerReplayMessages,
@@ -271,13 +273,7 @@ export function parseWorkerTurnProcessResult(processResult: SpawnResult) {
         : "Cloud worker process failed before completing the turn",
     );
   }
-  let value: unknown;
-  try {
-    value = JSON.parse(processResult.stdout.trim()) as unknown;
-  } catch (error) {
-    throw new Error("Worker process returned invalid output", { cause: error });
-  }
-  const result = parseWorkerRuntimeResult(value);
+  const result = parseWorkerRuntimeResult(safeParseJsonRecord(processResult.stdout.trim()));
   if (!result) {
     throw new Error("Worker process returned invalid output");
   }
@@ -297,8 +293,7 @@ export function buildWorkerTurnResult(params: {
   durationMs: number;
   sessionId: string;
   sessionFile: SessionPlacementTurnParams["sessionFile"];
-  text: string;
-  workspaceConflictSummary?: string;
+  reply: ReplyPayload;
 }) {
   const usageAccumulator = createUsageAccumulator();
   const assistants = params.messages.filter(
@@ -323,14 +318,10 @@ export function buildWorkerTurnResult(params: {
     ...params.modelRef,
     assistant: lastAssistant,
   });
-  const replyText =
-    params.workspaceConflictSummary === undefined
-      ? params.text
-      : params.text
-        ? `${params.text}\n\n${params.workspaceConflictSummary}`
-        : params.workspaceConflictSummary;
   return {
-    ...(replyText ? { payloads: [{ text: replyText }] } : {}),
+    ...(params.reply.text || params.reply.mediaUrl || params.reply.mediaUrls?.length
+      ? { payloads: [params.reply] }
+      : {}),
     meta: {
       durationMs: params.durationMs,
       agentMeta: {

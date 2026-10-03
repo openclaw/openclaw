@@ -178,37 +178,6 @@ test.each([
   },
 );
 
-test("sessions.create commits the personal default before dispatching its initial turn", async () => {
-  await withSessionTestState({ layout: "state-only" }, async () => {
-    const { storePath, authProfileId, client, context } =
-      await createPersonalAccountSessionFixture();
-    const key = "agent:main:dashboard:personal-default-initial-turn";
-    const observedProfiles: Array<string | undefined> = [];
-    const chatSend = vi.spyOn(chatSendOwner, "handleDirectExternalChatSend");
-    chatSend.mockImplementation(async ({ respond }) => {
-      observedProfiles.push(loadSessionEntry({ sessionKey: key, storePath })?.authProfileOverride);
-      respond(true, { runId: "personal-default-first-turn", status: "started" });
-    });
-    try {
-      const created = await directSessionReq<{ runStarted: boolean }>(
-        "sessions.create",
-        { key, model: "openai/gpt-5.6-sol", message: "Start the first turn" },
-        { client, context },
-      );
-
-      expect(created.ok, JSON.stringify(created.error)).toBe(true);
-      expect(created.payload?.runStarted).toBe(true);
-      expect(observedProfiles).toEqual([authProfileId]);
-      expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
-        authProfileOverride: authProfileId,
-        authProfileOverrideSource: "user-link",
-      });
-    } finally {
-      chatSend.mockRestore();
-    }
-  });
-});
-
 test.each([
   {
     endpoint: "direct model override",

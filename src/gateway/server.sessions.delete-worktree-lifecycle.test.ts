@@ -144,7 +144,11 @@ test.each(["restore-failed", "placement-changed"] as const)(
         expect(isSessionLifecycleMutationActive(storePath, [key, sessionId])).toBe(true);
         await placements!.startDispatch({ sessionId, sessionKey: key, agentId: "main" });
         // A stopped replacement is eligible, but cannot reuse preparation owned by the prior placement.
-        placements!.fail({ sessionId, expectedGeneration: 1, recoveryError: "preparation failed" });
+        await placements!.fail({
+          sessionId,
+          expectedGeneration: 1,
+          recoveryError: "preparation failed",
+        });
         releaseWriter.resolve();
         await heldWriter;
         await expect(admission).rejects.toThrow("changed before mutation");
@@ -186,7 +190,7 @@ test("sessions.create only allocates worktrees for lifecycle-manageable agent ow
   const workspace = await initializeRemoteBackedGitWorkspace(openClawState.root);
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
-  testState.agentsConfig = { list: [{ id: "ops", default: true }] };
+  testState.agentsConfig = { entries: { ops: {} } };
   const { storePath } = await createSessionStoreDir();
   const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
   const allocatedWorktreeIds = new Set<string>();

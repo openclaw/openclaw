@@ -45,6 +45,7 @@ import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { Message } from "../../llm/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { SessionManagerBranching } from "./session-manager-branching.js";
@@ -131,6 +132,27 @@ export class SessionManager extends SessionManagerBranching {
       Object.keys(initial).some((key) => Reflect.get(initial, key) !== Reflect.get(current, key))
     ) {
       throw new Error("Session manager changed during initial context read");
+    }
+    for (const entry of context.fileEntries) {
+      if (entry.type !== "message") {
+        continue;
+      }
+      const stored = this.byId.get(entry.id);
+      if (stored?.type !== "message") {
+        continue;
+      }
+      // The worker projects private fields away; equal payloads can share immutable custody.
+      if (isDeepStrictEqual(entry.message, stored.message)) {
+        entry.message = freezeJsonSnapshot(stored.message);
+      } else {
+        for (const key of Object.keys(entry.message)) {
+          const value: unknown = Reflect.get(stored.message, key);
+          if (isDeepStrictEqual(Reflect.get(entry.message, key), value)) {
+            Reflect.set(entry.message, key, freezeJsonSnapshot(value));
+          }
+        }
+        freezeJsonSnapshot(entry.message);
+      }
     }
     return context.buildSessionContext();
   }
@@ -337,14 +359,8 @@ export class SessionManager extends SessionManagerBranching {
         this: SessionManager,
         rewrittenEntryIds: ReadonlyMap<string, string>,
       ): Generator<SessionPersistenceStep, void, void> {
-        const publication = yield* sessionPersistenceStep(
-          () => prepared,
-          async () => {
-            const snapshot = SessionManager.inMemory(prepared.cwd);
-            Object.assign(snapshot, structuredClone(prepared.captureTranscriptView()));
-            return snapshot;
-          },
-        );
+        const publication = SessionManager.inMemory(prepared.cwd);
+        Object.assign(publication, structuredClone(prepared.captureTranscriptView()));
         const entries = publication.fileEntries
           .slice(initialEntryCount)
           .filter((entry) => entry.type !== "session");

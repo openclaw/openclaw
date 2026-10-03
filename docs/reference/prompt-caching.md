@@ -325,6 +325,8 @@ Run it with:
 OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 pnpm test:live:cache
 ```
 
+This command selects the existing cache regression test through the shared live runner. Set `OPENCLAW_VITEST_RUNTIME=bun` to run its provider calls on Bun; the default is Node. Provider usage summaries and advisory warnings remain visible, and hard regression floors fail the test.
+
 The baseline file stores the most recently observed live numbers plus the provider-specific regression floors the test checks against. Each run uses fresh per-run session IDs and prompt namespaces so previous cache state does not pollute the current sample. Anthropic and OpenAI use different enforcement: an Anthropic floor miss is a hard regression (test fails), while an OpenAI floor miss is watch-only (recorded as a warning, does not fail the run). They do not share a single cross-provider threshold.
 
 Claude CLI prompt reuse has a separate Docker lane because it exercises Claude Code's native session transport rather than the direct Anthropic API. After a fresh turn and tool-bearing warmup resume, it allows a no-tool settlement resume to run hot or cold, dirties the workspace, and requires at least 90% reuse on the following resume without rotating the settled live-session generation. It also verifies that a thinking-level change rotates the generation and that the next steady resume restores at least 90% reuse:

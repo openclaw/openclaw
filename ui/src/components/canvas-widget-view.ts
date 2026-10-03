@@ -494,7 +494,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
         this.promptPort === port &&
         message.data?.type === "openclaw:widget-prompt"
       ) {
-        dispatchWidgetPrompt(
+        void dispatchWidgetPrompt(
           host.frame,
           message.data.prompt,
           `${this.sessionKey}\0${this.docId}\0${this.validated!.generation}`,

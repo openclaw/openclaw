@@ -9,6 +9,7 @@ import { localParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { messageRecoveryKey } from "../chat-message-recovery.ts";
 import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
+import { resolveChatSubagentWait } from "../chat-subagent-wait.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
@@ -64,7 +65,7 @@ import type {
 import { projectTurnVideoMessages } from "./chat-turn-video-gallery.ts";
 import { renderChatTypingIndicator } from "./chat-typing-indicator.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
-import { renderTurnRecapRow } from "./chat-working-indicator.ts";
+import { renderChatWorkingIndicator, renderTurnRecapRow } from "./chat-working-indicator.ts";
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
 const workPreviewCache =
@@ -235,8 +236,9 @@ export function projectChatTranscript(
   };
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
   const hasTypingActors = (props.typingActors?.length ?? 0) > 0;
-  const isEmpty =
-    chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation && !hasTypingActors;
+  const subagentWait = resolveChatSubagentWait(props);
+  const hasLiveContent = Boolean(subagentWait || hasTypingActors || hasRealtimeTalkConversation);
+  const isEmpty = chatItems.length === 0 && !props.loading && !hasLiveContent;
   transcript.setContentReady(!props.loading);
   const { isDirectThread, avatarPlacement } = resolveTranscriptAvatarPlacement(
     props,
@@ -538,6 +540,24 @@ export function projectChatTranscript(
       kind: "content",
       key: "turn-recap",
       content: renderTurnRecapRow(turnRecap),
+    });
+  }
+  if (subagentWait && !searchFiltering) {
+    transcriptRows.push({
+      kind: "content",
+      key: "waiting-subagents",
+      content: renderChatWorkingIndicator(
+        {
+          kind: "reading-indicator",
+          key: `waiting-subagents:${props.sessionKey}`,
+          startedAt: subagentWait.startedAt,
+        },
+        {
+          mascot: props.branding?.mascot,
+          waitingSubagents: subagentWait,
+          onOpenSession: props.onOpenSession,
+        },
+      ),
     });
   }
   const typingIndicator = renderChatTypingIndicator(

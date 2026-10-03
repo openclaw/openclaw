@@ -294,14 +294,18 @@ export class ChatQuestionPanel extends OpenClawLightDomElement {
       return;
     }
     const optionIndex = Number(event.key) - 1;
-    const option = question.options[optionIndex];
-    if (optionIndex >= 0 && optionIndex < 4 && option) {
+    const option = this.querySelector<HTMLButtonElement>(
+      `.chat-question-panel__option[data-option-index="${optionIndex}"]`,
+    );
+    if (optionIndex >= 0 && optionIndex < 9 && option) {
       event.preventDefault();
-      this.toggleOption(model, question, option.value ?? option.label);
+      option.click();
       return;
     }
     if (
       question.options.length > 0 &&
+      question.options.length < 9 &&
+      !question.resource &&
       question.isOther &&
       optionIndex === question.options.length
     ) {

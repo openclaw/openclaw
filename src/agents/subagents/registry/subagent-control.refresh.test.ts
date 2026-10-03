@@ -40,7 +40,11 @@ it.for(["complete", "reject undefined"] as const)(
       const cfg = getRuntimeConfig();
       setRuntimeConfigSnapshot({
         ...cfg,
-        agents: { ...cfg.agents, list: [{ id: "main", default: true }, { id: "research" }] },
+        agents: {
+          ...cfg.agents,
+          ownership: "explicit",
+          entries: { main: {}, research: {} },
+        },
       });
     }
     const agentId = (id: string) => (sharedRawKey && id === "second" ? "research" : "main");
@@ -592,7 +596,7 @@ it.each([
         await awaitProgress(grandchildCancelled.promise, "grandchild cancellation publication");
         // Publication precedes G's abort-marker write. Join its mutation from
         // outside the observer's reentrant context before arming the next fault.
-        await runExclusiveSessionLifecycleMutation({
+        await runExclusiveSessionLifecycleMutation("subagent-kill", {
           scope: storePath,
           identities: [gKey, "g-session"],
           run: async () => {},

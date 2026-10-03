@@ -681,7 +681,6 @@ private func makeLegacyWatchQueue(_ id: String, gateway: String, text: String) t
 }
 
 @MainActor
-@discardableResult
 private func waitForMainActorWork(
     timeout: Duration = .seconds(2),
     _ condition: () -> Bool) async -> Bool
@@ -698,6 +697,7 @@ private func waitForMainActorWork(
 }
 
 @MainActor
+@Observable
 private final class MockWatchMessagingService: @preconcurrency WatchMessagingServicing, @unchecked Sendable {
     var currentStatus = WatchMessagingStatus(
         supported: true,
@@ -1023,6 +1023,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
     var status: NotificationAuthorizationStatus = .notDetermined
     var authorizationStatusHandler: (@Sendable () async -> NotificationAuthorizationStatus)?
     var addCalls = 0
+    let notificationAdded = AsyncTestGate()
     var pendingRemovedIdentifiers: [[String]] = []
     var deliveredRemovedIdentifiers: [[String]] = []
     var delivered: [NotificationSnapshot] = []
@@ -1036,6 +1037,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
 
     func add(_: UNNotificationRequest) async throws {
         self.addCalls += 1
+        self.notificationAdded.open()
     }
 
     func removePendingNotificationRequests(withIdentifiers identifiers: [String]) async {
@@ -1208,7 +1210,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     }
 }
 
-@Suite(.serialized) struct NodeAppModelInvokeTests {
+@Suite(.serialized, .testWaitLimit) struct NodeAppModelInvokeTests {
     @Test(arguments: [false, true]) @MainActor
     func `chat preserves a typed draft on initial agent resolution only for the same account`(
         changesAccount: Bool) throws
@@ -5257,7 +5259,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         appModel._test_setUnifiedExecApprovalGetResponse(makePendingExecApprovalJSON(
             "approval-watch-exact-owner",
             commandText: "echo exact owner"))
-        await waitForMainActorWork { watchService.lastSentExecApprovalSnapshot != nil }
+        try await TestWait.observed("initial Watch approval snapshot") {
+            watchService.lastSentExecApprovalSnapshot != nil
+        }
         let snapshotCount = watchService.sentExecApprovalSnapshots.count
 
         watchService.emitExecApprovalSnapshotRequest(
@@ -5265,7 +5269,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 "snapshot-byte-distinct-owner",
                 gateway: decomposedGatewayID,
                 sentAt: 227))
-        await waitForMainActorWork {
+        try await TestWait.observed("Watch snapshot for byte-distinct owner") {
             watchService.sentExecApprovalSnapshots.count > snapshotCount
         }
 
@@ -5288,11 +5292,13 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 commandText: "echo cached",
                 expiresAtMs: 4_000_000_000_000)))
         appModel._test_setExecApprovalPromptFetchStale()
-        await waitForMainActorWork { watchService.lastSentExecApprovalSnapshot != nil }
+        try await TestWait.observed("initial Watch approval snapshot") {
+            watchService.lastSentExecApprovalSnapshot != nil
+        }
 
         watchService.emitExecApprovalSnapshotRequest(
             makeWatchApprovalSnapshotRequest("snapshot-not-found", sentAt: 226))
-        await waitForMainActorWork {
+        try await TestWait.observed("Watch acknowledgment after not-found readback") {
             watchService.lastSentExecApprovalSnapshot?.requestId == "snapshot-not-found"
         }
 
@@ -5320,8 +5326,10 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         watchService.emitExecApprovalSnapshotRequest(
             makeWatchApprovalSnapshotRequest("snapshot-canonical", sentAt: 224))
-        await waitForMainActorWork {
-            watchService.lastSentExecApprovalSnapshot?.requestId == "snapshot-canonical"
+        try await TestWait.observed("Watch acknowledgment after canonical readback") {
+            watchService.lastSentExecApprovalSnapshot?.requestId == "snapshot-canonical" &&
+                watchService.lastSentExecApprovalSnapshot?.approvals.isEmpty == true &&
+                watchService.lastSentExecApprovalResolved?.approvalId == "approval-watch-stale-cache"
         }
 
         #expect(watchService.lastSentExecApprovalSnapshot?.approvals.isEmpty == true)
@@ -5458,7 +5466,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 id: approvalID,
                 commandText: "echo guarded",
                 expiresAtMs: 4_000_000_000_000)))
-        await waitForMainActorWork { watchService.lastSentExecApprovalPrompt != nil }
+        try await TestWait.observed("initial Watch approval prompt") {
+            watchService.lastSentExecApprovalPrompt != nil
+        }
         watchService.lastSentExecApprovalPrompt = nil
         watchService.sentExecApprovalPrompts.removeAll()
         appModel._test_setUnifiedExecApprovalGetResponse(makePendingExecApprovalJSON(approvalID), beforeResponse: {
@@ -5514,7 +5524,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         #expect(appModel.pendingExecApprovalPrompt == nil)
         #expect(appModel._test_pendingExecApprovalInboxItems().map(\.id) == ["approval-reconnect-restore"])
-        await waitForMainActorWork { watchService.lastSentExecApprovalPrompt != nil }
+        try await TestWait.observed("Watch approval prompt after reconnect") {
+            watchService.lastSentExecApprovalPrompt != nil
+        }
         #expect(watchService.lastSentExecApprovalPrompt?.approval.id == "approval-reconnect-restore")
         #expect(watchService.lastSentExecApprovalPrompt?.resetResolutionAttemptId == nil)
         appModel._test_presentPendingExecApprovalFromInbox(
@@ -5533,7 +5545,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 id: "approval-watch-reconcile",
                 commandText: "echo reconcile",
                 expiresAtMs: 4_000_000_000_000)))
-        await waitForMainActorWork { watchService.lastSentExecApprovalPrompt != nil }
+        try await TestWait.observed("initial Watch approval prompt") {
+            watchService.lastSentExecApprovalPrompt != nil
+        }
         appModel.dismissPendingExecApprovalPrompt()
         watchService.lastSentExecApprovalPrompt = nil
         appModel._test_setUnifiedExecApprovalGetResponse(makePendingExecApprovalJSON(
@@ -5542,7 +5556,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         await appModel.reconcileWatchExecApprovalCache(reason: "operator_reconnected")
 
-        await waitForMainActorWork { watchService.lastSentExecApprovalPrompt != nil }
+        try await TestWait.observed("Watch approval prompt after reconciliation") {
+            watchService.lastSentExecApprovalPrompt != nil
+        }
         #expect(watchService.lastSentExecApprovalPrompt?.approval.id == "approval-watch-reconcile")
         #expect(watchService.lastSentExecApprovalPrompt?.resetResolutionAttemptId == nil)
         #expect(appModel.pendingExecApprovalPrompt == nil)
@@ -5604,7 +5620,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 id: approvalID,
                 commandText: "echo serialized",
                 expiresAtMs: 4_000_000_000_000)))
-        await waitForMainActorWork { watchService.lastSentExecApprovalPrompt != nil }
+        try await TestWait.observed("initial Watch approval prompt") {
+            watchService.lastSentExecApprovalPrompt != nil
+        }
         watchService.lastSentExecApprovalPrompt = nil
         let probe = ExecApprovalConcurrentWriteProbe()
         appModel._test_setExecApprovalResolutionFailureHandler { _, decision, _ in
@@ -5639,7 +5657,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let snapshot = await probe.snapshot()
         #expect(snapshot.calls == ["allow-once", "deny"])
         #expect(snapshot.maximumActiveWrites == 1)
-        await waitForMainActorWork {
+        try await TestWait.observed("Watch resolution retry prompt") {
             watchService.lastSentExecApprovalPrompt?.resetResolutionAttemptId == "watch-lease-attempt"
         }
         #expect(watchService.lastSentExecApprovalPrompt?.resetResolutionAttemptId == "watch-lease-attempt")
@@ -7976,7 +7994,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(Array(cachedIDs[0].utf8) == Array(decomposedID.utf8))
         #expect(Array(cachedIDs[1].utf8) == Array(composedID.utf8))
 
-        await waitForMainActorWork {
+        try await TestWait.observed("Watch snapshot containing both exact approval IDs") {
             watchService.lastSentExecApprovalSnapshot?.approvals.count == 2
         }
         let snapshotIDs = try #require(watchService.lastSentExecApprovalSnapshot).approvals.map(\.id)
@@ -8441,7 +8459,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(appModel.watchMessagingStatus == status)
     }
 
-    @Test @MainActor func `watch status callback publishes reachability changes`() async {
+    @Test @MainActor func `watch status callback publishes reachability changes`() async throws {
         let (watchService, appModel) = makeWatchModel()
         let status = WatchMessagingStatus(
             supported: true,
@@ -8451,7 +8469,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             activationState: "activated")
 
         watchService.emitStatus(status)
-        await waitForMainActorWork { appModel.watchMessagingStatus == status }
+        try await TestWait.observed("Watch reachability status") { appModel.watchMessagingStatus == status }
 
         #expect(appModel.watchMessagingStatus == status)
     }
@@ -8536,24 +8554,28 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             id: "accepted-watch-mirror",
             command: OpenClawWatchCommand.notify.rawValue,
             params: OpenClawWatchNotifyParams(title: "OpenClaw", body: "Accepted mirror test"))
-        var response: BridgeInvokeResponse?
-        let invocation = Task { @MainActor in
-            response = await appModel.handleInvoke(request)
-        }
+        let invocation = Task { @MainActor in await appModel.handleInvoke(request) }
         let deadline = ContinuousClock().now.advanced(by: .seconds(2))
         while await !(mirrorGate.hasStarted()), ContinuousClock().now < deadline {
             await Task.yield()
         }
         let mirrorStarted = await mirrorGate.hasStarted()
-        await waitForMainActorWork { response != nil }
-        let responseBeforeMirror = response
+        let responseBeforeMirror: BridgeInvokeResponse
+        do {
+            responseBeforeMirror = try await TestWait.value(of: invocation, "Watch notification response")
+        } catch {
+            invocation.cancel()
+            await mirrorGate.resume()
+            _ = await invocation.value
+            throw error
+        }
         invocation.cancel()
         await mirrorGate.resume()
-        await invocation.value
-        await waitForMainActorWork { center.addCalls == 1 }
+        _ = await invocation.value
+        try await center.notificationAdded.wait("independent phone notification mirror")
 
         #expect(mirrorStarted)
-        #expect(responseBeforeMirror?.ok == true)
+        #expect(responseBeforeMirror.ok)
         #expect(center.addCalls == 1)
     }
 

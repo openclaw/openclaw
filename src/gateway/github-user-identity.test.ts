@@ -87,13 +87,18 @@ afterEach(() => {
 
 describe("authenticated GitHub identity sync", () => {
   it.each(["tailscale", "access"] as const)(
-    "verifies a fresh %s identity with the service credential when anonymous quota is exhausted",
+    "verifies a fresh public %s identity without using the Enterprise repository credential",
     async (provider) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         setRuntimeConfigSnapshot({
-          gateway: { controlUi: { github: { token: "configured-service-token" } } },
+          gateway: {
+            github: { host: "ghe.example.test", apiBaseUrl: "https://ghe.example.test/api/v3" },
+            controlUi: {
+              github: { host: "ghe.example.test", token: "enterprise-service-token" },
+            },
+          },
         });
-        vi.stubEnv("GH_TOKEN", "other-process-token");
+        vi.stubEnv("GH_TOKEN", "configured-service-token");
         const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
           const url =
             typeof input === "string" ? input : input instanceof URL ? input.href : input.url;

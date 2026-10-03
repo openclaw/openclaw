@@ -126,6 +126,16 @@ future-attempt artifacts remain invalid.
 
 ### Test runtime selection
 
+CI's `setup-test-bun` action consumes `scripts/lib/openclaw-bun.json` through
+`scripts/stage-openclaw-bun.sh`, the same owner used by the macOS and Tauri apps.
+Every pin bump requires **both** the paired CI Bun-lane replay and Bun-only smoke,
+and the macOS runtime probes plus two-binary test set, against the same published
+fork tag. Neither app nor CI advances if either gate fails; Linux-only runtime
+regressions stop the shared repin too. Preserve the last jointly admitted tag
+and attach exact-tag evidence to the repin PR. Publication alone is not admission.
+Shared pin/stager changes select macOS, Linux companion, and Bun test lanes.
+See [the shared pin schema and regeneration](/platforms/mac/dev-setup#shared-bun-pin-and-repin-gate).
+
 Linux test shards select Bun through `scripts/lib/ci-test-runtime.mts`. The
 ordinary unit-fast lane partitions its existing file inventory: files with known
 Bun failures or additional skips stay on Node, and the compatible remainder runs
@@ -284,10 +294,22 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `13311cf83e758c6a1fb720845a1a2d1ff23fd26f` with WebKit
+The pinned build pairs Bun `e167be5c8fdc8b959b707a13901af019b27bd4a3` with WebKit
 `fb1167ebf2cb9edc1f6771a2c11771b024693ae0` in prerelease
-`openclaw-v1.4.3-20261002-13311cf83e-webkit-fb1167ebf2`.
-WebKit is unchanged from the previous `1e6f0e7f70` pin. The build adds synchronous
+`openclaw-v1.4.3-20261003-e167be5c8f-webkit-fb1167ebf2`.
+WebKit is unchanged from the previous `13311cf83e` pin. This build fixes idle
+HTTP connection shutdown and filesystem read/write argument defaults. It also
+retains newly assigned Windows environment variables in copies, resets Windows
+pipe standard I/O after completion, and preserves prepared ESM records for
+equivalent filesystem paths. Package resolution now reports selected invalid
+package metadata with Node 24.21 diagnostics.
+
+The build adds an adaptive, bounded `node:vm` compilation cache for large module
+graphs. It activates after 1,750 distinct compiled sources and defaults to a
+256 MiB byte budget per VM. CI uses these defaults. This cache is separate
+from the Node-compatible bytecode cache disabled for Bun test processes above.
+
+The build retains synchronous
 `module.registerHooks` resolve/load chains and deregistration. JavaScriptCore
 limitations remain explicit: static input attributes are unavailable, static cycles
 can repeat resolution, and completed imports can be reused by `require`.

@@ -545,12 +545,12 @@ describe("diagnostic support export", () => {
   });
 
   it.each([
-    { agents: { list: [{ id: "legacy" }] }, expected: undefined },
+    { agents: { entries: { main: {} } }, expected: { count: 1 } },
     { agents: { defaults: {} }, expected: undefined },
     { agents: { entries: [] }, expected: undefined },
     { agents: { entries: {} }, expected: { count: 0 } },
   ])(
-    "distinguishes an absent canonical agent roster from an empty one: $agents",
+    "distinguishes absent, empty, and populated canonical agent rosters: $agents",
     async ({ agents, expected }) => {
       const configPath = path.join(tempDir, "openclaw.json");
       fs.writeFileSync(configPath, JSON.stringify({ agents }));

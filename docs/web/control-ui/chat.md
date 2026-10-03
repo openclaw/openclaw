@@ -13,11 +13,20 @@ sidebarTitle: "Chat"
 How the chat pane behaves: the session rail, the composer, and how the transcript renders.
 
 Tool activity shows a tool-specific icon beside its purpose or details instead of
-repeating the tool name. Hover the icon to see the exact tool name; screen readers
-retain that identity. Expanding an activity group keeps the individual tool details
+repeating the tool name. When no distinct purpose or detail is available, the row
+shows the tool label instead of leaving the text blank. Hover the icon to see the
+exact tool name; screen readers retain that identity. Expanding an activity group keeps the individual tool details
 and outcomes available. Completed group summaries retain their operation counts.
 Tool Search calls use the called tool's name, icon, and input details in tool rows
 and activity summaries.
+
+When the parent turn has ended but subagents are still active, the chat shows
+**Waiting on subagents**. A single active child already loaded in the pane can
+be opened from its name beside the indicator. Elapsed time appears when the
+loaded history records a yield after the parent's last run began.
+Successful `sessions_yield` calls leave a quiet **Handed off and waiting** marker
+with a timestamp; it changes to **Resumed** when the conversation continues.
+Private continuation context stays hidden.
 
 When your role or session policy blocks messages, the composer is disabled and
 shows the reason before you try to send. This includes sandbox requirements,
@@ -70,6 +79,8 @@ Side chat answers questions about the selected session and its project without e
 When the agent's primary model runs on a CLI runtime such as `claude-cli`, no utility model is set explicitly, and direct provider authentication is unavailable, Side chat answers through that same CLI runtime. Subscription-only installs need no provider API key. On that route each answer is a tool-free, one-shot side question that uses the bounded session snapshot and observer notes instead of the read-only session tools, and image questions are not supported. Installs with working direct provider authentication keep the direct route, including read-only tools and image support.
 
 Opening Side chat, reopening its panel, or selecting its tab focuses the question box. If you focus another input or keep typing while Side chat loads or answers, that newer input keeps focus.
+
+Confirming text with an input method does not send the Side chat question. Finish composition, then use your configured send shortcut or the Ask button.
 
 Editing a Side chat draft does not interrupt loading its earlier answers. **Clear side chat** removes the earlier content after the Gateway confirms it; drafts, images, and questions added after the click remain.
 

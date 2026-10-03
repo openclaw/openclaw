@@ -15,18 +15,7 @@ import {
   projectSessionStoreForPersistence,
 } from "../config/sessions/skill-prompt-blobs.js";
 import { stripRuntimeOnlySessionSkillsFields } from "../config/sessions/store-entry-shape.js";
-import {
-  applyFileBackedSessionStoreMaintenance,
-  type SessionMaintenanceApplyReport,
-} from "../config/sessions/store-maintenance-operations.js";
-import { planSessionEntryMaintenance } from "../config/sessions/store-maintenance-plan.js";
-import { collectSessionMaintenancePreserveKeysForStore } from "../config/sessions/store-maintenance-preserve.js";
-import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
-import {
-  countUnarchivedSessionEntries,
-  type ResolvedSessionMaintenanceConfig,
-  type SessionMaintenanceWarning,
-} from "../config/sessions/store-maintenance.js";
+import { applyFileBackedSessionStoreMaintenance } from "../config/sessions/store-maintenance-operations.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import { assertSupportedSessionStoreEntry } from "../config/sessions/supported-session-store.js";
 import {
@@ -61,25 +50,8 @@ import {
 import { writeTextAtomic } from "./json-files.js";
 import { readSessionStoreJson5 } from "./state-migrations.fs.js";
 
-type LegacySessionStoreLoadOptions = {
-  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
-  runMaintenance?: boolean;
-  hydrateSkillPromptRefs?: boolean;
-};
-
-export type LegacySessionStoreSaveOptions = {
+type LegacySessionStoreSaveOptions = {
   skipMaintenance?: boolean;
-  activeSessionKey?: string;
-  onWarn?: (warning: SessionMaintenanceWarning) => void | Promise<void>;
-  onMaintenanceApplied?: (report: SessionMaintenanceApplyReport) => void | Promise<void>;
-  maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
-  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
-  requireWriteSuccess?: boolean;
-};
-
-type LegacySessionStoreUpdateOptions<T> = LegacySessionStoreSaveOptions & {
-  reentrant?: boolean;
-  skipSaveWhenResult?: (result: T) => boolean;
 };
 
 const log = createSubsystemLogger("sessions/legacy-importer");
@@ -230,35 +202,11 @@ function normalizeLegacySessionStore(store: Record<string, SessionEntry>): void 
   }
 }
 
-export function loadLegacySessionStore(
-  storePath: string,
-  options: LegacySessionStoreLoadOptions = {},
-): Record<string, SessionEntry> {
+export function loadLegacySessionStore(storePath: string): Record<string, SessionEntry> {
   const { store } = readSessionStoreJson5(storePath);
-  if (options.hydrateSkillPromptRefs !== false) {
-    hydrateSessionStoreSkillPromptRefs({ storePath, store });
-  }
+  hydrateSessionStoreSkillPromptRefs({ storePath, store });
   const sessionStore = store as Record<string, SessionEntry>;
   normalizeLegacySessionStore(sessionStore);
-  if (options.runMaintenance) {
-    const maintenance = options.maintenanceConfig ?? resolveMaintenanceConfig();
-    const beforeCount = countUnarchivedSessionEntries(sessionStore);
-    if (maintenance.mode === "enforce") {
-      const preserveSessionKeys = collectSessionMaintenancePreserveKeysForStore({
-        storePath,
-        store: sessionStore,
-      });
-      planSessionEntryMaintenance({
-        profile: "legacy-read",
-        maintenance,
-        initialUnarchivedCount: beforeCount,
-        readPreserveKeys: () => preserveSessionKeys,
-        log: false,
-        readAgeCandidates: () => sessionStore,
-        readCapCandidates: () => ({ store: sessionStore, maxEntries: maintenance.maxEntries }),
-      });
-    }
-  }
   return sessionStore;
 }
 
@@ -353,11 +301,6 @@ async function writeLegacySessionStoreUnlocked(
     await applyFileBackedSessionStoreMaintenance({
       storePath,
       store,
-      activeSessionKey: options.activeSessionKey,
-      onWarn: options.onWarn,
-      onMaintenanceApplied: options.onMaintenanceApplied,
-      maintenanceOverride: options.maintenanceOverride,
-      maintenanceConfig: options.maintenanceConfig,
       log,
       commitReducedStore: () => persistLegacySessionStore(storePath, store),
       artifacts: {
@@ -396,21 +339,15 @@ export async function saveLegacySessionStore(
 export async function updateLegacySessionStore<T>(
   storePath: string,
   mutator: (store: Record<string, SessionEntry>) => Promise<T> | T,
-  options: LegacySessionStoreUpdateOptions<T> = {},
+  options: LegacySessionStoreSaveOptions = {},
 ): Promise<T> {
-  return await runExclusiveSessionStoreWrite(
-    storePath,
-    async () => {
-      const store = loadLegacySessionStore(storePath);
-      const lockedEntriesBefore = snapshotLockedEntries(store);
-      const result = await mutator(store);
-      if (!options.skipSaveWhenResult?.(result)) {
-        await writeLegacySessionStoreUnlocked(storePath, store, lockedEntriesBefore, options);
-      }
-      return result;
-    },
-    { reentrant: options.reentrant },
-  );
+  return await runExclusiveSessionStoreWrite(storePath, async () => {
+    const store = loadLegacySessionStore(storePath);
+    const lockedEntriesBefore = snapshotLockedEntries(store);
+    const result = await mutator(store);
+    await writeLegacySessionStoreUnlocked(storePath, store, lockedEntriesBefore, options);
+    return result;
+  });
 }
 
 type LegacySessionDeliveryEntry = SessionEntry & {

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
@@ -46,9 +47,20 @@ afterEach(async () => {
 function createStore(pruneAfterMs = 1_000, key = sessionKey) {
   // Keep the fake clock in this process without replacing admission or commit ownership.
   const runReclamation = reclamationRun.runSqliteSessionReclamation;
-  vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation((params) =>
-    runReclamation({ ...params, forceInProcess: true }),
-  );
+  const archived = createDeferred();
+  vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation((params) => {
+    const result = runReclamation({ ...params, forceInProcess: true });
+    // Observe publication without consuming the fault probes' original rejections.
+    void result.then(
+      (value) => {
+        if (value.kind === "maintenance-plan" && value.value.archived > 0) {
+          archived.resolve();
+        }
+      },
+      () => {},
+    );
+    return result;
+  });
   const storePath = path.join(tempDirs.make("session-maintenance-kick-"), "agent.sqlite");
   const scope = { agentId: "main", path: storePath };
   const database = openOpenClawAgentDatabase(scope);
@@ -71,7 +83,22 @@ function createStore(pruneAfterMs = 1_000, key = sessionKey) {
     scope,
     storePath,
   };
-  return { database, request, scope, storePath, updatedAt };
+  return { database, request, scope, storePath, updatedAt, archived: archived.promise };
+}
+
+function observeNextPeriodicMaintenance() {
+  // Install after createStore opens the handles and registers their WAL timers.
+  const scheduled = createDeferred();
+  const setTimer = globalThis.setTimeout;
+  const observer = vi.spyOn(globalThis, "setTimeout").mockImplementation((...args) => {
+    const timer = setTimer(...args);
+    if (args[1] === ageFacts.SESSION_ENTRY_MAINTENANCE_INTERVAL_MS) {
+      scheduled.resolve();
+    }
+    return timer;
+  });
+  return (signal: AbortSignal) =>
+    withinTest(scheduled.promise, signal).finally(() => observer.mockRestore());
 }
 
 it.each(["before kick", "before immediate", "before periodic", "before another kick"] as const)(
@@ -271,10 +298,17 @@ it("commits an automatic plan while unrelated writes arrive every 100 ms", async
   );
 });
 
-it.each([1, 3])(
+it.for([1, 3])(
   "replans policy conflicts without write quiet, bounded at three attempts (%s)",
-  async (conflicts) => {
-    const { request, scope, storePath, updatedAt } = createStore();
+  async (conflicts, { signal }) => {
+    const { request, scope, storePath, updatedAt, archived } = createStore();
+    const foregroundTurn = new AsyncLocalStorage<string>();
+    const timerContexts = new Set<string | undefined>();
+    const setTimer = globalThis.setTimeout;
+    vi.spyOn(globalThis, "setTimeout").mockImplementation((...args) => {
+      timerContexts.add(foregroundTurn.getStore());
+      return setTimer(...args);
+    });
     const victimKey = "agent:main:replan-victim";
     runOpenClawAgentWriteTransaction((owner) => {
       writeSessionEntry(owner, victimKey, { sessionId: "victim", updatedAt: updatedAt - 2_000 });
@@ -298,7 +332,7 @@ it.each([1, 3])(
       }
       return run(params);
     });
-    kickSessionEntryMaintenanceAfterWrite(request);
+    foregroundTurn.run("completed-turn", () => kickSessionEntryMaintenanceAfterWrite(request));
     await yieldToEventLoop();
     expect(rejections).toBe(conflicts);
     expect(plans).toHaveBeenCalledTimes(conflicts === 1 ? 2 : 3);
@@ -310,13 +344,15 @@ it.each([1, 3])(
       expect(loadSessionEntry({ sessionKey: victimKey, storePath })?.archivedAt).toBeUndefined();
       await vi.advanceTimersByTimeAsync(30 * 60 * 1_000);
       expect(plans).toHaveBeenCalledTimes(3);
-      kickSessionEntryMaintenanceAfterWrite(request);
+      foregroundTurn.run("later-turn", () => kickSessionEntryMaintenanceAfterWrite(request));
       await vi.advanceTimersByTimeAsync(1_000);
-      await yieldToEventLoop();
     }
+    // Writer fairness can yield again after the retry timer fires.
+    await withinTest(archived, signal);
     expect(loadSessionEntry({ sessionKey: victimKey, storePath })?.archiveReason).toBe(
       "age-retention",
     );
+    expect(timerContexts).toEqual(new Set([undefined]));
   },
 );
 
@@ -504,39 +540,43 @@ it.each([0, 32 * 24 * 60 * 60 * 1_000])(
   },
 );
 
-it("retries a transient maintenance failure on its next periodic pass", async () => {
-  const { request, storePath } = createStore();
+it("retries a transient maintenance failure on its next periodic pass", async ({ signal }) => {
+  const { request, storePath, archived } = createStore();
+  const scheduled = observeNextPeriodicMaintenance();
   vi.mocked(reclamationRun.runSqliteSessionReclamation).mockRejectedValueOnce(
     new Error("temporary maintenance failure"),
   );
   kickSessionEntryMaintenanceAfterWrite(request);
-  await yieldToEventLoop();
+  await scheduled(signal);
   expect(loadSessionEntry({ sessionKey, storePath })?.archivedAt).toBeUndefined();
 
   await vi.advanceTimersByTimeAsync(30 * 60 * 1_000);
-  await yieldToEventLoop();
+  await withinTest(archived, signal);
   expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
     archiveReason: "age-retention",
   });
 });
 
-it("backs off admission failures after the periodic deadline expires", async () => {
+it("backs off admission failures after the periodic deadline expires", async ({ signal }) => {
   const { request } = createStore(60 * 60 * 1_000);
+  const initialized = observeNextPeriodicMaintenance();
   kickSessionEntryMaintenanceAfterWrite(request);
-  await yieldToEventLoop();
+  await initialized(signal);
   const writes = vi
     .spyOn(agentDatabase, "runOpenClawAgentWriteTransaction")
     .mockImplementation(() => {
       throw new Error("database admission unavailable");
     });
 
-  await vi.advanceTimersByTimeAsync(30 * 60 * 1_000 + 1);
-  await yieldToEventLoop();
+  const firstRetry = observeNextPeriodicMaintenance();
+  await vi.advanceTimersByTimeAsync(30 * 60 * 1_000);
+  await firstRetry(signal);
   expect(writes).toHaveBeenCalledTimes(1);
-  await vi.advanceTimersByTimeAsync(30 * 60 * 1_000 - 2);
+  const nextRetry = observeNextPeriodicMaintenance();
+  await vi.advanceTimersByTimeAsync(30 * 60 * 1_000 - 1);
   expect(writes).toHaveBeenCalledTimes(1);
   await vi.advanceTimersByTimeAsync(1);
-  await yieldToEventLoop();
+  await nextRetry(signal);
   expect(writes).toHaveBeenCalledTimes(2);
 });
 

@@ -1,5 +1,6 @@
 import type { KeyId } from "@earendil-works/pi-tui";
 import type { ImageContent, Model } from "../../../llm/types.js";
+import { registerListener } from "../../../shared/listeners.js";
 import { interactiveAgentTheme as theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { isToolResultError } from "../../tool-result-error.js";
@@ -455,8 +456,7 @@ export class ExtensionRunner {
   }
 
   onError(listener: ExtensionErrorListener): () => void {
-    this.errorListeners.add(listener);
-    return () => this.errorListeners.delete(listener);
+    return registerListener(this.errorListeners, listener);
   }
 
   emitError(error: ExtensionError): void {

@@ -460,9 +460,13 @@ describe("install smoke no-push root image transport", () => {
     expect(text).not.toContain("gh api");
   });
 
-  it.each(["selected", "tooling", "missing"])(
-    "checks selected network source provenance before Docker: %s",
-    (source) => {
+  it.each(
+    ["selected", "tooling", "missing"].flatMap((source) =>
+      ["0", "1"].map((allowOmissions) => ({ source, allowOmissions })),
+    ),
+  )(
+    "checks selected network source provenance before Docker: $source, omissions=$allowOmissions",
+    ({ source, allowOmissions }) => {
       const workspace = tempDirs.make("install-smoke-source-binding-");
       const selected = path.join(workspace, ".release-source");
       const tooling = process.cwd();
@@ -548,7 +552,7 @@ describe("install smoke no-push root image transport", () => {
           ...process.env,
           PATH: `${bin}${path.delimiter}${process.env.PATH}`,
           DOCKER_CALLS: dockerCalls,
-          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
+          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: allowOmissions,
           OPENCLAW_SELECTED_SHA: selectedSha,
           OPENCLAW_TOOLING_SHA: toolingSha,
           OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD: "1",

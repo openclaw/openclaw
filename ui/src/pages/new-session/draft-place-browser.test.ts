@@ -39,9 +39,18 @@ function createBrowser(
     auth: { recoveryScope: "principal-a", role: "operator", scopes: ["operator.read"] },
     features: { methods: ["projects.list"] },
   };
+  const eventListeners = new Set<Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0]>();
   const context = {
     gateway: {
       subscribe: () => () => undefined,
+      subscribeEvents: (
+        listener: Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0],
+      ) => {
+        eventListeners.add(listener);
+        return () => {
+          eventListeners.delete(listener);
+        };
+      },
       connection: { gatewayUrl: "ws://gateway.example" },
       snapshot: {
         phase: "connected",

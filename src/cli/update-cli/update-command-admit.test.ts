@@ -469,6 +469,86 @@ describe("candidate update admission", () => {
     },
   );
 
+  it.each(["valid", "repairable"])(
+    "refuses retired config that a selected older plugin considers %s",
+    async (shape) => {
+      const pluginDir = path.join(home, "older-whatsapp");
+      fs.mkdirSync(pluginDir);
+      fs.writeFileSync(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({
+          name: "@openclaw/whatsapp",
+          version: "2026.9.7",
+          openclaw: { extensions: ["./index.js"] },
+        }),
+      );
+      fs.writeFileSync(
+        path.join(pluginDir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: "whatsapp",
+          channels: ["whatsapp"],
+          configSchema: { type: "object", additionalProperties: false },
+          channelConfigs: { whatsapp: { schema: { type: "object" } } },
+          doctorContract: { configRepair: true },
+        }),
+      );
+      fs.writeFileSync(
+        path.join(pluginDir, "index.js"),
+        "throw new Error('admission must not activate the plugin');\n",
+      );
+      fs.writeFileSync(
+        path.join(pluginDir, "doctor-contract-api.cjs"),
+        `const { stripRetiredChannelKeys } = require("openclaw/plugin-sdk/runtime-doctor-migrations");
+module.exports = {
+  legacyConfigRules: ${JSON.stringify(
+    shape === "repairable"
+      ? [{ path: ["channels", "whatsapp", "exposeErrorText"], message: "Retired ignored setting" }]
+      : [],
+  )},
+  normalizeCompatibilityConfig: ({ cfg }) => {
+    const changes = [];
+    const result = stripRetiredChannelKeys({
+      cfg, channelId: "whatsapp", keys: new Set(["exposeErrorText"]),
+      scope: "root-and-accounts", onRemove: () => changes.push("Removed ignored setting"),
+    });
+    return { config: result.config, changes };
+  },
+};\n`,
+      );
+      writeConfig({
+        plugins: { load: { paths: [pluginDir] }, allow: ["whatsapp"] },
+        channels: {
+          whatsapp: { exposeErrorText: false, accounts: { default: { exposeErrorText: true } } },
+        },
+      });
+      fs.writeFileSync(`${configPath}.bak`, "retained backup bytes\n");
+      const before = snapshotFiles();
+
+      await runCli(["node", "openclaw", "update", "admit", "--context", contextPath]);
+
+      expect(process.exitCode).toBe(3);
+      expect(readVerdict()).toMatchObject({
+        verdict: "refuse",
+        reasons: [
+          {
+            code: "invalid-config",
+            message: expect.stringContaining("channels.whatsapp.exposeErrorText"),
+            nextAction: expect.stringContaining("Install OpenClaw 2026.9.5"),
+          },
+        ],
+        facts: {
+          checks: expect.arrayContaining([
+            { name: "config", status: "refuse", detail: expect.any(String) },
+          ]),
+        },
+      });
+      expect(stdout).toContain("channels.whatsapp.accounts.default.exposeErrorText");
+      expect(stderr).toBe("");
+      expect(snapshotFiles()).toEqual(before);
+      expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(false);
+    },
+  );
+
   it("emits a parseable refusal when Doctor-projected database targets are incompatible", async () => {
     vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
     writeConfig({
