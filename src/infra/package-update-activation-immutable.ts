@@ -74,8 +74,16 @@ function readRecord(db: DatabaseSync, root: string, rootIdentity: string): Immut
     queries(db)
       .selectFrom("immutable_installation")
       .selectAll()
-      .where(sql<boolean>`length(CAST(descriptor_json AS BLOB)) <= ${MAX_RECORD_BYTES}`)
-      .where(sql<boolean>`length(CAST(prepared_json AS BLOB)) <= ${MAX_RECORD_BYTES}`)
+      .where(
+        (eb) => eb.fn<number>("length", [eb.cast("descriptor_json", "blob")]),
+        "<=",
+        MAX_RECORD_BYTES,
+      )
+      .where(
+        (eb) => eb.fn<number>("length", [eb.cast("prepared_json", "blob")]),
+        "<=",
+        MAX_RECORD_BYTES,
+      )
       .limit(2),
   ).rows;
   const row = rows[0];
