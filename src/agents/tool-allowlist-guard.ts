@@ -15,11 +15,18 @@ type ExplicitToolAllowlistSource = {
   label: string;
   entries: string[];
   enforceWhenToolsDisabled?: boolean;
+  /** The runtime supplied this list as a default; no operator authored it. */
+  runtimeSupplied?: boolean;
 };
 
 /** Normalize explicit allowlist sources, dropping empty source entries. */
 export function collectExplicitToolAllowlistSources(
-  sources: Array<{ label: string; allow?: string[]; enforceWhenToolsDisabled?: boolean }>,
+  sources: Array<{
+    label: string;
+    allow?: string[];
+    enforceWhenToolsDisabled?: boolean;
+    runtimeSupplied?: boolean;
+  }>,
 ): ExplicitToolAllowlistSource[] {
   return sources.flatMap((source) => {
     const entries = normalizeStringEntries(source.allow);
@@ -31,6 +38,7 @@ export function collectExplicitToolAllowlistSources(
         label: source.label,
         entries,
         ...(source.enforceWhenToolsDisabled === true ? { enforceWhenToolsDisabled: true } : {}),
+        ...(source.runtimeSupplied === true ? { runtimeSupplied: true } : {}),
       },
     ];
   });
@@ -43,6 +51,8 @@ export function buildEmptyExplicitToolAllowlistError(params: {
   toolsEnabled: boolean;
   disableTools?: boolean;
   toolsAllowExplicitlyEmpty?: boolean;
+  /** Server-stamped scheduled authority that capped this run, when present. */
+  scheduledToolPolicyMode?: "trusted" | "account";
   skillWorkshop?: SkillWorkshopToolConstructionContext;
 }): Error | null {
   const toolsIntentionallyDisabled =
@@ -74,6 +84,19 @@ export function buildEmptyExplicitToolAllowlistError(params: {
       : params.toolsEnabled
         ? "no registered tools matched"
         : "the selected model does not support tools";
+  // Every enforced source is a runtime-supplied default (for example a cron job
+  // whose `toolsAllowIsDefault` payload copied its creator turn's surface). The
+  // operator never wrote this list, so pointing them at "the allowlist" or a
+  // missing plugin sends them after a cause that is not theirs.
+  if (sources.every((source) => source.runtimeSupplied === true)) {
+    const scheduledClause =
+      params.scheduledToolPolicyMode === "account"
+        ? ' and a scheduled "account" tool policy capped this run to that session\'s authority'
+        : "";
+    return new Error(
+      `No callable tools remain after resolving explicit tool allowlist (${requested}); ${reason}. This allowlist was captured automatically from the session that created it, not written by an operator${scheduledClause}. Recreate the run from a session that can call the tools it needs, or set an explicit tool allowlist.`,
+    );
+  }
   return new Error(
     `No callable tools remain after resolving explicit tool allowlist (${requested}); ${reason}. Fix the allowlist or enable the plugin that registers the requested tool.`,
   );
