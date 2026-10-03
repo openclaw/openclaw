@@ -54,7 +54,6 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import { projectAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import { extractFirstTextBlock } from "../../shared/chat-message-content.js";
-import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withTempDir } from "../../test-utils/temp-dir.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -81,6 +80,7 @@ import { readChatSendDedupeResponse } from "./chat-send-pre-admission.js";
 import {
   ChatDirectiveDedupe,
   createChatDirectiveReplyBackend,
+  createGlobalChatDirectiveConfig,
   createChatDirectiveSuiteResources,
   createChatDirectiveUserMessageReader,
   expectManagedAudioBlock,
@@ -849,10 +849,7 @@ function useChatTestModel(model: "vision-model" | "text-only", configured = fals
 }
 
 async function createGlobalTranscriptFixture(prefix: string, agentId = "main") {
-  mockState.config = createCanonicalAgentConfigFixture({
-    agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-    session: { scope: "global" },
-  }).config;
+  mockState.config = createGlobalChatDirectiveConfig();
   return await createTranscriptFixture(prefix, { agentId, sessionKey: "global" });
 }
 

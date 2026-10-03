@@ -95,6 +95,20 @@ type ChatDirectiveSessionState = {
   transcriptPath: string;
 };
 
+export function createGlobalChatDirectiveConfig(): OpenClawConfig {
+  return {
+    agents: {
+      ownership: "explicit",
+      defaults: {
+        systemAgent: { agentId: "main" },
+        sessionStore: { agentId: "main" },
+      },
+      entries: { main: {}, work: {} },
+    },
+    session: { scope: "global" },
+  };
+}
+
 export function readChatDirectiveConfig(
   state: Pick<ChatDirectiveSessionState, "config" | "mainSessionKey">,
 ): OpenClawConfig {
