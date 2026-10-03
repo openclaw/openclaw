@@ -25,6 +25,18 @@ export function normalizeAskUserParams(value: unknown): NormalizedAskUserParams 
   if (!Value.Check(AskUserToolSchema, value)) {
     throw new ToolInputError("ask_user arguments do not match the model-facing question contract");
   }
+  const threadId = value.threadId?.trim();
+  if (value.threadId !== undefined && !threadId) {
+    throw new ToolInputError("threadId must be a non-empty string");
+  }
+  // Typed replies in another thread never reach this session, so a moved prompt
+  // must be answerable with its buttons alone.
+  const buttonsOnly = threadId !== undefined;
+  if (buttonsOnly && (value.questions.length > 1 || value.questions[0]?.multiSelect === true)) {
+    throw new ToolInputError(
+      "threadId supports only one single-select question; ask multi-question or multi-select prompts without threadId",
+    );
+  }
   const questions: QuestionRequestQuestion[] = value.questions.map((question) => ({
     questionId: question.id.trim(),
     header: truncateUtf16Safe(question.header.trim(), 12),
@@ -34,7 +46,7 @@ export function normalizeAskUserParams(value: unknown): NormalizedAskUserParams 
       ...(option.description?.trim() ? { description: option.description.trim() } : {}),
     })),
     ...(question.multiSelect === true ? { multiSelect: true } : {}),
-    isOther: true,
+    isOther: !buttonsOnly,
   }));
 
   if (!questions.every((question) => Value.Check(QuestionRequestQuestionSchema, question))) {
@@ -55,10 +67,6 @@ export function normalizeAskUserParams(value: unknown): NormalizedAskUserParams 
     throw new ToolInputError(semanticError);
   }
 
-  const threadId = value.threadId?.trim();
-  if (value.threadId !== undefined && !threadId) {
-    throw new ToolInputError("threadId must be a non-empty string");
-  }
   return {
     questions,
     timeoutSeconds: normalizeQuestionTimeoutSeconds(value.timeoutSeconds),
@@ -127,7 +135,7 @@ export const AskUserToolSchema = Type.Object(
       Type.String({
         minLength: 1,
         description:
-          "Thread to post the question in (Slack: the thread's root message ts). Default: the thread of the message that started this turn, or top level when that message was not in a thread. Set it when the conversation you are asking about is in a different thread.",
+          "Thread to post the question in (Slack: the thread's root message ts). Default: the thread of the message that started this turn, or top level when that message was not in a thread. Set it when the conversation you are asking about is in a different thread. Typed replies in that thread are not seen, so the question is answered with its buttons only: one question, no multiSelect, no custom answer.",
       }),
     ),
   },

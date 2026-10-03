@@ -130,7 +130,11 @@ export async function sendQuestionToolPrompt(params: {
       questions: questions.map(({ questionId: id, ...question }) =>
         Object.assign(question, { id }),
       ),
-      options: { intro: "Question for you:" },
+      options: {
+        intro: "Question for you:",
+        // Typed replies in a moved thread never reach the asking session.
+        ...(params.threadId ? { replyGuidance: "Answer with the buttons below." } : {}),
+      },
     }),
   );
 }

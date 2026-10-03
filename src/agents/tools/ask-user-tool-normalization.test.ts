@@ -38,6 +38,16 @@ describe("ask_user normalization", () => {
     expect(normalized.questions[0]).not.toHaveProperty("isSecret");
   });
 
+  it("drops the custom answer from a prompt moved to another thread", () => {
+    const normalized = normalizeAskUserParams({ ...validArgs, threadId: " 1700000000.000200 " });
+
+    expect(normalized.threadId).toBe("1700000000.000200");
+    expect(normalized.questions[0]?.isOther).toBe(false);
+    expect(JSON.stringify(AskUserToolSchema)).toContain(
+      "Typed replies in that thread are not seen",
+    );
+  });
+
   it("repeats the structured-choice contract in the model-visible schema", () => {
     const schema = JSON.stringify(AskUserToolSchema);
 
@@ -98,6 +108,22 @@ describe("ask_user normalization", () => {
       "duplicate option label",
     ],
     ["blank threadId", { ...validArgs, threadId: "   " }, "threadId must be a non-empty string"],
+    [
+      "several questions with threadId",
+      {
+        questions: [validArgs.questions[0], { ...validArgs.questions[0], id: "deploy_window" }],
+        threadId: "1700000000.000200",
+      },
+      "threadId supports only one single-select question",
+    ],
+    [
+      "multiSelect with threadId",
+      {
+        questions: [{ ...validArgs.questions[0], multiSelect: true }],
+        threadId: "1700000000.000200",
+      },
+      "threadId supports only one single-select question",
+    ],
   ])("rejects %s", (_name, args, error) => {
     expect(() => normalizeAskUserParams(args)).toThrow(error);
   });

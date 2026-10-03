@@ -112,6 +112,37 @@ describe("createChannelQuestionPromptDelivery", () => {
     );
   });
 
+  it("asks for a button answer when the prompt moves to another thread", async () => {
+    sendDurableMessageBatchCore.mockResolvedValueOnce({ status: "sent", results: [], receipt });
+    const delivery = createChannelQuestionPromptDelivery({ cfg, channel: "slack", to: "C1" });
+
+    await sendQuestionToolPrompt({
+      toolName: "ask_user",
+      questionId: "q1",
+      questions: [
+        {
+          questionId: "deploy_target",
+          header: "Target",
+          question: "Where should this deploy?",
+          options: [{ label: "Staging" }, { label: "Production" }],
+          isOther: false,
+        },
+      ],
+      send: delivery!.send,
+      threadId: "1700000000.000200",
+    });
+
+    const payload = sendDurableMessageBatchCore.mock.lastCall?.[0].payloads[0];
+    const [, guidance, buttons] = payload.presentation.blocks;
+    expect(payload.text).toMatch(/Answer with the buttons below\.$/);
+    expect(payload.text).not.toMatch(/reply/i);
+    expect(guidance.text).toMatch(/Answer with the buttons below\.$/);
+    expect(buttons.buttons.map((button: { label: string }) => button.label)).toEqual([
+      "Staging",
+      "Production",
+    ]);
+  });
+
   it("rejects a hook-suppressed prompt so the question does not become answerable", async () => {
     sendDurableMessageBatchCore.mockResolvedValueOnce({
       status: "suppressed",
