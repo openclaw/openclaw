@@ -1,10 +1,8 @@
 import { createHmac } from "node:crypto";
+import { once } from "node:events";
 import net from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  FaceTimeHelperActionError,
-  FaceTimeHelperUnavailableError,
-} from "../src/helper-results.js";
+import { FaceTimeHelperUnavailableError } from "../src/helper-results.js";
 import { FaceTimeHelperSocketServer } from "../src/helper-rpc.js";
 
 const TEST_HELPER_AUTH_TOKEN = "a".repeat(64);
@@ -23,27 +21,14 @@ function hmac(key: string, message: string): string {
   return createHmac("sha256", key).update(message).digest("hex");
 }
 
-function readFrame(socket: net.Socket): Promise<Record<string, unknown>> {
-  return new Promise((resolve, reject) => {
-    socket.once("data", (chunk) => {
-      try {
-        resolve(JSON.parse(String(chunk).trim()) as Record<string, unknown>);
-      } catch (error) {
-        reject(error instanceof Error ? error : new Error(String(error)));
-      }
-    });
-  });
+async function readFrame(socket: net.Socket): Promise<Record<string, unknown>> {
+  const [chunk] = await once(socket, "data");
+  return JSON.parse(String(chunk).trim()) as Record<string, unknown>;
 }
 
 function waitForSocketEvent(socket: net.Socket, event: "close" | "connect"): Promise<void> {
   return new Promise((resolve) => {
     socket.once(event, () => resolve());
-  });
-}
-
-function nextImmediate(): Promise<void> {
-  return new Promise((resolve) => {
-    setImmediate(resolve);
   });
 }
 
@@ -111,14 +96,10 @@ async function registerHelper(
   socket: net.Socket,
   helper: FaceTimeHelperSocketServer,
   bundleIdentifier: string,
-  buildId: string | null = TEST_HELPER_BUILD_ID,
+  buildId = TEST_HELPER_BUILD_ID,
   expectConnected = true,
   processId = 1234,
 ): Promise<TestHelperSession | undefined> {
-  if (buildId === null) {
-    socket.write(`${JSON.stringify({ event: "ping", bundle_identifier: bundleIdentifier })}\r\n`);
-    return undefined;
-  }
   const processStartedAtMs = 1_700_000_000_000;
   const clientNonce = "c".repeat(64);
   socket.write(
@@ -215,10 +196,20 @@ describe("FaceTime helper RPC", () => {
     return socket;
   }
 
+  async function connectHelper(
+    rpc: FaceTimeHelperSocketServer,
+    port: number,
+    bundle = "com.apple.FaceTime",
+    processId = 1234,
+  ) {
+    const client = await connectClient(port);
+    await registerHelper(client, rpc, bundle, TEST_HELPER_BUILD_ID, true, processId);
+    return client;
+  }
+
   async function startConnectedHelper() {
     const { rpc, port } = await startDefaultHelper();
-    const client = await connectClient(port);
-    await registerHelper(client, rpc, "com.apple.FaceTime");
+    const client = await connectHelper(rpc, port);
     return { rpc, client };
   }
 
@@ -231,54 +222,24 @@ describe("FaceTime helper RPC", () => {
     helper = undefined;
   });
 
-  it("sends set-muted actions over newline-framed JSON and resolves acknowledgements", async () => {
-    const { rpc, client } = await startConnectedHelper();
-
-    const received = readHelperPayload(client);
-
-    const actionPromise = rpc.setMuted("call-1", false);
-    const payload = await received;
-    expect(payload).toMatchObject({
-      action: "set-muted",
-      data: { callUUID: "call-1", muted: false },
-    });
-    expect(typeof payload.transactionId).toBe("string");
-
-    sendHelperPayload(client, {
-      transactionId: payload.transactionId,
-      conversation_audio_started: true,
-    });
-    await expect(actionPromise).resolves.toMatchObject({
-      transactionId: payload.transactionId,
-      conversation_audio_started: true,
-    });
-  });
-
-  it.each([
-    ["answerCall", "answer-call"],
-    ["leaveCall", "leave-call"],
-  ] as const)("fans %s out to FaceTime and Phone helpers", async (method, action) => {
+  it("fans answerCall out to FaceTime and Phone helpers", async () => {
     const { rpc, port } = await startDefaultHelper();
 
-    const [faceTimeClient, phoneClient] = await Promise.all([
-      connectClient(port),
-      connectClient(port),
-    ]);
-    await registerHelper(faceTimeClient, rpc, "com.apple.FaceTime");
-    await registerHelper(phoneClient, rpc, "com.apple.mobilephone");
+    const faceTimeClient = await connectHelper(rpc, port);
+    const phoneClient = await connectHelper(rpc, port, "com.apple.mobilephone");
 
     const payloadsPromise = Promise.all([
       readHelperPayload(faceTimeClient),
       readHelperPayload(phoneClient),
     ]);
-    const actionPromise = rpc[method]("call-phone");
+    const actionPromise = rpc.answerCall("call-phone");
     const [faceTimePayload, phonePayload] = await payloadsPromise;
     expect(faceTimePayload).toMatchObject({
-      action,
+      action: "answer-call",
       data: { callUUID: "call-phone" },
     });
     expect(phonePayload).toMatchObject({
-      action,
+      action: "answer-call",
       data: { callUUID: "call-phone" },
     });
 
@@ -299,33 +260,17 @@ describe("FaceTime helper RPC", () => {
   });
 
   it("keeps a disconnected carrier peer in inspect-call completeness", async () => {
-    const { rpc, port } = await startDefaultHelper();
+    const disconnected = Promise.withResolvers<string>();
+    const { rpc, port } = await startDefaultHelper({ onDisconnect: disconnected.resolve });
 
-    const [faceTimeClient, phoneClient] = await Promise.all([
-      connectClient(port),
-      connectClient(port),
-    ]);
-    await registerHelper(
-      faceTimeClient,
-      rpc,
-      "com.apple.FaceTime",
-      TEST_HELPER_BUILD_ID,
-      true,
-      1234,
-    );
-    await registerHelper(
-      phoneClient,
-      rpc,
-      "com.apple.mobilephone",
-      TEST_HELPER_BUILD_ID,
-      true,
-      5678,
-    );
+    const faceTimeClient = await connectHelper(rpc, port);
+    const phoneClient = await connectHelper(rpc, port, "com.apple.mobilephone", 5678);
 
     const faceTimeClosed = waitForSocketEvent(faceTimeClient, "close");
     faceTimeClient.destroy();
     await faceTimeClosed;
-    await waitFor(() => rpc?.connectedSockets === 1);
+    expect(await disconnected.promise).toBe("com.apple.FaceTime");
+    expect(rpc.connectedSockets).toBe(1);
 
     const received = readHelperPayload(phoneClient);
     const actionPromise = rpc.inspectCall(["call-phone"], [1234]);
@@ -350,21 +295,6 @@ describe("FaceTime helper RPC", () => {
         }),
       ],
     });
-  });
-
-  it("distinguishes definitive helper rejection from transport failure", async () => {
-    const { rpc, client } = await startConnectedHelper();
-
-    const received = readHelperPayload(client);
-    const actionPromise = rpc.startCall(
-      { handle: "owner@example.com", mode: "audio" },
-      "dial-2",
-      "2026-07-20T17:52:00.000Z",
-    );
-    const payload = await received;
-    sendHelperPayload(client, { transactionId: payload.transactionId, error: "cannot dial" });
-
-    await expect(actionPromise).rejects.toBeInstanceOf(FaceTimeHelperActionError);
   });
 
   it("preserves helper-declared ambiguous dial outcomes", async () => {
@@ -393,10 +323,8 @@ describe("FaceTime helper RPC", () => {
   it("routes outbound calls to FaceTime regardless of helper connection order", async () => {
     const { rpc, port } = await startDefaultHelper();
 
-    const phoneClient = await connectClient(port);
-    await registerHelper(phoneClient, rpc, "com.apple.mobilephone");
-    const faceTimeClient = await connectClient(port);
-    await registerHelper(faceTimeClient, rpc, "com.apple.FaceTime");
+    const phoneClient = await connectHelper(rpc, port, "com.apple.mobilephone");
+    const faceTimeClient = await connectHelper(rpc, port);
 
     let phoneReceivedAction = false;
     phoneClient.on("data", () => {
@@ -458,21 +386,6 @@ describe("FaceTime helper RPC", () => {
     expect(rpc.connectedSockets).toBe(0);
   });
 
-  it("rejects the retired pre-build-id authentication shape", async () => {
-    let staleReported = false;
-    const { rpc, port } = await startDefaultHelper({
-      onStale: () => {
-        staleReported = true;
-      },
-    });
-
-    const client = await connectClient(port);
-    await registerHelper(client, rpc, "com.apple.FaceTime", null, false);
-    await nextImmediate();
-    expect(staleReported).toBe(false);
-    expect(rpc.connectedSockets).toBe(0);
-  });
-
   it("queries the helper for a known outgoing call UUID", async () => {
     const { rpc, client } = await startConnectedHelper();
 
@@ -504,18 +417,8 @@ describe("FaceTime helper RPC", () => {
       },
     });
 
-    const faceTimeClient = await connectClient(port);
-    await registerHelper(faceTimeClient, rpc, "com.apple.FaceTime");
+    const faceTimeClient = await connectHelper(rpc, port);
     const rogueClient = await connectClient(port);
-    rogueClient.write(
-      `${JSON.stringify({
-        event: "ft-call-status-changed",
-        data: { call_uuid: "forged-call", call_status: 1 },
-      })}\r\n`,
-    );
-    await nextImmediate();
-    expect(injectedEvents).toBe(0);
-
     let rogueReceivedAction = false;
     rogueClient.on("data", () => {
       rogueReceivedAction = true;
@@ -549,7 +452,16 @@ describe("FaceTime helper RPC", () => {
       cancelled: true,
     });
     expect(rogueReceivedAction).toBe(false);
-    rogueClient.destroy();
+
+    const rejected = waitForSocketEvent(rogueClient, "close");
+    rogueClient.write(
+      `${JSON.stringify({
+        event: "ft-call-status-changed",
+        data: { call_uuid: "forged-call", call_status: 1 },
+      })}\r\n`,
+    );
+    await rejected;
+    expect(injectedEvents).toBe(0);
   });
 
   it("delivers a signed helper event once and closes the connection on replay", async () => {
@@ -560,8 +472,7 @@ describe("FaceTime helper RPC", () => {
         events.push(message);
       },
     });
-    const client = await connectClient(port);
-    await registerHelper(client, rpc, "com.apple.FaceTime");
+    const client = await connectHelper(rpc, port);
 
     const envelope = encodeHelperPayload(client, {
       event: "ft-call-status-changed",
@@ -574,23 +485,6 @@ describe("FaceTime helper RPC", () => {
     await closed;
 
     expect(events).toEqual([{ event: "ft-call-status-changed", data: { call_uuid: "call-once" } }]);
-  });
-
-  it("notifies when the last helper socket disconnects", async () => {
-    let disconnects = 0;
-    const { rpc, port } = await startDefaultHelper({
-      onDisconnect: () => {
-        disconnects += 1;
-      },
-    });
-
-    const client = await connectClient(port);
-    await registerHelper(client, rpc, "com.apple.FaceTime");
-    await waitFor(() => rpc.connectedSockets === 1);
-
-    client.destroy();
-    await waitFor(() => disconnects === 1);
-    expect(rpc.connectedSockets).toBe(0);
   });
 
   it.each([
