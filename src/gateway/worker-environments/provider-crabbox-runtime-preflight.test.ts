@@ -138,7 +138,6 @@ describe("Crabbox runtime preflight cleanup", () => {
       expect(support.testState.store.get(failed.environmentId)).toEqual(failed);
       expect(runCommand.mock.calls.map(([argv]) => argv.slice(1))).toEqual([
         ["--version"],
-        ["--version"],
         ["providers", "--json"],
         ...(failure === "setup-env" ? [] : [["config", "show", "--json"]]),
       ]);
@@ -386,7 +385,7 @@ describe("Crabbox runtime preflight cleanup", () => {
       name: "warm image without effective class",
       settings: { ...CLASSLESS_PROFILE, warmImage: true },
       message: "warmImage requires a configured class or a placement machine class",
-      commands: [["--version"], ["--version"], ["providers", "--json"]],
+      commands: [["--version"], ["providers", "--json"]],
     },
   ])(
     "keeps $name permanent even with missing runtime input",
