@@ -169,10 +169,12 @@ unavailable plugin keeps its saved position for when it returns. **Home** stays
 at the top in chip mode. Plugin links shown by default can be reordered but not
 dragged out of Pages to unpin them; optional plugin destinations can still be unpinned.
 
-To reorder without dragging, focus or hover a page, pinned session, or stored
-session-section header and open its **Reorder** grip menu. Choose **Move up** or
-**Move down**; the same menu is available on touch screens. Keyboard focus stays
-with the moved item, and the order uses the same saved preferences or Gateway
+To reorder without dragging, open the **Reorder** grip menu and choose **Move up**
+or **Move down**. On pages and pinned sessions, the grip is for keyboard and
+screen-reader users: it appears only while the row has keyboard focus (Tab to the
+row), and hovering with a mouse or tapping does not show it. Stored session-section
+headers show their grip on hover or focus, and on touch screens. Keyboard focus
+stays with the moved item, and the order uses the same saved preferences or Gateway
 group order as dragging. Home and sections derived from people, projects, or
 agents keep their existing fixed order.
 

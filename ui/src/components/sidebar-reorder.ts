@@ -28,7 +28,7 @@ export function renderSidebarReorderMenu(params: {
   const label = t("chat.sidebar.reorderItem", { item: params.label });
   return html`
     <wa-dropdown
-      class="sidebar-reorder-menu"
+      class="sidebar-reorder-menu sidebar-reorder-menu--${params.kind}"
       placement="bottom-end"
       aria-label=${label}
       @wa-show=${(event: Event) => {

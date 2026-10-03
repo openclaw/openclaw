@@ -79,16 +79,15 @@ suite.define(() => {
         page.locator(".sidebar-zone-entry:has(.nav-item)").evaluateAll((rows) =>
           rows.map((row) => {
             const link = row.querySelector(".nav-item")!;
+            // The keyboard-only reorder menu takes no row space for pointer users.
             const menu = row.querySelector(".sidebar-reorder-trigger")!;
             const rowBox = row.getBoundingClientRect();
             const linkBox = link.getBoundingClientRect();
-            const menuBox = menu.getBoundingClientRect();
             return {
               label: link.textContent?.trim(),
               width: linkBox.width,
-              available: rowBox.width - menuBox.width,
-              right: linkBox.right,
-              menuLeft: menuBox.left,
+              available: rowBox.width,
+              menuWidth: menu.getBoundingClientRect().width,
             };
           }),
         );
@@ -124,7 +123,7 @@ suite.define(() => {
       expect(finalWidths.map((row) => row.label)).toEqual(initialWidths.map((row) => row.label));
       for (const row of finalWidths) {
         expect.soft(row.width, row.label).toBeCloseTo(row.available, 1);
-        expect.soft(row.right, row.label).toBeLessThanOrEqual(row.menuLeft + 0.1);
+        expect.soft(row.menuWidth, row.label).toBeLessThanOrEqual(1);
       }
       await page.locator(".sidebar-brand__new-thread").click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");

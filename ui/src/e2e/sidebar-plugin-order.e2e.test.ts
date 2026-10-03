@@ -92,8 +92,8 @@ suite.define(() => {
       await expect
         .poll(() => reorderWorkboard.evaluate((element) => document.activeElement === element))
         .toBe(true);
-      await reorderWorkboard.click();
-      await page.getByRole("menuitem", { name: "Move down", exact: true }).click();
+      await page.keyboard.press("Enter");
+      await page.getByRole("menuitem", { name: "Move down", exact: true }).press("Enter");
       await expect.poll(keys).toEqual(expected);
 
       const reorderBeta = sidebar.getByRole("button", { name: "Reorder Beta", exact: true });
@@ -118,6 +118,92 @@ suite.define(() => {
       await expect.poll(keys).toEqual(expected);
       await expect.poll(sectionOrder).toEqual(["category:Beta", "category:Alpha"]);
       await captureUiProof(page, "plugin-drag-reloaded.png");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("shows page reorder grips only for keyboard focus", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      sessionGroups: ["Alpha", "Beta"],
+      sessions: [
+        { key: "agent:main:main", label: "Main" },
+        { key: "agent:main:alpha", label: "Alpha task", category: "Alpha" },
+        { key: "agent:main:beta", label: "Beta task", category: "Beta" },
+      ],
+    });
+    try {
+      await page.goto(suite.server.baseUrl + "chat");
+      const sidebar = page.locator("openclaw-app-sidebar:visible");
+      const pageRows = sidebar.locator(".sidebar-zone-entry:has(> .nav-item)");
+      const agentsLink = sidebar.getByRole("link", { name: "Agents", exact: true });
+      const agentsRow = pageRows.filter({
+        has: page.getByRole("link", { name: "Agents", exact: true }),
+      });
+      await agentsRow.waitFor();
+      const grip = (row: typeof agentsRow) =>
+        row.evaluate((element) => {
+          const link = element.querySelector(".nav-item")!.getBoundingClientRect();
+          const menu = element.querySelector(".sidebar-reorder-trigger")!.getBoundingClientRect();
+          return {
+            linkWidth: link.width,
+            menuWidth: menu.width,
+            rowWidth: element.getBoundingClientRect().width,
+          };
+        });
+
+      await agentsLink.hover();
+      const hovered = await grip(agentsRow);
+      expect(hovered.menuWidth).toBeLessThanOrEqual(1);
+      expect(hovered.linkWidth).toBeCloseTo(hovered.rowWidth, 1);
+      // Screen readers still reach the menu while it is visually hidden.
+      await expect
+        .poll(() => agentsRow.getByRole("button", { name: "Reorder Agents", exact: true }).count())
+        .toBe(1);
+      await captureUiProof(page, "page-reorder-pointer-hover.png");
+
+      const keys = () =>
+        sidebar
+          .locator("[data-sidebar-entry]")
+          .evaluateAll((rows) => rows.map((entry) => entry.getAttribute("data-sidebar-entry")));
+      const before = await keys();
+      await agentsLink.focus();
+      await page.keyboard.press("Shift+Tab");
+      await page.keyboard.press("Tab");
+      await expect
+        .poll(() => agentsLink.evaluate((link) => link.matches(":focus-visible")))
+        .toBe(true);
+      const focused = await grip(agentsRow);
+      expect(focused.menuWidth).toBeGreaterThanOrEqual(24);
+      expect(focused.linkWidth).toBeCloseTo(hovered.linkWidth, 1);
+      await captureUiProof(page, "page-reorder-keyboard-focus.png");
+
+      await page.keyboard.press("Tab");
+      await page.keyboard.press("Enter");
+      await page.getByRole("menuitem", { name: "Move down", exact: true }).press("Enter");
+      const agentsKey = await agentsRow.getAttribute("data-sidebar-entry");
+      const moved = [...before];
+      const index = moved.indexOf(agentsKey);
+      [moved[index], moved[index + 1]] = [moved[index + 1]!, moved[index]!];
+      await expect.poll(keys).toEqual(moved);
+
+      const sectionHead = sidebar.locator(
+        '[data-session-section="category:Alpha"] .sidebar-recent-sessions__head',
+      );
+      await sectionHead.hover();
+      await expect
+        .poll(() =>
+          sectionHead
+            .locator(".sidebar-reorder-trigger")
+            .evaluate((trigger) => getComputedStyle(trigger).opacity),
+        )
+        .toBe("1");
     } finally {
       await context.close();
     }

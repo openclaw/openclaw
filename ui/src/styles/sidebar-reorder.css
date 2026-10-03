@@ -1,4 +1,5 @@
 .sidebar-zone-entry {
+  position: relative;
   display: flex;
   align-items: center;
 }
@@ -36,12 +37,41 @@
   height: 16px;
 }
 
-@media (hover: hover) and (pointer: fine) {
+/* Pointer and touch users reorder pages by dragging. The menu is the keyboard and
+   screen-reader path: its trigger stays in the accessibility tree, takes no row
+   space, and only appears while the row has keyboard focus (same recipe as
+   .sr-only). wa-dropdown is display: contents, so the trigger carries the box. */
+.sidebar-reorder-menu--entry .sidebar-reorder-trigger {
+  position: absolute;
+  inset-block-start: calc(50% - 12px);
+  inset-inline-end: 4px;
+}
+
+.sidebar-zone-entry:not(:has(:focus-visible))
+  > .sidebar-reorder-menu--entry:not([open])
   .sidebar-reorder-trigger {
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Pinned sessions keep their row actions at the trailing edge; the grip takes its
+   own slot there instead of covering them. */
+.sidebar-zone-entry:has(.sidebar-recent-session)
+  .sidebar-reorder-menu--entry
+  .sidebar-reorder-trigger {
+  position: static;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .sidebar-reorder-menu--section .sidebar-reorder-trigger {
     opacity: 0;
   }
 
-  .sidebar-zone-entry:where(:hover, :focus-within) .sidebar-reorder-trigger,
   .sidebar-recent-sessions__head:where(:hover, :focus-within) .sidebar-reorder-trigger,
   .sidebar-reorder-menu[open] .sidebar-reorder-trigger {
     opacity: 1;
