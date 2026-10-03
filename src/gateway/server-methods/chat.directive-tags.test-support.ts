@@ -5,7 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { expect, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
   loadExactSessionEntryCandidates,
@@ -29,7 +29,59 @@ import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-stat
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import type { DedupeEntry } from "../server-shared.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
+import { readChatSendDedupeResponse } from "./chat-send-pre-admission.js";
+
+export function expectManagedAudioBlock(
+  block: Record<string, unknown> | undefined,
+  fileName: string,
+  isVoiceNote?: boolean,
+) {
+  expect(block).toEqual(
+    expect.objectContaining({
+      type: "audio",
+      artifactId: expect.stringMatching(/^artifact_managed_media_/u),
+      fileName,
+      mimeType: "audio/mpeg",
+      ...(isVoiceNote === undefined ? {} : { isVoiceNote }),
+    }),
+  );
+}
+
+export class ChatDirectiveDedupe extends Map<string, DedupeEntry> {
+  private readonly pending = new Map<string, ReturnType<typeof createDeferred<void>>>();
+
+  constructor(private readonly signal: AbortSignal) {
+    super();
+  }
+
+  override set(key: string, entry: DedupeEntry): this {
+    super.set(key, entry);
+    if (key.startsWith("chat:")) {
+      const runId = key.slice("chat:".length);
+      if (readChatSendDedupeResponse(this, runId)) {
+        this.pending.get(runId)?.resolve();
+      }
+    }
+    return this;
+  }
+
+  async waitForResponse(runId: string): Promise<void> {
+    if (!readChatSendDedupeResponse(this, runId)) {
+      const publication = this.pending.get(runId) ?? createDeferred();
+      this.pending.set(runId, publication);
+      try {
+        await withinTest(publication.promise, this.signal);
+      } finally {
+        this.pending.delete(runId);
+      }
+    }
+    this.signal.throwIfAborted();
+    // Admission retains request identity before a response-bearing receipt exists.
+    expect(readChatSendDedupeResponse(this, runId)).toBeDefined();
+  }
+}
 
 type ChatDirectiveSessionState = {
   config: Record<string, unknown>;

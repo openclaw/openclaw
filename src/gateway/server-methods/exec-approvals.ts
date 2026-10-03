@@ -207,16 +207,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       if (!requireApprovalsBaseHash(params, snapshot, respond)) {
         return;
       }
-      const incoming = (params as { file?: unknown }).file;
-      if (!incoming || typeof incoming !== "object") {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "exec approvals file is required"),
-        );
-        return;
-      }
-      const normalized = normalizeExecApprovals(incoming as ExecApprovalsFile);
+      const normalized = normalizeExecApprovals(params.file as ExecApprovalsFile);
       const nextSnapshot = await updateExecApprovals({
         baseHash: snapshot.hash,
         update: (current) => mergeExecApprovalsSocketDefaults({ normalized, current }),

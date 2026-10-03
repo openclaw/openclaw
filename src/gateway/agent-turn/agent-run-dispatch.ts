@@ -284,6 +284,8 @@ export function dispatchAgentRunFromGateway(params: {
           ? { sourceReplyDelivered: true as const }
           : {}),
       });
+      const inputProcessingCompleted =
+        recordedInputCompletion?.reason === "completed" && responseStatus === "ok";
       const payload = {
         runId: params.runId,
         status: responseStatus,
@@ -303,17 +305,13 @@ export function dispatchAgentRunFromGateway(params: {
           ? { providerStarted: terminalOutcome.providerStarted }
           : {}),
         result,
+        ...(inputProcessingCompleted ? { inputProcessingCompleted: true } : {}),
       };
-      const inputProcessingCompleted =
-        recordedInputCompletion?.reason === "completed" && responseStatus === "ok";
       const persistTerminalDedupe = () => {
         publishReplay({
           ts: Date.now(),
           ok: true,
-          payload: {
-            ...payload,
-            ...(inputProcessingCompleted ? { inputProcessingCompleted: true } : {}),
-          },
+          payload: { ...payload },
         });
       };
       const settled = await settle({ terminalOutcome, onRecovered: persistTerminalDedupe });
@@ -340,14 +338,7 @@ export function dispatchAgentRunFromGateway(params: {
       cleanupRunOwner();
       // Send a second res frame (same id) so TS clients with expectFinal can wait.
       // Swift clients will typically treat the first res as the result and ignore this.
-      params.io.emitFinal(
-        [
-          true,
-          { ...payload, ...(inputProcessingCompleted ? { inputProcessingCompleted: true } : {}) },
-          undefined,
-        ],
-        { runId: params.runId },
-      );
+      params.io.emitFinal([true, { ...payload }, undefined], { runId: params.runId });
       return { terminalOutcome, settled };
     })
     .catch(async (cause: unknown) => {

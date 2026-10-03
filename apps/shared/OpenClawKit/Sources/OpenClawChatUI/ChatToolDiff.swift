@@ -653,31 +653,17 @@ enum ChatToolDiff {
     }
 
     private static func stat(for lines: [ChatToolDiffLine]) -> ChatToolDiffStat {
-        lines.reduce(ChatToolDiffStat(added: 0, removed: 0)) { stat, line in
-            switch line.kind {
-            case .add:
-                ChatToolDiffStat(added: stat.added + 1, removed: stat.removed)
-            case .del:
-                ChatToolDiffStat(added: stat.added, removed: stat.removed + 1)
-            case .ctx, .file, .skip:
-                stat
-            }
-        }
+        ChatToolDiffStat(
+            added: lines.count { $0.kind == .add },
+            removed: lines.count { $0.kind == .del })
     }
 
     private static func firstNonBlankString(
         in record: [String: AnyCodable]?,
         keys: [String]) -> String?
     {
-        guard let record else { return nil }
-        for key in keys {
-            if let value = record[key]?.stringValue,
-               !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            {
-                return value
-            }
-        }
-        return nil
+        keys.lazy.compactMap { record?[$0]?.stringValue }
+            .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 
     private static func string(in record: [String: AnyCodable]?, keys: [String]) -> String? {

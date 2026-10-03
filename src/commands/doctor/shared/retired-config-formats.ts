@@ -129,6 +129,9 @@ export function findRetiredConfigUpgradeRequirement(
       }
     }
   });
+  visitChannelEntries(config, "nextcloud-talk", (scope, configPath) => {
+    checkKeys(scope, configPath, ["allowPrivateNetwork"]);
+  });
   visitChannelEntries(config, "matrix", (scope, configPath) => {
     checkKeys(scope, configPath, ["allowPrivateNetwork"]);
     if (isRecord(scope.dm) && scope.dm.policy === "trusted") {

@@ -16,7 +16,6 @@ import type {
   MemoryPromptSectionBuilder,
   MemoryPromptSectionParams,
   MemoryPromptSectionPreparer,
-  MemoryPromptSupplementRegistration,
   PreparedMemoryPromptSection,
 } from "./registry-contribution-types.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -349,9 +348,6 @@ export function buildMemoryPromptSection(
   return [...synchronous.primary, ...synchronous.supplements.flatMap((entry) => entry.lines)];
 }
 
-export function listMemoryPromptSupplements(): MemoryPromptSupplementRegistration[] {
-  return [...requireActivePluginRegistry().memoryPromptSupplements];
-}
 export function listMemoryPromptPreparations(): MemoryPromptPreparationRegistration[] {
   return [...requireActivePluginRegistry().memoryPromptPreparations];
 }

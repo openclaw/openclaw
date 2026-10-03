@@ -65,18 +65,6 @@ function normalizeGoogleAuthHeaders<T extends { headers?: unknown }>(
   return value as T & { headers: Headers };
 }
 
-function installGoogleAuthHeaderCompatibilityInterceptor(
-  transport: GoogleAuthTransport,
-): GoogleAuthTransport {
-  transport.interceptors.request.add({
-    resolved: async (config) => normalizeGoogleAuthHeaders(config),
-  });
-  transport.interceptors.response.add({
-    resolved: async (response) => normalizeGoogleAuthHeaders(response),
-  });
-  return transport;
-}
-
 function hasProxyAgentShape(value: unknown): value is ProxyAgentLike {
   const record = asNullableObjectRecord(value);
   return record !== null && record.proxy instanceof URL;
@@ -171,10 +159,6 @@ function shouldBypassGoogleAuthProxy(url: URL, noProxy: ProxyRule[] = []): boole
     }
   }
   return false;
-}
-
-function readGoogleAuthProxyUrl(value: unknown): string | undefined {
-  return value instanceof URL ? value.toString() : normalizeOptionalString(value);
 }
 
 function readOptionalTrimmedString(
@@ -352,7 +336,9 @@ function resolveGoogleAuthDispatcherPolicy(
   );
   const agent = resolveGoogleAuthAgent(googleAuthInit, requestUrl);
   const explicitProxy =
-    readGoogleAuthProxyUrl(googleAuthInit.proxy) ??
+    (googleAuthInit.proxy instanceof URL
+      ? googleAuthInit.proxy.toString()
+      : normalizeOptionalString(googleAuthInit.proxy)) ??
     (hasProxyAgentShape(agent) ? agent.proxy.toString() : undefined);
 
   if (!proxyBypassed && explicitProxy) {
@@ -454,11 +440,14 @@ export async function loadGoogleAuthRuntime(): Promise<GoogleAuthRuntime> {
 
 export async function getGoogleAuthTransport(): Promise<GoogleAuthTransport> {
   const { gaxios } = await loadGoogleAuthRuntime();
-  return installGoogleAuthHeaderCompatibilityInterceptor(
-    new gaxios.Gaxios({
-      fetchImplementation: createGoogleAuthFetch(),
-    }),
-  );
+  const transport = new gaxios.Gaxios({ fetchImplementation: createGoogleAuthFetch() });
+  transport.interceptors.request.add({
+    resolved: async (config) => normalizeGoogleAuthHeaders(config),
+  });
+  transport.interceptors.response.add({
+    resolved: async (response) => normalizeGoogleAuthHeaders(response),
+  });
+  return transport;
 }
 
 export async function resolveValidatedGoogleChatCredentials(

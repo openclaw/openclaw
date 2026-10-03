@@ -305,28 +305,14 @@ export function createOpenAICompatibleCompletionsThinkingOffWrapper(
   };
 }
 
-function isAnthropicThinkingEnabled(payload: Record<string, unknown>): boolean {
-  const thinking = payload.thinking;
-  if (!thinking || typeof thinking !== "object") {
-    return false;
-  }
-  return (thinking as { type?: unknown }).type !== "disabled";
-}
-
 function assistantMessageHasAnthropicToolUse(message: Record<string, unknown>): boolean {
-  if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
-    return true;
-  }
-  const content = message.content;
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  return content.some(
-    (block) =>
-      block &&
-      typeof block === "object" &&
-      ((block as { type?: unknown }).type === "tool_use" ||
-        (block as { type?: unknown }).type === "toolCall"),
+  return (
+    (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) ||
+    (Array.isArray(message.content) &&
+      message.content.some((block) => {
+        const type = asOptionalObjectRecord(block)?.type;
+        return type === "tool_use" || type === "toolCall";
+      }))
   );
 }
 
@@ -358,10 +344,10 @@ export function stripTrailingAssistantPrefillMessages(payload: Record<string, un
 export function stripTrailingAnthropicAssistantPrefillWhenThinking(
   payload: Record<string, unknown>,
 ): number {
-  if (!isAnthropicThinkingEnabled(payload)) {
-    return 0;
-  }
-  return stripTrailingAssistantPrefillMessages(payload);
+  const thinking = asOptionalObjectRecord(payload.thinking);
+  return thinking && thinking.type !== "disabled"
+    ? stripTrailingAssistantPrefillMessages(payload)
+    : 0;
 }
 
 /** @deprecated Anthropic-family provider stream helper; do not use from third-party plugins. */
@@ -432,21 +418,14 @@ export function setQwenChatTemplateThinking(
   enabled: boolean,
 ): void {
   const existing = payload.chat_template_kwargs;
-  if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-    const next: Record<string, unknown> = {
-      ...(existing as Record<string, unknown>),
-      enable_thinking: enabled,
-    };
-    if (!Object.hasOwn(next, "preserve_thinking")) {
-      next.preserve_thinking = true;
-    }
-    payload.chat_template_kwargs = next;
-    return;
-  }
-  payload.chat_template_kwargs = {
+  const next: Record<string, unknown> = {
+    ...(existing && typeof existing === "object" && !Array.isArray(existing) ? existing : {}),
     enable_thinking: enabled,
-    preserve_thinking: true,
   };
+  if (!Object.hasOwn(next, "preserve_thinking")) {
+    next.preserve_thinking = true;
+  }
+  payload.chat_template_kwargs = next;
 }
 
 /** @deprecated DeepSeek provider stream helper; do not use from third-party plugins. */

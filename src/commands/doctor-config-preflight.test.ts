@@ -136,6 +136,66 @@ const doctorRepairOptions = {
 } as const;
 
 describe("runDoctorConfigPreflight", () => {
+  it.each([
+    { selector: "environment", sidecarBytes: "not JSON" },
+    { selector: "config", sidecarBytes: '{"version":1,"encrypted":{"ciphertext":"synthetic"}}' },
+    { selector: "prefixed-config", sidecarBytes: "retired encrypted bytes" },
+    { selector: "prefixed-include", sidecarBytes: "retired encrypted bytes" },
+  ])(
+    "refuses retired OAuth sidecars before repairing config ($selector selector)",
+    async ({ selector, sidecarBytes }) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        const configPath = path.join(home, ".openclaw", "openclaw.json");
+        const oauthDir = path.join(home, "custom-credentials");
+        const config = {
+          agents: { entries: { main: {} } },
+          plugins: { enabled: false },
+          ...(selector !== "environment"
+            ? { env: { vars: { OPENCLAW_OAUTH_DIR: oauthDir } } }
+            : {}),
+        };
+        const originalConfig = `${selector.startsWith("prefixed-") ? "unexpected prefix\n" : ""}${JSON.stringify(
+          selector === "prefixed-include" ? { $include: "auth-selector.json" } : config,
+        )}`;
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+        if (selector === "prefixed-include") {
+          await fs.writeFile(
+            path.join(path.dirname(configPath), "auth-selector.json"),
+            JSON.stringify(config),
+          );
+        }
+        await fs.writeFile(configPath, originalConfig);
+        const backupPath = `${configPath}.bak`;
+        const backupBytes = "{}\n";
+        await fs.writeFile(backupPath, backupBytes);
+        const stateFiles = (await fs.readdir(path.dirname(configPath))).toSorted();
+        const legacyDir = path.join(home, ".clawdbot");
+        await fs.mkdir(legacyDir);
+        const sidecarDir = path.join(oauthDir, "auth-profiles");
+        const sidecarPath = path.join(sidecarDir, `${"a".repeat(32)}.json`);
+        await fs.mkdir(sidecarDir, { recursive: true });
+        await fs.writeFile(sidecarPath, sidecarBytes);
+
+        await withEnvAsync(
+          { OPENCLAW_OAUTH_DIR: selector === "environment" ? oauthDir : undefined },
+          async () => {
+            for (let pass = 0; pass < 2; pass += 1) {
+              await expect(runDoctorConfigPreflight(doctorRepairOptions)).rejects.toThrow(
+                "Upgrade through OpenClaw 2026.9.7",
+              );
+              expect(await fs.readFile(configPath, "utf8")).toBe(originalConfig);
+              expect(await fs.readFile(backupPath, "utf8")).toBe(backupBytes);
+              expect((await fs.readdir(path.dirname(configPath))).toSorted()).toEqual(stateFiles);
+              expect((await fs.lstat(legacyDir)).isSymbolicLink()).toBe(false);
+              expect(await fs.readFile(sidecarPath, "utf8")).toBe(sidecarBytes);
+              expect(await fs.readdir(sidecarDir)).toEqual([path.basename(sidecarPath)]);
+            }
+          },
+        );
+      });
+    },
+  );
+
   it("reports stale legacy update recovery without modifying the run", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       await writeOpenClawConfig(home, { gateway: { mode: "local" } });
@@ -521,6 +581,7 @@ describe("runDoctorConfigPreflight", () => {
     await withUnscopedDoctorConfigPreflightHome(async (home) => {
       await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const configPath = await writeOpenClawConfig(home, {
+          meta: { migrations: { webhookListeners: true } },
           gateway: { mode: "local" },
           plugins: {
             enabled: false,

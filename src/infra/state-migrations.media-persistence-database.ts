@@ -19,7 +19,6 @@ import {
 } from "./kysely-sync.js";
 import { readSqliteDataVersion } from "./node-sqlite.js";
 import {
-  eventIdentity,
   parseTranscriptEvent,
   transformTranscriptEvent,
 } from "./state-migrations.media-persistence-transform.js";
@@ -116,9 +115,6 @@ export function scanTranscriptRows(params: {
         const transformed = transformTranscriptEvent(event);
         if (!transformed.changed) {
           continue;
-        }
-        if (eventIdentity(event) !== eventIdentity(transformed.event)) {
-          throw new Error(`${owner} event identity changed during media migration`);
         }
         if (lastChangedSessionId !== row.session_id) {
           lastChangedSessionId = row.session_id;

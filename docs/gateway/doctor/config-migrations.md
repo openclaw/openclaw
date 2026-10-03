@@ -43,6 +43,36 @@ silently discard persisted data.
 Legacy normalization belongs to Doctor and migration owners, with the existing
 backup and verification flow. Runtime readers consume canonical state.
 
+### Session settings
+
+Global and project `settings.json` readers refuse retired settings before
+discovering agent resources. They preserve the original file and name the fields
+to repair. Back up the file, keep any existing canonical values, and replace:
+
+- `queueMode` with `steeringMode`.
+- `websockets` with `transport`: `true` becomes `"websocket"`, and `false` becomes `"sse"`.
+- An object-shaped `skills` with its `customDirectories` array, or `[]` when absent.
+  Move `skills.enableSkillCommands` to top-level `enableSkillCommands` if present.
+- `retry.maxDelayMs` with `retry.provider.maxRetryDelayMs`, preserving the other
+  `retry.provider` settings.
+
+Remove superseded keys after moving their values. OpenClaw `2026.9.7`
+retains the former settings reader if a staged upgrade is needed; see
+[upgrading very old versions](/install/updating#upgrading-very-old-versions) before
+using an older release with existing state. These embedded session files are
+separate from `openclaw.json`: current `doctor --fix` owns supported July-and-later
+config migrations, but does not rewrite these retired session settings.
+
+The `keybindings.json` reader also refuses retired action names such as `interrupt`
+and `submit`, naming their replacements (`app.interrupt` and `tui.input.submit`).
+Back up the file and rename the reported entries, keeping existing canonical
+bindings when both names occur. A refused reload preserves the last accepted
+bindings and leaves the file untouched. Unknown custom action names remain
+supported. OpenClaw `2026.9.7` retains the former keybinding reader; current Doctor
+does not rewrite retired keybinding names.
+
+### Retired state and config formats
+
 Unreleased per-agent SQLite session layouts below schema 8 and their pre-landing
 transcript search caches are retired. Doctor refuses those layouts without
 repairing their tables. Shipped schema-1
@@ -134,6 +164,8 @@ Doctor also refuses these retired config inputs:
 - Telegram `dm`, `direct.*.threadReplies`, native draft preview settings, and scalar
   or flat streaming settings (`streamMode`, `chunkMode`, `blockStreaming`,
   `blockStreamingCoalesce`, and `draftChunk`), including account overrides.
+- Nextcloud Talk `allowPrivateNetwork`; use the intermediate migration before the
+  canonical `network.dangerouslyAllowPrivateNetwork` setting.
 - Matrix `dm.policy: "trusted"`, flat `allowPrivateNetwork`, and `allow` in
   `groups.<room>` or `rooms.<room>`, including account overrides.
 - Slack `channels.<id>.allow`, including account overrides.
@@ -143,6 +175,14 @@ succeed. Doctor preserves the config and stops with recovery guidance instead
 of stripping these settings or replacing them with a backup. For an older installation,
 [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
 and run its Doctor migrations before installing the latest version.
+
+OAuth credential sidecars under `credentials/auth-profiles/` are retired. Their
+last writer shipped in `2026.5.16-beta.3` on May 16, 2026; `2026.5.16-beta.4`
+removed that writer. Doctor detects these files without reading credentials or
+accessing encryption keys. Upgrade through `2026.9.7` and run
+`openclaw doctor --fix` on the original host before retrying. The supported
+`auth.json`, `auth-profiles.json`, SQLite credential, and migration-recovery
+contracts remain unchanged.
 
 ## Cron ownership before roster migration
 
@@ -299,53 +339,95 @@ the backups until the repaired config and migrated state have been verified.
 
 ## Channel webhook listeners
 
-Feishu, Nextcloud Talk, and Telegram receive webhooks on Gateway HTTP routes. Their plugin-owned
-Doctor migrations move an explicitly configured `webhookPort` and effective bind host
-into `legacyWebhook: { port, host? }`. An explicit host without a port keeps that
-host with the channel's previous port (`3000` for Feishu, `8788` for Nextcloud Talk,
-`8787` for Telegram).
-Doctor validates and backs up the config through the normal write flow. The
-compatibility listener forwards only its registered webhook
-routes through the same Gateway request pipeline, preserving signatures and retry
-responses during channel restarts.
+Feishu, Microsoft Teams, Nextcloud Talk, and Telegram receive webhooks on Gateway
+HTTP routes. New installations open no separate webhook port unless
+`legacyWebhook: { port, host? }` explicitly selects one.
+
+Doctor preserves existing callbacks with a one-shot migration. It checks evidence
+of prior Gateway operation, channel ingress, or an update, rather than comparing
+version strings or treating an empty state database as an existing installation.
+For an enabled webhook account with no explicit or inherited `legacyWebhook`
+setting, it pins the historical endpoint: Feishu `127.0.0.1:3000`, Teams wildcard
+port `3978`, Nextcloud Talk `0.0.0.0:8788`, or Telegram `127.0.0.1:8787` when its
+callback URL does not match its configured public Gateway destination or its
+configured path cannot be served by the Gateway. Disabled accounts, Telegram polling, and
+Feishu WebSocket transport receive no pin. Explicit objects and `false` settings
+remain authoritative.
+
+Startup and update-time Doctor use the same migration owner. Doctor validates
+and backs up the config through the normal write flow. Pins and the
+`meta.migrations.webhookListeners` completion marker are saved together, including
+when channel settings come from `$include` files. Fresh installations record
+`true` without pins. Existing installations record an object whose keys are
+completed channel IDs and whose values list the exact config paths inserted by
+the migration; an empty list means the channel needed no pin.
+
+Keep this marker when removing a pin. Subsequent Doctor runs, restarts, and
+updates will not recreate it. Account pins cover only accounts present during
+migration. For trusted official plugins with older Doctor contracts, Doctor uses
+historical listener facts shipped with the Gateway. The installed plugin retains
+ownership of its other config migrations. Other plugins can remain pending while
+other channels finish. Replacing a pending plugin runs the same migration through
+the installer's backed-up config publication before its new runtime starts.
+Update a retained older standalone plugin before removing its pin; older plugin
+versions can still open their historical default port.
+
+For a read-only external config source, startup records completion in canonical
+SQLite machine state only when the completion marker is the sole required change.
+If endpoints or other channel settings need repair, update that external source
+and its completion marker as directed by the startup error. Startup refuses to
+drop an unmigrated endpoint. A fresh read-only installation needs no pins.
+When no config file exists yet, startup can record the same marker-only completion
+without creating a config file that would interfere with `gateway --dev` setup.
+
+The existing explicit-key migrations remain supported: `webhookPort` and
+`webhookHost` become `legacyWebhook: { port, host? }`; Teams `webhook.port` becomes
+`legacyWebhook.port` while `webhook.path` is preserved. A host-only setting keeps
+its historical default port. Both listeners use the same Gateway request pipeline,
+signature checks, and retry responses.
 
 The exported Feishu, Microsoft Teams, Nextcloud Talk, and Telegram config types
 retain deprecated listener input properties (`webhookPort`, `webhookHost`, or
 `webhook.port`) until the next Plugin SDK major. TypeScript config producers remain
 source-compatible, but parsed runtime config uses only `legacyWebhook`; run Doctor
-before using legacy inputs. This type compatibility window does not schedule
-removal of the default listener.
+before using legacy inputs.
 
 Update the external callback or reverse-proxy upstream to the Gateway port and
-the channel's webhook path, verify delivery, then set `legacyWebhook: false` to
-close the old port. Omitting `legacyWebhook` preserves Feishu's previous
-`127.0.0.1:3000` listener, Nextcloud Talk's `0.0.0.0:8788` listener, or Telegram's
-`127.0.0.1:8787` listener while webhook transport is active.
-An explicit object selects its configured endpoint;
-an account-level value overrides the
-channel-level setting. Doctor explains the canonical Gateway route and opt-out
-without changing implicit settings. A shared compatibility port closes when no
-account retains that endpoint.
+the channel's webhook path, verify delivery, then remove the pin to close the old
+port. Use account-level `legacyWebhook: false` to disable an inherited endpoint.
+A shared compatibility port closes when no account retains it. Doctor identifies
+the Gateway route and the external callback or proxy change still required.
 
-This behavior is the same for existing and new installations. It needs no upgrade
-eligibility check or migration receipt. Removing `legacyWebhook: false` restores
-the default listener; removing an explicit object also returns to the default.
-Retiring these listeners is a separate future change, with no removal deadline
-or automatic expiry introduced here.
+New separately installed Feishu, Microsoft Teams, Nextcloud Talk, and Telegram
+plugins require OpenClaw 2026.9.9 or newer so the host can preserve implicit listeners before
+replacement. Older hosts refuse these packages and retain the installed plugin;
+upgrade OpenClaw first.
 
-Telegram re-registers its configured public `webhookUrl` at startup. It preserves
-that URL because its reverse-proxy upstream cannot be inferred safely. Accounts
-that shared a path and secret on different explicit ports keep their old-port
-routing; assign distinct secrets or paths before moving them to one Gateway port.
+For Telegram with no explicit listener setting, Doctor recognizes a Gateway
+destination when `webhookUrl` matches `gateway.publicOrigin` plus a usable
+`webhookPath`, including the path and query. Startup registers the configured
+`webhookUrl` unchanged. Registration must succeed before channel
+readiness releases an old listener handoff; admitting an incoming webhook does
+not release it. A full process restart still has its ordinary restart interval.
+Any other callback URL may still proxy to the old port, so Doctor preserves that
+port with a pin even when `gateway.publicOrigin` is configured. Set `webhookUrl`
+to the public Gateway route before removing the pin, or move the existing proxy's
+upstream to the Gateway port. Explicit endpoint objects and `false` remain authoritative.
+Accounts that shared a path and secret on different ports must use distinct
+secrets or paths before moving them to one Gateway port.
 
-A separately installed Telegram plugin on the 2026.9.6 host performs the same config migration, but the host predates Gateway-owned forwarding. Telegram retains the predecessor's direct per-account listener there; accounts need distinct legacy endpoints. Doctor places the listener guidance in its supported warning output and identifies this limitation. On newer hosts, the shared Gateway listener and informational notes remain unchanged.
+Microsoft Teams keeps its Express body parser, ExpressAdapter, and SDK
+authentication on both listeners. Move its Azure Bot messaging endpoint or proxy
+upstream to the Gateway route before removing the pin.
 
-Microsoft Teams uses the same owner: Doctor moves explicit
-`channels.msteams.webhook.port` to `channels.msteams.legacyWebhook.port`, preserving
-`webhook.path`. Omitted listener settings retain port `3978` with its previous
-wildcard bind. After verifying the Azure Bot endpoint through the Gateway port,
-set `channels.msteams.legacyWebhook: false` to close the compatibility listener.
-Teams keeps its Express body parser and SDK authentication on both listeners.
+For environment-only Teams credentials, Doctor preserves the endpoint without
+persisting activation; `gateway run --ambient-channels` still controls whether
+Teams runs. If Doctor runs without those credentials, an existing installation
+leaves only the Teams migration pending until the first Gateway startup; other
+channels remain completed. A startup without Teams credentials, or a newly authored
+Teams configuration, completes that decision without a pin. Adding Teams later
+does not reopen its old port. Existing listener-only source configurations gain
+`enabled: true` to preserve their previous activation.
 
 ## Talk realtime inheritance
 

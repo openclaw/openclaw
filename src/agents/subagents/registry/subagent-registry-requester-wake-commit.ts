@@ -190,8 +190,8 @@ export function commitRequesterInitialTransfer(
   let prepared = false;
   let promoted = false;
   let released = !params.release;
-  const currentEntries = () =>
-    entries.map((entry) => {
+  const currentEntries = (selected = entries) =>
+    selected.map((entry) => {
       const current = context.options.runs.get(entry.runId);
       return current && isSameSubagentRunOwner(current, entry) ? current : entry;
     });
@@ -339,12 +339,7 @@ export function commitRequesterInitialTransfer(
             if (releasing) {
               released = true;
             }
-            adoptPublished(
-              value.drafts.map((entry) => {
-                const current = context.options.runs.get(entry.runId);
-                return current && isSameSubagentRunOwner(current, entry) ? current : entry;
-              }),
-            );
+            adoptPublished(currentEntries(value.drafts));
           },
         },
       );
@@ -352,12 +347,7 @@ export function commitRequesterInitialTransfer(
         if (releasing) {
           released = true;
         }
-        adoptPublished(
-          result.drafts.map((entry) => {
-            const current = context.options.runs.get(entry.runId);
-            return current && isSameSubagentRunOwner(current, entry) ? current : entry;
-          }),
-        );
+        adoptPublished(currentEntries(result.drafts));
       }
       writeFailure = undefined;
     } catch (error) {

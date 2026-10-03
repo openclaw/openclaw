@@ -574,8 +574,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
     }
 
     public func javaScript() throws -> String {
-        let data = try JSONEncoder().encode(self)
-        let json = String(bytes: data, encoding: .utf8)!
+        let json = try String(bytes: JSONEncoder().encode(self), encoding: .utf8)!
         return "window.__OPENCLAW_NATIVE_DEVICE_SETTINGS__ = \(json); " +
             "window.dispatchEvent(new CustomEvent('openclaw:native-device-settings-changed', " +
             "{detail: window.__OPENCLAW_NATIVE_DEVICE_SETTINGS__}));"

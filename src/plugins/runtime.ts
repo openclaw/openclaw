@@ -609,10 +609,6 @@ export function getActivePluginRegistryKey(): string | null {
   return state.key;
 }
 
-export function getActivePluginRuntimeSubagentMode(): "default" | "explicit" | "gateway-bindable" {
-  return state.runtimeSubagentMode;
-}
-
 export function getActivePluginRegistryVersion(): number {
   return state.activeVersion;
 }

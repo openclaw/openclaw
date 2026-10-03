@@ -29,6 +29,7 @@ export function createSubagentRegistryListener(config: {
   pendingLifecycle: ReturnType<typeof createPendingLifecycleScheduler>;
   onAgentEvent: (listener: (event: AgentEventPayload) => void) => () => void;
   resumeRequesterSettleWake: (runId: string, entry: SubagentRunRecord) => void;
+  adoptPausedSubagentRunIntoSuccessor: (entry: SubagentRunRecord) => Promise<boolean>;
   refreshFrozenResultFromSession: (sessionKey: string) => Promise<unknown>;
   completeSubagentRunWithRecovery: (
     params: SubagentCompletionRequest,
@@ -193,6 +194,9 @@ export function createSubagentRegistryListener(config: {
             if (paused?.pauseReason === "sessions_yield") {
               // An earlier event can arm grace while this row's publication awaits its ACK.
               pendingLifecycle.clear(evt.runId);
+              if (await config.adoptPausedSubagentRunIntoSuccessor(paused)) {
+                return;
+              }
               if (paused.requesterSettleWake?.pauseNotice) {
                 config.resumeRequesterSettleWake(paused.runId, paused);
               }
