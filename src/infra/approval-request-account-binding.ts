@@ -99,17 +99,18 @@ type PersistedApprovalRequestSessionEntry = {
   entry: SessionEntry;
 };
 
-/** Loads the persisted session entry referenced by an approval request, if still present. */
-export function resolvePersistedApprovalRequestSessionEntry(params: {
+/** Loads a persisted session entry by key from its agent's store, if still present. */
+export function loadApprovalSessionEntry(params: {
   cfg: OpenClawConfig;
-  request: ApprovalRequestLike;
+  sessionKey?: string | null;
+  agentId?: string | null;
 }): PersistedApprovalRequestSessionEntry | null {
-  const sessionKey = normalizeOptionalString(params.request.request.sessionKey);
+  const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!sessionKey) {
     return null;
   }
   const parsed = parseAgentSessionKey(sessionKey);
-  const agentId = parsed?.agentId ?? params.request.request.agentId ?? "main";
+  const agentId = parsed?.agentId ?? params.agentId ?? "main";
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
   const entry = loadSessionEntryReadOnly({
     storePath,
@@ -120,6 +121,18 @@ export function resolvePersistedApprovalRequestSessionEntry(params: {
     return null;
   }
   return { sessionKey, entry };
+}
+
+/** Loads the persisted session entry referenced by an approval request, if still present. */
+export function resolvePersistedApprovalRequestSessionEntry(params: {
+  cfg: OpenClawConfig;
+  request: ApprovalRequestLike;
+}): PersistedApprovalRequestSessionEntry | null {
+  return loadApprovalSessionEntry({
+    cfg: params.cfg,
+    sessionKey: params.request.request.sessionKey,
+    agentId: params.request.request.agentId,
+  });
 }
 
 function resolvePersistedApprovalRequestSessionBinding(params: {

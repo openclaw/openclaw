@@ -9,6 +9,7 @@ import {
   validateExecApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveExecCommandHighlighting } from "../../config/exec-command-highlighting.js";
+import { resolveApprovalLineageTurnSource } from "../../infra/approval-lineage-turn-source.js";
 import { sanitizeApprovalScope, type ApprovalScope } from "../../infra/approval-scope.js";
 import { resolveCommandAnalysisSummaryForDisplay } from "../../infra/command-analysis/explain.js";
 import { lookupCronRunExecSource } from "../../infra/cron-run-exec-source.js";
@@ -358,6 +359,16 @@ export function createExecApprovalHandlers(
             })
           : null,
       };
+      const lineageTurnSource = resolveApprovalLineageTurnSource({
+        cfg: runtimeConfig,
+        sessionKey: request.sessionKey,
+        agentId: request.agentId,
+        turnSourceChannel: request.turnSourceChannel,
+        reviewerDeviceIds: p.approvalReviewerDeviceIds,
+      });
+      if (lineageTurnSource) {
+        Object.assign(request, lineageTurnSource);
+      }
       // This check is adjacent to manager creation with no await between them.
       // The abort owner records the tombstone before sweeping pending approvals.
       if (requestRunId && context.chatRunState.hasAbortMarker(requestRunId)) {

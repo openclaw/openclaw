@@ -1,11 +1,16 @@
 // Plugin approval tests cover requested/resolved plugin approval events,
 // requester visibility, broadcast behavior, and approval manager integration.
 
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi, type TestContext } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
+import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import { createPluginApprovalHandlers } from "./plugin-approval.js";
@@ -488,6 +493,64 @@ describe("createPluginApprovalHandlers", () => {
       );
       await invokeHandler(handlers, opts);
       expect(hasExecApprovalClients).toHaveBeenCalledWith("backend-conn-42");
+    });
+
+    it("routes a spawned child's approval to the chat that spawned it", async () => {
+      await withTestDir({ prefix: "openclaw-plugin-approval-lineage-" }, async (tmpDir) => {
+        const storePath = path.join(tmpDir, "sessions.json");
+        const parentKey = "agent:main:whatsapp:direct:+15555550101";
+        const childKey = "agent:main:dashboard:11111111-1111-4111-8111-111111111111";
+        await replaceSessionEntry(
+          { storePath, sessionKey: parentKey },
+          normalizeLegacySessionEntryDelivery({
+            sessionId: "parent",
+            updatedAt: 1,
+            lastChannel: "whatsapp",
+            lastTo: "+15555550101",
+          } as SessionEntry),
+        );
+        await replaceSessionEntry({ storePath, sessionKey: childKey }, {
+          sessionId: "child",
+          updatedAt: 1,
+          spawnedBy: parentKey,
+        } as SessionEntry);
+        const cfg = { session: { store: storePath } };
+        const request = async (extra: Record<string, unknown>) => {
+          const handlers = createPluginApprovalHandlers(manager);
+          const { respond, accepted } = createApprovalRequestResponder();
+          const opts = createMockOptions(
+            "plugin.approval.request",
+            {
+              title: "Publish",
+              description: "Publish to production",
+              twoPhase: true,
+              sessionKey: childKey,
+              turnSourceChannel: "webchat",
+              turnSourceTo: childKey,
+              ...extra,
+            },
+            {
+              respond,
+              context: { ...createApprovalContext(), getRuntimeConfig: () => cfg } as never,
+            },
+          );
+          const pending = invokeHandler(handlers, opts);
+          const approvalId = await accepted;
+          const snapshot = await manager.getSnapshot(approvalId);
+          await manager.resolve(approvalId, "deny");
+          await pending;
+          return snapshot?.request;
+        };
+
+        expect(await request({})).toMatchObject({
+          turnSourceChannel: "whatsapp",
+          turnSourceTo: "+15555550101",
+        });
+        expect(await request({ approvalReviewerDeviceIds: ["device-1"] })).toMatchObject({
+          turnSourceChannel: "webchat",
+          turnSourceTo: childKey,
+        });
+      });
     });
 
     it("keeps plugin approvals pending when the originating chat can handle /approve directly", async () => {

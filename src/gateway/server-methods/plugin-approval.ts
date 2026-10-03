@@ -10,6 +10,7 @@ import {
   validatePluginApprovalRequestParams,
   validatePluginApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveApprovalLineageTurnSource } from "../../infra/approval-lineage-turn-source.js";
 import { sanitizeApprovalScope } from "../../infra/approval-scope.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
@@ -210,6 +211,16 @@ export function createPluginApprovalHandlers(
         turnSourceThreadId: turnSource.turnSourceThreadId ?? null,
       };
 
+      const lineageTurnSource = resolveApprovalLineageTurnSource({
+        cfg: context.getRuntimeConfig(),
+        sessionKey: request.sessionKey,
+        agentId: request.agentId,
+        turnSourceChannel: request.turnSourceChannel,
+        reviewerDeviceIds: p.approvalReviewerDeviceIds,
+      });
+      if (lineageTurnSource) {
+        Object.assign(request, lineageTurnSource);
+      }
       // Always server-generate the ID — never accept plugin-provided IDs.
       // Kind-prefix so /approve routing can distinguish plugin vs exec IDs deterministically.
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);

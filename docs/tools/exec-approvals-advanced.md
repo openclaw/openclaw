@@ -310,6 +310,11 @@ supports both approval kinds; the terminal UI supports plugin approvals only. If
 chat can already send commands and receive replies, approval requests no longer need a separate
 native delivery adapter just to stay pending.
 
+A session another agent spawned (`sessions_spawn`) has no chat of its own. Its approvals use the
+nearest spawning session's chat as their origin, so a task delegated from a WhatsApp or Slack
+conversation asks for approval in that conversation. A person reviewing from the Control UI, or a
+turn that arrives from an external chat, keeps the request where it is.
+
 Discord, Telegram, and QQ bot also support same-chat `/approve`, but those channels still use their
 resolved approver list for authorization even when native approval delivery is disabled.
 
