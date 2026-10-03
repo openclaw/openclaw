@@ -73,4 +73,51 @@ describe("shared-state integrity receipt fail-closed", () => {
     fastPath(second);
     expect(checks).toBe(3);
   });
+
+  it("does not let a check that was running when another check failed mint a receipt", () => {
+    const pathname = createStateDatabase("state-integrity-receipt-clear-race-");
+    const corrupted = pathname + ".corrupted";
+    copyFileSync(pathname, corrupted);
+    const pageSize = (() => {
+      const db = new DatabaseSync(pathname, { readOnly: true });
+      try {
+        return (db.prepare("PRAGMA page_size").get() as { page_size: number }).page_size;
+      } finally {
+        db.close();
+      }
+    })();
+    const fd = openSync(corrupted, "r+");
+    try {
+      writeSync(fd, Buffer.alloc(pageSize, 0xa5), 0, pageSize, pageSize);
+    } finally {
+      closeSync(fd);
+    }
+
+    // oxlint-disable-next-line typescript/unbound-method -- Forwarded with its exact database receiver.
+    const prepare = DatabaseSync.prototype.prepare;
+    let checks = 0;
+    let interleaved = false;
+    vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+      this: DatabaseSync,
+      sql: string,
+    ) {
+      if (/^PRAGMA integrity_check;?$/u.test(sql)) {
+        checks += 1;
+        if (!interleaved && this.location() === pathname) {
+          interleaved = true;
+          // Stands in for another thread: its check fails, and clears receipts, while this proof runs.
+          expect(() => fastPath(corrupted)).toThrow(/integrity_check|malformed|corrupt/iu);
+        }
+      }
+      return Reflect.apply(prepare, this, [sql]);
+    });
+    const checksPerAdmission = [0, 1, 2].map(() => {
+      const before = checks;
+      expect(fastPath(pathname)).toBe(true);
+      return checks - before;
+    });
+    // First: its own check plus the failing one. Second: that proof straddled a clear, so it was not
+    // trusted and the file is proved again. Third: the clean proof is reused.
+    expect(checksPerAdmission).toEqual([2, 1, 0]);
+  });
 });

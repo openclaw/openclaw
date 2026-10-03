@@ -15,7 +15,8 @@ import { inspectDatabasePathIdentitySync } from "../infra/sqlite-worker-identity
  * Invalidation contract: a receipt names the physical file the connection actually has open
  * (dev, inode, creation time where the platform policy trusts it, canonical path) and the schema
  * cookie. A replaced or recreated file, a different path, or any schema change misses the receipt
- * and runs the full check again. Any failed check clears every receipt in the process. Only an
+ * and runs the full check again. Any failed check clears every receipt in the process, and a check
+ * that was already running when that happened cannot mint one afterwards (clear generation). Only an
  * outermost read transaction may mint a receipt, because a nested check can observe uncommitted
  * pages that later roll back. A new process always starts with no receipts.
  */
@@ -27,9 +28,12 @@ const HEADER_BYTES = 16;
 const EMPTY = 0;
 const WRITING = 1;
 const READY = 2;
+// Slot header words: state, sequence, key length, clear generation the receipt was proved under.
+// One table-wide word after the slots holds the current clear generation.
+const GENERATION = (SLOT_COUNT * SLOT_BYTES) / 4;
 
 function openReceiptTable(): Int32Array {
-  const size = SLOT_COUNT * SLOT_BYTES;
+  const size = SLOT_COUNT * SLOT_BYTES + 4;
   try {
     const inherited = getEnvironmentData(OPENCLAW_STATE_INTEGRITY_RECEIPTS_ENV_KEY);
     if (inherited instanceof SharedArrayBuffer && inherited.byteLength === size) {
@@ -76,7 +80,11 @@ function hasReceipt(key: Uint8Array): boolean {
   for (let slot = 0; slot < SLOT_COUNT; slot += 1) {
     const base = (slot * SLOT_BYTES) / 4;
     const sequence = Atomics.load(words, base + 1);
-    if (Atomics.load(words, base) !== READY || Atomics.load(words, base + 2) !== key.byteLength) {
+    if (
+      Atomics.load(words, base) !== READY ||
+      Atomics.load(words, base + 2) !== key.byteLength ||
+      Atomics.load(words, base + 3) !== Atomics.load(words, GENERATION)
+    ) {
       continue;
     }
     const offset = slot * SLOT_BYTES + HEADER_BYTES;
@@ -91,8 +99,9 @@ function hasReceipt(key: Uint8Array): boolean {
   return false;
 }
 
-function recordReceipt(key: Uint8Array): void {
-  if (hasReceipt(key)) {
+function recordReceipt(key: Uint8Array, generation: number): void {
+  // A clear since the proof started means another check failed meanwhile: do not re-trust anything.
+  if (Atomics.load(words, GENERATION) !== generation || hasReceipt(key)) {
     return;
   }
   for (let slot = 0; slot < SLOT_COUNT; slot += 1) {
@@ -103,6 +112,9 @@ function recordReceipt(key: Uint8Array): void {
     Atomics.add(words, base + 1, 1);
     bytes.set(key, slot * SLOT_BYTES + HEADER_BYTES);
     Atomics.store(words, base + 2, key.byteLength);
+    // Tagged with the generation the proof started under, so a clear that races this write still
+    // invalidates it: hasReceipt only honours slots from the current generation.
+    Atomics.store(words, base + 3, generation);
     Atomics.store(words, base, READY);
     return;
   }
@@ -111,6 +123,9 @@ function recordReceipt(key: Uint8Array): void {
 
 /** Fail closed: forget every receipt in this process. */
 export function clearOpenClawStateIntegrityReceipts(): void {
+  // Bump first: every receipt minted under an older generation is dead even if the sweep below
+  // skips its slot because another thread is mid-write.
+  Atomics.add(words, GENERATION, 1);
   for (let slot = 0; slot < SLOT_COUNT; slot += 1) {
     const base = (slot * SLOT_BYTES) / 4;
     if (Atomics.compareExchange(words, base, READY, WRITING) !== READY) {
@@ -129,6 +144,7 @@ export function assertOpenClawStateIntegrityOncePerFileGeneration(
   schemaCookie: unknown,
   options: { mayRecordReceipt: boolean },
 ): void {
+  const generation = Atomics.load(words, GENERATION);
   const key = readReceiptKey(database, schemaCookie);
   if (key && hasReceipt(key)) {
     return;
@@ -145,6 +161,6 @@ export function assertOpenClawStateIntegrityOncePerFileGeneration(
   // A file swapped underneath the check must not inherit its proof.
   const after = readReceiptKey(database, schemaCookie);
   if (after && sameKey(after, key)) {
-    recordReceipt(key);
+    recordReceipt(key, generation);
   }
 }
