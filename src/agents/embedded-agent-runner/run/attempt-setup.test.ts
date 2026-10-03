@@ -15,8 +15,6 @@ import { prepareEmbeddedSkills } from "../skill-runtime.js";
 import { buildEmbeddedForegroundPromptContext } from "./agent-end-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-vi.mock("../../sandbox/state-owner.js", () => ({ captureSandboxStateOwner: () => () => {} }));
-
 const resolveProviderRuntimePluginHandle = vi.hoisted(() => vi.fn());
 const resolveSandboxContext = vi.hoisted(() =>
   vi.fn<typeof resolveRealSandboxContext>(async () => null),

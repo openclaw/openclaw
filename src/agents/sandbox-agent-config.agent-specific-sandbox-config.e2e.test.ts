@@ -7,8 +7,6 @@ import { splitSandboxBindSpec } from "./sandbox/bind-spec.js";
 import { sandboxMountOptionsReadOnly } from "./sandbox/workspace-mounts.js";
 import { createRestrictedAgentSandboxConfig } from "./test-helpers/sandbox-agent-config-fixtures.js";
 
-vi.mock("./sandbox/state-owner.js", () => ({ captureSandboxStateOwner: () => () => {} }));
-
 type SpawnCall = {
   command: string;
   args: string[];

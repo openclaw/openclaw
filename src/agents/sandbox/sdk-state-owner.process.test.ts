@@ -32,23 +32,36 @@ const entrypoint = resolveRuntimeWorkerArgv(
 async function snapshot(root: string) {
   const entries = await fs.readdir(root, { recursive: true, withFileTypes: true });
   return Promise.all(
-    entries.map(async (entry) => {
+    entries.map(async (entry): Promise<[string, string] | undefined> => {
       const file = path.join(entry.parentPath, entry.name);
+      const bytes = entry.isFile() ? await fs.readFile(file) : undefined;
+      // Read-only SQLite opens can create an empty WAL and rebuild its shared-memory index.
+      if (
+        entry.name.endsWith(".sqlite-shm") ||
+        (entry.name.endsWith(".sqlite-wal") && bytes?.length === 0)
+      ) {
+        return undefined;
+      }
       return [
         path.relative(root, file),
-        entry.isFile()
-          ? createHash("sha256")
-              .update(await fs.readFile(file))
-              .digest("hex")
-          : "dir",
+        bytes ? createHash("sha256").update(bytes).digest("hex") : "dir",
       ];
     }),
-  ).then((rows) => rows.toSorted(([left], [right]) => left!.localeCompare(right!)));
+  ).then((rows) =>
+    rows
+      .filter((row) => row !== undefined)
+      .toSorted(([left], [right]) => left.localeCompare(right)),
+  );
 }
 
 type Outcome = {
   api: string;
-  result?: { enabled?: boolean; sandboxed?: boolean; backendId?: string; workspaceAccess?: string };
+  result?: {
+    enabled?: boolean;
+    sandboxed?: boolean;
+    backendId?: string;
+    workspaceAccess?: string;
+  } | null;
   error?: { code: string; message: string };
 };
 type Reply = {
@@ -62,7 +75,7 @@ type Reply = {
 };
 
 describe("plugin SDK sandbox process ownership", () => {
-  it("refuses foreign and unscoped calls before SQL or mutation and retains hosted/offline custody", async () => {
+  it("refuses foreign live-owner mutations while preserving disabled and standalone SDK calls", async () => {
     const root = roots.make("openclaw-sdk-state-owner-");
     vi.stubEnv("HOME", root);
     vi.stubEnv("USERPROFILE", root);
@@ -77,7 +90,7 @@ describe("plugin SDK sandbox process ownership", () => {
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       NODE_DISABLE_COMPILE_CACHE: "1",
     };
-    const parentOwner = await acquireGatewayLock({ env, allowInTests: true, timeoutMs: 0 });
+    let parentOwner = await acquireGatewayLock({ env, allowInTests: true, timeoutMs: 0 });
     expect(parentOwner).not.toBeNull();
     const replies = new Map<string, ReturnType<typeof createDeferred<Reply>>>();
     const waitFor = (phase: string) => {
@@ -120,25 +133,33 @@ describe("plugin SDK sandbox process ownership", () => {
             return receive(phase);
           };
           await receive("ready");
-          for (const phase of ["foreign", "unscoped"] as const) {
+          const expectNoMutation = async (phase: string, refused: boolean, worker = false) => {
             const before = await snapshot(root);
             const { data } = await request(phase);
             const diagnostic = JSON.stringify(data);
-            expect(data.callerSql, diagnostic).toBe(0);
             expect(data.backendCalls, diagnostic).toBe(0);
             expect(data.outcomes).toHaveLength(2);
-            for (const outcome of data.outcomes) {
-              expect(outcome.error, diagnostic).toMatchObject({
-                code: "GATEWAY_STATE_OWNER_REQUIRED",
-              });
-              expect(outcome.error?.message).toMatch(/Gateway|embedded/);
+            if (refused) {
+              for (const outcome of data.outcomes) {
+                expect(outcome.error, diagnostic).toMatchObject({
+                  code: "GATEWAY_STATE_OWNER_REQUIRED",
+                });
+                expect(outcome.error?.message).toMatch(/Gateway|embedded/);
+              }
+            } else {
+              expect(data.outcomes, diagnostic).toEqual([
+                { api: "resolveSandboxContext", result: null },
+                {
+                  api: "prepareWorkspaceAuthority",
+                  result: { sandboxed: false, workspaceAccess: worker ? "none" : "rw" },
+                },
+              ]);
             }
             expect(await snapshot(root)).toEqual(before);
-            await parentOwner?.release();
-          }
-          for (const role of ["gateway", "agent-embedded"] as const) {
-            const { data } = await request(role);
-            expect(data.outcomes).toEqual([
+          };
+          const expectProvisioned = async (phase: string) => {
+            const { data } = await request(phase);
+            expect(data.outcomes, JSON.stringify(data)).toEqual([
               {
                 api: "resolveSandboxContext",
                 result: expect.objectContaining({ enabled: true, backendId: "docker" }),
@@ -152,13 +173,34 @@ describe("plugin SDK sandbox process ownership", () => {
             for (const api of ["resolveSandboxContext", "prepareWorkspaceAuthority"]) {
               expect(data.entries).toContainEqual(
                 expect.objectContaining({
-                  containerName: `synthetic-agent:main:subagent:${role}-${api}`,
+                  containerName: `synthetic-agent:main:subagent:${phase}-${api}`,
                 }),
               );
               expect(
-                (await fs.stat(path.join(root, "workspace", `${role}-${api}`))).isDirectory(),
+                (await fs.stat(path.join(root, "workspace", `${phase}-${api}`))).isDirectory(),
               ).toBe(true);
             }
+          };
+          for (const role of ["gateway", "agent-embedded"] as const) {
+            if (role === "agent-embedded") {
+              parentOwner = await acquireGatewayLock({
+                env,
+                role,
+                allowInTests: true,
+                timeoutMs: 0,
+              });
+              expect(parentOwner).not.toBeNull();
+            }
+            await expectNoMutation(`foreign-${role}-on`, true);
+            await expectNoMutation(`foreign-${role}-off`, false);
+            await parentOwner?.release();
+            parentOwner = null;
+          }
+          await expectNoMutation("offline-off", false);
+          await expectNoMutation("worker-off", false, true);
+          await expectProvisioned("offline-on");
+          for (const role of ["gateway", "agent-embedded"] as const) {
+            await expectProvisioned(role);
             // Ownership outlives both SDK calls and blocks a second process until explicit close.
             await expect(
               acquireGatewayLock({ env, allowInTests: true, timeoutMs: 0 }),

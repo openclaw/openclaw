@@ -17,8 +17,6 @@ import { resolveSandboxContext } from "./sandbox/context.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { resolveSandboxMountSelection } from "./sandbox/workspace-mounts.js";
 
-vi.mock("./sandbox/state-owner.js", () => ({ captureSandboxStateOwner: () => () => {} }));
-
 const backend = vi.hoisted(() =>
   vi.fn(async (_params: CreateSandboxBackendParams) => ({
     id: "docker",

@@ -495,7 +495,11 @@ async function resolveProvisionedSandboxContext(
 export async function resolveSandboxContext(
   params: ResolveSandboxContextParams,
 ): Promise<SandboxContext | null> {
-  const assertStateOwner = captureSandboxStateOwner();
+  const resolved = resolveSandboxSession(params);
+  if (!resolved) {
+    return null;
+  }
+  const assertStateOwner = await captureSandboxStateOwner();
   const assertCallerCurrent = params.assertCurrent;
   const assertCurrent = () => {
     assertStateOwner();
@@ -503,10 +507,6 @@ export async function resolveSandboxContext(
     assertStateOwner();
   };
   const ownedParams = { ...params, assertCurrent };
-  const resolved = resolveSandboxSession(ownedParams);
-  if (!resolved) {
-    return null;
-  }
   // Once a sandbox session is selected, every remaining step is local
   // provisioning. Preserve that owner boundary across backend, browser,
   // registry, and filesystem-bridge setup so model fallback never retries it.

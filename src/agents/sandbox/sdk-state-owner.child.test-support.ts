@@ -77,16 +77,16 @@ const config: OpenClawConfig = {
 };
 fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify(config));
 
-async function callApis(phase: string) {
+async function callApis(phase: string, selectedConfig = config, workspaceRoot = root) {
   const outcomes = [];
   const sqlBefore = callerSql;
   const callsBefore = backendCalls;
   for (const api of ["resolveSandboxContext", "prepareWorkspaceAuthority"] as const) {
     const params = {
-      config,
+      config: selectedConfig,
       agentId: "main",
       sessionKey: `agent:main:subagent:${phase}-${api}`,
-      workspaceDir: path.join(root, "workspace", `${phase}-${api}`),
+      workspaceDir: path.join(workspaceRoot, "workspace", `${phase}-${api}`),
     };
     try {
       const context =
@@ -111,6 +111,24 @@ async function callApis(phase: string) {
 
 const send = (phase: string, data: unknown = {}) =>
   process.stdout.write(`sdk-owner-proof:${JSON.stringify({ phase, data })}\n`);
+const workerRoot = path.join(root, "worker-shaped");
+fs.mkdirSync(workerRoot);
+const sandboxOffConfig: OpenClawConfig = {
+  ...config,
+  agents: {
+    ...config.agents,
+    defaults: {
+      ...config.agents?.defaults,
+      sandbox: { ...config.agents?.defaults?.sandbox, mode: "off" },
+    },
+  },
+};
+
+async function closeDatabases() {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
+}
+
 let owner: GatewayLockHandle | null = null;
 const lines = createInterface({ input: process.stdin });
 try {
@@ -125,20 +143,35 @@ try {
       owner.assertCurrent();
       send(phase, { ...result, entries: (await readRegistry()).entries });
     } else if (phase === "release") {
-      await closeOpenClawAgentDatabasesAsync();
-      await closeOpenClawStateDatabaseAsync();
+      await closeDatabases();
       await owner?.release();
       owner = null;
       send(phase);
-    } else if (phase === "foreign" || phase === "unscoped") {
-      send(phase, await callApis(phase));
+    } else if (phase === "worker-off") {
+      const stateDir = process.env.OPENCLAW_STATE_DIR;
+      const configPath = process.env.OPENCLAW_CONFIG_PATH;
+      try {
+        process.env.OPENCLAW_STATE_DIR = path.join(workerRoot, "state");
+        process.env.OPENCLAW_CONFIG_PATH = path.join(workerRoot, "openclaw.json");
+        // Match WORKER_TOOL_CONFIG's shape; this probes the SDK no-op, not a worker turn.
+        const result = await callApis(phase, { plugins: { enabled: false } }, workerRoot);
+        await closeDatabases();
+        send(phase, result);
+      } finally {
+        process.env.OPENCLAW_STATE_DIR = stateDir;
+        process.env.OPENCLAW_CONFIG_PATH = configPath;
+      }
+    } else if (phase.startsWith("foreign-") || phase.startsWith("offline-")) {
+      const result = await callApis(phase, phase.endsWith("-off") ? sandboxOffConfig : config);
+      const entries = phase === "offline-on" ? (await readRegistry()).entries : undefined;
+      await closeDatabases();
+      send(phase, { ...result, entries });
     } else {
       throw new Error(`Unknown fixture phase: ${phase}`);
     }
   }
 } finally {
-  await closeOpenClawAgentDatabasesAsync();
-  await closeOpenClawStateDatabaseAsync();
+  await closeDatabases();
   await owner?.release();
   restoreBackend();
   lines.close();

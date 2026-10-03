@@ -40,9 +40,6 @@ import {
 import "./server-startup-secret-diagnostics.test-support.js";
 import "./server-startup-secret-surfaces.test-support.js";
 
-// Direct server fixtures skip physical lock admission; this suite exercises secret ownership.
-vi.mock("../agents/sandbox/state-owner.js", () => ({ captureSandboxStateOwner: () => () => {} }));
-
 const { webSearchProviders } = vi.hoisted(() => {
   const credentialPath = "plugins.entries.google.config.webSearch.apiKey";
   return {

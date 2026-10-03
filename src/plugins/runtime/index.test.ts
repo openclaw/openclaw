@@ -32,9 +32,6 @@ vi.mock("./runtime-model-auth.runtime.js", () => ({
   resolveProviderRuntimeApiKey: runtimeModelAuthMocks.resolveProviderRuntimeApiKey,
 }));
 vi.mock("../../agents/sandbox/context.js", () => sandboxContextMocks);
-vi.mock("../../agents/sandbox/state-owner.js", () => ({
-  captureSandboxStateOwner: () => () => {},
-}));
 
 import { createPluginRuntime } from "./index.js";
 
@@ -215,7 +212,6 @@ describe("plugin runtime command execution", () => {
       sessionKey: "agent:main:subagent:workboard-card",
       workspaceDir: "/workspace",
       requireCurrentConfig: true,
-      assertCurrent: expect.any(Function),
     });
   });
 

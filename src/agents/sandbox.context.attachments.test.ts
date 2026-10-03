@@ -8,8 +8,6 @@ import { registerSandboxBackend } from "./sandbox/backend.js";
 import { resolveSandboxContext } from "./sandbox/context.js";
 import { resolveSubagentSessionAttachmentRootDir } from "./subagents/subagent-attachment-paths.js";
 
-vi.mock("./sandbox/state-owner.js", () => ({ captureSandboxStateOwner: () => () => {} }));
-
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it("isolates a session attachment projection from sibling agent-scoped sessions", async () => {

@@ -25,11 +25,10 @@ import { AUTH_TOKEN, createTestGatewayServer } from "./server-http.test-harness.
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
 
-// The HTTP harness starts after process-owner admission; command and session owners remain real.
+// The command and session owners are real; only model/provider execution is replaced.
 vi.mock("../agents/agent-runtime-config.js", () => ({
   resolveAgentRuntimeConfig: async () => getRuntimeConfig(),
 }));
-vi.mock("../agents/sandbox/state-owner.js", () => ({ captureSandboxStateOwner: () => () => {} }));
 
 const trustedProxyAuth: ResolvedGatewayAuth = {
   mode: "trusted-proxy",

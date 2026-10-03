@@ -393,19 +393,24 @@ Catalog list publishers use `createSessionCatalogSourceActorProjector({ pluginId
     only exact tool names whose registered implementations the calling plugin
     confines; wildcard prefixes do not prove tool ownership.
 
-    Workspace preparation requires the current process to retain the selected
-    state root's Gateway or offline embedded owner. This applies to
+    Sandbox workspace preparation checks the selected state root's live owner.
+    This applies to
     `prepareWorkspaceAuthority(...)` and `resolveSandboxContext(...)` from
-    `openclaw/plugin-sdk/agent-harness-runtime`. Foreign processes and standalone
-    calls without retained ownership reject with `code: "GATEWAY_STATE_OWNER_REQUIRED"`
-    before session reads or workspace mutation. Run the call inside the owning
-    Gateway plugin/runtime, or stop the Gateway and use an offline embedded
-    lifetime such as `openclaw agent --local`. Keep that lifetime until workspace
-    use and cleanup finish; preparation does not acquire a temporary lock or
-    forward permission callbacks over RPC. Released parameters and return types
-    are unchanged. Older SDK binaries and other state roots remain outside this
-    same-root gate; database freshness checks still apply. No migration or update
-    step is required.
+    `openclaw/plugin-sdk/agent-harness-runtime`. Disabled sandbox resolution stays
+    a no-op, and read-only session classification remains available in foreign
+    processes. When sandboxing is enabled, a foreign live Gateway or embedded
+    owner causes `code: "GATEWAY_STATE_OWNER_REQUIRED"` before sandbox workspace,
+    registry, or projection mutation. Run the call inside the owning Gateway
+    plugin/runtime, or stop the Gateway and wait for embedded runs to finish,
+    then retry offline.
+
+    Calls hosted by the current Gateway or embedded owner stay in-process.
+    Standalone SDK callers also stay local when no live owner exists. Preparation
+    does not acquire a temporary lock or forward permission callbacks over RPC;
+    it does not prevent another owner from starting after offline admission.
+    Released parameters and return types are unchanged. Older SDK binaries and
+    other state roots remain outside this same-root gate; database freshness
+    checks still apply. No migration or update step is required.
 
   </Accordion>
 </AccordionGroup>

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -7,8 +7,6 @@ import {
   resolveSandboxRuntimeStatus,
   resolveSandboxRuntimeStatusesForPersistedSessions,
 } from "./runtime-status.js";
-
-vi.mock("./state-owner.js", () => ({ captureSandboxStateOwner: () => () => {} }));
 
 describe("session sandbox override", () => {
   it("uses canonical classification identity in exact, batch, and context resolution", async () => {
