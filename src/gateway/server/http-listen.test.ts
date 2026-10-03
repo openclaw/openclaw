@@ -54,6 +54,8 @@ describe("listenGatewayHttpServer", () => {
     const onListening = vi.fn();
     server.on("error", onError);
     server.on("listening", onListening);
+    const errorListeners = server.listeners("error");
+    const listeningListeners = server.listeners("listening");
 
     await expect(
       listenGatewayHttpServer({
@@ -66,8 +68,8 @@ describe("listenGatewayHttpServer", () => {
       cause: { code: "ERR_SOCKET_BAD_PORT" },
     });
 
-    expect(server.listeners("error")).toEqual([onError]);
-    expect(server.listeners("listening")).toEqual([onListening]);
+    expect(server.listeners("error")).toEqual(errorListeners);
+    expect(server.listeners("listening")).toEqual(listeningListeners);
     expect(onError).not.toHaveBeenCalled();
     expect(onListening).not.toHaveBeenCalled();
   });
