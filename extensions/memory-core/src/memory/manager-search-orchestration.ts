@@ -271,8 +271,22 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           });
         }
       }
+      // A runtime-degraded provider (e.g. managed llama.cpp idle-stop/respawn
+      // racing a search) has no live embedding provider, so feeding `null` into
+      // the identity guard would synthesize expectedModel "fts-only" and never
+      // match a healthy vector-built index — misreporting a transient hiccup as
+      // a stale index with rebuild advice. Validate the index against its own
+      // recorded identity instead; keyword fallback proceeds per the documented
+      // contract while the provider recovers. Fresh managers whose embeddings are
+      // unavailable from the start (`fts-only` lifecycle) must keep failing
+      // closed: they must not serve stale rows and must keep reporting the
+      // mismatch, so only the runtime-degraded shape qualifies here.
+      const degradedProviderUnavailable =
+        !embeddingBootstrapKeywordOnly &&
+        !this.provider &&
+        this.providerLifecycle.mode === "degraded";
       const refreshSearchIdentity = () =>
-        embeddingBootstrapKeywordOnly
+        embeddingBootstrapKeywordOnly || degradedProviderUnavailable
           ? this.refreshKeywordFallbackIndexIdentity(indexState)
           : this.refreshIndexIdentityDirty({
               providerKeyKnown: this.providerInitialized,
