@@ -111,11 +111,13 @@ selection further. Starting, stopping, and error states remain visible under
 **All**. Filtering does not change the machine open in the workspace. These
 choices stay in place when you leave Systems and return on the same connection.
 
-The machine list excludes cloud workers whose teardown is complete, including
-retained records from archived sessions and failed starts with no allocated
-machine. Workers awaiting cleanup remain visible. Archiving stops running cloud
-workers through the normal workspace-reconciliation flow; failed placements keep
-their existing cleanup retries and recovery history.
+The machine list groups non-terminal cloud workers under **Active workers** and
+provider-reported destroyed or failed workers under **Recent worker history**.
+Workers awaiting cleanup remain active and inspectable until they reach a
+terminal state. Retained history stays visible after reclaim or session archive
+while the canonical environment inventory still reports it. Archiving stops
+running cloud workers through the normal workspace-reconciliation flow; failed
+placements keep their existing cleanup retries and recovery history.
 
 Select a desktop-capable system to open the existing Desktop viewer in the main
 workspace. It uses the same connection, control, sizing, and fullscreen behavior

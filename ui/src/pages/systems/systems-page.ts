@@ -11,6 +11,7 @@ import "../../components/desktop/desktop-panel.ts";
 import type { SparklineSample } from "../../components/sparkline-tile.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSystemsEnglish } from "../../i18n/locales/en-systems.ts";
+import { formatDurationHuman } from "../../lib/format-duration.ts";
 import { formatByteSize, formatTimeAgo } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import {
@@ -133,6 +134,16 @@ function renderMeasurements(row: SystemsInventoryRow, controller: SystemsControl
   );
 }
 
+function retainedWorkerError(row: SystemsInventoryRow): string | undefined {
+  for (const relation of row.sessions) {
+    const placement = relation.session.placement;
+    if (placement?.state === "failed") {
+      return placement.recoveryError ?? placement.terminalReason;
+    }
+  }
+  return undefined;
+}
+
 class SystemsPage extends OpenClawLightDomElement {
   @property({ attribute: false }) routeData?: SystemsRouteData;
   @property({ type: Boolean }) presented = true;
@@ -217,6 +228,7 @@ class SystemsPage extends OpenClawLightDomElement {
 
   private renderDetails(controller: SystemsController, row: SystemsInventoryRow) {
     const environment = row.environment;
+    const workerError = environment.worker?.error ?? retainedWorkerError(row);
     return html`<aside class="systems-details" aria-label=${t("systems.details")}>
       <header>
         <h2>${t("systems.details")}</h2>
@@ -236,6 +248,37 @@ class SystemsPage extends OpenClawLightDomElement {
         <dt>${t("systems.platform")}</dt>
         <dd>${systemPlatform(row) ?? t("systems.unknown")}</dd>
       </dl>
+      ${
+        environment.worker
+          ? html`<h3>${t("systems.workerDetails")}</h3>
+              <dl class="systems-worker-details">
+                <dt>${t("systems.status")}</dt>
+                <dd>${systemStatus(row)}</dd>
+                <dt>${t("systems.provider")}</dt>
+                <dd>${environment.worker.providerId}</dd>
+                <dt>${t("systems.profile")}</dt>
+                <dd>${environment.worker.profileId ?? t("systems.unknown")}</dd>
+                <dt>${t("systems.lease")}</dt>
+                <dd>${environment.worker.leaseId ?? t("systems.unknown")}</dd>
+                <dt>${t("systems.age")}</dt>
+                <dd>${formatDurationHuman(environment.worker.ageMs)}</dd>
+                ${
+                  environment.worker.idleMs === undefined
+                    ? nothing
+                    : html`<dt>${t("systems.idle")}</dt>
+                        <dd>${formatDurationHuman(environment.worker.idleMs)}</dd>`
+                }
+                <dt>${t("systems.tunnel")}</dt>
+                <dd>${environment.worker.tunnelStatus}</dd>
+                ${
+                  workerError
+                    ? html`<dt>${t("systems.workerError")}</dt>
+                        <dd class="systems-worker-error">${workerError}</dd>`
+                    : nothing
+                }
+              </dl>`
+          : nothing
+      }
       <h3>${t("systems.telemetry")}</h3>
       ${renderMeasurements(row, controller)}
       <h3>${t("systems.relatedSessions")}</h3>

@@ -52,6 +52,22 @@ function workerSummary(
 }
 
 describe("worker environment protocol schemas", () => {
+  it("accepts only a non-empty dedicated telemetry node identity", () => {
+    const summary = workerSummary("attached", "available");
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...summary,
+        worker: { ...summary.worker, nodeId: "dedicated-worker-node" },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...summary,
+        worker: { ...summary.worker, nodeId: "" },
+      }),
+    ).toBe(false);
+  });
+
   it("accepts only boolean opt-in for prepared details in list and status requests", () => {
     for (const includePreparedDetails of [undefined, false, true]) {
       const option = includePreparedDetails === undefined ? {} : { includePreparedDetails };

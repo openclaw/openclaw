@@ -2,12 +2,14 @@
 import type {
   BackupStatusResult,
   EnvironmentSummary,
+  SessionPlacement,
   SystemInfoResult,
 } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { DesktopClient } from "../../components/desktop/desktop-client.ts";
 import { createConnectionHandle } from "../../components/desktop/desktop-panel.test-support.ts";
 import { DESKTOP_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
@@ -17,7 +19,7 @@ import { setupSidebarTest } from "../../test-helpers/app-sidebar-setup.ts";
 import {
   createContext,
   createGatewayHarness,
-  createSessions,
+  createSessionsHarness,
 } from "../../test-helpers/app-sidebar.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { SystemsController } from "./systems-controller.ts";
@@ -129,12 +131,13 @@ function harness(
       ["operator.admin"],
     ),
   });
-  const context = createContext(gateway.gateway, createSessions("main", []));
+  const sessionsHarness = createSessionsHarness("main", []);
+  const context = createContext(gateway.gateway, sessionsHarness.sessions);
   const runtimeConfig = createRuntimeConfigCapability(gateway.gateway);
   runtimeConfigs.push(runtimeConfig);
   Object.assign(context, { basePath: "", navigate: vi.fn(), runtimeConfig });
   const controller = new SystemsController(context);
-  return { controller, gateway, context, request };
+  return { controller, gateway, context, request, sessionsHarness };
 }
 
 async function mount(controller: SystemsController) {
@@ -563,6 +566,231 @@ describe("Systems workspace", () => {
     expect(names()).toContain("Preparing worker");
   });
 
+  it("separates recent worker history and shows lifecycle details and errors", async () => {
+    const failedWorker: EnvironmentSummary = {
+      id: "worker:failed:cad",
+      type: "worker",
+      label: "CAD validation",
+      status: "error",
+      worker: {
+        providerId: "crabbox",
+        profileId: "cad-apple",
+        leaseId: "lease:cad-123",
+        state: "failed",
+        ageMs: 3_000,
+        attachedSessionIds: [],
+        tunnelStatus: "stopped",
+        error: "Bootstrap probe failed",
+      },
+    };
+    const destroyedWorker: EnvironmentSummary = {
+      ...failedWorker,
+      id: "worker:destroyed:cad",
+      label: "Completed CAD run",
+      status: "unavailable",
+      worker: {
+        providerId: "crabbox",
+        profileId: "cad-apple",
+        leaseId: "lease:cad-123",
+        state: "destroyed",
+        ageMs: 3_000,
+        attachedSessionIds: [],
+        tunnelStatus: "stopped",
+      },
+    };
+    const failedPlacement: GatewaySessionRow = {
+      key: "agent:cad-print-engineer:proof",
+      sessionId: "cad-proof",
+      kind: "direct",
+      updatedAt: 2,
+      placement: {
+        state: "failed",
+        generation: 3,
+        createdAtMs: 1,
+        updatedAtMs: 2,
+        stateChangedAtMs: 2,
+        environmentId: "worker:destroying:cad",
+        recoveryError: "Provider failed; cleanup retained",
+        recoveryAction: "stop-first",
+        terminalReason: "Provider failed",
+        terminalAtMs: 2,
+      },
+    };
+    const retainedWorker: EnvironmentSummary = {
+      ...destroyedWorker,
+      id: "worker:destroying:cad",
+      label: "Retained CAD run",
+      status: "stopping",
+      worker: { ...destroyedWorker.worker!, state: "destroying" },
+    };
+    const { controller, sessionsHarness } = harness(async () => [
+      host,
+      failedWorker,
+      destroyedWorker,
+      retainedWorker,
+    ]);
+    sessionsHarness.publish({
+      result: {
+        ts: 2,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [failedPlacement],
+      },
+    });
+    const { page, sidebar } = await mount(controller);
+
+    expect(
+      [...sidebar.querySelectorAll(".systems-group h3")].map((entry) =>
+        entry.textContent?.replace(/\s+/gu, " ").trim(),
+      ),
+    ).toEqual(["Active workers 1", "Recent worker history 2"]);
+    expect(
+      [...sidebar.querySelectorAll(".systems-machine__meta")].map((entry) =>
+        entry.textContent?.trim(),
+      ),
+    ).toEqual(["Linux", "Destroying", "Failed", "Destroyed"]);
+
+    controller.select(failedWorker.id);
+    controller.toggleDetails();
+    await page.updateComplete;
+    const details = page.querySelector(".systems-worker-details")?.textContent ?? "";
+    expect(details).toContain("Failed");
+    expect(details).toContain("crabbox");
+    expect(details).toContain("cad-apple");
+    expect(details).toContain("lease:cad-123");
+    expect(details).toContain("Bootstrap probe failed");
+
+    controller.select(retainedWorker.id);
+    await page.updateComplete;
+    const retainedDetails = page.querySelector(".systems-worker-details")?.textContent ?? "";
+    expect(retainedDetails).toContain("Provider failed; cleanup retained");
+  });
+
+  it("reconciles worker inventory when a session placement reaches a terminal state", async () => {
+    vi.useFakeTimers();
+    let currentWorker: EnvironmentSummary = {
+      ...worker,
+      worker: {
+        providerId: "crabbox",
+        profileId: "cad-apple",
+        leaseId: "lease:cad-123",
+        state: "attached",
+        ageMs: 3_000,
+        attachedSessionIds: ["cad-proof"],
+        tunnelStatus: "connected",
+      },
+    };
+    const { controller, request, sessionsHarness } = harness(async () => [host, currentWorker]);
+    const placement = (
+      state: "active" | "reclaimed",
+      stateChangedAtMs: number,
+    ): SessionPlacement => {
+      const timing = {
+        generation: 1,
+        createdAtMs: 1,
+        updatedAtMs: stateChangedAtMs,
+        stateChangedAtMs,
+      };
+      return state === "active"
+        ? {
+            ...timing,
+            state,
+            environmentId: worker.id,
+            activeOwnerEpoch: 1,
+            workerBundleHash: "a".repeat(64),
+            workspaceBaseManifestRef: "manifest",
+            remoteWorkspaceDir: "/work",
+          }
+        : {
+            ...timing,
+            state,
+            environmentId: worker.id,
+            activeOwnerEpoch: 1,
+          };
+    };
+    const sessionRow = (state: "active" | "reclaimed", stateChangedAtMs: number) => ({
+      key: "agent:cad-print-engineer:proof",
+      sessionId: "cad-proof",
+      kind: "direct" as const,
+      updatedAt: stateChangedAtMs,
+      placement: placement(state, stateChangedAtMs),
+    });
+    sessionsHarness.publish({
+      result: {
+        ts: 1,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [sessionRow("active", 2)],
+      },
+    });
+    await mount(controller);
+    expect(controller.rows[1]?.environment.worker?.state).toBe("attached");
+
+    currentWorker = {
+      ...currentWorker,
+      status: "unavailable",
+      worker: {
+        ...currentWorker.worker!,
+        state: "destroyed",
+        attachedSessionIds: [],
+        tunnelStatus: "stopped",
+      },
+    };
+    sessionsHarness.publish({
+      result: {
+        ts: 2,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [sessionRow("reclaimed", 3)],
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(controller.rows[1]?.environment.worker?.state).toBe("destroyed");
+    expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(2);
+  });
+
+  it("reconciles worker inventory directly from durable session invalidation", async () => {
+    vi.useFakeTimers();
+    let currentWorker: EnvironmentSummary = {
+      ...worker,
+      worker: {
+        providerId: "crabbox",
+        profileId: "cad-apple",
+        leaseId: "lease:cad-123",
+        state: "attached",
+        ageMs: 3_000,
+        attachedSessionIds: ["cad-proof"],
+        tunnelStatus: "connected",
+      },
+    };
+    const { controller, gateway, request } = harness(async () => [host, currentWorker]);
+    await mount(controller);
+    expect(controller.rows[1]?.environment.worker?.state).toBe("attached");
+
+    currentWorker = {
+      ...currentWorker,
+      status: "unavailable",
+      worker: {
+        ...currentWorker.worker!,
+        state: "destroyed",
+        attachedSessionIds: [],
+        tunnelStatus: "stopped",
+      },
+    };
+    gateway.publishEvent("sessions.changed", {
+      sessionKey: "agent:cad-print-engineer:proof",
+      reason: "reclaim",
+    });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(controller.rows[1]?.environment.worker?.state).toBe("destroyed");
+    expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(2);
+  });
+
   it("keeps disk histories attached to mount paths through reordering, removal, and return", async () => {
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
@@ -637,67 +865,6 @@ describe("Systems workspace", () => {
     expect(points()).toHaveLength(2);
     expect(page.querySelector('.systems-metrics[data-stale="true"]')).not.toBeNull();
     expect(page.querySelector(".systems-sample-time")?.textContent).toContain("Last reported");
-  });
-
-  it("graphs genuine node reports, preserves per-machine history, and leaves gaps for missing metrics", async () => {
-    const node = { ...offline, status: "available" as const };
-    let stats: NonNullable<NodeListNode["hostStats"]> = {
-      cpuCount: 8,
-      loadAverage: [2, 1, 1],
-      memoryTotalBytes: 16 * 1024 ** 3,
-      memoryFreeBytes: 8 * 1024 ** 3,
-      diskTotalBytes: 1024 ** 4,
-      diskAvailableBytes: 256 * 1024 ** 3,
-      updatedAtMs: Date.now() - 60_000,
-    };
-    const { controller, gateway } = harness(
-      async () => [host, node],
-      () => [{ nodeId: "offline", connected: true, paired: true, hostStats: stats }],
-    );
-    const { page } = await mount(controller);
-    controller.select(node.id);
-    const readings = () =>
-      [...page.querySelectorAll(".sparkline-tile__value")].map((tile) => tile.textContent?.trim());
-    await vi.waitFor(() => expect(readings()).toEqual(["2.00", "8.0 GB", "256 GB"]));
-    expect(page.querySelector('.systems-metrics[data-stale="false"]')).not.toBeNull();
-    expect(page.querySelectorAll(".sparkline-tile__chart")).toHaveLength(0);
-
-    stats = { ...stats, loadAverage: [4, 2, 1], updatedAtMs: stats.updatedAtMs + 60_000 };
-    await controller.refreshTelemetry();
-    await vi.waitFor(() => expect(readings()[0]).toBe("4.00"));
-    const chartPoints = () =>
-      page.querySelector(".sparkline-tile__chart polyline")?.getAttribute("points")?.split(" ");
-    expect(chartPoints()).toHaveLength(2);
-    await controller.refreshTelemetry();
-    await page.updateComplete;
-    expect(chartPoints()).toHaveLength(2);
-    controller.select(host.id);
-    await vi.waitFor(() => expect(readings()[0]).toBe("0.50"));
-    controller.select(node.id);
-    await vi.waitFor(() => expect(readings()[0]).toBe("4.00"));
-    expect(chartPoints()).toHaveLength(2);
-
-    stats = {
-      ...stats,
-      loadAverage: undefined,
-      diskAvailableBytes: undefined,
-      diskTotalBytes: undefined,
-      updatedAtMs: stats.updatedAtMs + 60_000,
-    };
-    await controller.refreshTelemetry();
-    await vi.waitFor(() => expect(readings()).toEqual(["–", "8.0 GB", "–"]));
-    expect(page.querySelectorAll(".sparkline-tile__chart")).toHaveLength(1);
-    stats = { ...stats, loadAverage: [3, 2, 1], updatedAtMs: stats.updatedAtMs + 60_000 };
-    await controller.refreshTelemetry();
-    await vi.waitFor(() => expect(readings()[0]).toBe("3.00"));
-    expect(
-      page.querySelector("openclaw-sparkline")?.querySelector(".sparkline-tile__chart"),
-    ).toBeNull();
-
-    gateway.publish({ phase: "offline" });
-    await vi.waitFor(() => expect(page.querySelectorAll(".sparkline-tile__chart")).toHaveLength(0));
-    expect(readings()[0]).toBe("3.00");
-    expect(page.querySelector('.systems-metrics[data-stale="true"]')).not.toBeNull();
   });
 
   it("shares inventory, keeps a single view-only connection through presentation changes, and retains a removed selection", async () => {

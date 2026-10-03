@@ -10,6 +10,7 @@ import { t } from "../../i18n/index.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
+import { createSessionEventRefreshCoordinator } from "../../lib/sessions/event-refresh-coordinator.ts";
 import { readSystemInfo } from "../../lib/system-info.ts";
 import {
   loadSystemsInventory,
@@ -25,6 +26,34 @@ import {
 } from "./systems-telemetry.ts";
 
 const TELEMETRY_SAMPLE_LIMIT = 120;
+
+function isWorkerPlacementSessionEvent(payload: unknown): boolean {
+  if (!isRecord(payload)) {
+    return false;
+  }
+  return payload.reason === "placement" || payload.reason === "reclaim";
+}
+
+function workerPlacementInventoryKey(context: ApplicationContext): string {
+  return (context.sessions.state.result?.sessions ?? [])
+    .flatMap((session) => {
+      const placement = session.placement;
+      if (!placement || placement.state === "local" || placement.state === "requested") {
+        return [];
+      }
+      return [
+        [
+          session.key,
+          placement.generation,
+          placement.state,
+          placement.environmentId ?? "",
+          placement.stateChangedAtMs,
+        ].join("\u0000"),
+      ];
+    })
+    .toSorted()
+    .join("\u0001");
+}
 
 export type SystemsSortMode = "name" | "online-first" | "offline-first";
 export type SystemsStatusFilter = "all" | "online" | "offline";
@@ -59,10 +88,20 @@ export class SystemsController {
   private telemetryRequest: AbortController | undefined;
   private presented = false;
   private refreshQueued?: "automatic" | "manual";
+  private workerPlacementKey = "";
+  private readonly eventRefresh: ReturnType<typeof createSessionEventRefreshCoordinator>;
 
   constructor(readonly context: ApplicationContext) {
     this.scope = gatewayPresentationScope(context.gateway);
     this.lifecycle = createGatewayConnectionLifecycle(context.gateway.snapshot);
+    this.eventRefresh = createSessionEventRefreshCoordinator({
+      active: false,
+      refresh: async (isCurrent) => {
+        if (isCurrent()) {
+          await this.refresh("automatic", false);
+        }
+      },
+    });
   }
 
   get current(): boolean {
@@ -368,11 +407,14 @@ export class SystemsController {
         unsubscribe();
       }
       this.subscriptions = [];
+      this.eventRefresh.reset();
       this.cancelRefresh();
       this.cancelBackups();
       this.resetDesktopSetup();
       return;
     }
+    this.eventRefresh.setActive(true);
+    this.workerPlacementKey = workerPlacementInventoryKey(this.context);
     this.subscriptions = [
       this.context.gateway.subscribe((snapshot) => {
         const changed = this.lifecycle.transition(snapshot);
@@ -403,12 +445,20 @@ export class SystemsController {
           this.cancelBackups();
           this.storageProbes.clear();
         }
-        if (
+        if (event.event === "sessions.changed") {
+          // Placement events can arrive before the shared session catalog exposes the
+          // replacement row. Ignore unrelated session activity and pace durable inventory
+          // invalidations through the shared event-refresh owner.
+          if (isWorkerPlacementSessionEvent(event.payload)) {
+            this.eventRefresh.schedule();
+          }
+        } else if (
           event.event === "presence" ||
           event.event === "node.pair.resolved" ||
           event.event === "node.runnerInventory.changed" ||
           event.event === "config.changed"
         ) {
+          this.eventRefresh.absorb();
           void this.refresh();
         } else if (
           event.event === "node.hostStats" &&
@@ -420,8 +470,17 @@ export class SystemsController {
         }
       }),
       this.context.sessions.subscribe(() => {
+        const workerPlacementKey = workerPlacementInventoryKey(this.context);
+        const placementChanged = workerPlacementKey !== this.workerPlacementKey;
+        this.workerPlacementKey = workerPlacementKey;
         this.projectRows();
         this.notify();
+        // Session placement and environments.list are separate read models. Re-projecting
+        // rows cannot turn a cached Attached environment into its terminal provider state,
+        // so reconcile the canonical inventory whenever a worker placement advances.
+        if (placementChanged) {
+          this.eventRefresh.schedule();
+        }
       }),
       this.context.runtimeConfig.subscribe(() => this.notify()),
     ];
@@ -460,7 +519,10 @@ export class SystemsController {
     this.query = "";
   }
 
-  async refresh(intent: "automatic" | "manual" = "automatic"): Promise<void> {
+  async refresh(intent: "automatic" | "manual" = "automatic", absorbEvents = true): Promise<void> {
+    if (absorbEvents) {
+      this.eventRefresh.absorb();
+    }
     const snapshot = this.context.gateway.snapshot;
     if (this.lifecycle.transition(snapshot)) {
       this.telemetry.clear();
@@ -550,7 +612,11 @@ export class SystemsController {
       return;
     }
     const gatewayHost = selected.environment.id === "gateway";
-    if (!gatewayHost && selected.environment.type !== "node") {
+    if (
+      !gatewayHost &&
+      selected.environment.type !== "node" &&
+      !selected.environment.worker?.nodeId
+    ) {
       return;
     }
     const request = new AbortController();

@@ -117,6 +117,8 @@ export const WorkerEnvironmentMetadataSchema = closedObject({
   profileId: Type.Optional(NonEmptyString),
   providerId: NonEmptyString,
   leaseId: Type.Optional(NonEmptyString),
+  /** Dedicated enrolled node that reports this worker machine's host telemetry. */
+  nodeId: Type.Optional(NonEmptyString),
   state: WorkerEnvironmentStateSchema,
   ageMs: Type.Integer({ minimum: 0 }),
   idleMs: Type.Optional(Type.Integer({ minimum: 0 })),

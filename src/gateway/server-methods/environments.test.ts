@@ -355,6 +355,27 @@ describe("environment gateway methods", () => {
     );
   });
 
+  it("exposes the enrolled node only for dedicated worker telemetry", () => {
+    expect(
+      summarizeWorkerEnvironment(
+        workerRecord({ sharedHost: false, nodeDeviceId: "dedicated-worker-node" }),
+        NOW,
+      ).worker,
+    ).toMatchObject({ nodeId: "dedicated-worker-node" });
+    expect(
+      summarizeWorkerEnvironment(
+        workerRecord({ sharedHost: true, nodeDeviceId: "shared-host-node" }),
+        NOW,
+      ).worker,
+    ).not.toHaveProperty("nodeId");
+    expect(
+      summarizeWorkerEnvironment(
+        workerRecord({ sharedHost: null, nodeDeviceId: "unattested-node" }),
+        NOW,
+      ).worker,
+    ).not.toHaveProperty("nodeId");
+  });
+
   it("rejects unknown environment ids", async () => {
     const [ok, , error] = await call("environments.status", {
       environmentId: "missing",

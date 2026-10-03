@@ -331,6 +331,16 @@ openclaw-systems-page {
   margin: 18px 0;
   font-size: 11px;
 }
+.systems-details .systems-worker-details {
+  margin-top: 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+.systems-worker-error {
+  color: var(--danger) !important;
+}
 .systems-details dt {
   color: var(--muted);
   margin-top: 9px;

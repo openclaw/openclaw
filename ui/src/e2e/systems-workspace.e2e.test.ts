@@ -487,8 +487,13 @@ suite.define(() => {
         .poll(() => page.locator(".systems-heading h1").textContent())
         .toBe("Cloud worker");
       await page.screenshot({ path: path.join(artifacts, "machine-inventory.png") });
-      expect(await inventory.getByRole("button", { name: /worker history/ }).count()).toBe(0);
-      expect(await inventory.locator(".systems-group__count").allTextContents()).toEqual(["1"]);
+      expect(await inventory.getByRole("button", { name: /worker history/ }).count()).toBe(2);
+      expect(await inventory.locator(".systems-group__count").allTextContents()).toEqual([
+        "1",
+        "2",
+      ]);
+      await inventory.getByRole("heading", { name: "Active workers 1" }).waitFor();
+      await inventory.getByRole("heading", { name: "Recent worker history 2" }).waitFor();
       await page.locator('.sidebar-nav a[href$="/dashboards"]').click();
       await expect.poll(() => page.locator(".systems-sidebar").count()).toBe(0);
       await page.locator('.sidebar-nav a[href$="/systems"]').click();
@@ -499,8 +504,8 @@ suite.define(() => {
       const picker = page.locator(".systems-mobile-picker");
       await expect.poll(() => picker.isVisible()).toBe(true);
       expect(await picker.inputValue()).toBe("worker-one");
-      expect(await picker.locator("option").allTextContents()).not.toEqual(
-        expect.arrayContaining([expect.stringContaining("worker history")]),
+      expect(await picker.locator("option").allTextContents()).toEqual(
+        expect.arrayContaining(["destroyed worker history", "failed worker history"]),
       );
       expect(await page.locator("openclaw-systems-page").count()).toBe(1);
       await gateway.setMethodResponse("environments.list", {
@@ -525,10 +530,15 @@ suite.define(() => {
       });
       await page.setViewportSize({ width: 1440, height: 900 });
       await inventory.getByRole("button", { name: "Refresh machines" }).click();
-      await expect.poll(() => inventory.locator(".systems-machine").count()).toBe(1);
-      expect(await inventory.locator(".systems-group__count").allTextContents()).toEqual([]);
+      await expect.poll(() => inventory.locator(".systems-machine").count()).toBe(2);
+      expect(await inventory.locator(".systems-group__count").allTextContents()).toEqual(["1"]);
+      await inventory.getByRole("heading", { name: "Recent worker history 1" }).waitFor();
+      await expect
+        .poll(() => page.locator(".systems-heading h1").textContent())
+        .toBe("Cloud worker");
       await page.setViewportSize({ width: 640, height: 900 });
-      expect(await picker.locator('option[value="worker-one"]').count()).toBe(0);
+      await expect.poll(() => picker.inputValue()).toBe("worker-one");
+      expect(await picker.locator('option[value="worker-one"]').count()).toBe(1);
     } finally {
       await context.close();
     }

@@ -45,8 +45,7 @@ function renderMenuOption(value: string, label: string, checked: boolean) {
 }
 
 export function systemName(row: SystemsInventoryRow): string {
-  const named =
-    row.gatewaySystemInfo?.machineName ?? row.environment.label ?? row.node?.displayName;
+  const named = row.gatewaySystemInfo?.machineName ?? row.environment.label;
   if (named) {
     return named;
   }
@@ -65,12 +64,10 @@ export function systemName(row: SystemsInventoryRow): string {
       return `${worker.providerId} · ${worker.profileId}`;
     }
   }
+  if (row.node?.displayName) {
+    return row.node.displayName;
+  }
   return row.environment.id;
-}
-
-/** Short, stable fragment of a Gateway-owned id for telling same-profile workers apart. */
-function shortId(id: string): string {
-  return id.slice(id.lastIndexOf(":") + 1, id.lastIndexOf(":") + 7);
 }
 
 export function systemKind(row: SystemsInventoryRow): "host" | "worker" | "node" {
@@ -82,6 +79,9 @@ export function systemKind(row: SystemsInventoryRow): "host" | "worker" | "node"
 }
 
 export function systemStatus(row: SystemsInventoryRow): string {
+  if (row.environment.worker) {
+    return t("systems.workerStates." + row.environment.worker.state);
+  }
   return t(
     row.environment.status === "available"
       ? "systems.online"
@@ -89,6 +89,11 @@ export function systemStatus(row: SystemsInventoryRow): string {
         ? "systems.offline"
         : "systems.statuses." + row.environment.status,
   );
+}
+
+function isWorkerHistory(row: SystemsInventoryRow): boolean {
+  const state = row.environment.worker?.state;
+  return state === "destroyed" || state === "failed";
 }
 
 export function systemPlatform(row: SystemsInventoryRow): string | undefined {
@@ -123,6 +128,10 @@ class SystemsSidebar extends OpenClawLightDomElement {
             row.environment.id,
             systemPlatform(row) ?? "",
             row.environment.platform ?? row.node?.platform ?? "",
+            row.environment.worker?.state ?? "",
+            row.environment.worker?.providerId ?? "",
+            row.environment.worker?.profileId ?? "",
+            row.environment.worker?.leaseId ?? "",
           ].some((value) => value.toLocaleLowerCase().includes(query))
         );
       })
@@ -158,7 +167,7 @@ class SystemsSidebar extends OpenClawLightDomElement {
         <i class="systems-machine__dot" aria-hidden="true"></i>
         <span class="systems-machine__name">${systemName(row)}</span>
         <span class="systems-machine__meta"
-          >${!online ? status : row.environment.worker ? shortId(row.environment.id) : (platform ?? nothing)}</span
+          >${row.environment.worker ? status : !online ? status : (platform ?? nothing)}</span
         >
         ${
           row.environment.desktop
@@ -227,12 +236,26 @@ class SystemsSidebar extends OpenClawLightDomElement {
       <div class="systems-sidebar__list" aria-busy=${controller.loading}>
         ${controller.loading && !controller.inventory ? html`<p class="systems-sidebar__empty" role="status">${t("systems.loading")}</p>` : nothing}
         ${rows.filter((row) => systemKind(row) === "host").map(renderRow)}
-        ${(["node", "worker"] as const).map((kind) => {
-          const group = rows.filter((row) => systemKind(row) === kind);
+        ${(["node", "worker", "history"] as const).map((kind) => {
+          const group = rows.filter((row) => {
+            const rowKind = systemKind(row);
+            if (kind === "node") {
+              return rowKind === "node";
+            }
+            return rowKind === "worker" && isWorkerHistory(row) === (kind === "history");
+          });
           return group.length
             ? html`<section class="systems-group">
                 <h3>
-                  <span>${t(kind === "node" ? "systems.nodes" : "systems.workers")}</span>
+                  <span
+                    >${t(
+                      kind === "node"
+                        ? "systems.nodes"
+                        : kind === "history"
+                          ? "systems.workerHistory"
+                          : "systems.activeWorkers",
+                    )}</span
+                  >
                   <span class="systems-group__count">${group.length}</span>
                 </h3>
                 ${group.map(renderRow)}

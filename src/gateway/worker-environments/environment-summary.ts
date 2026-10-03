@@ -67,6 +67,9 @@ export function summarizeWorkerEnvironment(
       profileId: record.profileId,
       providerId: record.providerId,
       ...(record.leaseId ? { leaseId: record.leaseId } : {}),
+      ...(record.sharedHost === false && record.nodeDeviceId
+        ? { nodeId: record.nodeDeviceId }
+        : {}),
       state: record.state,
       ...(options.includePreparedDetails && record.destroyRequestedAtMs !== null
         ? { destroyRequestedAtMs: record.destroyRequestedAtMs }
