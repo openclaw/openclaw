@@ -32,7 +32,7 @@ export function createDoctorMaintenanceState(options: {
     env,
     root: params.root ?? undefined,
     signal: options.signal,
-    assertCurrent: () => owner!.run(() => options.assertCurrent?.()),
+    assertCurrent: () => owner!.assertCurrent(options.assertCurrent),
     warn: options.warn,
   });
   const closeResources = async () => {
@@ -50,17 +50,15 @@ export function createDoctorMaintenanceState(options: {
     // Transfer can retire the source owner before caller revalidation runs.
     owner = acquired;
     try {
-      options.assertCurrent?.();
-      acquired.assertCurrent();
+      acquired.assertCurrent(options.assertCurrent);
       resources = createOpenClawDatabaseMaintenanceScope({
         schemaMaintenance: true,
         assertDatabaseAccess: acquired.assertDatabaseAccess,
-        assertOwnerCurrent: () => {
-          acquired.run(() => {
+        assertOwnerCurrent: (access) => {
+          acquired.assertCurrent(() => {
             options.assertCurrent?.();
             options.assertReadCurrent();
-            acquired.assertCurrent();
-          });
+          }, access);
         },
       });
     } catch (error) {
@@ -87,13 +85,16 @@ export function createDoctorMaintenanceState(options: {
       if (resources) {
         return;
       }
-      options.assertCurrent?.();
+      const assertCurrent = relocatedMaintenanceOwner
+        ? () => relocatedMaintenanceOwner.assertCurrent(options.assertCurrent)
+        : options.assertCurrent;
+      assertCurrent?.();
       const acquired = await acquireDoctorGatewayMaintenanceOwner(
         path.resolve(resolveOpenClawStateSqlitePath(selectedEnv)),
         selectedEnv,
         {
           ...params,
-          assertCurrent: options.assertCurrent,
+          assertCurrent,
           deadlineMs: options.deadline(),
           relocatedMaintenanceOwner,
         },
@@ -110,8 +111,7 @@ export function createDoctorMaintenanceState(options: {
       }
       const { closeOpenClawAgentDatabasesAsync } =
         await import("../state/openclaw-agent-db-lifecycle.js");
-      options.assertCurrent?.();
-      owner!.assertCurrent();
+      owner!.assertCurrent(options.assertCurrent);
       const sourceDatabase = resolveOpenClawStateSqlitePath(env);
       // This runs before the long-lived Doctor callback: closing its own tracked
       // callback would self-wait. Include CLI/bootstrap resources predating this scope.
