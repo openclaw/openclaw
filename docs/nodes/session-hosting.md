@@ -123,6 +123,9 @@ on the Gateway with the turn's live authority and tool hooks. Tool definitions
 carry their execution location, so new Gateway tools do not require a separate
 node allowlist.
 
+Concurrent Gateway tool calls wait for the existing transport budget, so larger
+model tool batches do not lose calls. Cancellation and heartbeats remain independent.
+
 Placement-local tools are offered only when the node declares their capability.
 Unavailable placement or transport capabilities are recorded in the Gateway log.
 Update OpenClaw on the node and restart it to enable newer local tools. Gateway

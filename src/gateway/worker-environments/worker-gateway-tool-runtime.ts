@@ -7,6 +7,7 @@ import {
   type WorkerGatewayToolUpdateFrame,
   type WorkerToolSurface,
 } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
+import { WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { getAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
 import { projectAgentToolDefinition } from "../../agents/prepared-tool-surface.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
@@ -105,7 +106,7 @@ export function createWorkerGatewayToolRuntime(params: {
         assertCurrent(prior.signal);
         return result;
       }
-      if (calls.size >= 4) {
+      if (calls.size >= WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS) {
         throw new Error("Too many worker tool operations are already in progress");
       }
       const controller = new AbortController();
