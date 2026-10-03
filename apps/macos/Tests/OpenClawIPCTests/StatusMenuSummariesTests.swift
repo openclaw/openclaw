@@ -433,13 +433,13 @@ private final class UsageGatewayFixture {
         let deliveries = await self.gateway.subscribe()
         let socket = try #require(self.session.latestTask())
         socket.emitReceiveFailure()
-        let retired = await deliveries.first { delivery in
-            guard case .disconnected = delivery.event else { return false }
-            return delivery.serverLease == lease
+        for await delivery in deliveries {
+            guard case .disconnected = delivery.event, delivery.serverLease == lease else { continue }
+            #expect(!self.gateway.serverLeaseMatchesCurrentState(lease))
+            _ = try await self.gateway.acquireServerLease()
+            return
         }
-        try #require(retired != nil)
-        #expect(!self.gateway.serverLeaseMatchesCurrentState(lease))
-        _ = try await self.gateway.acquireServerLease()
+        Issue.record("Gateway stream ended before the captured lease disconnected")
     }
 
     func close() async {

@@ -1128,7 +1128,7 @@ extension MacNodeCodexThreadCatalog {
     }
 
     private static func encodeResponse(_ response: WireResponse) throws -> String {
-        try String(decoding: JSONEncoder().encode(response), as: UTF8.self)
+        try String(bytes: JSONEncoder().encode(response), encoding: .utf8)!
     }
 
     fileprivate static func nonEmptyString(_ value: Any?) -> String? {

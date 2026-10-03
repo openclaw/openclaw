@@ -960,7 +960,7 @@ extension MacNodeRuntime {
     }
 
     private static func encodePayload(_ obj: some Encodable) throws -> String {
-        try String(decoding: JSONEncoder().encode(obj), as: UTF8.self)
+        try String(bytes: JSONEncoder().encode(obj), encoding: .utf8)!
     }
 
     static func projectedOuterFrameBytes(
