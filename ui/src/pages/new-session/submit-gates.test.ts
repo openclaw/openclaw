@@ -5,6 +5,7 @@ import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { renderControl } from "./model-control.test-support.ts";
 import { replaceBrowserPreference } from "./preferences.ts";
+import { repositoryIssueText } from "./submit-gates.ts";
 
 // The closed list of gates allowed to block without a visible reason: the busy
 // Start button and an empty draft explain themselves. Growing it is a product
@@ -442,4 +443,21 @@ it("keeps attachment preparation gated without duplicating its composer status a
   expect(flow.blockedSubmitNotice()).toBeUndefined();
   flow.attachmentDraft.reads.updatePending(signal, -1);
   expect(flow.canSubmit()).toBe(true);
+});
+
+describe("repositoryIssueText", () => {
+  it.each([
+    {
+      repository: { kind: "forbidden", repoRoot: "/srv/app", missingScope: "operator.admin" },
+      text: "This folder is outside the agent workspaces and needs operator.admin access. Open Inbox, select Limited access, request admin, then approve in Devices.",
+    },
+    {
+      repository: { kind: "unavailable", repoRoot: "/srv/app" },
+      text: "Couldn't verify Git for this folder. Choose it again to retry.",
+    },
+    { repository: { kind: "direct", repoRoot: "/srv/app" }, text: undefined },
+    { repository: { kind: "checking", repoRoot: "/srv/app" }, text: undefined },
+  ] as const)("names why $repository.kind blocks the worktree choice", ({ repository, text }) => {
+    expect(repositoryIssueText(repository)).toBe(text);
+  });
 });
