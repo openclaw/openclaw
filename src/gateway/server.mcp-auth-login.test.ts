@@ -369,17 +369,39 @@ describe("registered mcp.authLogin", () => {
   it("does not cancel a newer CLI attempt or accept malformed and denied callbacks", async () => {
     await clearMcpOAuthCredentials(identity());
     const started = await begin();
-    expect((await callback(started.state, "code=one&code=two")).status).toBe(400);
-    const resolved = resolveMcpTransportConfig("docs", config);
-    if (resolved?.kind !== "http") {
-      throw new Error("Fixture transport unavailable");
+    const pending = await readMcpOAuthStore(identity().storeKey);
+    const requestCount = requests.length;
+    let settled = false;
+    try {
+      for (const query of ["code=one&code=two", "code=%20"]) {
+        expect((await callback(started.state, query)).status).toBe(400);
+        expect(await readMcpOAuthStore(identity().storeKey)).toEqual(pending);
+        expect(requests).toHaveLength(requestCount);
+        expect(
+          await rpcReq(owner, "wizard.status", { sessionId: started.sessionId }),
+        ).toMatchObject({
+          ok: true,
+          payload: { status: "running" },
+        });
+      }
+      const resolved = resolveMcpTransportConfig("docs", config);
+      if (resolved?.kind !== "http") {
+        throw new Error("Fixture transport unavailable");
+      }
+      const newer = await startMcpOAuthAuthorization(identity(), resolved, {});
+      expect(newer.status).toBe("redirect");
+      const before = await readMcpOAuthStore(identity().storeKey);
+      expect((await callback(started.state, "error=access_denied")).status).toBe(400);
+      const result = await terminal(started.sessionId);
+      settled = true;
+      expect(result).toMatchObject({ status: "error" });
+      expect(await readMcpOAuthStore(identity().storeKey)).toEqual(before);
+    } finally {
+      if (!settled) {
+        await rpcReq(owner, "wizard.cancel", { sessionId: started.sessionId });
+        await terminal(started.sessionId);
+      }
     }
-    const newer = await startMcpOAuthAuthorization(identity(), resolved, {});
-    expect(newer.status).toBe("redirect");
-    const before = await readMcpOAuthStore(identity().storeKey);
-    expect((await callback(started.state, "error=access_denied")).status).toBe(400);
-    expect(await terminal(started.sessionId)).toMatchObject({ status: "error" });
-    expect(await readMcpOAuthStore(identity().storeKey)).toEqual(before);
   });
 
   it.each(["invalid_grant", "invalid_client"] as const)(
@@ -437,25 +459,6 @@ describe("registered mcp.authLogin", () => {
       }
     },
   );
-
-  it("rejects a blank callback code without exchanging or replacing the pending attempt", async () => {
-    await clearMcpOAuthCredentials(identity());
-    const started = await begin();
-    const before = await readMcpOAuthStore(identity().storeKey);
-    const requestCount = requests.length;
-    try {
-      expect((await callback(started.state, "code=%20")).status).toBe(400);
-      expect(await readMcpOAuthStore(identity().storeKey)).toEqual(before);
-      expect(requests).toHaveLength(requestCount);
-      expect(await rpcReq(owner, "wizard.status", { sessionId: started.sessionId })).toMatchObject({
-        ok: true,
-        payload: { status: "running" },
-      });
-    } finally {
-      await rpcReq(owner, "wizard.cancel", { sessionId: started.sessionId });
-      await terminal(started.sessionId);
-    }
-  });
 
   it("rejects a resolver replacement between dispatch and handler admission", async () => {
     await clearMcpOAuthCredentials(identity());
@@ -526,35 +529,6 @@ describe("registered mcp.authLogin", () => {
     expect((await readMcpOAuthStore(identity().storeKey)).codeVerifier).toBeUndefined();
   });
 
-  it("rejects a successful exchange after the connector URL changes", async () => {
-    await clearMcpOAuthCredentials(identity());
-    const started = await begin();
-    tokenEntered = createDeferredCore();
-    releaseToken = createDeferredCore();
-    try {
-      expect((await callback(started.state)).status).toBe(200);
-      await tokenEntered.promise;
-      await writeConfigFile({
-        gateway: { reload: { mode: "off" } },
-        mcp: { servers: { docs: { ...config, url: resourceUrl + "/replacement" } } },
-      });
-      await rpcReq(owner, "wizard.status", { sessionId: started.sessionId });
-      releaseToken.resolve();
-      const result = await terminal(started.sessionId);
-      expect(result.status).toBe("error");
-      expect(JSON.stringify(result)).not.toContain("private exchange detail");
-      expect((await readMcpOAuthStore(identity().storeKey)).tokens).toBeUndefined();
-    } finally {
-      releaseToken.resolve();
-      releaseToken = undefined;
-      tokenError = false;
-      await writeConfigFile({
-        gateway: { reload: { mode: "off" } },
-        mcp: { servers: { docs: config } },
-      });
-    }
-  });
-
   it.each(["register", "token"] as const)(
     "does not follow a %s redirect after configuration authority is withdrawn",
     async (stage) => {
@@ -597,7 +571,7 @@ describe("registered mcp.authLogin", () => {
     },
   );
 
-  it.each(["admin scope", "plugin registry"] as const)(
+  it.each(["admin scope", "plugin registry", "connector URL"] as const)(
     "rejects token publication after its %s authority changes",
     async (change) => {
       await clearMcpOAuthCredentials(identity());
@@ -624,7 +598,7 @@ describe("registered mcp.authLogin", () => {
         await tokenEntered.promise;
         if (change === "admin scope") {
           client.connect.scopes = ["operator.read"];
-        } else {
+        } else if (change === "plugin registry") {
           invocation.context.getGatewayMethodRegistry = () => replacement;
           expect(
             withPluginRuntimeRegistryScope(
@@ -633,6 +607,12 @@ describe("registered mcp.authLogin", () => {
                 partitionMcpServersByConnectionScope({ docs: config }).resolverRequesterServerNames,
             ),
           ).toEqual(["docs"]);
+        } else {
+          await writeConfigFile({
+            gateway: { reload: { mode: "off" } },
+            mcp: { servers: { docs: { ...config, url: resourceUrl + "/replacement" } } },
+          });
+          await rpcReq(owner, "wizard.status", { sessionId: started.sessionId });
         }
         const session = expectDefined(
           invocation.context.wizardSessions.get(started.sessionId),
@@ -642,61 +622,30 @@ describe("registered mcp.authLogin", () => {
         await session.whenSettled();
         expect(session.getStatus()).toBe("error");
         expect((await readMcpOAuthStore(identity().storeKey)).tokens).toBeUndefined();
+        if (change === "connector URL") {
+          const result = await terminal(started.sessionId);
+          expect(result.status).toBe("error");
+          expect(JSON.stringify(result)).not.toContain("private exchange detail");
+        }
       } finally {
         releaseToken.resolve();
         releaseToken = undefined;
         client.connect.scopes = scopes;
         invocation.context.getGatewayMethodRegistry = resolveRegistry;
-        await terminal(started.sessionId);
+        if (change === "connector URL") {
+          tokenError = false;
+          await writeConfigFile({
+            gateway: { reload: { mode: "off" } },
+            mcp: { servers: { docs: config } },
+          });
+        } else {
+          await terminal(started.sessionId);
+        }
       }
     },
   );
 
-  it("does not start after the socket closes during admission", async () => {
-    await clearMcpOAuthCredentials(identity());
-    const client = await connect(["operator.admin"]);
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const original = setupMigration.withSetupMigrationTargetLock;
-    const admission = vi.spyOn(setupMigration, "withSetupMigrationTargetLock");
-    admission.mockImplementationOnce(async (stateDir, run) => {
-      entered.resolve();
-      await release.promise;
-      return await original(stateDir, run);
-    });
-    admissionSettled = createDeferredCore();
-    const before = requests.length;
-    const sessionId = randomUUID();
-    try {
-      client.send(
-        JSON.stringify({
-          type: "req",
-          id: randomUUID(),
-          method: "mcp.authLogin",
-          params: { sessionId, serverName: "docs" },
-        }),
-      );
-      await entered.promise;
-      const invocation = expectDefined(admitted, "admitted request");
-      const signal = expectDefined(invocation.client?.connectionSignal, "connection lifetime");
-      const closed = new Promise<void>((resolve) => {
-        signal.addEventListener("abort", () => resolve(), { once: true });
-      });
-      client.close();
-      await closed;
-      release.resolve();
-      await admissionSettled.promise;
-      expect(invocation.context.wizardSessions.has(sessionId)).toBe(false);
-      expect(requests).toHaveLength(before);
-      expect((await readMcpOAuthStore(identity().storeKey)).tokens).toBeUndefined();
-    } finally {
-      release.resolve();
-      client.close();
-      admission.mockRestore();
-    }
-  });
-
-  it.each(["discovery", "exchange"] as const)(
+  it.each(["admission", "discovery", "exchange"] as const)(
     "settles sign-in when its socket closes during %s",
     async (stage) => {
       await clearMcpOAuthCredentials(identity());
@@ -704,10 +653,33 @@ describe("registered mcp.authLogin", () => {
       discoveryEntered = createDeferredCore();
       tokenEntered = createDeferredCore();
       const release = createDeferredCore();
+      const entered = createDeferredCore();
+      const original = setupMigration.withSetupMigrationTargetLock;
+      const admission =
+        stage === "admission"
+          ? vi.spyOn(setupMigration, "withSetupMigrationTargetLock")
+          : undefined;
+      admission?.mockImplementationOnce(async (stateDir, run) => {
+        entered.resolve();
+        await release.promise;
+        return await original(stateDir, run);
+      });
+      admissionSettled = createDeferredCore();
+      const before = requests.length;
       let callbackState: string | undefined;
       const sessionId = randomUUID();
       try {
-        if (stage === "discovery") {
+        if (stage === "admission") {
+          client.send(
+            JSON.stringify({
+              type: "req",
+              id: randomUUID(),
+              method: "mcp.authLogin",
+              params: { sessionId, serverName: "docs" },
+            }),
+          );
+          await entered.promise;
+        } else if (stage === "discovery") {
           releaseDiscovery = release;
           expect(
             (await rpcReq(client, "mcp.authLogin", { sessionId, serverName: "docs" })).ok,
@@ -721,10 +693,13 @@ describe("registered mcp.authLogin", () => {
           await tokenEntered.promise;
         }
         const invocation = expectDefined(admitted, "admitted request");
-        const session = expectDefined(
-          invocation.context.wizardSessions.get(String(invocation.params.sessionId)),
-          "admitted wizard",
-        );
+        const session =
+          stage === "admission"
+            ? undefined
+            : expectDefined(
+                invocation.context.wizardSessions.get(String(invocation.params.sessionId)),
+                "admitted wizard",
+              );
         const signal = expectDefined(invocation.client?.connectionSignal, "connection lifetime");
         const closed = new Promise<void>((resolve) => {
           signal.addEventListener("abort", () => resolve(), { once: true });
@@ -732,12 +707,20 @@ describe("registered mcp.authLogin", () => {
         client.close();
         await closed;
         release.resolve();
-        await whenAdmittedWizardSessionSettled(session);
-        expect(session.getStatus()).toBe("error");
+        if (session) {
+          await whenAdmittedWizardSessionSettled(session);
+          expect(session.getStatus()).toBe("error");
+        } else {
+          await admissionSettled.promise;
+          expect(invocation.context.wizardSessions.has(sessionId)).toBe(false);
+          expect(requests).toHaveLength(before);
+        }
         const stored = await readMcpOAuthStore(identity().storeKey);
         expect(stored.tokens).toBeUndefined();
-        expect(stored.codeVerifier).toBeUndefined();
-        expect(stored.lastAuthorizationUrl).toBeUndefined();
+        if (session) {
+          expect(stored.codeVerifier).toBeUndefined();
+          expect(stored.lastAuthorizationUrl).toBeUndefined();
+        }
         if (callbackState) {
           expect((await callback(callbackState)).status).toBe(410);
         }
@@ -746,6 +729,7 @@ describe("registered mcp.authLogin", () => {
         releaseDiscovery = undefined;
         releaseToken = undefined;
         client.close();
+        admission?.mockRestore();
       }
     },
   );
