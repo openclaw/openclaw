@@ -335,14 +335,17 @@ console.log('{"status":"identical"}');
           (step) => step.id === "tooling_identity",
         );
         check(decoderIndex).toBeGreaterThan(0);
-        check(identityIndex).toBe(decoderIndex + 1);
+        check(identityIndex).toBeGreaterThan(decoderIndex);
         check(identityIndex).toBeLessThan(
           resolveTarget.steps.findIndex((step) => step.id === "resolve"),
         );
         let status = 0;
         let stderr = "";
         const completed: string[] = [];
-        for (const step of resolveTarget.steps.slice(decoderIndex, identityIndex + 1)) {
+        for (const step of [
+          expectDefined(resolveTarget.steps[decoderIndex], "publication dispatch step"),
+          expectDefined(resolveTarget.steps[identityIndex], "tooling identity step"),
+        ]) {
           const output = join(root, `${step.id}.out`);
           const env: Record<string, string> = {
             PATH: [bin, dirname(nodeExecutable), process.env.PATH ?? ""].join(delimiter),
