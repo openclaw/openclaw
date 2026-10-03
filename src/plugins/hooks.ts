@@ -1134,14 +1134,14 @@ export function createHookRunner(
           const promise = Promise.resolve(handler(immutableEvent, ctx));
           const result = await awaitHook(hook, promise, modifyingHookTimeoutMsByHook[hookName]);
           return result
-            ? { ...attribution, status: "completed", result }
-            : { ...attribution, status: "skipped" };
+            ? Object.assign(attribution, { status: "completed" as const, result })
+            : Object.assign(attribution, { status: "skipped" as const });
         } catch (error) {
           const message = sanitizeHookError(error);
           logger?.error(
             `[hooks] ${hookName} handler from ${hook.pluginId} failed: ${formatHookErrorForLog(error)}`,
           );
-          return { ...attribution, status: "error", error: message };
+          return Object.assign(attribution, { status: "error" as const, error: message });
         }
       }),
     );
