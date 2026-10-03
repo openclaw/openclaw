@@ -190,6 +190,7 @@ function normalizeScheduleOptions(options: ScheduleOptionInput) {
   if (streamModeRaw !== "line" && streamModeRaw !== "match") {
     throw new CronCliError("--stream-mode must be line or match");
   }
+  const streamMode: "line" | "match" = streamModeRaw;
   const parsePositiveInteger = (value: unknown, flag: string): number | undefined => {
     const parsed =
       (typeof value === "string" || typeof value === "number") &&
@@ -210,7 +211,7 @@ function normalizeScheduleOptions(options: ScheduleOptionInput) {
     streamCommand: parseCronStreamCommandArgv(options.streamCommand),
     streamCwd: normalizeOptionalString(options.streamCwd),
     streamCwdSupplied: options.streamCwd !== undefined,
-    streamMode: streamModeRaw,
+    streamMode,
     streamModeSupplied,
     streamMatch: normalizeOptionalString(options.streamMatch),
     streamMatchSupplied: options.streamMatch !== undefined,
