@@ -1,10 +1,11 @@
+import type { DatabasePathIdentity } from "../../../infra/sqlite-worker-identity.js";
 import type { PluginStateNativeBindingPlan } from "../../../plugin-state/plugin-state-native-binding.types.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import type { AgentHarnessSessionDeletionMutation } from "../types.js";
 
 export type NativeSessionDeletionParticipant = {
   binding?: PluginStateNativeBindingPlan;
-  source?: { path: string; identity: string; birthtime?: string };
+  source?: DatabasePathIdentity;
   assertCurrent(): void;
   renewalPending(): boolean;
   joinRenewal(): Promise<void>;

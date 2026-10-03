@@ -144,11 +144,7 @@ export function createNativeSessionBindingLifecycle<TRecord extends NativeSessio
           rollbackChanged: options.errors.rollbackChanged,
           predicate: owner ? { kind: "leased", token: owner.token, value } : { kind: "absent" },
         },
-        source: {
-          path: source.admission.identity.canonicalPath,
-          identity: source.admission.identity.key,
-          birthtime: source.admission.identity.birthtime,
-        },
+        source: source.admission.identity,
         assertCurrent() {
           source.admission.assertCurrent();
           source.maintenanceScope?.assertAdmission();

@@ -1,1 +1,1 @@
-export { readStoredCodexAppServerBinding as readNativeSessionBindingRecord } from "./src/app-server/session-binding-record.js";
+export { readStoredCodexAppServerBinding as readNativeSessionBindingRecord } from "./src/app-server/session-binding-record-codec.js";

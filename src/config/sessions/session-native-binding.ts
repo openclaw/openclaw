@@ -50,14 +50,12 @@ export async function deleteSessionWithNativeBindingsInWorker(
   const members = captured.participants;
   const state = captureOpenClawStateWorkerContext({ env: plan.databaseOptions.env });
   const source = members.find(({ participant }) => participant.source)?.participant.source;
-  const sharedSource = source
-    ? { canonicalPath: source.path, key: source.identity, birthtime: source.birthtime }
-    : state.admission.identity;
+  const sharedSource = source ?? state.admission.identity;
   for (const { participant } of members) {
     if (
       participant.source &&
-      (participant.source.path !== sharedSource.canonicalPath ||
-        participant.source.identity !== sharedSource.key ||
+      (participant.source.canonicalPath !== sharedSource.canonicalPath ||
+        participant.source.key !== sharedSource.key ||
         participant.source.birthtime !== sharedSource.birthtime)
     ) {
       throw new Error("Native binding participants belong to different physical stores");
