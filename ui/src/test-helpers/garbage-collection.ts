@@ -1,25 +1,35 @@
+import { setImmediate as scheduleImmediate } from "node:timers";
 import { setImmediate } from "node:timers/promises";
 
 export async function collectGarbageForTest(): Promise<void> {
-  if (process.versions.bun) {
-    throw new Error(
-      "collectGarbageForTest needs V8's precise collection: JavaScriptCore scans stacks " +
-        "conservatively, so a forced Bun GC cannot prove a WeakRef target is unreachable. " +
-        "Add this file to the ui/vitest.config.ts nodeRequired set in scripts/lib/ci-test-runtime.mts.",
-    );
-  }
   // WeakRef targets stay alive for the current job, even without a strong owner.
   await setImmediate();
-  const { Session } = await import("node:inspector");
+  const { Session } = await import("node:inspector/promises");
   const session = new Session();
   session.connect();
   try {
+    await session.post("HeapProfiler.collectGarbage");
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      !("code" in error) ||
+      error.code !== "ERR_INSPECTOR_COMMAND" ||
+      error.message !== "Inspector error -32601: 'HeapProfiler.collectGarbage' wasn't found"
+    ) {
+      throw error;
+    }
+    const bun = (globalThis as typeof globalThis & { Bun?: { gc(force: boolean): void } }).Bun;
+    if (typeof bun?.gc !== "function") {
+      throw error;
+    }
     await new Promise<void>((resolve, reject) => {
-      session.post("HeapProfiler.collectGarbage", (error) => {
-        if (error) {
-          reject(error);
-        } else {
+      scheduleImmediate(() => {
+        try {
+          // A promise continuation can leave stale JavaScriptCore stack roots.
+          bun.gc(true);
           resolve();
+        } catch (error) {
+          reject(error);
         }
       });
     });
