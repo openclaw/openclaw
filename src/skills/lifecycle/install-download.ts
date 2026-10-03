@@ -10,14 +10,12 @@ import { FsSafeError, root as fsRoot, type Root } from "../../infra/fs-safe.js";
 import { assertCanonicalPathWithinBase } from "../../infra/install-safe-path.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { withTempDownloadPath } from "../../infra/temp-download.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { ensureDir, resolveUserPath } from "../../utils.js";
 import { resolveSkillToolsRootDir } from "../runtime/tools-dir.js";
 import type { SkillInstallSpec } from "../types.js";
 import { formatInstallFailureMessage } from "./install-output.js";
 import type { SkillInstallResult } from "./install-types.js";
 
-const extractModuleLoader = createLazyImportLoader(() => import("./install-extract.js"));
 // Skill downloads share ClawHub and marketplace's 256 MiB artifact ceiling;
 // changing this limit is a supported-artifact compatibility decision.
 const MAX_SKILL_DOWNLOAD_BYTES = 256 * 1024 * 1024;
@@ -288,7 +286,7 @@ export async function installDownloadSpec(params: {
     const stagingDir = path.join(path.dirname(tempArchivePath), "extracted");
     try {
       await fs.promises.mkdir(stagingDir, { mode: 0o700 });
-      const { extractSkillDownloadArchive } = await extractModuleLoader.load();
+      const { extractSkillDownloadArchive } = await import("./install-extract.js");
       const extractResult = await extractSkillDownloadArchive({
         archivePath: tempArchivePath,
         archiveType,
