@@ -659,6 +659,15 @@ and update behavior are unchanged.
 
 ## Carry facts, publish after commit
 
+Watched-session prompt preparation reads ambient targets through the shared-state
+reader and exact title entries through the session reader. It captures both stores
+before yielding, retains the session reader through disclosure revalidation, and
+rechecks the caller and watches after loading titles. Live turns, compaction, and
+bundled harnesses await the same preparation. The released synchronous SDK helper
+remains deprecated compatibility; the async path never falls back to host SQL.
+Sorted rows, the twenty-row cap, title truncation, prompt bytes, and update behavior
+are unchanged.
+
 Personal model-account success and failover-failure bookkeeping use typed reductions
 in the existing `authProfiles` shared-state worker. The host captures the physical
 store before provider probes or writer admission; the synchronous transaction

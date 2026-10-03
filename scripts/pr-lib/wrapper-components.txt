@@ -1104,6 +1104,7 @@ src/plugins/compat/plugin-sdk-subpath-records.ts
 src/plugins/compat/registry-records.ts
 src/plugins/compat/registry.ts
 src/plugins/compat/session-persistence-records.ts
+src/plugins/compat/watched-sessions.ts
 src/plugins/compat/workspace-mutation-guard.ts
 src/plugins/config-activation-shared.ts
 src/plugins/config-contract-matches.ts
