@@ -537,6 +537,75 @@ export function registerSharedClientLifetimeTests(
     expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
   });
 
+  it("closes an idle shared app-server 60 seconds after its final lease releases", async () => {
+    vi.useFakeTimers();
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    const closeAndWait = vi
+      .spyOn(harness.client, "closeAndWait")
+      .mockResolvedValue({ exited: true, cleanup: "closed" });
+
+    const lease = getLeasedSharedCodexAppServerClient({ timeoutMs: 1000 });
+    await sendInitializeResult(harness, "openclaw/0.149.0 (macOS; test)");
+    await expect(lease).resolves.toBe(harness.client);
+
+    expect(releaseLeasedSharedCodexAppServerClient(harness.client)).toBe(true);
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(closeAndWait).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(closeAndWait).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels idle shutdown when the shared app-server is reacquired", async () => {
+    vi.useFakeTimers();
+    const harness = createClientHarness();
+    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    const closeAndWait = vi
+      .spyOn(harness.client, "closeAndWait")
+      .mockResolvedValue({ exited: true, cleanup: "closed" });
+
+    const firstLease = getLeasedSharedCodexAppServerClient({ timeoutMs: 1000 });
+    await sendInitializeResult(harness, "openclaw/0.149.0 (macOS; test)");
+    await expect(firstLease).resolves.toBe(harness.client);
+    expect(releaseLeasedSharedCodexAppServerClient(harness.client)).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(getLeasedSharedCodexAppServerClient({ timeoutMs: 1000 })).resolves.toBe(
+      harness.client,
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(startSpy).toHaveBeenCalledTimes(1);
+    expect(closeAndWait).not.toHaveBeenCalled();
+    expect(releaseLeasedSharedCodexAppServerClient(harness.client)).toBe(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(closeAndWait).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a shared app-server alive until all concurrent leases release", async () => {
+    vi.useFakeTimers();
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    const closeAndWait = vi
+      .spyOn(harness.client, "closeAndWait")
+      .mockResolvedValue({ exited: true, cleanup: "closed" });
+
+    const firstLease = getLeasedSharedCodexAppServerClient({ timeoutMs: 1000 });
+    const secondLease = getLeasedSharedCodexAppServerClient({ timeoutMs: 1000 });
+    await sendInitializeResult(harness, "openclaw/0.149.0 (macOS; test)");
+    await expect(firstLease).resolves.toBe(harness.client);
+    await expect(secondLease).resolves.toBe(harness.client);
+
+    expect(releaseLeasedSharedCodexAppServerClient(harness.client)).toBe(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(closeAndWait).not.toHaveBeenCalled();
+
+    expect(releaseLeasedSharedCodexAppServerClient(harness.client)).toBe(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(closeAndWait).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["native-process", "thread-configuration"] as const)(
     "revokes %s ownership when its physical client is retired",
     async (requiredOwnership) => {
