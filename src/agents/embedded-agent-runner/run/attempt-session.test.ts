@@ -34,7 +34,7 @@ const hoisted = vi.hoisted(() => ({
   applySystemPromptToSession: vi.fn(),
   buildEmbeddedExtensionFactories: vi.fn(),
   createAgentSessionForEmbeddedRunner: vi.fn(),
-  createEmbeddedAgentResourceLoader: vi.fn(),
+  DefaultResourceLoader: vi.fn(class {}),
   createPreparedEmbeddedAgentSettingsManager: vi.fn(),
   getGlobalHookRunner: vi.fn(),
   installMessageToolOnlyTerminalHook: vi.fn(),
@@ -71,8 +71,8 @@ vi.mock("../extensions.js", () => ({
   buildEmbeddedExtensionFactories: hoisted.buildEmbeddedExtensionFactories,
 }));
 vi.mock("../logger.js", () => ({ log: { info: vi.fn() } }));
-vi.mock("../resource-loader.js", () => ({
-  createEmbeddedAgentResourceLoader: hoisted.createEmbeddedAgentResourceLoader,
+vi.mock("../../sessions/resource-loader.js", () => ({
+  DefaultResourceLoader: hoisted.DefaultResourceLoader,
 }));
 vi.mock("./attempt-client-tools.js", () => ({
   prepareEmbeddedAttemptClientTools: hoisted.prepareEmbeddedAttemptClientTools,
@@ -146,7 +146,11 @@ function createInput(options?: { activationError?: Error }) {
   hoisted.resolveEffectiveCompactionMode.mockReturnValue("safeguard");
   hoisted.isSilentOverflowProneModel.mockReturnValue(false);
   hoisted.buildEmbeddedExtensionFactories.mockReturnValue([{ id: "extension" }]);
-  hoisted.createEmbeddedAgentResourceLoader.mockReturnValue(resourceLoader);
+  hoisted.DefaultResourceLoader.mockImplementation(
+    class {
+      reload = resourceLoader.reload;
+    },
+  );
   hoisted.getGlobalHookRunner.mockReturnValue(hookRunner);
   hoisted.prepareEmbeddedAttemptClientTools.mockReturnValue({
     allCustomTools,
