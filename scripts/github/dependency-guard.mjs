@@ -188,7 +188,7 @@ function renderApprovedDependencyComment(approval, changes) {
       : "### ✅ Dependency graph changes approved",
     "",
     approval.kind === "author"
-      ? "This maintainer PR changes the dependency graph. This comment is informational because the PR author has repository Maintain or Admin access."
+      ? "This maintainer PR changes the dependency graph.\n\n### This comment is informational because the PR author has Maintain or Admin access. No secops approval is required."
       : "A maintainer approved this revision with an explicit dependency approval comment.",
     "",
     `- Current SHA: ${markdownCode(approval.sha)}`,
