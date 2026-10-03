@@ -70,6 +70,9 @@ openclaw mcp doctor docs --probe
 
 Useful companions: `openclaw mcp status --verbose` for a config-only summary, `openclaw mcp probe <name>` for live capabilities, and `openclaw mcp login <name>` when an HTTP server uses OAuth. The [MCP CLI reference](/cli/mcp) documents every command, flag, and output shape, plus the separate `mcp serve` bridge.
 
+For ready-made examples, including Screenpipe screen and audio history, see
+[Common server recipes](/cli/mcp/registry#common-server-recipes).
+
 ## Configure a server directly
 
 The same `docs` server, written straight into config:
