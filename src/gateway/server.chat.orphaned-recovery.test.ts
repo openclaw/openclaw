@@ -135,6 +135,7 @@ it("chat.send recovers failed and statusless work for new messages and retained 
         restartRecoveryDeliverySourceRunId: sourceRunId,
         restartRecoveryDeliveryRequestFingerprint: createRestartSafeChatRequest({
           cfg,
+          controlUiVisible: true,
           eligible: true,
           message: priorMessage,
           senderIsOwner: true,
