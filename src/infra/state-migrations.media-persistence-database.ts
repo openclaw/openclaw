@@ -17,7 +17,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { readSqliteDataVersion } from "./node-sqlite.js";
+import { readSqliteDataVersion } from "./sqlite-schema-facts.js";
 import {
   parseTranscriptEvent,
   transformTranscriptEvent,

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import nodePath from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { applyAgentDatabaseReaderRequest } from "../infra/agent-database-readers.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
@@ -39,6 +40,7 @@ it("bounds query preparation while scoped reads observe new commits", async () =
             .select("updated_at")
             .where("meta_key", "=", "primary");
           const prepare = vi.spyOn(db, "prepare");
+          const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
           try {
             for (let stamp = 1; stamp <= 20; stamp++) {
               writer
@@ -53,7 +55,16 @@ it("bounds query preparation while scoped reads observe new commits", async () =
             }
             const preparations = prepare.mock.calls.filter(([sql]) => sql === query.compile().sql);
             expect(preparations.length).toBeLessThanOrEqual(2);
+            expect(
+              observation.queries.filter((sql) => /^PRAGMA data_version$/iu.test(sql)),
+            ).toHaveLength(20);
+            expect(
+              observation.queries.filter((sql) =>
+                /^SELECT role, schema_version, agent_id/iu.test(sql),
+              ),
+            ).toHaveLength(20);
           } finally {
+            observation.restore();
             prepare.mockRestore();
           }
         }, options);
