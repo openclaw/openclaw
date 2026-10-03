@@ -37,6 +37,57 @@ final class SystemsNavigationUITests: XCTestCase {
         capture(app, named: "systems-saved-pins-preserved")
     }
 
+    func testLiveGatewaySystemsDestinationOpensDashboard() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone, "iPhone sidebar evidence")
+        let environment = ProcessInfo.processInfo.environment
+        try XCTSkipUnless(
+            environment["OPENCLAW_IOS_LIVE_GATEWAY"] == "1",
+            "Requires an isolated live Gateway"
+        )
+        let setupCode = try XCTUnwrap(environment["OPENCLAW_IOS_LIVE_SETUP_CODE"])
+
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        addUIInterruptionMonitor(withDescription: "Local network access") { alert in
+            guard alert.buttons["Allow"].exists else { return false }
+            alert.buttons["Allow"].tap()
+            return true
+        }
+        app.launchArguments = [
+            "--openclaw-reset-onboarding",
+            "--openclaw-initial-tab", "chat",
+            "--openclaw-initial-destination", "chat",
+            "-AppleLanguages", "(en)",
+        ]
+        app.launch()
+        XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 15))
+        app.buttons["Continue"].tap()
+        app.tap()
+        XCTAssertTrue(app.buttons["Connect Manually"].waitForExistence(timeout: 10))
+        app.buttons["Connect Manually"].tap()
+        let setupField = app.textFields["Enter setup code"]
+        XCTAssertTrue(setupField.waitForExistence(timeout: 5))
+        setupField.tap()
+        setupField.typeText(setupCode)
+        app.buttons["Apply"].tap()
+        XCTAssertTrue(app.staticTexts["You're connected"].waitForExistence(timeout: 60))
+        app.buttons["Go to Chat"].tap()
+
+        let showSidebar = app.buttons["RootTabs.Sidebar.Show"]
+        XCTAssertTrue(showSidebar.waitForExistence(timeout: 15), app.debugDescription)
+        showSidebar.tap()
+        let systems = app.buttons["RootTabs.Sidebar.Destination.systems"]
+        XCTAssertTrue(systems.waitForExistence(timeout: 10), app.debugDescription)
+        systems.tap()
+
+        XCTAssertTrue(app.navigationBars["Systems"].waitForExistence(timeout: 15))
+        let dashboard = app.webViews.firstMatch
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 30), app.debugDescription)
+        XCTAssertTrue(dashboard.staticTexts["Systems"].waitForExistence(timeout: 60), app.debugDescription)
+        XCTAssertFalse(app.descendants(matching: .any)["SettingsHub.Fallback"].exists)
+        capture(app, named: "systems-live-dashboard")
+    }
+
     private func launchApp(pinnedPages: String) -> XCUIApplication {
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait
