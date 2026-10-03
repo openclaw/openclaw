@@ -196,20 +196,6 @@ function pullsByHeadUrl(owner: string, repo: string, head: string): string {
   return `${sessionPullRequestRepositoryApiUrl({ owner, repo })}/pulls?head=${encHead}&state=all&sort=updated&direction=desc&per_page=5`;
 }
 
-async function fetchParentRepo(
-  owner: string,
-  repo: string,
-  fetchImpl: typeof fetch,
-  token: string | undefined,
-): Promise<{ owner: string; repo: string } | null> {
-  const value = await gitHubPublicApi.fetchGitHubJson(
-    sessionPullRequestRepositoryApiUrl({ owner, repo }),
-    fetchImpl,
-    token,
-  );
-  return resolveGitHubForkParent(value) ?? null;
-}
-
 // Sub-fetch degradation: quota errors abort the whole refresh (so the caller
 // serves stale chips with the rate-limit flag); anything else just drops the
 // optional field the sub-fetch would have filled.
@@ -290,19 +276,22 @@ async function fetchBranchPullRequests(
   token: string | undefined,
 ): Promise<BranchPullRequestsSnapshot> {
   const head = `${context.owner}:${context.branch}`;
-  const hasWorkingBranch = Boolean(context.branch && context.branch !== context.defaultBranch);
-  let items = hasWorkingBranch
-    ? parsePullList(
-        await gitHubPublicApi.fetchGitHubJson(
-          pullsByHeadUrl(context.owner, context.repo, head),
-          fetchImpl,
-          token,
-        ),
-      )
-    : [];
-  if (hasWorkingBranch && items.length === 0) {
+  let items = parsePullList(
+    await gitHubPublicApi.fetchGitHubJson(
+      pullsByHeadUrl(context.owner, context.repo, head),
+      fetchImpl,
+      token,
+    ),
+  );
+  if (items.length === 0) {
     // Fork flow: the branch lives on the fork but PRs open against the parent.
-    const parent = await fetchParentRepo(context.owner, context.repo, fetchImpl, token);
+    const parent = resolveGitHubForkParent(
+      await gitHubPublicApi.fetchGitHubJson(
+        sessionPullRequestRepositoryApiUrl(context),
+        fetchImpl,
+        token,
+      ),
+    );
     if (parent) {
       items = parsePullList(
         await gitHubPublicApi.fetchGitHubJson(
@@ -316,34 +305,20 @@ async function fetchBranchPullRequests(
   // Landing detection needs every fetched merged head, not just the displayed
   // slice: a squash-merged PR sorted past the cap still proves the tip landed.
   const mergedHeads = mergedHeadsOf(items);
-  const workingBranchHasLivePullRequest = items.some(
-    (item) => item.state === "open" || item.state === "draft",
-  );
   const isActive = (item: PullListItem) => item.state === "open" || item.state === "draft";
+  const workingBranchHasLivePullRequest = items.some(isActive);
   const capped = items
     .toSorted((left, right) => Number(isActive(right)) - Number(isActive(left)))
     .slice(0, MAX_PULL_REQUESTS);
   const branchOf = (item: PullListItem) => item.branch ?? context.branch ?? "";
   // The display cap must not discard evidence needed by publication recovery.
   const publicationCandidates = items.map((item) => stateOnlyPullRequestChip(item, branchOf(item)));
-  const stateOnlySnapshot = () => ({
-    pullRequests: capped.map((item) => stateOnlyPullRequestChip(item, branchOf(item))),
-    rateLimited: true,
-    publicationCandidates,
-    mergedHeads,
-    workingBranchHasLivePullRequest,
-  });
+  let pullRequests: ControlUiSessionPullRequest[];
+  let rateLimited = false;
   try {
-    const pullRequests = await Promise.all(
+    pullRequests = await Promise.all(
       capped.map((item) => finishPullRequest(item, branchOf(item), fetchImpl, token)),
     );
-    return {
-      pullRequests,
-      rateLimited: false,
-      publicationCandidates,
-      mergedHeads,
-      workingBranchHasLivePullRequest,
-    };
   } catch (error) {
     if (!(error instanceof gitHubPublicApi.ControlUiGitHubError && error.statusCode === 429)) {
       throw error;
@@ -351,8 +326,16 @@ async function fetchBranchPullRequests(
     // Quota ran out between the list fetch and the per-PR detail fetches:
     // keep the proven PR list as state-only chips instead of dropping it, or
     // a cold cache would show a Create PR row despite a known open PR.
-    return stateOnlySnapshot();
+    pullRequests = capped.map((item) => stateOnlyPullRequestChip(item, branchOf(item)));
+    rateLimited = true;
   }
+  return {
+    pullRequests,
+    rateLimited,
+    publicationCandidates,
+    mergedHeads,
+    workingBranchHasLivePullRequest,
+  };
 }
 
 async function refreshBranchPullRequests(

@@ -73,10 +73,9 @@ async function shutdownStep(
   name: string,
   fn: () => Promise<void> | void,
   warnings: string[],
-): Promise<boolean> {
+): Promise<void> {
   try {
     await fn();
-    return true;
   } catch (err: unknown) {
     if (hasRetainedPluginRuntimeCloseError(err)) {
       throw err;
@@ -84,7 +83,6 @@ async function shutdownStep(
     const detail = err instanceof Error ? err.message : String(err);
     shutdownLog.warn(`${name}: ${detail}`);
     recordShutdownWarning(warnings, name);
-    return false;
   }
 }
 

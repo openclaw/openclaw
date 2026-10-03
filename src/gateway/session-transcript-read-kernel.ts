@@ -109,36 +109,20 @@ function capAnchorEventsByBytes(
   return events.slice(start);
 }
 
-function normalizeRecentSqliteReadOptions(
+function readRecentSqliteMessageRecords(
+  projection: CurrentTranscriptProjection,
   opts?: Partial<ReadRecentSessionMessagesOptions> &
     TranscriptReadWindowOptions & { readOnly?: boolean },
-) {
+): ReadRecentSessionMessagesResult {
   const maxMessages = Math.max(0, Math.floor(opts?.maxMessages ?? 0));
-  return {
+  const page = readRecentSessionTranscriptHistoryEventsFromProjection(projection, {
     maxMessages,
     maxBytes: resolveIntegerOption(opts?.maxBytes, 8 * 1024 * 1024, { min: 1024 }),
     maxLines: resolveIntegerOption(opts?.maxLines, maxMessages * 20 + 20, { min: maxMessages }),
     captureReadWindow: opts?.captureReadWindow,
     expectedReadWindow: opts?.expectedReadWindow,
     readOnly: opts?.readOnly,
-  };
-}
-
-function readRecentSqliteMessageRecords(
-  projection: CurrentTranscriptProjection,
-  opts?: Partial<ReadRecentSessionMessagesOptions> &
-    TranscriptReadWindowOptions & { readOnly?: boolean },
-): {
-  activeLeafEntryId?: string | null;
-  deltaCursor?: string;
-  displaySource?: string;
-  readWindow?: TranscriptReadWindow;
-  windowReset?: boolean;
-  messages: unknown[];
-  totalMessages: number;
-} {
-  const normalized = normalizeRecentSqliteReadOptions(opts);
-  const page = readRecentSessionTranscriptHistoryEventsFromProjection(projection, normalized);
+  });
   return {
     ...(page.activeLeafEntryId !== undefined ? { activeLeafEntryId: page.activeLeafEntryId } : {}),
     ...(page.deltaCursor ? { deltaCursor: page.deltaCursor } : {}),

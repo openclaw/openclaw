@@ -7,11 +7,7 @@ import {
 import { isRedactedSecretValue } from "../config/redact-sentinel.js";
 import type { GatewayAuthConfig, GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
-import {
-  AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
-  type AuthRateLimiter,
-  type RateLimitCheckResult,
-} from "./auth-rate-limit.js";
+import { AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET, type AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth-resolve.js";
 import { getHeader } from "./http-header-value.js";
 import {
@@ -31,7 +27,7 @@ import {
   resolveRequestClientIpFromHeaders,
   isTrustedProxyAddress,
 } from "./net.js";
-import { checkBrowserOrigin } from "./origin-check.js";
+import { checkBrowserOrigin, type BrowserOriginPolicy } from "./origin-check.js";
 import { withSerializedRateLimitAttempt } from "./rate-limit-attempt-serialization.js";
 export { resolveGatewayAuth, type ResolvedGatewayAuth } from "./auth-resolve.js";
 const LEGACY_OPENCLAW_ENV_NOTE =
@@ -89,28 +85,10 @@ type AuthorizeGatewayConnectParams = {
   /** Trust X-Real-IP only when explicitly enabled. */
   allowRealIpFallback?: boolean;
   /** Optional browser-origin policy for HTTP requests that require Origin checks. */
-  browserOriginPolicy?: {
-    requestHost?: string;
-    origin?: string;
-    fetchSite?: string;
-    allowedOrigins?: string[];
-    allowHostHeaderOriginFallback?: boolean;
-  };
+  browserOriginPolicy?: BrowserOriginPolicy;
 };
 
-type GatewayAuthRequestContext = {
-  authSurface: GatewayAuthSurface;
-  limiter?: AuthRateLimiter;
-  subject?: string;
-  rateLimitScope: string;
-  localDirect: boolean;
-  resetOnSuccess: boolean;
-  ingressAttribution?: GatewayIngressAttribution;
-};
-
-function resolveGatewayAuthRequestContext(
-  params: AuthorizeGatewayConnectParams,
-): GatewayAuthRequestContext {
+function resolveGatewayAuthRequestContext(params: AuthorizeGatewayConnectParams) {
   const { req, trustedProxies } = params;
   const authSurface = params.authSurface ?? "http";
   const attributed =
@@ -302,17 +280,6 @@ function authorizeHttpBrowserOrigin(params: {
   return originCheck.ok ? null : { ok: false, reason: params.reason };
 }
 
-function authorizeTrustedProxyBrowserOrigin(params: {
-  authSurface: GatewayAuthSurface;
-  browserOriginPolicy?: AuthorizeGatewayConnectParams["browserOriginPolicy"];
-}): { ok: false; reason: string } | null {
-  return authorizeHttpBrowserOrigin({
-    ...params,
-    isLocalClient: false,
-    reason: "trusted_proxy_origin_not_allowed",
-  });
-}
-
 async function authorizeSharedSecretAuth(params: {
   method: "token" | "password";
   configuredSecret?: string;
@@ -356,7 +323,7 @@ function rejectIfRateLimited(params: {
   if (!params.limiter) {
     return undefined;
   }
-  const rlCheck: RateLimitCheckResult = params.limiter.check(params.ip, params.rateLimitScope);
+  const rlCheck = params.limiter.check(params.ip, params.rateLimitScope);
   if (rlCheck.allowed) {
     return undefined;
   }
@@ -473,9 +440,11 @@ async function authorizeGatewayConnectCore(
       if (ingressAttribution?.kind !== "trusted-proxy") {
         return { ok: false, reason: PROXY_ATTRIBUTION_REQUIRED_REASON };
       }
-      const originResult = authorizeTrustedProxyBrowserOrigin({
+      const originResult = authorizeHttpBrowserOrigin({
         authSurface,
         browserOriginPolicy: params.browserOriginPolicy,
+        isLocalClient: false,
+        reason: "trusted_proxy_origin_not_allowed",
       });
       if (originResult) {
         return originResult;

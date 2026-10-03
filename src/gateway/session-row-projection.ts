@@ -22,6 +22,7 @@ import { ensureSessionGroupCatalog } from "./session-group-catalog.js";
 import { createSessionMembershipProjection } from "./session-membership-projection.js";
 import { createSessionProjectionDrain, yieldSessionListWork } from "./session-projection-work.js";
 import * as rowMembership from "./session-row-membership-read.js";
+import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import * as rowRelations from "./session-row-projection-ancestors.js";
@@ -620,16 +621,19 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     readPreparedRowContext: () =>
       disposed ? undefined : inOwnerContext(() => metadata.readPrepared(epoch)),
     readPreparedSpawnedBy,
-    capture: rowReads.createSessionRowCapture(
-      lookup,
-      (row) =>
+    capture(query: records.Lookup) {
+      const row = lookup(query);
+      // Capture retains published identity while category facts wait for reconciliation.
+      return row &&
+        row.unresolvedDatabaseFacts !== "category" &&
         !topologyDirty &&
         !row.entry &&
         row.storedEntry !== undefined &&
         row.unresolvedDatabaseFacts !== true &&
-        Boolean(inOwnerContext(subagents.snapshotIdentity)),
-      (row) => acquireEntry(row, row.storedEntry),
-    ),
+        inOwnerContext(subagents.snapshotIdentity)
+        ? (acquireEntry(row, row.storedEntry) ?? row)
+        : row;
+    },
     findBySessionId(query: Parameters<typeof rowReads.findSessionRowById>[0]) {
       return rowReads.findSessionRowById(query, { disposed, lookup, matching, scope });
     },
@@ -657,11 +661,22 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       } => projection,
     }),
     setArchivePageSize: archive.setPageSize,
-    modelFacts: rowReads.createSessionRowModelFactsReader({
-      lookup,
-      readSourceEntry,
-      state: () => ({ cfg, modelCatalog: catalog.current, rowContext: metadata.current }),
-    }),
+    modelFacts(query: records.Lookup, metadataPrepared = false) {
+      const row = lookup(query);
+      if (!row?.entry) {
+        throw new Error("Session changed while preparing search facts; retry the request");
+      }
+      return readSessionRowModelFacts({
+        cfg,
+        modelCatalog: catalog.current,
+        rowContext: metadata.current,
+        ...row,
+        source: {
+          entry: row.storedEntry,
+          readSourceEntry: (key) => readSourceEntry(row, key, metadataPrepared),
+        },
+      });
+    },
     present: (record: records.MaterializedRow, options?: records.SnapshotOptions) =>
       records.present(record, metadata.current, options),
     ensureMaterialized,

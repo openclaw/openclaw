@@ -157,7 +157,6 @@ export type SessionSharingRoleParams = {
   cfg?: OpenClawConfig;
   client: GatewayClient | null;
   target: SessionSharingTarget;
-  includeMembership?: boolean;
   isMember?: boolean;
 };
 
@@ -209,15 +208,14 @@ export function resolveSessionSharingRole(
   }
   const member =
     params.isMember ??
-    (params.includeMembership !== false &&
-      isSessionMember(
-        {
-          agentId: params.target.agentId,
-          sessionKey: params.target.storeKey,
-          storePath: params.target.storePath,
-        },
-        identity.id,
-      ));
+    isSessionMember(
+      {
+        agentId: params.target.agentId,
+        sessionKey: params.target.storeKey,
+        storePath: params.target.storePath,
+      },
+      identity.id,
+    );
   return member ? "member" : "viewer";
 }
 
