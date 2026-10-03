@@ -6,7 +6,7 @@ import { NonEmptyString } from "./schema/primitives.js";
 export const SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY = "system.run.execution-context.v1";
 
 /** Routing hints only; never session, turn, or approval authority. */
-export const SystemRunExecutionContextSchema = closedObject({
+const SystemRunExecutionContextSchema = closedObject({
   senderId: Type.Optional(NonEmptyString),
   chatId: Type.Optional(NonEmptyString),
   subagent: Type.Optional(Type.Literal(true)),
