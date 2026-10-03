@@ -29,6 +29,7 @@ import {
   resolvePackedTarballPath,
   resolveReleaseNpmCommand,
   runReleaseCheckCommand,
+  writePackedBundledPluginActivationConfig,
 } from "../scripts/release-check.ts";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import { resolveNpmJsonEntries as resolveRuntimeNpmJsonEntries } from "../src/infra/npm-registry-spec.js";
@@ -185,6 +186,25 @@ describe("packed CLI smoke", () => {
       HOME: homeDir,
       OPENCLAW_STATE_DIR: join(homeDir, ".openclaw"),
     });
+  });
+
+  it("keeps bundled plugin activation independent of model runtimes", () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "openclaw-release-activation-config-"));
+    try {
+      writePackedBundledPluginActivationConfig(homeDir);
+      const config = JSON.parse(
+        readFileSync(join(homeDir, ".openclaw", "openclaw.json"), "utf8"),
+      ) as Record<string, unknown>;
+
+      expect(config).toMatchObject({
+        channels: { telegram: { enabled: true } },
+        plugins: { enabled: true, allow: ["telegram"], entries: { telegram: { enabled: true } } },
+      });
+      expect(config).not.toHaveProperty("agents");
+      expect(config).not.toHaveProperty("models");
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
   });
 
   it("does not admit provider credentials through smoke overrides", () => {
