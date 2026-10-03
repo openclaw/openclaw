@@ -41,7 +41,7 @@ overrides:
   "@agentclientprotocol/codex-acp@1.12.0>@openai/codex": 0.160.0
   "@codemirror/commands@6.11.1>@codemirror/view": 6.43.13
   "@codemirror/view@6.43.13>@codemirror/state": 6.7.6
-  "@anthropic-ai/sdk": 0.127.0
+  "@anthropic-ai/sdk": 0.128.0
   "@anthropic-ai/vertex-sdk@0.19.10>google-auth-library": 11.1.0
   "@opentelemetry/core": 2.11.0
   "@opentelemetry/propagator-jaeger": 2.11.0

@@ -132,27 +132,6 @@ async function runPostCompactionSessionMemorySync(params: PostCompactionSession)
   }
 }
 
-function syncPostCompactionSessionMemory(
-  params: PostCompactionSession & {
-    mode: "off" | "async" | "await";
-  },
-): Promise<void> {
-  if (params.mode === "off" || !params.config) {
-    return Promise.resolve();
-  }
-
-  const syncTask = runPostCompactionSessionMemorySync(params);
-  if (params.mode === "await") {
-    return syncTask;
-  }
-  // Async indexing must not retain a closed foreground owner or leak an abort
-  // rejection after the caller has already settled its turn.
-  void syncTask.catch((error: unknown) => {
-    log.debug(`memory sync cancelled (post-compaction): ${formatErrorMessage(error)}`);
-  });
-  return Promise.resolve();
-}
-
 export async function runPostCompactionSideEffects(params: PostCompactionSession): Promise<void> {
   await params.assertActive?.();
   const sessionFile = params.sessionFile.trim();
@@ -166,11 +145,18 @@ export async function runPostCompactionSideEffects(params: PostCompactionSession
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   await params.assertActive?.();
-  await syncPostCompactionSessionMemory({
-    ...params,
-    sessionFile,
-    mode: params.config?.agents?.defaults?.compaction?.postIndexSync ?? "async",
-  });
+  const mode = params.config?.agents?.defaults?.compaction?.postIndexSync ?? "async";
+  const syncTask =
+    mode !== "off" && params.config
+      ? runPostCompactionSessionMemorySync({ ...params, sessionFile })
+      : undefined;
+  if (mode !== "await") {
+    // Async indexing cannot leak an abort rejection after foreground settlement.
+    void syncTask?.catch((error: unknown) => {
+      log.debug(`memory sync cancelled (post-compaction): ${formatErrorMessage(error)}`);
+    });
+  }
+  await (mode === "await" ? syncTask : undefined);
   await params.assertActive?.();
 }
 

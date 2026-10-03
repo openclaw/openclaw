@@ -366,6 +366,7 @@ type SessionTranscriptAssistantAppendOptions = {
   updateMode?: SessionTranscriptUpdateMode;
   config?: OpenClawConfig;
   beforeMessageWrite?: AssistantBeforeMessageWrite;
+  assertCurrent?: () => void;
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
 };
 
@@ -502,6 +503,7 @@ export async function appendExactAssistantMessageToSessionTranscript(
   // Keyed mirrors use strict replay identity; text-only suppression must not
   // hide conflicting media or collapse distinct source messages.
   const turn = await persistSessionTranscriptTurn(target, {
+    assertCurrent: params.assertCurrent,
     cwd: entry.spawnedCwd,
     ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
     ...(params.expectedLifecycleRevision !== undefined
@@ -526,14 +528,16 @@ export async function appendExactAssistantMessageToSessionTranscript(
         ...(explicitIdempotencyKey ? { idempotencyLookup: "scan" } : {}),
         ...(explicitIdempotencyKey && params.beforeMessageWrite
           ? {
-              prepareMessageAfterIdempotencyCheck: (candidate: unknown) =>
-                applyBeforeMessageWriteToAssistant({
-                  message: candidate as Parameters<SessionManager["appendMessage"]>[0],
-                  beforeMessageWrite: params.beforeMessageWrite,
-                  explicitIdempotencyKey,
-                  agentId: transcriptAgentId,
-                  sessionKey: resolved.normalizedKey,
-                }),
+              workerPreparation: {
+                prepareMessageAfterIdempotencyCheck: (candidate: unknown) =>
+                  applyBeforeMessageWriteToAssistant({
+                    message: candidate as Parameters<SessionManager["appendMessage"]>[0],
+                    beforeMessageWrite: params.beforeMessageWrite,
+                    explicitIdempotencyKey,
+                    agentId: transcriptAgentId,
+                    sessionKey: resolved.normalizedKey,
+                  }),
+              },
             }
           : {}),
         shouldAppend: async (appendTarget) => {

@@ -21,28 +21,6 @@ import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-me
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-function applyCleanupBookkeeping(
-  cleanup: CleanupBookkeepingParams,
-  suppressSessionEffects: boolean,
-  retireAfterSettle: boolean,
-): void {
-  const { entry } = cleanup;
-  entry.cleanupCompletedAt = cleanup.completedAt;
-  if (suppressSessionEffects) {
-    entry.execution = {
-      ...entry.execution,
-      restartRecovery: undefined,
-      suppressSessionEffects: true,
-    };
-    entry.terminalOwner = undefined;
-  }
-  if (entry.collect) {
-    entry.requesterSettleWake = undefined;
-  } else if (!cleanup.skipRequesterSettleWake) {
-    markRequesterSettleWakePending(entry, { retireAfterSettle });
-  }
-}
-
 export async function completeCleanupBookkeeping(
   context: SubagentLifecycleWakeContext,
   cleanupParams: CleanupBookkeepingParams,
@@ -176,11 +154,20 @@ export async function completeCleanupBookkeeping(
       retireImmediately = retireAfterSettle && cleanupParams.skipRequesterSettleWake === true;
       cleanupParams.discardDelivery?.(draft);
       if (!retireImmediately) {
-        applyCleanupBookkeeping(
-          { ...cleanupParams, entry: draft },
-          suppressSessionEffects,
-          retireAfterSettle,
-        );
+        draft.cleanupCompletedAt = cleanupParams.completedAt;
+        if (suppressSessionEffects) {
+          draft.execution = {
+            ...draft.execution,
+            restartRecovery: undefined,
+            suppressSessionEffects: true,
+          };
+          draft.terminalOwner = undefined;
+        }
+        if (draft.collect) {
+          draft.requesterSettleWake = undefined;
+        } else if (!cleanupParams.skipRequesterSettleWake) {
+          markRequesterSettleWakePending(draft, { retireAfterSettle });
+        }
       }
     },
   });

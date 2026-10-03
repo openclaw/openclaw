@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizePendingFinalDeliveryText } from "../../../auto-reply/reply/pending-final-delivery-state.js";
 import {
@@ -294,12 +295,10 @@ function collectDirectCompletionContent(params: {
     const textParts: string[] = [];
     const mediaUrls = new Set<string>();
     let audioAsVoice = false;
-    for (const payload of payloads) {
-      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    for (const record of payloads) {
+      if (!isRecord(record)) {
         continue;
       }
-      // SAFETY: The object/array guard above narrows payload to a plain record boundary.
-      const record = payload as Record<string, unknown>;
       if (
         !hasVisibleAgentPayload(
           { payloads: [record] },

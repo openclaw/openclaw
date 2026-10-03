@@ -1,5 +1,5 @@
 import type { ModelCompatConfig, ModelMediaInputConfig } from "../../config/types.models.js";
-import { isVllmQwenThinkingCompat as hasVllmQwenThinkingCompat } from "../model-compat-catalog.js";
+import { isVllmQwenThinkingCompat } from "../model-compat-catalog.js";
 import { normalizeProviderId } from "../model-selection.js";
 
 export function mergeModelMediaInput(
@@ -25,44 +25,15 @@ export function mergeModelMediaInput(
   };
 }
 
-export function resolveConfiguredFallbackReasoning(params: {
-  provider: string;
-  compat?: unknown;
-  reasoning?: boolean;
-}): boolean {
-  return params.reasoning ?? isVllmQwenThinkingCompat(params);
-}
-
 export function resolveMergedConfiguredModelReasoning(params: {
   provider: string;
-  compat?: unknown;
+  compat?: ModelCompatConfig;
   configuredReasoning?: boolean;
   discoveredReasoning?: boolean;
 }): boolean {
-  if (params.configuredReasoning !== undefined) {
-    return params.configuredReasoning;
-  }
-  return isVllmQwenThinkingCompat(params) || (params.discoveredReasoning ?? false);
-}
-
-function isVllmQwenThinkingCompat(params: { provider: string; compat?: unknown }): boolean {
-  const { compat } = params;
-  if (!compat || typeof compat !== "object" || Array.isArray(compat)) {
-    return false;
-  }
-  const thinkingFormat = (compat as { thinkingFormat?: unknown }).thinkingFormat;
-  return hasVllmQwenThinkingCompat(normalizeProviderId(params.provider), { thinkingFormat });
-}
-
-export function mergeModelCompat(
-  base: ModelCompatConfig | undefined,
-  override: ModelCompatConfig | undefined,
-): ModelCompatConfig | undefined {
-  if (!base) {
-    return override;
-  }
-  if (!override) {
-    return base;
-  }
-  return { ...base, ...override };
+  return (
+    params.configuredReasoning ??
+    (isVllmQwenThinkingCompat(normalizeProviderId(params.provider), params.compat) ||
+      (params.discoveredReasoning ?? false))
+  );
 }

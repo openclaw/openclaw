@@ -750,54 +750,48 @@ export class DefaultPackageManager implements PackageManager {
       manifest !== null || RESOURCE_TYPES.some((type) => existsSync(join(packageRoot, type)));
     for (const resourceType of RESOURCE_TYPES) {
       const patterns = filter?.[resourceType];
-      const target = accumulator[resourceType];
-      if (patterns !== undefined) {
-        this.applyPackageFilter(packageRoot, patterns, resourceType, target, metadata);
-        continue;
-      }
       const entries = manifest?.[resourceType];
-      if (manifest !== null && (!filter || entries !== undefined)) {
-        this.addManifestEntries(entries, packageRoot, resourceType, target, metadata);
-        continue;
+      // User filters fall back to conventions for absent or empty manifest entries.
+      // Without a user filter, an explicit manifest can deliberately omit a type.
+      const useManifest =
+        patterns !== undefined
+          ? Boolean(entries?.length)
+          : manifest !== null && (!filter || entries !== undefined);
+      let allFiles: string[];
+      if (useManifest) {
+        const files = this.collectFilesFromManifestEntries(
+          entries ?? [],
+          packageRoot,
+          resourceType,
+        );
+        const enabled = applyPatterns(
+          files,
+          (entries ?? []).filter(isOverridePattern),
+          packageRoot,
+        );
+        // Package defaults retain discovery order; filtered packages retain pattern order.
+        allFiles =
+          patterns === undefined ? files.filter((file) => enabled.has(file)) : [...enabled];
+      } else {
+        allFiles = this.collectConventionResourceFiles(packageRoot, resourceType);
       }
-      for (const path of this.collectConventionResourceFiles(packageRoot, resourceType)) {
-        this.addResource(target, path, metadata, true);
+      // An explicit empty filter disables the type; absent filters use package defaults.
+      const enabledByUser =
+        patterns === undefined
+          ? undefined
+          : patterns.length > 0
+            ? applyPatterns(allFiles, patterns, packageRoot)
+            : new Set<string>();
+      for (const path of allFiles) {
+        this.addResource(
+          accumulator[resourceType],
+          path,
+          metadata,
+          enabledByUser?.has(path) ?? true,
+        );
       }
     }
     return hasPackageLayout;
-  }
-
-  private applyPackageFilter(
-    packageRoot: string,
-    userPatterns: string[],
-    resourceType: ResourceType,
-    target: Map<string, ResourceState>,
-    metadata: PathMetadata,
-  ): void {
-    const allFiles = this.collectManifestFiles(packageRoot, resourceType);
-
-    // An explicit empty filter disables the type; absent filters use package defaults.
-    const enabledByUser =
-      userPatterns.length > 0 ? applyPatterns(allFiles, userPatterns, packageRoot) : new Set();
-    for (const f of allFiles) {
-      this.addResource(target, f, metadata, enabledByUser.has(f));
-    }
-  }
-
-  private collectManifestFiles(packageRoot: string, resourceType: ResourceType): string[] {
-    const manifest = readResourceManifestFile(join(packageRoot, "package.json"));
-    const entries = manifest?.[resourceType];
-    if (entries && entries.length > 0) {
-      const allFiles = this.collectFilesFromManifestEntries(entries, packageRoot, resourceType);
-      const manifestPatterns = entries.filter(isOverridePattern);
-      return Array.from(
-        manifestPatterns.length > 0
-          ? applyPatterns(allFiles, manifestPatterns, packageRoot)
-          : new Set(allFiles),
-      );
-    }
-
-    return this.collectConventionResourceFiles(packageRoot, resourceType);
   }
 
   private collectConventionResourceFiles(
@@ -812,28 +806,6 @@ export class DefaultPackageManager implements PackageManager {
       collectResourceFiles(conventionDir, resourceType),
       packageRoot,
     );
-  }
-
-  private addManifestEntries(
-    entries: string[] | undefined,
-    root: string,
-    resourceType: ResourceType,
-    target: Map<string, ResourceState>,
-    metadata: PathMetadata,
-  ): void {
-    if (!entries) {
-      return;
-    }
-
-    const allFiles = this.collectFilesFromManifestEntries(entries, root, resourceType);
-    const patterns = entries.filter(isOverridePattern);
-    const enabledPaths = applyPatterns(allFiles, patterns, root);
-
-    for (const f of allFiles) {
-      if (enabledPaths.has(f)) {
-        this.addResource(target, f, metadata, true);
-      }
-    }
   }
 
   private collectFilesFromManifestEntries(

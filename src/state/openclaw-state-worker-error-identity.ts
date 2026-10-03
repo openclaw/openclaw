@@ -1,6 +1,12 @@
 import { DuplicateAgentError } from "../agents/agent-create-error.js";
 import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
 import { WorkspaceAliasRepointedError } from "../agents/workspace-state-identity.js";
+import {
+  SESSION_GOAL_OPERATION_ERROR_CODES,
+  SessionGoalOperationError,
+  type SessionGoalOperationErrorCode,
+} from "../config/sessions/goals-operations.types.js";
+import { SessionPendingInputCustodyError } from "../config/sessions/session-pending-input-custody-error.js";
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import {
@@ -36,6 +42,7 @@ type StateMigrationKind = ConstructorParameters<
 
 export type ErrorIdentity =
   | { type: "secret-store-validation"; secretCode: SecretStoreValidationError["code"] }
+  | { type: "session-goal-operation"; goalCode: SessionGoalOperationErrorCode }
   | { type: "worker-session-already-attached"; sessionId: string; environmentId: string }
   | {
       type: "workspace-alias-repointed";
@@ -55,7 +62,8 @@ export type ErrorIdentity =
         | "type-error"
         | "duplicate-agent"
         | "skill-upload-request"
-        | "mcp-oauth-corruption";
+        | "mcp-oauth-corruption"
+        | "session-pending-input-custody";
     }
   | { type: "state-owner-contention"; databasePath: string }
   | { type: "ownership-metadata"; databasePath: string }
@@ -108,6 +116,12 @@ export function identifyError(error: Error): ErrorIdentity {
   }
   if (error instanceof McpOAuthStoreCorruptionError) {
     return { type: "mcp-oauth-corruption" };
+  }
+  if (error instanceof SessionGoalOperationError) {
+    return { type: "session-goal-operation", goalCode: error.code };
+  }
+  if (error instanceof SessionPendingInputCustodyError) {
+    return { type: "session-pending-input-custody" };
   }
   if (error instanceof SessionMetadataUnavailableError) {
     return {
@@ -224,7 +238,12 @@ export function parseIdentity(node: Record<string, unknown>): ErrorIdentity | un
     case "duplicate-agent":
     case "skill-upload-request":
     case "mcp-oauth-corruption":
+    case "session-pending-input-custody":
       return { type: node.type };
+    case "session-goal-operation": {
+      const goalCode = SESSION_GOAL_OPERATION_ERROR_CODES.find((code) => code === node.goalCode);
+      return goalCode && node.code === goalCode ? { type: node.type, goalCode } : undefined;
+    }
     case "session-metadata":
       return (node.reason === "schema-missing" || node.reason === "table-missing") &&
         Array.isArray(node.missingTables) &&
@@ -291,6 +310,10 @@ export function createError(node: ErrorIdentity & { message: string }): Error {
       return new WorkerSessionAlreadyAttachedError(node.sessionId, node.environmentId);
     case "workspace-alias-repointed":
       return new WorkspaceAliasRepointedError(node);
+    case "session-goal-operation":
+      return new SessionGoalOperationError(node.goalCode, node.message);
+    case "session-pending-input-custody":
+      return new SessionPendingInputCustodyError(node.message);
     case "session-metadata":
       return new SessionMetadataUnavailableError(node.reason, undefined, node.missingTables);
     case "error":

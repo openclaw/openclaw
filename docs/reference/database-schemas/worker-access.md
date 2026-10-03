@@ -270,6 +270,20 @@ retain native transactions and yielding writer admission. Arbitrary async plugin
 updaters retain their existing nested-admission behavior. Schemas, durability,
 public callback contracts, and update behavior are unchanged.
 
+Durable transcript turns append messages, consume pending inputs, evaluate typed
+latest-assistant and active-entry predicates, update entries, and commit goal
+receipts in one agent-executor transaction. Host preparation uses worker-read
+idempotency facts; the transaction rechecks those facts before applying prepared
+messages. Runtime target selection uses the existing history reader, retaining
+the captured store, canonical session key, and selected lifecycle.
+Acknowledged custody and final transcript cursors install before row
+observers, then identity and message-completion callbacks settle within the same
+physical writer FIFO. Lost replies reconcile through the existing entry-patch
+transfer and native COMMIT receipt; uncertain outcomes never replay. Opaque
+released SDK callbacks and dependent callback batches retain their synchronous
+transaction visibility, and process-held incognito retains its existing owner. Reset remains a separate
+cutover. This changes no schema, durability, retention, or update behavior.
+
 Channel setup awaits a fresh policy read after the agent-selection prompt.
 Deferred plugin migration rows are read by the shared-state worker, and setup
 rechecks its config owner after the read before using the selected agent. Each

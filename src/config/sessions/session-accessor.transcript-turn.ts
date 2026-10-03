@@ -14,10 +14,7 @@ import { tryResolveLegacyCompatibilityAgentId } from "../legacy.default-agent-ow
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import { updateSessionEntry } from "./session-accessor.entry-mutation.js";
-import {
-  loadSessionEntryReadOnly,
-  resolveSessionEntryFromStore,
-} from "./session-accessor.entry.js";
+import { resolveSessionEntryFromStore } from "./session-accessor.entry.js";
 import {
   readCommittedTranscriptMessageSequence,
   rememberCommittedTranscriptMessageSequences,
@@ -264,6 +261,7 @@ async function appendTranscriptTurnMessages(
       },
       {
         ...appendOptions,
+        ...appendOptions.workerPreparation,
         message: attachSessionTranscriptRunId(appendOptions.message, options.runId),
         ...((append.cwd ?? options.cwd) ? { cwd: append.cwd ?? options.cwd } : {}),
         ...((append.config ?? options.config) ? { config: append.config ?? options.config } : {}),
@@ -323,6 +321,8 @@ async function persistExpectedSessionTranscriptTurn(
         expectedWriterRunId:
           options.expectedWriterRunId ?? inheritedWriterFence?.expectedWriterRunId,
         expectedSessionState: options.expectedSessionState,
+        assertCurrent: options.assertCurrent,
+        acceptedResultGuard: options.acceptedResultGuard,
         expectedSessionId,
         initialSessionEntry: options.initialSessionEntry,
         atomicGroup: options.atomicGroup,
@@ -366,6 +366,7 @@ async function persistExpectedSessionTranscriptTurn(
   }
   return {
     sessionTurnMutationResult: turn.sessionTurnMutationResult,
+    predicateSkipped: turn.predicateSkipped,
     appendedCount: turn.appendedMessages.filter((message) => message.appended).length,
     messages: turn.appendedMessages,
     sessionEntry: turn.sessionEntry ?? scope.sessionEntry,
@@ -426,13 +427,8 @@ async function resolveTranscriptTurnTarget(
   const resolved = scope.sessionStore
     ? resolveSessionEntryFromStore({ store: scope.sessionStore, sessionKey: target.sessionKey })
     : undefined;
-  // Mirrors can represent either durable Gateway state or memory-only internal
-  // sessions. Classify that provenance without materializing SQLite state.
-  const persistedEntry = loadSessionEntryReadOnly({
-    ...scope,
-    ...target,
-  });
-  const sessionEntry = persistedEntry ?? resolved?.existing ?? scope.sessionEntry;
+  // The target reader selected persisted identity; only the legacy mirror path needs this entry.
+  const sessionEntry = resolved?.existing ?? scope.sessionEntry;
   return {
     ...target,
     sessionEntry,

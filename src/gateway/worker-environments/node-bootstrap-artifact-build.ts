@@ -329,6 +329,7 @@ export async function prepareNodeBootstrapArtifact(
     // Neither belongs in the node runtime's packaging, validation, or download work.
     (relative) =>
       !relative.startsWith("dist/worker/") &&
+      !relative.startsWith("dist/worker-artifacts/") &&
       !relative.startsWith("dist/control-ui/") &&
       !externalPluginPrefixes.some((prefix) => relative.startsWith(prefix)),
   );

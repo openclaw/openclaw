@@ -363,6 +363,94 @@ describe("DefaultPackageManager", () => {
     ]);
   });
 
+  it("preserves manifest omission, convention fallback, and force-include ordering", async () => {
+    const root = tempDirs.make("openclaw-package-manager-manifest-");
+    const packageRoot = join(root, "package");
+    for (const dir of ["prompts", "custom"]) {
+      await mkdir(join(packageRoot, dir), { recursive: true });
+      for (const name of ["a", "b"]) {
+        await writeFile(join(packageRoot, dir, `${name}.md`), name);
+      }
+    }
+    const orderedManifest = {
+      prompts: ["custom/a.md", "custom/b.md", "!custom/a.md", "+custom/a.md"],
+    };
+    const cases: Array<{
+      name: string;
+      manifest?: { prompts?: string[] };
+      filter?: { prompts?: string[]; skills?: string[] };
+      expected: Array<[string, boolean]>;
+    }> = [
+      {
+        name: "no manifest",
+        expected: [
+          ["prompts/a.md", true],
+          ["prompts/b.md", true],
+        ],
+      },
+      { name: "omitted manifest type", manifest: {}, expected: [] },
+      { name: "empty manifest type", manifest: { prompts: [] }, expected: [] },
+      {
+        name: "another type filtered",
+        manifest: {},
+        filter: { skills: [] },
+        expected: [
+          ["prompts/a.md", true],
+          ["prompts/b.md", true],
+        ],
+      },
+      {
+        name: "empty entries with user filter",
+        manifest: { prompts: [] },
+        filter: { prompts: ["*.md"] },
+        expected: [
+          ["prompts/a.md", true],
+          ["prompts/b.md", true],
+        ],
+      },
+      {
+        name: "empty user filter",
+        manifest: {},
+        filter: { prompts: [] },
+        expected: [
+          ["prompts/a.md", false],
+          ["prompts/b.md", false],
+        ],
+      },
+      {
+        name: "unfiltered force-include order",
+        manifest: orderedManifest,
+        expected: [
+          ["custom/a.md", true],
+          ["custom/b.md", true],
+        ],
+      },
+      {
+        name: "filtered force-include order",
+        manifest: orderedManifest,
+        filter: { prompts: ["*.md", "!b.md"] },
+        expected: [
+          ["custom/b.md", false],
+          ["custom/a.md", true],
+        ],
+      },
+    ];
+    for (const { name, manifest, filter, expected } of cases) {
+      await writeFile(join(packageRoot, "package.json"), JSON.stringify({ openclaw: manifest }));
+      const manager = new DefaultPackageManager({
+        cwd: root,
+        agentDir: join(root, "agent"),
+        settingsManager: SettingsManager.inMemory({
+          packages: [{ source: packageRoot, ...filter }],
+        }),
+      });
+      expect(
+        (await manager.resolve()).prompts.map(({ path, enabled }) => [path, enabled]),
+        name,
+      ).toEqual(expected.map(([path, enabled]) => [join(packageRoot, path), enabled]));
+    }
+  });
+
   it.each([
     ["local", "./missing-extension.ts"],
     ["npm", "npm:@openclaw/missing-test"],

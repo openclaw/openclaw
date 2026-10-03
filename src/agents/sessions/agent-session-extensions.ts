@@ -64,29 +64,21 @@ export abstract class AgentSessionExtensions extends AgentSessionCompaction {
     metadata: { source: string; scope: "temporary"; origin: "top-level"; baseDir?: string };
   }> {
     return entries.map((entry) => {
-      const source = this.getExtensionSourceLabel(entry.extensionPath);
-      const baseDir = entry.extensionPath.startsWith("<")
-        ? undefined
-        : dirname(entry.extensionPath);
+      const synthetic = entry.extensionPath.startsWith("<");
       return {
         path: entry.path,
         metadata: {
-          source,
+          source: `extension:${
+            synthetic
+              ? entry.extensionPath.replace(/[<>]/g, "")
+              : basename(entry.extensionPath).replace(/\.(ts|js)$/, "")
+          }`,
           scope: "temporary",
           origin: "top-level",
-          baseDir,
+          baseDir: synthetic ? undefined : dirname(entry.extensionPath),
         },
       };
     });
-  }
-
-  private getExtensionSourceLabel(extensionPath: string): string {
-    if (extensionPath.startsWith("<")) {
-      return `extension:${extensionPath.replace(/[<>]/g, "")}`;
-    }
-    const base = basename(extensionPath);
-    const name = base.replace(/\.(ts|js)$/, "");
-    return `extension:${name}`;
   }
 
   private applyExtensionBindings(runner: ExtensionRunner): void {
@@ -303,11 +295,9 @@ export abstract class AgentSessionExtensions extends AgentSessionCompaction {
       runner,
     );
 
-    const toolRegistry = new Map(wrappedBuiltInTools.map((tool) => [tool.name, tool]));
-    for (const tool of wrappedExtensionTools) {
-      toolRegistry.set(tool.name, tool);
-    }
-    this.toolRegistry = toolRegistry;
+    this.toolRegistry = new Map(
+      [...wrappedBuiltInTools, ...wrappedExtensionTools].map((tool) => [tool.name, tool]),
+    );
 
     const nextActiveToolNames = (options?.activeToolNames ?? previousActiveToolNames).filter(
       (name) => isAllowedTool(name),

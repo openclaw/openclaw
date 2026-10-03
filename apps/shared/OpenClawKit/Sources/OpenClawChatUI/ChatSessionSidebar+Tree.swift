@@ -368,13 +368,7 @@ extension ChatSessionSidebar {
             if section.id.hasPrefix("group:"), self.isGroupCollapsed(section.title ?? ""),
                self.query.isEmpty { continue }
             if let agent = model.agentChoices.first(where: { section.id == "agent:\($0.id):recent" }) {
-                guard !self.collapsedAgentIDs.contains(agent.id) else { continue }
-                self.agentReveal.visible(section.nodes, agentID: agent.id) {
-                    model.matchesCurrentSessionKey(
-                        incoming: $0.id,
-                        agentId: $0.session.agentId,
-                        current: model.sessionKey)
-                }.forEach(visit)
+                self.visibleAgentRows(section.nodes, agentID: agent.id).forEach(visit)
             } else { section.nodes.forEach(visit) }
         }
         if self.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -443,8 +437,7 @@ extension ChatSessionSidebar {
                 } label: {
                     row
                 }
-                .tag(Optional(ChatSessionSidebarModel.selectionTarget(
-                    for: node.session, fallbackAgentID: self.viewModel.selectedAgentID)))
+                .tag(self.interactionIdentity(node.session))
             } else {
                 row
             }

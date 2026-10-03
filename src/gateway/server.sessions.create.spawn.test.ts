@@ -23,7 +23,7 @@ import {
   createGitWorkspace,
 } from "./server.sessions.create.projects.test-support.js";
 import {
-  setupSessionCreateTestHarness,
+  setupSessionCreateHandlerTestHarness,
   chatSendOwner,
   requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
@@ -33,7 +33,7 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 
 let gitWorkspaceTemplate: string;
-const { createSessionStoreDir } = setupSessionCreateTestHarness(async (makeTempDir) => {
+const { createSessionStoreDir } = setupSessionCreateHandlerTestHarness(async (makeTempDir) => {
   gitWorkspaceTemplate = await createGitWorkspace(makeTempDir("openclaw-session-git-template-"));
 });
 
@@ -321,13 +321,17 @@ test("sessions.create commits no child after its bound Gateway is replaced", asy
     },
   );
 
+  const rejected = expect(creating).rejects.toThrow(
+    "current gateway instance binding was replaced",
+  );
+
   try {
     await firstGuard.promise;
     current = replacement;
     releaseWriter.resolve();
     await heldWriter;
 
-    await expect(creating).rejects.toThrow("current gateway instance binding was replaced");
+    await rejected;
     expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
   } finally {
     releaseWriter.resolve();
@@ -394,13 +398,15 @@ test("sessions.create commits no child after its worker turn closes", async () =
     },
   );
 
+  const rejected = expect(creating).rejects.toThrow("worker turn authority changed");
+
   try {
     await firstGuard.promise;
     await placements.releaseTurn(turnClaim);
     releaseWriter.resolve();
     await heldWriter;
 
-    await expect(creating).rejects.toThrow("worker turn authority changed");
+    await rejected;
     expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
   } finally {
     releaseWriter.resolve();

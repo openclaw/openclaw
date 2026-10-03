@@ -520,6 +520,7 @@ src/config/sessions/archive-compression.ts
 src/config/sessions/artifacts.ts
 src/config/sessions/auth-profile-override-provenance.ts
 src/config/sessions/conversation-link.ts
+src/config/sessions/goals-operations.types.ts
 src/config/sessions/migration-required.ts
 src/config/sessions/model-override-provenance.ts
 src/config/sessions/paths.ts
@@ -543,6 +544,7 @@ src/config/sessions/cli-session-binding.ts
 src/config/sessions/session-incognito-side-data-contract.ts
 src/config/sessions/session-incognito-transcript-contract.ts
 src/config/sessions/session-model-context-projection.ts
+src/config/sessions/session-pending-input-custody-error.ts
 src/config/sessions/session-sqlite-target-paths.ts
 src/config/sessions/session-sqlite-target.ts
 src/config/sessions/session-store-config.ts

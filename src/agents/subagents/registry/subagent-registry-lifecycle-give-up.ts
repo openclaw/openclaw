@@ -19,7 +19,6 @@ import {
 import { retireSupersededCleanupIfNeeded } from "./subagent-registry-lifecycle-attempt.js";
 import { suspendPendingFinalDelivery } from "./subagent-registry-lifecycle-cleanup.js";
 import type { SubagentLifecycleAnnounceCleanupContext } from "./subagent-registry-lifecycle-context.js";
-import { emitCompletionEndedHookIfNeeded } from "./subagent-registry-lifecycle-delivery.js";
 import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
 import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
@@ -142,7 +141,7 @@ export async function finishSubagentCleanup(
   }
   if (!isCurrent()) {
     if (cleanupGeneration !== undefined) {
-      await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
+      await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
     }
     return;
   }
@@ -179,12 +178,16 @@ export async function finishSubagentCleanup(
     );
   };
   if (!(await context.shouldSuppressSessionEffects(entry)) && endedHookOwnerCurrent()) {
-    await emitCompletionEndedHookIfNeeded(
-      context.options,
-      entry,
-      completionReason ?? entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE,
-      endedHookOwnerCurrent,
-      async () => !(await context.shouldSuppressSessionEffects(entry)) && endedHookOwnerCurrent(),
-    );
+    const reason = completionReason ?? entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE;
+    if (context.options.shouldEmitEndedHookForRun({ entry, reason })) {
+      await context.options.emitSubagentEndedHookForRun({
+        entry,
+        reason,
+        sendFarewell: true,
+        isCurrent: endedHookOwnerCurrent,
+        prepareCurrent: async () =>
+          !(await context.shouldSuppressSessionEffects(entry)) && endedHookOwnerCurrent(),
+      });
+    }
   }
 }

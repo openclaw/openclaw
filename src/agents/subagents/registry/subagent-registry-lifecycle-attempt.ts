@@ -173,12 +173,7 @@ export function runDetachedCleanupAttempt(
         if (err instanceof SubagentRegistryWriteError && err.outcome === "committed") {
           if (err.publication === "superseded") {
             assertSubagentRegistryWriteSourceCurrent(stateContext);
-            await retireSupersededCleanupIfNeeded(
-              context,
-              args.runId,
-              args.entry,
-              args.cleanupGeneration,
-            );
+            await retireSupersededCleanupIfNeeded(context, args.entry, args.cleanupGeneration);
           }
           throw err;
         }
@@ -191,12 +186,7 @@ export function runDetachedCleanupAttempt(
             : context.isCleanupGenerationCurrent(args.runId, args.entry, args.cleanupGeneration))
         ) {
           assertSubagentRegistryWriteSourceCurrent(stateContext);
-          await retireSupersededCleanupIfNeeded(
-            context,
-            args.runId,
-            args.entry,
-            args.cleanupGeneration,
-          );
+          await retireSupersededCleanupIfNeeded(context, args.entry, args.cleanupGeneration);
           return;
         }
         if (startCommitted) {
@@ -298,7 +288,6 @@ export function beginSubagentCleanup(
 
 export async function retireSupersededCleanupIfNeeded(
   context: SubagentLifecycleCleanupContext,
-  _runId: string,
   entry: SubagentRunRecord,
   generation: number,
 ): Promise<boolean> {

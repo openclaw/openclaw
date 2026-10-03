@@ -231,25 +231,24 @@ export class SessionManagerBranching extends SessionManagerMetadata {
           adoptBranch({ ...fencedTarget, sessionId: newSessionId }, committed.version);
         } catch (cause) {
           failure = { cause };
-        } finally {
-          try {
-            publishCommittedSessionIdentity(
-              scope.agentId,
-              readOpenClawAgentDatabaseIdentity(admission.database).identity,
-              committed.identity.previous,
-              committed.identity.current,
-            );
-          } catch (cause) {
-            failure = {
-              cause: failure
-                ? new AggregateError(
-                    [failure.cause, cause],
-                    "Branch adoption and identity publication failed",
-                    { cause: failure.cause },
-                  )
-                : cause,
-            };
-          }
+        }
+        try {
+          publishCommittedSessionIdentity(
+            scope.agentId,
+            readOpenClawAgentDatabaseIdentity(admission.database).identity,
+            committed.identity.previous,
+            committed.identity.current,
+          );
+        } catch (cause) {
+          failure = {
+            cause: failure
+              ? new AggregateError(
+                  [failure.cause, cause],
+                  "Branch adoption and identity publication failed",
+                  { cause: failure.cause },
+                )
+              : cause,
+          };
         }
         if (failure) {
           const error = Object.assign(
