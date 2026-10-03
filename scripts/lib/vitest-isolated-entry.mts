@@ -4,11 +4,15 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import { runManagedCommand } from "./managed-child-process.mts";
 import { resolveIsolatedVitestBuild } from "./vitest-isolated-build.mts";
+import { prepareIsolatedVitestScratch } from "./vitest-isolated-source.mts";
 
 const [nodeVersion, pnpmVersion, ...argv] = process.argv.slice(2);
 if (process.version !== nodeVersion) {
   throw new Error("Isolated Node does not match the prepared host runtime.");
 }
+// Worktree allocation needs disk-backed capacity, not the bounded /tmp tmpfs.
+// Snapshot removal owns this scratch after every container descendant has joined.
+prepareIsolatedVitestScratch("/workspace");
 fs.mkdirSync("/tmp/home", { recursive: true });
 const pnpm = spawnSync("/opt/openclaw-vitest/pnpm", ["--version"], {
   encoding: "utf8",
