@@ -379,7 +379,6 @@ extensions/firecrawl/index.ts	2
 extensions/firecrawl/src/config.ts	3
 extensions/firecrawl/src/firecrawl-client.ts	1
 extensions/firecrawl/src/firecrawl-fetch-provider-shared.ts	5
-extensions/fish-audio-speech/speech-provider.ts	1
 extensions/github-copilot/embeddings.ts	3
 extensions/github-copilot/index.ts	3
 extensions/github-copilot/login.ts	2
@@ -2791,7 +2790,6 @@ src/talk/client-voice-session.ts	1
 src/talk/consult-question.ts	2
 src/talk/exact-speech-protocol.ts	1
 src/talk/provider-internal.ts	2
-src/talk/provider-resolver.ts	1
 src/talk/turn-context-tracker.ts	2
 src/trajectory/export.ts	14
 src/trajectory/runtime-store.sqlite.ts	1
