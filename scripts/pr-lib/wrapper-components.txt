@@ -1599,6 +1599,7 @@ src/utils.ts
 src/utils/boolean.ts
 src/utils/delivery-context.read.ts
 src/utils/fetch-timeout.ts
+src/utils/github-login.ts
 src/utils/parse-json-compat.ts
 src/utils/run-with-concurrency.ts
 src/utils/shell-argv.ts

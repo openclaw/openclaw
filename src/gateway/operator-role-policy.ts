@@ -14,7 +14,6 @@ import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { profileCatalogPath } from "../state/user-profile-identity.read.js";
 import { readResidentUserProfileRevision } from "../state/user-profile-list.js";
 import { getUserProfileRole } from "../state/user-profiles.js";
-import { normalizeGitHubLogin } from "../utils/github-login.js";
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import {
   resolveOperatorSessionCreation,
@@ -101,7 +100,7 @@ export function resolveOperatorRoleSelection(
   profileId: string | undefined,
   assignedRole: string | null,
   cfg: OpenClawConfig,
-  githubLogin: string | null | undefined,
+  githubLogin: string | null,
 ): { effectiveRole?: string; roleSource: "assigned" | "githubLogin" | "default" } {
   const roles = cfg.gateway?.roles;
   if (!roles || !profileId || profileId === GATEWAY_OWNER_PROFILE_ID) {
@@ -110,11 +109,11 @@ export function resolveOperatorRoleSelection(
   if (assignedRole && Object.hasOwn(roles.definitions, assignedRole)) {
     return { effectiveRole: assignedRole, roleSource: "assigned" };
   }
-  const login = githubLogin ? normalizeGitHubLogin(githubLogin)?.toLowerCase() : undefined;
+  const login = githubLogin?.toLowerCase();
   if (login) {
     for (const [configuredLogin, role] of Object.entries(roles.assignments?.byGithubLogin ?? {})) {
       if (
-        normalizeGitHubLogin(configuredLogin)?.toLowerCase() === login &&
+        configuredLogin.trim().toLowerCase() === login &&
         Object.hasOwn(roles.definitions, role)
       ) {
         return { effectiveRole: role, roleSource: "githubLogin" };
@@ -138,8 +137,8 @@ export function resolveOperatorRolePolicyForProfile(
     profileId ? readOperatorRoleAssignment(profileId) : null,
     cfg,
     profileId && cfg.gateway.roles.assignments?.byGithubLogin
-      ? readResidentUserProfileRevision(profileId, profileCatalogPath({}))?.githubLogin
-      : undefined,
+      ? (readResidentUserProfileRevision(profileId, profileCatalogPath({}))?.githubLogin ?? null)
+      : null,
   );
 }
 
@@ -148,7 +147,7 @@ export function resolveOperatorRolePolicyForAssignment(
   profileId: string | undefined,
   assignedRole: string | null,
   cfg: OpenClawConfig,
-  githubLogin?: string | null,
+  githubLogin: string | null,
 ): GatewayOperatorRoleDefinition | undefined {
   const roles = cfg.gateway?.roles;
   if (!roles || profileId === GATEWAY_OWNER_PROFILE_ID) {
@@ -230,7 +229,7 @@ export function resolveOperatorRolePolicy(
       authority.profileId,
       authority.readCurrentRoleAssignment(),
       cfg,
-      authority.readCurrentGithubLogin?.(),
+      authority.readCurrentGithubLogin?.() ?? null,
     );
   }
   const prepared = client?.preparedSessionProfile;
@@ -239,7 +238,7 @@ export function resolveOperatorRolePolicy(
       prepared.profileId,
       prepared.role,
       cfg,
-      prepared.githubLogin,
+      prepared.githubLogin ?? null,
     );
   }
   return resolveOperatorRolePolicyForProfile(actor?.profileId, cfg);

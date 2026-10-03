@@ -737,7 +737,8 @@ describe("operator role policy", () => {
     expect(resolveGatewayOperatorRoleActor(owner)).toBeUndefined();
     expect(resolveOperatorRolePolicyForProfile(GATEWAY_OWNER_PROFILE_ID, cfg)).toBeUndefined();
     expect(
-      resolveOperatorRolePolicyForAssignment(GATEWAY_OWNER_PROFILE_ID, "guest", cfg),
+      // Shared-secret owner authority has no verified GitHub identity.
+      resolveOperatorRolePolicyForAssignment(GATEWAY_OWNER_PROFILE_ID, "guest", cfg, null),
     ).toBeUndefined();
     owner.internal = { operatorRoleActor: { kind: "system" } };
     expect(resolveGatewayOperatorRoleActor(owner)).toEqual({ kind: "system" });

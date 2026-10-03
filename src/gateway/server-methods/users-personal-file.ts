@@ -121,7 +121,7 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
       canonicalId,
       profile?.role ?? null,
       cfg,
-      profile?.githubLogin,
+      profile?.githubLogin ?? null,
     );
     if (
       ![

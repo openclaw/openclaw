@@ -132,7 +132,7 @@ export const usersHandlers: GatewayRequestHandlers = {
             canonical.id,
             canonical.role ?? null,
             cfg,
-            canonical.githubIdentity?.login,
+            canonical.githubIdentity?.login ?? null,
           ),
         );
       }),

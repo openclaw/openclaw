@@ -170,7 +170,7 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
     profile.profileId,
     profile.role,
     config,
-    profile.githubLogin,
+    profile.githubLogin ?? null,
   )?.accessPolicyPlugin;
   if (requiredPlugin && !policies.some((entry) => entry.pluginId === requiredPlugin)) {
     throw new GatewayOperatorAccessDeniedError();
@@ -266,7 +266,7 @@ export function resumeGatewayOperatorAccessGrant(
     profile.profileId,
     profile.assignedRole,
     config,
-    profile.githubLogin,
+    profile.githubLogin ?? null,
   )?.accessPolicyPlugin;
   if (requiredPlugin && requiredPlugin !== grant?.pluginId) {
     // A newly required policy cannot replace the original request's recorded basis.

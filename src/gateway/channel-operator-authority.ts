@@ -68,8 +68,12 @@ function resolveChannelOperatorIdentityFacts(
       const current = resolveUserChannelIdentity(capturedIdentity, stateOptions);
       const usesGithubAssignment =
         Object.keys(currentCfg.gateway?.roles?.assignments?.byGithubLogin ?? {}).length > 0 &&
-        resolveOperatorRoleSelection(linked.profileId, linked.role, currentCfg, linked.githubLogin)
-          .roleSource !== "assigned";
+        resolveOperatorRoleSelection(
+          linked.profileId,
+          linked.role,
+          currentCfg,
+          linked.githubLogin ?? null,
+        ).roleSource !== "assigned";
       return (
         current !== undefined &&
         current.profileId === linked.profileId &&

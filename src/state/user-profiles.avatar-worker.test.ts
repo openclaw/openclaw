@@ -362,7 +362,12 @@ it("adopts an avatar off-thread and publishes its catalog before identity observ
     expect(seen).toEqual([
       {
         display: expect.objectContaining({ id: profile.id, hasAvatar: true }),
-        identity: { profileId: profile.id, role: null, aliases: new Set([profile.id, alias.id]) },
+        identity: {
+          profileId: profile.id,
+          role: null,
+          githubLogin: null,
+          aliases: new Set([profile.id, alias.id]),
+        },
       },
     ]);
     sql.expectIdle();

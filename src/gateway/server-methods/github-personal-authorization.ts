@@ -54,7 +54,12 @@ function currentGitHubClient(
   const profileId = typeof owner === "string" ? owner : owner?.profileId;
   const policy =
     typeof owner === "object"
-      ? resolveOperatorRolePolicyForAssignment(owner.profileId, owner.role, cfg, owner.githubLogin)
+      ? resolveOperatorRolePolicyForAssignment(
+          owner.profileId,
+          owner.role,
+          cfg,
+          owner.githubLogin ?? null,
+        )
       : profileId
         ? resolveOperatorRolePolicyForProfile(profileId, cfg)
         : resolveOperatorRolePolicy(client, cfg);

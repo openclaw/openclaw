@@ -72,6 +72,7 @@ describe("resident profile display and reference catalog", () => {
       expect(catalog.readCurrentIdentity(id)).toEqual({
         profileId: target.id,
         role: "reader",
+        githubLogin: null,
         aliases: new Set([alias.id, target.id]),
       });
       const mutation = fenceUserProfileMutationAuthority(admission, {
@@ -142,12 +143,17 @@ describe("resident profile display and reference catalog", () => {
         emails: [email, "retained@example.test"].toSorted(),
         ...(producer === "github" ? { githubAccountIds: [40] } : {}),
         assignedRole: null,
+        githubLogin: producer === "github" ? "first-account" : null,
       });
       expect(captureResidentUserProfileAccess(first.id, options).readCurrentFacts()).toEqual(
         current.profile,
       );
       expect(current.aliases).toEqual(new Set([first.id]));
-      expect(prepared.readCurrentProfile()).toEqual({ profileId: first.id, assignedRole: null });
+      expect(prepared.readCurrentProfile()).toEqual({
+        profileId: first.id,
+        assignedRole: null,
+        githubLogin: producer === "github" ? "first-account" : null,
+      });
       expect(native).not.toHaveBeenCalled();
       native.mockRestore();
       setDisplayName(first.id, "Cosmetic update", options);
@@ -160,6 +166,7 @@ describe("resident profile display and reference catalog", () => {
       expect(prepared.readCurrentProfile()).toEqual({
         profileId: first.id,
         assignedRole: "reader",
+        githubLogin: producer === "github" ? "first-account" : null,
       });
       prepared.readCurrentFacts(bindings);
       if (producer === "email") {
@@ -186,6 +193,7 @@ describe("resident profile display and reference catalog", () => {
         ).toSorted(),
         ...(producer === "github" ? { githubAccountIds: [40] } : {}),
         assignedRole: "reader",
+        githubLogin: producer === "github" ? "first-account" : null,
       });
       expect(() => prepared.readCurrentFacts(bindings)).toThrow("user profile not found");
       expect(() => selected.readCurrentFacts(selectedBindings)).toThrow("user profile not found");
@@ -214,6 +222,7 @@ describe("resident profile display and reference catalog", () => {
       profileId: current.id,
       emails: ["current@example.test"],
       assignedRole: null,
+      githubLogin: null,
     });
     expect(() => next.readCurrentFacts(next.emailBindingIds)).not.toThrow();
     const missing = await prepareUserProfileIdentity(prior.id, options);

@@ -107,7 +107,7 @@ function prepareRequesterPolicy(
           profile.profileId,
           profile.assignedRole,
           config,
-          profile.githubLogin,
+          profile.githubLogin ?? null,
         )
       : undefined;
     if (
