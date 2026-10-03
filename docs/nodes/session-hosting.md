@@ -135,6 +135,10 @@ new work; active turns and background commands keep their slots. When no free
 or reclaimable slot remains, the node stays available for status and cancellation
 but is not selected for a new session turn.
 
+Capacity, host-stat, and skill-bin updates do not interrupt active node work or
+change its pairing authority. This behavior requires an updated Gateway; node
+configuration and stored pairings remain unchanged.
+
 After a turn settles, OpenClaw can retain its worker process for up to two
 minutes so an immediate follow-up avoids loading the runtime again. The timer
 starts after the worker confirms that turn cleanup is complete. Each node keeps
