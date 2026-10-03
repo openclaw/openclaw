@@ -41,17 +41,6 @@ const resetArchiveDiscoveryCache = new Map<
   }
 >();
 
-function classifySessionTranscriptCandidate(
-  sessionId: string,
-  sessionFile?: string,
-): "current" | "stale" | "custom" {
-  const transcriptSessionId = extractGeneratedTranscriptSessionId(sessionFile);
-  if (!transcriptSessionId) {
-    return "custom";
-  }
-  return transcriptSessionId === sessionId ? "current" : "stale";
-}
-
 export function resolveSessionTranscriptCandidates(
   sessionId: string,
   storePath: string | undefined,
@@ -59,7 +48,8 @@ export function resolveSessionTranscriptCandidates(
   agentId?: string,
 ): string[] {
   const candidates: string[] = [];
-  const sessionFileState = classifySessionTranscriptCandidate(sessionId, sessionFile);
+  const transcriptSessionId = extractGeneratedTranscriptSessionId(sessionFile);
+  const staleSessionFile = Boolean(transcriptSessionId && transcriptSessionId !== sessionId);
   const pushCandidate = (resolve: () => string): void => {
     try {
       candidates.push(resolve());
@@ -70,20 +60,20 @@ export function resolveSessionTranscriptCandidates(
 
   if (storePath) {
     const sessionsDir = path.dirname(storePath);
-    if (sessionFile && sessionFileState !== "stale") {
+    if (sessionFile && !staleSessionFile) {
       pushCandidate(() =>
         resolveSessionFilePathCore(sessionId, { sessionFile }, { sessionsDir, agentId }),
       );
     }
     pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, sessionsDir));
-    if (sessionFile && sessionFileState === "stale") {
+    if (sessionFile && staleSessionFile) {
       pushCandidate(() =>
         resolveSessionFilePathCore(sessionId, { sessionFile }, { sessionsDir, agentId }),
       );
     }
   } else if (sessionFile) {
     if (agentId) {
-      if (sessionFileState !== "stale") {
+      if (!staleSessionFile) {
         pushCandidate(() => resolveSessionFilePathCore(sessionId, { sessionFile }, { agentId }));
       }
     } else {
@@ -96,7 +86,7 @@ export function resolveSessionTranscriptCandidates(
 
   if (agentId) {
     pushCandidate(() => resolveSessionTranscriptPath(sessionId, agentId));
-    if (sessionFile && sessionFileState === "stale") {
+    if (sessionFile && staleSessionFile) {
       pushCandidate(() => resolveSessionFilePathCore(sessionId, { sessionFile }, { agentId }));
     }
   }
@@ -200,17 +190,6 @@ async function resolveLatestResetArchiveForTranscriptAsync(
   return undefined;
 }
 
-function transcriptArchiveIdentity(
-  sessionId: string,
-  transcriptPath: string,
-): { key: string; requireSessionHeader: boolean } {
-  const generatedSessionId = extractGeneratedTranscriptSessionId(transcriptPath);
-  return {
-    key: path.basename(transcriptPath),
-    requireSessionHeader: !generatedSessionId || generatedSessionId !== sessionId,
-  };
-}
-
 export async function resolveSessionTranscriptResetArchiveCandidatesAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -227,11 +206,14 @@ export async function resolveSessionTranscriptResetArchiveCandidatesAsync(
     sessionFile,
     agentId,
   )) {
-    const identity = transcriptArchiveIdentity(sessionId, candidate);
-    candidatesByIdentity.set(identity.key, [
-      ...(candidatesByIdentity.get(identity.key) ?? []),
-      { path: candidate, requireSessionHeader: identity.requireSessionHeader },
-    ]);
+    const key = path.basename(candidate);
+    const generatedSessionId = extractGeneratedTranscriptSessionId(candidate);
+    const candidates = candidatesByIdentity.get(key) ?? [];
+    candidates.push({
+      path: candidate,
+      requireSessionHeader: !generatedSessionId || generatedSessionId !== sessionId,
+    });
+    candidatesByIdentity.set(key, candidates);
   }
   const archives = (
     await Promise.all(

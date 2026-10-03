@@ -181,9 +181,9 @@ export function createMentionInbox(params: {
     return changed || maintenance;
   }
 
-  function removeItem(item: StoredMention | null | undefined): boolean {
+  function removeItem(item: StoredMention | null | undefined): void {
     if (!item || !items.delete(item.id)) {
-      return false;
+      return;
     }
     const profileItems = itemsByProfile.get(item.recipientProfileId);
     profileItems?.delete(item);
@@ -192,7 +192,6 @@ export function createMentionInbox(params: {
     }
     item.source.recipients.set(item.recipientProfileId, null);
     dirtySources.add(item.source.key);
-    return true;
   }
 
   function trimItems(
@@ -214,13 +213,12 @@ export function createMentionInbox(params: {
     }
   }
 
-  function expireItems(): boolean {
+  function expireItems(): void {
     const now = scheduler.now();
     // Retention is bounded, but scanning it on every read and delivery makes a burst quadratic.
     if (now < nextExpiryAt) {
-      return false;
+      return;
     }
-    let changed = false;
     let next = Infinity;
     for (const [key, source] of processed) {
       if (source.expiresAt > now) {
@@ -228,7 +226,7 @@ export function createMentionInbox(params: {
         continue;
       }
       for (const item of source.recipients.values()) {
-        changed = removeItem(item) || changed;
+        removeItem(item);
       }
       processed.delete(key);
       dirtySources.add(key);
@@ -237,7 +235,6 @@ export function createMentionInbox(params: {
     if (processed.size < MAX_MENTION_SOURCES) {
       capacityReported = false;
     }
-    return changed;
   }
 
   function reconcileProfiles(): void {

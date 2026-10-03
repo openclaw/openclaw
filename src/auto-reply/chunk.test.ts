@@ -232,6 +232,13 @@ describe("chunkByParagraph Unicode line/paragraph separators", () => {
       limit: 40,
       expected: ["paragraph one line", "paragraph two starts here"],
     },
+    ...["\u2028", "\u2029"].map((separator) => ({
+      name: `retains a paragraph boundary after CR followed by ${JSON.stringify(separator)}`,
+      text: `first\r${separator}second`,
+      normalized: "first\n\nsecond",
+      limit: 4000,
+      expected: ["first\n\nsecond"],
+    })),
     {
       name: "retains a prepended whitespace cluster before a paragraph separator",
       text: "alpha\u0600 \u2029beta",

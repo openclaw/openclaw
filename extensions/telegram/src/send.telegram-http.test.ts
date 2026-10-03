@@ -38,6 +38,9 @@ import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
 describe("Telegram physical send acceptance over HTTP", () => {
   const fixture = useTelegramHttpFixture();
   const { cfg, requests, events, rejections, buttons, sendThrough, pinThroughAdapter } = fixture;
+  const recordDispatch = async () => {
+    events.push("dispatch");
+  };
   const configForToken = (botToken: string) => ({
     channels: { telegram: { ...cfg.channels.telegram, botToken } },
   });
@@ -345,22 +348,42 @@ describe("Telegram physical send acceptance over HTTP", () => {
     },
   );
 
-  it.each(["direct", "public"] as const)(
-    "preserves %s operation callbacks through quote and format fallback",
-    async (entry) => {
-      rejections.push("Bad Request: quote not found", "Bad Request: can't parse entities");
-      await sendThrough(entry, "answer", async () => {
-        events.push("dispatch");
-      });
+  it.each([
+    { entry: "direct", rich: false },
+    { entry: "public", rich: false },
+    { entry: "public", rich: true },
+  ] as const)(
+    "preserves $entry callbacks and controls through quote fallback (rich: $rich)",
+    async ({ entry, rich }) => {
+      rejections.push("Bad Request: quote not found");
+      if (!rich) {
+        rejections.push("Bad Request: can't parse entities");
+      }
+      await sendThrough(entry, "answer", recordDispatch, undefined, rich);
       expect(events).toEqual(
         entry === "direct"
           ? ["dispatch", "http", "http", "http"]
-          : ["dispatch", "http", "dispatch", "http", "dispatch", "http"],
+          : rich
+            ? ["dispatch", "http", "dispatch", "http"]
+            : ["dispatch", "http", "dispatch", "http", "dispatch", "http"],
       );
-      expect(requests).toHaveLength(3);
+      expect(requests).toHaveLength(rich ? 2 : 3);
       expect(requests[0]?.fields.reply_parameters).toMatchObject({ message_id: 7, quote: "quote" });
-      expect(requests[1]?.fields.reply_to_message_id).toBe(7);
-      expect(requests[2]?.fields.parse_mode).toBeUndefined();
+      if (rich) {
+        expect(requests.map(({ method }) => method)).toEqual([
+          "sendRichMessage",
+          "sendRichMessage",
+        ]);
+        expect(requests[1]?.fields.reply_parameters).toMatchObject({ message_id: 7 });
+        expect(requests[1]?.fields.reply_parameters).not.toHaveProperty("quote");
+        expect(requests.map(({ fields }) => fields.reply_markup)).toEqual([
+          { inline_keyboard: buttons },
+          { inline_keyboard: buttons },
+        ]);
+      } else {
+        expect(requests[1]?.fields.reply_to_message_id).toBe(7);
+        expect(requests[2]?.fields.parse_mode).toBeUndefined();
+      }
     },
   );
 
@@ -429,31 +452,11 @@ describe("Telegram physical send acceptance over HTTP", () => {
 
   it("preserves accepted media after photo rejection falls back to a document", async () => {
     rejections.push("Bad Request: PHOTO_INVALID_DIMENSIONS");
-    const result = await sendThrough(
-      "public",
-      "caption",
-      async () => {
-        events.push("dispatch");
-      },
-      photoPath,
-    );
+    const result = await sendThrough("public", "caption", recordDispatch, photoPath);
     expect(requests.map(({ method }) => method)).toEqual(["sendPhoto", "sendDocument"]);
     expect(requests.map(({ fields }) => fields.caption)).toEqual(["caption", "caption"]);
     expect(events).toEqual(["dispatch", "http", "dispatch", "http"]);
     expect(result).toMatchObject({ messageId: "2" });
-  });
-
-  it("retains buttons when a rich native quote is rejected", async () => {
-    rejections.push("Bad Request: quote not found");
-    await sendThrough("public", "answer", async () => {}, undefined, true);
-    expect(requests.map(({ method }) => method)).toEqual(["sendRichMessage", "sendRichMessage"]);
-    expect(requests[0]?.fields.reply_parameters).toMatchObject({ message_id: 7, quote: "quote" });
-    expect(requests[1]?.fields.reply_parameters).toMatchObject({ message_id: 7 });
-    expect(requests[1]?.fields.reply_parameters).not.toHaveProperty("quote");
-    expect(requests.map(({ fields }) => fields.reply_markup)).toEqual([
-      { inline_keyboard: buttons },
-      { inline_keyboard: buttons },
-    ]);
   });
 
   it("never resends or continues after an observer throws a recoverable-looking error", async () => {
