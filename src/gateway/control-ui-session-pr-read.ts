@@ -92,7 +92,6 @@ export function resolveControlUiSessionPrTarget(
 export function resolveProjectedControlUiSessionPrTarget(
   cfg: OpenClawConfig,
   record: MaterializedRow,
-  repository = record.materialized.row.repository ?? null,
 ) {
   const { storePath, agentId } = record.storeTarget;
   return resolveControlUiSessionPrTarget(
@@ -104,7 +103,7 @@ export function resolveProjectedControlUiSessionPrTarget(
       readSource: { agentId, path: storePath },
       entry: record.entry,
     },
-    repository,
+    record.materialized.row.repository ?? null,
   );
 }
 
@@ -330,8 +329,20 @@ export async function prepareControlUiSessionPrRead(params: {
                 (selected.entry?.repositoryWorkspaceId &&
                   (!original.rowContext ||
                     projection.readPreparedRowContext() !== original.rowContext)) ||
-                resolveProjectedControlUiSessionPrTarget(current.cfg, selected, target.repository)
-                  ?.identity !== target.target.identity
+                resolveControlUiSessionPrTarget(
+                  {
+                    cfg: current.cfg,
+                    agentId: selected.agentId,
+                    canonicalKey: selected.key,
+                    storePath: selected.storeTarget.storePath,
+                    readSource: {
+                      agentId: selected.storeTarget.agentId,
+                      path: selected.storeTarget.storePath,
+                    },
+                    entry: selected.entry,
+                  },
+                  target.repository,
+                )?.identity !== target.target.identity
               ) {
                 throw new Error("Session pull-request target changed");
               }
