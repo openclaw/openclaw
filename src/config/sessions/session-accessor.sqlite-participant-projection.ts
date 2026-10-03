@@ -157,7 +157,12 @@ export function prepareSqliteSessionParticipantProjection(
         const rows = tableExists(database, SESSION_PARTICIPANTS_TABLE)
           ? readParticipantRows(database, sessionKeys)
           : [];
-        rowsByKey = Map.groupBy(rows, (row) => row.session_key);
+        rowsByKey = new Map();
+        for (const row of rows) {
+          const participants = rowsByKey.get(row.session_key) ?? [];
+          participants.push(row);
+          rowsByKey.set(row.session_key, participants);
+        }
       } catch {
         // A native row-conversion failure must not poison healthy siblings.
         acquisitionFailed = true;

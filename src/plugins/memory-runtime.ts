@@ -1,11 +1,7 @@
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type {
-  LegacyMemoryReadResult,
-  MemoryReadResult,
-  MemorySearchManager,
-} from "../memory-host-sdk/host/types.js";
+import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
@@ -63,15 +59,6 @@ const registeredMemoryManagerAdapters = new WeakMap<
   MemorySearchManager
 >();
 
-function normalizeRegisteredMemoryReadResult(
-  result: LegacyMemoryReadResult | MemoryReadResult,
-): MemoryReadResult {
-  if (result.status === "ok" || result.status === "not_found") {
-    return result;
-  }
-  return { ...result, status: "ok" };
-}
-
 function normalizeRegisteredMemoryManager(
   manager: RegisteredMemorySearchManager,
 ): MemorySearchManager {
@@ -79,8 +66,12 @@ function normalizeRegisteredMemoryManager(
   if (existing) {
     return existing;
   }
-  const readFile: MemorySearchManager["readFile"] = async (params) =>
-    normalizeRegisteredMemoryReadResult(await manager.readFile(params));
+  const readFile: MemorySearchManager["readFile"] = async (params) => {
+    const result = await manager.readFile(params);
+    return result.status === "ok" || result.status === "not_found"
+      ? result
+      : { ...result, status: "ok" };
+  };
   // A neutral target permits wrapped methods even when the manager is frozen.
   const adapter = new Proxy(
     { readFile },
@@ -114,17 +105,6 @@ function resolveMemoryRuntimePluginIds(config: OpenClawConfig): string[] {
     return [];
   }
   return [pluginId];
-}
-
-function resolveMemoryRuntimeWorkspaceDir(
-  cfg: OpenClawConfig,
-  agentId: string,
-): string | undefined {
-  const dir = resolveAgentWorkspaceDir(cfg, agentId);
-  if (typeof dir !== "string" || !dir.trim()) {
-    return undefined;
-  }
-  return resolveUserPath(dir);
 }
 
 function listCurrentMemoryRuntimes(): AnyMemoryRuntime[] {
@@ -187,7 +167,8 @@ function ensureMemoryRuntime(params?: {
   if (onlyPluginIds.length === 0) {
     return undefined;
   }
-  const workspaceDir = resolveMemoryRuntimeWorkspaceDir(params.cfg, params.agentId);
+  const dir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+  const workspaceDir = typeof dir === "string" && dir.trim() ? resolveUserPath(dir) : undefined;
   const registry = loadPluginRegistryHandle({
     config: params.cfg,
     onlyPluginIds,

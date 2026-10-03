@@ -163,7 +163,7 @@ function fileContentMatches(
   ) {
     return true;
   }
-  return safeHashFile(filePath) === hash;
+  return safeHashFile({ filePath, diagnostics: [], required: false }) === hash;
 }
 
 function hasStaleDoctorContractFiles(

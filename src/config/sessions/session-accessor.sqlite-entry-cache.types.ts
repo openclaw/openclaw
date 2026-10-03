@@ -22,10 +22,33 @@ export type SessionEntryCacheSnapshot = {
 
 export type SessionSharingEntry = Pick<
   InternalSessionEntry,
-  keyof ReturnType<typeof projectSessionSharingEntry>
+  | "sessionId"
+  | "updatedAt"
+  | "createdAt"
+  | "initializationPending"
+  | "providerReview"
+  | "mainRestartRecovery"
+  | "modelSelectionLocked"
+  | "pendingProjectGitUrl"
+  | "pendingWorktree"
+  | "lifecycleRevision"
+  | "lifecycleRunId"
+  | "activeWriterRunId"
+  | "subagentRecovery"
+  | "archivedAt"
+  | "repositoryWorkspaceId"
+  | "visibility"
+  | "incognito"
+  | "createdActor"
+  | "owner"
+  | "sandbox"
+  | "spawnedBy"
+  | "spawnDepth"
+  | "parentSessionKey"
+  | "sessionStartedAt"
 >;
 
-export function projectSessionSharingEntry(entry: InternalSessionEntry) {
+export function projectSessionSharingEntry(entry: InternalSessionEntry): SessionSharingEntry {
   return {
     sessionId: entry.sessionId,
     updatedAt: entry.updatedAt,

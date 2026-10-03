@@ -33,6 +33,7 @@ import type {
   LegacyMainSessionMigrationOutcome,
   LegacyMainSessionMigrationResult,
   PhysicalStore,
+  SessionClaim,
 } from "./legacy-main-session-migration.contract.js";
 import { resolveSessionArtifactDirectory, resolveSessionStorePathCore } from "./paths.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
@@ -483,7 +484,12 @@ async function migrateLegacyMainSessionKeysInternal(
           path.join(resolveSessionArtifactDirectory(destinationResolved.path), "cold"),
         );
 
-  const byCanonical = Map.groupBy(allLegacy, (claim) => claim.canonicalKey);
+  const byCanonical = new Map<string, SessionClaim[]>();
+  for (const claim of allLegacy) {
+    const claims = byCanonical.get(claim.canonicalKey) ?? [];
+    claims.push(claim);
+    byCanonical.set(claim.canonicalKey, claims);
+  }
   for (const [canonicalKey, aliases] of byCanonical) {
     const canonicalClaims = allCanonical.filter((claim) => claim.key === canonicalKey);
     if (

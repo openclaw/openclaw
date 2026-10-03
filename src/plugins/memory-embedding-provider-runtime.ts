@@ -9,12 +9,16 @@ export function listRegisteredMemoryEmbeddingProviderAdapters(): MemoryEmbedding
 }
 
 /** Lists memory embedding providers from runtime config and registered adapters. */
-export const listMemoryEmbeddingProviders: (
+export function listMemoryEmbeddingProviders(
   cfg?: OpenClawConfig,
-) => MemoryEmbeddingProviderAdapter[] = listEmbeddingProviders;
+): MemoryEmbeddingProviderAdapter[] {
+  return listEmbeddingProviders(cfg);
+}
 
 /** Resolves one memory embedding provider by id, alias, or configured API owner. */
-export const getMemoryEmbeddingProvider: (
+export function getMemoryEmbeddingProvider(
   id: string,
   cfg?: OpenClawConfig,
-) => MemoryEmbeddingProviderAdapter | undefined = getEmbeddingProvider;
+): MemoryEmbeddingProviderAdapter | undefined {
+  return getEmbeddingProvider(id, cfg);
+}

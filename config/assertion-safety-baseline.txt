@@ -1954,7 +1954,7 @@ src/config/channel-doctor-helpers.ts	5
 src/config/config-env-vars.ts	1
 src/config/config-journal-snapshot.ts	2
 src/config/context-visibility.ts	1
-src/config/defaults.ts	6
+src/config/defaults.ts	5
 src/config/doc-baseline.ts	6
 src/config/docs-config-examples.ts	1
 src/config/gateway-dispatch-config.ts	2
@@ -1967,7 +1967,6 @@ src/config/io.observe.ts	1
 src/config/io.read-helpers.ts	2
 src/config/io.session-store-owner.ts	2
 src/config/io.snapshot.ts	1
-src/config/io.warnings.ts	2
 src/config/io.write-prepare.ts	12
 src/config/io.write-safety.ts	3
 src/config/io.write.ts	2
@@ -1991,7 +1990,6 @@ src/config/runtime-overrides.ts	1
 src/config/runtime-source-projection.ts	4
 src/config/schema.ts	1
 src/config/sessions/cleanup-service.ts	3
-src/config/sessions/group.ts	1
 src/config/sessions/legacy-main-session-migration.ts	4
 src/config/sessions/metadata.ts	1
 src/config/sessions/session-accessor.entry-mutation.ts	2
@@ -2010,7 +2008,7 @@ src/config/sessions/session-accessor.sqlite-transcript-write.ts	3
 src/config/sessions/session-accessor.sqlite-visible-cursor.ts	1
 src/config/sessions/session-accessor.transcript-range.ts	3
 src/config/sessions/session-accessor.transcript-turn.ts	1
-src/config/sessions/session-reset-boundary-event.ts	5
+src/config/sessions/session-reset-boundary-event.ts	2
 src/config/sessions/session-snapshot-merge.ts	9
 src/config/sessions/session-sqlite-target.ts	2
 src/config/sessions/session-store-config.ts	1
@@ -2021,7 +2019,7 @@ src/config/sessions/transcript-assistant-message.ts	2
 src/config/sessions/transcript-replay.ts	1
 src/config/sessions/transcript-stream.ts	1
 src/config/sessions/transcript-tree.ts	3
-src/config/sessions/transcript.ts	14
+src/config/sessions/transcript.ts	13
 src/config/sessions/types.ts	1
 src/config/talk.ts	1
 src/config/validation-channel-rules.ts	1
@@ -2560,7 +2558,7 @@ src/plugins/bundle-mcp.ts	2
 src/plugins/bundled-channel-config-metadata.ts	4
 src/plugins/bundled-plugin-scan.ts	1
 src/plugins/candidate-install-owner.ts	1
-src/plugins/capability-provider-runtime.ts	10
+src/plugins/capability-provider-runtime.ts	9
 src/plugins/captured-registration.ts	1
 src/plugins/channel-presence-policy.ts	2
 src/plugins/channel-validation.ts	1
@@ -2619,7 +2617,7 @@ src/plugins/marketplace.ts	6
 src/plugins/memory-runtime.ts	1
 src/plugins/native-module-require.ts	2
 src/plugins/official-external-provider-endpoints.ts	1
-src/plugins/openai-compatible-embedding-provider.ts	2
+src/plugins/openai-compatible-embedding-provider.ts	1
 src/plugins/plugin-command-dispatch-contract.ts	1
 src/plugins/plugin-command-execution.ts	1
 src/plugins/plugin-command-runtime.ts	1
@@ -2628,7 +2626,7 @@ src/plugins/plugin-package-update.ts	1
 src/plugins/plugin-peer-link.ts	2
 src/plugins/plugin-sdk-native-resolver.ts	1
 src/plugins/prepared-message-tool-catalog.ts	1
-src/plugins/provider-auth-choice-helpers.ts	9
+src/plugins/provider-auth-choice-helpers.ts	6
 src/plugins/provider-catalog-result.ts	7
 src/plugins/provider-discovery.runtime.ts	2
 src/plugins/provider-discovery.ts	1
@@ -2652,9 +2650,9 @@ src/plugins/runtime/channel-runtime-contexts.ts	1
 src/plugins/runtime/runtime-agent.ts	1
 src/plugins/runtime/runtime-llm-isolated.ts	2
 src/plugins/runtime/runtime-llm.runtime.ts	1
-src/plugins/schema-validator.ts	6
+src/plugins/schema-validator.ts	5
 src/plugins/session-catalog-history-import.ts	1
-src/plugins/setup-registry.ts	11
+src/plugins/setup-registry.ts	10
 src/plugins/slots.ts	1
 src/plugins/toggle-config.ts	2
 src/plugins/tools.ts	1

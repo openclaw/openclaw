@@ -38,6 +38,8 @@ export type SessionCatalogListProviderParams = {
   signal?: AbortSignal;
 };
 export type SessionCatalogReadProviderParams = Omit<SessionsCatalogReadParams, "catalogId"> & {
+  /** Gateway always supplies this; optional only for pre-existing external provider types. */
+  agentId?: string;
   /** False when Gateway-local reads must not inherit a root from process HOME. */
   allowProcessHomeFallback?: boolean;
 };
@@ -45,6 +47,8 @@ export type SessionCatalogContinueProviderParams = Omit<
   SessionsCatalogContinueParams,
   "catalogId"
 > & {
+  /** Gateway always supplies this; optional only for pre-existing external provider types. */
+  agentId?: string;
   /** False when Gateway-local continuation must not inherit a root from process HOME. */
   allowProcessHomeFallback?: boolean;
   /** Caller's gateway scopes so providers can gate high-authority continues up front. */
@@ -54,6 +58,8 @@ export type SessionCatalogArchiveProviderParams = Omit<
   SessionsCatalogArchiveParams,
   "catalogId"
 > & {
+  /** Gateway always supplies this; optional only for pre-existing external provider types. */
+  agentId?: string;
   /** False when Gateway-local archive must not inherit a root from process HOME. */
   allowProcessHomeFallback?: boolean;
 };

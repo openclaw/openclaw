@@ -28,12 +28,6 @@ type PackageEntrySourceParams = {
   rejectHardlinks?: boolean;
 };
 
-type PackageRuntimeEntryParams = Omit<PackageEntrySourceParams, "entryPath"> & {
-  manifest: PackageManifest | null;
-  origin: PluginOrigin;
-  requireBuiltRuntimeEntry?: boolean;
-};
-
 function reportPackageEntryDiagnostic(
   params: Pick<PackageEntrySourceParams, "diagnostics" | "pluginIdHint" | "sourceLabel">,
   level: PluginDiagnostic["level"],
@@ -403,7 +397,17 @@ function resolvePackageRuntimeEntrySource(
 }
 
 /** Resolves the runtime setup source for a plugin package manifest. */
-export function resolvePackageSetupSource(params: PackageRuntimeEntryParams): string | null {
+export function resolvePackageSetupSource(params: {
+  packageDir: string;
+  packageRootRealPath?: string;
+  manifest: PackageManifest | null;
+  pluginIdHint?: string;
+  origin: PluginOrigin;
+  requireBuiltRuntimeEntry?: boolean;
+  sourceLabel: string;
+  diagnostics: PluginDiagnostic[];
+  rejectHardlinks?: boolean;
+}): string | null {
   const packageManifest = getPackageManifestMetadata(params.manifest ?? undefined);
   const setupEntryPath = normalizeOptionalString(packageManifest?.setupEntry);
   if (!setupEntryPath) {
@@ -430,9 +434,18 @@ export function resolvePackageRuntimeExtensionSources(
 }
 
 /** Keeps declarations paired with their runtime sources when earlier entries cannot resolve. */
-export function resolvePackageRuntimeExtensions(
-  params: PackageRuntimeEntryParams & { extensions: readonly string[] },
-): Array<{ entryPath: string; source: string }> {
+export function resolvePackageRuntimeExtensions(params: {
+  packageDir: string;
+  packageRootRealPath?: string;
+  manifest: PackageManifest | null;
+  extensions: readonly string[];
+  origin: PluginOrigin;
+  pluginIdHint?: string;
+  requireBuiltRuntimeEntry?: boolean;
+  sourceLabel: string;
+  diagnostics: PluginDiagnostic[];
+  rejectHardlinks?: boolean;
+}): Array<{ entryPath: string; source: string }> {
   const runtimeResolution = resolvePackageRuntimeExtensionEntries(params);
   if (!runtimeResolution.ok) {
     reportPackageEntryDiagnostic(params, "error", runtimeResolution.error);

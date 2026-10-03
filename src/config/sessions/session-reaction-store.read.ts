@@ -49,10 +49,18 @@ export function listSessionReactionsInDatabase(
   sessionKey: string,
   params: { sessionId: string },
 ): Record<string, StoredMessageReactionSummary[]> {
-  const messages = Map.groupBy(
-    executeSqliteQuerySync(database.db, reactionRows(database, sessionKey, params.sessionId)).rows,
-    (row) => row.message_id,
-  );
+  const messages = new Map<string, SessionReactions[]>();
+  for (const row of executeSqliteQuerySync(
+    database.db,
+    reactionRows(database, sessionKey, params.sessionId),
+  ).rows) {
+    const rows = messages.get(row.message_id);
+    if (rows) {
+      rows.push(row);
+    } else {
+      messages.set(row.message_id, [row]);
+    }
+  }
   return Object.fromEntries(
     [...messages].map(([messageId, rows]) => [messageId, summarizeReactions(rows)]),
   );
