@@ -19,6 +19,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
 import * as capacity from "./capacity.js";
+import { addManagedWorktree } from "./checkout.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
 import type { WorktreeFilesystemBackend } from "./filesystem-backend.types.js";
@@ -86,6 +87,31 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     expect(await git(created.path, "status", "--porcelain")).toBe("");
     expect(listTemplates(env)).toEqual([]);
     expect(backend.cloneTemplate).not.toHaveBeenCalled();
+  });
+
+  it("preserves relative Git environment paths during registration and checkout", async () => {
+    const destination = path.join(path.dirname(repo), "relative-env");
+    const commit = await git(repo, "rev-parse", "HEAD");
+    vi.stubEnv("GIT_COMMON_DIR", "../repo/.git");
+
+    const result = await addManagedWorktree({
+      env,
+      now: () => now,
+      enabled: false,
+      repoRoot: repo,
+      commonDir: path.join(repo, ".git"),
+      worktreeRoot: path.dirname(destination),
+      destination,
+      base: commit,
+      requireSpace: () => {},
+      commitGuard: () => {},
+    });
+
+    expect(result.code).toBe(0);
+    expect(await fs.readFile(path.join(destination, "README.md"), "utf8")).toBe("base\n");
+    expect(await git(destination, "rev-parse", "HEAD")).toBe(commit);
+    expect(await git(destination, "status", "--porcelain")).toBe("");
+    expect(await git(repo, "status", "--porcelain")).toBe("");
   });
 
   it.each(["small", "remote-restore", "invalid", "fallback"])(

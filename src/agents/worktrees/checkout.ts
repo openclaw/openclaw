@@ -398,14 +398,14 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
   }
   const rollbackGuard = input.rollbackGuard ?? input.commitGuard;
   const rollbackOptions = { beforeRun: rollbackGuard, killProcessTree: true };
-  // Capture rollback-owned metadata: cloning can replace .git; Windows needs a short --git-dir.
-  const gitDir = normalizeGitPathForFilesystem(
-    await requireGit(input.destination, ["rev-parse", "--absolute-git-dir"], rollbackOptions),
-  );
+  // Capture rollback-owned metadata before cloning replaces .git; keep relative Git env paths anchored.
+  const absolute = await resolveGitMetadataPath(input.destination, ".", rollbackOptions);
+  const relative = path.relative(input.repoRoot, absolute);
+  const gitDir = Buffer.byteLength(relative) < Buffer.byteLength(absolute) ? relative : absolute;
   const readRegistration = (commandOptions: Parameters<typeof requireGit>[2]) =>
     requireGit(
-      gitDir,
-      ["--git-dir", ".", "rev-parse", "HEAD", "--symbolic-full-name", "HEAD"],
+      input.repoRoot,
+      ["--git-dir", gitDir, "rev-parse", "HEAD", "--symbolic-full-name", "HEAD"],
       commandOptions,
     );
   const registration = await readRegistration(rollbackOptions);
@@ -501,11 +501,11 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
       return options.deferGitCheckout ? added : await checkout();
     }
     const destinationIndex = path.resolve(
-      gitDir,
+      options.repoRoot,
       normalizeGitPathForFilesystem(
         await requireGit(
-          gitDir,
-          ["--git-dir", ".", "rev-parse", "--git-path", "index"],
+          options.repoRoot,
+          ["--git-dir", gitDir, "rev-parse", "--git-path", "index"],
           gitOptions(options),
         ),
       ),
