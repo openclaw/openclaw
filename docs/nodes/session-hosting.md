@@ -98,6 +98,10 @@ execution and other approved node commands retain their existing requirements.
 Updating a node first remains compatible with an older Gateway; the node
 advertises this support only when the Gateway understands it.
 
+When updating a node before a `2026.9.8` Gateway, the node preserves that
+Gateway's Skill Workshop launch binding for its supplied worker bundle.
+Ordinary attributed chat turns continue to work without updating both sides together.
+
 Turn completion uses a bounded status wait when both the Gateway and node host
 support `node-worker-status-wait-v1`. The node wakes the waiting request as soon
 as the exact turn's terminal result is journaled; transcript settlement and
