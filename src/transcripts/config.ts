@@ -19,13 +19,6 @@ export type ResolvedTranscriptsAutoStartConfig = TranscriptsAutoStartConfig & {
 /** Raw transcripts config block. */
 export type TranscriptsConfig = NonNullable<z.input<typeof OpenClawSchemaShape.transcripts>>;
 
-/** Resolved transcripts config with defaults applied. */
-type ResolvedTranscriptsConfig = {
-  enabled: boolean;
-  maxUtterances: number;
-  autoStart: ResolvedTranscriptsAutoStartConfig[];
-};
-
 const DEFAULT_TRANSCRIPTS_MAX_UTTERANCES = 2_000;
 
 function resolveAutoStart(raw: unknown): ResolvedTranscriptsAutoStartConfig[] {
@@ -54,7 +47,7 @@ function resolveAutoStart(raw: unknown): ResolvedTranscriptsAutoStartConfig[] {
 }
 
 /** Normalize raw transcripts config into runtime settings. */
-export function resolveTranscriptsConfig(raw: unknown): ResolvedTranscriptsConfig {
+export function resolveTranscriptsConfig(raw: unknown) {
   const config = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   return {
     enabled: config.enabled !== false,

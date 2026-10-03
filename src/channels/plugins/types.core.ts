@@ -4,6 +4,7 @@ import type {
   GatewayClientMode,
   GatewayClientName,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import type { ChannelsStatusResult } from "../../../packages/gateway-protocol/src/schema/channels.js";
 import type { ReplyDeliveryContext, ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
@@ -99,12 +100,11 @@ export type ChannelMessageToolDiscovery = {
   mediaSourceParams?: ChannelMessageToolMediaSourceParams | null;
 };
 
-export type ChannelStatusIssue = {
+export type ChannelStatusIssue = Omit<
+  NonNullable<ChannelsStatusResult["statusIssues"]>[number],
+  "channel"
+> & {
   channel: ChannelId;
-  accountId: string;
-  kind: "intent" | "permissions" | "config" | "auth" | "runtime";
-  message: string;
-  fix?: string;
 };
 
 export type ChannelAccountState =
@@ -144,18 +144,12 @@ export type ChannelMeta = {
 };
 
 /** Snapshot row returned by channel status and lifecycle surfaces. */
-export type ChannelAccountSnapshot = {
-  accountId: string;
-  name?: string;
-  enabled?: boolean;
-  configured?: boolean;
+export type ChannelAccountSnapshot = Omit<
+  ChannelsStatusResult["channelAccounts"][string][number],
+  "healthState" | "credentialSource" | "audienceType" | "audience" | "webhookPath" | "webhookUrl"
+> & {
   statusState?: string;
-  linked?: boolean;
-  running?: boolean;
-  connected?: boolean;
   restartPending?: boolean;
-  reconnectAttempts?: number;
-  lastConnectedAt?: number | null;
   lastDisconnect?:
     | string
     | {
@@ -167,9 +161,7 @@ export type ChannelAccountSnapshot = {
     | null;
   lastMessageAt?: number | null;
   lastEventAt?: number | null;
-  lastTransportActivityAt?: number | null;
   stateReason?: string;
-  lastError?: string | null;
   /**
    * Legacy channel-authored health label; channel plugins should publish `lifecycle` instead.
    * Core-derived policy writes remain supported. There is no removal date; removal awaits
@@ -188,20 +180,6 @@ export type ChannelAccountSnapshot = {
    */
   ingressUnavailable?: true;
   terminalDisconnect?: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastInboundAt?: number | null;
-  lastOutboundAt?: number | null;
-  busy?: boolean;
-  activeRuns?: number;
-  lastRunActivityAt?: number | null;
-  activeRunStartedAt?: number | null;
-  mode?: string;
-  dmPolicy?: string;
-  allowFrom?: string[];
-  tokenSource?: string;
-  botTokenSource?: string;
-  appTokenSource?: string;
   userTokenSource?: string;
   signingSecretSource?: string;
   tokenStatus?: string;
@@ -217,15 +195,6 @@ export type ChannelAccountSnapshot = {
   audience?: string;
   webhookPath?: string;
   webhookUrl?: string;
-  baseUrl?: string;
-  allowUnmentionedGroups?: boolean;
-  cliPath?: string | null;
-  dbPath?: string | null;
-  port?: number | null;
-  probe?: unknown;
-  lastProbeAt?: number | null;
-  audit?: unknown;
-  application?: unknown;
   bot?: unknown;
   publicKey?: string | null;
   profile?: unknown;

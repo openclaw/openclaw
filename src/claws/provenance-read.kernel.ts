@@ -18,24 +18,14 @@ import type {
   PersistedClawInstall,
 } from "./provenance-types.js";
 
-type ClawInstallRow = {
-  schema_version: string;
+type ClawInstallRow = Omit<
+  DB["claw_installs"],
+  "source_byte_length" | "manifest_schema_version" | "added_at_ms" | "updated_at_ms"
+> & {
   source_kind: "package" | "development";
-  claw_name: string;
-  claw_version: string;
-  package_root: string;
-  manifest_path: string;
   integrity_kind: "artifact" | "development-snapshot";
-  integrity: string;
   source_byte_length: number | bigint;
   manifest_schema_version: number | bigint;
-  plan_integrity: string;
-  agent_id: string;
-  workspace: string;
-  agent_config_digest: string;
-  agent_owned_paths_json: string;
-  bootstrap_source_path: string | null;
-  bootstrap_content_digest: string | null;
   status: ClawInstallStatus;
   added_at_ms: number | bigint;
   updated_at_ms: number | bigint;

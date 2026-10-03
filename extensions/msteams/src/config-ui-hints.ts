@@ -1,4 +1,5 @@
-import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-config-ui-hints";
+import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-core";
+import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const msTeamsChannelConfigUiHints = {
   "": {
@@ -46,4 +47,4 @@ export const msTeamsChannelConfigUiHints = {
       titleWording: true,
     },
   }),
-} satisfies ReturnType<typeof createChannelConfigUiHints>;
+} satisfies Record<string, ChannelConfigUiHint>;

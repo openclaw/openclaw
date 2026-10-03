@@ -2,23 +2,18 @@ import {
   normalizeStringEntries,
   normalizeUniqueStringEntries,
 } from "@openclaw/normalization-core/string-normalization";
+import type { TranscriptsGetResult } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isTranscriptArtifactText } from "../media-understanding/transcription-text.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 
-export type TranscriptsSummary = {
+type TranscriptSummaryWire = NonNullable<TranscriptsGetResult["summary"]>;
+
+export type TranscriptsSummary = Omit<TranscriptSummaryWire, "markdown" | "source"> & {
   sessionId: string;
   title: string;
-  generatedAt: string;
-  overview: string;
-  participants: string[];
-  source: "model" | "heuristic";
-  model?: string;
+  source: NonNullable<TranscriptSummaryWire["source"]>;
   transcript: string[];
-  decisions: string[];
-  actionItems: string[];
-  risks: string[];
-  utteranceCount: number;
 };
 
 const ACTION_PATTERNS =

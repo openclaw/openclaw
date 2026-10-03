@@ -159,61 +159,56 @@ export class GatewayClientRequestTimeoutError extends GatewayProtocolRequestTime
 
 class GatewayClientTransportPolicyError extends GatewayWebSocketTransportConfigurationError {}
 
-export type GatewayClientOptions = GatewayWebSocketTargetOptions & {
-  origin?: string;
-  /** Already-resolved edge-proxy auth headers (identity-aware proxy in front of the Gateway). */
-  edgeAuthHeaders?: Readonly<Record<string, string>>;
-  connectChallengeTimeoutMs?: number;
-  /**
-   * Server-side pre-auth handshake budget. Config-derived local clients use
-   * this to keep the connect-challenge watchdog aligned with the gateway.
-   */
-  preauthHandshakeTimeoutMs?: number;
-  tickWatchMinIntervalMs?: number;
-  tickWatchTimeoutMs?: number;
-  requestTimeoutMs?: number;
-  token?: string;
-  bootstrapToken?: string;
-  /** Prefer one setup credential for the first successful device-auth exchange. */
-  preferBootstrapToken?: boolean;
-  deviceToken?: string;
-  password?: string;
-  approvalRuntimeToken?: string;
-  agentRuntimeIdentityToken?: string;
-  instanceId?: string;
-  clientName?: GatewayClientName;
-  clientDisplayName?: string;
-  clientVersion?: string;
-  clientBuildId?: string;
-  platform?: string;
-  deviceFamily?: string;
-  modelIdentifier?: string;
-  mode?: GatewayClientMode;
-  role?: string;
-  scopes?: string[];
-  modelCatalog?: ConnectParams["modelCatalog"];
-  caps?: string[];
-  commands?: string[];
-  computerUse?: ConnectParams["computerUse"];
-  /** @deprecated Compatibility for the shipped v1 node-host connect envelope. */
-  workerRuns?: ConnectParams["workerRuns"];
-  permissions?: Record<string, boolean>;
-  pathEnv?: string;
-  env?: NodeJS.ProcessEnv;
-  deviceIdentity?: DeviceIdentity | null;
-  hostDeps?: GatewayClientHostDeps;
-  minProtocol?: number;
-  maxProtocol?: number;
-  onEvent?: (evt: EventFrame) => void;
-  onHelloOk?: (hello: HelloOk) => void;
-  onConnectError?: (err: Error) => void;
-  onReconnectPaused?: (info: GatewayReconnectPausedInfo) => void;
-  /** Report retryable startup closes for clients that present connection progress. */
-  notifyOnStartupRetry?: boolean;
-  onClose?: (code: number, reason: string, info?: GatewayClientCloseInfo) => void;
-  onGap?: (info: { expected: number; received: number }) => void;
-  onRequestTiming?: (timing: GatewayProtocolRequestTiming) => void;
-};
+export type GatewayClientOptions = GatewayWebSocketTargetOptions &
+  NonNullable<ConnectParams["auth"]> & {
+    origin?: string;
+    /** Already-resolved edge-proxy auth headers (identity-aware proxy in front of the Gateway). */
+    edgeAuthHeaders?: Readonly<Record<string, string>>;
+    connectChallengeTimeoutMs?: number;
+    /**
+     * Server-side pre-auth handshake budget. Config-derived local clients use
+     * this to keep the connect-challenge watchdog aligned with the gateway.
+     */
+    preauthHandshakeTimeoutMs?: number;
+    tickWatchMinIntervalMs?: number;
+    tickWatchTimeoutMs?: number;
+    requestTimeoutMs?: number;
+    /** Prefer one setup credential for the first successful device-auth exchange. */
+    preferBootstrapToken?: boolean;
+    instanceId?: string;
+    clientName?: GatewayClientName;
+    clientDisplayName?: string;
+    clientVersion?: string;
+    clientBuildId?: string;
+    platform?: string;
+    deviceFamily?: string;
+    modelIdentifier?: string;
+    mode?: GatewayClientMode;
+    role?: string;
+    scopes?: string[];
+    modelCatalog?: ConnectParams["modelCatalog"];
+    caps?: string[];
+    commands?: string[];
+    computerUse?: ConnectParams["computerUse"];
+    /** @deprecated Compatibility for the shipped v1 node-host connect envelope. */
+    workerRuns?: ConnectParams["workerRuns"];
+    permissions?: Record<string, boolean>;
+    pathEnv?: string;
+    env?: NodeJS.ProcessEnv;
+    deviceIdentity?: DeviceIdentity | null;
+    hostDeps?: GatewayClientHostDeps;
+    minProtocol?: number;
+    maxProtocol?: number;
+    onEvent?: (evt: EventFrame) => void;
+    onHelloOk?: (hello: HelloOk) => void;
+    onConnectError?: (err: Error) => void;
+    onReconnectPaused?: (info: GatewayReconnectPausedInfo) => void;
+    /** Report retryable startup closes for clients that present connection progress. */
+    notifyOnStartupRetry?: boolean;
+    onClose?: (code: number, reason: string, info?: GatewayClientCloseInfo) => void;
+    onGap?: (info: { expected: number; received: number }) => void;
+    onRequestTiming?: (timing: GatewayProtocolRequestTiming) => void;
+  };
 
 export type {
   GatewayClientCloseInfo,

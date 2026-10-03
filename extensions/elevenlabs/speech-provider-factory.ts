@@ -58,17 +58,6 @@ function normalizeElevenLabsTtsModelId(value: string | undefined): string | unde
   }
 }
 
-type ElevenLabsProviderConfig = {
-  apiKey?: string;
-  baseUrl: string;
-  voiceId: string;
-  modelId: string;
-  seed?: number;
-  applyTextNormalization?: string;
-  languageCode?: string;
-  voiceSettings: Parameters<typeof elevenLabsTTS>[0]["voiceSettings"];
-};
-
 function normalizeElevenLabsSeed(value: unknown): number | undefined {
   return asSafeIntegerInRange(value, { min: 0, max: 4_294_967_295 });
 }
@@ -107,7 +96,7 @@ function definedSettings<T extends Record<string, unknown>>(settings: T): Partia
 
 function normalizeVoiceSettings(
   raw: Record<string, unknown> | undefined,
-): Partial<ElevenLabsProviderConfig["voiceSettings"]> {
+): Partial<Parameters<typeof elevenLabsTTS>[0]["voiceSettings"]> {
   return definedSettings({
     stability: asFiniteNumberInRange(raw?.stability, { min: 0, max: 1 }),
     similarityBoost: asFiniteNumberInRange(raw?.similarityBoost, { min: 0, max: 1 }),
@@ -117,9 +106,7 @@ function normalizeVoiceSettings(
   });
 }
 
-function normalizeElevenLabsProviderConfig(
-  rawConfig: Record<string, unknown>,
-): ElevenLabsProviderConfig {
+function normalizeElevenLabsProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
   const raw = asOptionalRecord(providers?.elevenlabs) ?? asOptionalRecord(rawConfig.elevenlabs);
   const rawVoiceSettings = asOptionalRecord(raw?.voiceSettings);
@@ -142,7 +129,7 @@ function normalizeElevenLabsProviderConfig(
   };
 }
 
-function readElevenLabsProviderConfig(config: SpeechProviderConfig): ElevenLabsProviderConfig {
+function readElevenLabsProviderConfig(config: SpeechProviderConfig) {
   return normalizeElevenLabsProviderConfig({
     elevenlabs: { ...config, apiKey: trimToUndefined(config.apiKey) },
   });

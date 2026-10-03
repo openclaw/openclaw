@@ -156,11 +156,10 @@ export function resolveExecModePolicy(params: {
   };
 }
 
-export type SystemRunApprovalBinding = {
-  argv: string[];
-  cwd: string | null;
-  agentId: string | null;
-  sessionKey: string | null;
+export type SystemRunApprovalBinding = Pick<
+  SystemRunApprovalPlan,
+  "argv" | "cwd" | "agentId" | "sessionKey"
+> & {
   envHash: string | null;
 };
 
@@ -236,12 +235,7 @@ export type ExecApprovalResolved = {
   request?: ExecApprovalRequest["request"];
 };
 
-export type ExecApprovalsDefaults = {
-  security?: ExecSecurity;
-  ask?: ExecAsk;
-  askFallback?: ExecSecurity;
-  autoAllowSkills?: boolean;
-};
+export type ExecApprovalsDefaults = Partial<Omit<ExecApprovalPolicySnapshot, "allowlistRules">>;
 
 export type ExecApprovalsAgent = ExecApprovalsDefaults & {
   allowlist?: ExecAllowlistEntry[];

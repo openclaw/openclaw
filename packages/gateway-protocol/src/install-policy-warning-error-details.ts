@@ -6,39 +6,28 @@ import {
 export const INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED =
   "install_policy_warning_acknowledgement_required" as const;
 
-type InstallPolicyWarningErrorFinding = {
-  ruleId: string;
-  severity: "info" | "warn" | "critical";
-  message: string;
-  file?: string;
-  line?: number;
-  evidence?: string;
-};
+type InstallPolicyWarningErrorFinding = NonNullable<ReturnType<typeof readFinding>>;
 
-export type InstallPolicyWarningErrorDetails = {
-  installPolicyCode: typeof INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED;
-  targetName: string;
-  targetType: "skill" | "plugin";
-  requestMode: "install" | "update";
-  reason: string;
-  findings?: InstallPolicyWarningErrorFinding[];
-};
+export type InstallPolicyWarningErrorDetails = NonNullable<
+  ReturnType<typeof readInstallPolicyWarningErrorDetails>
+>;
 
-function readFinding(value: unknown): InstallPolicyWarningErrorFinding | undefined {
+function readFinding(value: unknown) {
   const record = asProtocolRecord(value);
   if (!record) {
     return undefined;
   }
   const ruleId = normalizeOptionalProtocolString(record.ruleId);
   const message = normalizeOptionalProtocolString(record.message);
-  const severity = record.severity;
+  const rawSeverity = record.severity;
   if (
     !ruleId ||
     !message ||
-    (severity !== "info" && severity !== "warn" && severity !== "critical")
+    (rawSeverity !== "info" && rawSeverity !== "warn" && rawSeverity !== "critical")
   ) {
     return undefined;
   }
+  const severity: "info" | "warn" | "critical" = rawSeverity;
   const file = normalizeOptionalProtocolString(record.file);
   const evidence = normalizeOptionalProtocolString(record.evidence);
   const line = record.line;
@@ -59,26 +48,26 @@ function readFinding(value: unknown): InstallPolicyWarningErrorFinding | undefin
   };
 }
 
-export function readInstallPolicyWarningErrorDetails(
-  value: unknown,
-): InstallPolicyWarningErrorDetails | undefined {
+export function readInstallPolicyWarningErrorDetails(value: unknown) {
   const record = asProtocolRecord(value);
   if (!record) {
     return undefined;
   }
   const targetName = normalizeOptionalProtocolString(record.targetName);
   const reason = normalizeOptionalProtocolString(record.reason);
-  const targetType = record.targetType;
-  const requestMode = record.requestMode;
+  const rawTargetType = record.targetType;
+  const rawRequestMode = record.requestMode;
   if (
     record.installPolicyCode !== INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED ||
     !targetName ||
     !reason ||
-    (targetType !== "skill" && targetType !== "plugin") ||
-    (requestMode !== "install" && requestMode !== "update")
+    (rawTargetType !== "skill" && rawTargetType !== "plugin") ||
+    (rawRequestMode !== "install" && rawRequestMode !== "update")
   ) {
     return undefined;
   }
+  const targetType: "skill" | "plugin" = rawTargetType;
+  const requestMode: "install" | "update" = rawRequestMode;
   let findings: InstallPolicyWarningErrorFinding[] | undefined;
   if (record.findings !== undefined) {
     if (!Array.isArray(record.findings)) {

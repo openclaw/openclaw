@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { ComputerInvokeParams } from "../../../packages/gateway-protocol/src/schema/computer.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-authority.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -13,7 +14,6 @@ import { computerRunOwner } from "./computer-owner.js";
 import { startComputerHostProcess, type ComputerHostProcess } from "./computer-process.js";
 import {
   ComputerHostFinalizationError,
-  type ComputerHostCommand,
   type ComputerHostExecutionClose,
 } from "./computer-protocol.js";
 import type { HostDesktopService } from "./host-source.js";
@@ -27,16 +27,11 @@ export type GatewayComputerStatus = {
   computerUse?: ComputerUseCapabilityDescriptor;
   error?: string;
 };
-type ComputerInvokeRequest = {
-  command: ComputerHostCommand;
-  params: Record<string, unknown>;
-  generation: string;
+type ComputerInvokeRequest = ComputerInvokeParams & {
   owner: string;
   signal?: AbortSignal;
   ownerSignal?: AbortSignal;
   assertCurrent(): void;
-  timeoutMs?: number;
-  idempotencyKey: string;
 };
 export type GatewayComputerService = {
   status(): Promise<GatewayComputerStatus>;

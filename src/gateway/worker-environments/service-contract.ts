@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import type {
   SessionPlacementMachine,
   SessionsReclaimParams,
+  WorkerDesktopLaunchResult as ProtocolWorkerDesktopLaunchResult,
+  WorkerDesktopObserveResult as ProtocolWorkerDesktopObserveResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import type {
@@ -70,20 +72,11 @@ export type WorkerEnvironmentServiceRecord = {
   error?: string;
 };
 
-export type WorkerDesktopObserveResult = {
+export type WorkerDesktopObserveResult = Omit<ProtocolWorkerDesktopObserveResult, "transport"> & {
   transport: "rfb";
-  wsPath: string;
-  expiresAtMs: number;
-  control: boolean;
-  /** Provider permission to request resizing, not negotiated RFB support. */
-  canResize?: boolean;
-  vncPassword?: string;
 };
 
-export type WorkerDesktopLaunchResult = {
-  app: WorkerDesktopApp["id"];
-  status: "ready";
-};
+export type WorkerDesktopLaunchResult = ProtocolWorkerDesktopLaunchResult;
 
 /** Request-facing lifecycle methods, kept separate from persistence and provider internals. */
 export type WorkerEnvironmentServiceContract = {

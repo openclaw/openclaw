@@ -1,3 +1,8 @@
+import type {
+  WorkerExecutionMode as ProtocolWorkerExecutionMode,
+  WorkerMachineOption as ProtocolWorkerMachineOption,
+  WorkerOperatingSystem as ProtocolWorkerOperatingSystem,
+} from "../../packages/gateway-protocol/src/schema/environments.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
@@ -49,23 +54,10 @@ import type { PluginJsonValue } from "./host-hook-json.js";
 export type WorkerProfile = Readonly<Record<string, PluginJsonValue>>;
 
 /** Provider-authored picker metadata for one machine class or exact machine type. */
-export type WorkerMachineOption = Readonly<{
-  id: string;
-  label: string;
-  os?: string;
-  cpu?: number;
-  memoryGb?: number;
-  default?: boolean;
-}>;
+export type WorkerMachineOption = Readonly<ProtocolWorkerMachineOption>;
 
 /** Provider-owned operating system choices for one configured worker profile. */
-export type WorkerOperatingSystem = Readonly<{
-  id: string;
-  label: string;
-  default?: boolean;
-  /** Why this advertised target cannot currently be selected, including a repair hint. */
-  disabledReason?: string;
-}>;
+export type WorkerOperatingSystem = Readonly<ProtocolWorkerOperatingSystem>;
 
 /** SSH endpoint material returned by a worker provider after provisioning. */
 export type WorkerSshEndpoint = {
@@ -127,7 +119,7 @@ export type WorkerDesktopEndpoint = {
 };
 
 /** Placement execution modes a worker provider can carry. */
-export type WorkerExecutionMode = "worker-turn" | "remote-exec";
+export type WorkerExecutionMode = ProtocolWorkerExecutionMode;
 
 /** Grant-free identity of the runtime bytes a provider may retain in a prepared image. */
 export type WorkerNodeRuntimeIdentity = {

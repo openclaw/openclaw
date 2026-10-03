@@ -1,87 +1,330 @@
-import type { z } from "zod";
-import type { DiscordAccountSchemaBase } from "../../extensions/discord/config-schema-api.js";
+import type { ChannelPreviewStreamingConfig, SessionThreadBindingsConfig } from "./types.base.js";
 import type {
+  ChannelBotInteractionConfig,
   ChannelExecApprovalConfig,
   ChannelReactionConfig,
+  CommonChannelGroupConfig,
   CommonChannelMessagingConfig,
 } from "./types.channel-messaging-common.js";
+import type { DiscordPresenceEventsConfig } from "./types.discord-presence.js";
+import type { ProviderCommandsConfig } from "./types.messages.js";
 import type { SecretInput } from "./types.secrets.js";
-import type { GroupToolPolicyBySenderConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 
-// Runtime Discord config carries normalized string IDs.
-type DiscordSchemaAccount = z.output<typeof DiscordAccountSchemaBase>;
-type DiscordSchemaGuild = NonNullable<NonNullable<DiscordSchemaAccount["guilds"]>[string]>;
-type DiscordSchemaGuildChannel = NonNullable<NonNullable<DiscordSchemaGuild["channels"]>[string]>;
-type DiscordSchemaVoice = NonNullable<DiscordSchemaAccount["voice"]>;
+export type DiscordChannelStreamingConfig = ChannelPreviewStreamingConfig;
 
-export type DiscordChannelStreamingConfig = NonNullable<DiscordSchemaAccount["streaming"]>;
-export type DiscordPluralKitConfig = Omit<
-  NonNullable<DiscordSchemaAccount["pluralkit"]>,
-  "token"
-> & {
+export type DiscordPluralKitConfig = {
+  enabled?: boolean;
   token?: string;
 };
-export type DiscordMentionAliasesConfig = NonNullable<DiscordSchemaAccount["mentionAliases"]>;
-export type DiscordDmConfig = NonNullable<DiscordSchemaAccount["dm"]>;
-export type DiscordGuildChannelConfig = Omit<DiscordSchemaGuildChannel, "toolsBySender"> & {
+
+export type DiscordMentionAliasesConfig = Record<string, string>;
+
+export type DiscordDmConfig = {
+  /** If false, ignore all incoming Discord DMs. Default: true. */
+  enabled?: boolean;
+  /** If true, allow group DMs (default: false). */
+  groupEnabled?: boolean;
+  /** Optional allowlist for group DM channels (ids or slugs). */
+  groupChannels?: string[];
+};
+
+export type DiscordGuildChannelConfig = Omit<CommonChannelGroupConfig, "allowFrom"> & {
+  /** Override mention gating in threads created by this bot; omitted preserves autoThread behavior. */
+  requireMentionInBotThreads?: boolean;
+  /**
+   * If true, drop messages addressed to another identity by mention or bot reply, but not this
+   * bot (not @everyone/@here).
+   * Default: false.
+   */
+  ignoreOtherMentions?: boolean;
+  /** Optional allowlist for channel senders (ids or names). */
+  users?: string[];
+  /** Optional allowlist for channel senders by role ID. */
+  roles?: string[];
+  /** If false, omit thread starter context for this channel (default: true). */
+  includeThreadStarter?: boolean;
   /** If true, automatically create a thread for each new message in this channel. */
   autoThread?: boolean;
-  toolsBySender?: GroupToolPolicyBySenderConfig;
+  /** Archive duration (minutes) for auto-created threads. Valid values: 60, 1440, 4320, 10080. */
+  autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
+  /** Naming strategy for auto-created threads. "message" uses message text; "generated" renames with an LLM title. */
+  autoThreadName?: "message" | "generated";
 };
-export type DiscordReactionNotificationMode = NonNullable<
-  DiscordSchemaGuild["reactionNotifications"]
->;
-export type DiscordGuildEntry = Omit<DiscordSchemaGuild, "toolsBySender" | "channels"> & {
-  toolsBySender?: GroupToolPolicyBySenderConfig;
+
+export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
+
+export type DiscordGuildEntry = Pick<
+  CommonChannelGroupConfig,
+  "requireMention" | "tools" | "toolsBySender"
+> & {
+  slug?: string;
+  /** Default for bot-created threads unless the channel overrides it. */
+  requireMentionInBotThreads?: boolean;
+  /**
+   * If true, drop messages addressed to another identity by mention or bot reply, but not this
+   * bot (not @everyone/@here).
+   * Default: false.
+   */
+  ignoreOtherMentions?: boolean;
+  /** Reaction notification mode (off|own|all|allowlist). Default: own. */
+  reactionNotifications?: DiscordReactionNotificationMode;
+  /** Optional allowlist for guild senders (ids or names). */
+  users?: string[];
+  /** Optional allowlist for guild senders by role ID. */
+  roles?: string[];
+  presenceEvents?: DiscordPresenceEventsConfig;
   channels?: Record<string, DiscordGuildChannelConfig>;
 };
-export type DiscordActionConfig = NonNullable<DiscordSchemaAccount["actions"]>;
-export type DiscordIntentsConfig = NonNullable<DiscordSchemaAccount["intents"]>;
-export type DiscordVoiceAutoJoinConfig = NonNullable<DiscordSchemaVoice["autoJoin"]>[number];
-export type DiscordVoiceAllowedChannelConfig = NonNullable<
-  DiscordSchemaVoice["allowedChannels"]
->[number];
-export type DiscordVoiceMode = NonNullable<DiscordSchemaVoice["mode"]>;
-export type DiscordVoiceRealtimeConfig = NonNullable<DiscordSchemaVoice["realtime"]>;
-export type DiscordVoiceRealtimeConsultPolicy = NonNullable<
-  DiscordVoiceRealtimeConfig["consultPolicy"]
->;
-export type DiscordVoiceRealtimeToolPolicy = NonNullable<DiscordVoiceRealtimeConfig["toolPolicy"]>;
-export type DiscordVoiceRealtimeBootstrapContextFile = NonNullable<
-  DiscordVoiceRealtimeConfig["bootstrapContextFiles"]
->[number];
-export type DiscordVoiceAgentSessionConfig = NonNullable<DiscordSchemaVoice["agentSession"]>;
-export type DiscordVoiceConfig = Omit<DiscordSchemaVoice, "tts"> & { tts?: TtsConfig };
+
+export type DiscordActionConfig = {
+  reactions?: boolean;
+  stickers?: boolean;
+  polls?: boolean;
+  permissions?: boolean;
+  messages?: boolean;
+  threads?: boolean;
+  pins?: boolean;
+  search?: boolean;
+  memberInfo?: boolean;
+  roleInfo?: boolean;
+  roles?: boolean;
+  channelInfo?: boolean;
+  voiceStatus?: boolean;
+  events?: boolean;
+  moderation?: boolean;
+  emojiUploads?: boolean;
+  stickerUploads?: boolean;
+  channels?: boolean;
+  /** Enable bot presence/activity changes (default: false). */
+  presence?: boolean;
+};
+
+export type DiscordIntentsConfig = {
+  /**
+   * Request the privileged Message Content intent. Disable only for mention-only guild operation;
+   * Discord still includes content in DMs and messages that explicitly mention the bot. Default: true.
+   */
+  messageContent?: boolean;
+  /** Enable Guild Presences privileged intent (requires Portal opt-in). Default: false. */
+  presence?: boolean;
+  /** Enable Guild Members privileged intent (requires Portal opt-in). Default: false. */
+  guildMembers?: boolean;
+  /** Enable Guild Voice States intent. Defaults to voice.enabled, unless explicitly set. */
+  voiceStates?: boolean;
+};
+
+export type DiscordVoiceAutoJoinConfig = {
+  /** Guild ID that owns the voice channel. */
+  guildId: string;
+  /** Voice channel ID to join. */
+  channelId: string;
+  /** Join and remain connected only while at least one human is in the channel. Default: false. */
+  whenOccupied?: boolean;
+};
+
+export type DiscordVoiceAllowedChannelConfig = {
+  /** Guild ID that owns the voice channel. */
+  guildId: string;
+  /** Voice channel ID allowed for realtime voice sessions. */
+  channelId: string;
+};
+
+export type DiscordVoiceMode = "stt-tts" | "agent-proxy" | "bidi";
+
+export type DiscordVoiceRealtimeConsultPolicy = "auto" | "always";
+
+export type DiscordVoiceRealtimeToolPolicy = "safe-read-only" | "owner" | "none";
+
+export type DiscordVoiceRealtimeBootstrapContextFile = "IDENTITY.md" | "USER.md" | "SOUL.md";
+
+export type DiscordVoiceRealtimeConfig = {
+  /** Realtime voice provider id, for example "openai". */
+  provider?: string;
+  /** Provider realtime session model, for example "gpt-realtime-2.1". */
+  model?: string;
+  /** Provider realtime output voice name, for example "cedar". */
+  speakerVoice?: string;
+  /** Provider realtime output voice id. */
+  speakerVoiceId?: string;
+  /** System instructions passed to the realtime provider. */
+  instructions?: string;
+  /** Tool policy for bidi realtime consult calls. */
+  toolPolicy?: DiscordVoiceRealtimeToolPolicy;
+  /** Whether bidi should force the OpenClaw agent brain for every substantive turn. */
+  consultPolicy?: DiscordVoiceRealtimeConsultPolicy;
+  /** OpenAI agent-proxy wake-name policy. Unset adapts to the room: off for one human, on for two or more. True always requires; false never requires. */
+  requireWakeName?: boolean;
+  /** Wake names that allow OpenAI agent-proxy realtime Discord voice to respond when the gate is active. Defaults to the routed agent name plus OpenClaw, or the agent id plus OpenClaw. */
+  wakeNames?: string[];
+  /** Agent profile bootstrap files to include in realtime provider instructions. Defaults to IDENTITY.md, USER.md, and SOUL.md; set [] to disable. */
+  bootstrapContextFiles?: DiscordVoiceRealtimeBootstrapContextFile[];
+  /** Allow Discord speaker-start events to interrupt active realtime playback. */
+  bargeIn?: boolean;
+  /** Minimum assistant playback duration before a barge-in truncates audio. Default: 250ms; set 0 for immediate interruption. */
+  minBargeInAudioEndMs?: number;
+  /** Debounce window before buffered transcripts are sent to the OpenClaw agent. */
+  debounceMs?: number;
+  /** Provider-specific realtime voice config keyed by provider id. */
+  providers?: Record<string, Record<string, unknown> | undefined>;
+};
+
+export type DiscordVoiceAgentSessionConfig = {
+  /** Which OpenClaw conversation should receive voice turns. Default: "voice". */
+  mode?: "voice" | "target";
+  /** Discord target used when mode is "target", for example "channel:123". */
+  target?: string;
+};
+
+export type DiscordVoiceConfig = {
+  /** Enable Discord voice channel conversations (default: true). */
+  enabled?: boolean;
+  /** Voice conversation mode. Default: agent-proxy. */
+  mode?: DiscordVoiceMode;
+  /** Route voice turns through an existing OpenClaw Discord conversation. */
+  agentSession?: DiscordVoiceAgentSessionConfig;
+  /** Optional LLM model override for Discord voice channel responses. */
+  model?: string;
+  /** Realtime provider settings for agent-proxy or bidi modes. */
+  realtime?: DiscordVoiceRealtimeConfig;
+  /** Voice channels to join automatically, optionally only while occupied. */
+  autoJoin?: DiscordVoiceAutoJoinConfig[];
+  /** If false, configured followUsers are ignored without removing the saved user list. */
+  followUsersEnabled?: boolean;
+  /** Discord user IDs whose current voice channel the bot should follow. */
+  followUsers?: string[];
+  /** Voice channels the bot is allowed to join or remain in. Unset means any voice channel is allowed. */
+  allowedChannels?: DiscordVoiceAllowedChannelConfig[];
+  /** Enable/disable DAVE end-to-end encryption (default: true; Discord may require this). */
+  daveEncryption?: boolean;
+  /** Consecutive decrypt failures before DAVE session reinitialization (default: 24). */
+  decryptionFailureTolerance?: number;
+  /** Initial @discordjs/voice Ready wait in milliseconds (default: 30000). */
+  connectTimeoutMs?: number;
+  /** Grace period for Discord voice reconnect signalling after a disconnect (default: 15000). */
+  reconnectGraceMs?: number;
+  /** Silence grace after Discord reports a speaker ended before finalizing STT capture (default: 2000). */
+  captureSilenceGraceMs?: number;
+  /** Optional TTS overrides for Discord voice output. */
+  tts?: TtsConfig;
+};
 
 export type DiscordExecApprovalConfig = ChannelExecApprovalConfig<string> & {
   /** Delete approval DMs after approval, denial, or timeout. Default: false. */
   cleanupAfterResolve?: boolean;
 };
-export type DiscordAgentComponentsConfig = NonNullable<DiscordSchemaAccount["agentComponents"]>;
-export type DiscordThreadBindingsConfig = NonNullable<DiscordSchemaAccount["threadBindings"]>;
-export type DiscordSlashCommandConfig = NonNullable<DiscordSchemaAccount["slashCommand"]>;
-export type DiscordThreadConfig = NonNullable<DiscordSchemaAccount["thread"]>;
-export type DiscordAutoPresenceConfig = NonNullable<DiscordSchemaAccount["autoPresence"]> & {
+
+export type DiscordAgentComponentsConfig = {
+  /** Enable agent-controlled interactive components (buttons, select menus). Default: true. */
+  enabled?: boolean;
+  /** Time in milliseconds before sent Discord component callbacks expire. Default: 1800000. */
+  ttlMs?: number;
+};
+
+export type DiscordThreadBindingsConfig = SessionThreadBindingsConfig;
+
+export type DiscordSlashCommandConfig = {
+  /** Reply ephemerally (default: true). */
+  ephemeral?: boolean;
+};
+
+export type DiscordThreadConfig = {
+  /** If true, Discord thread sessions inherit the parent channel transcript. Default: false. */
+  inheritParent?: boolean;
+};
+
+export type DiscordAutoPresenceConfig = {
+  /** Enable automatic runtime/quota-based Discord presence updates. Default: false. */
+  enabled?: boolean;
+  /** Poll interval for evaluating runtime availability state (ms). Default: 30000. */
+  intervalMs?: number;
+  /** Minimum spacing between actual gateway presence updates (ms). Default: 15000. */
+  minUpdateIntervalMs?: number;
   /** @deprecated Doctor-only legacy input. */
   exhaustedText?: string;
 };
 
 export type DiscordAccountConfig = Omit<
-  DiscordSchemaAccount,
-  "dms" | "guilds" | "voice" | "pluralkit" | "autoPresence" | "execApprovals" | "token"
+  CommonChannelMessagingConfig<string[], string, string, DiscordChannelStreamingConfig>,
+  "groupAllowFrom"
 > &
-  Pick<CommonChannelMessagingConfig, "dms" | "heartbeat"> &
+  ChannelBotInteractionConfig &
   ChannelReactionConfig<never, never, string> & {
-    guilds?: Record<string, DiscordGuildEntry>;
-    voice?: DiscordVoiceConfig;
-    pluralkit?: DiscordPluralKitConfig;
-    autoPresence?: DiscordAutoPresenceConfig;
-    execApprovals?: DiscordExecApprovalConfig;
+    /** Post a room-specific introduction when joining a group. Default: true. */
+    joinIntro?: boolean;
+    /** Override native command registration for Discord (bool or "auto"). */
+    commands?: ProviderCommandsConfig;
     token?: SecretInput;
+    /** Optional Discord application/client ID. Set this when REST application lookup is blocked. */
+    applicationId?: string;
+    activities?: { clientSecret?: string; applicationId?: string };
+    /** HTTP(S) proxy URL for Discord gateway WebSocket connections. */
+    proxy?: string;
+    /**
+     * Deterministic outbound @handle rewrites for known Discord users.
+     * Keys are handles without the leading @; values are Discord user IDs.
+     */
+    mentionAliases?: DiscordMentionAliasesConfig;
+    /**
+     * Suppress Discord-generated link embeds for outbound messages. Default: true.
+     * Explicit `embeds` payloads are still sent normally.
+     */
+    suppressEmbeds?: boolean;
+    /**
+     * Soft max line count per Discord message.
+     * Discord clients can clip/collapse very tall messages; splitting by lines
+     * keeps replies readable in-channel. Default: 17.
+     */
+    maxLinesPerMessage?: number;
+    /** Per-action tool gating (default: true for all). */
+    actions?: DiscordActionConfig;
+    /** Thread session behavior. */
+    thread?: DiscordThreadConfig;
+    dm?: DiscordDmConfig;
+    /** New per-guild config keyed by guild id or slug. */
+    guilds?: Record<string, DiscordGuildEntry>;
+    /** Exec approval forwarding configuration. */
+    execApprovals?: DiscordExecApprovalConfig;
+    /** Agent-controlled interactive components (buttons, select menus). */
+    agentComponents?: DiscordAgentComponentsConfig;
+    /** Slash command configuration. */
+    slashCommand?: DiscordSlashCommandConfig;
+    /** Thread binding lifecycle settings. */
+    threadBindings?: DiscordThreadBindingsConfig;
+    /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
+    intents?: DiscordIntentsConfig;
+    /** Voice channel conversation settings. */
+    voice?: DiscordVoiceConfig;
+    /** PluralKit identity resolution for proxied messages. */
+    pluralkit?: DiscordPluralKitConfig;
+    /** When to send ack reactions for this Discord account. Overrides messages.ackReactionScope. */
+    ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "off" | "none";
+    /** Bot activity status text (e.g. "Watching X"). */
+    activity?: string;
+    /** Bot status (online|dnd|idle|invisible). Defaults to online when presence is configured. */
+    status?: "online" | "dnd" | "idle" | "invisible";
+    /** Automatic runtime/quota presence signaling (status text + status mapping). */
+    autoPresence?: DiscordAutoPresenceConfig;
+    /** Activity type (0=Game, 1=Streaming, 2=Listening, 3=Watching, 4=Custom, 5=Competing). Defaults to 4 (Custom) when activity is set. */
+    activityType?: 0 | 1 | 2 | 3 | 4 | 5;
+    /** Streaming URL (Twitch/YouTube). Required when activityType=1. */
+    activityUrl?: string;
+    /**
+     * Legacy compatibility block. Discord no longer enforces channel-owned
+     * timeouts for queued inbound agent runs.
+     */
+    inboundWorker?: {
+      /**
+       * Ignored. Queued Discord agent runs are governed by the session/tool/runtime
+       * lifecycle, not by Discord channel config.
+       */
+      runTimeoutMs?: number;
+    };
   };
 
-export type DiscordConfig = DiscordAccountConfig & {
+export type DiscordConfig = {
+  /** Optional per-account Discord configuration (multi-account). */
   accounts?: Record<string, DiscordAccountConfig>;
+  /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
-};
+} & DiscordAccountConfig;

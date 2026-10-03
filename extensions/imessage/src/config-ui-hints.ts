@@ -1,5 +1,6 @@
-import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-config-ui-hints";
+import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-core";
 // Imessage helper module supports config ui hints behavior.
+import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/core";
 
 export const iMessageChannelConfigUiHints = {
   "": {
@@ -33,4 +34,4 @@ export const iMessageChannelConfigUiHints = {
     label: "iMessage Send Transport",
     help: 'Preferred imsg RPC send transport for normal outbound replies. "auto" uses the IMCore bridge when available, "bridge" requires it, and "applescript" forces Messages automation.',
   },
-} satisfies ReturnType<typeof createChannelConfigUiHints>;
+} satisfies Record<string, ChannelConfigUiHint>;

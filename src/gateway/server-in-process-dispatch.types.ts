@@ -1,8 +1,5 @@
-import type { ErrorShape } from "../../packages/gateway-protocol/src/schema/frames.js";
+import type { ResponseFrame } from "../../packages/gateway-protocol/src/schema/frames.js";
 
-export type GatewayMethodDispatchResponse = {
-  ok: boolean;
-  payload?: unknown;
-  error?: ErrorShape;
+export type GatewayMethodDispatchResponse = Omit<ResponseFrame, "type" | "id"> & {
   meta?: Record<string, unknown>;
 };

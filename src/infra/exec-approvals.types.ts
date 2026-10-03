@@ -8,7 +8,4 @@ export type McpToolGrant = NonNullable<ExecApprovalsAgent["mcpTools"]>[number];
 // why an approval can be reused later.
 export type ExecAllowlistEntry = NonNullable<ExecApprovalsAgent["allowlist"]>[number];
 
-export type AllowAlwaysPattern = {
-  pattern: string;
-  argPattern?: string;
-};
+export type AllowAlwaysPattern = Pick<ExecAllowlistEntry, "pattern" | "argPattern">;

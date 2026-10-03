@@ -1,23 +1,15 @@
 import type { Result } from "@openclaw/normalization-core/result";
+import type {
+  TranscriptSessionSummary,
+  TranscriptUtterance as TranscriptUtteranceWire,
+} from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 /** Supported source families for transcript providers. */
-export type TranscriptSourceKind =
-  | "live-audio"
-  | "live-caption"
-  | "posthoc-transcript"
-  | "recording-stt";
+export type TranscriptSourceKind = NonNullable<TranscriptSessionSummary["source"]["kind"]>;
 
 /** Provider-specific locator for a live, recorded, or imported transcript source. */
-export type TranscriptSourceLocator = {
-  providerId: string;
-  kind?: TranscriptSourceKind;
-  accountId?: string;
-  guildId?: string;
-  channelId?: string;
-  meetingUrl?: string;
-  threadTs?: string;
-  fileId?: string;
+export type TranscriptSourceLocator = TranscriptSessionSummary["source"] & {
   [key: string]: string | undefined;
 };
 
@@ -28,24 +20,21 @@ export type TranscriptParticipant = {
 };
 
 /** One captured or imported transcript utterance. */
-export type TranscriptUtterance = {
-  id?: string;
+export type TranscriptUtterance = Omit<
+  TranscriptUtteranceWire,
+  "sequence" | "speakerId" | "speakerLabel"
+> & {
   sessionId?: string;
-  startedAt?: string;
-  endedAt?: string;
   speaker?: TranscriptParticipant;
-  text: string;
-  final?: boolean;
   metadata?: Record<string, unknown>;
 };
 
 /** Durable transcript session metadata. */
-export type TranscriptSessionDescriptor = {
-  sessionId: string;
-  title?: string;
+export type TranscriptSessionDescriptor = Pick<
+  TranscriptSessionSummary,
+  "sessionId" | "title" | "startedAt" | "stoppedAt"
+> & {
   source: TranscriptSourceLocator;
-  startedAt: string;
-  stoppedAt?: string;
   metadata?: Record<string, unknown>;
 };
 
