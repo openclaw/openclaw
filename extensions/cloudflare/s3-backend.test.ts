@@ -128,9 +128,6 @@ describe("R2 object transport", () => {
         return { UploadId: "upload" };
       }
       if (command instanceof UploadPartCommand) {
-        if (failure === "part") {
-          throw serviceError("AccessDenied", 403);
-        }
         return { ETag: "part" };
       }
       if (command instanceof CompleteMultipartUploadCommand && failure === "completion") {
