@@ -87,37 +87,42 @@ describe("sessions_search candidate matching", () => {
   });
 
   it.each([
-    { keys: ["aaa", "agent:main:aaa"], hitKey: "agent:main:aaa", expected: "aaa" },
-    { keys: ["agent:main:zzz", "zzz"], hitKey: "agent:main:zzz", expected: "agent:main:zzz" },
-    { keys: [" aaa ", "aaa"], hitKey: "agent:main:aaa", expected: " aaa " },
-  ])("keeps the first matching candidate for $keys", async ({ keys, hitKey, expected }) => {
-    const { tool, requests } = createSearchFixture(keys, [searchHit(hitKey)]);
-    const result = await tool.execute("candidate-order", { query: "text" });
-    expect(result.details).toEqual({ results: [{ ...searchHit(hitKey), sessionKey: expected }] });
-    const request = requests.find((entry) => entry.method === "sessions.search");
-    if (!request) {
-      throw new Error("Missing sessions.search request");
-    }
-    const requested = (request.params as { sessionKeys: string[] }).sessionKeys.filter(
-      (key) => key !== "agent:main:requester",
-    );
-    expect(requested).toEqual(keys);
-  });
-
-  it.each([
-    { key: "agent:main:Mixed", accepted: "agent:main:Mixed", rejected: "agent:main:mixed" },
-    { key: " room ", accepted: "agent:main:room", rejected: "agent:work:room" },
-    { key: "Room", accepted: "Room", rejected: "agent:main:room" },
-    {
-      key: "matrix:channel:!AbC:example.org:thread:$Event",
-      accepted: "agent:main:matrix:channel:!AbC:example.org:thread:$Event",
-      rejected: "agent:main:matrix:channel:!abc:example.org:thread:$Event",
+    ...[
+      { keys: ["aaa", "agent:main:aaa"], accepted: "agent:main:aaa", expected: "aaa" },
+      { keys: ["agent:main:zzz", "zzz"], accepted: "agent:main:zzz", expected: "agent:main:zzz" },
+      { keys: [" aaa ", "aaa"], accepted: "agent:main:aaa", expected: " aaa " },
+    ].map(({ keys, accepted, expected }) => ({ keys, accepted, expected, rejected: undefined })),
+    ...[
+      { key: "agent:main:Mixed", accepted: "agent:main:Mixed", rejected: "agent:main:mixed" },
+      { key: " room ", accepted: "agent:main:room", rejected: "agent:work:room" },
+      { key: "Room", accepted: "Room", rejected: "agent:main:room" },
+      {
+        key: "matrix:channel:!AbC:example.org:thread:$Event",
+        accepted: "agent:main:matrix:channel:!AbC:example.org:thread:$Event",
+        rejected: "agent:main:matrix:channel:!abc:example.org:thread:$Event",
+      },
+    ].map(({ key, accepted, rejected }) => ({ accepted, rejected, keys: [key], expected: key })),
+  ])(
+    "selects the first authorized exact candidate for $keys",
+    async ({ keys, accepted, rejected, expected }) => {
+      const { tool, requests } = createSearchFixture(keys, [
+        ...(rejected ? [searchHit(rejected, 1)] : []),
+        searchHit(accepted),
+      ]);
+      const result = await tool.execute("candidate-order", { query: "text" });
+      expect(result.details).toEqual({
+        results: [{ ...searchHit(accepted), sessionKey: expected }],
+      });
+      const request = requests.find((entry) => entry.method === "sessions.search");
+      if (!request) {
+        throw new Error("Missing sessions.search request");
+      }
+      const requested = (request.params as { sessionKeys: string[] }).sessionKeys.filter(
+        (key) => key !== "agent:main:requester",
+      );
+      expect(requested).toEqual(keys);
     },
-  ])("preserves raw and opaque key identity for $key", async ({ key, accepted, rejected }) => {
-    const { tool } = createSearchFixture([key], [searchHit(rejected, 1), searchHit(accepted)]);
-    const result = await tool.execute("key-identity", { query: "text" });
-    expect(result.details).toEqual({ results: [{ ...searchHit(accepted), sessionKey: key }] });
-  });
+  );
 
   it("matches hits only within the chunk sent to that search request", async () => {
     const aliases = Array.from(

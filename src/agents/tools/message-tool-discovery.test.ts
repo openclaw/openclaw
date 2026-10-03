@@ -65,14 +65,58 @@ describe("session-derived message destinations", () => {
     });
   });
 
-  it("uses the current session's canonical destination without changing the route", () => {
-    expect(resolveEffectiveCurrentChannelContext(options, request)).toEqual({
-      accountId: undefined,
+  it.each<{
+    name: string;
+    delivery?: { channel: string; to: string; accountId?: string };
+    direct?: boolean;
+    expected: string;
+  }>([
+    {
+      name: "canonical group",
+      delivery: { channel: "googlechat", to: `googlechat:${canonicalSpace}`, accountId: "default" },
+      expected: canonicalSpace,
+    },
+    { name: "missing delivery", expected: foldedSpace },
+    {
+      name: "another channel",
+      delivery: { channel: "slack", to: canonicalSpace },
+      expected: foldedSpace,
+    },
+    {
+      name: "another peer",
+      delivery: { channel: "googlechat", to: "spaces/Other" },
+      expected: foldedSpace,
+    },
+    {
+      name: "another account",
+      delivery: { channel: "googlechat", to: canonicalSpace, accountId: "other" },
+      expected: foldedSpace,
+    },
+    {
+      name: "direct account and thread",
+      direct: true,
+      delivery: { channel: "googlechat", to: canonicalSpace, accountId: "work" },
+      expected: canonicalSpace,
+    },
+  ])("recovers only the matching route: $name", ({ delivery, direct, expected }) => {
+    readDeliveryMock.mockReturnValue(delivery);
+    expect(
+      resolveEffectiveCurrentChannelContext(
+        direct
+          ? {
+              ...options,
+              agentSessionKey: `agent:main:googlechat:work:direct:${foldedSpace}:thread:Thread1`,
+            }
+          : options,
+        direct ? { ...request, accountId: "work" } : request,
+      ),
+    ).toEqual({
+      accountId: direct ? "work" : undefined,
       currentChannelProvider: "googlechat",
-      currentChannelId: canonicalSpace,
-      currentMessagingTarget: canonicalSpace,
-      currentChatType: "group",
-      currentThreadTs: undefined,
+      currentChannelId: expected,
+      currentMessagingTarget: expected,
+      currentChatType: direct ? "direct" : "group",
+      currentThreadTs: direct ? "Thread1" : undefined,
     });
   });
 
@@ -117,77 +161,36 @@ describe("session-derived message destinations", () => {
     },
   );
 
-  it.each([
-    { name: "missing delivery", delivery: undefined },
-    { name: "another channel", delivery: { channel: "slack", to: canonicalSpace } },
-    { name: "another peer", delivery: { channel: "googlechat", to: "spaces/Other" } },
-    {
-      name: "another account",
-      delivery: { channel: "googlechat", to: canonicalSpace, accountId: "other" },
-    },
-  ])("keeps the inferred destination for $name", ({ delivery }) => {
-    readDeliveryMock.mockReturnValue(delivery);
-    expect(resolveEffectiveCurrentChannelContext(options, request).currentMessagingTarget).toBe(
-      foldedSpace,
+  it.each<{
+    name: string;
+    params?: Record<string, unknown>;
+    discovery?: boolean;
+    lowercase?: boolean;
+    inbound?: boolean;
+  }>([
+    { name: "explicit target", params: { target: "spaces/Explicit" } },
+    { name: "explicit to", params: { to: "spaces/Explicit" } },
+    { name: "explicit channelId", params: { channelId: "spaces/Explicit" } },
+    { name: "explicit targets", params: { targets: ["spaces/Explicit"] } },
+    { name: "reusable discovery", discovery: true },
+    { name: "lowercase-canonical channel", lowercase: true },
+    { name: "normal inbound destination", inbound: true },
+  ])("avoids delivery reads for $name", ({ params, discovery, lowercase, inbound }) => {
+    if (lowercase) {
+      getChannelPluginMock.mockReturnValue({ messaging: { targetIdComparison: "lowercase" } });
+    }
+    const result = resolveEffectiveCurrentChannelContext(
+      inbound
+        ? { ...options, currentChannelProvider: "googlechat", currentChannelId: canonicalSpace }
+        : options,
+      discovery ? undefined : { ...request, params: params ?? {} },
     );
-  });
-
-  it.each([
-    { target: "spaces/Explicit" },
-    { to: "spaces/Explicit" },
-    { channelId: "spaces/Explicit" },
-    { targets: ["spaces/Explicit"] },
-  ])("does not recover an explicitly addressed action %j", (params) => {
-    expect(
-      resolveEffectiveCurrentChannelContext(options, { ...request, params }).currentMessagingTarget,
-    ).toBe(foldedSpace);
+    if (inbound) {
+      expect(result.currentChannelId).toBe(canonicalSpace);
+    } else if (!discovery) {
+      expect(result.currentMessagingTarget).toBe(foldedSpace);
+    }
     expect(readDeliveryMock).not.toHaveBeenCalled();
-  });
-
-  it("does not read delivery while discovering a reusable tool", () => {
-    resolveEffectiveCurrentChannelContext(options);
-    expect(readDeliveryMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps lowercase-canonical channels free of delivery reads", () => {
-    getChannelPluginMock.mockReturnValue({ messaging: { targetIdComparison: "lowercase" } });
-    expect(resolveEffectiveCurrentChannelContext(options, request).currentMessagingTarget).toBe(
-      foldedSpace,
-    );
-    expect(readDeliveryMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps a normal inbound destination", () => {
-    const inbound = {
-      ...options,
-      currentChannelProvider: "googlechat",
-      currentChannelId: canonicalSpace,
-    };
-    expect(resolveEffectiveCurrentChannelContext(inbound, request).currentChannelId).toBe(
-      canonicalSpace,
-    );
-    expect(readDeliveryMock).not.toHaveBeenCalled();
-  });
-
-  it("preserves the account and thread encoded by a direct route", () => {
-    readDeliveryMock.mockReturnValue({
-      channel: "googlechat",
-      to: canonicalSpace,
-      accountId: "work",
-    });
-    const direct = {
-      ...options,
-      agentSessionKey: `agent:main:googlechat:work:direct:${foldedSpace}:thread:Thread1`,
-    };
-    expect(
-      resolveEffectiveCurrentChannelContext(direct, { ...request, accountId: "work" }),
-    ).toMatchObject({
-      accountId: "work",
-      currentChatType: "direct",
-      currentThreadTs: "Thread1",
-      currentChannelId: canonicalSpace,
-      currentMessagingTarget: canonicalSpace,
-    });
   });
 });
 

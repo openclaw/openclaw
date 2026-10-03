@@ -211,16 +211,28 @@ export function runWithSessionEntryCreationPublication<T>(
 
 export function assertSessionEntryCreationPublication(
   operation: SessionEntryCreationOperation,
-  target: { agentId: string; sessionKey: string; paths: ReadonlySet<string> },
+  target: {
+    agentId: string;
+    sessionKey: string;
+    paths: ReadonlySet<string>;
+    databaseIdentity?: string;
+  },
 ): void {
   const creation = preparedSharingChanges.operations.get(operation);
   assertCreationCurrent(creation);
   const sourcePath =
     creation.source.kind === "native" ? creation.source.database.path : creation.source.path;
+  const matchesDatabaseIdentity =
+    creation.source.kind === "file" &&
+    target.databaseIdentity === `file:${creation.source.databaseIdentity}`;
+  const matchesTarget =
+    target.databaseIdentity !== undefined
+      ? matchesDatabaseIdentity
+      : target.paths.has(path.resolve(sourcePath));
   if (
     creation.agentId !== target.agentId ||
     creation.sessionKey !== target.sessionKey ||
-    !target.paths.has(path.resolve(sourcePath))
+    !matchesTarget
   ) {
     throw new Error("Session creation publication owner is no longer current");
   }

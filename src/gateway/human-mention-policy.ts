@@ -27,8 +27,8 @@ import {
 } from "./operator-role-policy.js";
 import { ADMIN_SCOPE, READ_SCOPE } from "./operator-scopes.js";
 import { authenticatedProfileUnavailableError } from "./server-methods/gateway-client-identity.js";
-import { resolveOperatorSessionCreation } from "./server-methods/session-creation-provenance.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import {
   createProfileSessionEntryFilter,

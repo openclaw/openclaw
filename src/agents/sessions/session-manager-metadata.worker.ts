@@ -41,6 +41,12 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { assertCanonicalSessionKeyWrite } from "../../config/sessions/session-canonical-key.js";
+import {
+  findSessionTranscriptHeader,
+  isIndexedSessionEntry,
+  isReadableSessionMessage,
+  parseOpaqueLeafEntry,
+} from "../../config/sessions/session-entry-codec.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { prepareTranscriptPayloadForReuse } from "../../config/sessions/transcript-payload.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
@@ -139,12 +145,14 @@ export type SessionMetadataOperations = SessionMaintenanceOperations &
     "session.transcript.appendMessage": {
       input: {
         scope: MetadataTarget;
-        message: Message | CustomMessage | BashExecutionMessage;
+        messageJson: string;
         cwd: string;
       } & SessionMetadataMessageControl;
       output: {
         snapshot: ReturnType<
-          typeof appendTranscriptMessageSnapshotSync<Message | CustomMessage | BashExecutionMessage>
+          typeof appendTranscriptMessageSnapshotSync<
+            Message | CustomMessage | BashExecutionMessage | undefined
+          >
         >;
         projectionNeedsReconcile: boolean;
         pendingInputReceipt?: SessionPendingInputWorkerReceipt;
@@ -161,9 +169,9 @@ export type SessionMetadataOperations = SessionMaintenanceOperations &
     "session.metadata.append": {
       input: {
         scope: MetadataTarget;
-        event: SessionHeader | SessionEntry | SessionLeafControl;
+        event: Omit<SessionMessageEntry, "message"> | string;
         message?: {
-          prepared: PreparedTranscriptMessageAppend<SessionMessageEntry["message"]>;
+          messageJson: string;
           cwd: string;
           validateTurn: boolean;
           idempotencyLookup?: "scan" | "scan-assistant" | "caller-checked";
@@ -182,7 +190,7 @@ export type SessionMetadataOperations = SessionMaintenanceOperations &
         snapshot: Result<
           TranscriptWriteSnapshot<
             | TranscriptEventAppendResult
-            | TranscriptMessageAppendResult<SessionMessageEntry["message"]>
+            | TranscriptMessageAppendResult<SessionMessageEntry["message"] | undefined>
             | undefined
           >,
           TranscriptAppendRefusal
@@ -209,6 +217,30 @@ export type SessionMetadataWorkerOperations = {
       | { ok: false; refusal?: TranscriptAppendRefusal };
   };
 };
+
+function decodeMetadataAppendEvent(
+  input: SessionMetadataOperations["session.metadata.append"]["input"],
+): SessionHeader | SessionEntry | SessionLeafControl {
+  const event: unknown =
+    typeof input.event === "string"
+      ? JSON.parse(input.event)
+      : { ...input.event, message: JSON.parse(input.message?.messageJson ?? "null") };
+  if (isIndexedSessionEntry(event)) {
+    if ((event.type === "message") !== (typeof input.event !== "string")) {
+      throw new Error("Session message append requires prepared storage bytes");
+    }
+    return event;
+  }
+  const header = findSessionTranscriptHeader([event]);
+  if (header) {
+    return header;
+  }
+  const leaf = parseOpaqueLeafEntry(event);
+  if (leaf && isRecord(event) && typeof event.timestamp === "string") {
+    return { ...leaf, type: "leaf", timestamp: event.timestamp };
+  }
+  throw new Error("Invalid serialized session transcript entry");
+}
 
 function copyTranscriptRefusal(value: unknown): TranscriptAppendRefusal | undefined {
   if (value === undefined) {
@@ -339,6 +371,11 @@ export function bindSqliteWorkerBackend(
       };
     }
     if (command.type === "session.transcript.appendMessage") {
+      const message: unknown = JSON.parse(command.input.messageJson);
+      if (!isReadableSessionMessage(message)) {
+        throw new Error("Invalid serialized session transcript message");
+      }
+      const prepared = { messageJson: command.input.messageJson, persistedMessage: message };
       const result = runWithMetadataMessageAdmission(context, command.input, (admit) =>
         runOpenClawAgentWriteTransaction<
           SessionMetadataWorkerOperations["session.transcript.appendMessage"]["output"]
@@ -351,8 +388,8 @@ export function bindSqliteWorkerBackend(
             let projectionNeedsReconcile = false;
             const snapshot = appendTranscriptMessageSnapshotSync(
               scope,
-              { message: command.input.message, cwd: command.input.cwd },
-              undefined,
+              { message, cwd: command.input.cwd },
+              prepared,
               {
                 messageAlreadyRedacted: true,
                 scheduleProjectionReconcile: false,
@@ -370,24 +407,30 @@ export function bindSqliteWorkerBackend(
       );
       if (result.value.ok) {
         result.value.value.pendingInputReceipt = result.pendingInputReceipt;
+        const { snapshot } = result.value.value;
+        if (snapshot.ok && snapshot.value.result?.message === message) {
+          snapshot.value.result.message = undefined;
+        }
       }
       return result.value;
     }
-    if (command.type === "session.metadata.append" && command.input.event.type === "message") {
-      const { event, message } = command.input;
+    const event =
+      command.type === "session.metadata.append"
+        ? decodeMetadataAppendEvent(command.input)
+        : undefined;
+    let prepared: PreparedTranscriptMessageAppend<SessionMessageEntry["message"]> | undefined;
+    if (command.type === "session.metadata.append" && event?.type === "message") {
+      const { message } = command.input;
       if (!message) {
         throw new Error("Session message append requires prepared storage bytes");
       }
       const { message: _message, ...envelope } = event;
-      const eventJson = `${JSON.stringify(envelope).slice(0, -1)},"message":${message.prepared.messageJson}}`;
-      message.prepared.physicalPayload = prepareTranscriptPayloadForReuse(
-        context.database,
-        eventJson,
-        {
-          ...envelope,
-          message: message.prepared.persistedMessage,
-        },
-      );
+      const eventJson = `${JSON.stringify(envelope).slice(0, -1)},"message":${message.messageJson}}`;
+      prepared = {
+        messageJson: message.messageJson,
+        persistedMessage: event.message,
+        physicalPayload: prepareTranscriptPayloadForReuse(context.database, eventJson, event),
+      };
       if (message.validateTurn) {
         const mutationAt = validatePreparedAssistantAppendSync(
           scope,
@@ -438,7 +481,10 @@ export function bindSqliteWorkerBackend(
                 projectionNeedsReconcile = true;
               },
             } as const;
-            const { event, message } = command.input;
+            if (!event) {
+              throw new Error("Session metadata append requires a serialized event");
+            }
+            const { message } = command.input;
             const snapshot =
               event.type === "message" && message
                 ? appendTranscriptMessageSnapshotSync(
@@ -453,15 +499,14 @@ export function bindSqliteWorkerBackend(
                       idempotencyLookup: message.idempotencyLookup,
                       ...(message.freshMessageCheck ? { beforeFreshMessageCommit } : {}),
                     },
-                    message.prepared,
+                    prepared,
                     projection,
                   )
-                : appendTranscriptEventSnapshotSync(
-                    scope,
-                    event,
-                    command.input.options,
-                    projection,
-                  );
+                : appendTranscriptEventSnapshotSync(scope, event, command.input.options, {
+                    ...projection,
+                    eventJson:
+                      typeof command.input.event === "string" ? command.input.event : undefined,
+                  });
             admit("commit");
             return { ok: true, value: { snapshot, projectionNeedsReconcile } };
           },
@@ -470,29 +515,33 @@ export function bindSqliteWorkerBackend(
             operationLabel: command.type,
             diagnosticContext: {
               sessionId: scope.sessionId,
-              eventType:
-                command.type === "session.metadata.append" ? command.input.event.type : undefined,
-              messageRole:
-                command.type === "session.metadata.append" && command.input.event.type === "message"
-                  ? command.input.event.message.role
-                  : undefined,
+              eventType: event?.type,
+              messageRole: event?.type === "message" ? event.message.role : undefined,
             },
           },
         ),
     );
     const outcome = result.value;
+    if (outcome.ok && "snapshot" in outcome.value && outcome.value.snapshot.ok) {
+      const receipt = outcome.value.snapshot.value.result;
+      if (receipt && "message" in receipt && receipt.message === prepared?.persistedMessage) {
+        // Fresh commits reuse host custody; pending-input and replay receipts retain their own payload.
+        receipt.message = undefined;
+      }
+    }
     if (result.pendingInputReceipt && outcome.ok && "snapshot" in outcome.value) {
       outcome.value.pendingInputReceipt = result.pendingInputReceipt;
     }
     if (
       command.type === "session.metadata.append" &&
-      command.input.event.type !== "session" &&
+      event &&
+      event.type !== "session" &&
       command.input.view &&
       outcome.ok &&
       "snapshot" in outcome.value &&
       outcome.value.snapshot.ok
     ) {
-      const { event, view } = command.input;
+      const { view } = command.input;
       const committed = outcome.value.snapshot.value;
       if (!committed.result) {
         return outcome;

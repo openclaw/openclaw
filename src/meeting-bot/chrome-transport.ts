@@ -301,14 +301,9 @@ function createMeetingChromeTransportWithAudioPolicy<
     }
     const callBrowser = await resolveLocalMeetingBrowserRequest(params.runtime);
     const result = await openOrRecoverMeeting({
+      ...params,
       callBrowser,
-      config: params.config,
-      fullConfig: params.fullConfig,
       locationLabel: "in local Chrome",
-      meetingSessionId: params.meetingSessionId,
-      mode: params.mode,
-      trackedTargetId: params.trackedTargetId,
-      url: params.url,
     });
     if (!options.isRealtimeRouteReady(params.mode, result.browser)) {
       return { ...result, audioBackend: audio?.backend };
@@ -324,12 +319,9 @@ function createMeetingChromeTransportWithAudioPolicy<
     } catch (error) {
       if (!options.preserveTrackedBrowserOnEngineFailure || !params.trackedTargetId) {
         await rollbackBrowserJoin({
+          ...params,
           callBrowser,
-          config: params.config,
-          logger: params.logger,
-          meetingSessionId: params.meetingSessionId,
           tab: result.tab,
-          url: params.url,
         });
       }
       throw error;
@@ -407,14 +399,9 @@ function createMeetingChromeTransportWithAudioPolicy<
       : undefined;
     const callBrowser = await resolveBrowserRequest(params.runtime, nodeId);
     const browser = await openOrRecoverMeeting({
+      ...params,
       callBrowser,
-      config: params.config,
-      fullConfig: params.fullConfig,
       locationLabel: "on the selected Chrome node",
-      meetingSessionId: params.meetingSessionId,
-      mode: params.mode,
-      trackedTargetId: params.trackedTargetId,
-      url: params.url,
     });
     if (!options.isRealtimeRouteReady(params.mode, browser.browser)) {
       return {
@@ -544,12 +531,9 @@ function createMeetingChromeTransportWithAudioPolicy<
       }
       if (!options.preserveTrackedBrowserOnEngineFailure || !params.trackedTargetId) {
         await rollbackBrowserJoin({
+          ...params,
           callBrowser,
-          config: params.config,
-          logger: params.logger,
-          meetingSessionId: params.meetingSessionId,
           tab: browser.tab,
-          url: params.url,
         });
       }
       throw error;
@@ -596,10 +580,9 @@ function createMeetingChromeTransportWithAudioPolicy<
     nodeId?: string;
     tab: MeetingBrowserTab;
   }) {
-    const nodeId = params.nodeId;
     return await leaveMeetingWithBrowser({
       adapter: options.platform,
-      callBrowser: await resolveBrowserRequest(params.runtime, nodeId),
+      callBrowser: await resolveBrowserRequest(params.runtime, params.nodeId),
       launch: params.config.chrome.launch || !params.tab.openedByPlugin,
       meetingSessionId: params.meetingSessionId,
       meetingUrl: params.meetingUrl,
@@ -617,10 +600,9 @@ function createMeetingChromeTransportWithAudioPolicy<
     nodeId?: string;
     tab: MeetingBrowserTab;
   }): Promise<Transcript> {
-    const nodeId = params.nodeId;
     return await readMeetingTranscriptWithBrowser({
       adapter: options.platform,
-      callBrowser: await resolveBrowserRequest(params.runtime, nodeId),
+      callBrowser: await resolveBrowserRequest(params.runtime, params.nodeId),
       finalize: params.finalize === true,
       meetingUrl: params.meetingUrl,
       meetingSessionId: params.meetingSessionId,

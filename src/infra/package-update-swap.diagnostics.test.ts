@@ -12,6 +12,7 @@ import {
 } from "./package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "./package-update-activation-lifetime.test-support.js";
 import { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
+import { interceptPackageFileHashes } from "./package-update-integrity-hasher.test-support.js";
 import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
@@ -198,36 +199,31 @@ describe.skipIf(process.platform === "win32")("managed publication drift facts",
         await fs.writeFile(path.join(backupRoot, `drift-${index}.js`), "after!");
       }
       const hashes = Array.from({ length: 4 }, () => ({
-        closing: createDeferredCore(),
+        hashed: createDeferredCore(),
         release: createDeferredCore(),
         completed: createDeferredCore(),
       }));
       const reversed: number[] = [];
       const files = hashes.map((_, index) => path.join(backupRoot, `drift-${index}.js`));
-      const open = fs.open.bind(fs);
-      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-        const handle = await open(...args);
-        const index = files.indexOf(String(args[0]));
+      interceptPackageFileHashes(async (file, _stat, next) => {
+        const digest = await next();
+        const index = files.indexOf(file);
         if (index >= 0) {
-          const close = handle.close.bind(handle);
-          vi.spyOn(handle, "close").mockImplementation(async () => {
-            await close();
-            hashes[index]!.closing.resolve();
-            await hashes[index]!.release.promise;
-            reversed.push(index);
-            hashes[index]!.completed.resolve();
-          });
+          hashes[index]!.hashed.resolve();
+          await hashes[index]!.release.promise;
+          reversed.push(index);
+          hashes[index]!.completed.resolve();
         }
-        return handle;
+        return digest;
       });
       const rollingBack = transaction.rollback(fence.assertCurrent);
       let rollback: Awaited<ReturnType<PackageUpdateTransaction["rollback"]>>;
       try {
         await withinTest(
           awaitGateBeforeSettlement(
-            Promise.all(hashes.map((hash) => hash.closing.promise)),
+            Promise.all(hashes.map((hash) => hash.hashed.promise)),
             rollingBack,
-            "Rollback settled before its adjacent file hashes reached cleanup",
+            "Rollback settled before its adjacent file hashes completed their byte reads",
           ),
           signal,
         );

@@ -19,6 +19,11 @@ import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.j
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
 import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
+import {
+  isIncognitoComputeCommand,
+  isIncognitoComputeWrite,
+} from "./session-incognito-compute-contract.js";
+import { createIncognitoComputeWorker } from "./session-incognito-compute.worker.js";
 import type {
   IncognitoSessionOperations,
   IncognitoSessionSnapshot,
@@ -106,6 +111,7 @@ export function createIncognitoSessionWorker(
   const outbox = createIncognitoOutboxWorker(database, admit);
   const lifecycle = createIncognitoLifecycleWorker(database, identity, env, admit);
   const history = createIncognitoHistoryWorker(database, env);
+  const compute = createIncognitoComputeWorker(database, env, admit);
   const readOnly = <T>(operation: () => T): T => {
     // sqlite-allow-raw -- Guard reads on the retained writable memory connection.
     database.db.exec("PRAGMA query_only = ON");
@@ -118,7 +124,9 @@ export function createIncognitoSessionWorker(
   };
   return {
     async prepare(command: SqliteWorkerCommand<IncognitoSessionOperations>) {
-      if (isIncognitoHistoryCommand(command)) {
+      if (isIncognitoComputeCommand(command)) {
+        await compute.prepare(command);
+      } else if (isIncognitoHistoryCommand(command)) {
         await history.prepare(command);
       } else if (isIncognitoTranscriptCommand(command)) {
         await transcript.prepare(command);
@@ -133,6 +141,24 @@ export function createIncognitoSessionWorker(
       }
     },
     execute(command: SqliteWorkerCommand<IncognitoSessionOperations>) {
+      if (isIncognitoComputeCommand(command)) {
+        assertKey(command.input.sessionKey);
+        const execute = () => {
+          const { value, keys } = compute.execute(command);
+          return { value, facts: keys.flatMap((key) => read(key).facts) };
+        };
+        if (isIncognitoComputeWrite(command.type)) {
+          return execute();
+        }
+        return readOnly(() => {
+          const facts = read(command.input.sessionKey).facts;
+          requestSqliteWorkerOperationAdmission({
+            stage: "prepare",
+            facts: { identity, sessions: facts },
+          });
+          return execute();
+        });
+      }
       if (isIncognitoHistoryCommand(command)) {
         assertKey(command.input.sessionKey);
         return readOnly(() => {
@@ -141,7 +167,7 @@ export function createIncognitoSessionWorker(
             stage: "prepare",
             facts: { identity, sessions: facts },
           });
-          return { value: history.execute(command.input), facts };
+          return history.execute(command, facts);
         });
       }
       if (isIncognitoLifecycleCommand(command)) {
@@ -233,12 +259,14 @@ export function createIncognitoSessionWorker(
       return result;
     },
     assertSettled() {
+      compute.assertSettled();
       history.assertSettled();
       sideData.assertSettled();
       transcript.assertSettled();
       outbox.assertSettled();
     },
     close() {
+      compute.close();
       sideData.close();
       transcript.close();
       outbox.close();

@@ -8,6 +8,7 @@ import {
   recoverConfigFromJsonRootSuffix,
   type ConfigSnapshotReadMeasure,
 } from "../config/io.js";
+import { coerceConfig } from "../config/io.read-helpers.js";
 import { resolveCanonicalConfigPath, resolveIsConfigReadOnly } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store/paths.js";
@@ -17,6 +18,7 @@ import { assertNoRetiredStateFiles } from "../infra/state-migrations.retired-fil
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolveHomeDir } from "../utils.js";
 import type { ConfigPreflightSnapshotRead } from "./config-preflight-snapshot.js";
+import { listLegacyOAuthSidecarPaths } from "./doctor-auth-legacy-paths.js";
 import { shouldSkipPluginValidationForDoctorConfigPreflight } from "./doctor-config-preflight-plugin-index.js";
 import {
   canPlanAutomaticConfigRepair,
@@ -62,7 +64,7 @@ export async function migrateLegacyDoctorConfig(params: {
   enabled: boolean;
   measure: ConfigSnapshotReadMeasure;
 }): Promise<void> {
-  if (!params.enabled) {
+  if (!params.enabled || resolveIsConfigReadOnly(process.env)) {
     return;
   }
   const changes = await params.measure("legacy-config-migration", maybeMigrateLegacyConfig);
@@ -86,6 +88,10 @@ export async function prepareDoctorConfigRecovery(params: {
     if (retired) {
       throw new Error(`${retired.message} ${retired.nextAction}`);
     }
+    assertNoRetiredStateFiles(
+      "OAuth credential sidecars",
+      listLegacyOAuthSidecarPaths(process.env, coerceConfig(config)),
+    );
   };
   assertSupportedConfig(snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig);
   assertNoRetiredStateFiles(

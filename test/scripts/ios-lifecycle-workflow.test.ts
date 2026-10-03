@@ -66,6 +66,7 @@ function runSimulatorStep(mode = "ready", steps = [watchStep], env: Record<strin
   mkdirSync(harnessLib, { recursive: true });
   copyFileSync("scripts/lib/swift-toolchain.sh", path.join(harnessLib, "swift-toolchain.sh"));
   copyFileSync("scripts/lib/ci-ios-smoke-plan.mjs", path.join(harnessLib, "ci-ios-smoke-plan.mjs"));
+  copyFileSync("scripts/ci-xcodebuild.py", path.join(harnessLib, "..", "ci-xcodebuild.py"));
   mkdirSync(product, { recursive: true });
   const runner = path.join(root, "tools.mjs");
   writeFileSync(
@@ -126,7 +127,7 @@ if (tool === "installer") {
 }
 `,
   );
-  for (const tool of ["xcrun", "xcodebuild", "pnpm", "uname", "installer", "simslim"]) {
+  for (const tool of ["xcrun", "xcodebuild", "pnpm", "uname", "sysctl", "installer", "simslim"]) {
     const executable = path.join(bin, tool);
     writeFileSync(executable, `#!/bin/sh\nexec '${process.execPath}' '${runner}' '${tool}' "$@"\n`);
     chmodSync(executable, 0o755);
@@ -312,16 +313,29 @@ describe.skipIf(process.platform === "win32")("Watch simulator workflow", () => 
 
 describe.skipIf(process.platform === "win32")("iOS voice cleanup workflow", () => {
   it.each([
-    ["tests", "false"],
-    ["smoke", "true"],
-  ])("keeps the generic simulator build for phase=%s historical=%s", (phase, historical) => {
-    const { result, commands } = runSimulatorStep("voice", [buildStep], {
-      IOS_CI_PHASE: phase,
-      HISTORICAL_TARGET: historical,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(commands).toEqual([{ tool: "pnpm", args: ["ios:build"], destination: "" }]);
-  });
+    ["tests", "false", "false"],
+    ["smoke", "true", "true"],
+    ["tests", "false", "true"],
+  ])(
+    "keeps the generic simulator build for phase=%s historical=%s frozen=%s",
+    (phase, historical, frozen) => {
+      const { result, commands } = runSimulatorStep("voice", [buildStep], {
+        IOS_CI_PHASE: phase,
+        HISTORICAL_TARGET: historical,
+        IOS_FROZEN_TARGET: frozen,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      if (historical === "true" || frozen === "true") {
+        expect(commands).toEqual([{ tool: "pnpm", args: ["ios:build"], destination: "" }]);
+      } else {
+        const build = commands.find((command) => command.tool === "xcodebuild");
+        expect(build?.args).toEqual(
+          expect.arrayContaining(["-destination", "generic/platform=iOS Simulator", "build"]),
+        );
+        expect(build?.args).not.toContain("build-for-testing");
+      }
+    },
+  );
 
   it("retains universal build settings and verbose diagnostics in full manual validation", () => {
     const { result, commands } = runSimulatorStep(
@@ -335,7 +349,7 @@ describe.skipIf(process.platform === "win32")("iOS voice cleanup workflow", () =
     const appBuild = commands.find((command) => command.tool === "pnpm");
     expect(appBuild?.destination).toBe("");
     expect(commands.every((command) => command.settings === undefined)).toBe(true);
-    const testRun = commands.find((command) => command.tool === "xcodebuild");
+    const testRun = commands.find(isTestCommand);
     expect(testRun?.args).toEqual(
       expect.arrayContaining(["-collect-test-diagnostics", "on-failure"]),
     );
@@ -367,7 +381,7 @@ describe.skipIf(process.platform === "win32")("iOS voice cleanup workflow", () =
       );
       expect(result.status, result.stderr).toBe(0);
       const appBuild = commands.find((command) => command.tool === "pnpm");
-      expect(appBuild?.args).toEqual([phase === "smoke" ? "ios:gen" : "ios:build"]);
+      expect(appBuild?.args).toEqual(["ios:gen"]);
       expect(appBuild?.destination).toBe("platform=iOS Simulator,id=watch-fixture");
       expect(appBuild?.settings).toBe("ARCHS = arm64\nCOMPILER_INDEX_STORE_ENABLE = NO\n");
       expect(
@@ -375,18 +389,19 @@ describe.skipIf(process.platform === "win32")("iOS voice cleanup workflow", () =
       ).toEqual([
         ["simctl", "list", "devices", "available", "--json"],
         ["simctl", "bootstatus", "watch-fixture", "-b"],
+        ["simctl", "list", "devices", "booted"],
       ]);
       const builds = commands.filter((command) => command.tool === "xcodebuild");
       expect(
         builds.map((command) =>
           command.args.find((arg) =>
-            ["build-for-testing", "test", "test-without-building"].includes(arg),
+            ["build", "build-for-testing", "test", "test-without-building"].includes(arg),
           ),
         ),
       ).toEqual(
         phase === "smoke"
           ? ["build-for-testing", "test-without-building", "test-without-building"]
-          : ["test", "test"],
+          : ["build", "test", "test"],
       );
       for (const command of builds) {
         expect(command.args).toEqual(expect.arrayContaining(["-configuration", "Debug"]));
@@ -479,7 +494,7 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
       },
     );
     expect(result.status, result.stderr).toBe(0);
-    const tests = commands.filter((command) => command.tool === "xcodebuild");
+    const tests = commands.filter(isTestCommand);
     expect(tests).toHaveLength(2);
     expect(tests[0]?.args).toEqual(
       expect.arrayContaining([
@@ -553,6 +568,7 @@ describe("iOS simulator owner selection", () => {
     "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Resources/Mermaid/index.html",
     "scripts/lib/swift-toolchain.sh",
     "scripts/ios-simulator-prepare.sh",
+    "scripts/ci-xcodebuild.py",
     "scripts/lib/ci-ios-smoke-plan.mjs",
     ".github/workflows/ci.yml",
     "pnpm-lock.yaml",
@@ -647,9 +663,10 @@ describe.skipIf(process.platform === "win32")("iOS selected simulator workflow",
       );
     }
     if (!groups.length) {
-      expect(commands.some(({ tool }) => ["xcrun", "installer", "simslim"].includes(tool))).toBe(
-        false,
-      );
+      expect(commands.some(({ tool }) => ["installer", "simslim"].includes(tool))).toBe(false);
+      expect(commands.filter(({ tool }) => tool === "xcrun").map(({ args }) => args)).toEqual([
+        ["simctl", "list", "devices", "booted"],
+      ]);
     }
     expect(summary).toBe(formatIosSimulatorSelectionSummary(selection));
     for (const group of ["voice", "lifecycle"]) {

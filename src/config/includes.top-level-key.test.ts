@@ -29,18 +29,10 @@ function resolve(obj: unknown, files: Record<string, unknown> = {}) {
   return resolveConfigIncludes(obj, DEFAULT_BASE_PATH, createMockResolver(files));
 }
 
-function nestedObjects(depth: number): unknown {
-  let value: unknown = "leaf";
+function nested(depth: number, key: "x" | "0", leaf: unknown = "leaf"): unknown {
+  let value = leaf;
   for (let i = 0; i < depth; i += 1) {
-    value = { x: value };
-  }
-  return value;
-}
-
-function nestedArrays(depth: number): unknown {
-  let value: unknown = "leaf";
-  for (let i = 0; i < depth; i += 1) {
-    value = [value];
+    value = key === "x" ? { x: value } : [value];
   }
   return value;
 }
@@ -87,30 +79,15 @@ describe("resolveConfigIncludesForTopLevelKey", () => {
 });
 
 describe("resolveConfigIncludes deep nesting", () => {
-  it("resolves object nesting past the previously rejected depth budget", () => {
-    expectNestedPath(resolve(nestedObjects(600)), 600, "x", "leaf");
-  });
-
-  it("resolves thousands of nested objects instead of overflowing the call stack", () => {
-    expectNestedPath(resolve(nestedObjects(4_000)), 4_000, "x", "leaf");
-  });
-
-  it("preserves 100,000 levels of object nesting", () => {
-    expectNestedPath(resolve(nestedObjects(100_000)), 100_000, "x", "leaf");
-  });
-
-  it("preserves 100,000 levels of array nesting", () => {
-    expectNestedPath(resolve(nestedArrays(100_000)), 100_000, "0", "leaf");
+  it.each(["x", "0"] as const)("preserves 100,000 levels of nesting through %s", (key) => {
+    expectNestedPath(resolve(nested(100_000, key)), 100_000, key, "leaf");
   });
 
   it("resolves deep nesting carried across the include file chain", () => {
     // The $include sits 480 levels deep and its file adds 100 more; the
     // segments and their sum must resolve without any per-document budget.
-    let obj: unknown = { $include: "./deep.json" };
-    for (let i = 0; i < 480; i += 1) {
-      obj = { x: obj };
-    }
-    const files = { [configPath("deep.json")]: nestedObjects(100) };
+    const obj = nested(480, "x", { $include: "./deep.json" });
+    const files = { [configPath("deep.json")]: nested(100, "x") };
     expectNestedPath(resolve(obj, files), 580, "x", "leaf");
   });
 });

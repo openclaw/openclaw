@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
+import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createNoisyPngBuffer,
@@ -21,6 +23,7 @@ import {
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
+import { NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES } from "../../worker/node-workspace-protocol.js";
 import { parseMessageWithAttachments } from "../chat-attachments.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
@@ -43,7 +46,7 @@ import {
   turn,
 } from "./worker-turn-launcher.test-support.js";
 
-function harness() {
+function harness(assistantText = "image received") {
   const launches: WorkerLaunchPlan[] = [];
   const remoteFiles = new Map<string, Buffer>();
   const environment = attachedEnvironment();
@@ -71,7 +74,7 @@ function harness() {
         await openSessionManager()
       ).appendMessageAsync(
         makeAgentAssistantMessage({
-          content: [{ type: "text", text: "image received" }],
+          content: [{ type: "text", text: assistantText }],
           timestamp: Date.now(),
         }),
       );
@@ -124,6 +127,58 @@ describe("cloud turn media boundary", () => {
     vi.restoreAllMocks();
     await cleanupWorkerTurnLauncherTest();
   });
+
+  it.each(["relative", "absolute"] as const)(
+    "stages %s worker reply bytes before reconciliation without using the Gateway copy",
+    async (pathKind) => {
+      const remoteRoot = path.join(root, "remote-output");
+      const remotePath = path.join(remoteRoot, "reply.txt");
+      const bytes = Buffer.from("worker-only output\n".repeat(5_000));
+      await fs.mkdir(remoteRoot);
+      await fs.writeFile(remotePath, bytes);
+      await fs.writeFile(path.join(root, "reply.txt"), "stale Gateway copy");
+      await seedActivePlacement("worker-turn", remoteRoot);
+      const text = "MEDIA:" + (pathKind === "relative" ? "./reply.txt" : remotePath);
+      const rig = harness(text);
+      vi.mocked(rig.tunnel.runWorkspaceCommand).mockImplementation(async ({ argv }) => {
+        let stdout = "";
+        let stderr = "";
+        const commandProcess = {
+          argv: [process.execPath, path.resolve(remoteRoot, argv[4]!), ...argv.slice(5)],
+          platform: process.platform,
+          exitCode: 0,
+          stdout: { write: (value: string) => (stdout += value) },
+          stderr: { write: (value: string) => (stderr += value) },
+        };
+        runInNewContext(argv[2]!, {
+          Buffer,
+          process: commandProcess,
+          require: createRequire(import.meta.url),
+        });
+        return {
+          stdout: stdout.slice(0, NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES),
+          stderr,
+          code: commandProcess.exitCode,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      });
+      vi.mocked(rig.tunnel.reconcileWorkspace).mockImplementationOnce(async (request) => {
+        await fs.rm(remotePath);
+        return await reconcileUnchangedLocalWorkspace(request);
+      });
+
+      const result = await rig.execute(turn("outbound-" + pathKind));
+      const mediaUrl = result.payloads?.[0]?.mediaUrl;
+      expect(mediaUrl).toBeTypeOf("string");
+      await expect(fs.readFile(mediaUrl!)).resolves.toEqual(bytes);
+      expect((await openSessionManager()).getLeafEntry()).toMatchObject({
+        type: "message",
+        message: { role: "assistant", content: [{ type: "text", text }] },
+      });
+    },
+  );
 
   it("preserves ordered managed image input, follow-up files, replay and canonical paths", async () => {
     await seedActivePlacement();

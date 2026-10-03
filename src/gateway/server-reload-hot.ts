@@ -715,8 +715,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       restartChannelAccounts,
       activePluginChannelsAfterReload,
       shouldSkipChannelRestart,
-      skipChannelRestartLogMessage:
-        "skipping channel reload (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
       isLifecycleReloadAborted,
       getChannelAutostartSuppression,
       channelReloadTargets,

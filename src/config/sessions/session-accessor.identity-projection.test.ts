@@ -36,14 +36,15 @@ describe("qualified session accessor projection", () => {
     await state.cleanup();
   });
 
-  async function captureGlobalSession(entry: SessionEntry) {
+  async function captureSession(entry: SessionEntry, incognito = false) {
     const cfg: OpenClawConfig = {
-      session: { store: storePath, scope: "global" },
+      ...(!incognito ? { session: { store: storePath, scope: "global" as const } } : {}),
       agents: { entries: { main: { default: true } } },
     };
-    const physical = { agentId: "main", storePath, sessionKey: "global" };
+    const sessionKey = incognito ? "agent:main:dashboard:incognito-capture" : "global";
+    const physical = { agentId: "main", storePath, sessionKey };
     await replaceSessionEntry(physical, entry);
-    const scope = { cfg, sessionKey: "global", agentId: "main" };
+    const scope = { cfg, sessionKey, agentId: "main" };
     const target = resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
     return { physical, scope, target };
   }
@@ -211,24 +212,62 @@ describe("qualified session accessor projection", () => {
     ).toBeUndefined();
   });
 
-  it("rejects replacement of a captured session before its update starts", async () => {
-    const { physical, scope, target } = await captureGlobalSession({
-      sessionId: "original",
-      updatedAt: 1,
-    });
-    await replaceSessionEntry(physical, { sessionId: "replacement", updatedAt: 2 });
-    const update = vi.fn((entry: SessionEntry) => {
-      entry.label = "must not write";
-    });
-    await expect(updateResolvedSessionEntry(scope, update, { target })).rejects.toThrow(
-      "Captured session generation changed",
-    );
-    expect(update).not.toHaveBeenCalled();
-    expect(loadSessionEntryReadOnly(physical)?.label).toBeUndefined();
-  });
+  it.each([
+    { kind: "session", error: "Captured session generation changed" },
+    { kind: "file", error: "file identity changed" },
+    { kind: "incognito", recreated: false, error: /Captured session database/ },
+    { kind: "incognito", recreated: true, error: /Captured session database/ },
+  ] as const)(
+    "rejects a replaced or retired $kind capture (recreated=$recreated)",
+    async (variant) => {
+      const capturedEntry: SessionEntry =
+        variant.kind === "session"
+          ? { sessionId: "original", updatedAt: 1 }
+          : { sessionId: "same-session", lifecycleRevision: "same", updatedAt: 1 };
+      const { physical, scope, target } = await captureSession(
+        capturedEntry,
+        variant.kind === "incognito",
+      );
+      if (variant.kind === "session") {
+        await replaceSessionEntry(physical, { sessionId: "replacement", updatedAt: 2 });
+      } else if (variant.kind === "file") {
+        await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
+        const previousPath = `${target.storePath}.original`;
+        fs.renameSync(target.storePath, previousPath);
+        fs.copyFileSync(previousPath, target.storePath);
+      } else {
+        expect(typeof target.readSource?.databaseIdentity).toBe("symbol");
+        closeOpenClawAgentDatabaseByPath(target.storePath);
+        if (variant.recreated) {
+          await replaceSessionEntry(physical, capturedEntry);
+        }
+      }
+      const update = vi.fn((entry: SessionEntry) => {
+        entry.label = "must not write";
+      });
+      await expect(updateResolvedSessionEntry(scope, update, { target })).rejects.toThrow(
+        variant.error,
+      );
+      expect(update).not.toHaveBeenCalled();
+      expect(loadSessionEntryReadOnly(physical)?.label).toBeUndefined();
+      if (variant.kind === "file") {
+        expect(loadSessionEntryReadOnly(physical)).toMatchObject({
+          sessionId: "same-session",
+          lifecycleRevision: "same",
+        });
+        const fresh = resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
+        expect(fresh.readSource?.databaseIdentity).not.toBe(target.readSource?.databaseIdentity);
+      } else if (variant.kind === "incognito") {
+        expect(loadSessionEntryReadOnly(physical)?.sessionId).toBe(
+          variant.recreated ? "same-session" : undefined,
+        );
+        expect(fs.existsSync(target.storePath)).toBe(false);
+      }
+    },
+  );
 
   it("rejects a successor lifecycle with the same SID after waiting for FIFO admission", async () => {
-    const { physical, scope, target } = await captureGlobalSession({
+    const { physical, scope, target } = await captureSession({
       sessionId: "same-session",
       lifecycleRevision: "before",
       updatedAt: 1,
@@ -322,74 +361,8 @@ describe("qualified session accessor projection", () => {
     expect(loadSessionEntryReadOnly(physical)?.label).toBe("same physical record");
   });
 
-  it("rejects an identical database copied over the captured physical pathname", async () => {
-    const { physical, scope, target } = await captureGlobalSession({
-      sessionId: "same-session",
-      lifecycleRevision: "same",
-      updatedAt: 1,
-    });
-    await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
-    const previousPath = `${target.storePath}.original`;
-    fs.renameSync(target.storePath, previousPath);
-    fs.copyFileSync(previousPath, target.storePath);
-    const update = vi.fn((entry: SessionEntry) => {
-      entry.label = "must not write";
-    });
-    await expect(updateResolvedSessionEntry(scope, update, { target })).rejects.toThrow(
-      "file identity changed",
-    );
-    expect(update).not.toHaveBeenCalled();
-    expect(loadSessionEntryReadOnly(physical)).toMatchObject({
-      sessionId: "same-session",
-      lifecycleRevision: "same",
-    });
-    expect(loadSessionEntryReadOnly(physical)?.label).toBeUndefined();
-    const fresh = resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
-    expect(fresh.readSource?.databaseIdentity).not.toBe(target.readSource?.databaseIdentity);
-  });
-
-  it.each([false, true])(
-    "rejects retired incognito capture without creating a replacement when recreated=%s",
-    async (recreated) => {
-      const cfg: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
-      const physical = {
-        agentId: "main",
-        storePath,
-        sessionKey: "agent:main:dashboard:incognito-capture",
-      };
-      await replaceSessionEntry(physical, {
-        sessionId: "same-session",
-        lifecycleRevision: "same",
-        updatedAt: 1,
-      });
-      const scope = { cfg, agentId: "main", sessionKey: physical.sessionKey };
-      const target = resolveSessionEntryAccessTarget(scope, { keyFormat: "agent-qualified" });
-      expect(typeof target.readSource?.databaseIdentity).toBe("symbol");
-      closeOpenClawAgentDatabaseByPath(target.storePath);
-      if (recreated) {
-        await replaceSessionEntry(physical, {
-          sessionId: "same-session",
-          lifecycleRevision: "same",
-          updatedAt: 1,
-        });
-      }
-      const update = vi.fn((entry: SessionEntry) => {
-        entry.label = "must not write";
-      });
-      await expect(updateResolvedSessionEntry(scope, update, { target })).rejects.toThrow(
-        /Captured session database/,
-      );
-      expect(update).not.toHaveBeenCalled();
-      expect(loadSessionEntryReadOnly(physical)?.label).toBeUndefined();
-      expect(loadSessionEntryReadOnly(physical)?.sessionId).toBe(
-        recreated ? "same-session" : undefined,
-      );
-      expect(fs.existsSync(target.storePath)).toBe(false);
-    },
-  );
-
   it("rechecks counterpart absence after an awaited captured update", async () => {
-    const { physical, scope, target } = await captureGlobalSession({
+    const { physical, scope, target } = await captureSession({
       sessionId: "original",
       updatedAt: 1,
     });

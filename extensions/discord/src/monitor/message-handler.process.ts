@@ -265,7 +265,6 @@ export async function processDiscordMessage(
     info: DiscordProviderDeliveryInfo,
     options?: {
       allowFallbackOnlyToolWarning?: boolean;
-      allowProgressBlock?: boolean;
       deliverySession?: ReturnType<typeof getGroupThreadDeliverySession>;
     },
   ) => {
@@ -403,8 +402,7 @@ export async function processDiscordMessage(
       draftStream &&
       draftPreview.isProgressMode &&
       info.kind === "block" &&
-      !deliverablePayload.isCommentary &&
-      !options?.allowProgressBlock
+      !deliverablePayload.isCommentary
     ) {
       const reply = resolveSendableOutboundReplyParts(deliverablePayload);
       if (!reply.hasMedia && !deliverablePayload.isError) {

@@ -175,7 +175,6 @@ export function prepareSessionEntryMaintenanceInDatabase(
   };
   const { store, archived, capArchived, modelRunPruned, pruned, capped } =
     planSessionEntryMaintenance({
-      profile: "write",
       maintenance,
       initialUnarchivedCount: entryCount,
       forceMaintenance: params.forceMaintenance,

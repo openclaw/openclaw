@@ -61,6 +61,11 @@ type GuardedSessionManager = SessionManager & {
     assistantErrorTranscript: AssistantErrorTranscript | undefined,
     inputProvenance: InputProvenance | undefined,
     suppressNextUserMessagePersistence: boolean | undefined,
+    preparedUserTurn: {
+      message: PersistedUserTurnMessage | undefined;
+      recorder: UserTurnTranscriptRecorder | undefined;
+      replayKey: string | undefined;
+    },
   ) => void;
 };
 
@@ -114,8 +119,9 @@ export function guardSessionManager(
   let skipBeforeMessageWriteHooks = opts?.skipBeforeMessageWriteHooks;
   let inputProvenance = opts?.inputProvenance;
   let pendingPreparedUserTurnMessage = opts?.preparedUserTurnMessage;
-  const preparedUserReplayKey =
-    opts?.preparedUserTurnTranscriptRecorder?.getPersistedMessage?.()?.idempotencyKey ===
+  let preparedUserTurnTranscriptRecorder = opts?.preparedUserTurnTranscriptRecorder;
+  let preparedUserReplayKey =
+    preparedUserTurnTranscriptRecorder?.getPersistedMessage?.()?.idempotencyKey ===
     pendingPreparedUserTurnMessage?.idempotencyKey
       ? pendingPreparedUserTurnMessage?.idempotencyKey
       : undefined;
@@ -127,6 +133,11 @@ export function guardSessionManager(
       opts?.assistantErrorTranscript,
       inputProvenance,
       preparedUserReplayKey === undefined && opts?.suppressNextUserMessagePersistence,
+      {
+        message: pendingPreparedUserTurnMessage,
+        recorder: preparedUserTurnTranscriptRecorder,
+        replayKey: preparedUserReplayKey,
+      },
     );
     return guardedSessionManager;
   }
@@ -268,7 +279,7 @@ export function guardSessionManager(
       const recorder =
         runtimeContext?.recorder ??
         (prepared !== undefined && prepared === pendingPreparedUserTurnMessage
-          ? opts?.preparedUserTurnTranscriptRecorder
+          ? preparedUserTurnTranscriptRecorder
           : undefined);
       if (message.role === "user") {
         opts?.onUserMessagePreparingForPersistence?.(message, recorder, prepared);
@@ -342,14 +353,16 @@ export function guardSessionManager(
     errors,
     provenance,
     suppressUserPersistence,
+    preparedUserTurn,
   ) => {
     guard.setTranscriptRunId(runId, errors);
-    if (suppressUserPersistence !== undefined) {
-      guard.setNextUserMessagePersistenceSuppression(suppressUserPersistence);
-    }
+    guard.setNextUserMessagePersistenceSuppression(suppressUserPersistence === true);
     prepareAssistantTranscriptMessage = prepare;
     skipBeforeMessageWriteHooks = skipHooks;
     inputProvenance = provenance;
+    pendingPreparedUserTurnMessage = preparedUserTurn.message;
+    preparedUserTurnTranscriptRecorder = preparedUserTurn.recorder;
+    preparedUserReplayKey = preparedUserTurn.replayKey;
   };
   return guardedSessionManager;
 }

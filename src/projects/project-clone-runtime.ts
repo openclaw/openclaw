@@ -7,12 +7,14 @@ import {
   gitNullConfigPath,
   requireGitCommandOutput,
 } from "../infra/git-exec.js";
-import { withGitNetworkRetry } from "../infra/git-network-retry.js";
+import { withGitNetworkRetry, type GitOperationStarter } from "../infra/git-network-retry.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { withGitProcessOperation } from "../process/spawn-diagnostics.js";
 
 const PROJECT_CLONE_TIMEOUT_MS = 10 * 60_000;
 type ProjectCloneOptions = {
+  assertCurrent?: () => void;
+  startRun?: GitOperationStarter;
   env?: NodeJS.ProcessEnv;
   objectDirectory?: string;
   signal?: AbortSignal;
@@ -31,7 +33,11 @@ export class ProjectCloneError extends Error {
   }
 }
 
-function cloneCommandEnv(token: string | undefined, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+function cloneCommandEnv(
+  repositoryUrl: string | undefined,
+  token: string | undefined,
+  env: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
   const gitEnv: NodeJS.ProcessEnv = {
     ...env,
     GIT_TERMINAL_PROMPT: "0",
@@ -55,9 +61,10 @@ function cloneCommandEnv(token: string | undefined, env: NodeJS.ProcessEnv): Nod
     GIT_SSH_COMMAND: undefined,
     GIT_SSL_NO_VERIFY: undefined,
   };
-  if (token) {
+  if (token && repositoryUrl) {
+    const origin = new URL(repositoryUrl).origin;
     gitEnv.GIT_CONFIG_COUNT = "1";
-    gitEnv.GIT_CONFIG_KEY_0 = "http.https://github.com/.extraHeader";
+    gitEnv.GIT_CONFIG_KEY_0 = `http.${origin}/.extraHeader`;
     gitEnv.GIT_CONFIG_VALUE_0 = `Authorization: Basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`;
   }
   return gitEnv;
@@ -123,12 +130,14 @@ export async function cloneProjectCheckout(
     );
   }
   await fs.mkdir(path.dirname(input.target), { recursive: true });
-  const commandEnv = cloneCommandEnv(options.token, env);
+  const commandEnv = cloneCommandEnv(input.url, options.token, env);
   const result = await withGitNetworkRetry(
     "clone",
     {
       timeoutMs: options.timeoutMs ?? PROJECT_CLONE_TIMEOUT_MS,
       signal: options.signal,
+      beforeRun: options.assertCurrent,
+      startRun: options.startRun,
     },
     async (timeoutMs) => {
       const attempt = await withGitProcessOperation("project.clone", () =>
@@ -231,7 +240,7 @@ export async function refreshProjectCheckout(
     // The isolated repository owns transport, but it borrows the managed object store.
     // It must not run maintenance using its incomplete temporary ref inventory.
     const result = await runProjectCheckoutGit(
-      { target: staging },
+      { target: staging, url: input.url },
       {
         ...stagingOptions,
         timeoutMs: options.timeoutMs ?? PROJECT_FETCH_TIMEOUT_MS,
@@ -316,7 +325,7 @@ async function readProjectRemoteRefs(
 }
 
 function runProjectCheckoutGit(
-  input: { target: string },
+  input: { target: string; url?: string },
   options: ProjectCloneOptions,
   args: string[],
   commandOptions: { input?: string } = {},
@@ -327,13 +336,15 @@ function runProjectCheckoutGit(
     {
       operation: "project.clone",
       env: {
-        ...cloneCommandEnv(options.token, options.env ?? process.env),
+        ...cloneCommandEnv(input.url, options.token, options.env ?? process.env),
         ...(options.objectDirectory ? { GIT_OBJECT_DIRECTORY: options.objectDirectory } : {}),
       },
       timeoutMs: options.timeoutMs ?? PROJECT_CLONE_TIMEOUT_MS,
       signal: options.signal,
       killProcessTree: true,
       maxOutputBytes: 256 * 1024,
+      beforeRun: options.assertCurrent,
+      startRun: options.startRun,
       ...commandOptions,
     },
   );

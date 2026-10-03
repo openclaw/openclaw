@@ -85,7 +85,6 @@ export type OnboardingPluginInstallEntry = {
   trustedSourceLinkedOfficialInstall?: boolean;
   /** Keep this official runtime package on the same release cohort as OpenClaw. */
   versionBoundToOpenClaw?: boolean;
-  preferRemoteInstall?: boolean;
 };
 
 /** Outcome status for a single onboarding plugin install attempt. */
@@ -923,18 +922,8 @@ export async function ensureOnboardingPluginInstalled(params: {
     );
   }
   const allowLocal = hasGitWorkspace(workspaceDir);
-  const bundledLocalPath = entry.preferRemoteInstall
-    ? null
-    : resolveBundledLocalPath({ entry, workspaceDir });
-  const localPath =
-    bundledLocalPath ??
-    (entry.preferRemoteInstall
-      ? null
-      : resolveLocalPath({
-          entry,
-          workspaceDir,
-          allowLocal,
-        }));
+  const bundledLocalPath = resolveBundledLocalPath({ entry, workspaceDir });
+  const localPath = bundledLocalPath ?? resolveLocalPath({ entry, workspaceDir, allowLocal });
   const clawhubSpec = resolveClawHubSpecForOnboarding(entry.install);
   const npmSpec = resolveNpmSpecForOnboarding(entry.install);
   const updateChannel = resolveRegistryUpdateChannel({

@@ -218,11 +218,18 @@ async function waitForPending(
   const timeoutMs = Math.max(1, budget.deadlineMs - performance.now());
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
+  const settlement = new AbortController();
   try {
-    const bridgeReady = waitForPendingBridgeSettlement(pending, settlementMode).then(() => true);
+    const bridgeReady = waitForPendingBridgeSettlement(
+      pending,
+      settlementMode,
+      settlement.signal,
+    ).then(() => true);
     return await Promise.race([
       bridgeReady,
       new Promise<boolean>((resolve) => {
+        onAbort = () => resolve(false);
+        signal?.addEventListener("abort", onAbort, { once: true });
         let remainingMs = timeoutMs;
         let resumedAtMs = performance.now();
         const arm = () => {
@@ -242,16 +249,9 @@ async function waitForPending(
           arm();
         }
       }),
-      ...(signal
-        ? [
-            new Promise<boolean>((resolve) => {
-              onAbort = () => resolve(false);
-              signal.addEventListener("abort", onAbort, { once: true });
-            }),
-          ]
-        : []),
     ]);
   } finally {
+    settlement.abort();
     // Credit only approval time actually spent blocked here. A live sibling
     // approval must not refund guest computation, worker restore, or parked time.
     budget.deadlineMs += Math.max(0, approvalWait.pausedMs - pausedAtMs);
@@ -502,7 +502,7 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
           throw new Error("interrupted");
         }
         await raceWithAbortSignal(
-          waitForPendingBridgeSettlement(pending, result.settlementMode),
+          waitForPendingBridgeSettlement(pending, result.settlementMode, params.signal),
           params.signal,
         );
         params.budget.deadlineMs = performance.now() + remainingBudgetMs;

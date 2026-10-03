@@ -33,10 +33,14 @@ beforeEach(() => {
   for (const key of ["CODEX_CA_CERTIFICATE", "SSL_CERT_FILE", "REQUEST_METHOD"]) {
     vi.stubEnv(key, undefined);
   }
-  for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"]) {
+  for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]) {
     vi.stubEnv(key, undefined);
     vi.stubEnv(key.toLowerCase(), undefined);
   }
+  // The global fetch dispatcher may already own the host proxy. Keep only this
+  // fixture's loopback transport direct while its upstream remains guarded.
+  vi.stubEnv("NO_PROXY", "127.0.0.1,localhost,::1");
+  vi.stubEnv("no_proxy", "127.0.0.1,localhost,::1");
 });
 
 afterEach(() => vi.unstubAllEnvs());

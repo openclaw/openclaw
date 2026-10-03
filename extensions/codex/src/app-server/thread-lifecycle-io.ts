@@ -199,6 +199,7 @@ export async function resumeExistingCodexThread(
         abandonClient,
         request: resumeParams,
         signal: params.signal,
+        withCurrent: params.authority?.withCurrent,
         assertCurrent: () => {
           configuration.assertCurrent();
           assertCodexInferenceRouteConfig(
@@ -246,6 +247,7 @@ export async function resumeExistingCodexThread(
       restrictedToolSurface,
       lifecycleTiming,
       assertCurrent: assertHandoffCurrent,
+      withCurrent: params.authority?.withCurrent,
     });
     throwIfAborted();
     await refreshCodexThreadPolicy({
@@ -255,6 +257,7 @@ export async function resumeExistingCodexThread(
       timeoutMs: params.appServer.requestTimeoutMs,
       signal: params.signal,
       assertCurrent: assertHandoffCurrent,
+      withCurrent: params.authority?.withCurrent,
     });
     policyOutcome = "acknowledged";
     assertHandoffCurrent();
@@ -303,6 +306,7 @@ export async function resumeExistingCodexThread(
         bindingIdentity,
         { kind: "patch", threadId: resumeBinding.threadId, patch: resumePatch },
         assertHandoffCurrent,
+        params.authority,
       ),
     );
     if (!committed) {
@@ -367,6 +371,7 @@ export async function resumeExistingCodexThread(
         threadId: resumeBinding.threadId,
         timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
         assertCurrent: acceptedConfiguration.assertCurrent,
+        withCurrent: params.authority?.withCurrent,
       }).catch(() => false);
       if (
         !subscriptionReleased ||
@@ -503,6 +508,7 @@ export async function startFreshCodexThread(
       return await params.client.request("thread/start", startParams, {
         signal: params.signal,
         assertCurrent: assertInferenceCurrent,
+        withCurrent: params.authority?.withCurrent,
       });
     } catch (error) {
       if (error instanceof CodexAppServerRpcError) {
@@ -539,6 +545,7 @@ export async function startFreshCodexThread(
       restrictedToolSurface,
       lifecycleTiming,
       assertCurrent,
+      withCurrent: params.authority?.withCurrent,
     });
     assertCurrent();
   } catch (error) {
@@ -607,6 +614,7 @@ export async function startFreshCodexThread(
               }
             : { kind: "set", if: { kind: "absent" }, binding: nextBinding },
           assertCurrent,
+          params.authority,
         ),
       );
     } catch (error) {

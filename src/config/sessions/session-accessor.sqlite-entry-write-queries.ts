@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { createSqliteQueryCache, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { bindSessionNode, bindSessionRoot } from "./session-accessor.sqlite-session-row.js";
 
@@ -147,16 +147,4 @@ function prepareSessionEntryWriteQueries(database: DatabaseSync) {
 }
 
 // Cache fixed SQL shapes only; every write binds fresh rows through the normal executor.
-const sessionEntryWriteQueries = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof prepareSessionEntryWriteQueries>
->();
-
-export function getSessionEntryWriteQueries(database: DatabaseSync) {
-  let queries = sessionEntryWriteQueries.get(database);
-  if (!queries) {
-    queries = prepareSessionEntryWriteQueries(database);
-    sessionEntryWriteQueries.set(database, queries);
-  }
-  return queries;
-}
+export const getSessionEntryWriteQueries = createSqliteQueryCache(prepareSessionEntryWriteQueries);

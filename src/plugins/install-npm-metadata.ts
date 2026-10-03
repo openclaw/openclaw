@@ -27,10 +27,14 @@ export function isNpmPackageNotFoundMessage(error: string): boolean {
   return /E404|404 not found|not in this registry/i.test(normalized);
 }
 
-type TrustedOfficialPrereleaseResolution =
+export type TrustedOfficialPrereleaseResolution = {
+  resolvedPrereleaseVersion: string;
+  warning: string;
+} & (
   | { kind: "stable"; resolution: NpmSpecResolution }
   | { kind: "prerelease-only"; resolution: NpmSpecResolution }
-  | { kind: "allow-prerelease-only" };
+  | { kind: "allow-prerelease-only" }
+);
 
 export async function resolveTrustedOfficialPrereleaseResolution(params: {
   spec: ParsedRegistryNpmSpec;
@@ -38,7 +42,6 @@ export async function resolveTrustedOfficialPrereleaseResolution(params: {
   timeoutMs?: number;
   signal?: AbortSignal;
   killProcessTree?: boolean;
-  logger?: PluginInstallLogger;
 }): Promise<TrustedOfficialPrereleaseResolution | null> {
   if (!params.spec.name.startsWith("@openclaw/")) {
     return null;
@@ -66,10 +69,11 @@ export async function resolveTrustedOfficialPrereleaseResolution(params: {
       return null;
     }
     if (prereleaseVersion === params.resolvedPrereleaseVersion) {
-      params.logger?.warn?.(
-        `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; allowing it because this trusted official OpenClaw package has no stable npm versions yet.`,
-      );
-      return { kind: "allow-prerelease-only" };
+      return {
+        kind: "allow-prerelease-only",
+        resolvedPrereleaseVersion: params.resolvedPrereleaseVersion,
+        warning: `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; allowing it because this trusted official OpenClaw package has no stable npm versions yet.`,
+      };
     }
     version = prereleaseVersion;
   }
@@ -83,14 +87,13 @@ export async function resolveTrustedOfficialPrereleaseResolution(params: {
   if (!metadataResult.ok) {
     return null;
   }
-  params.logger?.warn?.(
-    stableVersion
-      ? `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; falling back to stable ${spec} for this trusted official OpenClaw install.`
-      : `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; using newest prerelease ${spec} because this trusted official OpenClaw package has no stable npm versions yet.`,
-  );
   return {
     kind: stableVersion ? "stable" : "prerelease-only",
     resolution: metadataResult.metadata,
+    resolvedPrereleaseVersion: params.resolvedPrereleaseVersion,
+    warning: stableVersion
+      ? `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; falling back to stable ${spec} for this trusted official OpenClaw install.`
+      : `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; using newest prerelease ${spec} because this trusted official OpenClaw package has no stable npm versions yet.`,
   };
 }
 

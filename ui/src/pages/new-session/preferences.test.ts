@@ -45,6 +45,23 @@ describe("new-session browser preferences", () => {
     expect(loadNewSessionPreference("ws://two.example", "main")).toBeNull();
   });
 
+  it("keeps a remote repository in identity preferences and preserves other browser choices", () => {
+    const choice = {
+      remoteProject: {
+        identity: "acme/private-repo",
+        cloneUrl: "https://ghe.example.test/acme/private-repo.git",
+        defaultBranch: "main",
+      },
+      baseRef: "main",
+    };
+    replaceBrowserPreference("ws://one.example", "main", choice);
+    expect(loadNewSessionPreference("ws://one.example", "main")).toEqual({ baseRef: "main" });
+    expect(decodeIdentityPreferences(encodeIdentityPreferences({ main: choice })).main).toEqual(
+      choice,
+    );
+    expect(localStorage.getItem(localStorage.key(0)!)).not.toContain("private-repo");
+  });
+
   it("keeps a legacy cloud source after unavailable Git clears the stored worktree flag", () => {
     const gatewayUrl = "ws://one.example";
     const legacyPreference = {
@@ -121,6 +138,7 @@ describe("new-session browser preferences", () => {
             folder: 42,
             where: { kind: "node", id: [] },
             projectId: {},
+            remoteProject: { identity: [], cloneUrl: 42 },
             model: [],
             worktree: "yes",
             freshWorkspace: "yes",
@@ -190,6 +208,7 @@ describe("palette placement overrides", () => {
           workspace: "/workspace",
           folder: "/workspace",
           projectId: "",
+          remoteProject: null,
           baseRef: "",
           worktreeName: "foreground-task",
           where: { kind: "local" },
@@ -206,6 +225,7 @@ describe("palette placement overrides", () => {
         workspace: "/workspace",
         folder: "/workspace",
         projectId: "",
+        remoteProject: null,
         baseRef: "",
         where: { kind: "local" },
         worktree: false,

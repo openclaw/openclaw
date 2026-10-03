@@ -84,7 +84,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       const [bootstrapResult, installationResult] = await racePromiseWithAbortSignal(
         Promise.allSettled([
           Promise.resolve().then(() => prepareNodeBootstrap(record, signal)),
-          record.profileSnapshot.project ? prepareBundle(undefined, signal) : undefined,
+          prepareBundle(undefined, signal),
         ]),
         signal,
       );
@@ -278,8 +278,6 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         });
         const prepared = await pending;
         assertCurrent();
-        // Enrollment overlaps process-owned packaging; failure stays with lease bootstrap.
-        void prepareInstallation().catch(() => undefined);
         return prepared;
       },
       close,

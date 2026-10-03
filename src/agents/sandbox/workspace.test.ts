@@ -10,12 +10,15 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { nodeFilePath } from "../../test-utils/node-file-path.js";
 import * as workspaceCopy from "../workspace-bootstrap-copy.js";
 import * as workspaceBootstrap from "../workspace-bootstrap-publish.js";
 import { WorkspaceBootstrapSeedConflictError } from "../workspace-bootstrap-publish.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../workspace-bootstrap-read.js";
+import { holdWorkspacePreparationSnapshot } from "../workspace-preparation-queue.test-support.js";
 import { WorkspaceAliasRepointedError } from "../workspace-state-identity.js";
 import * as workspaceOwner from "../workspace.js";
 import {
@@ -23,10 +26,96 @@ import {
   DEFAULT_SOUL_FILENAME,
   ensureSandboxWorkspace,
 } from "../workspace.js";
+import { captureSandboxStateOwner } from "./state-owner.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("ensureSandboxWorkspace", () => {
+  it("rejects released hosted custody before bootstrap publication while queued or after a destination read", async ({
+    signal,
+  }) => {
+    for (const phase of ["queued", "destination-read"] as const) {
+      const root = tempDirs.make("sandbox-bootstrap-owner-");
+      const seed = path.join(root, "seed");
+      const sandbox = path.join(root, "sandbox");
+      const target = path.join(sandbox, DEFAULT_AGENTS_FILENAME);
+      await fs.mkdir(seed, { recursive: true });
+      await fs.mkdir(sandbox);
+      await fs.writeFile(path.join(seed, DEFAULT_AGENTS_FILENAME), "seeded-agents");
+      await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
+        const owner = acquireGatewayStateOwner({
+          databasePath: resolveOpenClawStateSqlitePath(),
+          payload: {
+            pid: process.pid,
+            createdAt: new Date().toISOString(),
+            configPath: path.join(root, "openclaw.json"),
+            role: "gateway",
+          },
+        });
+        const guard = { assertHost: await captureSandboxStateOwner() };
+        const replacementGuard = vi.fn();
+        const entered = createDeferred();
+        const resume = createDeferred();
+        let held: ReturnType<typeof holdWorkspacePreparationSnapshot> | undefined;
+        let leader: ReturnType<typeof workspaceOwner.ensureAgentWorkspace> | undefined;
+        let preparation: Promise<void> | undefined;
+        let restoreRead = () => {};
+        try {
+          if (phase === "queued") {
+            held = holdWorkspacePreparationSnapshot(sandbox);
+            leader = held.run(() => workspaceOwner.ensureAgentWorkspace({ dir: sandbox }));
+            await held.ready(leader, signal);
+          } else {
+            const access = fs.access.bind(fs);
+            const read = vi.spyOn(fs, "access").mockImplementation(async (...args) => {
+              if (nodeFilePath(args[0]) === target) {
+                entered.resolve();
+                await resume.promise;
+              }
+              return access(...args);
+            });
+            restoreRead = () => read.mockRestore();
+          }
+          preparation = ensureSandboxWorkspace(sandbox, seed, true, undefined, guard);
+          void preparation.catch(() => undefined);
+          if (phase === "queued") {
+            guard.assertHost = replacementGuard;
+          } else {
+            await withinTest(
+              awaitGateBeforeSettlement(
+                entered.promise,
+                preparation,
+                "Bootstrap skipped destination read",
+              ),
+              signal,
+            );
+          }
+          owner.release();
+          resume.resolve();
+          held?.release();
+          if (leader) {
+            await expect(leader).resolves.toMatchObject({ dir: sandbox });
+          }
+          const result = await preparation.catch((error: unknown) => error);
+          expect(await fs.readdir(sandbox)).toEqual([]);
+          expect(result).toMatchObject({ code: "GATEWAY_STATE_OWNER_REQUIRED" });
+          if (phase === "queued") {
+            expect(replacementGuard).not.toHaveBeenCalled();
+          }
+        } finally {
+          resume.resolve();
+          if (held) {
+            await held.dispose([preparation]);
+          } else {
+            await preparation?.catch(() => {});
+          }
+          restoreRead();
+          owner.release();
+        }
+      });
+    }
+  });
+
   it("seeds regular bootstrap files from the source workspace", async () => {
     const root = tempDirs.make("openclaw-sandbox-workspace-");
     const seed = path.join(root, "seed");

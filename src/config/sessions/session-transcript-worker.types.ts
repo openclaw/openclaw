@@ -95,6 +95,7 @@ import type {
   PendingInputHistoryWorkerInput,
   PendingInputHistorySnapshot,
 } from "./session-pending-input-history.types.js";
+import type * as PendingInputSourceWorker from "./session-pending-input-source.types.js";
 import type {
   SessionMembersWorkerInput,
   SessionMembershipFactsWorkerInput,
@@ -310,10 +311,10 @@ export type SessionDiagnosticTextWorkerInput = {
   admission?: UserTurnTranscriptAdmissionReceipt;
 };
 
-type SessionEntryListWorkerInput = {
+export type SessionEntryListWorkerInput = {
   kind: "session-entry-list";
   database: { agentId: string; path: string };
-  scope: SessionEntryListScope;
+  scope: SessionEntryListScope & { cleanupSession?: string };
   continuation?: CanonicalSessionReaderContinuation;
 };
 
@@ -470,6 +471,7 @@ export type SessionHistoryWorkerInput =
   | SessionProgressCardWorkerInput
   | PendingInputHistoryWorkerInput
   | SessionPendingInputReceiptsWorkerInput
+  | PendingInputSourceWorker.Input
   | SessionGoalOperationReceiptWorkerInput
   | ConversationRowsWorkerInput
   | ConversationDeliveryWorkerInput
@@ -554,6 +556,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     kind: "goal-operation-receipt";
     result: SessionGoalOperationLookupResult;
   };
+  "session-pending-input-source": PendingInputSourceWorker.Value;
   "session-pending-input-history": {
     kind: "session-pending-input-history";
     snapshot: PendingInputHistorySnapshot;
@@ -733,6 +736,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
     SessionGoalOperationReceiptWorkerInput,
     SessionGoalOperationLookupResult
   >;
+  readPendingInputSource: PendingInputSourceWorker.Reader;
   readPendingInputHistory: SessionHistoryReader<
     PendingInputHistoryWorkerInput,
     PendingInputHistorySnapshot

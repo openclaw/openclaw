@@ -10,12 +10,8 @@ export function isQuestionThumbnail(value: unknown): value is string {
   ) {
     return true;
   }
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && !url.username && !url.password;
-  } catch {
-    return false;
-  }
+  const url = URL.parse(value);
+  return url?.protocol === "https:" && !url.username && !url.password;
 }
 
 export function readQuestionResourcePreview(value: unknown): QuestionResourcePreview | undefined {

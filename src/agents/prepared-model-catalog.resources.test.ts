@@ -254,86 +254,121 @@ function coldCatalogConfig(
   };
 }
 
-it("prepares a cold durable model catalog and auth labels without host SQLite", async () => {
+it.each([false, true])("prepares scoped model auth and labels (env-only=%s)", async (envOnly) => {
   await withOpenClawTestState(
-    { label: "cold-durable-model-catalog", scenario: "minimal" },
+    { label: "scoped-model-catalog-auth", scenario: "minimal" },
     async (state) => {
-      const provider = "cold-auth-fixture";
+      const provider = envOnly ? "env-only-fixture" : "cold-auth-fixture";
       const modelId = "fixture-model";
-      const profileId = `${provider}:default`;
+      const profileId = `${provider}:${envOnly ? "external" : "default"}`;
+      const profile = {
+        type: "api_key" as const,
+        provider,
+        key: envOnly ? "synthetic-external-credential" : "synthetic-cold-auth-key",
+      };
       const agentDir = state.agentDir("main");
       const config = coldCatalogConfig(state.workspaceDir, provider, modelId);
-      // Model a previous process's persisted credentials without publishing a warm runtime view.
-      runAuthProfileWriteTransaction(
-        agentDir,
-        (database) =>
-          writePersistedAuthProfileStoreRaw(
-            {
-              version: 1,
-              profiles: {
-                [profileId]: { type: "api_key", provider, key: "synthetic-cold-auth-key" },
-              },
-            },
-            agentDir,
-            database,
-          ),
-        { env: state.env },
-      );
-      expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toBeUndefined();
-      await closeOpenClawAgentDatabasesAsync(state.stateDir);
-      const observation = observeMainThreadSql({ includeClose: true });
+      const publishedProfileIds = () =>
+        Object.keys(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles ?? {});
+      let observation: ReturnType<typeof observeMainThreadSql> | undefined;
       let lease: Awaited<ReturnType<typeof acquireReadOnlyPreparedModelRuntime>> | undefined;
       try {
-        observation.calibrate();
-        lease = await acquireReadOnlyPreparedModelRuntime(
-          {
-            config,
-            agentId: "main",
+        if (envOnly) {
+          setRuntimeAuthProfileStoreSnapshot(
+            {
+              version: 1,
+              profiles: { [profileId]: profile },
+              runtimeExternalProfileIds: [profileId],
+              runtimeExternalProfileIdsAuthoritative: true,
+            },
             agentDir,
-            inheritedAuthDir: agentDir,
-            workspaceDir: state.workspaceDir,
-            env: state.env,
-          },
-          { catalogMode: "static" },
-        );
-        const snapshot = lease.snapshot;
-        expect(snapshot.findConfiguredRuntimeModel(provider, modelId)).toMatchObject({
-          provider,
-          id: modelId,
-          name: "Cold auth fixture model",
-        });
-        const authStore = expectDefined(
-          getPreparedModelRuntimeAuthStore(snapshot),
-          "cold durable prepared auth store",
-        );
-        expect(authStore.profiles[profileId]).toEqual({
-          type: "api_key",
-          provider,
-          key: "synthetic-cold-auth-key",
-        });
-        const labels = expectDefined(
-          getPreparedModelRuntimeAuthLabels(snapshot).get(provider),
-          "captured provider auth labels",
-        );
-        const label = formatModelCatalogAuthLabel(labels.all, {
-          cfg: config,
-          store: authStore,
-          metadataSnapshot: snapshot.metadataSnapshot,
-        });
-        expect(label).toContain(`${profileId}=`);
-        expect(label).not.toContain("missing");
-        expect(label).toContain(
-          `auth profile store: ${shortenHomePath(resolveAuthProfileDatabasePath(agentDir))}`,
-        );
-        await lease[Symbol.asyncDispose]();
-        lease = undefined;
-        observation.expectIdle();
+          );
+          expect(publishedProfileIds()).toEqual([profileId]);
+        } else {
+          // Persist credentials without publishing the previous process's warm runtime view.
+          runAuthProfileWriteTransaction(
+            agentDir,
+            (database) =>
+              writePersistedAuthProfileStoreRaw(
+                { version: 1, profiles: { [profileId]: profile } },
+                agentDir,
+                database,
+              ),
+            { env: state.env },
+          );
+          expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toBeUndefined();
+          await closeOpenClawAgentDatabasesAsync(state.stateDir);
+          observation = observeMainThreadSql({ includeClose: true });
+        }
+        const verify = async () => {
+          observation?.calibrate();
+          lease = await acquireReadOnlyPreparedModelRuntime(
+            {
+              config,
+              agentId: "main",
+              agentDir,
+              inheritedAuthDir: agentDir,
+              workspaceDir: state.workspaceDir,
+              env: state.env,
+            },
+            { catalogMode: "static" },
+          );
+          const { snapshot } = lease;
+          expect(snapshot.findConfiguredRuntimeModel(provider, modelId)).toMatchObject({
+            provider,
+            id: modelId,
+            name: "Cold auth fixture model",
+          });
+          const authStore = expectDefined(
+            getPreparedModelRuntimeAuthStore(snapshot),
+            "prepared auth store",
+          );
+          if (envOnly) {
+            expect(Object.keys(authStore.profiles)).toEqual([]);
+            expect(snapshot.authModes[provider]).toBeUndefined();
+          } else {
+            expect(authStore.profiles[profileId]).toEqual(profile);
+          }
+          const labels = expectDefined(
+            getPreparedModelRuntimeAuthLabels(snapshot).get(provider),
+            "provider auth labels",
+          );
+          const label = formatModelCatalogAuthLabel(labels.all, {
+            cfg: config,
+            store: authStore,
+            metadataSnapshot: snapshot.metadataSnapshot,
+          });
+          if (envOnly) {
+            expect(label).toBe("missing");
+          } else {
+            expect(label).toContain(`${profileId}=`);
+            expect(label).not.toContain("missing");
+            expect(label).toContain(
+              `auth profile store: ${shortenHomePath(resolveAuthProfileDatabasePath(agentDir))}`,
+            );
+          }
+          await lease[Symbol.asyncDispose]();
+          lease = undefined;
+          observation?.expectIdle();
+        };
+        if (envOnly) {
+          await withEnvOnlyAuthProfileStore(verify);
+          expect(publishedProfileIds()).toEqual([profileId]);
+        } else {
+          await verify();
+        }
       } finally {
         try {
           await lease?.[Symbol.asyncDispose]();
         } finally {
-          observation.restore();
-          await resetPreparedModelRuntimeSnapshotsForTest();
+          observation?.restore();
+          try {
+            await resetPreparedModelRuntimeSnapshotsForTest();
+          } finally {
+            if (envOnly) {
+              clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
+            }
+          }
         }
       }
     },
@@ -467,71 +502,3 @@ it.each(["explicit root", "ambient changes after capture"] as const)(
     });
   },
 );
-
-it("keeps published external credentials out of an env-only model lease", async () => {
-  await withOpenClawTestState({ label: "env-only-model-catalog" }, async (state) => {
-    const provider = "env-only-fixture";
-    const modelId = "fixture-model";
-    const profileId = `${provider}:external`;
-    const agentDir = state.agentDir("main");
-    const config = coldCatalogConfig(state.workspaceDir, provider, modelId);
-    const publishedProfileIds = () =>
-      Object.keys(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles ?? {});
-    try {
-      setRuntimeAuthProfileStoreSnapshot(
-        {
-          version: 1,
-          profiles: {
-            [profileId]: { type: "api_key", provider, key: "synthetic-external-credential" },
-          },
-          runtimeExternalProfileIds: [profileId],
-          runtimeExternalProfileIdsAuthoritative: true,
-        },
-        agentDir,
-      );
-      expect(publishedProfileIds()).toEqual([profileId]);
-      await withEnvOnlyAuthProfileStore(async () => {
-        await using lease = await acquireReadOnlyPreparedModelRuntime(
-          {
-            config,
-            agentId: "main",
-            agentDir,
-            inheritedAuthDir: agentDir,
-            workspaceDir: state.workspaceDir,
-            env: state.env,
-          },
-          { catalogMode: "static" },
-        );
-        const { snapshot } = lease;
-        expect(snapshot.findConfiguredRuntimeModel(provider, modelId)).toMatchObject({
-          provider,
-          id: modelId,
-        });
-        const authStore = expectDefined(
-          getPreparedModelRuntimeAuthStore(snapshot),
-          "env-only prepared auth store",
-        );
-        expect(Object.keys(authStore.profiles)).toEqual([]);
-        expect(snapshot.authModes[provider]).toBeUndefined();
-        const labels = expectDefined(
-          getPreparedModelRuntimeAuthLabels(snapshot).get(provider),
-          "env-only provider auth label",
-        );
-        expect(
-          formatModelCatalogAuthLabel(labels.all, {
-            cfg: config,
-            store: authStore,
-            metadataSnapshot: snapshot.metadataSnapshot,
-          }),
-        ).toBe("missing");
-      });
-      expect(publishedProfileIds()).toEqual([profileId]);
-    } finally {
-      try {
-        await resetPreparedModelRuntimeSnapshotsForTest();
-      } finally {
-        clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
-      }
-    }
-  });
-});

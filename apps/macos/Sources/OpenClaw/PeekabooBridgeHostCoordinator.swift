@@ -145,6 +145,8 @@ final class PeekabooBridgeHostCoordinator {
                     return
                 }
                 self.aliasManager.ensureAliases(logger: self.logger)
+            } catch let PeekabooBridgeHostError.socketAlreadyOwned(path) {
+                self.logSocketServedElsewhere(path)
             } catch {
                 let message = "Failed to restart retained PeekabooBridge runtime: \(error.localizedDescription)"
                 self.logger.error("\(message, privacy: .public)")
@@ -168,9 +170,17 @@ final class PeekabooBridgeHostCoordinator {
             self.retainedRuntime = candidate
             self.aliasManager.ensureAliases(logger: self.logger)
             self.logger.info("PeekabooBridge host ready at \(started.socketPath, privacy: .public)")
+        } catch let PeekabooBridgeHostError.socketAlreadyOwned(path) {
+            self.logSocketServedElsewhere(path)
         } catch {
             self.logger.error("Failed to start PeekabooBridge host: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    private func logSocketServedElsewhere(_ path: String) {
+        self.logger.info(
+            "PeekabooBridge host not started: \(path, privacy: .public) is already served by another host; " +
+                "this per-user socket is shared by all OpenClaw profiles")
     }
 
     private func ensureStopped() async {

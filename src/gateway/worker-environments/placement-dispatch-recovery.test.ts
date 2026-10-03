@@ -621,13 +621,13 @@ describe("worker placement restart recovery", () => {
         },
       };
       const replacePlacement = async () => {
-        placements.fail({
+        await placements.fail({
           sessionId: original.sessionId,
           expectedGeneration: original.generation,
           recoveryError: "superseded placement",
         });
         const requested = await placements.startDispatch(REQUEST);
-        replacement = placements.transition({
+        replacement = await placements.transition({
           sessionId: original.sessionId,
           from: "requested",
           to: "provisioning",
@@ -635,7 +635,7 @@ describe("worker placement restart recovery", () => {
           patch: { environmentId: replacementEnvironmentId },
         });
         if (state === "syncing" || state === "starting") {
-          replacement = placements.transition({
+          replacement = await placements.transition({
             sessionId: original.sessionId,
             from: "provisioning",
             to: "syncing",
@@ -644,7 +644,7 @@ describe("worker placement restart recovery", () => {
           });
         }
         if (state === "starting") {
-          replacement = placements.transition({
+          replacement = await placements.transition({
             sessionId: original.sessionId,
             from: "syncing",
             to: "starting",
@@ -671,7 +671,6 @@ describe("worker placement restart recovery", () => {
           throw new Error("stale recovery lifecycle was replaced");
         },
         runActivationBarrier: async ({ activate }) => activate(),
-        reportTransition: (observer, placement) => observer?.(placement),
       });
 
       await startup.resumeProvisioning(original, async () => {});

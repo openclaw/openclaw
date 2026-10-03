@@ -434,6 +434,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
               model: agentMeta?.model ?? fallbackModel,
               thinkLevel: effectiveTurnThinkLevel,
               auth: params.attempt.maintenanceAuthProfile,
+              senderIsOwner: params.opts.senderIsOwner,
             }),
             sessionId: runOwnedSessionId,
             lifecycleRevision: sessionEntry.lifecycleRevision,

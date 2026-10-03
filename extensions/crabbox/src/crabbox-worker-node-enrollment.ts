@@ -36,6 +36,7 @@ export function createCrabboxNodeRuntimeSetup(params: {
   nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"];
   workerBundle: CrabboxWorkerNodeRuntimePreparation["workerBundle"];
   leaseId: string;
+  target?: CrabboxOperatingSystem;
 }): { command: string; forwardedEnv: Record<string, string> } {
   return createCrabboxNodeSetup(params);
 }
@@ -108,6 +109,27 @@ setPhase("preparation");
   const setupFile = path.join(stateDir, "setup-code");
   const runtimeLink = path.join(stateDir, "runtime");
   const nodeEnv = { ...process.env, ...(mode ? { OPENCLAW_STATE_DIR: stateDir } : {}) };
+  // Tools travel inside the verified full-node artifact and share its preparation identity.
+  if (process.platform !== "win32") {
+    nodeEnv.PATH = path.join(runtimeDir, "node_modules", "openclaw", "dist", "worker-tools", "bin") + path.delimiter + (nodeEnv.PATH || "");
+  }
+  const subprocessError = (message, result) => {
+    let detail = [result.error?.message, result.stderr].filter(Boolean).join("\\n");
+    // Sanitize complete values before truncation can leave an unrecognizable credential fragment.
+    const privateValues = [credentials, setupCode, ...Object.values(tokens), ...Object.values(nodeEnv)]
+      .filter((value) => typeof value === "string" && value.length > 0)
+      .sort((a, b) => b.length - a.length);
+    for (const value of privateValues) detail = detail.replaceAll(value, "[redacted]");
+    detail = detail
+      .replace(/\\b(?:Bearer|Basic)\\s+\\S+/gi, "[redacted]")
+      .replace(/([A-Za-z_][A-Za-z0-9_]*\\s*=\\s*)(?:"[^"]*"|'[^']*'|[^\\s]+)/g, "$1[redacted]")
+      .replace(/\\s+/g, " ").trim();
+    const bytes = Buffer.from(detail);
+    let start = Math.max(0, bytes.length - 512);
+    while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start++;
+    const cause = new Error("exit code " + (result.status ?? "unknown") + ", signal " + (result.signal ?? "none") + (detail ? ": " + bytes.subarray(start).toString("utf8") : ""));
+    return new Error(message + ": " + cause.message, { cause });
+  };
   const finishDesktopSetup = () => {
     if (!desktopSetup) return;
     setPhase("desktop setup");
@@ -152,7 +174,7 @@ setPhase("preparation");
     const probe = spawnSync(process.execPath, [path.join(packageRoot, "openclaw.mjs"), "--version"], { env: nodeEnv, encoding: "utf8", timeout: 60000 });
     const version = probe.stdout?.trim();
     const expected = "OpenClaw " + bootstrap.openclawVersion;
-    if (probe.status !== 0 || (version !== expected && !version?.startsWith(expected + " "))) throw new Error("Cloud worker bootstrap CLI could not verify its Gateway version");
+    if (probe.status !== 0 || (version !== expected && !version?.startsWith(expected + " "))) throw subprocessError("Cloud worker bootstrap CLI could not verify its Gateway version", probe);
   };
   const verifyArchive = async (source, artifact) => {
     const hash = crypto.createHash("sha256");
@@ -358,10 +380,35 @@ setPhase("preparation");
           const npmCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
           if (process.platform === "win32" && !fs.existsSync(npmCli)) throw new Error("Cloud worker requires npm beside node.exe; update the Crabbox Windows bootstrap image and reprovision the worker");
           installed = await new Promise((resolve) => {
-            const child = spawn(process.platform === "win32" ? process.execPath : "npm", [...(process.platform === "win32" ? [npmCli] : []), "install", "--prefix", installDir, "--omit=dev", "--no-save", "--package-lock=false", "--no-audit", "--no-fund", "--ignore-scripts=false", archive], { cwd: stage, env: nodeEnv, windowsHide: true, stdio: ["ignore", log, log], timeout: 600000 });
+            const child = spawn(process.platform === "win32" ? process.execPath : "npm", [...(process.platform === "win32" ? [npmCli] : []), "install", "--prefix", installDir, "--omit=dev", "--no-save", "--package-lock=false", "--no-audit", "--no-fund", "--ignore-scripts=false", archive], { cwd: stage, env: nodeEnv, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", log, log] });
             let error;
+            const stopInstall = () => {
+              if (!child.pid) return;
+              // Kill the owned npm group, including lifecycle scripts, then join close below.
+              try {
+                if (process.platform === "win32") {
+                  const stopped = spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { env: nodeEnv, windowsHide: true, stdio: "ignore", timeout: 10000 });
+                  if (stopped.error) error = stopped.error;
+                } else process.kill(-child.pid, "SIGKILL");
+              } catch (cause) { if (cause.code !== "ESRCH") error = cause; }
+            };
+            const timeout = setTimeout(() => {
+              error = new Error("Cloud worker bootstrap package installation timed out");
+              stopInstall();
+            }, 600000);
+            const cancelInstall = () => downloadAbort.abort(new Error("Cloud worker bootstrap installation cancelled"));
+            process.once("SIGTERM", cancelInstall);
+            process.once("SIGINT", cancelInstall);
             child.once("error", (cause) => { error = cause; });
-            child.once("close", (status, signal) => resolve({ status, signal, error }));
+            child.once("close", (status, signal) => {
+              clearTimeout(timeout);
+              process.removeListener("SIGTERM", cancelInstall);
+              process.removeListener("SIGINT", cancelInstall);
+              downloadAbort.signal.removeEventListener("abort", stopInstall);
+              resolve({ status, signal, error });
+            });
+            downloadAbort.signal.addEventListener("abort", stopInstall, { once: true });
+            if (downloadAbort.signal.aborted) stopInstall();
           });
         } finally { fs.closeSync(log); }
         downloadAbort.signal.throwIfAborted();
@@ -399,7 +446,7 @@ setPhase("preparation");
   if (pluginIds.length > 0) {
     // One CLI process retains the combined per-plugin time and output allowances.
     const enabled = spawnSync(process.execPath, [cli, "plugins", "enable", ...pluginIds], { env: nodeEnv, encoding: "utf8", timeout: 60000 * pluginIds.length, maxBuffer: 1024 * 1024 * pluginIds.length });
-    if (enabled.status !== 0) throw new Error("Cloud worker bootstrap could not enable plugins " + pluginIds.join(", "));
+    if (enabled.status !== 0) throw subprocessError("Cloud worker bootstrap could not enable plugins " + pluginIds.join(", "), enabled);
   }
   // Publishing this pointer earlier makes fresh state look like a legacy installation.
   fs.symlinkSync(runtimeDir, runtimeLink, process.platform === "win32" ? "junction" : "dir");

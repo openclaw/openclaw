@@ -83,6 +83,7 @@ import {
   replaceTranscriptEvents,
   trimTranscriptForManualCompact,
 } from "./session-accessor.sqlite-transcript-write.js";
+import { createLegacyUnsequencedTurnFixture } from "./session-accessor.transcript-turn.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 import {
@@ -2632,29 +2633,7 @@ describe("session accessor seam", () => {
   });
 
   it("invalidates a legacy multi-message turn when active cursors cannot be proven", async () => {
-    const scope = transcriptScope(
-      "session-legacy-unsequenced-turn",
-      "agent:main:legacy-unsequenced-turn",
-    );
-    await upsertSessionEntryCore(scope, {
-      lifecycleRevision: "legacy-unsequenced-revision",
-      sessionId: scope.sessionId,
-      updatedAt: 10,
-    });
-    await persistSessionTranscriptTurn(scope, {
-      messages: [
-        transcriptMessage("legacy-unsequenced-root", null, {
-          role: "user",
-          content: "canonical root",
-        }),
-      ],
-      updateMode: "none",
-    });
-    await appendTranscriptEvent(scope, {
-      id: "legacy-unsequenced-child",
-      parentId: "legacy-unsequenced-root",
-      message: { role: "assistant", content: "legacy raw event" },
-    });
+    const scope = await createLegacyUnsequencedTurnFixture(storePath);
 
     const publicUpdates: Array<{ target: unknown; message?: unknown; messageSeq?: number }> = [];
     const internalUpdates: Array<{

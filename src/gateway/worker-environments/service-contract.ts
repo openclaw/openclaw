@@ -247,9 +247,12 @@ export type WorkerPlacementMoveRequest = Pick<
 export type WorkerPlacementAuthorization = () => void;
 
 /** Exact source eligibility may follow only transitions published by captured predecessors. */
-export type WorkerPlacementReclaimSourceCheck = (
+export type WorkerPlacementReclaimSourceCheck = ((
   predecessor?: WorkerPlacementCancellationTarget,
-) => void;
+) => void) & {
+  /** Host-only eligibility, without placement reads; ends when drain commits. */
+  assertCurrent?: WorkerPlacementAuthorization;
+};
 
 // Leaf dispatch contract: GatewayRequestContext must not import the dispatch
 // runtime (it reaches agents/plugins and closes an import cycle through core).

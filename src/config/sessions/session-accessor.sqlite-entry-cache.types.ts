@@ -23,6 +23,7 @@ export type SessionEntryCacheSnapshot = {
 export type SessionSharingEntry = Pick<
   InternalSessionEntry,
   | "sessionId"
+  | "previousSessionId"
   | "updatedAt"
   | "createdAt"
   | "initializationPending"
@@ -51,6 +52,7 @@ export type SessionSharingEntry = Pick<
 export function projectSessionSharingEntry(entry: InternalSessionEntry): SessionSharingEntry {
   return {
     sessionId: entry.sessionId,
+    previousSessionId: entry.previousSessionId,
     updatedAt: entry.updatedAt,
     createdAt: entry.createdAt,
     initializationPending: entry.initializationPending,

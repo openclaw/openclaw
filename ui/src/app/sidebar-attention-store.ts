@@ -1,3 +1,4 @@
+import { registerListener } from "../../../src/shared/listeners.js";
 import {
   clearSidebarAttentionDismissal,
   resolveSidebarAttentionKey,
@@ -80,10 +81,7 @@ export function createSidebarAttentionStore(
     dismiss(dismissal) {
       controller?.dismiss(dismissal);
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
       stopGateway();
       stopScopeUpgrade();

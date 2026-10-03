@@ -4,6 +4,7 @@ import type {
   MentionInboxItem,
   MentionsListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { registerListener } from "../../../src/shared/listeners.js";
 import {
   GatewayRequestError,
   resolveGatewayErrorDetailCode,
@@ -265,10 +266,7 @@ export function createMentionsCapability(
         }
       }
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
       disposed = true;
       connection = null;

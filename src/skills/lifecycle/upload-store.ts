@@ -14,10 +14,7 @@ import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { validateRequestedSkillSlug } from "./install-paths.js";
 import { SkillUploadRequestError } from "./upload-store-error.js";
-import {
-  resolveSkillUploadDatabaseOptions,
-  type SkillUploadMetadataRow,
-} from "./upload-store.sqlite.js";
+import type { SkillUploadMetadataRow } from "./upload-store.sqlite.js";
 import type { SkillUploadWorkerOperations } from "./upload-store.worker-contract.js";
 type SkillUploadScope = Pick<SqliteWorkerStore<SkillUploadWorkerOperations>, "execute">;
 
@@ -180,7 +177,10 @@ function toSkillUploadRecord(row: SkillUploadMetadataRow, archivePath: string) {
 }
 
 function createSkillUploadStore(options?: SkillUploadStoreOptions) {
-  const stateOptions = resolveSkillUploadDatabaseOptions(options ?? {});
+  const stateOptions: OpenClawStateDatabaseOptions = {
+    ...(options?.env ? { env: options.env } : {}),
+    ...(options?.path ? { path: options.path } : {}),
+  };
   const ttlMs = options?.ttlMs ?? SKILL_UPLOAD_TTL_MS;
   const tempRootDir = options?.tempRootDir;
   const installLeaseMs = resolvePositiveDuration(

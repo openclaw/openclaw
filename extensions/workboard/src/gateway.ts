@@ -6,7 +6,6 @@ import { redactClaimToken } from "./card-redaction.js";
 import {
   assertNoCursorAdvance,
   createWorkboardDispatchHandler,
-  listWorkboardCards,
   readId,
   readExpectedUpdatedAt,
   registerWorkboardResultMethods,
@@ -165,7 +164,7 @@ export function registerWorkboardGatewayMethods(params: {
     [
       "workboard.cards.list",
       READ_SCOPE,
-      async ({ params: requestParams }) => await listWorkboardCards(store, requestParams.boardId),
+      ({ params: requestParams }) => store.listCards(requestParams.boardId),
     ],
   ]);
 
@@ -279,10 +278,11 @@ export function registerWorkboardGatewayMethods(params: {
     [
       "workboard.sessionsBoard.read",
       READ_SCOPE,
-      ({ params: input }) =>
+      (context: GatewayMethodContext) =>
         sessionsBoard().read(
-          readStringParam(input, "boardId", { required: true }),
-          sessionsBoardView(input),
+          readStringParam(context.params, "boardId", { required: true }),
+          sessionsBoardView(context.params),
+          sessionsBoardCaller(context),
         ),
     ],
     [

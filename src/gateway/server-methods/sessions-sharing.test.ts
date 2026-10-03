@@ -415,7 +415,7 @@ describe("session sharing handlers", () => {
       );
       const run = sharingLifecycle.runExclusiveSessionLifecycleMutation;
       vi.spyOn(sharingLifecycle, "runExclusiveSessionLifecycleMutation").mockImplementationOnce(
-        async (params) => {
+        async (operation, params) => {
           replaceSessionEntrySync(
             { agentId: "main", sessionKey },
             {
@@ -427,7 +427,7 @@ describe("session sharing handlers", () => {
           expect(loadSessionEntry({ agentId: "main", sessionKey })?.sessionId).toBe(
             "session-replaced",
           );
-          return run(params);
+          return run(operation, params);
         },
       );
       const broadcast = vi.fn();

@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveConfiguredGitHubHost } from "../../agents/github-host.js";
 import {
   GitHubIdentityError,
   prepareGitHubReadIdentity,
@@ -60,6 +61,9 @@ async function prepareControlUiGitHubIdentity(
   const config = context.getRuntimeConfig();
   const configuredIdentity = () => {
     const current = context.getRuntimeConfig();
+    if (resolveConfiguredGitHubHost(current) !== "github.com") {
+      return undefined;
+    }
     return (
       resolveConfiguredGitHubToolIdentity({ config: current, agentId, scope: "agent" }) ??
       resolveConfiguredGitHubToolIdentity({ config: current, agentId, scope: "system" })

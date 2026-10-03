@@ -147,7 +147,7 @@ async function deployDiscordCommands(params: {
   });
   try {
     try {
-      await params.client.deployCommands({ mode: "reconcile" });
+      await params.client.deployCommands();
     } catch (err) {
       if (isDiscordDeployDailyCreateLimit(err)) {
         params.runtime.log?.(

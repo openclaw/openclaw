@@ -17,7 +17,6 @@ import {
   compileStringField,
   findChoice,
   invalid,
-  matchesStringFormat,
   normalizeChoices,
   readSuggestions,
   validateChoices,
@@ -55,10 +54,7 @@ export function compileStringArrayField(
   }
   const decode = (values: readonly string[]): DecodeValue => {
     if (values.length < (minItems ?? 0) || values.length > maxItems) {
-      return invalid(
-        context,
-        "requires between " + (minItems ?? 0) + " and " + maxItems + " entries.",
-      );
+      return invalid(context, `requires between ${minItems ?? 0} and ${maxItems} entries.`);
     }
     const decoded: string[] = [];
     for (const value of values) {
@@ -90,7 +86,7 @@ export function compileStringArrayField(
     constraints: [
       "Enter each custom value on a separate line.",
       item.question.question,
-      "between " + (minItems ?? 0) + " and " + maxItems + " entries",
+      `between ${minItems ?? 0} and ${maxItems} entries`,
     ],
     options: suggestions ?? null,
     isOther: true,
@@ -180,13 +176,7 @@ export function compileResourceField(
     }
     const uri = ownString(resource, "uri");
     const name = ownString(resource, "name");
-    if (
-      !uri ||
-      uri.length > 2048 ||
-      !name ||
-      !matchesStringFormat(uri, "uri") ||
-      validator.decode([uri]).kind !== "present"
-    ) {
+    if (!uri || uri.length > 2048 || !name || validator.decode([uri]).kind !== "present") {
       return "contains a resource outside its URI constraints.";
     }
     const meta = ownRecord(resource, "_meta");
@@ -285,22 +275,19 @@ export function compileResourceField(
       if (values.length < (minimum ?? 0) || values.length > (maximum ?? 64)) {
         return invalid(context, "has an invalid number of resources.");
       }
-      const uris: string[] = [];
       for (const value of values) {
         const supplied = findChoice(choices, value, true);
-        const uri = supplied?.value ?? value;
         if (
-          (!supplied && (!upload || !source?.isUploadedResource(context.questionId, uri))) ||
-          validator.decode([uri]).kind !== "present"
+          (!supplied && (!upload || !source?.isUploadedResource(context.questionId, value))) ||
+          validator.decode([value]).kind !== "present"
         ) {
           return invalid(context, "contains a resource not admitted for this field.");
         }
-        uris.push(uri);
       }
-      if (new Set(uris).size !== uris.length) {
+      if (new Set(values).size !== values.length) {
         return invalid(context, "contains duplicate resources.");
       }
-      return { kind: "present", value: type === "array" ? uris : (uris[0] ?? "") };
+      return { kind: "present", value: type === "array" ? [...values] : (values[0] ?? "") };
     },
   });
 }

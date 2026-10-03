@@ -525,6 +525,9 @@ it.for([
         verified: true,
       });
     }
+    if (scenario === "package-changed") {
+      expect(execution?.originalManagedServiceRuntime?.packageFingerprintWarning).toBeUndefined();
+    }
     if (healthy) {
       expect(mocks.health).toHaveBeenCalledWith(
         expect.objectContaining({

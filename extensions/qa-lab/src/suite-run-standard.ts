@@ -146,6 +146,7 @@ export async function runQaFlowSuiteStandard(
       fastMode,
       thinkingDefault: params?.thinkingDefault,
       forcedRuntime: params?.forcedRuntime,
+      runtimeSelection: params?.runtimeSelection,
       claudeCliAuthMode: params?.claudeCliAuthMode,
       controlUiEnabled,
       enabledPluginIds,
@@ -183,6 +184,7 @@ export async function runQaFlowSuiteStandard(
       mock: activeMock,
       gateway: activeGateway,
       runtimeId: params?.forcedRuntime ?? "openclaw",
+      runtimeSelection: params?.runtimeSelection,
       outputDir,
       // YAML scenarios should see the full staged gateway config, not just
       // the transport fragment. Routing/session/plugin assertions depend on it.

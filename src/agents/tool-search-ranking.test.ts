@@ -272,30 +272,63 @@ describe("ToolSearchRuntime.search", () => {
     expect((await search.search("meteors")).map((hit) => hit.name)).toEqual(["indexed_resource"]);
   });
 
-  it("reuses document tokens across runtimes and visibility views until the catalog changes", async () => {
-    const catalog = CATALOG.map(entry);
-    const tokenize = vi.spyOn(ranking, "tokenizeDocument");
+  it("shares one index across fresh turns and rebuilds for a changed tool-set revision", async () => {
+    const catalog = CATALOG.map((item) => entry({ ...item, id: `shared-index:${item.id}` }));
+    const build = vi.spyOn(ranking, "buildLexicalIndex");
     for (const [query, expected] of [
       ["repository", ["issue_create"]],
       ["scheduling", ["cron_create"]],
       ["read", ["read_file"]],
-      ["the and with", []],
     ] as const) {
-      const hits = await runtime(catalog).search(query, {
+      const freshCatalog = catalog.map((item) => entry({ ...item, tool: {} as never }));
+      const hits = await runtime(freshCatalog).search(query, {
         allowedIds: new Set(catalog.map(({ id }) => id)),
       });
       expect(hits.map(({ name }) => name)).toEqual(expected);
     }
-    expect(tokenize).toHaveBeenCalledTimes(catalog.length);
+    expect(build).toHaveBeenCalledTimes(1);
 
     catalog[0]!.description = "Observe asteroids";
     expect((await runtime(catalog).search("asteroids")).map(({ name }) => name)).toEqual([
       "web_search",
     ]);
-    expect(tokenize).toHaveBeenCalledTimes(catalog.length + 1);
+    expect(build).toHaveBeenCalledTimes(2);
 
     await runtime([...catalog]).search("repository");
-    expect(tokenize).toHaveBeenCalledTimes(catalog.length * 2 + 1);
+    expect(build).toHaveBeenCalledTimes(2);
+
+    const allowedIds = new Set([catalog[0]!.id]);
+    expect(await runtime(catalog).search("repository", { allowedIds })).toEqual([]);
+    allowedIds.add(catalog[4]!.id);
+    expect(
+      (await runtime(catalog).search("repository", { allowedIds })).map(({ name }) => name),
+    ).toEqual(["issue_create"]);
+    expect(build).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not retain oversized source text through cached token slices", async () => {
+    const catalog = [
+      entry({
+        name: "oversized_revision",
+        description: `Retention ${" ".repeat(4 * 1024 * 1024)}`,
+      }),
+    ];
+    const build = vi.spyOn(ranking, "buildLexicalIndex");
+    for (let turn = 0; turn < 2; turn++) {
+      expect((await runtime(catalog).search("retention")).map(({ name }) => name)).toEqual([
+        "oversized_revision",
+      ]);
+    }
+    expect(build).toHaveBeenCalledTimes(2);
+  });
+
+  it("projects shared index hits from the current catalog without retaining another run's metadata", async () => {
+    const first = entry({ name: "shared_revision", description: "Measure quasars" });
+    await runtime([first]).search("quasars");
+    const current = entry({ ...first, source: "mcp", sourceName: "current-server" });
+    expect(await runtime([current]).search("quasars")).toEqual([
+      expect.objectContaining({ source: "mcp", sourceName: "current-server", input: "unknown" }),
+    ]);
   });
 
   it.each(["listURL", "listUrl"])("prefers the exact catalog ID spelling for %s", async (name) => {

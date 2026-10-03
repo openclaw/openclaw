@@ -106,20 +106,15 @@ export async function prepareAgentCommandExecution(
     );
   }
 
-  const cfg = await resolveAgentRuntimeConfig(runtime, {
-    runtimeTargetsChannelSecrets: opts.deliver === true,
-    runtimeChannelSecretScope:
-      opts.deliver !== true && shouldResolveExplicitRecipientSession && recipientChannel
-        ? { channel: recipientChannel, accountId: opts.accountId }
-        : undefined,
-  });
-  const normalizedSpawned = normalizeSpawnedRunMetadata({
-    spawnedBy: opts.spawnedBy,
-    groupId: opts.groupId,
-    groupChannel: opts.groupChannel,
-    groupSpace: opts.groupSpace,
-    workspaceDir: opts.workspaceDir,
-  });
+  const cfg = await (runtimeContext?.config ??
+    resolveAgentRuntimeConfig(runtime, {
+      runtimeTargetsChannelSecrets: opts.deliver === true,
+      runtimeChannelSecretScope:
+        opts.deliver !== true && shouldResolveExplicitRecipientSession && recipientChannel
+          ? { channel: recipientChannel, accountId: opts.accountId }
+          : undefined,
+    }));
+  const normalizedSpawned = normalizeSpawnedRunMetadata(opts);
   const agentIdOverrideRaw = opts.agentId?.trim();
   const agentIdOverride = agentIdOverrideRaw ? normalizeAgentId(agentIdOverrideRaw) : undefined;
   if (agentIdOverride) {

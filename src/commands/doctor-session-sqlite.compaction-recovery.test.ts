@@ -248,23 +248,6 @@ describe("runDoctorSessionSqlite", () => {
     expect(report.totals.validatedEntries).toBe(1);
   });
 
-  it.skipIf(process.platform === "win32")(
-    "reapplies owner-only permissions after compaction",
-    async () => {
-      const { sqlitePath, store } = await createImportedStoreForCompaction();
-      fs.chmodSync(sqlitePath, 0o666);
-
-      const report = await runDoctorSessionSqlite({
-        env: store.env,
-        mode: "compact",
-        store: store.storePath,
-      });
-
-      expect(report.totals.issues).toBe(0);
-      expect(fs.statSync(sqlitePath).mode & 0o777).toBe(0o600);
-    },
-  );
-
   it("rejects stale secondary indexes before compacting and quarantines them in recovery", async () => {
     const { sqlitePath, store } = await createImportedStoreForCompaction();
     createUnsafeIndexDrift(sqlitePath);

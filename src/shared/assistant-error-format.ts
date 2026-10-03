@@ -267,12 +267,13 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
   return trimmed.length > 600 ? `${truncateUtf16Safe(trimmed, 600)}…` : trimmed;
 }
 
+const CONNECTION_FAILED_MESSAGE =
+  "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
 const TRANSPORT_ERRORS = [
   {
     code: /\beconnrefused\b/i,
     phrases: ["connection refused", "actively refused"],
-    message:
-      "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+    message: CONNECTION_FAILED_MESSAGE,
   },
   {
     code: /\beconnreset\b|\beconnaborted\b|\benetreset\b|\bepipe\b/i,
@@ -281,21 +282,18 @@ const TRANSPORT_ERRORS = [
       "Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
   },
   {
-    code: /\benotfound\b|\beai_again\b/i,
-    phrases: ["getaddrinfo", "no such host", "dns"],
-    message:
-      "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
-  },
-  {
-    code: /\benetunreach\b|\behostunreach\b|\behostdown\b/i,
-    phrases: ["network is unreachable", "host is unreachable"],
-    message:
-      "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
-  },
-  {
-    phrases: ["fetch failed", "connection error", "network request failed"],
-    message:
-      "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+    code: /\benotfound\b|\beai_again\b|\benetunreach\b|\behostunreach\b|\behostdown\b/i,
+    phrases: [
+      "getaddrinfo",
+      "no such host",
+      "dns",
+      "network is unreachable",
+      "host is unreachable",
+      "fetch failed",
+      "connection error",
+      "network request failed",
+    ],
+    message: CONNECTION_FAILED_MESSAGE,
   },
 ];
 
@@ -314,7 +312,7 @@ export function formatTransportErrorCopy(raw: string): string | undefined {
     }
   }
   if (raw.includes("网络错误") || raw.includes("网络异常") || raw.includes("连接错误")) {
-    return "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
+    return CONNECTION_FAILED_MESSAGE;
   }
   return undefined;
 }

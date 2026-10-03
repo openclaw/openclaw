@@ -507,6 +507,8 @@ export function createChatSendReplyDispatch(params: {
         content: persistedContentForAppend,
         expectedGeneration: assistantTranscriptRewriteState.generation,
         mediaUrls: sourceMediaUrls,
+        rejectedMediaCount: mediaFailures.filter((failure) => failure.code === "invalid-reference")
+          .length,
         scope: transcriptScope,
       });
       if (indexedRewrite) {

@@ -144,11 +144,13 @@ export async function loadAgentEntryPatchOperations() {
 
 export async function loadAgentCompoundOperations() {
   const turn = await import("../config/sessions/session-turn.worker.js");
+  const reset = await import("../config/sessions/session-reset.worker.js");
   const predicates = await import("../config/sessions/session-turn-predicate.js");
   await predicates.prepareSessionTurnPredicates();
   return {
     "session.turn.prepare": turn.prepareSessionTurn,
     "session.turn.commit": turn.commitSessionTurn,
+    "session.lifecycle.reset": reset.commitSessionReset,
   } satisfies Handlers;
 }
 
@@ -237,9 +239,18 @@ export async function loadAgentReactionOperations() {
 }
 
 export async function loadAgentPendingInputOperations() {
+  const pending = await import("../config/sessions/session-pending-input-operations.kernel.js");
   const kernel = await import("../config/sessions/session-pending-input-withdrawal.worker.js");
   const history = await import("../config/sessions/session-pending-input-history-reconcile.js");
   return {
+    "session.pendingInputs.read": (
+      input: Parameters<typeof pending.readPendingInput>[1],
+      { open },
+    ) => pending.readPendingInput(open(), input),
+    "session.pendingInputs.mutate": (
+      input: Parameters<typeof pending.mutatePendingInput>[0],
+      context,
+    ) => pending.mutatePendingInput(input, context, deferSqliteWorkerCommitReceipt),
     "session.pendingInputs.interruptHistory": (
       input: Parameters<typeof history.interruptPendingInputHistoryInDatabase>[2],
       { open, options, admit },

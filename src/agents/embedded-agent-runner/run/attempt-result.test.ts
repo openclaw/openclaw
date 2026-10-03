@@ -196,6 +196,8 @@ describe("attempt result projection", () => {
     const fixture = createResultFixture({
       currentAttemptCompletedAssistant: assistant,
       hasSuccessfulModelResponse: true,
+      successfulNestedToolNames: ["read", "memory_search"],
+      latestMcpAppChannelView: { viewId: "view-latest" },
     });
     fixture.settled.lastAssistant = assistant;
     fixture.prompt.finalPromptText = "settled prompt";
@@ -229,6 +231,8 @@ describe("attempt result projection", () => {
     expect(result.lastAssistant).toBe(assistant);
     expect(result.currentAttemptCompletedAssistant).toBe(assistant);
     expect(result.hasSuccessfulModelResponse).toBe(true);
+    expect(result.successfulNestedToolNames).toEqual(["read", "memory_search"]);
+    expect(result.latestMcpAppChannelView).toEqual({ viewId: "view-latest" });
     expect(result.messagesSnapshot).toBe(messages);
     expect(result.finalPromptText).toBe("settled prompt");
     expect(result.attemptUsage).toBeUndefined();
@@ -264,21 +268,14 @@ describe("attempt result projection", () => {
     });
   });
 
-  it("does not turn an uncorroborated messaging flag into terminal output", () => {
-    const recordEvent = vi.fn<EmbeddedRunAttemptTrajectoryRecorder["recordEvent"]>();
-    const result = completeResult({
-      didSendViaMessagingTool: true,
-      trajectoryRecorder: { recordEvent, flush: async () => {} },
-    });
-
-    expect(result.didSendViaMessagingTool).toBe(true);
-    expect(recordEvent).toHaveBeenCalledWith(
-      "session.ended",
-      expect.objectContaining({ status: "error", terminalError: "non_deliverable_terminal_turn" }),
-    );
-  });
-
   it.each([
+    {
+      label: "an uncorroborated messaging flag",
+      assistant: undefined,
+      didSendViaMessagingTool: true,
+      expectedStatus: "error",
+      terminalError: "non_deliverable_terminal_turn",
+    },
     {
       label: "a completed refusal",
       assistant: makeAssistantMessageFixture({
@@ -306,16 +303,20 @@ describe("attempt result projection", () => {
     },
   ])(
     "records $label after transcript projection",
-    ({ assistant, expectedStatus, terminalError }) => {
+    ({ assistant, didSendViaMessagingTool, expectedStatus, terminalError }) => {
       const recordEvent = vi.fn<EmbeddedRunAttemptTrajectoryRecorder["recordEvent"]>();
       const result = completeResult({
         currentAttemptCompletedAssistant: assistant,
-        replyOptional: true,
+        replyOptional: !didSendViaMessagingTool,
+        didSendViaMessagingTool,
         trajectoryRecorder: { recordEvent, flush: async () => {} },
       });
 
       expect(result.currentAttemptAssistant).toBeUndefined();
       expect(result.currentAttemptCompletedAssistant).toEqual(assistant);
+      if (didSendViaMessagingTool) {
+        expect(result.didSendViaMessagingTool).toBe(true);
+      }
       expect(recordEvent).toHaveBeenCalledWith(
         "session.ended",
         expect.objectContaining({ status: expectedStatus, terminalError }),
@@ -323,219 +324,127 @@ describe("attempt result projection", () => {
     },
   );
 
-  it.each([
-    {
-      label: "provider socket reset",
-      source: "prompt" as const,
-      error: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
-      expected: true,
-    },
-    {
-      label: "nested provider socket failure",
-      source: "prompt" as const,
-      error: new Error("provider request failed", {
-        cause: Object.assign(new Error("socket closed"), { code: "UND_ERR_SOCKET" }),
-      }),
-      expected: true,
-    },
-    {
-      label: "authentication failure",
-      source: "prompt" as const,
-      error: Object.assign(new Error("401 Unauthorized"), { status: 401 }),
-      expected: false,
-    },
-    {
-      label: "quota exhaustion",
-      source: "prompt" as const,
-      error: Object.assign(new Error("429 insufficient_quota"), { status: 429 }),
-      expected: false,
-    },
-    {
-      label: "policy denial",
-      source: "prompt" as const,
-      error: new Error("content policy violation"),
-      expected: false,
-    },
-    {
-      label: "security denial",
-      source: "prompt" as const,
-      error: Object.assign(new Error("403 Forbidden: security policy denied"), { status: 403 }),
-      expected: false,
-    },
-    {
-      label: "malformed provider response",
-      source: "prompt" as const,
-      error: new SyntaxError("Unexpected token in JSON response"),
-      expected: false,
-    },
-    {
-      label: "openai-completions truncated stream",
-      source: "prompt" as const,
-      error: new Error("Stream ended without finish_reason"),
-      expected: true,
-    },
-    {
-      label: "precheck socket failure",
-      source: "precheck" as const,
-      error: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
-      expected: false,
-    },
-    {
-      label: "compaction socket failure",
-      source: "compaction" as const,
-      error: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
-      expected: false,
-    },
-    {
-      label: "agent hook socket failure",
-      source: "hook:before_agent_run" as const,
-      error: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
-      expected: false,
-    },
-  ])("limits settled-turn recovery after $label to $expected", ({ source, error, expected }) => {
-    const result = completeResult({
-      terminal: { kind: "failed", source, error },
-      messagesSnapshot: settledToolMessages(),
-    });
-
-    expect(Boolean(result.settledTurnFinalizationContext)).toBe(expected);
+  type ResultInput = NonNullable<Parameters<typeof createResultFixture>[0]>;
+  const socketReset = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+  const failed = (
+    error: Error,
+    source: "prompt" | "precheck" | "compaction" | "hook:before_agent_run" = "prompt",
+    timeoutObservation?: "compaction" | "tool_execution",
+  ): ResultInput => ({ terminal: { kind: "failed", source, error, timeoutObservation } });
+  const assistantFailure = (errorMessage: string, errorCode?: string): ResultInput => ({
+    currentAttemptCompletedAssistant: makeAssistantMessageFixture({
+      stopReason: "error",
+      errorMessage,
+      ...(errorCode ? { errorCode } : {}),
+    }),
   });
-
-  it.each([
-    {
-      label: "an opaque WebSocket error",
-      errorMessage: "WebSocket error",
-      errorCode: "ERR_WEBSOCKET_TRANSPORT",
-      expected: true,
-    },
-    {
-      label: "a coded socket failure",
-      errorMessage: "provider request failed",
-      errorCode: "ECONNRESET",
-      expected: true,
-    },
-    {
-      label: "an authentication failure",
-      errorMessage: "invalid API key",
-      errorCode: undefined,
-      expected: false,
-    },
-    {
-      label: "an incomplete completions stream",
-      errorMessage: "Stream ended without finish_reason",
-      errorCode: undefined,
-      expected: true,
-    },
-  ])(
-    "captures settled-turn context from $label reported by the provider assistant=$expected",
-    ({ errorMessage, errorCode, expected }) => {
-      const result = completeResult({
-        currentAttemptCompletedAssistant: makeAssistantMessageFixture({
-          stopReason: "error",
-          errorMessage,
-          ...(errorCode ? { errorCode } : {}),
+  const truncated = failed(new Error("Stream ended without finish_reason"));
+  it.each<[string, ResultInput, boolean]>([
+    ["provider socket reset", failed(socketReset), true],
+    [
+      "nested socket failure",
+      failed(
+        new Error("provider request failed", {
+          cause: Object.assign(new Error("socket closed"), { code: "UND_ERR_SOCKET" }),
         }),
-        messagesSnapshot: settledToolMessages(),
-      });
-
-      expect(Boolean(result.settledTurnFinalizationContext)).toBe(expected);
-    },
-  );
-
-  it.each([
-    {
-      label: "only pre-tool commentary",
-      assistantTexts: ["Checking the post-reboot state."],
-      messagesSnapshot: [
-        makeAssistantMessageFixture({
-          stopReason: "toolUse",
-          errorMessage: undefined,
-          timestamp: 1,
-          content: [
-            { type: "text", text: "Checking the post-reboot state." },
-            { type: "toolCall", id: "call-read", name: "read", arguments: {} },
-          ],
-        }),
-        ...settledToolMessages(),
-        makeAssistantMessageFixture({
-          stopReason: "error",
-          errorMessage: "Stream ended without finish_reason",
-          timestamp: 3,
-          content: [],
-        }),
-      ],
-      expected: true,
-    },
-    {
-      label: "unattributed visible text",
-      assistantTexts: ["here is the answer"],
-      messagesSnapshot: settledToolMessages(),
-      expected: false,
-    },
-    {
-      label: "post-tool authored text",
-      assistantTexts: ["here is the answer"],
-      messagesSnapshot: [
-        ...settledToolMessages(),
-        makeAssistantMessageFixture({
-          stopReason: "stop",
-          errorMessage: undefined,
-          timestamp: 2,
-          content: [{ type: "text", text: "here is the answer" }],
-        }),
-      ],
-      expected: false,
-    },
-  ])(
-    "keeps truncated-stream settled recovery for $label=$expected",
-    ({ assistantTexts, messagesSnapshot, expected }) => {
-      const result = completeResult({
-        terminal: {
-          kind: "failed",
-          source: "prompt",
-          error: new Error("Stream ended without finish_reason"),
-        },
-        assistantTexts,
-        messagesSnapshot,
-      });
-
-      expect(Boolean(result.settledTurnFinalizationContext)).toBe(expected);
-    },
-  );
-
-  it.each(["compaction", "tool_execution"] as const)(
-    "does not authorize settled-turn finalization after a %s timeout observation",
-    (timeoutObservation) => {
-      const result = completeResult({
-        terminal: {
-          kind: "failed",
-          source: "prompt",
-          error: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
-          timeoutObservation,
-        },
-        messagesSnapshot: settledToolMessages(),
-      });
-
-      expect(result.settledTurnFinalizationContext).toBeUndefined();
-    },
-  );
-
-  it.each(["compaction", "tool_execution"] as const)(
-    "does not authorize assistant-reported finalization after a %s timeout observation",
-    (phase) => {
-      const result = completeResult({
+      ),
+      true,
+    ],
+    [
+      "authentication failure",
+      failed(Object.assign(new Error("401 Unauthorized"), { status: 401 })),
+      false,
+    ],
+    [
+      "quota exhaustion",
+      failed(Object.assign(new Error("429 insufficient_quota"), { status: 429 })),
+      false,
+    ],
+    ["policy denial", failed(new Error("content policy violation")), false],
+    [
+      "security denial",
+      failed(Object.assign(new Error("403 Forbidden: security policy denied"), { status: 403 })),
+      false,
+    ],
+    ["malformed response", failed(new SyntaxError("Unexpected token in JSON response")), false],
+    ["truncated stream", truncated, true],
+    ["precheck socket failure", failed(socketReset, "precheck"), false],
+    ["compaction socket failure", failed(socketReset, "compaction"), false],
+    ["agent hook socket failure", failed(socketReset, "hook:before_agent_run"), false],
+    [
+      "assistant WebSocket error",
+      assistantFailure("WebSocket error", "ERR_WEBSOCKET_TRANSPORT"),
+      true,
+    ],
+    [
+      "assistant coded socket failure",
+      assistantFailure("provider request failed", "ECONNRESET"),
+      true,
+    ],
+    ["assistant authentication failure", assistantFailure("invalid API key"), false],
+    ["assistant truncated stream", assistantFailure("Stream ended without finish_reason"), true],
+    [
+      "only pre-tool commentary",
+      {
+        ...truncated,
+        assistantTexts: ["Checking the post-reboot state."],
+        messagesSnapshot: [
+          makeAssistantMessageFixture({
+            stopReason: "toolUse",
+            errorMessage: undefined,
+            timestamp: 1,
+            content: [
+              { type: "text", text: "Checking the post-reboot state." },
+              { type: "toolCall", id: "call-read", name: "read", arguments: {} },
+            ],
+          }),
+          ...settledToolMessages(),
+          makeAssistantMessageFixture({
+            stopReason: "error",
+            errorMessage: "Stream ended without finish_reason",
+            timestamp: 3,
+            content: [],
+          }),
+        ],
+      },
+      true,
+    ],
+    ["unattributed visible text", { ...truncated, assistantTexts: ["here is the answer"] }, false],
+    [
+      "post-tool authored text",
+      {
+        ...truncated,
+        assistantTexts: ["here is the answer"],
+        messagesSnapshot: [
+          ...settledToolMessages(),
+          makeAssistantMessageFixture({
+            stopReason: "stop",
+            errorMessage: undefined,
+            timestamp: 2,
+            content: [{ type: "text", text: "here is the answer" }],
+          }),
+        ],
+      },
+      false,
+    ],
+    ["compaction failure observation", failed(socketReset, "prompt", "compaction"), false],
+    ["tool execution failure observation", failed(socketReset, "prompt", "tool_execution"), false],
+    ...(["compaction", "tool_execution"] as const).map((phase): [string, ResultInput, boolean] => [
+      `assistant ${phase} timeout`,
+      {
+        ...assistantFailure("WebSocket error", "ERR_WEBSOCKET_TRANSPORT"),
         terminal: { kind: "timeout", phase, source: "observation" },
-        currentAttemptCompletedAssistant: makeAssistantMessageFixture({
-          stopReason: "error",
-          errorMessage: "WebSocket error",
-          errorCode: "ERR_WEBSOCKET_TRANSPORT",
-        }),
-        messagesSnapshot: settledToolMessages(),
-      });
-
+      },
+      false,
+    ]),
+  ])("limits settled-turn recovery after %s", (_name, params, expected) => {
+    const result = completeResult({ messagesSnapshot: settledToolMessages(), ...params });
+    if (expected) {
+      expect(Boolean(result.settledTurnFinalizationContext)).toBe(true);
+    } else {
       expect(result.settledTurnFinalizationContext).toBeUndefined();
-    },
-  );
+    }
+  });
 
   it.each([true, false, undefined])(
     "carries yield acknowledgment and owner-recorded message wait (%s) separately from private context",
@@ -725,13 +634,6 @@ describe("attempt result projection", () => {
     ]);
   });
 
-  it("projects successful nested tool names from settled attempt state", () => {
-    expect(
-      completeResult({ successfulNestedToolNames: ["read", "memory_search"] })
-        .successfulNestedToolNames,
-    ).toEqual(["read", "memory_search"]);
-  });
-
   it("projects pending media and voice fields", () => {
     expect(completeResult().toolMediaUrls).toBeUndefined();
     expect(completeResult({ pendingToolMediaReply: { mediaUrls: [" "] } }).toolMediaUrls).toEqual([
@@ -767,14 +669,6 @@ describe("attempt result projection", () => {
         TEST_OPERATIONAL_RUN_INSTANCE,
       ),
     ).toEqual([]);
-  });
-
-  it("projects the latest MCP App channel view without result data", () => {
-    expect(
-      completeResult({
-        latestMcpAppChannelView: { viewId: "view-latest" },
-      }).latestMcpAppChannelView,
-    ).toEqual({ viewId: "view-latest" });
   });
 });
 
@@ -939,34 +833,20 @@ describe("trailing source progress at runtime settlement", () => {
     };
   }
 
-  it("treats progress sent as the last tool batch as the reply", async () => {
-    const { result, finalizerInstruction } = await settleRealLoop([{ tools: ["progress"] }, {}]);
-
-    expect(result.sourceReplyDeliveryState).toBe("delivered");
-    expect(result.messagingToolSentTargets?.map((send) => send.sourceReplyFinal)).toEqual([true]);
-    expect(finalizerInstruction).toBeNull();
-  });
-
-  it("still finalizes when the turn continues after an async progress send", async () => {
-    const { result, finalizerInstruction } = await settleRealLoop([
-      { tools: ["progress"], async: true },
-      { tools: ["read"] },
-      {},
+  it.each<[string, ModelCall[], boolean]>([
+    ["last tool batch", [{ tools: ["progress"] }, {}], true],
+    ["later work", [{ tools: ["progress"], async: true }, { tools: ["read"] }, {}], false],
+    ["shared provider response", [{ tools: ["read", "progress"], async: true }, {}], false],
+  ])("settles source progress with %s", async (_name, calls, delivered) => {
+    const { result, finalizerInstruction } = await settleRealLoop(calls);
+    expect(result.sourceReplyDeliveryState).toBe(delivered ? "delivered" : "missing");
+    expect(result.messagingToolSentTargets?.map((send) => send.sourceReplyFinal)).toEqual([
+      delivered,
     ]);
-
-    expect(result.sourceReplyDeliveryState).toBe("missing");
-    expect(result.messagingToolSentTargets?.map((send) => send.sourceReplyFinal)).toEqual([false]);
-    expect(finalizerInstruction).toContain("did not produce a user-visible answer");
-  });
-
-  it("still finalizes when async work and progress share one provider response", async () => {
-    const { result, finalizerInstruction } = await settleRealLoop([
-      { tools: ["read", "progress"], async: true },
-      {},
-    ]);
-
-    expect(result.sourceReplyDeliveryState).toBe("missing");
-    expect(result.messagingToolSentTargets?.map((send) => send.sourceReplyFinal)).toEqual([false]);
-    expect(finalizerInstruction).toContain("did not produce a user-visible answer");
+    if (delivered) {
+      expect(finalizerInstruction).toBeNull();
+    } else {
+      expect(finalizerInstruction).toContain("did not produce a user-visible answer");
+    }
   });
 });

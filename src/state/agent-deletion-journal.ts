@@ -501,6 +501,31 @@ function updateAgentDeletionJournalPaths(
   }, options);
 }
 
+/** Revoke an attempt while retaining its pending cleanup fence for a later owner. */
+export function handoffAgentDeletionJournalInDatabase(
+  database: OpenClawStateDatabase,
+  agentId: string,
+  operationId: string,
+  retryOperationId: string,
+): boolean {
+  assertAgentDeletionJournalAvailable(database.db);
+  const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
+  const result = executeSqliteQuerySync(
+    database.db,
+    db
+      .updateTable("agent_deletion_journal")
+      .set({ operation_id: retryOperationId })
+      .where("agent_id", "=", normalizeAgentId(agentId))
+      .where("operation_id", "=", operationId)
+      .where("cleanup_completed", "=", 0),
+  );
+  const handedOff = result.numAffectedRows === 1n;
+  if (handedOff) {
+    sessionChanges.emit({ all: true, scope: "stores" }, database.db);
+  }
+  return handedOff;
+}
+
 /** Complete a deletion journal inside a caller-owned shared-state transaction. */
 export function completeAgentDeletionJournalInDatabase(
   database: OpenClawStateDatabase,

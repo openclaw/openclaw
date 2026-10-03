@@ -187,7 +187,7 @@ describe("run-node live Gateway dist fence", () => {
       ],
     },
   ])(
-    "dispatches source-only QA $command before the live dist fence",
+    "keeps source-only QA $command on Node before the live dist fence when Bun is selected",
     async ({ command, reportScript, reportArgs }) => {
       await withTestDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
         await setupTrackedProject(tmp, {
@@ -208,6 +208,7 @@ describe("run-node live Gateway dist fence", () => {
         };
         const exitCode = await runNodeCommand(tmp, {
           args: ["qa", command, ...reportArgs],
+          env: { OPENCLAW_VITEST_RUNTIME: "bun" },
           spawn,
         });
         expect(exitCode).toBe(0);

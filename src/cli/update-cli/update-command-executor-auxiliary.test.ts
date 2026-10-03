@@ -524,7 +524,6 @@ it.each([
   { boundary: "before-launch", change: "requester-revoked" },
   ...(
     [
-      "options-replaced",
       "run-replaced",
       "run-id-changed",
       "executor-replaced",
@@ -548,9 +547,6 @@ it.each([
     const recoveryParams = { root, opts, timeoutMs: 10000 };
     const revoke = () => {
       assert(opts.run);
-      if (change === "options-replaced") {
-        recoveryParams.opts = { run: { ...opts.run } };
-      }
       if (change === "run-replaced") {
         opts.run = { ...opts.run };
       }

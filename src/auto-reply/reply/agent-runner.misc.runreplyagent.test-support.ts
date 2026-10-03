@@ -122,6 +122,7 @@ vi.mock("../../agents/thinking-runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../agents/thinking-runtime.js")>();
   return {
     ...actual,
+    resolveCandidateAgentRuntime: () => "openclaw",
     resolveCandidateThinkingLevel: (
       params: Parameters<typeof actual.resolveCandidateThinkingLevel>[0],
     ) => params.level,

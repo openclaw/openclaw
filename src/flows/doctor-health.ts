@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
@@ -40,7 +39,7 @@ import { withPluginLoadDiagnostics } from "../plugins/load-diagnostics.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { withDeferredDebugProxyCapture } from "../proxy-capture/runtime-deferral.js";
-import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
@@ -50,14 +49,6 @@ const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? messa
 const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? message);
 
 const loadConfigModule = createLazyRuntimeModule(() => import("../config/config.js"));
-
-function stateDirectoryExistsAtDoctorStart(): boolean {
-  try {
-    return fs.statSync(resolveStateDir()).isDirectory();
-  } catch {
-    return false;
-  }
-}
 
 /** Runs the full interactive doctor flow against the provided or default runtime. */
 export async function runDoctorHealthFlow(
@@ -128,28 +119,9 @@ async function runDoctorHealthFlowWithResult(
   resumeCapture?: () => void,
   preCaptureRehearsalRoot?: string,
 ) {
-  const effectiveRuntime = runtime ?? (await import("../runtime.js")).defaultRuntime;
-  const repairRuntime: RuntimeEnv = {
-    ...effectiveRuntime,
-    exit: createNonExitingRuntime().exit,
-  };
-  // Config loading can initialize SQLite-backed state before integrity runs.
-  // Preserve the entry fact so doctor can report that automatic initialization.
-  const stateDirExistedAtStart = stateDirectoryExistsAtDoctorStart();
-  intro("OpenClaw doctor");
-
-  const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
-  const root = await resolveOpenClawPackageRoot({
-    moduleUrl: import.meta.url,
-    argv1: process.argv[1],
-    cwd: process.cwd(),
-  });
-
-  if (options.repair === true || options.yes === true || options.generateGatewayToken === true) {
-    const { assertConfigWriteAllowedInCurrentMode } =
-      await import("../config/config-write-guard.js");
-    assertConfigWriteAllowedInCurrentMode();
-  }
+  const { prepareDoctorHealthFlow } = await import("./doctor-health-startup.js");
+  const { effectiveRuntime, repairRuntime, stateDirExistedAtStart, root } =
+    await prepareDoctorHealthFlow(runtime, options, intro);
   let maintenance: Awaited<
     ReturnType<typeof import("../commands/doctor-maintenance.js").beginDoctorMaintenance>
   >;
@@ -461,6 +433,12 @@ async function runDoctorHealthFlowWithResult(
         return undefined;
       }
       if (options.repair === true || options.yes === true) {
+        const { validateDoctorExternalConfigForStartup } =
+          await import("./doctor-external-config.js");
+        if (!(await validateDoctorExternalConfigForStartup(effectiveRuntime))) {
+          exitCode = 1;
+          return undefined;
+        }
         const { assertDoctorMaintenanceReady } =
           await import("../commands/doctor-maintenance-inspection.js");
         const readiness = await measureGatewayBootstrapStep("doctor.maintenance-ready", () =>

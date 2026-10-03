@@ -121,42 +121,6 @@ const countCalendarDays = (
   return Math.floor((endDayMs - startDayMs) / (24 * 60 * 60 * 1000)) + 1;
 };
 
-function finishCostUsageSummary(params: {
-  daily: Map<string, CostUsageTotals>;
-  totals: CostUsageTotals;
-  startMs: number;
-  endMs: number;
-  formatDay: UsageDayKeyFormatter;
-  refreshing: boolean;
-  cachedFiles: number;
-  staleFiles: number;
-  refreshedAt: number | undefined;
-}): CostUsageSummary {
-  fillMissingDays(params.daily, params.startMs, params.endMs, params.formatDay);
-  const status = params.refreshing
-    ? "refreshing"
-    : params.staleFiles > 0
-      ? params.cachedFiles > 0
-        ? "partial"
-        : "stale"
-      : "fresh";
-  return {
-    updatedAt: Date.now(),
-    days: countCalendarDays(params.startMs, params.endMs, params.formatDay),
-    daily: Array.from(params.daily.entries())
-      .map(([date, bucket]) => Object.assign({ date }, bucket))
-      .toSorted((a, b) => a.date.localeCompare(b.date)),
-    totals: params.totals,
-    cacheStatus: {
-      status,
-      cachedFiles: params.cachedFiles,
-      pendingFiles: params.staleFiles,
-      staleFiles: params.staleFiles,
-      refreshedAt: params.refreshedAt,
-    },
-  };
-}
-
 function includeRemainingRollupScans(
   rows: Iterable<SessionCostUsageRollupRow>,
   pricingFingerprint: string,
@@ -230,21 +194,34 @@ export async function projectCostUsageSummary(
       totals,
     });
   }
-  return finishCostUsageSummary({
-    daily,
-    totals,
-    startMs: params.startMs,
-    endMs: params.endMs,
-    formatDay,
-    refreshing: params.refreshing,
-    cachedFiles,
-    staleFiles,
-    refreshedAt: includeRemainingRollupScans(
-      params.remainingRows,
-      params.pricingFingerprint,
-      latestScan,
+  const refreshedAt = includeRemainingRollupScans(
+    params.remainingRows,
+    params.pricingFingerprint,
+    latestScan,
+  );
+  fillMissingDays(daily, params.startMs, params.endMs, formatDay);
+  const status = params.refreshing
+    ? "refreshing"
+    : staleFiles > 0
+      ? cachedFiles > 0
+        ? "partial"
+        : "stale"
+      : "fresh";
+  return {
+    updatedAt: Date.now(),
+    days: countCalendarDays(params.startMs, params.endMs, formatDay),
+    daily: Array.from(daily, ([date, bucket]) => Object.assign({ date }, bucket)).toSorted((a, b) =>
+      a.date.localeCompare(b.date),
     ),
-  });
+    totals,
+    cacheStatus: {
+      status,
+      cachedFiles,
+      pendingFiles: staleFiles,
+      staleFiles,
+      refreshedAt,
+    },
+  };
 }
 
 export async function projectSessionCostSummaries(

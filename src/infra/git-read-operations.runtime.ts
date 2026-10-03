@@ -26,7 +26,7 @@ export async function executeGitReadOperation(
     case "checkout.revision":
       return readCheckoutGitRevision(operation.input);
     case "checkout.context":
-      return await readCheckoutGitContext(operation.input.root);
+      return await readCheckoutGitContext(operation.input.root, operation.input.githubHost);
     case "checkout.diff":
       return await collectCheckoutDiff(operation.input);
     case "checkout.baseline":

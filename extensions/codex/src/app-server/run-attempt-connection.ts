@@ -5,6 +5,7 @@ import {
   resolveUserPath,
   type FastModeAutoProgressState,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { prepareAgentWorkspaceAttachments } from "openclaw/plugin-sdk/agent-workspace-runtime";
@@ -205,7 +206,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   // Only a durable session row authorizes stable-key ownership. Caller-owned
   // transcripts omit a store target, so classify them against the default store too.
   if (bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
-    const authority = resolveCodexRunSessionBindingAuthority({
+    const authority = await resolveCodexRunSessionBindingAuthority({
       identity: bindingIdentity,
       config: params.config,
       storePath: params.sessionTarget?.storePath,
@@ -234,7 +235,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     | ReturnType<NonNullable<typeof params.hostCapabilities.bindModelExecution>>
     | undefined;
   const assertModelExecutionCurrent = () => modelExecution?.assertCurrent();
-  const { binding: admittedBinding, assertCurrent: assertBindingCurrent } =
+  const { binding: admittedBinding, authority: bindingAuthority } =
     await resolveCodexSessionBinding({
       reclaimStale: true,
       bindingStore,
@@ -249,9 +250,10 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         : undefined,
     });
   const assertCurrent = () => {
-    assertBindingCurrent();
+    bindingAuthority.assertCurrent();
     assertModelExecutionCurrent();
   };
+  const authority = createNativeSessionBindingAuthority(bindingAuthority.lineage, assertCurrent);
   let startupBinding = admittedBinding;
   preDynamicStartupStages.mark("read-binding");
   const usesSupervisionConnection = startupBinding?.connectionScope === "supervision";
@@ -469,6 +471,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     const startupBindingBeforeRotation = startupBinding;
     const startupBindingResolution = await rotateOversizedCodexAppServerStartupBinding({
       assertCurrent,
+      authority,
       binding: startupBinding,
       bindingStore,
       identity: bindingIdentity,
@@ -576,6 +579,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         return note;
       },
       assertCurrent,
+      authority,
+      withCurrent: authority.withCurrent,
+      assertLegacyCurrent: authority.assertLegacyCurrent,
       assertModelExecutionCurrent,
       bindModelExecution,
       releaseModelExecution,

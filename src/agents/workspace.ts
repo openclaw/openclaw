@@ -8,6 +8,7 @@ import type { ChatType } from "../channels/chat-type.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import { isRootFileMissingFailure } from "../infra/boundary-file-read.js";
 import { pathExists } from "../infra/fs-safe.js";
+import { retainMutationAuthority } from "../infra/mutation-authority.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -551,12 +552,20 @@ type EnsuredAgentWorkspace = {
   identityPathCreated?: boolean;
 };
 
+function captureWorkspacePreparationGuard(guard?: WorkspaceStateGuard) {
+  return (
+    guard && {
+      ...guard,
+      recoveryHoldPredicate: structuredClone(guard.recoveryHoldPredicate),
+    }
+  );
+}
+
 export async function ensureAgentWorkspace(
   params?: EnsureAgentWorkspaceParams,
 ): Promise<EnsuredAgentWorkspace> {
   const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
   const dir = resolveUserPath(rawDir);
-  const guard = params?.guard;
   const captured = {
     ...params,
     dir,
@@ -564,10 +573,7 @@ export async function ensureAgentWorkspace(
     skipOptionalBootstrapFiles: params?.skipOptionalBootstrapFiles && [
       ...params.skipOptionalBootstrapFiles,
     ],
-    guard: guard && {
-      ...guard,
-      recoveryHoldPredicate: structuredClone(guard.recoveryHoldPredicate),
-    },
+    guard: captureWorkspacePreparationGuard(params?.guard),
   } satisfies EnsureAgentWorkspaceParams;
   if (getAgentWorkspaceAccess(dir)) {
     return ensureAgentWorkspaceOwned(captured);
@@ -592,20 +598,37 @@ export async function ensureSandboxWorkspace(
   seedFrom?: string,
   skipBootstrap?: boolean,
   skipOptionalBootstrapFiles?: OptionalBootstrapFileName[],
+  guard?: WorkspaceStateGuard,
 ): Promise<void> {
   const dir = resolveUserPath(workspaceDir);
   const seed = seedFrom ? resolveUserPath(seedFrom) : undefined;
   const skipOptional = skipOptionalBootstrapFiles && [...skipOptionalBootstrapFiles];
+  const capturedGuard = captureWorkspacePreparationGuard(guard);
+  const beforeMutation = createWorkspaceFileMutationGuard(capturedGuard);
+  const assertCallerCurrent = beforeMutation ? retainMutationAuthority(beforeMutation) : undefined;
   await runWorkspacePreparation(dir, async (assertFilesystem) => {
+    const assertHost = () => {
+      capturedGuard?.assertHost?.();
+      assertFilesystem();
+    };
+    const assertCurrent = () => {
+      assertCallerCurrent?.();
+      assertFilesystem();
+    };
+    assertHost();
     const { copyWorkspaceBootstrapFiles } = await import("./workspace-bootstrap-copy.js");
-    assertFilesystem();
-    await copyWorkspaceBootstrapFiles(dir, seed, assertFilesystem);
+    assertHost();
+    await copyWorkspaceBootstrapFiles(dir, seed, assertCurrent);
     await ensureAgentWorkspaceOwned({
       dir,
       ensureBootstrapFiles: !skipBootstrap,
       skipOptionalBootstrapFiles: skipOptional,
-      guard: { assertHost: assertFilesystem },
+      guard: {
+        ...capturedGuard,
+        assertHost,
+      },
     });
+    assertCurrent();
   });
 }
 

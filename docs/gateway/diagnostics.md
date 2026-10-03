@@ -429,6 +429,17 @@ and samples. Each node's `selfSize` is the estimated allocation bytes at that ca
 site; sum its descendants for inclusive
 bytes. Samples link to nodes by `nodeId`.
 
+`heapSpacesBefore` and `heapSpacesAfter` contain the main isolate's V8 heap-space
+statistics at the same boundaries as the memory readings: `space_name`,
+`space_used_size`, `space_size`, `space_available_size`, and `physical_space_size`
+(sizes in bytes). Compare entries by name to locate growth in old, large-object,
+code, or other spaces. On Node, the [Prometheus exporter](/gateway/prometheus)
+also exposes `openclaw_heap_space_bytes{space="<space_name>",stat="used|size|available|physical"}`
+from the existing 30-second diagnostic memory heartbeat, with the same idle
+sample suppression, never per scrape. Names come from V8's finite space set,
+including spaces added by future V8 versions; each space contributes four gauges
+under the exporter's existing series cap.
+
 Heap and CPU profiles label dependency frames as `[dep:<pkg>]` with URL
 `node_modules/<pkg>`, including scoped packages and pnpm layouts; symbols,
 versions, filenames, and absolute paths stay hidden. URLs with query or fragment
@@ -543,6 +554,22 @@ Worker for five minutes, reusing it only when its runtime entry and heap limit
 match. Warm task workers still collect released payloads in place; critical
 pressure, cancellation, rotation, and shutdown retain their existing cleanup
 paths. No configuration setting is needed.
+
+## RPC response size and heap changes
+
+The [Prometheus exporter](/gateway/prometheus) records
+`openclaw_gateway_rpc_response_bytes` for each encoded JSON response frame accepted
+by the WebSocket sender (UTF-8 bytes, excluding transport framing/compression),
+with power-of-two buckets from 1 KiB to 64 MiB. Slow-response journal lines include
+`bytes=` for the same frame. `openclaw_gateway_rpc_handler_heap_delta_bytes` samples
+`process.memoryUsage().heapUsed` at request start and dispatch finish on the main
+thread only, using signed buckets around zero. A method with high heap delta per
+call is materializing large graphs on the main thread. Treat this as an indicative
+transient-allocation signal, not exact attribution: concurrent requests and GC
+also affect it, GC can make it negative, and worker heaps are excluded. Use bucket
+counts or quantiles; the signed `_sum` can decrease, so `rate()` on that sum is not
+valid. Both histograms use registered method labels and the existing exporter cap,
+without new configuration; disabled or uninterested diagnostics skip heap sampling.
 
 ## Related
 

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import {
   clearActiveEmbeddedRun,
   isEmbeddedAgentRunActive,
@@ -229,7 +230,7 @@ describe("Gateway creation preparation", () => {
       const scope = { agentId: target.agentId, sessionKey: key, storePath: target.storePath };
       const entered = createDeferredCore();
       const rotate = createDeferredCore();
-      const mutation = runExclusiveSessionLifecycleMutation({
+      const mutation = runExclusiveSessionLifecycleMutation("create", {
         scope: target.storePath,
         identities: [key, first.entry.sessionId],
         run: async () => {
@@ -243,9 +244,23 @@ describe("Gateway creation preparation", () => {
         ok: true as const,
         value: { sessionRoot: state.path("worktree") },
       }));
-      const adoption = createGatewaySession({ ...common, prepareLifecycle });
-      rotate.resolve();
+      const lifecycleAdmission = createDeferredCore();
+      const adoption = createGatewaySession({
+        ...common,
+        prepareLifecycle,
+        onPhase: (phase) => {
+          if (phase === "lifecycleAdmission") {
+            lifecycleAdmission.resolve();
+          }
+        },
+      });
       try {
+        await awaitGateBeforeSettlement(
+          lifecycleAdmission.promise,
+          adoption,
+          "Session adoption settled before lifecycle admission",
+        );
+        rotate.resolve();
         await mutation;
         expect(await adoption).toMatchObject({
           ok: false,

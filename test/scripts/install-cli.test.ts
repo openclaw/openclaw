@@ -388,33 +388,26 @@ fi
     const dynamicValue = `quote"\\café项目lobster🦞${String.fromCharCode(
       ...Array.from({ length: 31 }, (_, index) => index + 1),
     )}end`;
-    const repo = join(root, dynamicValue);
-    const legacyDir = join(repo, "Peekaboo");
     const fakeNode = join(root, "node");
-    mkdirSync(legacyDir, { recursive: true });
     writeFileSync(fakeNode, '#!/bin/bash\nprintf "%s" "$EVENT_VALUE"\n');
     chmodSync(fakeNode, 0o755);
 
     const success = runInstallCliShell(
       [
         "JSON=1",
-        'cleanup_legacy_submodules "$REPO"',
         "try_link_usable_node_runtime_from_path() { return 0; }",
         `node_bin() { printf '%s\\n' ${JSON.stringify(fakeNode)}; }`,
         "install_alpine_node",
         'emit_json done version "$EVENT_VALUE"',
       ].join("\n"),
-      { EVENT_VALUE: dynamicValue, REPO: repo },
+      { EVENT_VALUE: dynamicValue },
     );
 
     expect(success.status, success.stderr || success.stdout).toBe(0);
-    expect(existsSync(legacyDir)).toBe(false);
     const successLines = success.stdout.trimEnd().split("\n");
-    expect(successLines).toHaveLength(5);
+    expect(successLines).toHaveLength(3);
     const successEvents = successLines.map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(successEvents).toEqual([
-      { event: "step", name: "legacy-submodule", status: "start", path: legacyDir },
-      { event: "step", name: "legacy-submodule", status: "ok", path: legacyDir },
       { event: "step", name: "node", status: "start", method: "apk" },
       { event: "step", name: "node", status: "ok", method: "system", version: dynamicValue },
       { event: "done", ok: true, version: dynamicValue },
@@ -494,7 +487,6 @@ fi
         [[ "$1" == "$target" && "$2" == "main" ]] || return 1
         GIT_REF_KIND=moving
       }
-      cleanup_legacy_submodules() { [[ "$1" == "$target" ]]; }
       ensure_pnpm_git_prepare_allowlist() { [[ "$1" == "$target" ]]; }
       ensure_pnpm() { [[ "$1" == "$target" ]]; }
       run_pnpm() {
@@ -904,7 +896,6 @@ fi
                 "preflight_fresh_git_disk_space() { :; }",
                 "ensure_pnpm() { :; }",
                 "ensure_pnpm_git_prepare_allowlist() { :; }",
-                "cleanup_legacy_submodules() { :; }",
                 "resolve_git_openclaw_ref() { printf 'main\\n'; }",
                 "checkout_git_openclaw_ref() { :; }",
                 "git_install_lockfile_flag() { printf '%s\\n' '--no-frozen-lockfile'; }",

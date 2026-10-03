@@ -263,14 +263,8 @@ function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
 }
 
 /**
- * Canonical workspace root of a session that lives on this Gateway's own disk.
- * Workspace identity surfaces must name the same directory the file routes
- * open, so they read it from here instead of re-deriving the precedence.
- *
- * An exec-node session's directory only exists on the remote host, while the
- * precedence below falls back to the local agent workspace — returning that
- * would describe the wrong machine. `sessions.files.reveal` refuses the same
- * case; callers here get "no local root" and their own absent-workspace path.
+ * Reuse file-route workspace precedence, excluding remote-owned roots.
+ * Exec-node sessions can otherwise fall back to a local agent directory.
  */
 export function resolveLocalSessionWorkspaceRoot(params: {
   sessionKey: string;

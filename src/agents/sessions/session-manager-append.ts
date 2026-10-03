@@ -16,6 +16,7 @@ import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/
 import type { Message } from "../../llm/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { readNestedToolActivity } from "../../sessions/nested-tool-activity.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { copyCodeModeSourceAppendOptions } from "../transcript-code-mode-source.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
@@ -300,14 +301,14 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       }
       // A native SDK append can publish a later view before the worker receipt arrives.
       return {
-        entry: {
+        entry: freezeJsonSnapshot({
           ...entry,
           id: committed.result?.adoptedMessageId ?? entry.id,
           parentId:
             committed.result?.effectiveParentId !== undefined
               ? committed.result.effectiveParentId
               : entry.parentId,
-        },
+        }),
         anchor: committed.result?.anchor,
         lifecycleRevision: committed.result?.lifecycleRevision,
         appended: committed.result?.appended ?? true,
@@ -408,6 +409,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       }
     }
     this.pendingDeliberateAppend = false;
+    freezeJsonSnapshot(canonicalEntry);
     return {
       entry: canonicalEntry,
       anchor: persistenceResult?.anchor,

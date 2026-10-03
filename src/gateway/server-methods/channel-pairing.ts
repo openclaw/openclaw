@@ -21,6 +21,7 @@ import { hasConfiguredCommandOwners } from "../../commands/doctor-command-owner.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bootstrapCommandOwnerFromPairing } from "../../pairing/command-owner.js";
 import {
+  approveChannelPairingCode,
   approveChannelPairingRequest,
   CHANNEL_PAIRING_PENDING_MAX,
   CHANNEL_PAIRING_PENDING_TTL_MS,
@@ -29,8 +30,9 @@ import {
   resolveChannelPairingRequestId,
 } from "../../pairing/pairing-store.js";
 import { formatForLog } from "../ws-log.js";
+import { captureLocalStateMutationGuard } from "./local-state-owner.js";
 import { respondUnavailable, respondUnavailableOnThrow } from "./response.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 type PairingAccount = {
@@ -192,11 +194,54 @@ function respondPairingFailure(respond: RespondFn, error: unknown): void {
   );
 }
 
+function capturePairingCliGuard(expectedOwnerId: string, opts: GatewayRequestHandlerOptions) {
+  if (!opts.client?.connect.scopes?.includes("operator.admin")) {
+    opts.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.FORBIDDEN, "missing scope: operator.admin", {
+        details: { mutationAccepted: false },
+      }),
+    );
+    return null;
+  }
+  try {
+    return captureLocalStateMutationGuard(expectedOwnerId, opts);
+  } catch (error) {
+    opts.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, formatForLog(error), {
+        details: { reason: "STATE_OWNER_CHANGED", mutationAccepted: false },
+        retryable: false,
+      }),
+    );
+    return null;
+  }
+}
+
 export const channelPairingHandlers: GatewayRequestHandlers = {
   "channels.pairing.list": defineValidatedGatewayHandler(
     "channels.pairing.list",
     validateChannelsPairingListParams,
-    async ({ params, respond, context }) => {
+    async (opts) => {
+      const { params, respond, context } = opts;
+      if ("format" in params) {
+        const assertCurrent = capturePairingCliGuard(params.expectedOwnerId, opts);
+        if (!assertCurrent) {
+          return;
+        }
+        await respondUnavailableOnThrow(respond, async () => {
+          const requests = await listChannelPairingRequests(
+            params.channel,
+            process.env,
+            params.accountId,
+            assertCurrent,
+          );
+          respond(true, requests, undefined);
+        });
+        return;
+      }
       try {
         const cfg = context.getRuntimeConfig();
         const accounts = await listPairingAccounts({
@@ -235,7 +280,24 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
   "channels.pairing.approve": defineValidatedGatewayHandler(
     "channels.pairing.approve",
     validateChannelsPairingApproveParams,
-    async ({ params, respond, context }) => {
+    async (opts) => {
+      const { params, respond, context } = opts;
+      if ("code" in params) {
+        const assertCurrent = capturePairingCliGuard(params.expectedOwnerId, opts);
+        if (!assertCurrent) {
+          return;
+        }
+        await respondUnavailableOnThrow(respond, async () => {
+          const approved = await approveChannelPairingCode({
+            channel: params.channel,
+            code: params.code,
+            accountId: params.accountId,
+            assertCurrent,
+          });
+          respond(true, approved, undefined);
+        });
+        return;
+      }
       let cfg: OpenClawConfig;
       let account: PairingAccount | null;
       try {

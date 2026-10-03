@@ -1,4 +1,5 @@
 import { execFile, execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
@@ -135,7 +136,9 @@ process.exit(result.status ?? 1);
   const { directory } = JSON.parse(inspection.stdout) as { directory: string };
   return {
     directory,
+    env,
     home,
+    input,
     repository,
     git,
     witness,
@@ -233,6 +236,37 @@ describe("public repository project seeds", () => {
     expect(await fs.readFile(f.witness, "utf8")).toBe("fetch\n");
     await expect(fs.stat(f.codeWitness)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(f.askpassWitness)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("installs an enterprise repository pack without contacting its credentialed origin", async () => {
+    const f = await fixture();
+    const pack = execFileSync("git", ["-C", f.repository, "pack-objects", "--stdout", "--revs"], {
+      input: `${f.baseCommit}\n`,
+      env: f.env,
+    });
+    await fs.writeFile(path.join(f.directory, "base.pack"), pack);
+    const enterpriseUrl = "https://ghe.example.test/acme/private-repo.git";
+    const result = spawnSync(
+      "sh",
+      [
+        "-c",
+        createProjectSeedScript({
+          ...f.input,
+          pack: {
+            directory: f.directory,
+            bytes: pack.byteLength,
+            sha256: createHash("sha256").update(pack).digest("hex"),
+            repositoryUrl: enterpriseUrl,
+          },
+        }),
+      ],
+      { encoding: "utf8", timeout: 30_000, env: f.env },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ ready: true });
+    expect(f.git(f.seed, ["remote", "get-url", "origin"])).toBe(enterpriseUrl);
+    await expect(fs.stat(f.witness)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("returns a bounded generic failure and removes staging when public fetch emits excessive diagnostics", async () => {

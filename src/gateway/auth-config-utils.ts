@@ -3,7 +3,7 @@
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
-import { resolveRequiredConfiguredSecretRefInputString } from "./resolve-configured-secret-input-string.js";
+import { resolveCanonicalRequiredConfiguredSecretRefInputString } from "./resolve-configured-secret-input-string.js";
 import {
   assignResolvedGatewaySecretInput,
   readGatewaySecretInputValue,
@@ -90,7 +90,7 @@ async function resolveGatewayAuthSecretRefValue(
   if (!shouldResolveGatewayAuthSecretRef(params, path)) {
     return undefined;
   }
-  const value = await resolveRequiredConfiguredSecretRefInputString({
+  const value = await resolveCanonicalRequiredConfiguredSecretRefInputString({
     config: params.cfg,
     env: params.env,
     value: readGatewaySecretInputValue(params.cfg, path),

@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDefaultCronStaggerMs } from "../cron/stagger.js";
 import type { CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   openExistingOpenClawStateDatabaseReadOnly,
   openOpenClawStateDatabase,
@@ -244,14 +245,6 @@ function collectInstallFindings(
   return findings;
 }
 
-function tableExists(db: DatabaseSync, name: string): boolean {
-  return Boolean(
-    db /* sqlite-allow-raw: read-only Claw doctor table-existence probe with bound table name. */
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get(name),
-  );
-}
-
 function orphanedAgentIds(options: OpenClawStateDatabaseOptions): string[] {
   const { db } = openOpenClawStateDatabase(options);
   const installed = new Set<string>();
@@ -314,14 +307,14 @@ export async function collectClawStateHealthFindings(
   }
   let database: OpenClawStateDatabase | undefined;
   try {
-    database = await openExistingOpenClawStateDatabaseReadOnly(options);
+    database = await openExistingOpenClawStateDatabaseReadOnly({
+      ...options,
+      requireCanonicalSchema: true,
+    });
     if (!database) {
       return [];
     }
     const orphanedRefs = orphanedAgentIds({ ...options, database, readOnly: true });
-    if (!tableExists(database.db, "claw_installs")) {
-      return orphanedRefs.map(orphanedReferenceFinding);
-    }
     let sourceMcpServers = options.sourceMcpServers ?? {};
     if (hasClawMcpServerRefs(database.db) && !options.sourceMcpServers) {
       const listed = await (options.listMcpServers ?? listConfiguredMcpServers)();

@@ -1,6 +1,7 @@
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { NODE_WORKER_BUNDLE_INSTALL_COMMAND } from "../../infra/node-commands.js";
+import { notifyListeners } from "../../shared/listeners.js";
 import {
   parseNodeWorkerBundleInstallResult,
   type NodeWorkerBundleInstallResult,
@@ -60,13 +61,6 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
   const now = options.now ?? Date.now;
   const active = new Map<string, ActiveInstall>();
   let version = 0;
-  const notifyProgress = (listener: () => void) => {
-    try {
-      listener();
-    } catch {
-      // Run-progress observers do not own installation success.
-    }
-  };
   const publish = (entry: ActiveInstall, environmentIds = entry.observation.environmentIds) => {
     entry.lastPublicationAtMs = now();
     try {
@@ -74,7 +68,7 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
     } catch {
       // Session projection observers do not own installation success.
     }
-    entry.progressListeners.forEach(notifyProgress);
+    notifyListeners(entry.progressListeners, undefined);
   };
   const install: GatewayNodeWorkerBundleInstall = async (params) => {
     let startedAtMs = now();
@@ -153,7 +147,7 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
         publish(entry);
       } else if (progressListener) {
         // Joining an environment's in-flight install is progress even without a new publication.
-        notifyProgress(progressListener);
+        notifyListeners([progressListener], undefined);
       }
       const currentEntry = entry;
       startedAtMs = currentEntry.observation.startedAtMs;

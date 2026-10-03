@@ -14,6 +14,15 @@ extension ChatSessionSidebarModel {
             policy: .preserveBareKeys)
     }
 
+    private static func sidebarKey(_ key: String, agentID: String?) -> String {
+        let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Bare sentinels share their wire key across agents; ordinary qualified keys stay distinct.
+        if let agentID, ["main", "global"].contains(key.lowercased()) {
+            return "\(agentID.lowercased())\u{0}\(key.lowercased())"
+        }
+        return self.sidebarKey(key)
+    }
+
     static func sidebarKey(_ key: String) -> String {
         // ui/src/lib/sessions/session-key.ts:93,347 preserves opaque channel identifiers.
         let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -73,14 +82,20 @@ extension ChatSessionSidebarModel {
             allowedAgentIDs.map { Self.sidebarAgentID(row).map($0.contains) == true } ?? true
         }
         let admittedRoots = roots.filter(inScope)
-        let mains = Set(mainKeys.map(self.sidebarKey))
+        func identity(_ row: OpenClawChatSessionEntry) -> String {
+            Self.sidebarKey(row.key, agentID: Self.sidebarAgentID(row))
+        }
+        let mains = Set(mainKeys.map { Self.sidebarKey($0) }).union(rows.filter {
+            mainKeys.contains($0.key)
+        }.map(identity))
+        let selectedID = Self.sidebarKey(selectedKey, agentID: options.selectedAgentID)
         // ui/src/components/app-sidebar-session-archive-visibility.ts:57: active windows cannot exclude archives.
         let membership = options.status == .active ? Dictionary(
-            membership.map { (self.sidebarKey($0.key), Set($0.value.map(self.sidebarKey))) },
+            membership.map { (self.sidebarKey($0.key), Set($0.value.map { self.sidebarKey($0) })) },
             uniquingKeysWith: { $0.union($1) }) : [:]
         // Gateway row admission requires agent-qualified ordinary keys; child reads exclude bare sentinels.
         // ui/src/components/app-sidebar-session-navigation-logic.ts:424 uses the same canonical-key index.
-        let byKey = Dictionary(rows.map { (self.sidebarKey($0.key), $0) }, uniquingKeysWith: { _, last in last })
+        let byKey = Dictionary(rows.map { (identity($0), $0) }, uniquingKeysWith: { _, last in last })
         func independentlyPlaced(_ row: OpenClawChatSessionEntry) -> Bool {
             !Self.isSidebarRun(row.key) &&
                 (row.pinned == true || ChatPayloadDecoding.trimmedNonEmptyString(row.category) != nil)
@@ -94,11 +109,13 @@ extension ChatSessionSidebarModel {
                row.parentSessionId == nil, row.spawnedBy == nil, row.forkSource == nil,
                row.forkedFromParent != true, !Self.isSidebarRun(row.key), mains.contains(Self.sidebarKey(key))
             { return nil }
-            return Self.sidebarKey(key)
+            let ownedKey = Self.sidebarKey(key, agentID: row.flatMap(Self.sidebarAgentID))
+            // Unlisted Home reads return cross-agent children linked by the literal Gateway parent key.
+            return byKey[ownedKey] == nil ? Self.sidebarKey(key) : ownedKey
         }
         let (childKeys, listedParents) = self.sidebarChildKeys(
             rows: rows, byKey: byKey, membership: membership, parent: parent)
-        let rootKeys = Set(admittedRoots.map { Self.sidebarKey($0.key) })
+        let rootKeys = Set(admittedRoots.map(identity))
         var reachable = rootKeys.union(excludesMain ? mains : [])
         if let lineageRootKey { reachable.insert(Self.sidebarKey(lineageRootKey)) }
         var pending = Array(reachable)
@@ -122,9 +139,9 @@ extension ChatSessionSidebarModel {
                 if Self.isSidebarRun(child) { pending.append(child) } else { promoted.insert(child) }
             }
         }
-        var candidates = admittedRoots.map { byKey[Self.sidebarKey($0.key)] ?? $0 }
-        for row in rows where !rootKeys.contains(Self.sidebarKey(row.key)) && visible(row) && inScope(row) {
-            let key = Self.sidebarKey(row.key)
+        var candidates = admittedRoots.map { byKey[identity($0)] ?? $0 }
+        for row in rows where !rootKeys.contains(identity(row)) && visible(row) && inScope(row) {
+            let key = identity(row)
             // ui/src/components/app-sidebar-agent-session-rows.ts:152 admits routed ancestry outside discovery toggles.
             if row.key == lineageRootKey || (options.includes(row) &&
                 (promoted.contains(key) || (reachable.contains(key) && independentlyPlaced(row))))
@@ -136,12 +153,12 @@ extension ChatSessionSidebarModel {
         // Web navigation keeps spawned conversations under their parent unless curated or explicitly routed.
         // ui/src/lib/sessions/navigation.ts:204; a missing parent alone does not admit an ordinary root.
         candidates = candidates.filter {
-            let key = Self.sidebarKey($0.key)
+            let key = identity($0)
             return seen.insert(key).inserted && !Self.isSidebarRun(key) && !(excludesMain && mains.contains(key)) &&
                 ($0.spawnedBy == nil || independentlyPlaced($0) || promoted.contains(key) ||
-                    key == Self.sidebarKey(selectedKey) || $0.key == lineageRootKey)
+                    key == selectedID || $0.key == lineageRootKey)
         }
-        let candidateKeys = Set(candidates.map { Self.sidebarKey($0.key) })
+        let candidateKeys = Set(candidates.map(identity))
         var nested = Set<String>(), builtKeys = Set<String>()
         // ui/src/components/app-sidebar-session-ownership.ts:81 promotes matching children through excluded owners.
         func matchingOwner(_ node: Node) -> [Node] {
@@ -150,7 +167,7 @@ extension ChatSessionSidebarModel {
         func build(_ row: OpenClawChatSessionEntry, ancestors: Set<String>) -> Node {
             var row = row
             row.agentId = row.agentId ?? Self.sidebarAgentID(row)
-            let key = Self.sidebarKey(row.key)
+            let key = identity(row)
             builtKeys.insert(key)
             let ancestors = ancestors.union([key])
             let keys = row.isArchived ? [] : (childKeys[key] ?? []).filter {
@@ -162,7 +179,7 @@ extension ChatSessionSidebarModel {
             }
             // ui/src/components/app-sidebar-session-tree.ts:127 folds runs, retaining persistent descendants and reads.
             let children = descendants.flatMap { Self.isSidebarRun($0.id) ? $0.children : [$0] }
-            nested.formUnion(children.map { Self.sidebarKey($0.id) })
+            nested.formUnion(children.map { identity($0.session) })
             let runs = descendants.filter { Self.isSidebarRun($0.id) }
             // ui/src/components/app-sidebar-session-ownership.ts:86 retains summaries when filtering navigation.
             let folded = descendants.filter {
@@ -191,13 +208,13 @@ extension ChatSessionSidebarModel {
         }
         let roots = candidates.filter {
             guard !independentlyPlaced($0),
-                  let key = parent($0, listed: listedParents[Self.sidebarKey($0.key)]) else { return true }
+                  let key = parent($0, listed: listedParents[identity($0)]) else { return true }
             return Self.isSidebarRun(key) || !candidateKeys.contains(key)
         }
         // Keep a deterministic entry into malformed cycles instead of losing every selectable row.
         var built = roots.map { build($0, ancestors: []) }
-        for row in candidates where !builtKeys.contains(Self.sidebarKey(row.key)) {
-            var cursor: String? = Self.sidebarKey(row.key), chain = Set<String>()
+        for row in candidates where !builtKeys.contains(identity(row)) {
+            var cursor: String? = identity(row), chain = Set<String>()
             while let key = cursor, candidateKeys.contains(key), byKey[key]?.isArchived != true {
                 if !chain.insert(key).inserted { built.append(build(row, ancestors: []))
                     break
@@ -205,12 +222,12 @@ extension ChatSessionSidebarModel {
                 cursor = parent(byKey[key], listed: listedParents[key])
             }
         }
-        if let selected = candidates.first(where: { Self.sidebarKey($0.key) == Self.sidebarKey(selectedKey) }),
-           !builtKeys.contains(Self.sidebarKey(selected.key)) { built.insert(build(selected, ancestors: []), at: 0) }
+        if let selected = candidates.first(where: { identity($0) == selectedID }),
+           !builtKeys.contains(identity(selected)) { built.insert(build(selected, ancestors: []), at: 0) }
         return built.filter { node in
-            guard let key = parent(node.session, listed: listedParents[Self.sidebarKey(node.id)]),
+            guard let key = parent(node.session, listed: listedParents[identity(node.session)]),
                   Self.isSidebarRun(key) else { return true }
-            return !nested.contains(Self.sidebarKey(node.id))
+            return !nested.contains(identity(node.session))
         }.flatMap(matchingOwner)
     }
 
@@ -228,18 +245,20 @@ extension ChatSessionSidebarModel {
             if listedParents[child] == nil { listedParents[child] = parent }
         }
         for row in rows {
-            let key = Self.sidebarKey(row.key)
-            for child in row.childSessions ?? [] where byKey[Self.sidebarKey(child)] != nil ||
-                membership[key]?.contains(Self.sidebarKey(child)) != false
-            {
-                if parent(byKey[Self.sidebarKey(child)], row.key) == key { append(child, to: key) }
+            let key = Self.sidebarKey(row.key, agentID: Self.sidebarAgentID(row))
+            for child in row.childSessions ?? [] {
+                let child = Self.sidebarKey(child, agentID: Self.sidebarAgentID(row))
+                guard byKey[child] != nil || membership[Self.sidebarKey(row.key)]?.contains(child) != false else {
+                    continue
+                }
+                if parent(byKey[child], key) == key { append(child, to: key) }
             }
         }
         // A complete child read can retire unresolved hints, never current roster ancestry.
         // The Gateway child window is retention-filtered and may omit a known navigation child.
         for row in rows {
             if let key = parent(row, nil) {
-                append(row.key, to: key)
+                append(Self.sidebarKey(row.key, agentID: Self.sidebarAgentID(row)), to: key)
             }
         }
         return (childKeys, listedParents)
@@ -263,13 +282,20 @@ enum ChatSidebarChildMode {
 }
 
 extension ChatSessionSidebarModel.Node {
-    func containsSelection(_ key: String) -> Bool {
-        ChatSessionSidebarModel.sidebarKey(self.id) == ChatSessionSidebarModel.sidebarKey(key) ||
-            self.children.contains { $0.containsSelection(key) }
+    @MainActor var sidebarID: String {
+        OpenClawChatSessionSidebarData.identity(self.session)
+    }
+
+    func containsSelection(_ key: String, agentID: String? = nil) -> Bool {
+        (ChatSessionSidebarModel.sidebarKey(self.id) == ChatSessionSidebarModel.sidebarKey(key) &&
+            ChatSessionSidebarModel.isSessionInActiveAgentScope(
+                key: self.id, agentID: self.session.agentId, activeAgentID: agentID)) ||
+            self.children.contains { $0.containsSelection(key, agentID: agentID) }
     }
 
     @MainActor func visibleChildren(
         selectedKey: String,
+        selectedAgentID: String? = nil,
         fullyShown: Bool,
         now: Date,
         attention: (Self) -> OpenClawChatAttentionSummary?) -> [Self]
@@ -280,7 +306,8 @@ extension ChatSessionSidebarModel.Node {
             let facts = ChatSessionSidebarRowFacts(
                 node: node, isChild: true, attention: attention(node), showPreview: false, preview: nil, now: now)
             let ownFailure = ["failed", "timeout"].contains(node.session.status ?? "") ? 1 : 0
-            return node.containsSelection(selectedKey) || facts.running || facts.attentionLabel != nil ||
+            return node.containsSelection(selectedKey, agentID: selectedAgentID) || facts.running || facts
+                .attentionLabel != nil ||
                 node.badges.hasUnread || node.badges.failedCount > ownFailure ||
                 node.previewSessions.contains { ChatSessionSidebarRowFacts.workspaceConflicts($0) > 0 }
         }.map(\.element)
@@ -352,9 +379,7 @@ extension ChatSessionSidebar {
         var homeParents: [OpenClawChatSessionEntry] = []
         func visit(_ node: ChatSessionSidebarModel.Node) {
             let expanded = self.childExpansion(node).wrappedValue
-            if expanded || ChatSessionSidebarModel.sidebarKey(node.id) == ChatSessionSidebarModel
-                .sidebarKey(model.sessionKey)
-            {
+            if expanded || self.isCurrentInteractionRow(node.session) {
                 for key in node.loadParentKeys {
                     if let row = owner?.row(key: key, agentID: node.session.agentId) {
                         parents[ChatSessionSidebarChildren.key(for: row)] = row
@@ -395,8 +420,10 @@ extension ChatSessionSidebar {
     func childExpansion(_ node: ChatSessionSidebarModel.Node) -> Binding<Bool> {
         ChatSidebarChildMode.expansionBinding(
             modes: self.$childModes,
-            key: node.id,
-            automaticallyExpanded: node.children.contains { $0.containsSelection(self.viewModel.sessionKey) })
+            key: node.sidebarID,
+            automaticallyExpanded: node.children.contains {
+                $0.containsSelection(self.viewModel.sessionKey, agentID: self.viewModel.selectedAgentID)
+            })
     }
 
     func treeRow(
@@ -409,7 +436,8 @@ extension ChatSessionSidebar {
         let row = self.row(for: node, isChild: isChild, now: now, ownership: ownership, previewRequest: previewRequest)
         let visible = node.visibleChildren(
             selectedKey: self.viewModel.sessionKey,
-            fullyShown: self.childModes[node.id] == .all,
+            selectedAgentID: self.viewModel.selectedAgentID,
+            fullyShown: self.childModes[node.sidebarID] == .all,
             now: now)
         {
             self.attentionSummary(sessions: $0.previewSessions, agentID: self.sessionAgentID($0.session), now: now)
@@ -417,7 +445,7 @@ extension ChatSessionSidebar {
         return AnyView(Group {
             if node.hasNavigationChildren || !node.children.isEmpty {
                 DisclosureGroup(isExpanded: self.childExpansion(node)) {
-                    ForEach(visible) { child in
+                    ForEach(visible, id: \.sidebarID) { child in
                         self.treeRow(
                             child,
                             isChild: true,
@@ -431,7 +459,7 @@ extension ChatSessionSidebar {
                         }
                     }
                     if visible.count < node.children.count {
-                        Button(String(localized: "Show more")) { self.childModes[node.id] = .all }
+                        Button(String(localized: "Show more")) { self.childModes[node.sidebarID] = .all }
                             .selectionDisabled()
                     }
                 } label: {

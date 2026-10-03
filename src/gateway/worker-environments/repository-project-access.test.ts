@@ -5,7 +5,7 @@ import {
   PROJECT_KEY,
   usePreparedPoolFixture,
 } from "./prepared-pool.test-support.js";
-import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
+import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 
 const admit = vi.hoisted(() =>
   vi.fn<typeof import("./repository-project-admission.js").prepareRepositoryWorkerProjectSource>(),

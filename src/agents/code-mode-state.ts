@@ -38,8 +38,8 @@ export type CodeModeBridgeDispatchState = {
 };
 
 export type PendingBridgeState = PendingBridgeRequest & {
-  promise: Promise<void>;
   reply: CodeModeReplyLease;
+  onSettlement?: () => void;
   settled?: boolean;
   settledSequence?: number;
   cancel?: () => void;
@@ -413,22 +413,39 @@ export function pendingBridgeStatesForSettlement(
 export function waitForPendingBridgeSettlement(
   pending: readonly PendingBridgeState[],
   settlementMode: CodeModeSettlementMode,
+  signal?: AbortSignal,
 ): Promise<void> {
   const required = pendingBridgeStatesForSettlement(pending, settlementMode);
   const outstanding = required.filter((entry) => !entry.settled);
   // Workers reject hostless pending guests; headless execution also validates
   // the frontier before reaching this shared settlement helper.
   if (
+    signal?.aborted ||
     outstanding.length === 0 ||
     (settlementMode.kind === "awaiting" && outstanding.length !== required.length)
   ) {
     return Promise.resolve();
   }
-  const settlement =
-    settlementMode.kind === "draining"
-      ? Promise.all(outstanding.map((entry) => entry.promise))
-      : Promise.race(outstanding.map((entry) => entry.promise));
-  return settlement.then(() => undefined);
+  // A cell serializes guest frontiers and rejects concurrent waits. Retain only
+  // its current observer: Promise.race retains a reaction per losing frontier.
+  return new Promise<void>((resolve) => {
+    const finish = () => {
+      for (const entry of outstanding) {
+        entry.onSettlement = undefined;
+      }
+      signal?.removeEventListener("abort", finish);
+      resolve();
+    };
+    const onSettlement = () => {
+      if (settlementMode.kind === "awaiting" || outstanding.every((entry) => entry.settled)) {
+        finish();
+      }
+    };
+    for (const entry of outstanding) {
+      entry.onSettlement = onSettlement;
+    }
+    signal?.addEventListener("abort", finish, { once: true });
+  });
 }
 
 export function reserveActiveRunSlot(ownedRunId?: string): () => void {
@@ -564,33 +581,33 @@ export function createPendingBridgeStates(
     const state: PendingBridgeState = {
       ...request,
       reply,
-      promise: completion.then(() => {
-        params.signal.removeEventListener("abort", onAbort);
-        state.settledSequence = ++nextPendingBridgeSettlementSequence;
-        state.settled = true;
-        // Only the response is needed until guest replay; live calls keep their own request.
-        state.args = [];
-        if (state.method === "agentWait" && params.activeRunId) {
-          const active = activeRuns.get(params.activeRunId);
-          if (active?.pending.includes(state)) {
-            const renewed = resolveExpiresAtMsFromDurationSeconds(
-              active.config.snapshotTtlSeconds,
-              { nowMs: Date.now() },
-            );
-            if (renewed !== undefined) {
-              active.expiresAt = renewed;
-              scheduleActiveRunExpiry();
-            }
-          }
-        }
-      }),
       cancel: () => {
         reply.cancel();
-        if (!state.settled) {
-          abortController.abort(new Error(BRIDGE_CLOSED_MESSAGE));
-        }
+        abortController.abort(new Error(BRIDGE_CLOSED_MESSAGE));
       },
     };
+    void completion.then(() => {
+      params.signal.removeEventListener("abort", onAbort);
+      state.settledSequence = ++nextPendingBridgeSettlementSequence;
+      state.settled = true;
+      state.cancel = undefined;
+      // Only the response is needed until guest replay; live calls keep their own request.
+      state.args = [];
+      if (state.method === "agentWait" && params.activeRunId) {
+        const active = activeRuns.get(params.activeRunId);
+        if (active?.pending.includes(state)) {
+          const renewed = resolveExpiresAtMsFromDurationSeconds(active.config.snapshotTtlSeconds, {
+            nowMs: Date.now(),
+          });
+          if (renewed !== undefined) {
+            active.expiresAt = renewed;
+            scheduleActiveRunExpiry();
+          }
+        }
+      }
+      state.onSettlement?.();
+      state.onSettlement = undefined;
+    });
     return state;
   });
 }

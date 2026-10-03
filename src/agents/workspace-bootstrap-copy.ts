@@ -23,6 +23,7 @@ export async function copyWorkspaceBootstrapFiles(
   seed: string | undefined,
   assertCurrent: () => void,
 ) {
+  assertCurrent();
   await fs.mkdir(workspaceDir, { recursive: true });
   assertCurrent();
   if (seed) {
@@ -40,6 +41,7 @@ export async function copyWorkspaceBootstrapFiles(
         () => true,
         () => false,
       );
+      assertCurrent();
       if (destinationExists) {
         continue;
       }
@@ -49,12 +51,15 @@ export async function copyWorkspaceBootstrapFiles(
         boundaryLabel: "sandbox seed workspace",
       });
       if (!opened.ok) {
+        assertCurrent();
         continue;
       }
       let content: string;
       try {
+        assertCurrent();
         content = await readWorkspaceBootstrapFile(opened.fd);
       } catch (err) {
+        assertCurrent();
         if (err instanceof RangeError) {
           log.warn(
             `Ignoring oversized sandbox seed file ${src}: file exceeds the ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES}-byte limit`,
@@ -65,8 +70,9 @@ export async function copyWorkspaceBootstrapFiles(
       } finally {
         syncFs.closeSync(opened.fd);
       }
+      assertCurrent();
       await publishBootstrapFile(dest, content, assertCurrent);
+      assertCurrent();
     }
   }
-  assertCurrent();
 }

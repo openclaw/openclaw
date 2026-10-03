@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/zalo",
-  "version": "2026.9.7",
+  "version": "2026.9.8",
   "description": "OpenClaw Zalo channel plugin for bot and webhook chats.",
   "repository": {
     "type": "git",
@@ -12,7 +12,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.9.7"
+    "openclaw": ">=2026.9.8"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -90,7 +90,7 @@
       "pluginApi": ">=2026.9.8"
     },
     "build": {
-      "openclawVersion": "2026.9.7"
+      "openclawVersion": "2026.9.8"
     },
     "release": {
       "publishToClawHub": true,

@@ -7,8 +7,8 @@ import {
   type SessionUpstreamLink,
 } from "../../sessions/session-upstream-links.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { resolveSessionNativeRuntimeRestriction } from "./sessions-patch-model-selection.js";
 import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";

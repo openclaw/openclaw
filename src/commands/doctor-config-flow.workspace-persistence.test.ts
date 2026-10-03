@@ -178,6 +178,7 @@ describe("Doctor workspace persistence", () => {
               research: { memory: { search: { provider: "auto" } } },
             };
             const configPath = await writeOpenClawConfig(home, {
+              meta: { migrations: { webhookListeners: true } },
               agents: {
                 ownership: "explicit",
                 defaults: {

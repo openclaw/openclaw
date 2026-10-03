@@ -315,32 +315,6 @@ it("preserves caller cancellation after a settled maintenance inspection", async
   expect(boundary.restart).not.toHaveBeenCalled();
 });
 
-it("leaves a progressing Gateway running and warns after the readiness cap", async () => {
-  boundary.health.mockResolvedValue({
-    healthy: false,
-    staleGatewayPids: [],
-    runtime: { status: "running", pid: 4242 },
-    portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
-    waitOutcome: "still-starting",
-    elapsedMs: 300_000,
-    startupPhase: "startup migration",
-  });
-  const maintenance = await begin();
-  expect(maintenance).toBeDefined();
-
-  await expect(maintenance!.finish({})).resolves.toBeUndefined();
-
-  const warning = expect.stringMatching(
-    /still starting after 300s.*startup migration.*openclaw gateway status --deep/,
-  );
-  expect(maintenance!.warnings).toContainEqual(warning);
-  expect(boundary.log).toHaveBeenCalledWith(warning);
-  expect(boundary.log).not.toHaveBeenCalledWith(
-    "Gateway restarted and verified after Doctor repair.",
-  );
-  expect(boundary.restart).toHaveBeenCalledOnce();
-});
-
 it.each(["forced", "uncertain"] as const)(
   "joins failed maintenance admission before compensating (%s)",
   async (cleanup) => {

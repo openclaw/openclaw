@@ -455,6 +455,7 @@ describe("Gateway config selection before migration admission", () => {
       expect(JSON.parse(results[0]!.slice("__RESULT__".length))).toEqual([
         { dev, allowUnconfigured },
       ]);
+      expect(fs.existsSync(configPath)).toBe(false);
     },
     75_000,
   );

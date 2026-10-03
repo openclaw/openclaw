@@ -23,7 +23,6 @@ import {
 import {
   buildPluginBindingSessionKey,
   normalizeChannel,
-  PLUGIN_BINDING_SESSION_PREFIX,
 } from "./conversation-binding-session-key.js";
 import {
   addPersistentApproval,
@@ -43,11 +42,6 @@ import { getActivePluginRegistry } from "./runtime.js";
 const log = createSubsystemLogger("plugins/binding");
 
 const PLUGIN_BINDING_CUSTOM_ID_PREFIX = "pluginbind";
-const LEGACY_CODEX_PLUGIN_SESSION_PREFIXES = [
-  "openclaw-app-server:thread:",
-  "openclaw-codex-app-server:thread:",
-] as const;
-
 // Runtime plugin conversation bindings are approval-driven and distinct from
 // configured channel bindings compiled from config.
 type PluginBindingApprovalDecision = PluginConversationBindingResolutionDecision;
@@ -129,14 +123,7 @@ function toConversationRef(params: PluginBindingConversation): ConversationRef {
 }
 
 function logPluginBindingLifecycleEvent(params: {
-  event:
-    | "migrating legacy record"
-    | "auto-refresh"
-    | "auto-approved"
-    | "requested"
-    | "detached"
-    | "denied"
-    | "approved";
+  event: "auto-refresh" | "auto-approved" | "requested" | "detached" | "denied" | "approved";
   identity: PluginBindingIdentity;
   conversation: ConversationRef;
   decision?: PluginBindingApprovalDecision;
@@ -151,25 +138,6 @@ function logPluginBindingLifecycleEvent(params: {
     `conversation=${params.conversation.conversationId}`,
   ];
   log.info(parts.join(" "));
-}
-
-function isLegacyPluginBindingRecord(params: {
-  record:
-    | {
-        targetSessionKey: string;
-        metadata?: Record<string, unknown>;
-      }
-    | null
-    | undefined;
-}): boolean {
-  if (!params.record || isPluginOwnedBindingMetadata(params.record.metadata)) {
-    return false;
-  }
-  const targetSessionKey = params.record.targetSessionKey.trim();
-  return (
-    targetSessionKey.startsWith(`${PLUGIN_BINDING_SESSION_PREFIX}:`) ||
-    LEGACY_CODEX_PLUGIN_SESSION_PREFIXES.some((prefix) => targetSessionKey.startsWith(prefix))
-  );
 }
 
 function buildApprovalInteractiveReply(
@@ -266,7 +234,6 @@ function resolvePluginConversationBindingState(conversation: PluginBindingConver
     ref,
     record,
     binding,
-    isLegacyForeignBinding: isLegacyPluginBindingRecord({ record }),
   };
 }
 
@@ -448,7 +415,7 @@ function pluginBindingOwnershipConflict(
   state: ReturnType<typeof resolvePluginConversationBindingState>,
   pluginRoot: string,
 ): string | undefined {
-  if (state.record && !state.binding && !state.isLegacyForeignBinding) {
+  if (state.record && !state.binding) {
     return "This conversation is already bound by core routing and cannot be claimed by a plugin.";
   }
   if (state.binding && state.binding.pluginRoot !== pluginRoot) {
@@ -500,14 +467,6 @@ export async function requestPluginConversationBinding(params: {
         return { status: "error", message: conflict };
       }
     }
-    if (state.isLegacyForeignBinding) {
-      logPluginBindingLifecycleEvent({
-        event: "migrating legacy record",
-        identity: requestParams,
-        conversation: state.ref,
-      });
-    }
-
     if (state.binding || approved) {
       const bound = await bindConversationNow({
         identity: requestParams,
