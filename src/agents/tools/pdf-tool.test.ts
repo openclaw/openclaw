@@ -228,6 +228,7 @@ it("selects later pages and reports partial extraction to both models", async ()
   const { pdf, extract } = await extraction("openai-responses", {
     agents: { defaults: { pdfModel: { primary: OPENAI }, pdfMaxPages: 2 } },
   });
+  completeMock.mockResolvedValue({ ...summary("  fallback summary  "), stopReason: "toolUse" });
   const result = await pdf.execute("pdf", {
     pdf: "/tmp/doc.pdf",
     pages: "21-23",
@@ -241,6 +242,36 @@ it("selects later pages and reports partial extraction to both models", async ()
   expect(contextText()).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
   expect(result.content).toEqual([{ type: "text", text: `${notice}\nfallback summary` }]);
   expect(result.details).toMatchObject({ native: false, model: OPENAI });
+});
+
+it.each([
+  { stopReason: "stop", errorMessage: "  bad request  ", expected: ": bad request" },
+  { stopReason: "error", errorMessage: undefined, expected: "" },
+  { stopReason: "aborted", errorMessage: undefined, expected: "" },
+] as const)(
+  "reports failed PDF output before its text ($stopReason)",
+  async ({ stopReason, errorMessage, expected }) => {
+    const { pdf } = await extraction();
+    completeMock.mockResolvedValue({
+      ...summary("must not hide the failure"),
+      stopReason,
+      errorMessage,
+    });
+    await expect(pdf.execute("pdf", { pdf: "/tmp/doc.pdf" })).rejects.toThrow(
+      `PDF model failed (${OPENAI})${expected}`,
+    );
+  },
+);
+
+it("rejects extracted PDF responses without visible text", async () => {
+  const { pdf } = await extraction();
+  completeMock.mockResolvedValue({
+    ...summary(),
+    content: [{ type: "thinking", thinking: "private" }],
+  });
+  await expect(pdf.execute("pdf", { pdf: "/tmp/doc.pdf" })).rejects.toThrow(
+    `PDF model returned no text (${OPENAI}).`,
+  );
 });
 
 it.each([true, false])(

@@ -8,12 +8,11 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { AssistantMessage, Context } from "../../llm/types.js";
+import type { Context } from "../../llm/types.js";
 import { providerSupportsNativePdfDocument } from "../../media-understanding/defaults.js";
 import { renderDocumentTruncationNotice } from "../../media/document-extraction-metadata.js";
 import type { PdfExtractedContent } from "../../media/pdf-extract.js";
 import { wrapExternalContent } from "../../security/external-content.js";
-import { extractEmbeddedAssistantText } from "../embedded-agent-utils.js";
 
 /** Normalized PDF model preference used by tool registration and execution. */
 type PdfModelConfig = { primary?: string; fallbacks?: string[] };
@@ -84,30 +83,6 @@ export function parsePageRange(
     throw new Error(`No PDF pages matched requested range "${range}"`);
   }
   return { pages, truncated: false };
-}
-
-/** Converts a provider assistant message into PDF text or throws a model-labelled failure. */
-export function coercePdfAssistantText(params: {
-  message: AssistantMessage;
-  provider: string;
-  model: string;
-}): string {
-  const label = `${params.provider}/${params.model}`;
-  const errorMessage = params.message.errorMessage?.trim();
-  if (
-    params.message.stopReason === "error" ||
-    params.message.stopReason === "aborted" ||
-    errorMessage
-  ) {
-    throw new Error(
-      errorMessage ? `PDF model failed (${label}): ${errorMessage}` : `PDF model failed (${label})`,
-    );
-  }
-  const text = extractEmbeddedAssistantText(params.message).trim();
-  if (text) {
-    return text;
-  }
-  throw new Error(`PDF model returned no text (${label}).`);
 }
 
 /** Reads configured PDF primary/fallback models from agent defaults. */

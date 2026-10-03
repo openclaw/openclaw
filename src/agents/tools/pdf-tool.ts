@@ -21,6 +21,7 @@ import {
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { resolveModelAsync } from "../embedded-agent-runner/model.js";
 import { abortable } from "../embedded-agent-runner/run/abortable.js";
+import { requireMediaAssistantText } from "../embedded-agent-utils.js";
 import { requireApiKey } from "../model-auth.js";
 import {
   resolveAllowedImageFallbackCandidates,
@@ -53,7 +54,6 @@ import { applyAgentDefaultModelConfig, hasToolModelConfig } from "./model-config
 import { anthropicAnalyzePdf, geminiAnalyzePdf } from "./pdf-native-providers.js";
 import {
   buildPdfExtractionContext,
-  coercePdfAssistantText,
   coercePdfModelConfig,
   parsePageRange,
   providerSupportsNativePdf,
@@ -339,7 +339,12 @@ async function runPdfPrompt(params: {
       );
       const message = modelSignal ? await abortable(modelSignal, completion) : await completion;
       assertModelCurrent();
-      const text = coercePdfAssistantText({ message, provider, model: modelId });
+      const text = requireMediaAssistantText({
+        message,
+        provider,
+        model: modelId,
+        kind: "PDF",
+      });
       return { text, provider, model: modelId, native: false, extractions: effectiveExtractions };
     },
   });

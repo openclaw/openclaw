@@ -2,6 +2,7 @@ import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
+import { requireMediaAssistantText } from "../agents/embedded-agent-utils.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import { requireApiKey, resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
@@ -15,10 +16,7 @@ import {
   unwrapSecretSentinelsForProviderEgress,
 } from "../agents/provider-secret-egress.js";
 import { registerProviderStreamForModel } from "../agents/provider-stream.js";
-import {
-  coerceImageAssistantText,
-  hasImageReasoningOnlyResponse,
-} from "../agents/tools/image-tool.helpers.js";
+import { hasImageReasoningOnlyResponse } from "../agents/tools/image-tool.helpers.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import { complete } from "../llm/stream.js";
 import type { AssistantMessage, Context, Model, ProviderStreamOptions } from "../llm/types.js";
@@ -551,7 +549,8 @@ async function describeImagesWithModelInternal(
 
     const message = await completeImage();
     try {
-      const text = coerceImageAssistantText({
+      const text = requireMediaAssistantText({
+        kind: "Image",
         message,
         provider: model.provider,
         model: model.id,
@@ -565,7 +564,8 @@ async function describeImagesWithModelInternal(
 
     params.signal?.throwIfAborted();
     const retryMessage = await completeImage(disableReasoningForImageRetryPayload);
-    const text = coerceImageAssistantText({
+    const text = requireMediaAssistantText({
+      kind: "Image",
       message: retryMessage,
       provider: model.provider,
       model: model.id,

@@ -2750,48 +2750,6 @@ describe("image tool response validation", () => {
     };
   }
 
-  it.each([
-    {
-      name: "rejects image-model responses with no final text",
-      message: createAssistantMessage({
-        content: [{ type: "thinking", thinking: "hmm" }],
-      }) as never,
-      expectedError: /returned no text/i,
-    },
-    {
-      name: "surfaces provider errors from image-model responses",
-      message: createAssistantMessage({
-        stopReason: "error",
-        errorMessage: "boom",
-      }) as never,
-      expectedError: /boom/i,
-    },
-  ])("$name", ({ message, expectedError }) => {
-    expect(() =>
-      testing.coerceImageAssistantText({
-        provider: "openai",
-        model: "gpt-5.4-mini",
-        message,
-      }),
-    ).toThrow(expectedError);
-  });
-
-  it("returns trimmed text from image-model responses", () => {
-    const text = testing.coerceImageAssistantText({
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      message: {
-        ...createAssistantMessage({
-          api: "anthropic-messages",
-          provider: "anthropic",
-          model: "claude-opus-4-6",
-        }),
-        content: [{ type: "text", text: "  hello  " }],
-      } as never,
-    });
-    expect(text).toBe("hello");
-  });
-
   it.each(["reasoning_content", "reasoning", "reasoning_details", "reasoning_text"])(
     "detects %s as a retryable image reasoning-only response",
     (thinkingSignature) => {
@@ -2805,13 +2763,6 @@ describe("image tool response validation", () => {
         ],
       });
       expect(testing.hasImageReasoningOnlyResponse(message as never)).toBe(true);
-      expect(() =>
-        testing.coerceImageAssistantText({
-          provider: "openai",
-          model: "gpt-5.4-mini",
-          message: message as never,
-        }),
-      ).toThrow(/returned no text/i);
     },
   );
 
@@ -2831,13 +2782,6 @@ describe("image tool response validation", () => {
         ],
       });
       expect(testing.hasImageReasoningOnlyResponse(message as never)).toBe(true);
-      expect(() =>
-        testing.coerceImageAssistantText({
-          provider: "openai",
-          model: "gpt-5.4-mini",
-          message: message as never,
-        }),
-      ).toThrow(/returned no text/i);
     },
   );
 

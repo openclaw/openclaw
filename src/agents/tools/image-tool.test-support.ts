@@ -16,7 +16,6 @@ import type {
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import type {
-  coerceImageAssistantText,
   decodeDataUrl,
   hasImageReasoningOnlyResponse,
   ImageModelConfig,
@@ -64,7 +63,6 @@ type ImageToolProviderDeps = {
 
 type ImageToolTestApi = {
   decodeDataUrl: typeof decodeDataUrl;
-  coerceImageAssistantText: typeof coerceImageAssistantText;
   hasImageReasoningOnlyResponse: typeof hasImageReasoningOnlyResponse;
   resolveImageCompressionPolicy: ResolveImageCompressionPolicy;
   setProviderDepsForTest(overrides?: Partial<ImageToolProviderDeps>): void;

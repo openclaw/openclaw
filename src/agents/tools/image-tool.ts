@@ -34,7 +34,6 @@ import { optionalFiniteNumberSchema, optionalPositiveIntegerSchema } from "../sc
 import type { ToolFsPolicy } from "../tool-fs-policy.js";
 import { readFiniteNumberParam, readPositiveIntegerParam, type AnyAgentTool } from "./common.js";
 import {
-  coerceImageAssistantText,
   coerceImageModelConfig,
   decodeDataUrl,
   hasImageReasoningOnlyResponse,
@@ -164,7 +163,6 @@ function isCanonicalCandidateShadowedByExecutionAlias(
 
 const testing = {
   decodeDataUrl,
-  coerceImageAssistantText,
   hasImageReasoningOnlyResponse,
   resolveImageCompressionPolicy,
   setProviderDepsForTest(overrides?: Partial<typeof defaultImageToolProviderDeps>) {

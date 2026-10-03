@@ -217,6 +217,29 @@ export function extractEmbeddedAssistantText(msg: AssistantMessage): string {
   return finalizeAssistantExtraction(msg.stopReason === "error", extracted);
 }
 
+/** Require successful media-analysis text with a tool-specific failure label. */
+export function requireMediaAssistantText(params: {
+  message: AssistantMessage;
+  provider: string;
+  model: string;
+  kind: "Image" | "PDF";
+}): string {
+  const stop = params.message.stopReason;
+  const errorMessage = params.message.errorMessage?.trim();
+  const label = `${params.kind} model`;
+  const model = `${params.provider}/${params.model}`;
+  if (stop === "error" || stop === "aborted" || errorMessage) {
+    throw new Error(
+      errorMessage ? `${label} failed (${model}): ${errorMessage}` : `${label} failed (${model})`,
+    );
+  }
+  const text = extractEmbeddedAssistantText(params.message).trim();
+  if (text) {
+    return text;
+  }
+  throw new Error(`${label} returned no text (${model}).`);
+}
+
 /** Extract native thinking block text; signature-only blocks (no summary) surface nothing. */
 export function extractAssistantThinking(msg: AssistantMessage): string {
   if (!Array.isArray(msg.content)) {

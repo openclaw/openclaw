@@ -103,28 +103,6 @@ export function decodeDataUrl(
   return { buffer, mimeType, kind: "image" };
 }
 
-/** Extracts assistant text or throws a provider/model-specific image failure. */
-export function coerceImageAssistantText(params: {
-  message: AssistantMessage;
-  provider: string;
-  model: string;
-}): string {
-  const stop = params.message.stopReason;
-  const errorMessage = params.message.errorMessage?.trim();
-  if (stop === "error" || stop === "aborted" || errorMessage) {
-    throw new Error(
-      errorMessage
-        ? `Image model failed (${params.provider}/${params.model}): ${errorMessage}`
-        : `Image model failed (${params.provider}/${params.model})`,
-    );
-  }
-  const text = extractEmbeddedAssistantText(params.message).trim();
-  if (text) {
-    return text;
-  }
-  throw new Error(`Image model returned no text (${params.provider}/${params.model}).`);
-}
-
 /** Reads imageModel defaults from config into the shared tool model config shape. */
 export function coerceImageModelConfig(cfg?: OpenClawConfig): ImageModelConfig {
   return coerceToolModelConfig(cfg?.agents?.defaults?.imageModel);
