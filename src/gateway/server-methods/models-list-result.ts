@@ -16,7 +16,6 @@ import {
   resolveCatalogDecisionRuntime,
   type ModelCatalogDecisionParams,
 } from "../../agents/model-catalog-decisions.js";
-import { resolveModelCatalogServiceTiers } from "../../agents/model-catalog-service-tiers.js";
 import {
   createModelCatalogView,
   selectModelCatalogRuntimeEntry,
@@ -70,6 +69,7 @@ import {
 import type { ModelsListCatalogSource } from "./models-list-context.js";
 import {
   buildPublicModelProjection,
+  projectModelServiceTiers,
   projectProviderCatalogOutcomes,
 } from "./models-list-public-projection.js";
 import { resolveDefaultModelsPreview } from "./models-list-result.default-models.js";
@@ -213,7 +213,10 @@ function createPublicModelsListProjector(params: {
       ? evaluation.availability
       : (evaluation.availability ?? false);
     const supportsFastMode = params.fastMode(entry, evaluation, preparedEntry.agentRuntime?.id);
-    const serviceTiers = resolveModelCatalogServiceTiers({
+    const serviceTiers = projectModelServiceTiers({
+      config: params.cfg,
+      agentId: params.agentId,
+      pluginRegistry: params.pluginRegistry,
       snapshot: params.snapshot,
       entry,
       evaluation,
