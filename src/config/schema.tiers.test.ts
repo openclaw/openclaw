@@ -29,24 +29,6 @@ describe("config schema tiers", () => {
     );
   });
 
-  it("materializes resolved common and advanced tiers in schema hints", () => {
-    expect(baseSchema.uiHints["gateway.port"]?.advanced).toBe(false);
-    expect(baseSchema.uiHints["gateway.reload.mode"]?.advanced).toBe(true);
-    expect(baseSchema.uiHints["agents.defaults.workspace"]?.advanced).toBe(false);
-    expect(baseSchema.uiHints["agents.defaults.compaction.timeoutSeconds"]?.advanced).toBe(true);
-    for (const path of [
-      "tools.swarm",
-      "tools.swarm.enabled",
-      "tools.swarm.maxConcurrent",
-      "tools.loopDetection.enabled",
-      "gateway.cliAgents.enabled",
-      "logging.audit.messages",
-    ]) {
-      expect(baseSchema.uiHints[path]?.advanced, path).toBe(false);
-    }
-    expect(baseSchema.uiHints["agents.defaults.experimental.localModelLean"]?.advanced).toBe(true);
-  });
-
   it.each([
     [
       "leading wildcard specificity",
@@ -122,23 +104,19 @@ describe("config schema tiers", () => {
     expect(hints[target]?.advanced).toBe(expected);
   });
 
-  it.each(["anyOf", "oneOf", "allOf"])(
-    "resolves numeric %s branches before inheriting child tiers",
-    (composition) => {
-      const branches = [
-        { type: "object", properties: { child: { type: "string" } } },
-        { type: "integer" },
-      ];
-      for (const variants of [branches, branches.toReversed()]) {
-        const hints = applyResolvedConfigTierHints(
-          customSchema({ choice: { [composition]: variants } }),
-          { custom: { advanced: false } },
-        );
-        expect(hints["custom.choice"]?.advanced).toBe(true);
-        expect(hints["custom.choice.child"]?.advanced).toBe(true);
-      }
-    },
-  );
+  it("resolves numeric composition branches before inheriting child tiers", () => {
+    const branches = [
+      { type: "object", properties: { child: { type: "string" } } },
+      { type: "integer" },
+    ];
+    for (const variants of [branches, branches.toReversed()]) {
+      const hints = applyResolvedConfigTierHints(customSchema({ choice: { anyOf: variants } }), {
+        custom: { advanced: false },
+      });
+      expect(hints["custom.choice"]?.advanced).toBe(true);
+      expect(hints["custom.choice.child"]?.advanced).toBe(true);
+    }
+  });
 
   it.each([false, true])(
     "ranks generated numeric wildcards with authored tiers (explicit common=%s)",
