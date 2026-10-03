@@ -175,6 +175,7 @@ async function executeAgentTurnInternalLoop(
   }
   let replyMediaContext: ReplyMediaContext;
   let currentTurnImages: CurrentTurnImages;
+  let modelPatch: Awaited<ReturnType<typeof createAgentPatchedSessionModelRunGuard>>;
   try {
     replyMediaContext =
       params.replyMediaContext ??
@@ -223,6 +224,19 @@ async function executeAgentTurnInternalLoop(
       params = { ...params, mcpAppContextLease: modelContextLease };
     }
     ({ params, currentTurnImages } = applyMcpAppModelContext(params, currentTurnImages));
+    modelPatch = await createAgentPatchedSessionModelRunGuard({
+      cfg: runtimeConfig,
+      agentId: params.followupRun.run.agentId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      assertReadCurrent: () => {
+        params.replyOperation?.abortSignal?.throwIfAborted();
+        params.opts?.abortSignal?.throwIfAborted();
+        preparedRunAdmission.assertSourceCurrent();
+      },
+      onError: (error) =>
+        logVerbose(`agent model patch reconciliation failed: ${formatErrorMessage(error)}`),
+    });
   } catch (error) {
     clearAgentRunContext(runId, lifecycleGeneration);
     throw error;
@@ -283,19 +297,6 @@ async function executeAgentTurnInternalLoop(
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
   let fallbackExhausted = false;
   let terminalRunFailed = false;
-  const modelPatch = await createAgentPatchedSessionModelRunGuard({
-    cfg: runtimeConfig,
-    agentId: params.followupRun.run.agentId,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-    assertReadCurrent: () => {
-      params.replyOperation?.abortSignal?.throwIfAborted();
-      params.opts?.abortSignal?.throwIfAborted();
-      preparedRunAdmission.assertSourceCurrent();
-    },
-    onError: (error) =>
-      logVerbose(`agent model patch reconciliation failed: ${formatErrorMessage(error)}`),
-  });
   let liveModelSwitchRetries = 0;
   const fallbackCycleState: AgentFallbackCycleState = {
     deferredLifecycle,
