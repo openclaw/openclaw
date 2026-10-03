@@ -1233,7 +1233,7 @@ src/agents/agent-bundle-mcp-runtime-shared.ts	2
 src/agents/agent-bundle-mcp-runtime.ts	3
 src/agents/agent-command-restart-recovery.ts	1
 src/agents/agent-command.ts	1
-src/agents/agent-hooks/compaction-safeguard.ts	13
+src/agents/agent-hooks/compaction-safeguard.ts	12
 src/agents/agent-project-settings-snapshot.ts	5
 src/agents/agent-run-terminal-delivery.ts	1
 src/agents/agent-run-terminal-outcome.ts	2
@@ -1257,7 +1257,7 @@ src/agents/apply-patch-targets.ts	1
 src/agents/apply-patch.ts	2
 src/agents/auth-profiles/clone.ts	1
 src/agents/auth-profiles/external-auth.ts	1
-src/agents/auth-profiles/oauth-refresh-failure.ts	2
+src/agents/auth-profiles/oauth-refresh-failure.ts	1
 src/agents/auth-profiles/oauth-refresh-lock-errors.ts	1
 src/agents/auth-profiles/oauth.ts	2
 src/agents/auth-profiles/persisted.ts	2
@@ -1486,12 +1486,11 @@ src/agents/sessions/agent-session-models.ts	1
 src/agents/sessions/agent-session-tree.ts	1
 src/agents/sessions/agent-session-utils.ts	1
 src/agents/sessions/auth-storage.ts	3
-src/agents/sessions/extensions/loader.ts	7
+src/agents/sessions/extensions/loader.ts	2
 src/agents/sessions/extensions/runner.ts	14
 src/agents/sessions/extensions/types.ts	1
 src/agents/sessions/keybindings.ts	2
 src/agents/sessions/model-registry.ts	9
-src/agents/sessions/package-manager.ts	2
 src/agents/sessions/resolve-config-value.ts	1
 src/agents/sessions/sdk.ts	1
 src/agents/sessions/session-manager-codec.ts	5
@@ -1549,7 +1548,7 @@ src/agents/tools/cron-tool-context.ts	1
 src/agents/tools/cron-tool-schema.ts	1
 src/agents/tools/cron-tool-write.ts	2
 src/agents/tools/cron-tool.ts	5
-src/agents/tools/dashboard-tool.ts	2
+src/agents/tools/dashboard-tool.ts	1
 src/agents/tools/embedded-gateway-stub.ts	7
 src/agents/tools/gateway-tool.ts	3
 src/agents/tools/goal-tools.ts	2
