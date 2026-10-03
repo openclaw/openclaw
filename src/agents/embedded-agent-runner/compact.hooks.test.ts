@@ -1386,10 +1386,11 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     // compact.hooks.harness resolves every compaction watchdog to 30 s.
     const windowMs = 30_000;
     const ceilingMs = 10 * windowMs;
-    const deltaEveryMs = 10_000;
+    // The trickle's last delta before the ceiling (280 s) leaves less than one window.
+    const deltaEveryMs = 20_000;
 
     // Real host watchdog, runtime delegate, native watchdog, session and summarizer;
-    // only the provider stream is scripted: one text delta every 10 s.
+    // only the provider stream is scripted: one text delta every 20 s.
     async function compactWhileStreaming(deltas: number, end: "done" | "silent" | "keepalive") {
       const [
         { createAgentSessionForEmbeddedRunner },

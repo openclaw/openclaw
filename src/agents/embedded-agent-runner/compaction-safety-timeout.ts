@@ -28,7 +28,6 @@ export async function compactWithSafetyTimeout<T>(
     onCancel?: () => void;
   },
 ): Promise<T> {
-  const ceilingAt = Date.now() + timeoutMs * COMPACTION_CEILING_WINDOWS;
   let canceled = false;
   const cancel = () => {
     if (canceled) {
@@ -55,16 +54,7 @@ export async function compactWithSafetyTimeout<T>(
 
       try {
         return await racePromiseWithAbortSignal(
-          () =>
-            trackAsyncWork(() =>
-              compact(composedAbortSignal, () => {
-                // A refresh that would outlive the ceiling is ignored, so the window
-                // already armed expires no later than the ceiling.
-                if (Date.now() + timeoutMs <= ceilingAt) {
-                  resetTimeout();
-                }
-              }),
-            ),
+          () => trackAsyncWork(() => compact(composedAbortSignal, resetTimeout)),
           abortSignal,
           (signal) => {
             cancel();
@@ -80,6 +70,7 @@ export async function compactWithSafetyTimeout<T>(
     },
     timeoutMs,
     "Compaction",
+    timeoutMs * COMPACTION_CEILING_WINDOWS,
   );
 }
 
