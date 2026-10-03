@@ -31,9 +31,9 @@ export function normalizeAuthProfileSecretRefs(
 // Upsert paths normalize literal secret strings but preserve SecretRef-backed
 // credentials for the secret resolver.
 export function normalizeAuthProfileCredential(
-  credential: AuthProfileCredential,
+  input: AuthProfileCredential,
 ): AuthProfileCredential {
-  credential = normalizeAuthProfileSecretRefs(credential);
+  const credential = normalizeAuthProfileSecretRefs(input);
   if (credential.type === "api_key") {
     if (typeof credential.key !== "string") {
       return credential;
