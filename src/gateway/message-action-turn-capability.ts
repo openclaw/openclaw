@@ -45,6 +45,8 @@ export type MessageActionAuthorization = {
   requesterAccountId?: string;
   requesterSenderId?: string;
   toolContext?: InternalChannelThreadingToolContext;
+  /** @internal Preserves the originating channel-selection namespace across Gateway delegation. */
+  allowNativeChannelNamespace?: boolean;
   /** @internal Redeemed from the process-local turn capability. */
   scheduled?: ScheduledMessageActionAuthority;
   /** @internal Restricts writes independently of scheduled authorization. */

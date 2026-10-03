@@ -1,4 +1,5 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
 import { listRuntimeVisibleChannelPlugins } from "./runtime-visible-channels.js";
 
@@ -79,6 +80,35 @@ function resolveChannelTargetProviderPrefix(
 /** Resolves the channel implied by a plugin-owned target prefix, if any. */
 export function resolveTargetPrefixedChannel(raw?: string | null): string | undefined {
   return resolveChannelTargetProviderPrefix(raw)?.channel;
+}
+
+/** Finds a bare target that names the selected channel instead of a destination. */
+export function resolveBareTargetChannelNamespace(params: {
+  raw?: string | null;
+  plugin?: ChannelPlugin;
+}): { namespace: string; destinationPrefix: string } | undefined {
+  const raw = normalizeOptionalLowercaseString(params.raw);
+  const plugin = params.plugin;
+  if (!raw || !plugin) {
+    return undefined;
+  }
+  const namespace = [
+    plugin.id,
+    ...(plugin.meta?.aliases ?? []),
+    ...(plugin.messaging?.targetPrefixes ?? []),
+  ]
+    .map((candidate) => normalizeOptionalLowercaseString(candidate))
+    .find((candidate) => candidate === raw);
+  if (!namespace) {
+    return undefined;
+  }
+  const destinationPrefix = (plugin.messaging?.targetPrefixes ?? [])
+    .map((candidate) => normalizeOptionalLowercaseString(candidate))
+    .find((candidate): candidate is string => Boolean(candidate));
+  return {
+    namespace,
+    destinationPrefix: destinationPrefix ?? plugin.id,
+  };
 }
 
 /** Rejects targets whose plugin-owned prefix belongs to a different selected channel. */

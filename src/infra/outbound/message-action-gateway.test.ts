@@ -128,6 +128,57 @@ describe("runMessageAction plugin dispatch", () => {
       );
     });
 
+    it.each([
+      ["ordinary", undefined],
+      [
+        "scheduled",
+        {
+          scheduled: { policy: { version: 1, mode: "trusted" as const }, assertCurrent: () => {} },
+        },
+      ],
+    ])(
+      "carries inferred-channel namespace provenance through %s Gateway delegation",
+      async (_, authorization) => {
+        const handleActionEntry = vi.fn(async () => jsonResult({ ok: true, local: true }));
+        const gatewayPlugin = createGatewayActionPlugin({
+          pluginId: "gatewaychat",
+          label: "Gateway Chat",
+          blurb: "Gateway Chat scheduled action test plugin.",
+          actions: ["edit"],
+          handleAction: handleActionEntry,
+        });
+        setTestPlugin(gatewayPlugin, "gatewaychat");
+        mocks.callGatewayLeastPrivilege.mockResolvedValue({ ok: true });
+
+        await runMessageAction({
+          cfg: createEnabledMessageActionConfig("gatewaychat"),
+          action: "edit",
+          params: {
+            to: "gatewaychat",
+            messageId: "message-1",
+            message: "updated",
+          },
+          messageActionAuthorization: authorization,
+          gateway: {
+            resolveAgentRuntimeIdentityToken: async () => "agent-runtime-token",
+            clientName: "cli",
+            mode: "cli",
+          },
+        });
+
+        const gatewayCall = readMockCallArg(
+          mocks.callGatewayLeastPrivilege,
+          "scheduled Gateway action",
+        );
+        expect(readRecordField(gatewayCall, "params", "scheduled Gateway params")).toMatchObject({
+          channel: "gatewaychat",
+          action: "edit",
+          allowNativeChannelNamespace: false,
+        });
+        expect(handleActionEntry).not.toHaveBeenCalled();
+      },
+    );
+
     it("keeps blank backend requester provenance least-privileged", async () => {
       const handleActionEntry = vi.fn(async () => jsonResult({ ok: true, local: true }));
       const gatewayPlugin = createGatewayActionPlugin({
