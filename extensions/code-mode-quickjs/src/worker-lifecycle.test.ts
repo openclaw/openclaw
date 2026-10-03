@@ -74,8 +74,11 @@ function boundary(value: unknown): CodeModeWorkerBoundary {
   expect(value).toMatchObject({ status: "boundary" });
   return value as CodeModeWorkerBoundary;
 }
-function response(command: CodeModeWorkerContinuation): WorkerTaskResponse {
-  return { input: command, timeoutMs: 10_000 };
+function response(
+  command: CodeModeWorkerContinuation,
+  onConsumed?: () => void,
+): WorkerTaskResponse {
+  return { input: command, timeoutMs: 10_000, onConsumed };
 }
 afterEach(async () => {
   await Promise.all(pools.splice(0).map((value) => value.close()));
@@ -474,6 +477,33 @@ describe("Code Mode worker lifecycle", () => {
 });
 
 describe("Code Mode live VM", () => {
+  it.each(["task", "sequence"] as const)(
+    "rejects stale worker %s messages before dispatching another host call",
+    async (stale) => {
+      const source = `import { parentPort } from 'node:worker_threads';
+      parentPort.on('message', (message) => {
+        if (message.responseId === undefined) {
+          parentPort.postMessage({ status: 'request', taskId: message.taskId, id: 1, value: null });
+        } else {
+          parentPort.postMessage({ status: 'consumed', taskId: message.taskId, id: 1 });
+          parentPort.postMessage({ status: 'request', taskId: message.taskId + ${stale === "task" ? 1 : 0}, id: ${stale === "task" ? 2 : 1}, value: null });
+        }
+      });`;
+      const workers = new WorkerTaskPool<unknown, CodeModeWorkerResult>({
+        workerUrl: new URL("data:text/javascript," + encodeURIComponent(source)),
+        maxWorkers: 1,
+      });
+      pools.push(workers);
+      const consumed = vi.fn();
+      const onRequest = vi.fn(async () => response({ kind: "checkpoint" }, consumed));
+      await expect(workers.run({}, { timeoutMs: 2000, onRequest })).rejects.toMatchObject({
+        code: "unavailable",
+      });
+      expect(onRequest).toHaveBeenCalledTimes(1);
+      expect(consumed).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("checkpoints a small VM and restores it with consumed input receipts", async () => {
     const parked = await runCodeModeWorker(
       input(`const value = 41; ${sleep} return value + 1;`),

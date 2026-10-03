@@ -12,6 +12,55 @@ import { CODEX_TERMINAL_START_COMMAND } from "./session-catalog-terminal.js";
 import type { CodexSessionCatalogPage } from "./session-catalog-types.js";
 
 describe("Codex catalog list operation", () => {
+  it("serves the retained node immediately and rejects an older refresh after a newer publication", async () => {
+    const f = await nodeFixture();
+    await f.read();
+    const older = createDeferred<unknown>();
+    const newer = createDeferred<unknown>();
+    f.invoke.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    const first = observe(f.read());
+    const second = observe(f.read());
+    try {
+      await nextTurn();
+      expect(first.state.settled).toBe(true);
+      expect(second.state.settled).toBe(true);
+      for (const result of [first, second]) {
+        await expect(result.done).resolves.toMatchObject({
+          status: "fulfilled",
+          value: [
+            { hostId: "gateway:local" },
+            { hostId: "node:remote", sessions: [{ threadId: "original" }] },
+          ],
+        });
+      }
+      newer.resolve({ payloadJSON: JSON.stringify(page(["newer"])) });
+      await nextTurn();
+      older.resolve({ payloadJSON: JSON.stringify(page(["older"])) });
+      await Promise.all(f.publications);
+      const published = f.onHost.mock.calls.flatMap(([host]) =>
+        host.hostId === "node:remote"
+          ? host.sessions.map((row: { threadId: string }) => row.threadId)
+          : [],
+      );
+      expect(published).toContain("newer");
+      expect(published).not.toContain("older");
+      const held = createDeferred<unknown>();
+      f.invoke.mockReturnValueOnce(held.promise);
+      try {
+        await expect(f.read()).resolves.toMatchObject([
+          { hostId: "gateway:local" },
+          { hostId: "node:remote", sessions: [{ threadId: "newer" }] },
+        ]);
+      } finally {
+        held.resolve({ payloadJSON: JSON.stringify(page(["final"])) });
+      }
+    } finally {
+      older.resolve({ payloadJSON: JSON.stringify(page([])) });
+      newer.resolve({ payloadJSON: JSON.stringify(page([])) });
+      await Promise.allSettled([first.done, second.done, ...f.publications]);
+    }
+  });
+
   it("yields an inert exclusion checkpoint and retains filled rows, limits and cursors", async () => {
     const f = await fixture();
     f.listPage

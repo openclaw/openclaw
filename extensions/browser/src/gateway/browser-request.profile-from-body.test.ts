@@ -897,14 +897,16 @@ describe("session tab scope", () => {
     },
   );
 
-  it.each([
-    { path: "/tabs/owned", method: "DELETE", outcome: "success" },
-    { path: "/navigate", method: "POST", outcome: "success" },
-    { path: "/tabs/focus", method: "POST", outcome: "success" },
-    { path: "/act", method: "POST", outcome: "success" },
-    { path: "/tabs/open", method: "POST", outcome: "failure" },
-    { path: "/tabs/open", method: "POST", outcome: "stale" },
-  ])(
+  it.each(
+    ["/tabs/open", "/tabs/owned", "/navigate", "/tabs/focus", "/act", "/screenshot"].flatMap(
+      (path) =>
+        ["success", "failure", "stale"].map((outcome) => ({
+          path,
+          outcome,
+          method: path === "/tabs/owned" ? "DELETE" : "POST",
+        })),
+    ),
+  )(
     "updates ownership and activity only for current successful $path ($outcome)",
     async ({ path, method, outcome }) => {
       vi.spyOn(Date, "now").mockReturnValue(9_000);

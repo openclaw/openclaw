@@ -121,6 +121,42 @@ describe("R2 object transport", () => {
     expect(send.mock.calls[2]?.[0]).toBeInstanceOf(CompleteMultipartUploadCommand);
   });
 
+  it.each(["completion", "producer", "size"])("aborts multipart when %s fails", async (failure) => {
+    const { send, backend } = fixture();
+    send.mockImplementation(async (command) => {
+      if (command instanceof CreateMultipartUploadCommand) {
+        return { UploadId: "upload" };
+      }
+      if (command instanceof UploadPartCommand) {
+        if (failure === "part") {
+          throw serviceError("AccessDenied", 403);
+        }
+        return { ETag: "part" };
+      }
+      if (command instanceof CompleteMultipartUploadCommand && failure === "completion") {
+        throw serviceError("PreconditionFailed", 412);
+      }
+      return {};
+    });
+    async function* source() {
+      yield Buffer.from("abc");
+      if (failure === "producer") {
+        throw new Error("private-credential-value");
+      }
+    }
+    const result = backend.putObject("broken", source(), {
+      sizeBytes: failure === "size" ? PART_BYTES + 1 : undefined,
+    });
+    await expect(result).rejects.not.toThrow("private-credential-value");
+    expect(send.mock.calls.at(-1)?.[0]).toBeInstanceOf(AbortMultipartUploadCommand);
+    expect(send.mock.calls.at(-1)?.[0].input).toEqual({
+      Bucket: "test-bucket",
+      Key: "archive/team/broken",
+      UploadId: "upload",
+    });
+    expect(send.mock.calls.at(-1)).toHaveLength(1);
+  });
+
   it("cancels a blocked producer and cleans up its upload", async () => {
     const { send, backend } = fixture();
     const controller = new AbortController();
