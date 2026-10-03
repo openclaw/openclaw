@@ -379,7 +379,15 @@ class ChatCompletedWorkLayoutTest {
         composeRule
           .onNodeWithText(text, useUnmergedTree = true)
           .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action -> assertTrue(action(layouts)) }
-        assertEquals("Body phase style for $text", expected, layouts.single().layoutInput.style.fontStyle)
+        assertEquals(
+          "Body phase style for $text",
+          expected,
+          layouts
+            .single()
+            .layoutInput
+            .style
+            .fontStyle,
+        )
       }
     }
     command.performClick()
