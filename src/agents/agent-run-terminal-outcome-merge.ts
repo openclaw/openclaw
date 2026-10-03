@@ -54,5 +54,14 @@ export function mergeAgentRunTerminalOutcome(
       ? current
       : incoming;
   }
+  // Queue/gateway wait timeouts are wait-layer uncertainty. Unattributed timed_out
+  // still lets chat delivery settlement replace an earlier execution completion.
+  if (
+    incoming.reason === "timed_out" &&
+    (incoming.timeoutPhase === "queue" || incoming.timeoutPhase === "gateway_draining") &&
+    completedBeforeOrAtTimeout({ completed: current, timeout: incoming })
+  ) {
+    return current;
+  }
   return incoming;
 }
