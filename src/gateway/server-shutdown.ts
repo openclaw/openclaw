@@ -112,9 +112,7 @@ export function runGatewayCloseSteps(params: {
 /** Failed acquisition retains its owner when native cleanup cannot finish. */
 export class GatewayStartupCleanupError extends AggregateError {
   constructor(startupError: unknown, cleanupError: unknown) {
-    super([startupError, cleanupError], "Gateway startup failed and cleanup did not complete", {
-      cause: startupError,
-    });
+    super([startupError, cleanupError], formatErrorMessage(startupError), { cause: startupError });
     this.name = "GatewayStartupCleanupError";
   }
 }
