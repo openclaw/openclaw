@@ -56,11 +56,7 @@ function buildTailnetHttpsOrigin(rawHost: string): string | null {
   if (!normalizedHost) {
     return null;
   }
-  try {
-    return new URL(`https://${normalizedHost}`).origin;
-  } catch {
-    return null;
-  }
+  return URL.parse(`https://${normalizedHost}`)?.origin ?? null;
 }
 
 function appendAllowedOrigin(existing: string[] | undefined, origin: string): string[] {

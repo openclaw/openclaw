@@ -67,19 +67,16 @@ export function buildControlUiCspHeader(opts?: {
     "https://tweakcn.com",
   ];
   if (opts?.portalHost) {
-    try {
-      const parsed = new URL(`http://${opts.portalHost}`);
-      const isHostOnly =
-        !parsed.username &&
-        !parsed.password &&
-        parsed.pathname === "/" &&
-        !parsed.search &&
-        !parsed.hash;
-      if (isHostOnly && parsed.hostname) {
-        connectTokens.push(`http://${parsed.hostname}:*`, `https://${parsed.hostname}:*`);
-      }
-    } catch {
-      // Invalid Host headers do not relax the baseline policy.
+    const parsed = URL.parse(`http://${opts.portalHost}`);
+    if (
+      parsed?.hostname &&
+      !parsed.username &&
+      !parsed.password &&
+      parsed.pathname === "/" &&
+      !parsed.search &&
+      !parsed.hash
+    ) {
+      connectTokens.push(`http://${parsed.hostname}:*`, `https://${parsed.hostname}:*`);
     }
   }
   return [

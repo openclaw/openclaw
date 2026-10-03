@@ -42,6 +42,7 @@ export {
   readStringField,
 } from "../../packages/normalization-core/src/record-coerce.js";
 export {
+  containsAsciiControlCharacter,
   filterStringEntries,
   normalizeAtHashSlug,
   normalizeHyphenSlug,

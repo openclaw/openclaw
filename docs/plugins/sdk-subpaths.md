@@ -507,7 +507,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/response-limit-runtime` | Private-local after July 2026; Byte-, idle-, and deadline-bounded response-body readers without the broad media runtime surface |
     | `plugin-sdk/session-binding-runtime` | Private-local after July 2026; Current conversation binding state without configured binding routing or pairing stores |
     | `plugin-sdk/context-visibility-runtime` | Private-local after July 2026; Context visibility resolution and supplemental context filtering without broad config/security imports |
-    | `plugin-sdk/string-coerce-runtime` | Browser-safe primitive coercion, string normalization, Date-valid timestamps, and UTF-16 truncation |
+    | `plugin-sdk/string-coerce-runtime` | Browser-safe primitive coercion, string normalization, ASCII control-character detection, Date-valid timestamps, and UTF-16 truncation |
     | `plugin-sdk/html-entity-runtime` | Private-local after July 2026; Single-pass semicolon-terminated HTML5 entity decoding without broad text utilities |
     | `plugin-sdk/text-grapheme` | Private official-plugin facade for `findGraphemeChunkEnd`. The publication builder bundles the canonical pure normalization implementation so plugins preserve grapheme boundaries on supported hosts that predate this SDK binding. |
     | `plugin-sdk/text-utility-runtime` | Private-local after July 2026; Low-level text and path helpers, including budget-aware grapheme chunk selection, UTF-8 prefix truncation, and five-entity HTML escaping |

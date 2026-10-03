@@ -122,10 +122,8 @@ async function probeTcpReachability(
   rawUrl: string,
   timeoutMs = 700,
 ): Promise<QaStartupProbeStatus> {
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
+  const parsed = URL.parse(rawUrl);
+  if (!parsed) {
     return {
       label: rawUrl,
       url: rawUrl,

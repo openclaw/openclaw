@@ -91,10 +91,8 @@ export async function assertHttpUrlTargetsPrivateNetwork(
     errorMessage?: string;
   } = {},
 ): Promise<void> {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
+  const parsed = URL.parse(url);
+  if (!parsed) {
     // URL parser errors retain rejected input. Keep only stable classification.
     const err = new TypeError("Invalid URL") as TypeError & { code: string };
     err.code = "ERR_INVALID_URL";

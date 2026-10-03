@@ -400,15 +400,10 @@ function readIdentityProxyRejection(details: unknown): { cloudflareAccess: boole
     return null;
   }
   const location = normalizeOptionalProtocolString(details.location);
-  if (!location) {
-    return { cloudflareAccess: false };
-  }
-  try {
-    const hostname = new URL(location).hostname.toLowerCase().replace(/\.+$/u, "");
-    return { cloudflareAccess: hostname.endsWith(".cloudflareaccess.com") };
-  } catch {
-    return { cloudflareAccess: false };
-  }
+  const hostname = URL.parse(location ?? "")
+    ?.hostname.toLowerCase()
+    .replace(/\.+$/u, "");
+  return { cloudflareAccess: hostname?.endsWith(".cloudflareaccess.com") ?? false };
 }
 
 /** Classifies Gateway connect failures from structured details, with one legacy text fallback. */
