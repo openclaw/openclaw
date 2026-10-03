@@ -45,10 +45,15 @@ describe("memory-lancedb embedding responses", () => {
     expect(decoded[1]).toBeCloseTo(-2.5);
   });
 
-  test.each(["float array", "base64"])("rejects nonfinite %s embeddings", async (encoding) => {
+  test.each(
+    [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY].flatMap((coordinate) => [
+      { encoding: "float array", coordinate },
+      { encoding: "base64", coordinate },
+    ]),
+  )("rejects nonfinite $coordinate in $encoding embeddings", async ({ encoding, coordinate }) => {
     const bytes = Buffer.alloc(Float32Array.BYTES_PER_ELEMENT);
-    bytes.writeFloatLE(Number.NaN);
-    const vector = encoding === "base64" ? bytes.toString("base64") : [Number.NaN];
+    bytes.writeFloatLE(coordinate);
+    const vector = encoding === "base64" ? bytes.toString("base64") : [coordinate];
     await expect(embedResponse(vector)).rejects.toThrow(
       "Embedding response contains non-numeric values",
     );

@@ -1,3 +1,7 @@
+// Memory Core tests prove the chunking upgrade fallback against a real HTTP
+// embedding server: the outage reaches the wire through the real
+// openai-compatible provider, the real embedding retry policy, and the real
+// SQLite store instead of a test-double provider.
 import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -27,9 +31,16 @@ const { closeAllMemorySearchManagers, getMemorySearchManager } = await import(".
 
 type ServerMode = "ok" | "unauthorized" | "quota";
 
+type CapturedRequest = {
+  method: string | undefined;
+  url: string | undefined;
+  status: number;
+  body: Record<string, unknown>;
+};
+
 type EmbeddingServer = {
   baseUrl: string;
-  requests: number[];
+  requests: CapturedRequest[];
   setMode: (mode: ServerMode) => void;
   close: () => Promise<void>;
 };
@@ -63,7 +74,7 @@ function errorBody(mode: Exclude<ServerMode, "ok">): Record<string, unknown> {
 }
 
 async function startEmbeddingServer(): Promise<EmbeddingServer> {
-  const requests: number[] = [];
+  const requests: CapturedRequest[] = [];
   let mode: ServerMode = "ok";
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
@@ -71,12 +82,12 @@ async function startEmbeddingServer(): Promise<EmbeddingServer> {
         const body = await readJsonBody(req);
         if (mode !== "ok") {
           const status = mode === "quota" ? 429 : 401;
-          requests.push(status);
+          requests.push({ method: req.method, url: req.url, status, body });
           res.writeHead(status, { "content-type": "application/json" });
           res.end(JSON.stringify(errorBody(mode)));
           return;
         }
-        requests.push(200);
+        requests.push({ method: req.method, url: req.url, status: 200, body });
         const input = body.input;
         const texts = Array.isArray(input) ? input : [input];
         res.writeHead(200, { "content-type": "application/json" });
@@ -92,7 +103,7 @@ async function startEmbeddingServer(): Promise<EmbeddingServer> {
           }),
         );
       } catch (error) {
-        requests.push(500);
+        requests.push({ method: req.method, url: req.url, status: 500, body: {} });
         res.writeHead(500, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: { message: String(error) } }));
       }
@@ -229,9 +240,9 @@ describe("memory chunking upgrade fallback over a real embedding transport", () 
   });
 
   afterEach(async () => {
-    await closeAllMemorySearchManagers();
     const pendingServers = servers.splice(0);
     await Promise.all(pendingServers.map((server) => server.close()));
+    await closeAllMemorySearchManagers();
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     await closeOpenClawStateDatabaseAsync();
@@ -244,67 +255,147 @@ describe("memory chunking upgrade fallback over a real embedding transport", () 
     }
   });
 
-  it.each(["quota", "missing FTS", "changed scope"] as const)(
-    "handles %s during a rejected upgrade over the real embedding transport",
-    async (scenario) => {
-      const server = await startEmbeddingServer();
-      const cfg = createConfig({ baseUrl: server.baseUrl });
-      let indexedConfig = cfg;
-      if (scenario === "changed scope") {
-        const wikiPath = path.join(root, "wiki");
-        await fs.mkdir(wikiPath, { recursive: true });
-        await fs.writeFile(path.join(wikiPath, "note.md"), "UpgradeScopeWiki alpha note.");
-        indexedConfig = createConfig({ baseUrl: server.baseUrl, extraPaths: [wikiPath] });
-      }
-      const filePath = path.join(memory, "upgrade.md");
-      await fs.writeFile(filePath, "UpgradeFallback()\nfinish()");
-      const dbPath = await seedPriorChunkingVersionIndex(indexedConfig);
-      // Force a fresh embedding rather than satisfying the rebuild from cache.
-      await fs.writeFile(
-        filePath,
-        "UpgradeFallback() changed after the prior index was published.",
-      );
-      if (scenario === "missing FTS") {
-        const db = new DatabaseSync(dbPath);
-        try {
-          db.exec("DROP TABLE IF EXISTS memory_index_chunks_fts");
-          db.exec("CREATE VIEW memory_index_chunks_fts AS SELECT 1 AS text");
-        } finally {
-          db.close();
-        }
-      }
-      server.setMode(scenario === "quota" ? "quota" : "unauthorized");
-      const manager =
-        scenario === "quota"
-          ? requireManager(await getMemorySearchManager({ cfg, agentId: "main" }))
-          : undefined;
-      const result = await createMemorySearchToolFor(cfg).execute("upgrade-fallback", {
-        query: "UpgradeFallback",
+  it("serves keyword results through memory_search when a real server rejects the upgrade rebuild", async () => {
+    const server = await startEmbeddingServer();
+    const cfg = createConfig({ baseUrl: server.baseUrl });
+    const filePath = path.join(memory, "upgrade-fallback.md");
+    await fs.writeFile(filePath, "UpgradeKeywordFallback()\nfinish()");
+    await seedPriorChunkingVersionIndex(cfg);
+    // The changed file forces the upgrade rebuild to request a fresh embedding
+    // instead of republishing from the embedding cache.
+    await fs.writeFile(
+      filePath,
+      "UpgradeKeywordFallback() changed after the prior index was published.",
+    );
+    server.setMode("unauthorized");
+
+    const tool = createMemorySearchToolFor(cfg);
+    try {
+      const result = await tool.execute("upgrade-keyword-fallback", {
+        query: "UpgradeKeywordFallback",
         corpus: "memory",
       });
-      if (scenario === "quota") {
-        expect(result.details).toMatchObject({
-          results: [expect.objectContaining({ path: "memory/upgrade.md" })],
-        });
-        expect(result.details).not.toHaveProperty("unavailable");
-        expect(manager?.status().custom?.indexIdentity).toMatchObject({
-          status: "mismatched",
-          code: "chunking_version",
-          owner: "openclaw",
-          chunkingVersionOnly: true,
-        });
-      } else {
-        expect(result.details).toMatchObject({
-          results: [],
-          disabled: true,
-          unavailable: true,
-          error: expect.stringContaining("HTTP 401"),
-          warning: expect.stringContaining("Rebuilding may call the configured embedding provider"),
-        });
-      }
-      expect(server.requests).toContain(200);
-      // Retry counts vary with the real backoff budget; require the rejection on the wire.
-      expect(server.requests).toContain(scenario === "quota" ? 429 : 401);
-    },
-  );
+      expect(result.details).toMatchObject({
+        results: [expect.objectContaining({ path: "memory/upgrade-fallback.md" })],
+      });
+      expect(result.details).not.toHaveProperty("unavailable");
+    } finally {
+      await closeAllMemorySearchManagers();
+      closeOpenClawAgentDatabasesForTest();
+    }
+    // The rejection must have reached the real server for the rebuild's fresh
+    // embedding; the seed phase answered 200 beforehand.
+    expect(server.requests.some((request) => request.status === 401)).toBe(true);
+    expect(server.requests.some((request) => request.status === 200)).toBe(true);
+  });
+
+  it("keeps memory_search paused when a real outage rebuild has no usable FTS index", async () => {
+    const server = await startEmbeddingServer();
+    const cfg = createConfig({ baseUrl: server.baseUrl });
+    const filePath = path.join(memory, "upgrade-fts-paused.md");
+    await fs.writeFile(filePath, "UpgradeFtsPaused()\nfinish()");
+    const dbPath = await seedPriorChunkingVersionIndex(cfg);
+    await fs.writeFile(filePath, "UpgradeFtsPaused() changed after the prior index was published.");
+    // Occupy the FTS table name with a view so every schema ensure — including
+    // the upgrade rebuild's republish — fails to restore a usable keyword index.
+    const sabotaged = new DatabaseSync(dbPath);
+    try {
+      sabotaged.exec("DROP TABLE IF EXISTS memory_index_chunks_fts");
+      sabotaged.exec("CREATE VIEW memory_index_chunks_fts AS SELECT 1 AS text");
+    } finally {
+      sabotaged.close();
+    }
+    server.setMode("unauthorized");
+
+    const tool = createMemorySearchToolFor(cfg);
+    try {
+      const result = await tool.execute("upgrade-fts-paused", {
+        query: "UpgradeFtsPaused",
+        corpus: "memory",
+      });
+      expect(result.details).toMatchObject({
+        results: [],
+        disabled: true,
+        unavailable: true,
+        error: expect.stringContaining("HTTP 401"),
+        warning: expect.stringContaining("Rebuilding may call the configured embedding provider"),
+      });
+    } finally {
+      await closeAllMemorySearchManagers();
+      closeOpenClawAgentDatabasesForTest();
+    }
+    expect(server.requests.some((request) => request.status === 401)).toBe(true);
+  });
+
+  it("pauses memory_search when a real outage rebuild coincides with a changed scope", async () => {
+    const server = await startEmbeddingServer();
+    const wikiPath = path.join(root, "wiki");
+    await fs.mkdir(wikiPath, { recursive: true });
+    await fs.writeFile(path.join(wikiPath, "note.md"), "UpgradeScopeWiki alpha note.");
+    const cfgWithWiki = createConfig({ baseUrl: server.baseUrl, extraPaths: [wikiPath] });
+    const cfgWithoutWiki = createConfig({ baseUrl: server.baseUrl });
+    const filePath = path.join(memory, "upgrade-scope.md");
+    await fs.writeFile(filePath, "UpgradeScopeMemory alpha note.");
+    await seedPriorChunkingVersionIndex(cfgWithWiki);
+    await fs.writeFile(filePath, "UpgradeScopeMemory note changed after the prior index.");
+    server.setMode("unauthorized");
+
+    const tool = createMemorySearchToolFor(cfgWithoutWiki);
+    try {
+      const result = await tool.execute("upgrade-changed-scope", {
+        query: "UpgradeScopeMemory",
+        corpus: "memory",
+      });
+      expect(result.details).toMatchObject({
+        results: [],
+        disabled: true,
+        unavailable: true,
+        error: expect.stringContaining("HTTP 401"),
+        warning: expect.stringContaining("Rebuilding may call the configured embedding provider"),
+      });
+    } finally {
+      await closeAllMemorySearchManagers();
+      closeOpenClawAgentDatabasesForTest();
+    }
+    expect(server.requests.some((request) => request.status === 401)).toBe(true);
+  });
+
+  it("keeps keyword results readable when a real quota-exhausted server rate-limits the rebuild", async () => {
+    const server = await startEmbeddingServer();
+    const cfg = createConfig({ baseUrl: server.baseUrl });
+    const filePath = path.join(memory, "upgrade-quota.md");
+    await fs.writeFile(filePath, "UpgradeQuotaFallback()\nfinish()");
+    await seedPriorChunkingVersionIndex(cfg);
+    await fs.writeFile(
+      filePath,
+      "UpgradeQuotaFallback() changed after the prior index was published.",
+    );
+    server.setMode("quota");
+
+    const manager = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    try {
+      // A real quota rejection rate-limits the rebuild over the wire while the
+      // published keyword index stays readable.
+      const results = await manager.search("UpgradeQuotaFallback");
+      expect(results).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: "memory/upgrade-quota.md" })]),
+      );
+      expect(manager.status().custom?.indexIdentity).toMatchObject({
+        status: "mismatched",
+        code: "chunking_version",
+        owner: "openclaw",
+        chunkingVersionOnly: true,
+      });
+    } finally {
+      await manager.close();
+      await closeAllMemorySearchManagers();
+      closeOpenClawAgentDatabasesForTest();
+    }
+    // The quota rejection reached the real server over the wire. How many
+    // retries fit into the run is clock-dependent — the rate-limit budget
+    // drains through backoff sleeps and the search fallback races it — so the
+    // run only promises at least one wire-visible 429; the exact budget is
+    // owned by the embedding-policy unit tests.
+    expect(server.requests.some((request) => request.status === 429)).toBe(true);
+  });
 });

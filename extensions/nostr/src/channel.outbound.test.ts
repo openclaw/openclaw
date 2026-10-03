@@ -2,6 +2,7 @@ import {
   buildChannelInboundEventContext,
   type dispatchInboundDirectDm as DispatchInboundDirectDm,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createPluginRuntimeMock,
   createStartAccountContext,
@@ -112,7 +113,7 @@ const send = (text: string) =>
   });
 
 describe("nostr gateway lifecycle", () => {
-  it("retires the bus before fallible shutdown settles", async () => {
+  it.each([false, true])("retires the bus before shutdown settles (failure=%s)", async (fails) => {
     const close = Promise.withResolvers<void>();
     const closing = Promise.withResolvers<void>();
     const bus = createMockNostrBus(eventId);
@@ -130,10 +131,16 @@ describe("nostr gateway lifecycle", () => {
       await expect(send("hello")).rejects.toThrow("Nostr bus not running for account default");
       expect(bus.sendDm).not.toHaveBeenCalled();
       expect(h.context.log?.info).not.toHaveBeenCalledWith("[default] Nostr provider stopped");
-      const error = new Error("Nostr relay shutdown failed");
-      close.reject(error);
-      await expect(h.task).rejects.toBe(error);
-      expect(h.context.log?.info).not.toHaveBeenCalledWith("[default] Nostr provider stopped");
+      if (fails) {
+        const error = new Error("Nostr relay shutdown failed");
+        close.reject(error);
+        await expect(h.task).rejects.toBe(error);
+        expect(h.context.log?.info).not.toHaveBeenCalledWith("[default] Nostr provider stopped");
+      } else {
+        close.resolve();
+        await expect(h.task).resolves.toBeUndefined();
+        expect(h.context.log?.info).toHaveBeenCalledWith("[default] Nostr provider stopped");
+      }
       expect(bus.close).toHaveBeenCalledOnce();
       expect(getActiveNostrBuses().has("default")).toBe(false);
     } finally {
@@ -157,7 +164,6 @@ describe("nostr gateway lifecycle", () => {
       expect(getActiveNostrBuses().get("default")).toBe(replacement.bus);
       close.resolve();
       await first.task;
-      expect(first.context.log?.info).toHaveBeenCalledWith("[default] Nostr provider stopped");
       expect(getActiveNostrBuses().get("default")).toBe(replacement.bus);
       replacement.abort.abort();
       await replacement.task;
@@ -165,6 +171,15 @@ describe("nostr gateway lifecycle", () => {
     } finally {
       close.resolve();
     }
+  });
+
+  it("closes immediately for an already-aborted signal", async () => {
+    const abort = new AbortController();
+    abort.abort();
+    const h = await startGateway({ abort });
+    await h.task;
+    expect(mocks.startNostrBus).toHaveBeenCalledOnce();
+    expect(h.bus.close).toHaveBeenCalledOnce();
   });
 
   it("becomes ready on connection and recovers only after the last relay disconnects", async () => {
@@ -243,6 +258,20 @@ describe("nostr inbound", () => {
       { eventId: "event-123", createdAt: 1_710_000_000 },
       lifecycle,
     );
+    expect(mocks.dispatchInboundDirectDm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "nostr",
+        accountId: "default",
+        peer: { kind: "direct", id: TEST_HEX_PUBLIC_KEY },
+        senderId: TEST_HEX_PUBLIC_KEY,
+        rawBody: "hello from nostr",
+        messageId: "event-123",
+        timestamp: 1_710_000_000_000,
+        commandAuthorized: true,
+        turnAdoptionLifecycle: expect.objectContaining({ admission: "exclusive" }),
+        channelRuntime: runtime.channel,
+      }),
+    );
     if (visible) {
       expect(convertMarkdownTables).toHaveBeenCalledWith(visible, "off");
     } else {
@@ -257,8 +286,7 @@ describe("nostr inbound", () => {
 });
 
 describe("nostr outbound", () => {
-  it("sanitizes tool traces at the outbound adapter", () => {
-    const { text, expected } = NOSTR_SANITIZER_CASES[1]!;
+  it.each(NOSTR_SANITIZER_CASES)("$name", ({ text, expected }) => {
     expect(nostrPlugin.outbound?.sanitizeText?.({ text, payload: { text } })).toBe(expected);
   });
 
@@ -304,5 +332,38 @@ describe("nostr outbound", () => {
     const h = await startGateway();
     await expect(send("***")).rejects.toThrow("requires non-empty text");
     expect(h.bus.sendDm).not.toHaveBeenCalled();
+  });
+
+  it("backs declared message capabilities with a delivered text receipt", async () => {
+    const h = await startGateway();
+    const adapter = nostrPlugin.message;
+    if (!adapter?.send?.text) {
+      throw new Error("Expected Nostr message adapter");
+    }
+    const sendText = adapter.send.text;
+    expect(adapter.send.media).toBeUndefined();
+    await verifyChannelMessageAdapterCapabilityProofs({
+      adapterName: "nostrMessageAdapter",
+      adapter,
+      proofs: {
+        text: async () => {
+          const result = await sendText({
+            cfg: {},
+            to: TEST_HEX_PUBLIC_KEY,
+            text: "hello",
+            accountId: "default",
+          });
+          expect(h.bus.sendDm).toHaveBeenCalledWith(
+            TEST_HEX_PUBLIC_KEY,
+            "hello",
+            expect.any(Object),
+          );
+          expect(result.receipt.parts[0]?.kind).toBe("text");
+        },
+        messageSendingHooks: () => {
+          expect(sendText).toBeTypeOf("function");
+        },
+      },
+    });
   });
 });

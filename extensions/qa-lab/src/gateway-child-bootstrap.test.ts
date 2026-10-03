@@ -261,46 +261,6 @@ async function fixture(phase: string, mode: string) {
   };
 }
 
-async function cliFixture(
-  phase: string,
-  mode: string,
-  args: string[],
-  options: { fakeTimers?: boolean; stdin?: string; env?: NodeJS.ProcessEnv } = {},
-) {
-  const f = await fixture(phase, mode);
-  const lifetime = new QaGatewayChildLifecycle();
-  cleanups.push(async () => {
-    await lifetime.stop();
-  });
-  const registration = vi.spyOn(lifetime, "register");
-  if (options.fakeTimers) {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  }
-  const outcome = f.track(
-    runQaGatewayCliCommand({
-      ...f.command,
-      lifetime,
-      args,
-      cwd: f.root,
-      env: { HOME: f.root, ...options.env },
-      stdin: options.stdin,
-    }),
-  );
-  return { ...f, lifetime, outcome, child: registration.mock.calls[0]![0] };
-}
-
-async function repairProgress(f: Awaited<ReturnType<typeof cliFixture>>, count: number) {
-  await bounded(
-    new Promise<void>((resolve) => {
-      f.child.stderr!.once("data", () => resolve());
-      f.child.kill("SIGUSR1");
-    }),
-  );
-  await vi.waitFor(() =>
-    expect(f.records().filter((entry) => entry.kind === "progress")).toHaveLength(count),
-  );
-}
-
 describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", () => {
   it("uses the direct candidate CLI while its Gateway owns the state", async () => {
     vi.stubEnv("OPENCLAW_PROFILE", "operator-parent");
@@ -436,7 +396,9 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
   });
 
   it.each([
+    { phase: "openai", mode: "running" },
     { phase: "anthropic", mode: "running" },
+    { phase: "help", mode: "leader-exited" },
     { phase: "repair", mode: "leader-exited" },
   ])("stops during $phase ($mode) before any gateway spawn", async ({ phase, mode }) => {
     const f = await fixture(phase, mode);
@@ -471,54 +433,131 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
     expect(() => gateway.runCli(["hang"])).toThrow("lifecycle is closed");
   });
 
-  it("settles descendants after successful CLI exit with closed pipes", async () => {
-    const f = await cliFixture("probe", "closed-pipes", ["probe"]);
-    await f.ready();
-    expect(await bounded(f.outcome)).toBe("fixture-output");
-    f.assertStopped();
-    await expect(f.lifetime.stop()).resolves.toEqual({ process: "confirmed-stopped", errors: [] });
-  });
+  it.each(["leader-exited", "closed-pipes"])(
+    "settles descendants after successful CLI exit (%s)",
+    async (mode) => {
+      const f = await fixture("probe", mode);
+      const lifetime = new QaGatewayChildLifecycle();
+      const command = f.track(
+        runQaGatewayCliCommand({
+          ...f.command,
+          lifetime,
+          args: ["probe"],
+          cwd: f.root,
+          env: { HOME: f.root },
+        }),
+      );
+      cleanups.push(async () => {
+        await lifetime.stop();
+      });
+      await f.ready();
+      expect(await bounded(command)).toBe("fixture-output");
+      f.assertStopped();
+      await expect(lifetime.stop()).resolves.toEqual({ process: "confirmed-stopped", errors: [] });
+    },
+  );
 
   it("allows progressing repair phases past the whole-command deadline and settles descendants", async () => {
-    const f = await cliFixture("repair", "progress", ["update", "repair", "--json"], {
-      fakeTimers: true,
+    const f = await fixture("repair", "progress");
+    const lifetime = new QaGatewayChildLifecycle();
+    cleanups.push(async () => {
+      await lifetime.stop();
     });
+    const registration = vi.spyOn(lifetime, "register");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     let settled = false;
-    const command = f.outcome.then((value) => {
-      settled = true;
-      return value;
-    });
+    const command = f
+      .track(
+        runQaGatewayCliCommand({
+          ...f.command,
+          lifetime,
+          args: ["update", "repair", "--json"],
+          cwd: f.root,
+          env: { HOME: f.root },
+        }),
+      )
+      .then((value) => {
+        settled = true;
+        return value;
+      });
     await f.ready();
+    const child = registration.mock.calls[0]![0];
     for (let phase = 1; phase <= 4; phase++) {
       await vi.advanceTimersByTimeAsync(60_000);
       expect(settled).toBe(false);
-      await repairProgress(f, phase);
+      await bounded(
+        new Promise<void>((resolve) => {
+          child.stderr!.once("data", () => resolve());
+          child.kill("SIGUSR1");
+        }),
+      );
+      await vi.waitFor(() =>
+        expect(f.records().filter((entry) => entry.kind === "progress")).toHaveLength(phase),
+      );
     }
-    f.child.kill("SIGUSR2");
+    child.kill("SIGUSR2");
     expect(await bounded(command)).toBe("repair-complete");
     f.assertStopped();
   });
 
   it("still times out a repair stalled after forward progress and settles its real tree", async () => {
-    const f = await cliFixture("repair", "progress", ["update", "repair"], { fakeTimers: true });
+    const f = await fixture("repair", "progress");
+    const lifetime = new QaGatewayChildLifecycle();
+    cleanups.push(async () => {
+      await lifetime.stop();
+    });
+    const registration = vi.spyOn(lifetime, "register");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const command = f.track(
+      runQaGatewayCliCommand({
+        ...f.command,
+        lifetime,
+        args: ["update", "repair"],
+        cwd: f.root,
+        env: { HOME: f.root },
+      }),
+    );
     await f.ready();
-    await repairProgress(f, 1);
+    const child = registration.mock.calls[0]![0];
+    await bounded(
+      new Promise<void>((resolve) => {
+        child.stderr!.once("data", () => resolve());
+        child.kill("SIGUSR1");
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(f.records().filter((entry) => entry.kind === "progress")).toHaveLength(1),
+    );
     await vi.advanceTimersByTimeAsync(120_000);
-    const error = await bounded(f.outcome);
+    const error = await bounded(command);
     expect(error).toBeInstanceOf(Error);
     expect(String(error)).toContain("no update repair phase progress for 120000ms");
     f.assertStopped();
   });
 
-  it.each(["timeout", "stderr", "stdin", "process"] as const)(
+  it.each(["timeout", "cancel", "stdout", "stderr", "stdin", "process"] as const)(
     "retains bounded redacted diagnostics after %s failure and settles the real CLI tree",
     async (failure) => {
-      const f = await cliFixture("probe", "running", ["probe", "unlabeled-argv-secret"], {
-        fakeTimers: failure === "timeout",
-        env: { QA_SYNTHETIC_SECRET: "unlabeled-env-secret" },
-        stdin: failure === "stdin" ? "unlabeled-stdin-secret" : undefined,
+      const f = await fixture("probe", "running");
+      const lifetime = new QaGatewayChildLifecycle();
+      const registration = vi.spyOn(lifetime, "register");
+      if (failure === "timeout") {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
+      const command = f.track(
+        runQaGatewayCliCommand({
+          ...f.command,
+          lifetime,
+          args: ["probe", "unlabeled-argv-secret"],
+          cwd: f.root,
+          env: { HOME: f.root, QA_SYNTHETIC_SECRET: "unlabeled-env-secret" },
+          stdin: failure === "stdin" ? "unlabeled-stdin-secret" : undefined,
+        }),
+      );
+      cleanups.push(async () => {
+        await lifetime.stop();
       });
-      const { child } = f;
+      const child = registration.mock.calls[0]![0];
       const observed = { stdout: "", stderr: "" };
       for (const stream of ["stdout", "stderr"] as const) {
         child[stream]!.on("data", (chunk) => (observed[stream] += String(chunk)));
@@ -528,8 +567,11 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
         expect(observed.stdout).toContain("stdout ready");
         expect(observed.stderr).toContain("stderr ready");
       });
+      let stopping: Promise<unknown> | undefined;
       if (failure === "timeout") {
         await vi.advanceTimersByTimeAsync(120_000);
+      } else if (failure === "cancel") {
+        stopping = f.track(lifetime.stop());
       } else {
         const error = Object.assign(
           new AggregateError(
@@ -553,13 +595,17 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
         }
       }
       (failure === "process" ? child.stderr! : child).emit("error", new Error("later failure"));
-      const error = await bounded(f.outcome);
+      const error = await bounded(command);
       expect(error).toBeInstanceOf(Error);
       if (!(error instanceof Error)) {
         throw new Error("expected CLI failure");
       }
       expect(error.message).toContain(
-        failure === "timeout" ? "exceeded 120000ms" : `${failure} failed`,
+        failure === "timeout"
+          ? "exceeded 120000ms"
+          : failure === "cancel"
+            ? "CLI cancelled"
+            : `${failure} failed`,
       );
       expect(error.message).not.toContain("later failure");
       expect(error.message).toContain("plugin registry still pending apiKey=<redacted>");
@@ -581,10 +627,10 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
       const diagnostic = inspect(error, { depth: null });
       expect(diagnostic).not.toMatch(/synthetic-[\w-]+-secret|unlabeled-[\w-]+-secret/u);
       f.assertStopped();
-      await expect(f.lifetime.stop()).resolves.toEqual({
-        process: "confirmed-stopped",
-        errors: [],
-      });
+      if (stopping) {
+        expect(await bounded(stopping)).toEqual({ process: "confirmed-stopped", errors: [] });
+      }
+      await expect(lifetime.stop()).resolves.toEqual({ process: "confirmed-stopped", errors: [] });
     },
   );
 

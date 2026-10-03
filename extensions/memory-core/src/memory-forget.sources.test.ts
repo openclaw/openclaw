@@ -100,36 +100,62 @@ describe("memory forget source removal", () => {
     }
   });
 
-  it("refuses missing required tables during read planning without repairing the source", async () => {
-    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    openOpenClawAgentDatabase({ agentId: "main" });
-    await closeOpenClawAgentDatabasesAsync(fixture.stateDir);
-    closeOpenClawAgentDatabasesForTest(fixture.stateDir);
-    const setup = openNodeSqliteDatabase(databasePath);
-    try {
-      setup.exec("DROP TABLE memory_index_chunks");
-    } finally {
-      setup.close();
-    }
-    const before = await fs.readFile(databasePath);
-    const message = /Session metadata unavailable \(table-missing: memory_index_chunks\)/;
-    await expect(
-      pruneMemoryEntryOrigins({
-        workspaceDir: fixture.workspaceDir,
-        agentIds: ["main"],
-        entryKeys: ["candidate"],
-        retainedEntryKeys: new Set(),
-      }),
-    ).rejects.toThrow(message);
-    await expect(
-      planMemoryIndex(indexSelection(), {
-        agentId: "main",
-        path: databasePath,
-        env: { OPENCLAW_STATE_DIR: fixture.stateDir },
-      }),
-    ).rejects.toThrow(message);
-    expect(await fs.readFile(databasePath)).toEqual(before);
-  });
+  it.each([
+    [
+      "missing required table",
+      /Session metadata unavailable \(table-missing: memory_index_chunks\)/,
+    ],
+    ["newer schema", /uses newer schema version 999/],
+    ["unreadable source", /file is not a database/],
+  ] as const)(
+    "refuses %s during read planning without repairing its source",
+    async (failure, message) => {
+      openOpenClawAgentDatabase({ agentId: "main" });
+      const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+      await closeOpenClawAgentDatabasesAsync(fixture.stateDir);
+      closeOpenClawAgentDatabasesForTest(fixture.stateDir);
+      const original = await fs.readFile(databasePath);
+      try {
+        if (failure === "unreadable source") {
+          await fs.writeFile(databasePath, "not a SQLite database");
+        } else {
+          const setup = openNodeSqliteDatabase(databasePath);
+          try {
+            setup.exec(
+              failure === "newer schema"
+                ? "PRAGMA user_version = 999"
+                : "DROP TABLE memory_index_chunks",
+            );
+          } finally {
+            setup.close();
+          }
+        }
+        const beforeRead = await fs.readFile(databasePath);
+        const reading = async () =>
+          failure === "missing required table"
+            ? pruneMemoryEntryOrigins({
+                workspaceDir: fixture.workspaceDir,
+                agentIds: ["main"],
+                entryKeys: ["candidate"],
+                retainedEntryKeys: new Set(),
+              })
+            : listMemoryEntryOrigins({ agentId: "main" });
+        await expect(reading()).rejects.toThrow(message);
+        await expect(
+          planMemoryIndex(indexSelection(), {
+            agentId: "main",
+            path: databasePath,
+            env: { OPENCLAW_STATE_DIR: fixture.stateDir },
+          }),
+        ).rejects.toThrow(message);
+        expect(await fs.readFile(databasePath)).toEqual(beforeRead);
+      } finally {
+        await closeOpenClawAgentDatabasesAsync(fixture.stateDir);
+        closeOpenClawAgentDatabasesForTest(fixture.stateDir);
+        await fs.writeFile(databasePath, original);
+      }
+    },
+  );
 
   it.each(["removed", "new mixed contributor"] as const)(
     "keeps selected file provenance when another workspace leaves lineage %s during planning",
@@ -337,120 +363,130 @@ describe("memory forget source removal", () => {
     }
   });
 
-  it("forgets a batch with bounded writes and preserves other sources", async () => {
-    const { cfg } = fixture;
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
-    const insertSource = db.prepare(
-      "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, 1, 1)",
-    );
-    const insertChunk = db.prepare(`INSERT INTO memory_index_chunks
+  it.each([1, 32])(
+    "forgets %d sessions with bounded writes and preserves other sources",
+    async (sessionCount) => {
+      const { cfg } = fixture;
+      const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+      const insertSource = db.prepare(
+        "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, 1, 1)",
+      );
+      const insertChunk = db.prepare(`INSERT INTO memory_index_chunks
       (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
       VALUES (?, ?, 'sessions', 1, 1, 'fixture-hash', 'test', 'forget', x'', 1)`);
-    const provenance = db.prepare(`INSERT INTO memory_index_chunk_provenance
+      const provenance = db.prepare(`INSERT INTO memory_index_chunk_provenance
       (chunk_id, origin_class, session_kind, observed_at) VALUES (?, 'agent', 'interactive', 1)`);
-    const sessionIds = Array.from({ length: 32 }, (_, index) => `target-${index}`);
-    const paths = Array.from(
-      { length: 32 },
-      (_, index) =>
-        `sessions/main/${sessionIds[index]!}.jsonl.deleted.2026-08-25T10-00-00.${String(index).padStart(3, "0")}Z.zst`,
-    );
-    for (const [index, sourcePath] of paths.entries()) {
-      insertSource.run(sourcePath, "sessions", "remove");
-      insertChunk.run(`chunk-${index}`, sourcePath);
-      provenance.run(`chunk-${index}`);
-    }
-    insertSource.run(paths[0]!, "memory", "keep-memory");
-    insertSource.run("sessions/main/survivor.jsonl", "sessions", "keep-session");
-    const survivors = db
-      .prepare("SELECT * FROM memory_index_sources WHERE hash != 'remove' ORDER BY id")
-      .all();
-    const preview = await forgetMemoryEntries({
-      cfg,
-      agentId: "main",
-      sessionIds,
-      dryRun: true,
-    });
-    expect(preview.artifacts.indexSources).toBe(32);
-    expect(db.prepare("SELECT count(*) AS count FROM memory_index_sources").get()).toEqual({
-      count: 34,
-    });
-    const reportPath = path.join(fixture.stateDir, "forget-native-counts.jsonl");
-    const restore = observeMemoryForgetWorker(db, { reportPath });
-    try {
-      const result = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds });
-      expect(result).toEqual({ ...preview, dryRun: false });
-      expect(db.prepare("SELECT * FROM memory_index_sources ORDER BY id").all()).toEqual(survivors);
-      expect(db.prepare("SELECT id FROM memory_index_chunks").all()).toEqual([]);
-      expect(await listMemorySessionTombstones({ agentId: "main" })).toMatchObject(
-        sessionIds.toSorted().map((sessionId) => ({ sessionId, reason: "forgotten" })),
+      const sessionIds = Array.from({ length: sessionCount }, (_, index) =>
+        sessionCount === 1 ? "target" : `target-${index}`,
       );
-      let sourceDeletes = 0;
-      let tombstoneInserts = 0;
-      const reports = (await fs.readFile(reportPath, "utf8")).trim().split("\n");
-      for (const report of reports) {
-        const counts: unknown = JSON.parse(report);
-        if (
-          typeof counts !== "object" ||
-          counts === null ||
-          !("sourceDeletes" in counts) ||
-          typeof counts.sourceDeletes !== "number" ||
-          !("tombstoneInserts" in counts) ||
-          typeof counts.tombstoneInserts !== "number"
-        ) {
-          throw new Error("Invalid native Forget execution counts");
-        }
-        sourceDeletes += counts.sourceDeletes;
-        tombstoneInserts += counts.tombstoneInserts;
+      const paths = Array.from(
+        { length: 32 },
+        (_, index) =>
+          `sessions/main/${sessionIds[index % sessionCount]!}.jsonl.deleted.2026-08-25T10-00-00.${String(index).padStart(3, "0")}Z.zst`,
+      );
+      for (const [index, sourcePath] of paths.entries()) {
+        insertSource.run(sourcePath, "sessions", "remove");
+        insertChunk.run(`chunk-${index}`, sourcePath);
+        provenance.run(`chunk-${index}`);
       }
-      expect(sourceDeletes).toBeGreaterThan(0);
-      expect(sourceDeletes).toBeLessThanOrEqual(2);
-      expect(tombstoneInserts).toBeGreaterThan(0);
-      expect(tombstoneInserts).toBeLessThanOrEqual(2);
-    } finally {
-      restore();
-    }
-  });
+      insertSource.run(paths[0]!, "memory", "keep-memory");
+      insertSource.run("sessions/main/survivor.jsonl", "sessions", "keep-session");
+      const survivors = db
+        .prepare("SELECT * FROM memory_index_sources WHERE hash != 'remove' ORDER BY id")
+        .all();
+      const preview = await forgetMemoryEntries({
+        cfg,
+        agentId: "main",
+        sessionIds,
+        dryRun: true,
+      });
+      expect(preview.artifacts.indexSources).toBe(32);
+      expect(db.prepare("SELECT count(*) AS count FROM memory_index_sources").get()).toEqual({
+        count: 34,
+      });
+      const reportPath = path.join(fixture.stateDir, "forget-native-counts.jsonl");
+      const restore = observeMemoryForgetWorker(db, { reportPath });
+      try {
+        const result = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds });
+        expect(result).toEqual({ ...preview, dryRun: false });
+        expect(db.prepare("SELECT * FROM memory_index_sources ORDER BY id").all()).toEqual(
+          survivors,
+        );
+        expect(db.prepare("SELECT id FROM memory_index_chunks").all()).toEqual([]);
+        expect(await listMemorySessionTombstones({ agentId: "main" })).toMatchObject(
+          sessionIds.toSorted().map((sessionId) => ({ sessionId, reason: "forgotten" })),
+        );
+        let sourceDeletes = 0;
+        let tombstoneInserts = 0;
+        const reports = (await fs.readFile(reportPath, "utf8")).trim().split("\n");
+        for (const report of reports) {
+          const counts: unknown = JSON.parse(report);
+          if (
+            typeof counts !== "object" ||
+            counts === null ||
+            !("sourceDeletes" in counts) ||
+            typeof counts.sourceDeletes !== "number" ||
+            !("tombstoneInserts" in counts) ||
+            typeof counts.tombstoneInserts !== "number"
+          ) {
+            throw new Error("Invalid native Forget execution counts");
+          }
+          sourceDeletes += counts.sourceDeletes;
+          tombstoneInserts += counts.tombstoneInserts;
+        }
+        expect(sourceDeletes).toBeGreaterThan(0);
+        expect(sourceDeletes).toBeLessThanOrEqual(2);
+        expect(tombstoneInserts).toBeGreaterThan(0);
+        expect(tombstoneInserts).toBeLessThanOrEqual(2);
+      } finally {
+        restore();
+      }
+    },
+  );
 
-  it("rolls back the complete admission batch after SQLite FAIL", async () => {
-    const { cfg } = fixture;
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
-    const sessionIds = Array.from({ length: 130 }, (_, index) => `target-${index}`);
-    db.prepare(`INSERT INTO memory_index_sources (path, source, hash, mtime, size)
+  it.each(["ABORT", "FAIL"] as const)(
+    "keeps the index intact when admission fails with %s",
+    async (failure) => {
+      const { cfg } = fixture;
+      const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+      const sessionIds = Array.from({ length: 130 }, (_, index) => `target-${index}`);
+      db.prepare(`INSERT INTO memory_index_sources (path, source, hash, mtime, size)
       VALUES ('sessions/main/target-0.jsonl', 'sessions', 'keep-until-admitted', 1, 1)`).run();
-    db.prepare(`INSERT INTO memory_index_chunks
+      db.prepare(`INSERT INTO memory_index_chunks
       (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
       VALUES ('target-chunk', 'sessions/main/target-0.jsonl', 'sessions', 1, 1, 'hash', 'test', 'forget', x'', 1)`).run();
-    db.prepare(`INSERT INTO memory_index_chunk_provenance
+      db.prepare(`INSERT INTO memory_index_chunk_provenance
       (chunk_id, origin_class, session_kind, observed_at)
       VALUES ('target-chunk', 'agent', 'interactive', 1)`).run();
-    const sources = db.prepare("SELECT * FROM memory_index_sources").all();
-    const chunks = db.prepare("SELECT * FROM memory_index_chunks").all();
-    const revision = db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get();
-    const restore = observeMemoryForgetWorker(db, {
-      trigger: {
-        event: "BEFORE INSERT ON memory_session_tombstones WHEN NEW.session_id = 'target-129'",
-        message: "synthetic admission failure",
-        action: "FAIL",
-      },
-    });
-    try {
-      await expect(forgetMemoryEntries({ cfg, agentId: "main", sessionIds })).rejects.toThrow(
-        "synthetic admission failure",
-      );
-      expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
-      expect(db.prepare("SELECT * FROM memory_index_sources").all()).toEqual(sources);
-      expect(db.prepare("SELECT * FROM memory_index_chunks").all()).toEqual(chunks);
-      expect(db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get()).toEqual(
-        revision,
-      );
-    } finally {
-      restore();
-    }
-    const result = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds });
-    expect(result.artifacts.indexSources).toBe(1);
-    expect(result.artifacts.indexChunks).toBe(1);
-    expect(await listMemorySessionTombstones({ agentId: "main" })).toHaveLength(130);
-    expect(db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);
-    expect(db.prepare("SELECT * FROM memory_index_chunks").all()).toEqual([]);
-  });
+      const sources = db.prepare("SELECT * FROM memory_index_sources").all();
+      const chunks = db.prepare("SELECT * FROM memory_index_chunks").all();
+      const revision = db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get();
+      const restore = observeMemoryForgetWorker(db, {
+        trigger: {
+          event: "BEFORE INSERT ON memory_session_tombstones WHEN NEW.session_id = 'target-129'",
+          message: "synthetic admission failure",
+          action: failure,
+        },
+      });
+      try {
+        await expect(forgetMemoryEntries({ cfg, agentId: "main", sessionIds })).rejects.toThrow(
+          "synthetic admission failure",
+        );
+        expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
+        expect(db.prepare("SELECT * FROM memory_index_sources").all()).toEqual(sources);
+        expect(db.prepare("SELECT * FROM memory_index_chunks").all()).toEqual(chunks);
+        expect(db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get()).toEqual(
+          revision,
+        );
+      } finally {
+        restore();
+      }
+      const result = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds });
+      expect(result.artifacts.indexSources).toBe(1);
+      expect(result.artifacts.indexChunks).toBe(1);
+      expect(await listMemorySessionTombstones({ agentId: "main" })).toHaveLength(130);
+      expect(db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);
+      expect(db.prepare("SELECT * FROM memory_index_chunks").all()).toEqual([]);
+    },
+  );
 });

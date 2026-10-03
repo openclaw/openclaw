@@ -90,6 +90,20 @@ describe("ONNX decision contract", () => {
     });
   });
 
+  it("keeps caller cancellation distinct from model unavailability", async () => {
+    const controller = new AbortController();
+    const classify = vi.fn<InferenceWorkerClient["classify"]>().mockImplementation(async () => {
+      controller.abort(new Error("caller cancelled"));
+      throw new OnnxWorkerError("runtime");
+    });
+    await expect(
+      createOnnxProvider({ classify }, vi.fn()).evaluate(batch, {
+        ...context(),
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("caller cancelled");
+  });
+
   it("reports missing artifacts with an actionable setup message", async () => {
     const classify = vi
       .fn<InferenceWorkerClient["classify"]>()

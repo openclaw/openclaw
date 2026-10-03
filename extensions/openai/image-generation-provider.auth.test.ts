@@ -44,7 +44,7 @@ describe("OpenAI image generation auth availability", () => {
     });
 
     isProviderApiKeyConfiguredMock.mockReturnValue(false);
-    ensureAuthProfileStoreMock.mockReturnValue(createCodexOAuthAuthStore());
+    ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
     expect(provider.isConfigured?.({ agentDir: "/tmp/agent" })).toBe(false);
   });
 
@@ -61,6 +61,32 @@ describe("OpenAI image generation auth availability", () => {
       }),
     ).toBe(true);
   });
+
+  it("honors canonical auth rejection even when another Codex profile exists", () => {
+    isProviderApiKeyConfiguredMock.mockReturnValue(false);
+    ensureAuthProfileStoreMock.mockReturnValue(createCodexOAuthAuthStore());
+    expect(provider.isConfigured?.({ agentDir: "/tmp/agent" })).toBe(false);
+  });
+
+  it.each([["whitespace-only", "   "]])(
+    "treats a %s config apiKey as not configured",
+    (_label, apiKey) => {
+      // Blank placeholders resolve to no usable credential in the generate
+      // path, so readiness must not count them either.
+      isProviderApiKeyConfiguredMock.mockReturnValue(false);
+      ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
+
+      expect(
+        provider.isConfigured?.({
+          agentDir: "/tmp/agent",
+          cfg: openAIImageConfig({
+            baseUrl: "https://gateway.example.test/openai/v1",
+            apiKey,
+          }),
+        }),
+      ).toBe(false);
+    },
+  );
 
   it("reports ChatGPT OAuth image auth as configured for ChatGPT routes", () => {
     isProviderApiKeyConfiguredMock.mockReturnValue(true);
@@ -86,18 +112,42 @@ describe("OpenAI image generation auth availability", () => {
     ).toBe(true);
   });
 
-  it.each(["https://openai-compatible.example.test/v1", "https://api.openai.com/v1?proxy=1"])(
-    "rejects OAuth image auth for the non-ChatGPT route %s",
-    (baseUrl) => {
-      isProviderApiKeyConfiguredMock.mockReturnValue(true);
-      ensureAuthProfileStoreMock.mockReturnValue(createCodexOAuthAuthStore());
+  it("does not report OpenAI OAuth image auth as configured for custom OpenAI endpoints", () => {
+    isProviderApiKeyConfiguredMock.mockReturnValue(true);
+    ensureAuthProfileStoreMock.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai:chatgpt": {
+          type: "oauth",
+          provider: "openai",
+          access: "chatgpt-access",
+          refresh: "chatgpt-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    });
 
-      expect(
-        provider.isConfigured?.({
-          agentDir: "/tmp/agent",
-          cfg: openAIImageConfig({ baseUrl }),
+    expect(
+      provider.isConfigured?.({
+        agentDir: "/tmp/agent",
+        cfg: openAIImageConfig({
+          baseUrl: "https://openai-compatible.example.test/v1",
         }),
-      ).toBe(false);
-    },
-  );
+      }),
+    ).toBe(false);
+  });
+
+  it("does not report Codex OAuth image auth as configured for non-exact public OpenAI URLs", () => {
+    isProviderApiKeyConfiguredMock.mockReturnValue(true);
+    ensureAuthProfileStoreMock.mockReturnValue(createCodexOAuthAuthStore());
+
+    expect(
+      provider.isConfigured?.({
+        agentDir: "/tmp/agent",
+        cfg: openAIImageConfig({
+          baseUrl: "https://api.openai.com/v1?proxy=1",
+        }),
+      }),
+    ).toBe(false);
+  });
 });
