@@ -193,7 +193,7 @@ export class UpdateFinalizationLifecycle {
     const endedAtMs = Date.now();
     for (const row of updateRunStepsFromResultStep(step)) {
       this.record(
-        row.step,
+        { phase: "doctor", step: row.step },
         row.status === "failed" ? "failed" : "completed",
         endedAtMs,
         row.detail,

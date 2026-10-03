@@ -35,10 +35,7 @@ import {
   verifyPackageUpdateRecovery,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
-import {
-  normalizeFallbackFailureReason,
-  reportUpdateStepCompletion,
-} from "../../infra/update-runner-command.js";
+import { normalizeFallbackFailureReason } from "../../infra/update-runner-command.js";
 import {
   buildUpdateDoctorEnv,
   resolveUpdateDoctorExecutionPolicy,
@@ -76,6 +73,7 @@ type PackageDoctorOptions = {
   timeoutMs?: number;
   workTimeoutMs?: number | null;
   progress: ReturnType<typeof createUpdateProgress>["progress"];
+  assertCurrent?: () => void;
   results?: UpdateStepResult[];
   managedServiceEnv?: NodeJS.ProcessEnv;
   invocationCwd?: string;
@@ -85,6 +83,7 @@ type PackageDoctorOptions = {
 };
 
 export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
+  const assertCurrent = params.assertCurrent;
   const context = params.getDoctorContext?.();
   context?.assertCurrent();
   const entryPath = await resolveGatewayInstallEntrypoint(params.root);

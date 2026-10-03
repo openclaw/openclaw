@@ -63,7 +63,7 @@ export async function runDoctorHealthFlow(
     writeAuthority?.assertCurrent,
     writeAuthority?.commandAuthority,
   );
-  const run = () => {
+  const run = async () => {
     let preparedPreflight = databasePreflight;
     if (process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" && !writeAuthority?.postCoreSchemaRepair) {
       const { guardUpdateDoctorSchemaUpgrade, rehearseDeferredUpdateDoctorSchema } =

@@ -530,7 +530,7 @@ export async function completePostCorePluginUpdate(params: {
   opts?: UpdateCommandOptions;
   doctorConfigWrites?: true;
   databaseBackup?: UpdateDatabaseBackup;
-  onDatabaseWriteStep?: (step: UpdateStepResult) => void;
+  onDoctorStep?: (step: UpdateStepResult) => void;
   pluginUpdate: PostCorePluginUpdateResult;
   freshDoctorRequired: boolean;
   yes: boolean;

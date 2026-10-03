@@ -3551,7 +3551,7 @@ describe("scheduleRestartSentinelWake", () => {
         threadId: "topic-7",
         payloads: [
           expect.objectContaining({
-            text: expect.stringContaining("returned to the previous version"),
+            text: expect.stringContaining("rolled back to the previous version"),
           }),
         ],
       }),
