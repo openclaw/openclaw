@@ -264,7 +264,12 @@ it.each(["authority", "mandatory policy", "competing entry"] as const)(
         (error: unknown) => error,
       );
       try {
-        await entered.promise;
+        await Promise.race([
+          entered.promise,
+          sending.then(() => {
+            throw new Error("Chat send settled before native confirmation commit");
+          }),
+        ]);
         if (change === "authority") {
           client.connect.scopes = ["operator.write"];
         } else if (change === "mandatory policy") {
@@ -277,7 +282,24 @@ it.each(["authority", "mandatory policy", "competing entry"] as const)(
           });
         }
         release.resolve();
-        await outcome;
+        if (change === "competing entry") {
+          await expect(sending).resolves.toBeUndefined();
+          expect(respond.mock.calls).toEqual([
+            [
+              false,
+              undefined,
+              {
+                code: "INVALID_REQUEST",
+                message: "Session changed before native confirmation. Retry.",
+              },
+            ],
+          ]);
+        } else {
+          const failure = await outcome;
+          expect(failure).toBeInstanceOf(Error);
+          expect((failure as Error).message).toBe("Native session creation changed before commit.");
+          expect(respond).not.toHaveBeenCalled();
+        }
         const entries = listSessionEntries({ agentId: "main", readOnly: true });
         if (change === "competing entry") {
           expect(entries).toMatchObject([
