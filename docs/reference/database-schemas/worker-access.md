@@ -16,6 +16,12 @@ paths are migration debt, not a pattern to extend. The
 [migration inventory](/reference/database-schemas/worker-access-inventory) separates
 candidate main-thread paths from SQL already executing in workers.
 
+Reusable SQLite inspection children launch in the detached lifecycle context,
+after the caller captures the runtime generation, transport, environment, and
+working directory. Their process callbacks and idle queue tail must not retain
+the first read's async context. Each read keeps its own admission, cancellation,
+and deadline scope until settlement; completed operation promises are released.
+
 Inventory classifications describe counted operations, not whole-module runtime
 safety. Reviewed mixed modules use named operation paths, optionally narrowed to
 a variable initializer, rather than line numbers. Initializer exceptions exclude
