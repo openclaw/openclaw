@@ -251,6 +251,13 @@ the adapter retains responsibility for cancellation and terminal settlement.
     `undefined` on a miss. The reader's `ttlMs` argument is optional:
     existing one-argument calls continue to use the stored expiry alone.
 
+    `postTrustedWebToolsJson` and `withTrustedWebSearchEndpoint` remain strict
+    by default. Providers offering explicit operator-controlled self-hosted
+    endpoints may pass `selfHostedBaseUrl` to trust that exact origin only.
+    The request URL must match its origin; cross-origin redirects are rejected.
+    This path uses direct pinned DNS, keeps TLS verification, and does not trust
+    query parameters or returned URLs. Do not derive this opt-in from tool input.
+
     Both tool definitions accept `execute(args, context?)`, where the optional
     context carries `signal?: AbortSignal`. Forward that signal to network
     requests and check cancellation after asynchronous work. Existing

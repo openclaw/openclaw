@@ -28,7 +28,11 @@ import {
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
 import { resolveXaiResponsesEndpoint } from "./responses-tool-shared.js";
-import { resolveNormalizedXaiToolModel } from "./tool-config-shared.js";
+import {
+  resolveNormalizedXaiToolModel,
+  resolveXaiSearchNetworkPolicy,
+  type XaiSearchNetworkPolicy,
+} from "./tool-config-shared.js";
 import {
   buildXaiWebSearchPayload,
   requestXaiWebSearch,
@@ -124,6 +128,7 @@ async function runXaiWebSearch(params: {
   query: string;
   model: string;
   endpoint: string;
+  networkPolicy: XaiSearchNetworkPolicy;
   apiKey: string;
   timeoutSeconds: number;
   inlineCitations: boolean;
@@ -132,7 +137,7 @@ async function runXaiWebSearch(params: {
 }): Promise<Record<string, unknown>> {
   params.signal?.throwIfAborted();
   const cacheKey = normalizeCacheKey(
-    `grok:${params.endpoint}:${params.model}:${String(params.inlineCitations)}:${params.query}`,
+    `grok:${params.endpoint}:${params.networkPolicy}:${params.model}:${String(params.inlineCitations)}:${params.query}`,
   );
   const cached = readCache(XAI_WEB_SEARCH_CACHE, cacheKey, params.cacheTtlMs);
   if (cached) {
@@ -393,6 +398,7 @@ export async function executeXaiWebSearchProviderTool(
       query,
       model: resolveNormalizedXaiToolModel({ config: grok, defaultModel: XAI_DEFAULT_MODEL_ID }),
       endpoint: resolveXaiResponsesEndpoint(grok.baseUrl),
+      networkPolicy: resolveXaiSearchNetworkPolicy(grok),
       timeoutSeconds,
       inlineCitations: grok.inlineCitations === true,
       cacheTtlMs: resolveCacheTtlMs(searchConfig?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),

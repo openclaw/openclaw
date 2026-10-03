@@ -4,6 +4,7 @@ import {
   resolveXaiToolDefaultReasoningEffort,
   requireXaiResponseTextCitationsAndInline,
 } from "./responses-tool-shared.js";
+import type { XaiSearchNetworkPolicy } from "./tool-config-shared.js";
 import type { XaiWebSearchResponse } from "./web-search-response.types.js";
 export type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
@@ -38,6 +39,7 @@ export function buildXaiWebSearchPayload(params: {
   };
 }
 
+
 export function wrapXaiWebSearchError(error: unknown, timeoutSeconds: number): never {
   if (
     error instanceof Error &&
@@ -61,6 +63,7 @@ export async function requestXaiWebSearch(params: {
   model: string;
   apiKey: string;
   endpoint: string;
+  networkPolicy?: XaiSearchNetworkPolicy;
   timeoutSeconds: number;
   inlineCitations: boolean;
   signal?: AbortSignal;

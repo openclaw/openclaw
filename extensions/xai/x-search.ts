@@ -15,6 +15,10 @@ import {
   resolveXaiToolApiKeyWithAuth,
   type XaiToolAuthContext,
 } from "./src/tool-auth-shared.js";
+import {
+  resolveXaiSearchNetworkPolicy,
+  type XaiSearchNetworkPolicy,
+} from "./src/tool-config-shared.js";
 import { resolveEffectiveXSearchConfig } from "./src/x-search-config.js";
 import {
   buildXaiXSearchPayload,
@@ -90,6 +94,7 @@ function buildXSearchCacheKey(params: {
   query: string;
   model: string;
   endpoint: string;
+  networkPolicy: XaiSearchNetworkPolicy;
   inlineCitations: boolean;
   maxTurns?: number;
   options: Omit<XaiXSearchOptions, "query">;
@@ -98,6 +103,7 @@ function buildXSearchCacheKey(params: {
     "x_search",
     params.model,
     params.endpoint,
+    params.networkPolicy,
     params.query,
     params.inlineCitations,
     params.maxTurns ?? null,
@@ -160,12 +166,14 @@ export function createXSearchTool(options?: {
     };
     const model = resolveXaiXSearchModel(xSearchConfig);
     const endpoint = resolveXaiXSearchEndpoint(xSearchConfig);
+    const networkPolicy = resolveXaiSearchNetworkPolicy(xSearchConfig);
     const inlineCitations = resolveXaiXSearchInlineCitations(xSearchConfig);
     const maxTurns = resolveXaiXSearchMaxTurns(xSearchConfig);
     const cacheKey = buildXSearchCacheKey({
       query,
       model,
       endpoint,
+      networkPolicy,
       inlineCitations,
       maxTurns,
       options: xSearchOptions,
@@ -180,6 +188,7 @@ export function createXSearchTool(options?: {
     const result = await requestXaiXSearch({
       apiKey,
       endpoint,
+      networkPolicy,
       model,
       timeoutSeconds: resolveTimeoutSeconds(xSearchConfig?.timeoutSeconds, 30),
       inlineCitations,

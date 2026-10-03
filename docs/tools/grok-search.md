@@ -125,6 +125,47 @@ posts to `<baseUrl>/responses` after trimming trailing slashes. `x_search`
 falls back to the same `webSearch.baseUrl` unless
 `plugins.entries.xai.config.xSearch.baseUrl` is set.
 
+Private Docker, LAN, and loopback endpoints remain blocked by default. To trust
+your own compatible proxy, set `networkPolicy: "selfHosted"` separately for
+each search tool:
+
+```json5
+{
+  plugins: {
+    entries: {
+      xai: {
+        config: {
+          webSearch: {
+            baseUrl: "http://litellm:4000/v1",
+            networkPolicy: "selfHosted",
+          },
+          xSearch: {
+            baseUrl: "http://litellm:4000/v1",
+            networkPolicy: "selfHosted",
+          },
+        },
+      },
+    },
+  },
+  tools: { web: { search: { provider: "grok" } } },
+}
+```
+
+`networkPolicy` defaults to `"strict"`, preserving the hosted-provider guard.
+`"selfHosted"` requires an explicitly configured base URL (or the documented
+base URL fallback for `x_search`). It allows private addresses only for that
+exact origin: scheme, hostname, and port. Same-origin redirects revalidate DNS;
+all cross-origin redirects are blocked, including port changes. DNS remains
+pinned and HTTPS certificate validation remains enabled. Explicit `localhost`
+or loopback IP base URLs are supported; ordinary hostnames rebinding to
+loopback, link-local, or metadata addresses are still blocked.
+
+Self-hosted requests connect directly so ambient or managed forward proxies
+cannot replace the pinned DNS lookup. Search queries and returned citation URLs
+never receive endpoint trust. `xSearch.networkPolicy` does not inherit
+`webSearch.networkPolicy`; model-provider, browser, and `web_fetch` network
+policies do not control either search tool.
+
 ## Related
 
 - [Web Search overview](/tools/web) -- all providers and auto-detection

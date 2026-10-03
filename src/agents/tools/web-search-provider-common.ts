@@ -21,6 +21,8 @@ const loadWebGuardedFetch = createLazyPromise(() => import("./web-guarded-fetch.
 
 type WebSearchEndpointOptions = {
   url: string;
+  /** Explicit operator trust; private-network access is limited to this exact origin. */
+  selfHostedBaseUrl?: string;
   timeoutSeconds: number;
   init: RequestInit;
   signal?: AbortSignal;
@@ -55,7 +57,14 @@ export async function withTrustedWebSearchEndpoint<T>(
   params: WebSearchEndpointOptions,
   run: (response: Response) => Promise<T>,
 ): Promise<T> {
-  const { withTrustedWebToolsEndpoint } = await loadWebGuardedFetch();
+  const { withTrustedWebToolsEndpoint, withOriginScopedSelfHostedWebToolsEndpoint } =
+    await loadWebGuardedFetch();
+  if (params.selfHostedBaseUrl !== undefined) {
+    return withOriginScopedSelfHostedWebToolsEndpoint(
+      { ...params, selfHostedBaseUrl: params.selfHostedBaseUrl },
+      async ({ response }) => run(response),
+    );
+  }
   return withTrustedWebToolsEndpoint(params, async ({ response }) => run(response));
 }
 
@@ -70,6 +79,7 @@ export async function withSelfHostedWebSearchEndpoint<T>(
 export async function postTrustedWebToolsJson<T>(
   params: {
     url: string;
+    selfHostedBaseUrl?: string;
     timeoutSeconds: number;
     apiKey: string;
     body: Record<string, unknown>;
@@ -87,6 +97,7 @@ export async function postTrustedWebToolsJson<T>(
   return withTrustedWebSearchEndpoint(
     {
       url: params.url,
+      selfHostedBaseUrl: params.selfHostedBaseUrl,
       timeoutSeconds: params.timeoutSeconds,
       signal: params.signal,
       init: {
