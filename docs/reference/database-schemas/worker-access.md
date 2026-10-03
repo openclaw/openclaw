@@ -562,6 +562,16 @@ owners, so a nested scope cannot close an executor retained by its parent.
 
 ## Carry facts, publish after commit
 
+Message-tool-only completion records use the canonical per-agent writer. The
+host captures the original store and run facts before waiting; configured-store
+discovery uses the existing reader. First-use schema admission commits separately
+before the outcome insert and bounded prune, with current host grants at each
+transaction and commit. Recording retains the agent writer's FIFO and settles
+before the turn returns. Failures remain best-effort warnings and never replay
+the model or tool action. Process-held incognito side data retains its native
+owner. Schemas, outcome semantics, the 10,000-row bound, and update behavior are
+unchanged.
+
 Workspace snapshots and conditional alias registration, first-writer setup merges,
 and exact expired-state deletion use the shared-state writer. Read-only snapshots
 retain the existing reader. The host captures the physical database and filesystem
