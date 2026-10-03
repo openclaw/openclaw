@@ -163,8 +163,7 @@ export function consumeGitHubSetupHandoff(params: {
   }
   const now = params.nowMs ?? Date.now();
   try {
-    let value: string | undefined;
-    runOpenClawStateWriteTransaction(
+    const value = runOpenClawStateWriteTransaction(
       ({ db: sqlite }) => {
         const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
         const row = executeSqliteQueryTakeFirstSync(
@@ -192,7 +191,7 @@ export function consumeGitHubSetupHandoff(params: {
             .where("scope_id", "=", "")
             .where("name", "=", params.name),
         );
-        value = row.value;
+        return row.value;
       },
       params.database,
       { operationLabel: "secrets.store.consume-github-setup-handoff" },

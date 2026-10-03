@@ -53,7 +53,6 @@ import { formatErrorMessage } from "./errors.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
-  clearNodeSqliteKyselyCacheForDatabase,
   enableNodeSqliteKyselyStatementCache,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -354,7 +353,6 @@ async function migrateAgentDatabase(params: {
       finalVersion: readSqliteUserVersion(database),
     };
   } finally {
-    clearNodeSqliteKyselyCacheForDatabase(database);
     database.close();
   }
 }
