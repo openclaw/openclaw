@@ -1121,6 +1121,10 @@ describe("Gateway steer FIFO", () => {
         await waitForRunTerminal(fixture, firstRunId);
         await vi.waitFor(() => expect(fixture.chatFinalRunIds).toContain(firstRunId), WAIT_OPTS);
         await waitForSessionIdle(fixture, idleBaseline.lastSeq ?? 0);
+        // Runtime terminal/idle events can precede reply accounting and dispatch cleanup.
+        expect(
+          await client.request("agent.wait", { runId: firstRunId, timeoutMs: WAIT_OPTS.timeout }),
+        ).toMatchObject({ runId: firstRunId, status: "ok" });
         expect((await historyWithoutSteer()).sessionInfo.hasActiveRun).toBe(false);
         expect(modelServer.requests).toHaveLength(2);
         expect(fixture.chatFinalRunIds).not.toContain(steerRunId);
