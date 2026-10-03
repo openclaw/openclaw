@@ -33,7 +33,7 @@ type MessageOperationRouteBinding = {
 };
 
 type MessageOperationRouteBindingEntry = {
-  requestScope: string;
+  route: MessageOperationRoute;
   retainUntilSettled: boolean;
   ts: number;
 };
@@ -145,33 +145,6 @@ function resolveGatewayInflightRequest(params: {
   });
 }
 
-function parseMessageOperationRoute(
-  requestScope: string | undefined,
-): MessageOperationRoute | undefined {
-  if (!requestScope) {
-    return undefined;
-  }
-  try {
-    const parsed: unknown = JSON.parse(requestScope);
-    if (
-      !Array.isArray(parsed) ||
-      parsed.length !== 2 ||
-      typeof parsed[0] !== "string" ||
-      typeof parsed[1] !== "string"
-    ) {
-      return undefined;
-    }
-    const channel = normalizeMessageChannel(parsed[0]);
-    const accountId = normalizeOptionalAccountId(parsed[1]);
-    if (!channel || channel !== parsed[0] || !accountId || accountId !== parsed[1]) {
-      return undefined;
-    }
-    return { channel, accountId, requestScope };
-  } catch {
-    return undefined;
-  }
-}
-
 function resolveMessageOperationRouteBinding(params: {
   context: GatewayRequestContext;
   prefix: MessageOperationPrefix;
@@ -206,9 +179,7 @@ function resolveMessageOperationRouteBinding(params: {
   const key = `${params.prefix}${authorityScope}:route-binding:${explicitRouteScope}:${params.idempotencyKey}`;
   return {
     key,
-    reservedRoute: parseMessageOperationRoute(
-      getMessageOperationRouteBindings(params.context).get(key)?.requestScope,
-    ),
+    reservedRoute: getMessageOperationRouteBindings(params.context).get(key)?.route,
   };
 }
 
@@ -216,7 +187,7 @@ function resolveMessageOperationRouteBinding(params: {
 function prepareMessageOperationRouteBinding(params: {
   context: GatewayRequestContext;
   binding: MessageOperationRouteBinding | undefined;
-  requestScope: string;
+  route: MessageOperationRoute;
 }): (() => void) | undefined {
   const binding = params.binding;
   if (!binding) {
@@ -224,7 +195,7 @@ function prepareMessageOperationRouteBinding(params: {
   }
   const bindings = getMessageOperationRouteBindings(params.context);
   const existing = bindings.get(binding.key);
-  if (existing && existing.requestScope !== params.requestScope) {
+  if (existing && existing.route.requestScope !== params.route.requestScope) {
     return undefined;
   }
   return () => {
@@ -232,7 +203,7 @@ function prepareMessageOperationRouteBinding(params: {
       binding.key,
       existing
         ? { ...existing, ts: Date.now() }
-        : { ts: Date.now(), requestScope: params.requestScope, retainUntilSettled: false },
+        : { ts: Date.now(), route: params.route, retainUntilSettled: false },
     );
     pruneMessageOperationRouteBindings(bindings, Date.now());
   };
@@ -249,7 +220,7 @@ function updateMessageOperationRouteBinding(params: {
   }
   const bindings = getMessageOperationRouteBindings(params.context);
   const existing = bindings.get(params.binding.key);
-  if (existing?.requestScope === params.requestScope) {
+  if (existing?.route.requestScope === params.requestScope) {
     // Active work retains its alias past TTL/capacity pressure; settlement restarts expiry.
     bindings.set(params.binding.key, {
       ...existing,
@@ -389,7 +360,11 @@ export async function withMessageOperationRoute<
     const publishBinding = prepareMessageOperationRouteBinding({
       context: params.context,
       binding,
-      requestScope: accountRoute.requestScope,
+      route: {
+        channel: resolved.channel,
+        accountId: accountRoute.effectiveAccountId,
+        requestScope: accountRoute.requestScope,
+      },
     });
     if (!publishBinding) {
       respondMessageOperationAdmissionError({

@@ -322,11 +322,7 @@ type GatewayKernelContext = {
   systemAgentSessions: Map<string, GatewaySystemAgentSession>;
   findRunningWizard: () => string | null;
   purgeWizardSession: (id: string) => void;
-  wizardRunner: (
-    opts: import("../../commands/onboard-types.js").OnboardOptions,
-    runtime: import("../../runtime.js").RuntimeEnv,
-    prompter: import("../../wizard/prompts.js").WizardPrompter,
-  ) => Promise<void>;
+  wizardRunner: import("./wizard.js").SetupWizardRunner;
   channelWizardRunner: import("./wizard.js").ChannelSetupWizardRunner;
   unavailableGatewayMethods?: ReadonlySet<string>;
 };

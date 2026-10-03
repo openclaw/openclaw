@@ -430,7 +430,6 @@ export async function handleChatAbortRequestWithLifecycle(
           sessionKey,
           agentId: abortAgentId,
           defaultAgentId: compatibilityDefaultAgentId,
-          includeHidden: true,
           requiredSessionId,
         });
         if (payload) {

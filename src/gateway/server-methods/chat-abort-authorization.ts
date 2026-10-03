@@ -127,7 +127,6 @@ export function readPreRegisteredAgentDedupePayloadForSession(params: {
   sessionKey: string;
   agentId?: string;
   defaultAgentId?: string;
-  includeHidden?: boolean;
   requiredSessionId?: string;
 }): PreRegisteredAgentDedupePayload | undefined {
   if (!params.entry?.ok) {
@@ -135,9 +134,6 @@ export function readPreRegisteredAgentDedupePayloadForSession(params: {
   }
   const payload = params.entry.payload as PreRegisteredAgentDedupePayload | undefined;
   if (payload?.status !== "accepted") {
-    return undefined;
-  }
-  if (!params.includeHidden && payload.controlUiVisible === false) {
     return undefined;
   }
   const payloadRunId = normalizeOptionalString(payload.runId);
@@ -242,21 +238,15 @@ export function writePreRegisteredAgentAbort(params: {
   payload: PreRegisteredAgentDedupePayload;
   stopReason: string;
   endedAt?: number;
-  expectedPayload?: PreRegisteredAgentDedupePayload;
+  expectedPayload: PreRegisteredAgentDedupePayload;
 }) {
-  if (
-    params.expectedPayload &&
-    params.context.dedupe.get(`agent:${params.runId}`)?.payload !== params.expectedPayload
-  ) {
+  if (params.context.dedupe.get(`agent:${params.runId}`)?.payload !== params.expectedPayload) {
     return false;
   }
   const endedAt = params.endedAt ?? Date.now();
   const payloadAgentId = normalizeOptionalString(params.payload.agentId);
   for (const key of resolvePreRegisteredAgentDedupeKeys(params.payload, params.runId)) {
-    if (
-      params.expectedPayload &&
-      params.context.dedupe.get(key)?.payload !== params.expectedPayload
-    ) {
+    if (params.context.dedupe.get(key)?.payload !== params.expectedPayload) {
       continue;
     }
     setGatewayDedupeEntry({

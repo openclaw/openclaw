@@ -1,7 +1,6 @@
-// Shared session workspace presentation for Gateway-local and worker-owned files.
-import { createHash } from "node:crypto";
 import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionFileBrowserEntry,
@@ -39,7 +38,6 @@ export type LoadedSessionFiles = SessionFileReadBoundary & {
   diffCwd?: string;
   files: TouchedFile[];
 };
-const MAX_PREVIEW_BYTES = WORKSPACE_PREVIEW_MAX_BYTES;
 const MAX_BROWSER_ENTRIES = 250;
 const MAX_SEARCH_ENTRIES = 500;
 const MAX_SEARCH_VISITED_ENTRIES = 5_000;
@@ -179,7 +177,7 @@ function applyInlineFilePreview(entry: SessionFileEntry, buffer: Buffer, mimeTyp
     entry.content = text;
     // The hash doubles as the sessions.files.set CAS token. Binary files
     // never receive one, so replacement characters cannot be saved back.
-    entry.hash = createHash("sha256").update(buffer).digest("hex");
+    entry.hash = sha256Hex(buffer);
     return;
   }
   entry.previewKind = "unsupported";
@@ -254,7 +252,7 @@ async function toSessionFileEntry(
   if (!opts.includeContent) {
     return entry;
   }
-  const inline = stat.size <= MAX_PREVIEW_BYTES;
+  const inline = stat.size <= WORKSPACE_PREVIEW_MAX_BYTES;
   const read = inline
     ? await readWorkspaceFile(readRoot, browserPath, { assertCurrent: opts.assertCurrent })
     : await readWorkspaceFilePrefix(readRoot, browserPath, MIME_SNIFF_PREFIX_BYTES);
@@ -562,7 +560,7 @@ export async function setSessionWorkspaceFile(params: {
     return { status: "unsafe" };
   }
   const size = Buffer.byteLength(params.content, "utf8");
-  if (size > MAX_PREVIEW_BYTES) {
+  if (size > WORKSPACE_PREVIEW_MAX_BYTES) {
     return { status: "too-large", size };
   }
   if (Buffer.from(params.content, "utf8").toString("utf8") !== params.content) {

@@ -53,13 +53,10 @@ function pluginReadError(error: unknown) {
 
 export const pluginsHandlers: GatewayRequestHandlers = {
   ...pluginCredentialHandlers,
-  "plugins.skills.read": async ({ params, respond, context }) => {
-    if (
-      !assertValidParams(params, validatePluginsSkillsReadParams, "plugins.skills.read", respond)
-    ) {
-      return;
-    }
-    try {
+  "plugins.skills.read": defineValidatedGatewayHandler(
+    "plugins.skills.read",
+    validatePluginsSkillsReadParams,
+    async ({ params, respond, context }) => {
       if (params.path !== undefined) {
         try {
           validatePluginSkillPath(params.path);
@@ -95,15 +92,13 @@ export const pluginsHandlers: GatewayRequestHandlers = {
         }),
         undefined,
       );
-    } catch (error) {
-      respond(false, undefined, pluginReadError(error));
-    }
-  },
-  "plugins.list": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validatePluginsListParams, "plugins.list", respond)) {
-      return;
-    }
-    try {
+    },
+    pluginReadError,
+  ),
+  "plugins.list": defineValidatedGatewayHandler(
+    "plugins.list",
+    validatePluginsListParams,
+    async ({ respond, context }) => {
       const catalog = await listManagedPlugins({ config: context.getRuntimeConfig() });
       const registry = getPluginRegistryForContext();
       // The first loaded record owns shadowed IDs; read runtime facts after catalog I/O.
@@ -142,15 +137,13 @@ export const pluginsHandlers: GatewayRequestHandlers = {
         },
         undefined,
       );
-    } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
-    }
-  },
-  "plugins.inspect": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validatePluginsInspectParams, "plugins.inspect", respond)) {
-      return;
-    }
-    try {
+    },
+    (error) => errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)),
+  ),
+  "plugins.inspect": defineValidatedGatewayHandler(
+    "plugins.inspect",
+    validatePluginsInspectParams,
+    async ({ params, respond, context }) => {
       let target: { pluginId: string } | { clawhub: { packageName: string; version?: string } };
       if ("pluginId" in params) {
         target = { pluginId: params.pluginId };
@@ -194,15 +187,13 @@ export const pluginsHandlers: GatewayRequestHandlers = {
         },
         undefined,
       );
-    } catch (error) {
-      respond(false, undefined, pluginReadError(error));
-    }
-  },
-  "plugins.search": async ({ params, respond }) => {
-    if (!assertValidParams(params, validatePluginsSearchParams, "plugins.search", respond)) {
-      return;
-    }
-    try {
+    },
+    pluginReadError,
+  ),
+  "plugins.search": defineValidatedGatewayHandler(
+    "plugins.search",
+    validatePluginsSearchParams,
+    async ({ params, respond }) => {
       const results = await searchInstallablePluginPackages({
         query: params.query,
         limit: params.limit,
@@ -245,10 +236,9 @@ export const pluginsHandlers: GatewayRequestHandlers = {
         },
         undefined,
       );
-    } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
-    }
-  },
+    },
+    (error) => errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)),
+  ),
   "plugins.catalog.browse": defineValidatedGatewayHandler(
     "plugins.catalog.browse",
     validatePluginsCatalogBrowseParams,
@@ -349,19 +339,13 @@ export const pluginsHandlers: GatewayRequestHandlers = {
     "plugins.catalog.categories",
     validatePluginsCatalogCategoriesParams,
     async ({ respond }) => {
-      try {
-        respond(true, { categories: await fetchClawHubPluginCategories() }, undefined);
-      } catch (error) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            `Plugin categories are unavailable: ${formatErrorMessage(error)}. Retry to reconnect to ClawHub.`,
-          ),
-        );
-      }
+      respond(true, { categories: await fetchClawHubPluginCategories() }, undefined);
     },
+    (error) =>
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `Plugin categories are unavailable: ${formatErrorMessage(error)}. Retry to reconnect to ClawHub.`,
+      ),
   ),
   "plugins.catalog.get": async ({ params, respond, context }) => {
     if (

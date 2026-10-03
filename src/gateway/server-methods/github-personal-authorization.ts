@@ -1,4 +1,8 @@
-import { operatorScopeSatisfied, roleScopesAllow } from "../../shared/operator-scope-compat.js";
+import {
+  intersectOperatorScopes,
+  operatorScopeSatisfied,
+  roleScopesAllow,
+} from "../../shared/operator-scope-compat.js";
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
 import { resolvePersonalGitHubOwner } from "../../state/user-github-connections.js";
 import type { PersonalGitHubAction } from "../github-personal-oauth.js";
@@ -59,17 +63,7 @@ function currentGitHubClient(
         ? resolveOperatorRolePolicyForProfile(profileId, cfg)
         : resolveOperatorRolePolicy(client, cfg);
   const granted = client.connect.scopes ?? [];
-  const scopes = policy
-    ? [...new Set([...granted, ...policy.scopes])].filter((candidate) =>
-        [granted, policy.scopes].every((allowedScopes) =>
-          roleScopesAllow({
-            role: "operator",
-            requestedScopes: [candidate],
-            allowedScopes,
-          }),
-        ),
-      )
-    : granted;
+  const scopes = policy ? intersectOperatorScopes(granted, policy.scopes) : granted;
   if (
     client.connect.role !== "operator" ||
     !roleScopesAllow({
