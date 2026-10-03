@@ -457,3 +457,35 @@ describe("local refs across a nested $id resource boundary", () => {
     expect(root).toEqual({ block: { values: ["first"] } });
   });
 });
+
+// A `$defs.Map` is a record, so a numeric segment below it names a key, not an array slot. The
+// walker has to resolve the `$ref` before it can tell: an unresolved `{$ref}` schema yields no
+// candidate, and the fallback builds an array, which rewrites a map-shaped setting on `config set`.
+const objectMapRefSchema = {
+  $defs: {
+    Map: { type: "object", additionalProperties: { type: "string" } },
+  },
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    block: {
+      type: "object",
+      additionalProperties: false,
+      properties: { values: { $ref: "#/$defs/Map" } },
+    },
+  },
+};
+
+describe("local refs to an object-shaped definition", () => {
+  it.each(["block.values[0]", "block.values.0"])("builds an object for the %s write", (rawPath) => {
+    const root: Record<string, unknown> = {};
+    setAtPath(root, parseConfigSetPath(rawPath), "first", { schema: objectMapRefSchema });
+    expect(root).toEqual({ block: { values: { 0: "first" } } });
+  });
+
+  it("keeps an authored map when a numeric key is added to it", () => {
+    const root: Record<string, unknown> = { block: { values: { note: "keep" } } };
+    setAtPath(root, parseConfigSetPath("block.values.0"), "first", { schema: objectMapRefSchema });
+    expect(root).toEqual({ block: { values: { note: "keep", 0: "first" } } });
+  });
+});
