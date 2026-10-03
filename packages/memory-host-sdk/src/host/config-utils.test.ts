@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfigWithLegacyRoster } from "../../../../src/config/legacy.roster.js";
 import {
   normalizeConfiguredMemoryExtraPaths,
   resolveMemoryHostAgentWorkspaceDir,
@@ -224,6 +225,22 @@ describe("resolveMemoryHostAgentWorkspaceDir", () => {
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }
+  });
+
+  it("preserves marked legacy default workspace inheritance", () => {
+    const cfg: OpenClawConfigWithLegacyRoster = {
+      agents: {
+        list: [{ id: "first" }, { id: "support", default: true }],
+        defaults: { workspace: "~/shared" },
+      },
+    };
+    const env = { HOME: "/home/fixture" };
+    expect(resolveMemoryHostAgentWorkspaceDir(cfg, "support", env)).toBe(
+      path.resolve("/home/fixture/shared"),
+    );
+    expect(resolveMemoryHostAgentWorkspaceDir(cfg, "first", env)).toBe(
+      path.resolve("/home/fixture/shared/first"),
+    );
   });
 
   it.each<{

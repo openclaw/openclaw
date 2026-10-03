@@ -1,6 +1,9 @@
 import path from "node:path";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
-import { listAgentEntries } from "../../../../src/agents/agent-roster.js";
+import {
+  listAgentEntries,
+  tryResolveRawLegacyDefaultAgentId,
+} from "../../../../src/agents/agent-roster.js";
 import {
   resolveDefaultAgentWorkspaceDir,
   resolveStateDir,
@@ -127,9 +130,11 @@ export const MEMORY_HOST_ROOT_FILENAME = "MEMORY.md";
 
 const DEFAULT_AGENT_ID = "main";
 
-/** Preserve first-agent workspace inheritance for configs without explicit ownership. */
+/** Preserve raw default-marker, then first-agent, workspace inheritance. */
 function resolveDefaultAgentId(cfg: OpenClawConfig): string {
-  return normalizeAgentId(listAgentEntries(cfg)[0]?.id || DEFAULT_AGENT_ID);
+  return normalizeAgentId(
+    tryResolveRawLegacyDefaultAgentId(cfg) ?? listAgentEntries(cfg)[0]?.id ?? DEFAULT_AGENT_ID,
+  );
 }
 
 /** Find one agent config by canonical id. */
@@ -155,7 +160,7 @@ export function resolveMemoryHostAgentWorkspaceDir(
     return stripNullBytes(resolveUserPath(configured, env));
   }
   const fallback = cfg.agents?.defaults?.workspace?.trim();
-  // Legacy reader inputs keep first-agent inheritance. Explicit ownership uses
+  // Legacy reader inputs keep default-marker, then first-agent inheritance. Explicit ownership uses
   // the same legacy data owner as search, independently of the runtime default.
   const inheritedWorkspaceAgentId =
     cfg.agents?.ownership === "explicit"
