@@ -1,6 +1,7 @@
 import type { IncomingMessage } from "node:http";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  PROXY_ATTRIBUTION_GUIDANCE,
   createGatewayUnattributableProxyReporter,
   markGatewayIngressTransport,
   prepareGatewayIngressAttribution,
@@ -27,6 +28,10 @@ function request(params?: {
     },
   } as IncomingMessage;
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("gateway ingress attribution", () => {
   it("keeps clean headerless loopback on the ordinary listener local", async () => {
@@ -187,23 +192,162 @@ describe("gateway ingress attribution", () => {
     });
   });
 
-  it("emits one bounded operator warning for repeated unattributable traffic", async () => {
+  it("reports distinct unattributable proxy sources while suppressing repeats", async () => {
     const warn = vi.fn();
     const report = createGatewayUnattributableProxyReporter({ warn });
     const first = prepareGatewayIngressAttribution({
-      req: request({ forwardedFor: "100.64.0.10" }),
+      req: request({ remoteAddress: "192.0.2.10", forwardedFor: "100.64.0.10" }),
     });
     const second = prepareGatewayIngressAttribution({
-      req: request({ forwardedFor: "100.64.0.11" }),
+      req: request({ remoteAddress: "192.0.2.11", forwardedFor: "100.64.0.11" }),
     });
     if (first.kind === "unattributable-proxy") {
+      report(first);
       report(first);
     }
     if (second.kind === "unattributable-proxy") {
       report(second);
     }
 
-    expect(warn).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls.map(([message]) => message)).toEqual([
+      expect.stringContaining("192.0.2.10"),
+      expect.stringContaining("192.0.2.11"),
+    ]);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("gateway.trustedProxies"));
+  });
+
+  it("reports a continuing source again after the suppression window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const warn = vi.fn();
+    const report = createGatewayUnattributableProxyReporter({ warn });
+    const attribution = prepareGatewayIngressAttribution({
+      req: request({ remoteAddress: "192.0.2.10", forwardedFor: "100.64.0.10" }),
+    });
+    if (attribution.kind !== "unattributable-proxy") {
+      throw new Error("expected unattributable proxy");
+    }
+
+    report(attribution);
+    vi.advanceTimersByTime(5 * 60_000);
+    report(attribution);
+
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a source suppressed when the aggregate budget refills beside it", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const warn = vi.fn();
+    const report = createGatewayUnattributableProxyReporter({ warn });
+    const attribution = prepareGatewayIngressAttribution({
+      req: request({ remoteAddress: "192.0.2.10", forwardedFor: "100.64.0.10" }),
+    });
+    if (attribution.kind !== "unattributable-proxy") {
+      throw new Error("expected unattributable proxy");
+    }
+
+    // Warn this source one second before the aggregate budget refills.
+    vi.setSystemTime(5 * 60_000 - 1_000);
+    report(attribution);
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    // The budget refills two seconds later; the source is still inside its own window.
+    vi.setSystemTime(5 * 60_000 + 1_000);
+    report(attribution);
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    // It is reported again only once its own five minutes have elapsed.
+    vi.setSystemTime(5 * 60_000 - 1_000 + 5 * 60_000);
+    report(attribution);
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not let continued traffic keep a source suppressed forever", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const warn = vi.fn();
+    const report = createGatewayUnattributableProxyReporter({ warn });
+    const attribution = prepareGatewayIngressAttribution({
+      req: request({ remoteAddress: "192.0.2.10", forwardedFor: "100.64.0.10" }),
+    });
+    if (attribution.kind !== "unattributable-proxy") {
+      throw new Error("expected unattributable proxy");
+    }
+
+    // A peer that never stops sending must not refresh its own suppression record.
+    for (let minute = 0; minute <= 6; minute += 1) {
+      vi.setSystemTime(minute * 60_000);
+      report(attribution);
+    }
+
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains a full late-window source set across the next budget", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const warn = vi.fn();
+    const report = createGatewayUnattributableProxyReporter({ warn });
+    const attribution = (index: number) =>
+      ({
+        kind: "unattributable-proxy",
+        reason: "proxy_attribution_required",
+        guidance: PROXY_ATTRIBUTION_GUIDANCE,
+        remoteAddress: `192.0.2.${index}`,
+      }) as const;
+
+    vi.setSystemTime(5 * 60_000 - 1_000);
+    for (let index = 0; index < 16; index += 1) {
+      report(attribution(index));
+    }
+    expect(warn).toHaveBeenCalledTimes(16);
+
+    vi.setSystemTime(5 * 60_000 + 1_000);
+    report(attribution(16));
+    report(attribution(0));
+
+    expect(warn).toHaveBeenCalledTimes(17);
+  });
+
+  it("resets source suppression when the wall clock moves backward", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const warn = vi.fn();
+    const report = createGatewayUnattributableProxyReporter({ warn });
+    const attribution = prepareGatewayIngressAttribution({
+      req: request({ remoteAddress: "192.0.2.10", forwardedFor: "100.64.0.10" }),
+    });
+    if (attribution.kind !== "unattributable-proxy") {
+      throw new Error("expected unattributable proxy");
+    }
+
+    vi.setSystemTime(4 * 60_000);
+    report(attribution);
+    vi.setSystemTime(2 * 60_000);
+    report(attribution);
+    report(attribution);
+    expect(warn).toHaveBeenCalledTimes(2);
+
+    vi.setSystemTime(7 * 60_000);
+    report(attribution);
+    expect(warn).toHaveBeenCalledTimes(3);
+  });
+
+  it("bounds warnings from a flood of unique proxy sources", async () => {
+    const warn = vi.fn();
+    const report = createGatewayUnattributableProxyReporter({ warn });
+
+    for (let index = 0; index < 1_000; index += 1) {
+      report({
+        kind: "unattributable-proxy",
+        reason: "proxy_attribution_required",
+        guidance: PROXY_ATTRIBUTION_GUIDANCE,
+        remoteAddress: `192.0.2.${index}`,
+      });
+    }
+
+    expect(warn).toHaveBeenCalledTimes(16);
   });
 });
