@@ -178,11 +178,12 @@ describe("runDoctorSessionSqlite", () => {
         .mockImplementation((directoryPath) => {
           fs.mkdirSync(directoryPath, { mode: 0o700 });
         });
-      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+      let platformSpy: ReturnType<typeof vi.spyOn> | undefined;
       const syncSpy = vi.spyOn(fs, "fsyncSync").mockImplementation((fd) => {
         if (!isDirectoryDescriptor(fd, path.dirname(manifestPath))) {
           return fsync(fd);
         }
+        platformSpy ??= vi.spyOn(process, "platform", "get").mockReturnValue(platform);
         // Assert the persisted intent at the commit boundary, before any original moves.
         const manifest = readMigrationManifest(manifestPath);
         if (fs.existsSync(archivePath)) {
@@ -220,7 +221,7 @@ describe("runDoctorSessionSqlite", () => {
         }
       } finally {
         syncSpy.mockRestore();
-        platformSpy.mockRestore();
+        platformSpy?.mockRestore();
         privateDirectorySpy.mockRestore();
         stagingRootSpy.mockRestore();
       }
