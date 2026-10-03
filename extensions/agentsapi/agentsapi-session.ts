@@ -55,6 +55,7 @@ export function createAgentsApiSession(options: {
   let admittedMessageCount = submitted ? 1 : 0;
   let baselineTurnId: string | undefined;
   let baselineCaptured = submitted;
+  const priorInputItemIds = new Set<string>();
   let observedInputItems = new Set<string>();
   const coordinatorTurnIds = new Set<string>();
   const excludedTurnIds = new Set<string>();
@@ -165,7 +166,7 @@ export function createAgentsApiSession(options: {
       const items = itemsByTurn.get(turn.id) ?? [];
       for (const item of items) {
         rememberItemTurn(item.id, turn.id);
-        if (item.type === "message" && item.role === "user") {
+        if (item.type === "message" && item.role === "user" && !priorInputItemIds.has(item.id)) {
           inputItems.add(item.id);
         }
       }
@@ -264,7 +265,27 @@ export function createAgentsApiSession(options: {
     async run(prompt: string, persistInput: () => Promise<void>, onSubmitted: () => void) {
       signal.throwIfAborted();
       if (!options.initialInputSubmitted) {
-        baselineTurnId = (await client.turns(sessionId, signal, undefined, true))[0]?.id;
+        const latest = (await client.turns(sessionId, signal, undefined, true))[0];
+        assertCurrent();
+        baselineTurnId = latest?.id;
+        if (latest && !isAgentsApiTerminalTurn(latest.status)) {
+          // A recovery input can join the still-active native root. Retain its
+          // tools and output, but count only inputs admitted by this attempt.
+          const turns = await client.turns(sessionId, signal);
+          assertCurrent();
+          const latestIndex = turns.findIndex((turn) => turn.id === latest.id);
+          if (latestIndex < 0) {
+            throw new Error("Agents API continuation lost its active root turn");
+          }
+          baselineTurnId = turns[latestIndex - 1]?.id;
+          const items = await client.items(sessionId, latest.id, signal);
+          assertCurrent();
+          for (const item of items) {
+            if (item.type === "message" && item.role === "user") {
+              priorInputItemIds.add(item.id);
+            }
+          }
+        }
         baselineCaptured = true;
         if (baselineTurnId) {
           excludedTurnIds.add(baselineTurnId);
@@ -694,6 +715,7 @@ export function createAgentsApiSession(options: {
             event.item?.type === "message" &&
             event.item.role === "user" &&
             event.item.id &&
+            !priorInputItemIds.has(event.item.id) &&
             !observedInputItems.has(event.item.id)
           ) {
             observedInputItems.add(event.item.id);

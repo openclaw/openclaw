@@ -89,6 +89,145 @@ describe("Agents API native session receipts", () => {
     await session.close();
   });
 
+  it.each(["active", "completed", "completes before input"] as const)(
+    "settles a continuation with a %s prior root without admitting historical inputs",
+    async (priorStatus) => {
+      const controller = new AbortController();
+      const stream = createEventStream();
+      const submitted = deferred<void>();
+      const historicalTurn = createTurn({ id: "turn-history" });
+      const priorTurn = createTurn({
+        id: "turn-prior",
+        status: priorStatus === "completed" ? "completed" : "in_progress",
+        completed_at: priorStatus === "completed" ? 2 : null,
+      });
+      const currentTurn = createTurn({
+        id: priorStatus === "active" ? priorTurn.id : "turn-current",
+      });
+      const historicalInput = {
+        ...createSavedMessage("input-history", "user", "Historical request"),
+        turn_id: historicalTurn.id,
+      };
+      const priorInput = {
+        ...createSavedMessage("input-prior", "user", "Original request"),
+        turn_id: priorTurn.id,
+      };
+      const priorCommand: AgentsApiItem = {
+        id: "command-prior",
+        type: "command_execution",
+        turn_id: priorTurn.id,
+        command: "fixture-worker",
+        status: "in_progress",
+      };
+      const continuationInput = {
+        ...createSavedMessage("input-continuation", "user", "Continue existing work"),
+        turn_id: currentTurn.id,
+      };
+      let savedTurns = [historicalTurn, priorTurn];
+      let savedItems = [historicalInput, priorInput, priorCommand];
+      let savedSession = createHostedSession("in_progress");
+      const postedBodies: unknown[] = [];
+      fetchWithSsrFGuardMock.mockImplementation(async (request) => {
+        request.beforeRequest?.();
+        if (request.init?.method === "POST") {
+          postedBodies.push(await new Request(request.url, request.init).json());
+          savedTurns = [historicalTurn, { ...priorTurn, status: "completed" }];
+          if (currentTurn.id !== priorTurn.id) {
+            savedTurns.push(currentTurn);
+          }
+          savedItems = [
+            historicalInput,
+            priorInput,
+            { ...priorCommand, status: "completed", exit_code: 0, output: "Worker result" },
+          ];
+          savedSession = createHostedSession("idle");
+          return guardedResponse(request.url, Response.json({}));
+        }
+        if (new Headers(request.init?.headers).get("accept") === "text/event-stream") {
+          return guardedResponse(request.url, stream.response(request.signal));
+        }
+        return guardedResponse(
+          request.url,
+          savedStateResponse(request.url, savedTurns, savedItems, savedSession),
+        );
+      });
+      const onReconcile = vi.fn(async (_turn: Turn, _items: AgentsApiItem[]) => {});
+      const onReconcileHistory = vi.fn(async () => {});
+      const observedEvents: AgentsApiEvent[] = [];
+      const session = createSession(
+        controller.signal,
+        (event) => {
+          observedEvents.push(event);
+          stream.observe(event);
+        },
+        { onReconcile, onReconcileHistory },
+      );
+      const result = session.run(
+        "Continue existing work",
+        async () => {},
+        () => submitted.resolve(),
+      );
+      void result.catch(() => {});
+      try {
+        await submitted.promise;
+        void stream.send({ type: "agent.session.turn.completed", turn: historicalTurn });
+        void stream.send({ type: "agent.session.turn.item.done", item: priorInput });
+        await stream.send({ type: "agent.session.idle" });
+        await stream.send({ type: "agent.session.in_progress" });
+        expect(session.isSettled()).toBe(false);
+
+        savedItems.push(continuationInput);
+        void stream.send({ type: "agent.session.turn.item.done", item: continuationInput });
+        await stream.send({ type: "agent.session.idle" });
+        // A still-waiting session consumes this next event. A settled session
+        // completes first, so the pre-fix failure needs no timer or polling.
+        const outcome = await Promise.race([
+          result.then((value) => ({ kind: "settled", value })),
+          stream.send({ type: "agent.session.in_progress" }).then(() => ({ kind: "waiting" })),
+        ]);
+        expect(outcome).toMatchObject({ kind: "settled", value: { turn: { id: currentTurn.id } } });
+        expect(postedBodies).toEqual([
+          {
+            events: [
+              {
+                type: "agent.session.input.message",
+                input: [
+                  {
+                    role: "user",
+                    content: [{ type: "input_text", text: "Continue existing work" }],
+                  },
+                ],
+              },
+            ],
+          },
+        ]);
+        expect(onReconcile.mock.calls.map(([turn]) => turn.id)).toEqual(
+          priorStatus === "completes before input"
+            ? [priorTurn.id, currentTurn.id]
+            : [currentTurn.id],
+        );
+        if (priorStatus !== "completed") {
+          expect(onReconcile.mock.calls[0]?.[1]).toContainEqual({
+            ...priorCommand,
+            status: "completed",
+            exit_code: 0,
+            output: "Worker result",
+          });
+        }
+        expect(onReconcileHistory).toHaveBeenCalledWith(
+          expect.arrayContaining([{ turn: historicalTurn, items: [historicalInput] }]),
+        );
+        expect(observedEvents.filter((event) => event.turn).map((event) => event.turn?.id)).toEqual(
+          [],
+        );
+      } finally {
+        controller.abort();
+        await result.catch(() => {});
+        await session.close();
+      }
+    },
+  );
+
   it.each([false, true])(
     "connects while the original input acknowledgement is pending (existing action: %s)",
     async (existingAction) => {
@@ -472,7 +611,12 @@ function createSession(
   onEvent: (event: AgentsApiEvent) => void,
   lifecycle: Pick<
     Parameters<typeof createAgentsApiSession>[0],
-    "connectEnvironment" | "onSessionFailed" | "executeFunction" | "onFunctionResult"
+    | "connectEnvironment"
+    | "onSessionFailed"
+    | "executeFunction"
+    | "onFunctionResult"
+    | "onReconcile"
+    | "onReconcileHistory"
   > = {},
 ) {
   return createAgentsApiSession({
@@ -492,9 +636,17 @@ function savedStateResponse(
   items: AgentsApiItem[],
   session: AgentSession,
 ) {
-  switch (new URL(url).pathname) {
-    case "/v1/agents/sessions/session-fixture/turns":
-      return Response.json({ data: turns, has_more: false });
+  const parsed = new URL(url);
+  switch (parsed.pathname) {
+    case "/v1/agents/sessions/session-fixture/turns": {
+      let page = parsed.searchParams.get("order") === "desc" ? turns.toReversed() : turns;
+      const after = parsed.searchParams.get("after");
+      if (after) {
+        page = page.slice(page.findIndex((turn) => turn.id === after) + 1);
+      }
+      const limit = Number(parsed.searchParams.get("limit"));
+      return Response.json({ data: limit > 0 ? page.slice(0, limit) : page, has_more: false });
+    }
     case "/v1/agents/sessions/session-fixture/items":
       return Response.json({ data: items, has_more: false });
     case "/v1/agents/sessions/session-fixture":
