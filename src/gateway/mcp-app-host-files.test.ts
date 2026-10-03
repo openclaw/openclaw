@@ -12,9 +12,21 @@ import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
 } from "./device-revocation.js";
+import { createGatewayBroadcaster } from "./server-broadcast.js";
+import { makeClient } from "./server-broadcast.test-helpers.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 
-const state = vi.hoisted(() => ({ root: "", sessionId: "session-1" }));
+const state = vi.hoisted(() => ({ root: "", sessionId: "session-1", prepare: vi.fn() }));
+vi.mock("./mcp-app-extension-runtime.js", () => ({
+  prepareMcpAppExtensionRuntime: state.prepare,
+}));
+vi.mock("../plugins/current-plugin-metadata-state.js", () => ({
+  getGatewayPluginMetadataSnapshot: () => undefined,
+}));
+vi.mock("../agents/mcp-form-resource-upload.js", () => ({
+  prepareMcpAppFormUpload: async () => undefined,
+}));
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   return { ...actual, watchFile: vi.fn(actual.watchFile) };
@@ -39,6 +51,7 @@ vi.mock("./mcp-app-reconstruction.js", () => ({ restoreMcpAppView: async () => u
 vi.mock("./mcp-app-standalone.js", () => ({ createMcpAppStandaloneTicket: () => undefined }));
 
 import { prepareMcpAppHostFile } from "./mcp-app-host-files.js";
+import { mcpAppExtensionHandlers } from "./server-methods/mcp-app-extensions.js";
 import { mcpAppHandlers } from "./server-methods/mcp-app.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -72,6 +85,59 @@ async function invoke(method: string, params: Record<string, unknown>, profileId
     respond,
   });
   return respond.mock.calls[0]!;
+}
+
+async function launchFileView() {
+  runtime.callTool = async () => ({ content: [] });
+  const assertCurrent = () => {
+    if (!allowed) {
+      throw new Error("App interaction revoked");
+    }
+  };
+  state.prepare.mockImplementation(async (request) => ({
+    options: request,
+    runtime,
+    agentId: "main",
+    sessionKey,
+    requesterId: "alice",
+    catalog: {
+      tools: [
+        {
+          serverName: "demo",
+          toolName: "edit",
+          uiResourceUri: "ui://demo/editor",
+          appExtensions: { entrypoints: [{ type: "file", extensions: [".stl"] }] },
+        },
+      ],
+    },
+    assertCurrent,
+    assertTool: assertCurrent,
+    approveTool: async () => assertCurrent,
+    retainViewAuthority: () => ({ assertCurrent, release() {} }),
+    async dispose() {},
+  }));
+  const respond = vi.fn();
+  await mcpAppExtensionHandlers["mcp.app.launch"]!({
+    ...options({
+      sessionKey,
+      serverName: "demo",
+      toolName: "edit",
+      entrypointType: "file",
+      filePath: "part.stl",
+    }),
+    respond,
+  });
+  expect(respond.mock.calls[0]?.[0]).toBe(true);
+  viewId = respond.mock.calls[0]![1].viewId;
+  const view = getMcpAppViewLease(viewId, runtime)!;
+  uri = view.hostFile!.resourceUri;
+  expect(view.toolInput).toEqual({ file: { name: "part.stl", resourceUri: uri } });
+  disposers.push(() => {
+    clearTimeout(view.expiryTimer);
+    for (const dispose of view.disposeCallbacks ?? []) {
+      dispose();
+    }
+  });
 }
 
 beforeEach(async () => {
@@ -306,6 +372,7 @@ describe("registered MCP App host-file routes", () => {
   it("keeps file notifications alive after the accepted subscription request finishes", async ({
     signal,
   }) => {
+    await launchFileView();
     const request = options({ sessionKey, viewId, uri });
     const device = captureGatewayDeviceRevocation(
       request.context,
@@ -321,10 +388,20 @@ describe("registered MCP App host-file routes", () => {
     expect(respond).toHaveBeenCalledWith(true, {});
     device.release();
     const file = path.join(state.root, "part.stl");
+    const owner = makeClient("alice", "operator", ["operator.read"]);
+    const observer = makeClient("observer", "operator", ["operator.read"]);
+    const { broadcastToConnIds } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([owner.client, observer.client]),
+    });
     for (const change of ["append", "atomic rename"]) {
       const notified = createDeferred();
       publish.mockClear();
-      publish.mockImplementation(() => notified.resolve());
+      publish.mockImplementation(
+        (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
+          broadcastToConnIds(event, payload, connIds);
+          notified.resolve();
+        },
+      );
       if (change === "append") {
         await appendFile(file, "\nsolid appended");
       } else {
@@ -337,11 +414,17 @@ describe("registered MCP App host-file routes", () => {
         { viewId, uri },
         new Set(["alice"]),
       );
+      expect(JSON.parse(owner.socket.send.mock.calls[0]![0])).toMatchObject({
+        event: "mcp.app.resourceUpdated",
+        payload: { viewId, uri },
+      });
+      expect(observer.socket.send).not.toHaveBeenCalled();
+      owner.socket.send.mockClear();
     }
     invalidateGatewayDeviceRevocation(request.context, "viewer");
     expect(device.isCurrent()).toBe(false);
     connection.abort();
-    expect(getMcpAppViewLease(viewId, runtime)?.disposeCallbacks?.size).toBe(0);
+    expect(getMcpAppViewLease(viewId, runtime)?.disposeCallbacks?.size).toBe(1);
   });
 
   it("registers and removes subscriptions through the same view authority", async () => {
