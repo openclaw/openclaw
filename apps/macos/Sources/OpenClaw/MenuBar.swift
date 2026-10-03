@@ -131,7 +131,7 @@ struct OpenClawApp: App {
             SidebarCommands()
             CommandMenu("Navigate") {
                 Button("Systems") {
-                    AppNavigationActions.openPrimaryWebRoute(DashboardRouteMap.systemsPagePath)
+                    AppNavigationActions.openSelectedWebRoute(DashboardRouteMap.systemsPagePath)
                 }
 
                 Divider()
