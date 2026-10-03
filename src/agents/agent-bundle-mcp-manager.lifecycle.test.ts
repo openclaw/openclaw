@@ -421,12 +421,12 @@ describe("MCP manager creation ownership", () => {
     },
   );
 
-  it.each([
-    ["host-close", acquireSessionMcpRuntime],
-    ["scheduler-stop", acquireRequesterScopedMcpRuntime],
-    ["already-stopped", acquireSessionMcpRuntime],
-    ["unbound-stopped", acquireRequesterScopedMcpRuntime],
-  ] as const)("rejects acquisition at %s", async (boundary, acquire) => {
+  it.each(
+    ["host-close", "scheduler-stop", "already-stopped", "unbound-stopped"].flatMap((boundary) => [
+      { boundary, entrypoint: "full", acquire: acquireSessionMcpRuntime },
+      { boundary, entrypoint: "requester", acquire: acquireRequesterScopedMcpRuntime },
+    ]),
+  )("rejects acquisition at $boundary ($entrypoint)", async ({ boundary, acquire }) => {
     const firstClock = createGatewaySchedulerClock(Date.now());
     const firstScheduler = createTestGatewayScheduler(firstClock.clock);
     const nextScheduler = createTestGatewayScheduler();
@@ -478,12 +478,14 @@ describe("MCP manager creation ownership", () => {
     }
   });
 
-  it.each([
-    ["host-close", acquireSessionMcpRuntime],
-    ["scheduler-stop", acquireRequesterScopedMcpRuntime],
-    ["last-scheduler-stop", acquireSessionMcpRuntime],
-    ["unbound-last-scheduler-stop", acquireRequesterScopedMcpRuntime],
-  ] as const)("releases queued acquisition after %s", async (boundary, acquire) => {
+  it.each(
+    ["host-close", "scheduler-stop", "last-scheduler-stop", "unbound-last-scheduler-stop"].flatMap(
+      (boundary) => [
+        { boundary, entrypoint: "full", acquire: acquireSessionMcpRuntime },
+        { boundary, entrypoint: "requester", acquire: acquireRequesterScopedMcpRuntime },
+      ],
+    ),
+  )("releases queued acquisition after $boundary ($entrypoint)", async ({ boundary, acquire }) => {
     await withRequesterResolver(async () => {
       const survivorScheduler = createTestGatewayScheduler();
       const originScheduler = createTestGatewayScheduler();

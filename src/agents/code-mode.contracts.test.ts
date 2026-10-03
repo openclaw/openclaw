@@ -43,7 +43,7 @@ it("supports root MCP API and multiple server declarations", async () => {
             headers: [typeof root.header, typeof a.header, typeof b.header],
             rootDeclaration: rootFile.content.includes(root.header),
             indexDeclaration: indexFile?.content.includes("declare namespace MCP.index"),
-            files: [rootFile, await API.read("mcp/alpha.d.ts"), await API.read("mcp/beta.d.ts")],
+            files: [rootFile, indexFile, await API.read("mcp/alpha.d.ts"), await API.read("mcp/beta.d.ts")],
           };
         `,
     }),

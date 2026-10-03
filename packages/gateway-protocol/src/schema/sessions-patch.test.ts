@@ -1,23 +1,44 @@
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { validateSessionsPatchParams, validateSessionsPatchManyParams } from "../index.js";
 
-it("validates sandbox mutations and compare-and-set modes", () => {
-  for (const sandboxMode of ["off", null]) {
-    expect(
-      validateSessionsPatchParams({
-        key: "agent:main:chat",
-        sandboxMode,
-        expectedSandboxMode: null,
-      }),
-    ).toBe(true);
+describe("session patch schema", () => {
+  it.each([
+    [1_800_000_000_000, true],
+    [null, true],
+    [0, false],
+    [-1, false],
+    [1.5, false],
+    ["1800000000000", false],
+  ] as const)("validates snoozedUntil %j for single and batch patches", (snoozedUntil, valid) => {
+    expect(validateSessionsPatchParams({ key: "agent:main:chat", snoozedUntil })).toBe(valid);
     expect(
       validateSessionsPatchManyParams({
-        targets: [{ key: "agent:main:chat", expectedSandboxMode: "off" }],
-        patch: { sandboxMode },
+        targets: [{ key: "agent:main:chat" }],
+        patch: { snoozedUntil },
       }),
-    ).toBe(true);
-  }
-  for (const sandboxMode of ["all", "required", true]) {
+    ).toBe(valid);
+  });
+
+  it.each(["off", null] as const)(
+    "accepts sandbox mode %s with single and batch CAS",
+    (sandboxMode) => {
+      expect(
+        validateSessionsPatchParams({
+          key: "agent:main:chat",
+          sandboxMode,
+          expectedSandboxMode: null,
+        }),
+      ).toBe(true);
+      expect(
+        validateSessionsPatchManyParams({
+          targets: [{ key: "agent:main:chat", expectedSandboxMode: "off" }],
+          patch: { sandboxMode },
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it.each(["all", "required", true])("rejects unsupported sandbox mode %s", (sandboxMode) => {
     expect(validateSessionsPatchParams({ key: "agent:main:chat", sandboxMode })).toBe(false);
     expect(
       validateSessionsPatchParams({
@@ -26,34 +47,72 @@ it("validates sandbox mutations and compare-and-set modes", () => {
         expectedSandboxMode: sandboxMode,
       }),
     ).toBe(false);
-  }
-});
-
-it("validates session settings and lifecycle preconditions", () => {
-  for (const [fields, valid] of [
-    [
-      {
+  });
+  it("accepts explicit runtime selections and clearing the runtime pin", () => {
+    expect(
+      validateSessionsPatchParams({
+        key: "agent:main:runtime",
+        model: "openai/gpt-5.6-sol",
+        agentRuntime: "codex",
+      }),
+    ).toBe(true);
+    expect(validateSessionsPatchParams({ key: "agent:main:runtime", agentRuntime: null })).toBe(
+      true,
+    );
+    expect(validateSessionsPatchParams({ key: "agent:main:runtime", agentRuntime: "" })).toBe(
+      false,
+    );
+  });
+  it("validates session settings compare-and-set fields", () => {
+    expect(
+      validateSessionsPatchParams({
+        key: "agent:main:settings-cas",
         expectedPermissionMode: "guarded",
         permissionMode: "workspace",
         expectedToolOverrides: { webSearch: false },
         toolOverrides: { skills: { release: false } },
-      },
-      true,
-    ],
-    [{ expectedToolOverrides: { unknown: true }, toolOverrides: null }, false],
-    [
-      {
+      }),
+    ).toBe(true);
+    expect(
+      validateSessionsPatchParams({
+        key: "agent:main:settings-cas",
+        expectedToolOverrides: { unknown: true },
+        toolOverrides: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("validates lifecycle and unread acknowledgement identities", () => {
+    expect(
+      validateSessionsPatchParams({
+        key: "agent:main:self-archive",
         archived: true,
         expectedSessionId: "session-self-archive",
         expectedLifecycleRevision: "revision-self-archive",
-      },
-      true,
-    ],
-    [{ unread: false, expectedMarkedUnreadAt: 42 }, true],
-    [{ expectedSessionId: "" }, false],
-    [{ expectedLifecycleRevision: "" }, false],
-    [{ unread: false, expectedMarkedUnreadAt: -1 }, false],
-  ] as const) {
-    expect(validateSessionsPatchParams({ key: "agent:main:chat", ...fields })).toBe(valid);
-  }
+      }),
+    ).toBe(true);
+    expect(
+      validateSessionsPatchParams({
+        key: "agent:main:mark-read",
+        unread: false,
+        expectedMarkedUnreadAt: 42,
+      }),
+    ).toBe(true);
+    expect(
+      validateSessionsPatchParams({ key: "agent:main:self-archive", expectedSessionId: "" }),
+    ).toBe(false);
+    expect(
+      validateSessionsPatchParams({
+        key: "agent:main:self-archive",
+        expectedLifecycleRevision: "",
+      }),
+    ).toBe(false);
+    expect(
+      validateSessionsPatchParams({
+        key: "agent:main:mark-read",
+        unread: false,
+        expectedMarkedUnreadAt: -1,
+      }),
+    ).toBe(false);
+  });
 });
