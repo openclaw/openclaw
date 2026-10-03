@@ -1,4 +1,4 @@
-import "./browser/extension-install.fixture-test-support.js";
+import "./browser/extension-install-fixture.test-support.js";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
@@ -11,7 +11,7 @@ import {
 import {
   chromeProductRoots,
   installStableChromeExtension,
-} from "./browser/extension-install.fixture-test-support.js";
+} from "./browser/extension-install-fixture.test-support.js";
 import {
   useExtensionInstallFixture,
   writeChromePreferences,

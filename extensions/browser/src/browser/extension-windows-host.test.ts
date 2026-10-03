@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import "./extension-install.fixture-test-support.js";
+import "./extension-install-fixture.test-support.js";
 import {
   installChromeExtensionBootstrap,
   inspectWindowsNativeHosts,
   installWindowsNativeHost,
   uninstallWindowsNativeHosts,
   validateWindowsNativeContext,
-} from "./extension-install.fixture-test-support.js";
+} from "./extension-install-fixture.test-support.js";
 import { useExtensionInstallFixture } from "./extension-install.test-support.js";
 import {
   WINDOWS_OFFICIAL_ORIGIN,

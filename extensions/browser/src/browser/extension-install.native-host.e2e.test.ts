@@ -1,5 +1,5 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
-import "./extension-install.fixture-test-support.js";
+import "./extension-install-fixture.test-support.js";
 
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -10,7 +10,7 @@ import {
   chromeProductRoots,
   installStableChromeExtension,
   installChromeExtensionBootstrap,
-} from "./extension-install.fixture-test-support.js";
+} from "./extension-install-fixture.test-support.js";
 import {
   predictedId,
   useExtensionInstallFixture,

@@ -1,10 +1,9 @@
 import { existsSync } from "node:fs";
-import "./extension-install.fixture-test-support.js";
+import "./extension-install-fixture.test-support.js";
 
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { generateChromeExtensionIdForPath } from "./extension-install-layout.js";
 import {
   chromeProductRoots,
   installStableChromeExtension,
@@ -12,7 +11,8 @@ import {
   browserExtensionStatus,
   installChromeExtensionBootstrap,
   uninstallChromeExtensionNativeHosts,
-} from "./extension-install.fixture-test-support.js";
+} from "./extension-install-fixture.test-support.js";
+import { generateChromeExtensionIdForPath } from "./extension-install-layout.js";
 import { normalizeExtensionInstallWaitMs } from "./extension-install.js";
 import {
   FOUNDATION_STORE_ID,

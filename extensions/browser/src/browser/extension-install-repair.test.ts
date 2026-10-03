@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import "./extension-install.fixture-test-support.js";
+import "./extension-install-fixture.test-support.js";
 
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +9,7 @@ import {
   installRegistration,
   installChromeExtensionBootstrap,
   repairChromeExtensionNativeHosts,
-} from "./extension-install.fixture-test-support.js";
+} from "./extension-install-fixture.test-support.js";
 import {
   predictedId,
   useExtensionInstallFixture,

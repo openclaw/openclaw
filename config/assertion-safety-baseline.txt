@@ -1284,8 +1284,6 @@ src/agents/bootstrap-hooks.ts	1
 src/agents/btw-transcript.ts	5
 src/agents/btw.ts	6
 src/agents/cache-trace.ts	3
-src/agents/cli-auth-epoch.ts	1
-src/agents/cli-backends.ts	1
 src/agents/cli-credentials.ts	7
 src/agents/cli-executable-identity.ts	3
 src/agents/cli-output-records.ts	1
@@ -2451,7 +2449,6 @@ src/meeting-bot/voice-call-gateway.ts	1
 src/memory-host-sdk/event-store.ts	2
 src/memory-host-sdk/events.ts	1
 src/model-catalog/bundled-catalog-stamp.ts	1
-src/model-catalog/remote-overlay.ts	1
 src/model-picker/apply-session-model-selection.ts	1
 src/node-host/config.ts	1
 src/node-host/invoke-agent-cli-claude-params.ts	1

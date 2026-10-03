@@ -1,4 +1,4 @@
-import "../browser/extension-install.fixture-test-support.js";
+import "../browser/extension-install-fixture.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
@@ -9,7 +9,7 @@ import { createCliRuntimeCapture } from "../../test-support.js";
 import {
   chromeProductRoots,
   type InstallFixture,
-} from "../browser/extension-install.fixture-test-support.js";
+} from "../browser/extension-install-fixture.test-support.js";
 import {
   FOUNDATION_STORE_ID,
   predictedId,
@@ -26,7 +26,7 @@ const boundary = vi.hoisted(() => ({
 }));
 vi.mock("../browser/extension-install.js", async (original) => {
   const real = await original<typeof import("../browser/extension-install.js")>();
-  const fixture = await import("../browser/extension-install.fixture-test-support.js");
+  const fixture = await import("../browser/extension-install-fixture.test-support.js");
   return {
     ...real,
     browserExtensionStatus: (p: Parameters<typeof real.browserExtensionStatus>[0]) =>
@@ -61,7 +61,7 @@ async function setup(
   options: { legacy?: boolean; relocate?: boolean; registeredConfig?: "custom" | "default" } = {},
 ) {
   const f = await fixture(platform);
-  const real = await import("../browser/extension-install.fixture-test-support.js");
+  const real = await import("../browser/extension-install-fixture.test-support.js");
   const root = chromeProductRoots(f.deps)[0]!;
   await fs.mkdir(root.userDataDir, { recursive: true, mode: 0o700 });
   const registeredConfigPath =

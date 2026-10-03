@@ -1,10 +1,10 @@
-import "../browser/extension-install.fixture-test-support.js";
+import "../browser/extension-install-fixture.test-support.js";
 import { Command } from "commander";
 import * as runtimeConfigSnapshot from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../../test-support.js";
-import type { InstallFixture } from "../browser/extension-install.fixture-test-support.js";
+import type { InstallFixture } from "../browser/extension-install-fixture.test-support.js";
 import { useExtensionInstallFixture } from "../browser/extension-install.test-support.js";
 import type {
   WindowsManagementRequest,
@@ -21,7 +21,7 @@ const boundary = vi.hoisted(() => ({
 // Only inject isolated filesystem/Windows OS facts and the C# process boundary.
 vi.mock("../browser/extension-install.js", async (original) => {
   const real = await original<typeof import("../browser/extension-install.js")>();
-  const fixture = await import("../browser/extension-install.fixture-test-support.js");
+  const fixture = await import("../browser/extension-install-fixture.test-support.js");
   return {
     ...real,
     browserExtensionStatus: (p: Parameters<typeof real.browserExtensionStatus>[0]) =>
@@ -89,7 +89,7 @@ async function setup() {
     ...local.deps,
     windowsNative: { platform: f.ops, context: f.context, executable: f.executable, manage },
   };
-  const real = await import("../browser/extension-install.fixture-test-support.js");
+  const real = await import("../browser/extension-install-fixture.test-support.js");
   await real.installChromeExtensionBootstrap({
     ...local,
     deps: boundary.deps,
