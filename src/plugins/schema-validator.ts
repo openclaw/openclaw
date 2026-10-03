@@ -336,11 +336,14 @@ export function validatePluginSchemaValue(
   const { origin, ...validationParams } = params;
   if (origin === "bundled") {
     const result = validateJsonSchemaValue(validationParams);
+    if (!result.ok && result.schemaError) {
+      throw new RangeError(result.errors[0]?.message ?? "schema is too deep or large to compile");
+    }
     return result.ok ? result : { ...result, schemaError: false };
   }
   try {
     const result = validateJsonSchemaValue(validationParams);
-    return result.ok ? result : { ...result, schemaError: false };
+    return result.ok ? result : { ...result, schemaError: result.schemaError ?? false };
   } catch (error) {
     // The thrown text can embed raw manifest content (TypeBox echoes a bad regex
     // pattern), and callers log it, so it is sanitized like every other error path.
@@ -361,34 +364,51 @@ export function validateJsonSchemaValue(params: {
   sourceValue?: unknown;
   applyDefaults?: boolean;
   cache?: boolean;
-}): { ok: true; value: unknown } | { ok: false; errors: JsonSchemaValidationError[] } {
-  const schemaKey = params.cacheKey ?? JSON.stringify(params.schema);
-  const cacheKey = params.applyDefaults ? `${schemaKey}::defaults` : schemaKey;
-  let cached = params.cache === false ? undefined : schemaCache.get(cacheKey);
-  if (!cached || cached.schema !== params.schema) {
-    const schemaError = findJsonSchemaShapeError(params.schema);
-    if (schemaError) {
-      throw new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`));
+}):
+  | { ok: true; value: unknown }
+  | { ok: false; errors: JsonSchemaValidationError[]; schemaError?: true } {
+  let cached: CachedValidator | undefined;
+  try {
+    const schemaKey = params.cacheKey ?? JSON.stringify(params.schema);
+    const cacheKey = params.applyDefaults ? `${schemaKey}::defaults` : schemaKey;
+    cached = params.cache === false ? undefined : schemaCache.get(cacheKey);
+    if (!cached || cached.schema !== params.schema) {
+      const schemaError = findJsonSchemaShapeError(params.schema);
+      if (schemaError) {
+        throw new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`));
+      }
     }
-  }
-  const schemaFingerprint =
-    !cached || cached.schema !== params.schema ? JSON.stringify(params.schema) : undefined;
-  if (
-    !cached ||
-    (cached.schema !== params.schema && cached.schemaFingerprint !== schemaFingerprint)
-  ) {
-    const validate = compileSchema(params.schema);
-    cached = {
-      hasDefaults: params.applyDefaults ? schemaHasDefaults(params.schema) : false,
-      validate,
-      schema: params.schema,
-      schemaFingerprint: schemaFingerprint ?? JSON.stringify(params.schema),
+    const schemaFingerprint =
+      !cached || cached.schema !== params.schema ? JSON.stringify(params.schema) : undefined;
+    if (
+      !cached ||
+      (cached.schema !== params.schema && cached.schemaFingerprint !== schemaFingerprint)
+    ) {
+      const validate = compileSchema(params.schema);
+      cached = {
+        hasDefaults: params.applyDefaults ? schemaHasDefaults(params.schema) : false,
+        validate,
+        schema: params.schema,
+        schemaFingerprint: schemaFingerprint ?? JSON.stringify(params.schema),
+      };
+      if (params.cache !== false) {
+        schemaCache.set(cacheKey, cached);
+      }
+    } else if (cached.schema !== params.schema) {
+      cached.schema = params.schema;
+    }
+  } catch (error) {
+    if (!(error instanceof RangeError)) {
+      throw error;
+    }
+    // Schemas can overflow during fingerprinting and traversal as well as TypeBox
+    // compilation. Keep that failure distinct from an invalid supplied value.
+    const message = "schema is too deep or large to compile";
+    return {
+      ok: false,
+      schemaError: true,
+      errors: [{ path: "<root>", message, text: `<root>: ${message}` }],
     };
-    if (params.cache !== false) {
-      schemaCache.set(cacheKey, cached);
-    }
-  } else if (cached.schema !== params.schema) {
-    cached.schema = params.schema;
   }
 
   return withPluginFormatSemantics(() => {
