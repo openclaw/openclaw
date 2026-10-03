@@ -98,9 +98,9 @@ describe("Agents API self-hosted session connection", () => {
       });
       const client = new AgentsApiClient("fixture-not-a-real-api-key", vi.fn());
       const connect = vi.fn(async () => {});
-      await expect(
-        client.pendingFunctionCalls("session-fixture", signal, connect),
-      ).rejects.toThrow("cannot reconnect an environment_connection");
+      await expect(client.pendingFunctionCalls("session-fixture", signal, connect)).rejects.toThrow(
+        "cannot reconnect an environment_connection",
+      );
       expect(connect).not.toHaveBeenCalled();
     },
   );

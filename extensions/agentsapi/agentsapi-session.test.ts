@@ -81,8 +81,6 @@ describe("Agents API native session receipts", () => {
       type: "agent.session.turn.item.done",
       item: inputReceipt,
     });
-    expect(session.isSettled()).toBe(false);
-    await stream.send({ type: "agent.session.idle" });
 
     await expect(result).resolves.toMatchObject({ turn: { id: "turn-fixture" }, cancelled: false });
     expect(session.isSettled()).toBe(true);
@@ -90,7 +88,7 @@ describe("Agents API native session receipts", () => {
   });
 
   it.each(["active", "completed", "completes before input"] as const)(
-    "settles a continuation with a %s prior root without admitting historical inputs",
+    "settles a continuation with a %s prior root on its late input receipt",
     async (priorStatus) => {
       const controller = new AbortController();
       const stream = createEventStream();
@@ -178,7 +176,6 @@ describe("Agents API native session receipts", () => {
 
         savedItems.push(continuationInput);
         void stream.send({ type: "agent.session.turn.item.done", item: continuationInput });
-        await stream.send({ type: "agent.session.idle" });
         // A still-waiting session consumes this next event. A settled session
         // completes first, so the pre-fix failure needs no timer or polling.
         const outcome = await Promise.race([

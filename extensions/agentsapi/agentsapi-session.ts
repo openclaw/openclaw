@@ -724,6 +724,8 @@ export function createAgentsApiSession(options: {
             if (!inputTurnId) {
               throw new Error("Agents API input item is missing its turn ID");
             }
+            // The input receipt can arrive after the final idle notification.
+            await settleFromSavedState();
           }
           if (event.type === "error") {
             throw new AgentsApiError(
