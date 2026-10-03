@@ -47,6 +47,7 @@ import {
   testState,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
+import * as workerBundles from "./worker-environments/bundle.js";
 import { hashWorkerCredential } from "./worker-environments/credential.js";
 import * as workerService from "./worker-environments/service.js";
 
@@ -124,6 +125,19 @@ it("carries authenticated session previews through the node and retires access b
   const destinationPort = (destination.address() as AddressInfo).port;
   const runtimeFactory = vi.spyOn(workerStartup, "createGatewayWorkerEnvironmentRuntime");
   const serviceFactory = vi.spyOn(workerService, "createWorkerEnvironmentService");
+  // Packing an ambient dist/worker build costs tens of seconds and no part of this proof.
+  vi.spyOn(workerBundles, "createWorkerBundleProducer").mockReturnValue({
+    prepare: async () => ({
+      install: "bundle",
+      bundleHash: "a".repeat(64),
+      openclawVersion: "2026.9.1",
+      protocolFeatures: [],
+      tarballBytes: 1,
+      tarballSha256: "b".repeat(64),
+      tarballPath: "/synthetic/worker.tgz",
+    }),
+    prune: async () => {},
+  });
   const recordConnection = nodePairingWrites.recordPairedNodeConnection;
   const nodeConnectionRecorded = createDeferred<Awaited<ReturnType<typeof recordConnection>>>();
   vi.spyOn(nodePairingWrites, "recordPairedNodeConnection").mockImplementation((...args) => {
@@ -182,27 +196,12 @@ it("carries authenticated session previews through the node and retires access b
         const store = startup.startup.store;
         const serviceOptions = serviceFactory.mock.calls.at(-1)?.[0];
         assert(serviceOptions, "Gateway must own the worker bundle producer");
-        let bootstrapReceipt: WorkerAdmissionHandshake;
-        try {
-          const artifact = await serviceOptions.prepareInstallation("bundle");
-          bootstrapReceipt = {
-            bundleHash: artifact.bundleHash,
-            openclawVersion: artifact.openclawVersion,
-            protocolFeatures: [...artifact.protocolFeatures],
-          };
-          console.info("Portal transport proof: current Gateway worker build receipt");
-        } catch (error) {
-          assert(error instanceof Error);
-          expect(error.message).toMatch(/^OpenClaw worker deploy artifact is missing;/);
-          expect(error.cause).toMatchObject({ code: "ENOENT" });
-          // Source-only Gateways preserve admitted leases when no replacement build exists.
-          bootstrapReceipt = {
-            bundleHash: "a".repeat(64),
-            openclawVersion: "2026.9.1",
-            protocolFeatures: [],
-          };
-          console.info("Portal transport proof: historical receipt; worker build absent (ENOENT)");
-        }
+        const artifact = await serviceOptions.prepareInstallation("bundle");
+        const bootstrapReceipt: WorkerAdmissionHandshake = {
+          bundleHash: artifact.bundleHash,
+          openclawVersion: artifact.openclawVersion,
+          protocolFeatures: [...artifact.protocolFeatures],
+        };
         const sockets: Awaited<ReturnType<typeof openWs>>[] = [];
         const controllers = new Map<string, AbortController>();
         const running = new Set<Promise<void>>();
