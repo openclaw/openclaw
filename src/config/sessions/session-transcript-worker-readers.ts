@@ -399,6 +399,12 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "session-pending-input-receipts", ...input }),
       (value) => value.receipts,
     ),
+    readPendingInputSource: reader(
+      "session-pending-input-source",
+      "a submitted input source",
+      (input) => ({ kind: "session-pending-input-source", ...input }),
+      (value) => value.snapshot,
+    ),
     readConversationDelivery: reader(
       "conversation-delivery",
       "a conversation delivery receipt",

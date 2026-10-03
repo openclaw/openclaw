@@ -510,6 +510,11 @@ suite.define(() => {
       });
       const alert = page.locator('.chat-error[role="alert"]');
       await pollLocatorText(alert).toContain(failure);
+      expect(await gateway.getSessionRow(sessionKey)).toMatchObject({
+        activeRunIds: [],
+        hasActiveRun: false,
+        status: "failed",
+      });
       await expect.poll(() => working.count()).toBe(0);
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await expect.poll(() => composer.isEnabled()).toBe(true);

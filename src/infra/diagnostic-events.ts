@@ -26,6 +26,7 @@ import type {
   DiagnosticMemoryUsage,
   DiagnosticChildProcessSpawnFields,
 } from "./diagnostic-process-types.js";
+import type { DiagnosticGatewayRpcFields } from "./diagnostic-rpc-types.js";
 import type {
   DiagnosticAgentCommentaryFields,
   DiagnosticRunScopeFields,
@@ -64,32 +65,7 @@ type DiagnosticBaseEvent = {
 type DiagnosticSessionEvent = DiagnosticBaseEvent &
   Pick<DiagnosticRunScopeFields, "sessionKey" | "sessionId">;
 
-/** Payload-free facts from authenticated Gateway WebSocket request owners. */
-type DiagnosticGatewayRpcEvent = DiagnosticBaseEvent & {
-  type: "gateway.rpc";
-  /** Registered method name, or a fixed other/unknown bucket. */
-  method: string;
-} & (
-    | { phase: "received" }
-    | {
-        phase: "response";
-        outcome: "ok" | "error" | "unavailable" | "suppressed";
-        durationMs: number;
-      }
-    | {
-        phase: "handler";
-        outcome: "returned" | "threw";
-        durationMs: number;
-        admissionMs: number;
-      }
-    | {
-        phase: "dispatch";
-        outcome: "returned" | "threw" | "rejected" | "cancelled";
-        durationMs: number;
-        queueWaitMs?: number;
-        response: "none" | "sent" | "unavailable" | "suppressed";
-      }
-  );
+type DiagnosticGatewayRpcEvent = DiagnosticBaseEvent & DiagnosticGatewayRpcFields;
 
 type DiagnosticUsageEvent = DiagnosticSessionEvent & {
   type: "model.usage";

@@ -208,6 +208,20 @@ describe("temporary human mention Inbox", () => {
     });
   });
 
+  it("drains accepted committed input during disposal while refusing new input", async () => {
+    await withInbox(async (f) => {
+      const accepted = f.post("accepted-before-dispose");
+      const disposal = f.inbox.dispose();
+      await f.post("refused-after-dispose");
+      await Promise.all([accepted, disposal]);
+      const restarted = f.openInbox("after-disposal");
+      expect((await read(restarted, f.bobClient)).items.map((item) => item.messageId)).toEqual([
+        "message-accepted-before-dispose",
+      ]);
+      expect(f.push).toHaveBeenCalledOnce();
+    });
+  });
+
   it("fences committed input when the Gateway scheduler closes", async () => {
     await withInbox(async (f) => {
       await f.post("before-close");

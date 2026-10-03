@@ -178,12 +178,35 @@ function fixture(
   };
 }
 
-it("prepares an idle resident whose shutdown budget is unknown before stopping", async () => {
-  const f = fixture({ resident: { pid: 42 } });
-  await expect(withGatewayMaintenanceDrain(f.params, f.stop)).resolves.toBe("stopped");
-  expect(f.events).toEqual(["status", "observe:ready", "stop"]);
-  expect(f.warn).not.toHaveBeenCalled();
-});
+it.each([
+  { residentTimeout: undefined, managerTimeout: 330_000, drain: true, warning: false },
+  { residentTimeout: 325_000, managerTimeout: 330_000, drain: false, warning: false },
+  { residentTimeout: 325_000, managerTimeout: 30_000, drain: true, warning: true },
+  { residentTimeout: 325_000, managerTimeout: undefined, drain: true, warning: true },
+])(
+  "stops an idle resident with budgets $residentTimeout/$managerTimeout",
+  async ({ residentTimeout, managerTimeout, drain, warning }) => {
+    const f = fixture({
+      resident: {
+        pid: 42,
+        ...(residentTimeout === undefined
+          ? {}
+          : { shutdownBudget: { timeoutMs: residentTimeout } }),
+      },
+    });
+    mocks.managerTimeout.mockResolvedValue(managerTimeout);
+    await expect(withGatewayMaintenanceDrain(f.params, f.stop)).resolves.toBe("stopped");
+    expect(f.events.filter((event) => !event.startsWith("warning:"))).toEqual(
+      drain ? ["status", "observe:ready", "stop"] : ["status", "stop"],
+    );
+    if (warning) {
+      expect(f.warn).toHaveBeenCalledOnce();
+      expect(f.warn.mock.calls[0]?.[0]).toContain("using lifecycle drain");
+    } else {
+      expect(f.warn).not.toHaveBeenCalled();
+    }
+  },
+);
 
 it("waits for admitted work to become idle before stopping", async () => {
   const f = fixture({ observations: [draining("embedded-run", "1 active agent turn"), ready()] });
@@ -197,139 +220,106 @@ it("waits for admitted work to become idle before stopping", async () => {
   expect(f.warn).not.toHaveBeenCalled();
 });
 
-it("uses the existing update deadline before warning about interrupted admitted work", async () => {
-  const f = fixture({
-    observations: [draining("embedded-run", "1 active agent turn", DEFAULT_UPDATE_STEP_TIMEOUT_MS)],
-  });
-  const { timeoutMs: _timeoutMs, ...params } = f.params;
-  const running = withGatewayMaintenanceDrain(params, f.stop);
-  await vi.advanceTimersByTimeAsync(0);
-  expect(f.stop).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(DEFAULT_UPDATE_STEP_TIMEOUT_MS);
-  await expect(running).resolves.toBe("stopped");
-  expect(f.warn).toHaveBeenCalledOnce();
-  expect(f.warn.mock.calls[0]?.[0]).toMatch(/25000ms.*1 active agent turn.*interrupted.*330s/);
-  expect(f.events.at(-1)).toBe("stop");
-  expect(f.events.at(-2)).toMatch(/^warning:/);
-});
-
-it("refuses deadline custody in session-mutation and releases the suspension", async () => {
-  const kind = "session-mutation";
-  const f = fixture({ observations: [draining(kind, `1 active ${kind} owner`)] });
-  const outcome = withGatewayMaintenanceDrain(f.params, f.stop).catch((error: unknown) => error);
-  await vi.advanceTimersByTimeAsync(1_000);
-  const error = await outcome;
-  expect(error).toBeInstanceOf(GatewayServiceStopUnsafeError);
-  expect(error).toMatchObject({ message: expect.stringContaining(`owner phase ${kind}`) });
-  expect(f.stop).not.toHaveBeenCalled();
-  expect(f.warn).not.toHaveBeenCalled();
-  expect(f.events.at(-1)).toBe("resume");
-  expect(mocks.call).toHaveBeenCalledWith(
-    expect.objectContaining({
-      method: "gateway.suspend.resume",
-      params: { suspensionId: "resident-suspension" },
-    }),
-  );
-});
-
-it("gives the final custody observation its normal RPC budget at the deadline", async () => {
-  const f = fixture({
-    observations: [
-      { ...draining("root-request", "1 request"), writeCustody: [{ phase: "backup", count: 1 }] },
-    ],
-  });
-  const call = expectDefined(mocks.call.getMockImplementation(), "Missing Gateway call fixture");
-  mocks.call.mockImplementation(async (request: CallGatewayCliOptions) => {
-    if (request.method === "gateway.suspend.prepare") {
-      if ((request.timeoutMs ?? 0) < 2) {
-        throw new Error("observation timed out during connection");
-      }
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 2);
+it.each(["admitted work", "published resident", "expired observation"] as const)(
+  "warns before stopping at the drain deadline: %s",
+  async (scenario) => {
+    const observation: GatewaySuspendPrepareResult =
+      scenario === "admitted work"
+        ? draining("embedded-run", "1 active agent turn", DEFAULT_UPDATE_STEP_TIMEOUT_MS)
+        : scenario === "published resident"
+          ? {
+              ...draining("root-request", "2 active gateway requests"),
+              writeCustody: undefined,
+              activeCount: 5,
+              blockers: [
+                { kind: "root-request", count: 2, message: "2 active gateway requests" },
+                { kind: "cron-run", count: 3, message: "3 active cron runs" },
+              ],
+            }
+          : {
+              ...draining("cron-run", "1 active cron run"),
+              writeCustody: [{ phase: "backup", count: 1 }],
+            };
+    const f = fixture({
+      observations: [observation],
+      ...(scenario === "published resident" ? { resident: { pid: 42 } } : {}),
+    });
+    if (scenario === "expired observation") {
+      const call = expectDefined(
+        mocks.call.getMockImplementation(),
+        "Missing Gateway call fixture",
+      );
+      let observations = 0;
+      mocks.call.mockImplementation(async (request: CallGatewayCliOptions) => {
+        if (request.method === "gateway.suspend.prepare" && observations++ > 0) {
+          throw new Error("resident unavailable");
+        }
+        return await call(request);
       });
     }
-    return await call(request);
-  });
-  const outcome = withGatewayMaintenanceDrain(f.params, f.stop).catch((error: unknown) => error);
-  await vi.advanceTimersByTimeAsync(f.params.timeoutMs + 100);
-  expect(await outcome).toBeInstanceOf(GatewayServiceStopUnsafeError);
-  expect(await outcome).toMatchObject({
-    message: expect.stringContaining("owner phase backup (1)"),
-  });
-  expect(f.stop).not.toHaveBeenCalled();
-  expect(f.events.at(-1)).toBe("resume");
-});
-
-it("warns and stops when a published resident cannot distinguish root/cron custody", async () => {
-  const observation: GatewaySuspendPrepareResult = {
-    ...draining("root-request", "2 active gateway requests"),
-    writeCustody: undefined,
-    activeCount: 5,
-    blockers: [
-      { kind: "root-request", count: 2, message: "2 active gateway requests" },
-      { kind: "cron-run", count: 3, message: "3 active cron runs" },
-    ],
-  };
-  const f = fixture({ resident: { pid: 42 }, observations: [observation] });
-  const running = withGatewayMaintenanceDrain(f.params, f.stop);
-  await vi.advanceTimersByTimeAsync(f.params.timeoutMs);
-  await expect(running).resolves.toBe("stopped");
-  expect(f.warn).toHaveBeenCalledWith(
-    expect.stringMatching(
-      /WARNING:.*budget unknown.*root-request=2, cron-run=3.*cannot distinguish migrations\/backups from ordinary work.*next Gateway starts with a 330s/,
-    ),
-  );
-  expect(f.stop).toHaveBeenCalledOnce();
-});
-
-it("stops directly when both the resident and manager have the current budget", async () => {
-  const f = fixture({ resident: { pid: 42, shutdownBudget: { timeoutMs: 325_000 } } });
-  await expect(withGatewayMaintenanceDrain(f.params, f.stop)).resolves.toBe("stopped");
-  expect(f.events).toEqual(["status", "stop"]);
-  expect(f.warn).not.toHaveBeenCalled();
-});
-
-it("does not promote an expired custody observation into a deadline refusal", async () => {
-  const f = fixture({
-    observations: [
-      {
-        ...draining("cron-run", "1 active cron run"),
-        writeCustody: [{ phase: "backup", count: 1 }],
-      },
-    ],
-  });
-  const call = expectDefined(mocks.call.getMockImplementation(), "Missing Gateway call fixture");
-  let observations = 0;
-  mocks.call.mockImplementation(async (request: CallGatewayCliOptions) => {
-    if (request.method === "gateway.suspend.prepare" && observations++ > 0) {
-      throw new Error("resident unavailable");
-    }
-    return await call(request);
-  });
-  const running = withGatewayMaintenanceDrain(f.params, f.stop);
-  await vi.advanceTimersByTimeAsync(f.params.timeoutMs);
-  await expect(running).resolves.toBe("stopped");
-  expect(f.stop).toHaveBeenCalledOnce();
-  expect(f.warn).toHaveBeenCalledWith(
-    expect.stringMatching(
-      /cron-run=1.*Current lifecycle observation unavailable.*resident unavailable/,
-    ),
-  );
-});
-
-it.each([30_000, undefined])(
-  "drains before stopping when the effective manager timeout is %s",
-  async (timeout) => {
-    const f = fixture({ resident: { pid: 42, shutdownBudget: { timeoutMs: 325_000 } } });
-    mocks.managerTimeout.mockResolvedValue(timeout);
-    await expect(withGatewayMaintenanceDrain(f.params, f.stop)).resolves.toBe("stopped");
-    expect(f.events.filter((event) => !event.startsWith("warning:"))).toEqual([
-      "status",
-      "observe:ready",
-      "stop",
-    ]);
+    const timeoutMs = scenario === "admitted work" ? undefined : f.params.timeoutMs;
+    const running = withGatewayMaintenanceDrain({ ...f.params, timeoutMs }, f.stop);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.stop).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS);
+    await expect(running).resolves.toBe("stopped");
     expect(f.warn).toHaveBeenCalledOnce();
-    expect(f.warn.mock.calls[0]?.[0]).toContain("using lifecycle drain");
+    expect(f.warn).toHaveBeenCalledWith(
+      expect.stringMatching(
+        scenario === "admitted work"
+          ? /25000ms.*1 active agent turn.*interrupted.*330s/
+          : scenario === "published resident"
+            ? /WARNING:.*budget unknown.*root-request=2, cron-run=3.*cannot distinguish migrations\/backups from ordinary work.*next Gateway starts with a 330s/
+            : /cron-run=1.*Current lifecycle observation unavailable.*resident unavailable/,
+      ),
+    );
+    expect(f.stop).toHaveBeenCalledOnce();
+    expect(f.events.at(-1)).toBe("stop");
+    expect(f.events.at(-2)).toMatch(/^warning:/);
+  },
+);
+
+it.each(["session-mutation", "backup"] as const)(
+  "refuses deadline custody in %s and releases the suspension with a full final RPC budget",
+  async (phase) => {
+    const f = fixture({
+      observations: [
+        phase === "session-mutation"
+          ? draining(phase, `1 active ${phase} owner`)
+          : { ...draining("root-request", "1 request"), writeCustody: [{ phase, count: 1 }] },
+      ],
+    });
+    if (phase === "backup") {
+      const call = expectDefined(
+        mocks.call.getMockImplementation(),
+        "Missing Gateway call fixture",
+      );
+      mocks.call.mockImplementation(async (request: CallGatewayCliOptions) => {
+        if (request.method === "gateway.suspend.prepare") {
+          if ((request.timeoutMs ?? 0) < 2) {
+            throw new Error("observation timed out during connection");
+          }
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 2);
+          });
+        }
+        return await call(request);
+      });
+    }
+    const outcome = withGatewayMaintenanceDrain(f.params, f.stop).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(f.params.timeoutMs + (phase === "backup" ? 100 : 0));
+    const error = await outcome;
+    expect(error).toBeInstanceOf(GatewayServiceStopUnsafeError);
+    expect(error).toMatchObject({ message: expect.stringContaining(`owner phase ${phase} (1)`) });
+    expect(f.stop).not.toHaveBeenCalled();
+    expect(f.warn).not.toHaveBeenCalled();
+    expect(f.events.at(-1)).toBe("resume");
+    expect(mocks.call).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "gateway.suspend.resume",
+        params: { suspensionId: "resident-suspension" },
+      }),
+    );
   },
 );
 
@@ -347,23 +337,21 @@ it.each([25_000, 325_000])(
   },
 );
 
-it("does not stop after authority is lost while observing the resident", async () => {
-  const f = fixture({ afterObservation: () => f.loseAuthority() });
-  await expect(withGatewayMaintenanceDrain(f.params, f.stop)).rejects.toThrow(
-    "service operation authority lost",
-  );
-  expect(f.events).toEqual(["status", "observe:ready"]);
-  expect(f.stop).not.toHaveBeenCalled();
-});
-
-it("rejects a replacement boot before sending suspension or stopping", async () => {
-  const f = fixture({ bootId: (method) => (method === "status" ? "resident" : "replacement") });
-  await expect(withGatewayMaintenanceDrain(f.params, f.stop)).rejects.toThrow(
-    "Gateway process changed",
-  );
-  expect(f.events).toEqual(["status"]);
-  expect(f.stop).not.toHaveBeenCalled();
-});
+it.each(["authority", "boot"] as const)(
+  "refuses a changed %s while observing the resident",
+  async (change) => {
+    const f = fixture(
+      change === "authority"
+        ? { afterObservation: () => f.loseAuthority() }
+        : { bootId: (method) => (method === "status" ? "resident" : "replacement") },
+    );
+    await expect(withGatewayMaintenanceDrain(f.params, f.stop)).rejects.toThrow(
+      change === "authority" ? "service operation authority lost" : "Gateway process changed",
+    );
+    expect(f.events).toEqual(change === "authority" ? ["status", "observe:ready"] : ["status"]);
+    expect(f.stop).not.toHaveBeenCalled();
+  },
+);
 
 const juneStaleConnection = "gateway closed (1011): gateway message handler unavailable";
 const legacyResident = { pid: 42, state: "alive", path: "/tmp/openclaw-fixture/gateway.lock" };
@@ -392,76 +380,81 @@ function staleConnectionError(message: string) {
     : new Error(message);
 }
 
-it.each([GATEWAY_STALE_INSTALL_CLOSE_REASON, juneStaleConnection])(
-  "stops an identified replaced resident without draining: %s",
-  async (reason) => {
-    const f = fixture();
-    mocks.legacyLock.mockResolvedValue(legacyResident);
-    mocks.call.mockImplementation(async () => {
+it.each(
+  (["before", "during"] as const).flatMap((phase) =>
+    [GATEWAY_STALE_INSTALL_CLOSE_REASON, juneStaleConnection].map((reason) => ({ phase, reason })),
+  ),
+)("stops an identified resident replaced $phase the drain: $reason", async ({ phase, reason }) => {
+  const f = fixture(
+    phase === "during" ? { observations: [draining("embedded-run", "1 active agent turn")] } : {},
+  );
+  mocks.legacyLock.mockResolvedValue(legacyResident);
+  let calls = 0;
+  const base = mocks.call.getMockImplementation();
+  mocks.call.mockImplementation(async (request) => {
+    if (phase === "before" || (request.method === "gateway.suspend.prepare" && ++calls > 1)) {
       throw staleConnectionError(reason);
-    });
-    const { timeoutMs: _timeoutMs, ...params } = f.params;
-    const running = withGatewayMaintenanceDrain(params, f.stop);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(f.stop).toHaveBeenCalledOnce();
-    await expect(running).resolves.toBe("stopped");
-    expect(f.events).toEqual([
-      expect.stringMatching(/^warning:.*replaced before this stop/),
-      "stop",
-    ]);
+    }
+    return base?.(request);
+  });
+  const running = withGatewayMaintenanceDrain(
+    { ...f.params, timeoutMs: phase === "before" ? undefined : f.params.timeoutMs },
+    f.stop,
+  );
+  await vi.advanceTimersByTimeAsync(0);
+  if (phase === "during") {
+    expect(f.events).toEqual(["status", "observe:draining"]);
+    await vi.advanceTimersByTimeAsync(100);
+  }
+  expect(f.stop).toHaveBeenCalledOnce();
+  await expect(running).resolves.toBe("stopped");
+  const warning = expect.stringMatching(new RegExp(`^warning:.*replaced ${phase} this stop`));
+  expect(f.events.at(-1)).toBe("stop");
+  expect(f.events.at(-2)).toEqual(warning);
+  if (phase === "before") {
+    expect(f.events).toEqual([warning, "stop"]);
     if (reason === GATEWAY_STALE_INSTALL_CLOSE_REASON) {
       expect(mocks.legacyLock).not.toHaveBeenCalled();
       expect(mocks.portUsage).not.toHaveBeenCalled();
     }
-  },
-);
-
-it.each([GATEWAY_STALE_INSTALL_CLOSE_REASON, juneStaleConnection])(
-  "stops an identified resident replaced during the drain: %s",
-  async (reason) => {
-    const f = fixture({ observations: [draining("embedded-run", "1 active agent turn")] });
-    mocks.legacyLock.mockResolvedValue(legacyResident);
-    let calls = 0;
-    const base = mocks.call.getMockImplementation();
-    mocks.call.mockImplementation(async (request) => {
-      if (request.method === "gateway.suspend.prepare" && ++calls > 1) {
-        throw staleConnectionError(reason);
-      }
-      return base?.(request);
-    });
-    const running = withGatewayMaintenanceDrain(f.params, f.stop);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(f.events).toEqual(["status", "observe:draining"]);
-    await vi.advanceTimersByTimeAsync(100);
-    expect(f.stop).toHaveBeenCalledOnce();
-    await expect(running).resolves.toBe("stopped");
-    expect(f.events.at(-1)).toBe("stop");
-    expect(f.events.at(-2)).toMatch(/^warning:.*replaced during this stop/);
-  },
-);
-
-it.each([
-  ["absent", undefined],
-  ["unverified", { ...legacyResident, state: "unknown" }],
-  ["different PID", { ...legacyResident, pid: 43 }],
-])("keeps the normal deadline with a %s legacy lock", async (_label, legacy) => {
-  const f = fixture();
-  mocks.legacyLock.mockResolvedValue(legacy);
-  mocks.call.mockRejectedValue(staleConnectionError(juneStaleConnection));
-  await expectNormalDeadline(f);
+  }
 });
 
-it.each<PortUsage>([
-  { port: 18789, status: "unknown", listeners: [], hints: [] },
-  { port: 18789, status: "busy", listeners: [{}], hints: [] },
-  { port: 18789, status: "busy", listeners: [{ pid: 42 }, { pid: 43 }], hints: [] },
-])("does not shorten the June deadline without owned listener attribution: %j", async (usage) => {
-  const f = fixture();
-  mocks.legacyLock.mockResolvedValue(legacyResident);
-  mocks.portUsage.mockResolvedValue(usage);
-  mocks.call.mockRejectedValue(staleConnectionError(juneStaleConnection));
-  await expectNormalDeadline(f);
-});
+it.each<{
+  name: string;
+  legacy?: typeof legacyResident;
+  usage?: PortUsage;
+}>([
+  { name: "absent lock" },
+  { name: "unverified lock", legacy: { ...legacyResident, state: "unknown" } },
+  { name: "different lock PID", legacy: { ...legacyResident, pid: 43 } },
+  {
+    name: "unknown port",
+    legacy: legacyResident,
+    usage: { port: 18789, status: "unknown", listeners: [], hints: [] },
+  },
+  {
+    name: "unattributed listener",
+    legacy: legacyResident,
+    usage: { port: 18789, status: "busy", listeners: [{}], hints: [] },
+  },
+  {
+    name: "mixed listeners",
+    legacy: legacyResident,
+    usage: { port: 18789, status: "busy", listeners: [{ pid: 42 }, { pid: 43 }], hints: [] },
+  },
+])(
+  "keeps the June deadline without owned listener attribution: $name",
+  async ({ legacy, usage }) => {
+    const f = fixture();
+    mocks.legacyLock.mockResolvedValue(legacy);
+    if (usage) {
+      mocks.portUsage.mockResolvedValue(usage);
+    }
+    mocks.call.mockRejectedValue(staleConnectionError(juneStaleConnection));
+    await expectNormalDeadline(f);
+  },
+);
 
 it.each(["plain error", "protocol response", "extended close reason"])(
   "does not shorten the June deadline for a %s lookalike",
@@ -496,54 +489,46 @@ it.each(["plain error", "protocol response", "extended close reason"])(
   },
 );
 
-it.each(["listener", "authority"])(
-  "does not stop when %s changes during June listener revalidation",
-  async (change) => {
+it.each([
+  { phase: "listener", change: "listener" },
+  { phase: "listener", change: "authority" },
+  { phase: "lock", change: "lock" },
+  { phase: "lock", change: "native PID" },
+  { phase: "lock", change: "authority" },
+])(
+  "does not stop when $change changes during June $phase revalidation",
+  async ({ phase, change }) => {
     const f = fixture();
-    mocks.legacyLock.mockResolvedValue(legacyResident);
     mocks.call.mockRejectedValue(staleConnectionError(juneStaleConnection));
-    mocks.portUsage
-      .mockResolvedValueOnce({
-        port: 18789,
-        status: "busy",
-        listeners: [{ pid: 42 }],
-        hints: [],
-      })
-      .mockImplementationOnce(async () => {
-        if (change === "authority") {
+    mocks.legacyLock.mockResolvedValue(legacyResident);
+    if (phase === "listener") {
+      mocks.portUsage
+        .mockResolvedValueOnce({ port: 18789, status: "busy", listeners: [{ pid: 42 }], hints: [] })
+        .mockImplementationOnce(async () => {
+          if (change === "authority") {
+            f.loseAuthority();
+          }
+          return { port: 18789, status: "busy", listeners: [{ pid: 43 }], hints: [] };
+        });
+    } else {
+      mocks.legacyLock.mockResolvedValueOnce(legacyResident).mockImplementationOnce(async () => {
+        if (change === "lock") {
+          return undefined;
+        }
+        if (change === "native PID") {
+          f.params.state.runtime = { status: "running", pid: 43 };
+        } else {
           f.loseAuthority();
         }
-        return { port: 18789, status: "busy", listeners: [{ pid: 43 }], hints: [] };
+        return legacyResident;
       });
+    }
     await expect(withGatewayMaintenanceDrain(f.params, f.stop)).rejects.toThrow(
       change === "authority"
         ? "service operation authority lost"
-        : "Legacy Gateway listener changed",
-    );
-    expect(f.stop).not.toHaveBeenCalled();
-  },
-);
-
-it.each(["lock", "native PID", "authority"])(
-  "does not stop when %s changes during legacy revalidation",
-  async (change) => {
-    const f = fixture();
-    mocks.call.mockRejectedValue(staleConnectionError(juneStaleConnection));
-    mocks.legacyLock.mockResolvedValueOnce(legacyResident).mockImplementationOnce(async () => {
-      if (change === "lock") {
-        return undefined;
-      }
-      if (change === "native PID") {
-        f.params.state.runtime = { status: "running", pid: 43 };
-      } else {
-        f.loseAuthority();
-      }
-      return legacyResident;
-    });
-    await expect(withGatewayMaintenanceDrain(f.params, f.stop)).rejects.toThrow(
-      change === "authority"
-        ? "service operation authority lost"
-        : "Legacy Gateway identity changed",
+        : phase === "listener"
+          ? "Legacy Gateway listener changed"
+          : "Legacy Gateway identity changed",
     );
     expect(f.stop).not.toHaveBeenCalled();
   },

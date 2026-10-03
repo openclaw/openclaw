@@ -2782,6 +2782,7 @@ type Workflow = {
     schedule?: Array<{ cron?: string }>;
     workflow_call?: {
       inputs?: Record<string, unknown>;
+      secrets?: Record<string, unknown>;
     };
     workflow_dispatch?: {
       inputs?: Record<string, unknown>;
@@ -11220,15 +11221,30 @@ describe("package artifact reuse", () => {
     expect(
       workflowJob(SCHEDULED_LIVE_CHECKS_WORKFLOW, "weekly_upgrade_survivors").secrets,
     ).toBeUndefined();
+    for (const key of ["KIE_API_KEY", "NOVITA_API_KEY", "PIXVERSE_API_KEY"]) {
+      expect(readWorkflow(LIVE_E2E_WORKFLOW).on?.workflow_call?.secrets?.[key]).toEqual({
+        required: false,
+      });
+      for (const job of [
+        workflowJob(RELEASE_CHECKS_WORKFLOW, "live_repo_e2e_release_checks"),
+        workflowJob(SCHEDULED_LIVE_CHECKS_WORKFLOW, "live_and_openwebui_checks"),
+      ]) {
+        expect(job.secrets, key).toMatchObject({ [key]: "${{ secrets." + key + " }}" });
+      }
+      expect(
+        workflowJob(LIVE_E2E_WORKFLOW, "validate_live_media_provider_suites").env?.[key],
+        key,
+      ).toBe("${{ secrets." + key + " }}");
+    }
     const hydrationHome = tempDirs.make("live-auth-hydration-");
     const hydrated = spawnSync(
       "bash",
       [
         "-euc",
         `bash "$1" "$2"
-unset DEEPSEEK_API_KEY DEEPINFRA_API_KEY
+unset DEEPSEEK_API_KEY DEEPINFRA_API_KEY KIE_API_KEY NOVITA_API_KEY PIXVERSE_API_KEY
 source "$2"
-printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
+printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY" "$KIE_API_KEY" "$NOVITA_API_KEY" "$PIXVERSE_API_KEY"`,
         "hydrate-live-auth",
         CI_HYDRATE_LIVE_AUTH_SCRIPT,
         resolve(hydrationHome, "live.profile"),
@@ -11241,11 +11257,16 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
           HOME: hydrationHome,
           DEEPSEEK_API_KEY: "deepseek-sentinel",
           DEEPINFRA_API_KEY: "deepinfra-sentinel",
+          KIE_API_KEY: "kie-sentinel",
+          NOVITA_API_KEY: "novita-sentinel",
+          PIXVERSE_API_KEY: "pixverse-sentinel",
         },
       },
     );
     expect(hydrated.status, hydrated.stderr).toBe(0);
-    expect(hydrated.stdout).toBe("deepseek-sentinel\ndeepinfra-sentinel\n");
+    expect(hydrated.stdout).toBe(
+      "deepseek-sentinel\ndeepinfra-sentinel\nkie-sentinel\nnovita-sentinel\npixverse-sentinel\n",
+    );
     expect(reusableWorkflow).toContain("FACTORY_API_KEY:\n        required: false");
     expect(packageAcceptanceWorkflow).toContain("FACTORY_API_KEY:\n        required: false");
     expectTextToIncludeAll(reusableWorkflow, [

@@ -2,6 +2,7 @@ import type { CapturedSessionEntryReadSource } from "./session-entry-read-source
 /** Identity is parser-validated; optional owner values retain their exact stored semantics. */
 export type SessionEntryCurrentFacts = {
   sessionId: string;
+  previousSessionId?: unknown;
   archivedAt?: unknown;
   repositoryWorkspaceId?: unknown;
   lifecycleRevision?: unknown;

@@ -60,6 +60,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
   const context = captureOpenClawStateWorkerContext();
   let state = createMentionProjection({ head: { revision: -1, nextSequence: 0 }, sources: [] });
   let tail: Promise<void> = Promise.resolve();
+  let closing = false;
   let needsSynchronization = true;
   let nativeRevision = 0;
   let sessionRevision = 0;
@@ -77,6 +78,9 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
   }
 
   function enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    if (closing) {
+      return Promise.reject(new Error("Mention Inbox is closed"));
+    }
     // Failed work must not poison later FIFO operations.
     const pending = tail.then(() => {
       assertActive();
@@ -323,7 +327,11 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
   }
 
   function scheduleExpiry(retryAfterMs?: number): void {
-    if (scheduler.signal.aborted || (state.processed.size === 0 && retryAfterMs === undefined)) {
+    if (
+      closing ||
+      scheduler.signal.aborted ||
+      (state.processed.size === 0 && retryAfterMs === undefined)
+    ) {
       return;
     }
     scheduler.schedule({
@@ -335,7 +343,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
   }
 
   async function refresh(): Promise<void> {
-    if (scheduler.signal.aborted) {
+    if (closing || scheduler.signal.aborted) {
       return;
     }
     try {
@@ -400,7 +408,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
   });
 
   function readOperation<T>(operation: () => Result<T, ErrorShape>): Result<T, ErrorShape> {
-    if (!scheduler.signal.aborted) {
+    if (!closing && !scheduler.signal.aborted) {
       try {
         return operation();
       } catch {
@@ -455,7 +463,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
     warnMentionInboxDeprecation("invalidate");
     invalidateTargets(sessionKey);
     policy.invalidateDirectory();
-    if (scheduler.signal.aborted) {
+    if (closing || scheduler.signal.aborted) {
       return;
     }
     try {
@@ -729,6 +737,9 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
     },
     recordCommittedInput(input: MentionCommittedInput): void {
       warnMentionInboxDeprecation("recordCommittedInput");
+      if (closing) {
+        return;
+      }
       try {
         if (!prepareCommittedInput(input)) {
           return;
@@ -778,11 +789,13 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
     invalidate,
     invalidateAsync,
     async dispose(): Promise<void> {
+      // Stop admission without revoking accepted writes before they settle.
+      closing = true;
+      await tail;
       scheduler.beginClose();
       stopProfiles();
       stopSessions();
       stopRows();
-      await tail;
       connectedTargets.clear();
       policy.dispose();
       state.items.clear();

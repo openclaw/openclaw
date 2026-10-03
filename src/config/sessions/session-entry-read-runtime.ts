@@ -41,6 +41,12 @@ import {
   captureCanonicalSessionReaderContinuation,
   type CanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
+import { withOrderedSessionEntriesInWorker } from "./session-entry-read-ordered.js";
+import type {
+  SessionEntryWorkerRead,
+  PreparedSessionEntryWorkerRead,
+  SessionStoreWorkerReadScope,
+} from "./session-entry-read-runtime.types.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import {
   assertSessionStoreReadCandidate,
@@ -56,7 +62,6 @@ import {
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import type {
-  SessionExactEntriesWorkerResult,
   SessionExactEntriesWorkerSelection,
   SessionHistoryWorkerDatabase,
   SessionEntryListWorkerInput,
@@ -296,12 +301,6 @@ export async function readSessionEntryInWorker(
   return loadedRead.entry;
 }
 
-type SessionStoreWorkerReadScope = {
-  agentId: string;
-  storePath: string;
-  env?: NodeJS.ProcessEnv;
-};
-
 /** Read descriptive summaries through the original store selection and reader lifetime. */
 export async function readSessionEntrySummariesInWorker(
   input: Omit<SessionStoreWorkerReadScope, "agentId"> &
@@ -343,26 +342,15 @@ export async function readSessionEntrySummariesInWorker(
   );
 }
 
-type SessionEntryWorkerRead = SessionStoreWorkerReadScope &
-  SessionExactEntriesWorkerSelection & {
-    lifecycleSessionKey?: string;
-    projection?: "full" | "sharing" | "list";
-    includeMembers?: boolean;
-    includeParticipantRecords?: boolean;
-    includeAuthorization?: boolean;
-  };
-
-export type PreparedSessionEntryWorkerRead = {
-  result: SessionExactEntriesWorkerResult;
-  database: { agentId: string; path: string; env: NodeJS.ProcessEnv };
-  assertCurrent: () => void;
-};
-
 /** Keep every discovered database and original admission alive through one synchronous consumer. */
 export async function withSessionEntriesFromStoresInWorker<T>(
   inputs: readonly SessionEntryWorkerRead[],
   consume: (reads: readonly PreparedSessionEntryWorkerRead[]) => T,
+  options?: { ordered?: boolean },
 ): Promise<T> {
+  if (options?.ordered) {
+    return withOrderedSessionEntriesInWorker(inputs, consume, withSessionStoreReaderInWorker);
+  }
   const reads: PreparedSessionEntryWorkerRead[] = [];
   const enter = (index: number): Promise<T> => {
     const input = inputs[index];

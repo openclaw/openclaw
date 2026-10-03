@@ -11,6 +11,7 @@ import type { CodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
 import type { CodexDynamicToolSpec, JsonObject } from "./protocol.js";
 import type {
+  CodexBindingAuthority,
   CodexAppServerBindingIdentity,
   CodexAppServerBindingStore,
   CodexAppServerContextEngineBinding,
@@ -74,7 +75,8 @@ export type CodexStartOrResumeThreadParams = Omit<
   reserveResumeThread?: (threadId: string) => { release: () => void };
   bindingStore: CodexAppServerBindingStore;
   params: AgentHarnessSessionRuntimeParamsV1;
-  /** Retained host-generation proof; the opaque host capability remains unchanged. */
+  authority?: CodexBindingAuthority;
+  /** Caller liveness; durable lineage is owned by authority. */
   assertCurrent?: () => void;
   /** Private execution identity resolved by this harness's catalog generation. */
   runtimeModelId?: string;

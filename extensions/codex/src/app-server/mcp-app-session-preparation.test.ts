@@ -63,7 +63,10 @@ vi.mock("./shared-client.js", () => ({
 vi.mock("./thread-lifecycle.js", () => ({ startOrResumeThread: mocks.start }));
 vi.mock("./session-binding.js", () => ({
   sessionBindingIdentity: () => ({ sessionId: "session" }),
-  resolveCodexSessionBinding: async () => ({ binding: undefined, assertCurrent: mocks.assert }),
+  resolveCodexSessionBinding: async () => ({
+    binding: undefined,
+    authority: { assertLegacyCurrent: mocks.assert },
+  }),
 }));
 vi.mock("./thread-ownership.js", () => ({
   isSameCodexAppServerThreadOwner: () => true,

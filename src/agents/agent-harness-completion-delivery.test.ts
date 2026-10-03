@@ -1,5 +1,7 @@
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   captureHarnessCompletionRecovery,
   createHarnessCompletionSourceAssertion,
@@ -11,6 +13,7 @@ import {
   buildRestartRecoveryClaimCleanupPatch,
   getRestartRecoveryTerminalDeliveryEvidence,
 } from "../config/sessions/restart-recovery-state.js";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -372,17 +375,90 @@ describe("host-owned harness completion recovery", () => {
         }
         await replaceSessionEntry(target, lost);
         await appendCompletionSource({ target, entry });
-        expect(reconcileHarnessCompletionDelivery(request)).toBe("blocked");
-        const joined = await deliverAgentHarnessCompletion({
-          scope: createAgentHarnessCompletionScope({ requesterSessionKey: sessionKey }),
-          isSourceSessionAdmissionAllowed: () => true,
-          childSessionKey: runId,
-          childSessionId: "child-1",
-          announceId: announceId.slice("announce:".length),
-          status: "succeeded",
-          result: "result",
-        });
-        expect(joined).toMatchObject({ delivered: false, recoveryBlocked: true });
+        expect(await reconcileHarnessCompletionDelivery(request)).toBe("blocked");
+        const submittedRead = sessionAccessor.readSessionSubmittedInput;
+        const queries: string[] = [];
+        const read = vi
+          .spyOn(sessionAccessor, "readSessionSubmittedInput")
+          .mockImplementation(async (...args) => {
+            // Measure the moved read; existing requester and authority reads stay outside this boundary.
+            const sql = observeHostDataSql();
+            try {
+              return await submittedRead(...args);
+            } finally {
+              queries.push(...sql.queries);
+              sql.restore();
+            }
+          });
+        try {
+          const joined = await deliverAgentHarnessCompletion({
+            scope: createAgentHarnessCompletionScope({ requesterSessionKey: sessionKey }),
+            isSourceSessionAdmissionAllowed: () => true,
+            childSessionKey: runId,
+            childSessionId: "child-1",
+            announceId: announceId.slice("announce:".length),
+            status: "succeeded",
+            result: "result",
+          });
+          expect(joined).toMatchObject({ delivered: false, recoveryBlocked: true });
+          expect(read).toHaveBeenCalledTimes(retained === "input-only" ? 1 : 0);
+          expect(queries).toEqual([]);
+        } finally {
+          read.mockRestore();
+        }
+      });
+    },
+  );
+
+  it.each(["unchanged", "physical", "revision", "claim", "terminal"])(
+    "rechecks %s custody after awaiting missing submitted input",
+    async (changed) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const { entry, target, request } = await admit(state);
+        const unowned = {
+          ...entry,
+          restartRecoveryHarnessCompletion: undefined,
+          restartRecoveryDeliverySourceRunId: undefined,
+          restartRecoveryDeliveryRunId: undefined,
+        };
+        await replaceSessionEntry(target, unowned);
+        const entered = createDeferred();
+        const result = createDeferred<undefined>();
+        const read = vi
+          .spyOn(sessionAccessor, "readSessionSubmittedInput")
+          .mockImplementationOnce(() => {
+            entered.resolve();
+            return result.promise;
+          });
+        const reconciliation = reconcileHarnessCompletionDelivery(request);
+        try {
+          await awaitGateBeforeSettlement(
+            entered.promise,
+            reconciliation,
+            "completion bypassed submitted-input read",
+          );
+          const successor =
+            changed === "claim"
+              ? entry
+              : changed === "terminal"
+                ? terminalEntry(entry)
+                : {
+                    ...unowned,
+                    sessionId: changed === "physical" ? "physical-2" : entry.sessionId,
+                    lifecycleRevision:
+                      changed === "revision" ? "revision-2" : entry.lifecycleRevision,
+                  };
+          await replaceSessionEntry(target, successor);
+          result.resolve(undefined);
+          expect(await reconciliation).toBe(changed === "unchanged" ? "unowned" : "blocked");
+        } finally {
+          result.resolve(undefined);
+          try {
+            await reconciliation;
+          } finally {
+            read.mockRestore();
+          }
+        }
       });
     },
   );
@@ -392,7 +468,7 @@ describe("host-owned harness completion recovery", () => {
       const { entry, claim, target, request } = await admit(state);
       await appendCompletionSource({ target, entry });
 
-      expect(reconcileHarnessCompletionDelivery(request)).toBe("pending");
+      expect(await reconcileHarnessCompletionDelivery(request)).toBe("pending");
       const joined = await deliverAgentHarnessCompletion({
         scope: createAgentHarnessCompletionScope({ requesterSessionKey: sessionKey }),
         isSourceSessionAdmissionAllowed: () => true,
@@ -415,7 +491,7 @@ describe("host-owned harness completion recovery", () => {
       await replaceSessionEntry(target, successor);
       expect(successor.restartRecoveryDeliverySourceRunId).toBe(announceId);
       expect(successor.restartRecoveryHarnessCompletion).toEqual(claim);
-      expect(reconcileHarnessCompletionDelivery(request)).toBe("pending");
+      expect(await reconcileHarnessCompletionDelivery(request)).toBe("pending");
     });
   });
 
@@ -423,7 +499,7 @@ describe("host-owned harness completion recovery", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const { entry, target, request } = await admit(state);
       await replaceSessionEntry(target, terminalEntry(entry));
-      expect(reconcileHarnessCompletionDelivery(request)).toBe("delivered");
+      expect(await reconcileHarnessCompletionDelivery(request)).toBe("delivered");
     });
   });
 
@@ -461,7 +537,7 @@ describe("host-owned harness completion recovery", () => {
         sent.accountId = "different-account";
       }
       await replaceSessionEntry(target, terminal);
-      expect(reconcileHarnessCompletionDelivery(request)).toBe(
+      expect(await reconcileHarnessCompletionDelivery(request)).toBe(
         ["default-account", "casefolded-provider"].includes(kind) ? "delivered" : "blocked",
       );
     });
@@ -471,7 +547,7 @@ describe("host-owned harness completion recovery", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const { entry, target, request } = await admit(state);
       await replaceSessionEntry(target, terminalEntry(entry, false));
-      expect(reconcileHarnessCompletionDelivery(request)).toBe("blocked");
+      expect(await reconcileHarnessCompletionDelivery(request)).toBe("blocked");
     });
   });
 
@@ -490,7 +566,7 @@ describe("host-owned harness completion recovery", () => {
         }
         await replaceSessionEntry(target, terminal);
         expect(getOwedHarnessCompletionTask(claim, terminal)).toBeUndefined();
-        expect(reconcileHarnessCompletionDelivery(request)).toBe("blocked");
+        expect(await reconcileHarnessCompletionDelivery(request)).toBe("blocked");
       });
     },
   );
@@ -554,7 +630,7 @@ describe("host-owned harness completion recovery", () => {
         ...entry,
         restartRecoveryTerminalDeliveryEvidence: [receipt],
       });
-      expect(reconcileHarnessCompletionDelivery(request)).toBe("pending");
+      expect(await reconcileHarnessCompletionDelivery(request)).toBe("pending");
     });
   });
 
@@ -602,10 +678,10 @@ describe("host-owned harness completion recovery", () => {
           ...terminal,
           restartRecoveryTerminalDeliveryEvidence: [evidence],
         });
-        expect(reconcileHarnessCompletionDelivery(request)).toBe("blocked");
+        expect(await reconcileHarnessCompletionDelivery(request)).toBe("blocked");
       }
       await replaceSessionEntry(target, terminal);
-      expect(reconcileHarnessCompletionDelivery(request)).toBe("delivered");
+      expect(await reconcileHarnessCompletionDelivery(request)).toBe("delivered");
     });
   });
 });
@@ -626,7 +702,7 @@ describe("review3 custody ownership", () => {
             { message: { role: "user", content: "new human work" } },
           );
         }
-        expect(reconcileHarnessCompletionDelivery(request)).toBe("blocked");
+        expect(await reconcileHarnessCompletionDelivery(request)).toBe("blocked");
       });
     },
   );
@@ -653,7 +729,7 @@ describe("review3 custody ownership", () => {
           if (kind === "released") {
             releaseAgentRunContext(announceId, owner);
           }
-          expect(reconcileHarnessCompletionDelivery(request)).toBe(
+          expect(await reconcileHarnessCompletionDelivery(request)).toBe(
             kind === "owned" ? "pending" : "blocked",
           );
         } finally {
@@ -703,7 +779,7 @@ describe("review3 Gateway admission custody", () => {
         if (kind === "released") {
           registration.cleanup();
         }
-        const result = withPluginRuntimeGatewayRequestScope(
+        const result = await withPluginRuntimeGatewayRequestScope(
           {
             context,
             resolveGatewayContext: () => {

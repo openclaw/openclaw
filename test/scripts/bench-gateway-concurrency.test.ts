@@ -2306,7 +2306,7 @@ syncBuiltinESMExports();\n`,
           expect(config.agents.defaults.maxConcurrent).toBe(1);
           expect(config.agents.defaults.heartbeat).toEqual({ every: "0m" });
           if (liveFailure) {
-            expect(config.agents.list.map((agent: { id: string }) => agent.id)).toEqual(["main"]);
+            expect(Object.keys(config.agents.entries)).toEqual(["main"]);
             expect(config.models.providers.openai.apiKey).toEqual({
               source: "env",
               provider: "default",

@@ -168,6 +168,7 @@ function preparedRuntimeConfig(): Record<string, unknown> {
     agents: {
       defaults: {
         model: { primary: model },
+        modelPolicy: { allow: [model] },
         models: { [model]: { agentRuntime: { id: "openclaw" } } },
       },
     },
@@ -529,7 +530,7 @@ async function waitForStartupTracePhase(params: {
 function buildBenchAgentList(
   root: string,
   topology: GatewayBenchCase["agentTopology"],
-): Array<{ id: string; default?: boolean; workspace: string }> | undefined {
+): Array<{ id: string; workspace: string }> | undefined {
   if (!topology) {
     return undefined;
   }
@@ -537,19 +538,17 @@ function buildBenchAgentList(
   const distinctWorkspace = path.join(root, "distinct-workspace");
   mkdirSync(sharedWorkspace, { recursive: true });
   if (topology === "single") {
-    return [{ id: "main", default: true, workspace: sharedWorkspace }];
+    return [{ id: "main", workspace: sharedWorkspace }];
   }
   if (topology === "incident-scale") {
     return Array.from({ length: 8 }, (_, index) => ({
       id: `incident-agent-${String(index + 1).padStart(2, "0")}`,
-      default: index === 0,
       workspace: path.join(root, "workspaces", `agent-${String(index + 1).padStart(2, "0")}`),
     }));
   }
   mkdirSync(distinctWorkspace, { recursive: true });
   return Array.from({ length: 12 }, (_, index) => ({
     id: `agent-${String(index + 1).padStart(2, "0")}`,
-    ...(index === 0 ? { default: true } : {}),
     workspace: index === 11 ? distinctWorkspace : sharedWorkspace,
   }));
 }

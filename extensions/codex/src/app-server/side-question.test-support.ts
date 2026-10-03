@@ -486,3 +486,24 @@ export async function runSideQuestionWithManagedWebSearchCall(
   const forkConfig = (forkCall?.[1] as { config?: Record<string, unknown> } | undefined)?.config;
   return { forkConfig, result, toolResponse };
 }
+
+export function createPendingClient({ interrupt = true } = {}) {
+  const client = createFakeClient({ completeTurn: false });
+  client.request.mockImplementation(async (method: string) => {
+    if (method === "thread/fork") {
+      return threadResult("side-thread");
+    }
+    if (method === "turn/start") {
+      return turnStartResult("turn-1");
+    }
+    if (
+      method === "thread/inject_items" ||
+      method === "thread/unsubscribe" ||
+      (interrupt && method === "turn/interrupt")
+    ) {
+      return {};
+    }
+    throw new Error(`unexpected request: ${method}`);
+  });
+  return client;
+}
