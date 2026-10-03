@@ -588,6 +588,15 @@ owners, so a nested scope cannot close an executor retained by its parent.
 
 ## Carry facts, publish after commit
 
+Watched-session prompt preparation reads ambient targets through the shared-state
+reader and exact title entries through the session reader. It captures both stores
+before yielding, retains the session reader through disclosure revalidation, and
+rechecks the caller and watches after loading titles. Live turns, compaction, and
+bundled harnesses await the same preparation. The released synchronous SDK helper
+remains deprecated compatibility; the async path never falls back to host SQL.
+Sorted rows, the twenty-row cap, title truncation, prompt bytes, and update behavior
+are unchanged.
+
 Message-tool-only completion records use the canonical per-agent writer. The
 host captures the original store and run facts before waiting; configured-store
 discovery uses the existing reader. First-use schema admission commits separately

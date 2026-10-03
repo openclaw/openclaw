@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { SESSION_WATCH_PROVENANCE_AMBIENT_GROUP } from "../state/session-watch-cursor-provenance.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import {
   getSessionStateKysely,
@@ -26,6 +27,17 @@ export function readSessionStateSequence(
 }
 
 export const sessionStateReadOperations = {
+  "sessionState.ambientTargets": (input: { watcherSessionKey: string }, db) => ({
+    type: "sessionState.ambientTargets" as const,
+    targets: executeSqliteQuerySync(
+      db,
+      getSessionStateKysely(db)
+        .selectFrom("session_watch_cursors")
+        .select("target_session_key")
+        .where("watcher_session_key", "=", input.watcherSessionKey)
+        .where("provenance", "=", SESSION_WATCH_PROVENANCE_AMBIENT_GROUP),
+    ).rows.map((row) => row.target_session_key),
+  }),
   "sessionState.versions": (refs: ReadonlyArray<{ sessionKey: string; agentId: string }>, db) => {
     const keys = [...new Set(refs.map((ref) => ref.sessionKey).filter(Boolean))];
     const versions = new Map<string, Map<string, number>>();

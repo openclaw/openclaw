@@ -9,6 +9,7 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
   if (
     command.type === "secrets.metadata" ||
     command.type === "sessionState.versions" ||
+    command.type === "sessionState.ambientTargets" ||
     command.type === "sessionState.events" ||
     command.type === "operatorApprovals.history" ||
     command.type === "diagnostic.latest" ||
@@ -207,6 +208,7 @@ function stringBytes(values: readonly (string | undefined)[]): number {
 function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (
     command.type === "sessionState.versions" ||
+    command.type === "sessionState.ambientTargets" ||
     command.type === "sessionState.events" ||
     command.type === "workers.placementProjection" ||
     command.type === "workers.placementPendingResults" ||
