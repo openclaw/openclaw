@@ -1116,10 +1116,10 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
 
     it.each([
-      ["provider timeout", "request timed out", "fallback"],
+      // A timed-out summary commits without one instead of trying the next model.
+      ["provider timeout", "request timed out", "reduce"],
       ["provider rate limit", "429 rate limit exceeded", "fallback"],
       ["intentional quality rejection", undefined, "cancel"],
-      // An explicit compaction model has no fallback chain; its timeout commits without a summary.
       ["explicit model timeout", "request timed out", "reduce"],
       [
         "reasoning-mandatory rejection",

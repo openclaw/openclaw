@@ -34,11 +34,7 @@ beforeAll(async () => {
     req.on("end", () => {
       summaryRequests.push(body);
       summaryArrived.resolve();
-      const mode: SummaryMode = body.includes('"model":"fallback-model"')
-        ? "ok"
-        : body.includes('"model":"rejecting-model"')
-          ? "error"
-          : summaryMode;
+      const mode: SummaryMode = body.includes('"model":"fallback-model"') ? "ok" : summaryMode;
       if (mode === "stall") {
         res.writeHead(200, { "content-type": "text/event-stream" });
         return;
@@ -130,7 +126,7 @@ function appendToolTurns(fixture: Fixture, first: number, count: number): string
 async function withSession(
   run: (fixture: Fixture) => Promise<void>,
   options: {
-    fallbackModel?: "fallback-model" | "rejecting-model";
+    modelFallback?: boolean;
     safeguard?: boolean;
   } = {},
 ) {
@@ -151,7 +147,7 @@ async function withSession(
           workspace: state.workspaceDir,
           model: {
             primary: "fixture/model",
-            ...(options.fallbackModel ? { fallbacks: [`fixture/${options.fallbackModel}`] } : {}),
+            ...(options.modelFallback ? { fallbacks: ["fixture/fallback-model"] } : {}),
           },
           compaction: {
             timeoutSeconds: 60,
@@ -166,7 +162,7 @@ async function withSession(
             api: "openai-completions",
             apiKey: "synthetic-fixture",
             baseUrl,
-            models: [model("model"), model("fallback-model"), model("rejecting-model")],
+            models: [model("model"), model("fallback-model")],
           },
         },
       },
@@ -254,36 +250,16 @@ describe("automatic compaction summary failure", () => {
     });
   });
 
-  it("lets a configured fallback model summarize a timed-out compaction first", async () => {
+  it("commits the reduction without trying a configured fallback model", async () => {
     await withSession(
       async (fixture) => {
         appendToolTurns(fixture, 0, 8);
         summaryMode = "provider-timeout";
 
         expect(await compactSession(fixture)).toMatchObject({ ok: true, compacted: true });
+        // Each extra candidate could cost another full summary window.
         expect(summaryRequests.some((body) => body.includes('"model":"fallback-model"'))).toBe(
-          true,
-        );
-        expect(
-          openSession(fixture)
-            .getBranch()
-            .filter((entry) => entry.type === "compaction")
-            .map((entry) => entry.summary),
-        ).toEqual([expect.stringContaining("Model summary after recovery.")]);
-      },
-      { fallbackModel: "fallback-model" },
-    );
-  });
-
-  it("commits the reduction when the fallback model also fails after a timeout", async () => {
-    await withSession(
-      async (fixture) => {
-        appendToolTurns(fixture, 0, 8);
-        summaryMode = "provider-timeout";
-
-        expect(await compactSession(fixture)).toMatchObject({ ok: true, compacted: true });
-        expect(summaryRequests.some((body) => body.includes('"model":"rejecting-model"'))).toBe(
-          true,
+          false,
         );
         expect(
           openSession(fixture)
@@ -292,7 +268,7 @@ describe("automatic compaction summary failure", () => {
             .map((entry) => entry.summary),
         ).toEqual([expect.stringContaining("removed without a summary")]);
       },
-      { fallbackModel: "rejecting-model" },
+      { modelFallback: true },
     );
   });
 
