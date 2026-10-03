@@ -25,8 +25,6 @@ type FileCursor = {
   bytes: number;
 };
 
-type FileLogAppender = typeof appendRegularFile;
-
 let queue: FileLogQueueEntry[] = [];
 let queueStart = 0;
 let activeBatch: FileLogQueueEntry[] | null = null;
@@ -39,7 +37,6 @@ let flushPromise: Promise<void> | null = null;
 let drainGeneration = 0;
 let processExiting = false;
 let processHooksInstalled = false;
-let appendFile: FileLogAppender = appendRegularFile;
 const warnedRotationFiles = new Map<string, number>();
 const warnedAppendFiles = new Set<string>();
 let appendFailureTrackingSaturated = false;
@@ -236,7 +233,7 @@ async function writeEntries(entries: FileLogQueueEntry[], generation: number): P
     // Forced drains must skip the whole issued append, which cannot be safely replayed.
     activeIndex = batch.nextIndex;
     try {
-      await appendFile({ filePath: entry.file, content: batch.payload });
+      await appendRegularFile({ filePath: entry.file, content: batch.payload });
       cursor.bytes += batch.payloadBytes;
       clearAppendFailure(entry);
     } catch {
@@ -420,15 +417,10 @@ function setFileLogQueueMaxRecordsForTests(value?: number): void {
   maxQueuedRecords = Math.max(1, value ?? DEFAULT_MAX_QUEUED_RECORDS);
 }
 
-function setFileLogAppenderForTests(value?: FileLogAppender): void {
-  appendFile = value ?? appendRegularFile;
-}
-
 function resetFileLogTransportForTests(): void {
   drainFileLogQueueSync();
   removeProcessHooks();
   processExiting = false;
-  appendFile = appendRegularFile;
   maxQueuedRecords = DEFAULT_MAX_QUEUED_RECORDS;
   warnedRotationFiles.clear();
   warnedAppendFiles.clear();
@@ -440,6 +432,5 @@ export const fileLogTransport = {
   enqueue: enqueueFileLog,
   flush: flushFileLogQueue,
   resetForTests: resetFileLogTransportForTests,
-  setAppenderForTests: setFileLogAppenderForTests,
   setMaxQueuedRecordsForTests: setFileLogQueueMaxRecordsForTests,
 };

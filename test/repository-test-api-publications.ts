@@ -17,7 +17,6 @@ const publications: Record<string, string | symbol> = {
   "src/agents/auth-profiles/store.ts": Symbol.for("openclaw.authProfileStoreTestApi"),
   "src/agents/auth-profiles/usage.ts": Symbol.for("openclaw.authProfileUsageTestApi"),
   "src/agents/bash-process-registry.ts": Symbol.for("openclaw.bashProcessRegistryTestApi"),
-  "src/agents/cli-runner/prepare.ts": Symbol.for("openclaw.cliRunnerPrepareTestApi"),
   "src/agents/embedded-agent-runner/context-engine-maintenance.ts": Symbol.for(
     "openclaw.contextEngineMaintenanceTestApi",
   ),

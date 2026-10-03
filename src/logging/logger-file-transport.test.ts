@@ -1,8 +1,9 @@
 // Logger file transport tests cover async ordering, overflow, and exit durability.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
-import { appendRegularFile } from "@openclaw/fs-safe/advanced";
+import * as fsSafe from "@openclaw/fs-safe/advanced";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
@@ -12,6 +13,11 @@ import { testApi } from "./logger.test-support.js";
 import { registerSecretValueForRedaction } from "./secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "./secret-redaction-registry.test-support.js";
 
+vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/advanced")>()),
+}));
+
+const { appendRegularFile } = fsSafe;
 const logPathTracker = createSuiteLogPathTracker("openclaw-file-transport-");
 
 function writeStableRecords(): void {
@@ -64,7 +70,7 @@ describe("async logger file transport", () => {
     const asyncPath = logPathTracker.nextPath();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-27T12:00:00Z"));
-    testApi.setHostnameResolverForTests(() => "transport-test-host");
+    vi.spyOn(os, "hostname").mockReturnValue("transport-test-host");
     setLoggerOverride({ level: "info", file: syncPath });
 
     writeStableRecords();
@@ -72,7 +78,6 @@ describe("async logger file transport", () => {
     const syncBytes = fs.readFileSync(syncPath);
 
     resetLogger();
-    testApi.setHostnameResolverForTests(() => "transport-test-host");
     setLoggerOverride({ level: "info", file: asyncPath });
     writeStableRecords();
     await testApi.flushFileLogQueueForTests();
@@ -119,7 +124,7 @@ describe("async logger file transport", () => {
   it("drains bursts with bounded secured appends while preserving every record", async () => {
     const logPath = logPathTracker.nextPath();
     const appended: string[] = [];
-    testApi.setFileLogAppenderForTests(async (options) => {
+    vi.spyOn(fsSafe, "appendRegularFile").mockImplementation(async (options) => {
       appended.push(String(options.content));
       await appendRegularFile(options);
     });
@@ -181,7 +186,7 @@ describe("async logger file transport", () => {
     const issued = createDeferred();
     const release = createDeferred();
     let issuedRecords = 0;
-    testApi.setFileLogAppenderForTests(async (options) => {
+    vi.spyOn(fsSafe, "appendRegularFile").mockImplementation(async (options) => {
       await appendRegularFile(options);
       issuedRecords = String(options.content).trim().split("\n").length;
       issued.resolve();
@@ -270,7 +275,7 @@ describe("async logger file transport", () => {
     const logPath = `${logPathTracker.nextPath()}-${secret}`;
     let appendAttempts = 0;
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    testApi.setFileLogAppenderForTests(async (options) => {
+    vi.spyOn(fsSafe, "appendRegularFile").mockImplementation(async (options) => {
       appendAttempts += 1;
       if (appendAttempts !== 3) {
         throw new Error("injected append failure");
@@ -368,7 +373,7 @@ describe("async logger file transport", () => {
     stderrSpy.mockImplementationOnce(() => {
       throw new Error("injected stderr failure");
     });
-    testApi.setFileLogAppenderForTests(async () => {
+    vi.spyOn(fsSafe, "appendRegularFile").mockImplementation(async () => {
       throw new Error("injected append failure");
     });
     setLoggerOverride({ level: "info", file: logPath });
@@ -391,7 +396,7 @@ describe("async logger file transport", () => {
       lastPath,
     ];
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    testApi.setFileLogAppenderForTests(async () => {
+    vi.spyOn(fsSafe, "appendRegularFile").mockImplementation(async () => {
       throw new Error("injected append failure");
     });
 
@@ -405,7 +410,7 @@ describe("async logger file transport", () => {
     expect(warnings.filter((line) => line.includes("diagnostics saturated"))).toHaveLength(1);
     expect(warnings.some((line) => line.includes(`file=${lastPath}`))).toBe(false);
 
-    testApi.setFileLogAppenderForTests(async (options) => {
+    vi.spyOn(fsSafe, "appendRegularFile").mockImplementation(async (options) => {
       if (options.filePath === firstPath) {
         await appendRegularFile(options);
         return;

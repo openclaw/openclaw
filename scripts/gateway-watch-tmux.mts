@@ -1,19 +1,9 @@
 #!/usr/bin/env node
 // Starts gateway watch in tmux while preserving useful dev environment state.
-import { spawnSync, type SpawnSyncOptions, type SpawnSyncReturns } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-
-type TextWriter = {
-  write: (message: string) => unknown;
-};
-
-type GatewaySpawn = (
-  command: string,
-  args: string[],
-  options: SpawnSyncOptions,
-) => Partial<SpawnSyncReturns<string | Buffer>>;
 
 type GatewayWatchParams = {
   args?: string[];
@@ -21,14 +11,9 @@ type GatewayWatchParams = {
   env?: NodeJS.ProcessEnv;
   nodePath?: string;
   sessionName?: string;
-  spawnSync?: GatewaySpawn;
-  stderr?: TextWriter;
-  stdinIsTTY?: boolean;
-  stdout?: TextWriter;
-  stdoutIsTTY?: boolean;
 };
 
-type GatewayWatchDeps = Required<Omit<GatewayWatchParams, "sessionName">>;
+type GatewayWatchRuntimeParams = Pick<GatewayWatchParams, "args" | "cwd" | "env">;
 
 const TMUX_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
 const TMUX_ATTACH_FORCE_VALUES = new Set(["1", "true", "yes", "on"]);
@@ -312,16 +297,14 @@ const parseTrailingJsonObject = (
 };
 
 /** Stops the matching managed service without targeting an unrelated listener. */
-export const runGatewayWatchServiceHandoff = (params: GatewayWatchParams = {}): number => {
+export const runGatewayWatchServiceHandoff = (params: GatewayWatchRuntimeParams = {}): number => {
   const args = params.args ?? [];
   const cwd = params.cwd ?? process.cwd();
   const env = params.env ? { ...params.env } : { ...process.env };
-  const nodePath = params.nodePath ?? process.execPath;
-  const spawnSyncImpl: GatewaySpawn = params.spawnSync ?? spawnSync;
-  const stderr = params.stderr ?? process.stderr;
+  const nodePath = process.execPath;
   const profile = resolveGatewayWatchProfile(args, env);
   const profileArgs = profile === null ? [] : ["--profile", profile];
-  const statusResult = spawnSyncImpl(
+  const statusResult = spawnSync(
     nodePath,
     [RUN_NODE_SCRIPT, ...profileArgs, "gateway", "status", "--json", "--no-probe"],
     {
@@ -334,12 +317,12 @@ export const runGatewayWatchServiceHandoff = (params: GatewayWatchParams = {}): 
   if (statusResult.error || statusResult.status !== 0) {
     const detail =
       statusResult.error?.message || String(statusResult.stderr || "").trim() || "unknown error";
-    log(stderr, `failed to inspect the managed Gateway service before watch: ${detail}`);
+    log(`failed to inspect the managed Gateway service before watch: ${detail}`);
     return statusResult.status || 1;
   }
   const status = parseTrailingJsonObject(statusResult.stdout);
   if (!status) {
-    log(stderr, "failed to parse managed Gateway service status before watch");
+    log("failed to parse managed Gateway service status before watch");
     return 1;
   }
   const service = isRecord(status.service) ? status.service : undefined;
@@ -360,14 +343,11 @@ export const runGatewayWatchServiceHandoff = (params: GatewayWatchParams = {}): 
   const currentConfigPort = parsePortValue(portCli?.port ?? gateway?.port);
   const watchPort = requestedPort ?? currentConfigPort;
   if (managedPort === null || watchPort === null) {
-    log(stderr, "failed to resolve the Gateway watch port before service handoff");
+    log("failed to resolve the Gateway watch port before service handoff");
     return 1;
   }
   if (watchPort !== managedPort) {
-    log(
-      stderr,
-      `gateway:watch leaving managed Gateway on port ${managedPort}; watching port ${watchPort}`,
-    );
+    log(`gateway:watch leaving managed Gateway on port ${managedPort}; watching port ${watchPort}`);
     return 0;
   }
 
@@ -377,45 +357,36 @@ export const runGatewayWatchServiceHandoff = (params: GatewayWatchParams = {}): 
   if (explicitCli) {
     stopEnv.OPENCLAW_GATEWAY_PORT = String(watchPort);
   }
-  const stopResult = spawnSyncImpl(nodePath, [RUN_NODE_SCRIPT, ...profileArgs, "gateway", "stop"], {
+  const stopResult = spawnSync(nodePath, [RUN_NODE_SCRIPT, ...profileArgs, "gateway", "stop"], {
     cwd,
     env: stopEnv,
     stdio: "inherit",
   });
   if (stopResult.error) {
-    log(
-      stderr,
-      `failed to stop the managed Gateway service before watch: ${stopResult.error.message}`,
-    );
+    log(`failed to stop the managed Gateway service before watch: ${stopResult.error.message}`);
     return 1;
   }
   return stopResult.status ?? (stopResult.signal ? 1 : 0);
 };
 
-const runForegroundWatcher = (
-  deps: Pick<GatewayWatchDeps, "args" | "cwd" | "env" | "nodePath" | "spawnSync">,
-) => {
-  const result = deps.spawnSync(deps.nodePath, [RAW_WATCH_SCRIPT, ...deps.args], {
-    cwd: deps.cwd,
-    env: deps.env,
+const runForegroundWatcher = (args: string[], cwd: string, env: NodeJS.ProcessEnv) => {
+  const result = spawnSync(process.execPath, [RAW_WATCH_SCRIPT, ...args], {
+    cwd,
+    env,
     stdio: "inherit",
   });
   return result.status ?? (result.signal ? 1 : 0);
 };
 
-const runTmux = (
-  spawnSyncImpl: GatewaySpawn,
-  args: string[],
-  options: { stdio?: "inherit" } = {},
-) =>
-  spawnSyncImpl("tmux", args, {
+const runTmux = (args: string[], options: { stdio?: "inherit" } = {}) =>
+  spawnSync("tmux", args, {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     ...options,
   });
 
-const log = (stderr: TextWriter, message: string): void => {
-  stderr.write(`[openclaw] ${message}\n`);
+const log = (message: string): void => {
+  process.stderr.write(`[openclaw] ${message}\n`);
 };
 
 const getTmuxErrorText = (result: ReturnType<typeof runTmux>): string =>
@@ -427,8 +398,8 @@ const isNodeErrorCode = (error: Error | undefined, code: string): boolean =>
 const isMissingTmuxTarget = (result: ReturnType<typeof runTmux>): boolean =>
   /can't find (?:session|window|pane)|no current target/i.test(getTmuxErrorText(result));
 
-const shouldAttachTmux = (deps: Pick<GatewayWatchDeps, "env" | "stdinIsTTY" | "stdoutIsTTY">) => {
-  const raw = (deps.env.OPENCLAW_GATEWAY_WATCH_ATTACH ?? "").toLowerCase();
+const shouldAttachTmux = (env: NodeJS.ProcessEnv) => {
+  const raw = (env.OPENCLAW_GATEWAY_WATCH_ATTACH ?? "").toLowerCase();
   if (TMUX_ATTACH_FORCE_VALUES.has(raw)) {
     return true;
   }
@@ -436,123 +407,95 @@ const shouldAttachTmux = (deps: Pick<GatewayWatchDeps, "env" | "stdinIsTTY" | "s
     return false;
   }
   // TERM=dumb pseudo-TTYs cannot satisfy tmux's clear/cursor requirements.
-  const term = (deps.env.TERM ?? "").trim().toLowerCase();
+  const term = (env.TERM ?? "").trim().toLowerCase();
   return (
-    !deps.env.CI &&
-    deps.stdinIsTTY &&
-    deps.stdoutIsTTY &&
-    (Boolean(deps.env.TMUX) || (term !== "" && term !== "dumb"))
+    !env.CI &&
+    process.stdin.isTTY &&
+    process.stdout.isTTY &&
+    (Boolean(env.TMUX) || (term !== "" && term !== "dumb"))
   );
 };
 
-const attachTmux = (deps: Pick<GatewayWatchDeps, "env" | "spawnSync">, sessionName: string) => {
-  const args = deps.env.TMUX
+const attachTmux = (env: NodeJS.ProcessEnv, sessionName: string) => {
+  const args = env.TMUX
     ? ["switch-client", "-t", sessionName]
     : ["attach-session", "-t", sessionName];
-  return runTmux(deps.spawnSync, args, { stdio: "inherit" });
+  return runTmux(args, { stdio: "inherit" });
 };
 
-const setTmuxSessionMetadata = (
-  deps: Pick<GatewayWatchDeps, "cwd" | "spawnSync" | "stderr">,
-  sessionName: string,
-) => {
+const setTmuxSessionMetadata = (cwd: string, sessionName: string) => {
   const updates = [
-    ["set-option", "-q", "-t", sessionName, TMUX_CWD_OPTION_KEY, deps.cwd],
-    ["set-environment", "-t", sessionName, TMUX_CWD_ENV_KEY, deps.cwd],
+    ["set-option", "-q", "-t", sessionName, TMUX_CWD_OPTION_KEY, cwd],
+    ["set-environment", "-t", sessionName, TMUX_CWD_ENV_KEY, cwd],
   ];
   for (const args of updates) {
-    const result = runTmux(deps.spawnSync, args);
+    const result = runTmux(args);
     if (result.error || result.status !== 0) {
-      log(
-        deps.stderr,
-        `warning: failed to update tmux session metadata: ${getTmuxErrorText(result)}`,
-      );
+      log(`warning: failed to update tmux session metadata: ${getTmuxErrorText(result)}`);
       return;
     }
   }
 };
 
-export const runGatewayWatchTmuxMain = (params: GatewayWatchParams = {}): number => {
+export const runGatewayWatchTmuxMain = (params: GatewayWatchRuntimeParams = {}): number => {
   const resolvedArgs = resolveGatewayWatchBenchmarkArgs({
     args: params.args ?? process.argv.slice(2),
     env: params.env ? { ...params.env } : { ...process.env },
   });
-  const deps = {
-    args: resolvedArgs.args,
-    cwd: params.cwd ?? process.cwd(),
-    env: resolvedArgs.env,
-    nodePath: params.nodePath ?? process.execPath,
-    spawnSync: params.spawnSync ?? spawnSync,
-    stderr: params.stderr ?? process.stderr,
-    stdinIsTTY: params.stdinIsTTY ?? process.stdin.isTTY,
-    stdout: params.stdout ?? process.stdout,
-    stdoutIsTTY: params.stdoutIsTTY ?? process.stdout.isTTY,
-  } satisfies GatewayWatchDeps;
+  const { args, env } = resolvedArgs;
+  const cwd = params.cwd ?? process.cwd();
 
   if (resolvedArgs.benchmarkProfileDir) {
-    log(deps.stderr, `gateway:watch benchmark CPU profiles: ${resolvedArgs.benchmarkProfileDir}`);
+    log(`gateway:watch benchmark CPU profiles: ${resolvedArgs.benchmarkProfileDir}`);
   }
   if (resolvedArgs.benchmarkTraceOutputLog) {
-    log(
-      deps.stderr,
-      `gateway:watch benchmark trace output: ${resolvedArgs.benchmarkTraceOutputLog}`,
-    );
+    log(`gateway:watch benchmark trace output: ${resolvedArgs.benchmarkTraceOutputLog}`);
   }
   if (resolvedArgs.benchmarkNoForce) {
-    log(deps.stderr, "gateway:watch benchmark running without --force");
+    log("gateway:watch benchmark running without --force");
   }
 
   if (
-    TMUX_DISABLE_VALUES.has((deps.env.OPENCLAW_GATEWAY_WATCH_TMUX ?? "").toLowerCase()) ||
-    deps.env.OPENCLAW_GATEWAY_WATCH_TMUX_CHILD === "1"
+    TMUX_DISABLE_VALUES.has((env.OPENCLAW_GATEWAY_WATCH_TMUX ?? "").toLowerCase()) ||
+    env.OPENCLAW_GATEWAY_WATCH_TMUX_CHILD === "1"
   ) {
-    return runForegroundWatcher(deps);
+    return runForegroundWatcher(args, cwd, env);
   }
 
-  const sessionName =
-    params.sessionName ?? resolveGatewayWatchTmuxSessionName({ args: deps.args, env: deps.env });
+  const sessionName = resolveGatewayWatchTmuxSessionName({ args, env });
   const command = buildGatewayWatchTmuxCommand({
-    args: deps.args,
-    cwd: deps.cwd,
-    env: deps.env,
-    nodePath: deps.nodePath,
+    args,
+    cwd,
+    env,
+    nodePath: process.execPath,
     sessionName,
   });
 
-  const hasSession = runTmux(deps.spawnSync, ["has-session", "-t", sessionName]);
+  const hasSession = runTmux(["has-session", "-t", sessionName]);
   if (isNodeErrorCode(hasSession.error, "ENOENT")) {
     log(
-      deps.stderr,
       "tmux is not installed or not on PATH; run `pnpm gateway:watch:raw` for foreground watch mode.",
     );
     return 1;
   }
   if (hasSession.error) {
-    log(deps.stderr, `failed to query tmux session ${sessionName}: ${hasSession.error.message}`);
+    log(`failed to query tmux session ${sessionName}: ${hasSession.error.message}`);
     return 1;
   }
 
-  const launchPane = () =>
-    runTmux(deps.spawnSync, ["respawn-pane", "-k", "-t", sessionName, "-c", deps.cwd, command]);
+  const launchPane = () => runTmux(["respawn-pane", "-k", "-t", sessionName, "-c", cwd, command]);
   const prepareSession = () =>
-    runTmux(deps.spawnSync, ["set-option", "-w", "-t", sessionName, "remain-on-exit", "on"]);
+    runTmux(["set-option", "-w", "-t", sessionName, "remain-on-exit", "on"]);
   const startSession = () => {
     // Create a durable shell pane first so remain-on-exit is active before the
     // watcher can fail. Agents can then capture the original startup error.
-    const created = runTmux(deps.spawnSync, [
-      "new-session",
-      "-d",
-      "-s",
-      sessionName,
-      "-c",
-      deps.cwd,
-    ]);
+    const created = runTmux(["new-session", "-d", "-s", sessionName, "-c", cwd]);
     if (created.error || created.status !== 0) {
       return created;
     }
     const prepared = prepareSession();
     if (prepared.error || prepared.status !== 0) {
-      runTmux(deps.spawnSync, ["kill-session", "-t", sessionName]);
+      runTmux(["kill-session", "-t", sessionName]);
       return prepared;
     }
     return launchPane();
@@ -567,12 +510,11 @@ export const runGatewayWatchTmuxMain = (params: GatewayWatchParams = {}): number
   const action = hasSession.status === 0 ? "restarted" : "started";
   let result = hasSession.status === 0 ? restartSession() : startSession();
   if (hasSession.status === 0 && isMissingTmuxTarget(result)) {
-    runTmux(deps.spawnSync, ["kill-session", "-t", sessionName]);
+    runTmux(["kill-session", "-t", sessionName]);
     result = startSession();
   }
   if (isNodeErrorCode(result.error, "ENOENT")) {
     log(
-      deps.stderr,
       "tmux is not installed or not on PATH; run `pnpm gateway:watch:raw` for foreground watch mode.",
     );
     return 1;
@@ -580,31 +522,27 @@ export const runGatewayWatchTmuxMain = (params: GatewayWatchParams = {}): number
   if (result.error || result.status !== 0) {
     const detail = getTmuxErrorText(result);
     log(
-      deps.stderr,
       `failed to ${action === "started" ? "start" : "restart"} tmux session ${sessionName}: ${detail}`,
     );
     return result.status || 1;
   }
 
-  setTmuxSessionMetadata(deps, sessionName);
+  setTmuxSessionMetadata(cwd, sessionName);
 
-  log(deps.stderr, `gateway:watch ${action} in tmux session ${sessionName}`);
-  if (shouldAttachTmux(deps)) {
-    const attachResult = attachTmux(deps, sessionName);
+  log(`gateway:watch ${action} in tmux session ${sessionName}`);
+  if (shouldAttachTmux(env)) {
+    const attachResult = attachTmux(env, sessionName);
     if (attachResult.error || attachResult.status !== 0) {
-      log(
-        deps.stderr,
-        `failed to attach tmux session ${sessionName}: ${getTmuxErrorText(attachResult)}`,
-      );
+      log(`failed to attach tmux session ${sessionName}: ${getTmuxErrorText(attachResult)}`);
       return attachResult.status || 1;
     }
     return 0;
   }
-  deps.stdout.write(`Attach: tmux attach -t ${sessionName}\n`);
-  deps.stdout.write(`Logs: tmux capture-pane -ep -t ${sessionName} -S -200\n`);
-  deps.stdout.write(`Cwd: tmux show-options -v -t ${sessionName} ${TMUX_CWD_OPTION_KEY}\n`);
-  deps.stdout.write("Restart: rerun the same pnpm gateway:watch command\n");
-  deps.stdout.write(`Stop: tmux kill-session -t ${sessionName}\n`);
+  process.stdout.write(`Attach: tmux attach -t ${sessionName}\n`);
+  process.stdout.write(`Logs: tmux capture-pane -ep -t ${sessionName} -S -200\n`);
+  process.stdout.write(`Cwd: tmux show-options -v -t ${sessionName} ${TMUX_CWD_OPTION_KEY}\n`);
+  process.stdout.write("Restart: rerun the same pnpm gateway:watch command\n");
+  process.stdout.write(`Stop: tmux kill-session -t ${sessionName}\n`);
   return 0;
 };
 

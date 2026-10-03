@@ -96,10 +96,13 @@ type RunNodeMutableState = {
   outputTee: RunNodeOutputTee | null;
   runNodeProgress: RunNodeProgress | undefined;
 };
-type RunNodeLogDeps = Pick<RunNodeDeps, "env" | "stderr"> &
-  Partial<Pick<RunNodeDeps, "outputTee" | "runNodeProgress">>;
-type RunNodeLockDeps = Pick<RunNodeDeps, "cwd" | "env" | "fs" | "process" | "stderr"> & {
+type RunNodeLogDeps = Pick<RunNodeDeps, "env"> &
+  Partial<Pick<RunNodeDeps, "outputTee" | "runNodeProgress">> & {
+    stderr: Pick<NodeJS.WriteStream, "write">;
+  };
+type RunNodeLockDeps = Pick<RunNodeDeps, "cwd" | "env" | "fs" | "process"> & {
   args: readonly string[];
+  stderr: RunNodeLogDeps["stderr"];
 };
 type BuildRequirement = { shouldBuild: boolean; reason: keyof typeof BUILD_REASON_LABELS };
 type RuntimePostBuildRequirement = {

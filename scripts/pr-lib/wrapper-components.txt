@@ -1058,7 +1058,6 @@ src/logging/log-file-path.ts
 src/logging/log-file-shared.ts
 src/logging/logger-file-message.ts
 src/logging/logger-file-transport.ts
-src/logging/logger-hostname-state.ts
 src/logging/logger-settings-internal.ts
 src/logging/logger.ts
 src/logging/redact-bounded.ts
