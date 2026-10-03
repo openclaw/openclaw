@@ -37,6 +37,51 @@ function terminalTalkChatSendAckError(result: unknown): ErrorShape | undefined {
 }
 
 /** Starts the chat run that backs a realtime Talk tool call. */
+type TalkConsultStart =
+  | { ok: true; runId: string; idempotencyKey: string }
+  | { ok: false; error: ErrorShape };
+
+const CONSULT_JOIN_WINDOW_MS = 120_000;
+const inFlightConsults = new Map<string, { startedAt: number; start: Promise<TalkConsultStart> }>();
+
+/**
+ * Start a consult, or join the one already in flight for this voice session.
+ *
+ * A realtime model that repeats the consult tool call would otherwise send one
+ * chat message per repeat into the busy session. Each returns at once with no
+ * text, the model calls again, and the session is left with a backlog of turns.
+ */
+export async function joinOrStartTalkConsult(params: {
+  key: string;
+  isRunLive: (runId: string) => boolean;
+  start: () => Promise<TalkConsultStart>;
+}): Promise<TalkConsultStart> {
+  for (;;) {
+    const prior = inFlightConsults.get(params.key);
+    // ponytail: 120 s matches the client's consult wait and bounds a run whose
+    // completion was never observed. A different follow-up question asked inside
+    // the window is answered by the in-flight run; forward it if that matters.
+    if (!prior || Date.now() - prior.startedAt >= CONSULT_JOIN_WINDOW_MS) {
+      break;
+    }
+    const result = await prior.start;
+    if (result.ok && params.isRunLive(result.runId)) {
+      return result;
+    }
+    if (inFlightConsults.get(params.key) === prior) {
+      inFlightConsults.delete(params.key);
+      break;
+    }
+  }
+  const entry = { startedAt: Date.now(), start: params.start() };
+  inFlightConsults.set(params.key, entry);
+  const result = await entry.start;
+  if (!result.ok && inFlightConsults.get(params.key) === entry) {
+    inFlightConsults.delete(params.key);
+  }
+  return result;
+}
+
 export async function startTalkRealtimeAgentConsult(
   request: GatewayRequestHandlerOptions,
   params: {

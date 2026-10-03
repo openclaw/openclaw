@@ -30,6 +30,7 @@ import {
   createOrResumeClientVoiceSession,
   ensureClientVoiceAgentSessionEntry,
   registerClientVoiceConsultRun,
+  resolveClientVoiceRunBinding,
   resolveClientVoiceSessionOrigin,
   resolveOpenClientVoiceSessionId,
 } from "../../../talk/client-voice-session.js";
@@ -38,7 +39,7 @@ import type { GatewayRequestHandlers } from "../../server-methods/types.js";
 import { defineValidatedGatewayHandler } from "../../server-methods/validation.js";
 import { SessionMutationAuthorizationChangedError } from "../../session-mutation-authorization-error.js";
 import { formatForLog } from "../../ws-log.js";
-import { startTalkRealtimeAgentConsult } from "../agent-consult.js";
+import { joinOrStartTalkConsult, startTalkRealtimeAgentConsult } from "../agent-consult.js";
 import { prepareTalkClientControlAuthority } from "../client-agent-consult.js";
 import {
   closeTalkClientGatewayControlSession,
@@ -164,30 +165,43 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         return;
       }
 
-      const result = await startTalkRealtimeAgentConsult(request, {
-        sessionTarget: target,
-        callId: params.callId,
-        args: consultArgs,
-        relaySessionId: normalizeOptionalString(params.relaySessionId),
-        connId,
-        onRunStarted: (runId) => {
-          registerClientVoiceConsultRun({
-            agentId,
-            sessionKey: params.sessionKey,
-            voiceSessionId,
-            runId,
-            config: request.context.getRuntimeConfig(),
+      const startConsult = () =>
+        startTalkRealtimeAgentConsult(request, {
+          sessionTarget: target,
+          callId: params.callId,
+          args: consultArgs,
+          relaySessionId: normalizeOptionalString(params.relaySessionId),
+          connId,
+          onRunStarted: (runId) => {
+            registerClientVoiceConsultRun({
+              agentId,
+              sessionKey: params.sessionKey,
+              voiceSessionId,
+              runId,
+              config: request.context.getRuntimeConfig(),
+            });
+            const observation = observeClientVoiceConfirmationRun({
+              agentId,
+              voiceSessionId,
+              runId,
+            });
+            // CLI diagnostics retire the binding before the outer lifecycle publishes chat.final.
+            // Chat run state retains only the veto reply, never execution authority.
+            request.context.chatRunState.getOrCreate(runId).readVoiceConfirmationReply = () =>
+              observation.readReply({ includeConfirmationId: true });
+            if (confirmationGrant) {
+              bindAuthorizedClientVoiceConfirmation({ grant: confirmationGrant, runId });
+            }
+          },
+        });
+      // A confirmed retry must reach the agent; never fold it into the blocked run.
+      const result = confirmationGrant
+        ? await startConsult()
+        : await joinOrStartTalkConsult({
+            key: `${agentId}:${voiceSessionId}`,
+            isRunLive: (runId) => resolveClientVoiceRunBinding(runId) !== undefined,
+            start: startConsult,
           });
-          const observation = observeClientVoiceConfirmationRun({ agentId, voiceSessionId, runId });
-          // CLI diagnostics retire the binding before the outer lifecycle publishes chat.final.
-          // Chat run state retains only the veto reply, never execution authority.
-          request.context.chatRunState.getOrCreate(runId).readVoiceConfirmationReply = () =>
-            observation.readReply({ includeConfirmationId: true });
-          if (confirmationGrant) {
-            bindAuthorizedClientVoiceConfirmation({ grant: confirmationGrant, runId });
-          }
-        },
-      });
       if (!result.ok) {
         respond(false, undefined, result.error);
         return;
