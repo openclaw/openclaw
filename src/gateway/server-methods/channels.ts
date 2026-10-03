@@ -15,6 +15,7 @@ import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.j
 import {
   type ChannelId,
   getChannelPlugin,
+  listChannelPlugins,
   normalizeChannelId,
 } from "../../channels/plugins/index.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
@@ -266,6 +267,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
     const rawChannel = params.channel;
     const cfg = context.getRuntimeConfig();
     const plugins = listReadOnlyChannelPluginsForConfig(cfg);
+    const loadedPlugins = new Map(listChannelPlugins().map((plugin) => [plugin.id, plugin]));
     const requestedChannel =
       typeof rawChannel === "string"
         ? (normalizeChannelId(rawChannel) ??
@@ -441,7 +443,16 @@ export const channelsHandlers: GatewayRequestHandlers = {
           if ("account" in result) {
             resolvedAccounts[result.accountId] = result.account;
           }
-          accounts.push(result.snapshot);
+          const loadedPlugin = loadedPlugins.get(channelId);
+          accounts.push({
+            ...result.snapshot,
+            // Setup/manifest fallbacks cannot establish the runtime's missing capabilities.
+            ...(loadedPlugin
+              ? { probeSupported: Boolean(loadedPlugin.status?.probeAccount) }
+              : plugin.status?.probeAccount
+                ? { probeSupported: true }
+                : {}),
+          });
         }
       }
       const defaultAccount =

@@ -82,6 +82,13 @@ state plus probe results such as `works`, `probe failed`, `audit ok`, or `audit 
 If the gateway is unreachable, `channels status` falls back to config-only summaries
 instead of live probe output.
 
+Live JSON account snapshots include `probeSupported` when capability is known:
+`false` means the loaded channel has no `probeAccount` hook; `true` means the
+hook exists, even when probing was not requested or the account was disabled or
+unconfigured. The field is omitted for fallback adapters without a known probe
+hook and while reload reports recorded state. Support alone does not establish
+channel health or message delivery.
+
 If the Gateway answers with an error, such as an unknown `--channel`, the command
 reports that error and exits nonzero instead of showing an unreachable fallback.
 

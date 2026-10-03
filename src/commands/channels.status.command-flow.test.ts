@@ -268,6 +268,16 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     vi.restoreAllMocks();
   });
 
+  it("preserves account probe capabilities in live JSON output", async () => {
+    const { runtime, logs } = createCapturingTestRuntime();
+    const payload = {
+      channelAccounts: { discord: [{ accountId: "default", probeSupported: false }] },
+    };
+    mocks.callGateway.mockResolvedValueOnce(payload);
+    await channelsStatusCommand({ probe: true, json: true }, runtime);
+    expect(JSON.parse(logs.at(-1) ?? "{}")).toEqual(payload);
+  });
+
   it("reports pending startup in JSON without falling back to a Gateway error", async () => {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     vi.mocked(waitForGatewayDiagnosticReadiness).mockResolvedValueOnce({

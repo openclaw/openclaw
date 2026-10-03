@@ -223,6 +223,8 @@ export type ChannelAccountSnapshot = {
   dbPath?: string | null;
   port?: number | null;
   probe?: unknown;
+  /** Whether the available runtime adapter supports probing; absent when capability is unknown. */
+  probeSupported?: boolean;
   lastProbeAt?: number | null;
   audit?: unknown;
   application?: unknown;
