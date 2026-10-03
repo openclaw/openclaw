@@ -209,12 +209,7 @@ export async function resolveTargetVersion(
 }
 
 export async function isGitCheckout(root: string): Promise<boolean> {
-  try {
-    await fs.stat(path.join(root, ".git"));
-    return true;
-  } catch {
-    return false;
-  }
+  return pathExists(path.join(root, ".git"));
 }
 
 export async function isEmptyDir(targetPath: string): Promise<boolean> {
