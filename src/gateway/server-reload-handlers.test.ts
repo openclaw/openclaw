@@ -686,6 +686,7 @@ async function createManagedRestartSequenceHarness(
   options: {
     invalidateGenerationOnReconcile?: boolean;
     scheduler?: ManagedReloaderTestParams["scheduler"];
+    resolveSharedGatewaySessionGenerationForConfig?: (config: OpenClawConfig) => string | undefined;
   } = {},
 ) {
   const watcher = installWatcherMock();
@@ -752,7 +753,7 @@ async function createManagedRestartSequenceHarness(
     return makePreparedSecretsSnapshot(config);
   });
   const sharedGatewaySessionGenerationState = new SharedGatewaySessionGenerationState({
-    current: undefined,
+    current: options.resolveSharedGatewaySessionGenerationForConfig?.(initialConfig),
     required: null,
   });
   let generationInvalidated = false;
@@ -783,6 +784,12 @@ async function createManagedRestartSequenceHarness(
     commitRuntimePolicy: terminalPolicy.commitConfig,
     acceptTerminalConfig,
     sharedGatewaySessionGenerationState,
+    ...(options.resolveSharedGatewaySessionGenerationForConfig
+      ? {
+          resolveSharedGatewaySessionGenerationForConfig:
+            options.resolveSharedGatewaySessionGenerationForConfig,
+        }
+      : {}),
     requestRecoveryRestart,
   });
   await reloader.ready;
@@ -4374,10 +4381,12 @@ describe("gateway Gmail hot reload handlers", () => {
     const withGateway = (base: OpenClawConfig, gateway: Partial<OpenClawConfig["gateway"]>) =>
       ({ ...base, gateway: { ...base.gateway, ...gateway } }) as OpenClawConfig;
 
-    async function startHarness() {
+    async function startHarness(
+      options: Parameters<typeof createManagedRestartSequenceHarness>[0] = {},
+    ) {
       vi.useFakeTimers();
       const { clock, scheduler } = createConfigReloadTestClock();
-      const harness = await createManagedRestartSequenceHarness({ scheduler });
+      const harness = await createManagedRestartSequenceHarness({ ...options, scheduler });
       return Object.assign(harness, { clock });
     }
     type RevertHarness = Awaited<ReturnType<typeof startHarness>>;
@@ -4511,6 +4520,33 @@ describe("gateway Gmail hot reload handlers", () => {
         await writeAndPromote(harness, harness.initialConfig, "revert", 3);
         await drainUntilRestart(harness);
 
+        expect(harness.requestRecoveryRestart).toHaveBeenCalledTimes(1);
+      } finally {
+        await harness.reloader.stop();
+      }
+    });
+
+    it("restarts and readmits running credentials after an auth mode change reverts", async () => {
+      const harness = await startHarness({
+        resolveSharedGatewaySessionGenerationForConfig: (config) =>
+          config.gateway?.auth?.mode === "password" ? "password-generation" : "token-generation",
+      });
+      try {
+        hoisted.activeAgentRunCount.value = 1;
+        const passwordAuth = withGateway(harness.initialConfig, {
+          auth: { mode: "password", password: "candidate-password" },
+        });
+        await writeAndPromote(harness, passwordAuth, "password-auth", 1);
+        expect(harness.sharedGatewaySessionGenerationState.requiredGeneration).toBe(
+          "password-generation",
+        );
+
+        await writeAndPromote(harness, harness.initialConfig, "revert", 2);
+
+        expect(harness.sharedGatewaySessionGenerationState.requiredGeneration).toBe(
+          "token-generation",
+        );
+        await drainUntilRestart(harness);
         expect(harness.requestRecoveryRestart).toHaveBeenCalledTimes(1);
       } finally {
         await harness.reloader.stop();
