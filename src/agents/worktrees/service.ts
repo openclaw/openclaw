@@ -129,6 +129,8 @@ export {
 export const IDLE_GC_MS = 7 * 24 * 60 * 60 * 1000; // Idle worktrees remain restorable after automatic cleanup.
 export const SNAPSHOT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // Snapshot refs expire with their registry affordance.
 export const WORKTREE_GC_INTERVAL_MS = 60 * 60 * 1000;
+// --auto is cheap below GC thresholds; a large clone's full repack must not be killed hourly.
+const WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS = 30 * 60 * 1000;
 
 export { WorktreeRepositoryError } from "./errors.js";
 const log = createSubsystemLogger("agents/worktrees");
@@ -1411,6 +1413,35 @@ export class ManagedWorktreeService {
     }
     result.orphansDeleted = orphansDeleted;
     result.snapshotsPruned = snapshotsPruned;
+    assertCurrent();
+    // Cleanup has released allocation ownership and retired its refs before maintenance.
+    const live = await readRegistryWorktrees(this.env, { liveOnly: true }).catch(
+      (error: unknown) => {
+        assertCurrent();
+        log.warn(`worktree Git maintenance inventory failed: ${String(error)}`);
+        return [];
+      },
+    );
+    for (const repoRoot of new Set(live.map((record) => record.repoRoot))) {
+      assertCurrent();
+      try {
+        if (!(await worktreePathExists(repoRoot))) {
+          throw new Error("Repository path is missing");
+        }
+        const maintained = await runGit(repoRoot, ["maintenance", "run", "--auto"], {
+          killProcessTree: true,
+          signal: params.signal,
+          beforeRun: assertCurrent,
+          timeoutMs: WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS,
+        });
+        if (maintained.termination !== "exit" || maintained.code !== 0) {
+          throw commandError("git maintenance run --auto", maintained);
+        }
+      } catch (error) {
+        assertCurrent();
+        log.warn(`worktree Git maintenance failed for ${repoRoot}: ${String(error)}`);
+      }
+    }
     assertCurrent();
     return result;
   }
