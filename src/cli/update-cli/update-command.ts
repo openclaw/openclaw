@@ -1,5 +1,5 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import type { PackageActivationRuntime } from "../../infra/package-update-swap-contract.js";
+import type { PackageActivationRuntime } from "../../infra/package-update-activation-runtime.types.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";

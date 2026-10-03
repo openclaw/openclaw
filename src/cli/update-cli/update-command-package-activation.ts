@@ -1,5 +1,5 @@
 import { capturePackageActivationRuntime } from "../../infra/package-update-activation-paths.js";
-import type { PackageActivationRuntime } from "../../infra/package-update-swap-contract.js";
+import type { PackageActivationRuntime } from "../../infra/package-update-activation-runtime.types.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import { reserveUpdateCommandExecutorSlot } from "./update-command-executor.js";

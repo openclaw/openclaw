@@ -7,11 +7,14 @@ import { gitCommitPrefixesMatch } from "./git-commit.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { readVerifiedGitUpdateReceipt, type VerifiedGitUpdateReceipt } from "./restart-sentinel.js";
 import { resolveEffectiveUpdateChannel, type UpdateChannel } from "./update-channels.js";
-import type { UpdateCheckLifecycle } from "./update-check-lifecycle.js";
 import { checkUpdateStatus, type UpdateCheckResult } from "./update-check.js";
 import { updateInstallRootsMatch } from "./update-install-root.js";
+import type { StartupInstallStatus } from "./update-install-status.types.js";
 
-export async function resolveStartupInstallStatus(fetchRemoteGit: boolean, signal: AbortSignal) {
+export async function resolveStartupInstallStatus(
+  fetchRemoteGit: boolean,
+  signal: AbortSignal,
+): Promise<StartupInstallStatus> {
   const [root, installReceipt] = await Promise.all([
     resolveOpenClawPackageRoot({
       moduleUrl: import.meta.url,
@@ -77,11 +80,11 @@ export async function resolveStartupInstallStatus(fetchRemoteGit: boolean, signa
 }
 
 export async function prepareStartupUpdateInstall(
-  lifecycle: UpdateCheckLifecycle,
+  initialize: () => Promise<StartupInstallStatus>,
   configChannel: UpdateChannel | null,
   signal: AbortSignal,
 ) {
-  let installStatus = await lifecycle.initialize();
+  let installStatus = await initialize();
   signal.throwIfAborted();
   if (installStatus.status.error) {
     throw new Error(installStatus.status.error.message);
