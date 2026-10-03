@@ -7,10 +7,8 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { clearCronJobActive, markCronJobActive } from "../cron/active-jobs.js";
 import { registerActiveCronTaskRun } from "../cron/service/active-run-cancellation.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  readAgentDeletionRecoveryHolds,
-  reconstructAgentDeletionJournal,
-} from "../state/agent-deletion-journal-recovery.js";
+import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
+import { readAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.kernel.js";
 import {
   beginAgentDeletionJournal,
   claimCompletedAgentDeletionJournal,

@@ -11,14 +11,14 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
+import type {
+  SessionTranscriptMaintenanceRead,
+  SessionTranscriptMaintenanceFacts,
+} from "../../config/sessions/session-transcript-hydration.types.js";
 import {
   SYNC_REBUILD_MAX_BYTES,
   SYNC_REBUILD_MAX_ROWS,
 } from "../../config/sessions/session-transcript-index.js";
-import type {
-  SessionTranscriptMaintenanceRead,
-  SessionTranscriptMaintenanceFacts,
-} from "../../config/sessions/session-transcript-maintenance-read.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {

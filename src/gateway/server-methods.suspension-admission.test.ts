@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { validateGatewaySuspendStatusResult } from "../../packages/gateway-protocol/src/index.js";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { createGatewayHostLifecycle } from "../cli/gateway-cli/host-lifecycle.js";
 import {
   consumeGatewaySuspendHandoff,
@@ -14,6 +15,7 @@ import {
 import {
   beginGatewayRestartSignalAdmission,
   beginGatewayRootWorkAdmissionWhenOpen,
+  captureGatewayRootWorkAdmissionContinuationScope,
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -21,6 +23,7 @@ import {
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createCoreGatewayMethodDescriptors } from "./methods/core-method-policy.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
@@ -487,6 +490,50 @@ describe("gateway request suspension admission", () => {
     suspension?.rollback();
     const release = releaseContinuation as (() => void) | null;
     release?.();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("keeps an observation root busy until accepted child work settles", async () => {
+    const draining = deferred();
+    const finishChild = deferred();
+    const settledChild = vi.fn();
+    let child: Promise<void> | undefined;
+    const observation = dispatch({
+      method: "agent.wait",
+      scope: "operator.admin",
+      core: true,
+      requestParams: { runId: "observed-run" },
+      handler: ({ respond }) => {
+        const signal = expectDefined(getAsyncWorkSignal(), "observation lifetime");
+        const admission = expectDefined(
+          captureGatewayRootWorkAdmissionContinuationScope(),
+          "admitted observation",
+        );
+        child = trackAsyncWork(async () => {
+          signal.addEventListener("abort", draining.resolve, { once: true });
+          await finishChild.promise;
+          admission.runSync(settledChild);
+        });
+        void child.catch(() => {});
+        respond(true, { status: "ok" });
+      },
+    });
+    try {
+      await awaitGateBeforeSettlement(
+        draining.promise,
+        observation.request,
+        "Observation returned before draining its accepted child",
+      );
+      expect(observation.respond).toHaveBeenCalledExactlyOnceWith(true, { status: "ok" });
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      expect(settledChild).not.toHaveBeenCalled();
+    } finally {
+      finishChild.resolve();
+      await Promise.allSettled([observation.request, child]);
+    }
+    await observation.request;
+    await child;
+    expect(settledChild).toHaveBeenCalledOnce();
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 

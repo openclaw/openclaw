@@ -13,6 +13,7 @@ import {
 import { normalizePluginsConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { buildPromptPrefix } from "./prompt.js";
+import { buildMemoryAudienceCacheIdentity } from "./recall-state.js";
 
 const TRIGGER_CANDIDATE_LIMIT = 24;
 const TRIGGER_INJECTION_LIMIT = 3;
@@ -134,6 +135,7 @@ type TriggerLookupParams = {
   /** Undefined uses legacy query identity; null disables request-local reuse. */
   requestKey?: string | null;
   authorityFingerprint?: string;
+  debug?: (message: string) => void;
 };
 
 type TriggerRecallRunEntry = {
@@ -183,6 +185,9 @@ async function loadNativeTriggerRecallCandidates(
     params.signal,
   );
   if (!lookup.provider) {
+    params.debug?.(
+      `active-memory: trigger recall denied by ${lookup.providerId ?? "selected memory plugin"}: ${lookup.error ?? "provider unavailable"}`,
+    );
     return [];
   }
   try {
@@ -190,8 +195,16 @@ async function loadNativeTriggerRecallCandidates(
       !lookup.provider.candidates ||
       !lookup.provider.capabilities.candidates.includes("trigger")
     ) {
+      params.debug?.(
+        `active-memory: trigger recall unsupported by ${lookup.providerId ?? "selected memory plugin"}`,
+      );
       return [];
     }
+    // Providers without a project filter return unfiltered entries; the
+    // all-of project check below applies the active keys either way.
+    const projectFilter = lookup.provider.capabilities.projectFilter
+      ? { activeProjectKeys: [...activeProjectKeys] }
+      : {};
     const [retrieved, triggerCandidates] = await waitForTriggerLookup(
       Promise.all([
         lookup.provider
@@ -202,12 +215,22 @@ async function loadNativeTriggerRecallCandidates(
             sources: ["memory"],
             // Lane one stays local and deterministic; do not embed the query.
             lexicalOnly: true,
-            activeProjectKeys: [...activeProjectKeys],
+            ...projectFilter,
           })
-          .catch(() => ({ hits: [] })),
+          .catch((error: unknown) => {
+            params.debug?.(
+              `active-memory: trigger recall search failed for ${lookup.providerId ?? "selected memory plugin"}: ${String(error)}`,
+            );
+            return { hits: [] };
+          }),
         lookup.provider
-          .candidates({ kind: "trigger", activeProjectKeys: [...activeProjectKeys] })
-          .catch(() => ({ hits: [] })),
+          .candidates({ kind: "trigger", ...projectFilter })
+          .catch((error: unknown) => {
+            params.debug?.(
+              `active-memory: trigger recall candidates failed for ${lookup.providerId ?? "selected memory plugin"}: ${String(error)}`,
+            );
+            return { hits: [] };
+          }),
       ]),
       params.signal,
     );
@@ -312,7 +335,15 @@ function resolveTriggerRecallCandidates(params: TriggerLookupParams) {
   if (!runId || params.requestKey === null) {
     return loadTriggerRecallCandidates(params);
   }
-  const runKey = `${runId}:${JSON.stringify([params.authorityFingerprint, params.requestKey])}`;
+  const memoryAudience =
+    params.source.kind === "native" && params.source.context.authority.kind === "session"
+      ? params.source.context.authority.audience
+      : undefined;
+  const runKey = `${runId}:${JSON.stringify([
+    params.authorityFingerprint,
+    params.requestKey,
+    buildMemoryAudienceCacheIdentity(memoryAudience),
+  ])}`;
   const existing = triggerRecallRuns.get(runKey);
   const activeProjectKeys = params.activeProjectKeys ?? [];
   if (

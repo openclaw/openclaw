@@ -31,6 +31,7 @@ enum DashboardBrowserError: Error, LocalizedError {
     case captureFailed
     case downloadFailed
     case downloadInProgress
+    case dialogDeferred
 
     var errorDescription: String? {
         switch self {
@@ -41,6 +42,7 @@ enum DashboardBrowserError: Error, LocalizedError {
         case .captureFailed: "Could not capture this Mac tab. Try again after the page loads."
         case .downloadFailed: "Could not download this asset. Try again after the page loads."
         case .downloadInProgress: "This tab already has a download in progress."
+        case .dialogDeferred: "File dialogs are deferred by --no-activate. Relaunch without the flag and try again."
         }
     }
 }

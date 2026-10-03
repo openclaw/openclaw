@@ -156,7 +156,7 @@ function stringifyRedactedPayload(value: unknown): string {
     if (!encoded) {
       return "<empty>";
     }
-    const redacted = redactSensitiveText(encoded, { mode: "tools" });
+    const redacted = redactSensitiveText(encoded);
     return redacted.length > 8000 ? `${truncateUtf16Safe(redacted, 8000)}…<truncated>` : redacted;
   } catch {
     return "<unserializable>";

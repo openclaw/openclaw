@@ -12,6 +12,7 @@ import { withCanonicalSessionValidationDeferral } from "../../config/sessions/se
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import type { SessionOperatorScope } from "../../shared/session-method-scopes-base.js";
 import type { ExpectedProfileBinding } from "../expected-profile.js";
 import type { GatewayMethodRegistry } from "../methods/registry.js";
@@ -63,6 +64,10 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   sessionMutationAuthorization?: SessionMutationAuthorization;
   sessionAccessAuthority?: GatewaySessionAccessAuthority;
 }> {
+  const signal = params.methodRegistry.isObservation(params.method)
+    ? getAsyncWorkSignal()
+    : undefined;
+  signal?.throwIfAborted();
   if (params.context.ensureSessionRowProjection) {
     params.markSessionSubscribePhase?.("projectionReadiness");
     await params.context.ensureSessionRowProjection();
@@ -90,6 +95,7 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         })
       : null;
   while (true) {
+    signal?.throwIfAborted();
     const scopeAuthorization = authorizeMethod();
     if (scopeAuthorization.error) {
       return { error: scopeAuthorization.error };
@@ -230,23 +236,26 @@ export async function authorizeGatewayRequestPreDispatch(params: {
     );
     const preparedSessionMutation =
       projection && !subscriptionAccessOnly
-        ? await projection.withPreparedExactRows(
-            (cfg) =>
-              resolveDirectSessionTargets(params.method, params.requestParams).flatMap((target) => {
+        ? await projection.withPreparedExactRows((cfg) => {
+            signal?.throwIfAborted();
+            return resolveDirectSessionTargets(params.method, params.requestParams).flatMap(
+              (target) => {
                 const agent = resolveRequestedSessionAgentId(
                   cfg,
                   target.sessionKey,
                   target.agentId,
                 );
                 return agent.ok ? [{ key: target.sessionKey, agentId: agent.agentId }] : [];
-              }),
-            authorizeSessionAndConsume,
-          )
+              },
+            );
+          }, authorizeSessionAndConsume)
         : withCanonicalSessionValidationDeferral(() => authorizeSessionAndConsume());
     params.markSessionSubscribePhase?.("accessFacts");
+    signal?.throwIfAborted();
     if (preparedSessionMutation.kind === "pending") {
       const { certifySessionCanonicalValidationPending } =
         await import("../../config/sessions/session-canonical-validation-readiness.js");
+      signal?.throwIfAborted();
       await certifySessionCanonicalValidationPending(preparedSessionMutation.database);
       // No permission result survives readiness. Method scopes, profile binding,
       // startup state, target selection and current session facts all run again.

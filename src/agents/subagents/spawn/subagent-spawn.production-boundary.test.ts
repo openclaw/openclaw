@@ -504,10 +504,18 @@ describe("recursive spawn production boundary", () => {
     let childRunId: string | undefined;
     const failures: unknown[] = [];
     try {
-      const result = await createBoundSpawnInvocation(bound, undefined, {
-        provider: "custom",
-        model: "child-model",
-      })();
+      // Model-facing owner fields cannot clear the trusted host identity.
+      const request = {
+        context: "isolated" as const,
+        senderIsOwner: false,
+        spawnedBySenderIsOwner: false,
+      };
+      const result = await createBoundSpawnInvocation(
+        bound,
+        request,
+        { provider: "custom", model: "child-model" },
+        true,
+      )();
       expect(result.details, JSON.stringify(result)).toMatchObject({
         status: "accepted",
         childSessionKey: expect.any(String),
@@ -548,6 +556,8 @@ describe("recursive spawn production boundary", () => {
         loadSessionEntry({ storePath: bound.storePath, sessionKey: details.childSessionKey }),
       ).toMatchObject({
         spawnedBy: parentSessionKey,
+        spawnedBySessionId: "parent-session",
+        spawnedBySenderIsOwner: true,
         spawnDepth: 2,
         providerOverride: "custom",
         modelOverride: "child-model",
@@ -555,6 +565,11 @@ describe("recursive spawn production boundary", () => {
         modelOverrideFallbackOriginProvider: "custom",
         modelOverrideFallbackOriginModel: "child-model",
       });
+      // The receipt's parent id stays out of navigation fields that sessions.list projects.
+      expect(
+        loadSessionEntry({ storePath: bound.storePath, sessionKey: details.childSessionKey })
+          ?.parentSessionId,
+      ).toBeUndefined();
       expect(subagentRuns.get(details.runId)).toMatchObject({
         childSessionKey: details.childSessionKey,
         requesterSessionKey: parentSessionKey,

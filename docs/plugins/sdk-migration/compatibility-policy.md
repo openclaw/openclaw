@@ -335,6 +335,33 @@ The `sourceVisibleReplies` harness delivery-default alias has been removed;
 use [`deliveryDefaults.visibleReplies`](/plugins/sdk-agent-harness/sessions-and-results#harness-delivery-defaults).
 The terminal-result aliases retain their separate published-reader condition.
 
+Eight deprecated stream and replay hook constants have been removed. Construct
+the same hooks with `buildProviderStreamFamilyHooks` from `provider-stream-family`
+or `buildProviderReplayFamilyHooks` from `provider-model-shared`:
+
+| Removed constant                   | Constructor argument               |
+| ---------------------------------- | ---------------------------------- |
+| `GOOGLE_THINKING_STREAM_HOOKS`     | `"google-thinking"`                |
+| `KILOCODE_THINKING_STREAM_HOOKS`   | `"kilocode-thinking"`              |
+| `MINIMAX_FAST_MODE_STREAM_HOOKS`   | `"minimax-fast-mode"`              |
+| `OPENAI_RESPONSES_STREAM_HOOKS`    | `"openai-responses-defaults"`      |
+| `OPENROUTER_THINKING_STREAM_HOOKS` | `"openrouter-thinking"`            |
+| `TOOL_STREAM_DEFAULT_ON_HOOKS`     | `"tool-stream-default-on"`         |
+| `ANTHROPIC_BY_MODEL_REPLAY_HOOKS`  | `{ family: "anthropic-by-model" }` |
+| `OPENAI_COMPATIBLE_REPLAY_HOOKS`   | `{ family: "openai-compatible" }`  |
+
+The stream constants are removed from both `provider-stream` and
+`provider-stream-family`. Update plugins that import them before updating the
+host. The constructors retain their existing behavior; this removal does not
+change stored config, credentials, or session data.
+
+`MOONSHOT_THINKING_STREAM_HOOKS` remains on both stream subpaths for published
+Moonshot providers. `NATIVE_ANTHROPIC_REPLAY_HOOKS` and
+`PASSTHROUGH_GEMINI_REPLAY_HOOKS` remain on `provider-model-shared` for published
+Anthropic Vertex and Kilocode providers. Their `2026.7.1` and `2026.7.33` through
+`2026.7.35` packages still import these names. The constructors are preferred
+for new code, but these aliases retain their reader-dependent removal condition.
+
 The unused private memory-host `loadConfig` re-exports have been removed.
 Memory implementations use `getRuntimeConfig` or caller-provided config;
 custom-table migration behavior remains intact.

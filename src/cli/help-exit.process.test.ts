@@ -10,7 +10,7 @@ import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts"
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   cliMessageExitEntrypoints,
@@ -486,9 +486,9 @@ await runCliWithExitFinalization({
       const spawned: { child?: ChildProcess } = {};
       const child = await lifetime.track(
         runNodeScript(
-          [
+          (workerArgv) => [
             ...resolveVitestNodeArgs(),
-            ...resolveRuntimeWorkerArgv(helpersUrl, nodeExecutable).slice(0, -1),
+            ...workerArgv(helpersUrl).slice(0, -1),
             entryPath,
           ],
           {

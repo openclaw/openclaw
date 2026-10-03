@@ -351,6 +351,43 @@ describe("native project memory bootstrap", () => {
     expect(rendered).toContain("Foreign fact.");
   });
 
+  it("filters every project key without requesting unsupported provider filtering", async () => {
+    runtimeMocks.getProvider.mockResolvedValue({
+      provider: {
+        capabilities: { candidates: ["trigger", "project"], projectFilter: false },
+        candidates: runtimeMocks.listCurated,
+        close: vi.fn(),
+      },
+    });
+    runtimeMocks.listCurated.mockResolvedValue({
+      hits: [
+        {
+          ...entries[0]!,
+          automaticRecall: { eligible: true, projectKeys: ["alpha", "beta"] },
+        },
+        {
+          ...entries[1]!,
+          automaticRecall: { eligible: true, projectKeys: ["alpha", "inactive"] },
+        },
+      ],
+    });
+
+    const rendered = (
+      await prepareProjectMemoryBootstrap({
+        cfg: {},
+        agentId: "main",
+        activeProjectKeys: ["alpha", "beta"],
+      })
+    ).join("\n");
+
+    expect(runtimeMocks.listCurated).toHaveBeenCalledExactlyOnceWith({
+      kind: "project",
+      limit: 48,
+    });
+    expect(rendered).toContain("Use the release helper.");
+    expect(rendered).not.toContain("Foreign fact.");
+  });
+
   it("uses the dedicated curated listing instead of a daily-note-crowded search", async () => {
     runtimeMocks.search.mockResolvedValue(
       Array.from({ length: 100 }, (_, index) => ({
@@ -361,7 +398,7 @@ describe("native project memory bootstrap", () => {
     runtimeMocks.listCurated.mockResolvedValue({ hits: [entries[0]] });
     runtimeMocks.getProvider.mockResolvedValue({
       provider: {
-        capabilities: { candidates: ["project"] },
+        capabilities: { candidates: ["project"], projectFilter: true },
         search: runtimeMocks.search,
         candidates: runtimeMocks.listCurated,
         close: vi.fn(),
@@ -425,7 +462,9 @@ describe("native project memory bootstrap", () => {
     expect(runtimeMocks.listCurated).toHaveBeenCalledOnce();
     expect(close).toHaveBeenCalledOnce();
     expect(logMocks.debug).toHaveBeenCalledWith(
-      expect.stringContaining("project memory cleanup failed: Error: provider cleanup failed"),
+      expect.stringContaining(
+        "project memory cleanup failed for memory-core: Error: provider cleanup failed",
+      ),
     );
   });
 

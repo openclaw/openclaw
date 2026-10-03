@@ -154,6 +154,7 @@ export async function finalizeNodePairingCleanupClaim(
       },
       {
         baseDir: claim.baseDir,
+        onAuthorityRefused: () => [],
         assertCurrent: () => {
           if (!cleanupClaimIsActive(claim)) {
             throw new DevicePairingAuthorityRefusedError("node reconnect cleanup claim changed");
@@ -161,11 +162,6 @@ export async function finalizeNodePairingCleanupClaim(
         },
       },
     );
-  } catch (error) {
-    if (error instanceof DevicePairingAuthorityRefusedError) {
-      return [];
-    }
-    throw error;
   } finally {
     removeCleanupClaim(claim);
   }
@@ -218,41 +214,35 @@ export async function approveNodePairing(
   options: { callerScopes?: readonly string[] },
   baseDir?: string,
 ): Promise<ApproveNodePairingResult> {
-  try {
-    return await executeDevicePairingMutation(
-      {
-        type: "node.approve",
-        input: { requestId, callerScopes: options.callerScopes, nowMs: Date.now() },
+  return await executeDevicePairingMutation(
+    {
+      type: "node.approve",
+      input: { requestId, callerScopes: options.callerScopes, nowMs: Date.now() },
+    },
+    {
+      baseDir,
+      onAuthorityRefused: () => null,
+      admit: (facts) => {
+        if (
+          !isRecord(facts) ||
+          facts.kind !== "node-pending" ||
+          typeof facts.nodeId !== "string" ||
+          typeof facts.requestId !== "string" ||
+          (facts.revision !== undefined && typeof facts.revision !== "string")
+        ) {
+          throw new Error("invalid node pending admission facts");
+        }
+        const key = buildCleanupRevisionClaimKey(baseDir, {
+          nodeId: facts.nodeId,
+          requestId: facts.requestId,
+          revision: facts.revision,
+        });
+        if ((activeCleanupRevisionClaims.get(key)?.size ?? 0) > 0) {
+          throw new DevicePairingAuthorityRefusedError("node reconnect owns pending revision");
+        }
       },
-      {
-        baseDir,
-        admit: (facts) => {
-          if (
-            !isRecord(facts) ||
-            facts.kind !== "node-pending" ||
-            typeof facts.nodeId !== "string" ||
-            typeof facts.requestId !== "string" ||
-            (facts.revision !== undefined && typeof facts.revision !== "string")
-          ) {
-            throw new Error("invalid node pending admission facts");
-          }
-          const key = buildCleanupRevisionClaimKey(baseDir, {
-            nodeId: facts.nodeId,
-            requestId: facts.requestId,
-            revision: facts.revision,
-          });
-          if ((activeCleanupRevisionClaims.get(key)?.size ?? 0) > 0) {
-            throw new DevicePairingAuthorityRefusedError("node reconnect owns pending revision");
-          }
-        },
-      },
-    );
-  } catch (error) {
-    if (error instanceof DevicePairingAuthorityRefusedError) {
-      return null;
-    }
-    throw error;
-  }
+    },
+  );
 }
 
 export function rejectNodePairing(

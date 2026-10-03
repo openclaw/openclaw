@@ -10,8 +10,8 @@ import {
   readClawPackageRefs,
 } from "../claws/provenance.js";
 import type { ClawAddPlan } from "../claws/types.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { createNodeEvalArgs, resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { createNodeEvalArgs } from "../test-utils/node-process.js";
 import { markClawPackageIndependentlyOwned } from "./claw-package-adoption.js";
 import { acquireClawPackageLifecycleLease } from "./claw-package-lifecycle-lease.js";
 import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
@@ -286,8 +286,8 @@ describe("Claw package independent adoption", () => {
       stateNativeProcessEntrypoints.clawPackageLifecycleLease,
     );
     const result = await runNodeScript(
-      [
-        ...resolveRuntimeWorkerArgv(moduleUrl, resolveTestNodeExecPath()).slice(0, -1),
+      (workerArgv) => [
+        ...workerArgv(moduleUrl).slice(0, -1),
         ...createNodeEvalArgs(
           `
           import { withClawPackageLifecycleLease } from ${JSON.stringify(moduleUrl.href)};

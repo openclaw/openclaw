@@ -17,6 +17,7 @@ import {
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.helpers.js";
 import {
   createSubagentCoordinationHistoryProjection,
+  prepareForwardedMessageCronJobNameResolver,
   projectForwardedMessages,
   type SubagentCoordinationDisplayResolver,
 } from "./chat-display-projection.history.js";
@@ -54,8 +55,13 @@ export async function readSessionHistorySnapshotAsync(
     const snapshot = await readSessionHistorySnapshotKernel(params, {
       readers: sessionTranscriptReaders,
       resolveCurrentUserProfileDisplay,
+      // Match the worker projection: install current names on the completed page below.
+      resolveCronJobName: () => undefined,
     });
-    const messages = projectForwardedMessages(snapshot.history.messages);
+    const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
+      snapshot.history.messages,
+    );
+    const messages = projectForwardedMessages(snapshot.history.messages, resolveCronJobName);
     return { ...snapshot, history: { ...snapshot.history, items: messages, messages } };
   }
   const { readSessionHistoryPageInWorker } =
@@ -77,8 +83,13 @@ export async function readSessionHistorySnapshotAsync(
       },
     },
   });
+  const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
+    snapshot.history.messages,
+  );
   const project = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay);
-  const messages = projectForwardedMessages(snapshot.history.messages).map(project);
+  const messages = projectForwardedMessages(snapshot.history.messages, resolveCronJobName).map(
+    project,
+  );
   return { ...snapshot, history: { ...snapshot.history, items: messages, messages } };
 }
 
@@ -170,17 +181,22 @@ export class SessionHistorySseState {
         prepared.assertCurrent,
       );
     }
+    const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver([
+      ...this.sentHistory.messages,
+      message,
+    ]);
     // The stream queue retains ordering; its publisher reauthorizes before applying this transition.
-    return () => this.appendInlineMessage(message, messageSeq, subagentCoordination);
+    return () =>
+      this.appendInlineMessage(message, messageSeq, subagentCoordination, resolveCronJobName);
   }
 
   private appendInlineMessage(
     message: unknown,
     messageSeq: number,
     subagentCoordination: SubagentCoordinationDisplayResolver | undefined,
+    resolveCronJobName: (jobId: string) => string | undefined,
   ): InlineSessionHistoryAppend | null {
     subagentCoordination?.assertCurrent?.();
-    this.rawTranscriptSeq = messageSeq;
     const hadPendingTurnBoundary = this.turnBoundaryPending;
     const nextMessage = createSubagentCoordinationHistoryProjection(subagentCoordination)([
       message,
@@ -190,15 +206,8 @@ export class SessionHistorySseState {
       maxChars: this.maxChars,
       turnBoundaryPending: hadPendingTurnBoundary,
       assistantErrorPending: this.assistantErrorPending,
+      resolveCronJobName,
     });
-    this.turnBoundaryPending = nextProjection.turnBoundaryPending;
-    this.assistantErrorPending = nextProjection.assistantErrorPending;
-    if (nextProjection.assistantErrorRecoveryObserved) {
-      // Keep only the pending bit here: retaining raw transcript context would
-      // undo the bounded SSE memory contract. The caller rereads canonical
-      // history so full projection can remove the already-emitted placeholder.
-      return { shouldRefresh: true };
-    }
     // Projection can split, drop, or rewrite raw transcript messages. When one
     // raw append changes multiple visible rows, callers must refresh instead of
     // emitting a misleading single SSE item.
@@ -208,9 +217,19 @@ export class SessionHistorySseState {
         includeCommentaryFallbacks: true,
         maxChars: this.maxChars,
         resolveCurrentUserProfileDisplay,
+        resolveCronJobName,
       },
     );
     subagentCoordination?.assertCurrent?.();
+    this.rawTranscriptSeq = messageSeq;
+    this.turnBoundaryPending = nextProjection.turnBoundaryPending;
+    this.assistantErrorPending = nextProjection.assistantErrorPending;
+    if (nextProjection.assistantErrorRecoveryObserved) {
+      // Keep only the pending bit here: retaining raw transcript context would
+      // undo the bounded SSE memory contract. The caller rereads canonical
+      // history so full projection can remove the already-emitted placeholder.
+      return { shouldRefresh: true };
+    }
     const projectedPrefix = projectedMessages.slice(0, this.sentHistory.messages.length);
     // A rewritten prefix needs a full refresh; only an unchanged prefix can append inline.
     if (
@@ -242,7 +261,7 @@ export class SessionHistorySseState {
     }
     if (
       nextProjection.messages.length === 0 &&
-      projectedMessages.length === this.sentHistory.messages.length
+      isDeepStrictEqual(projectedMessages, this.sentHistory.messages)
     ) {
       return null;
     }

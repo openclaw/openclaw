@@ -196,34 +196,53 @@ export async function prepareProjectMemoryBootstrap(params: {
     return runtime ? await prepareLegacyProjectMemoryBootstrap(params, runtime) : [];
   }
   let active = true;
+  const caller: MemoryCallerContext = params.context ?? {
+    authority: { kind: "host", operation: "project-memory-bootstrap" },
+    assertCurrent() {},
+  };
+  // Fails closed until the audience owner is loaded; then it checks the caller and its audience.
+  let assertCallerCurrent = (): void => {
+    throw new Error("project memory caller authority is unavailable");
+  };
   const context: MemoryCallerContext = {
-    authority: params.context?.authority ?? { kind: "host", operation: "project-memory-bootstrap" },
-    signal: params.context?.signal,
+    authority: caller.authority,
+    signal: caller.signal,
     assertCurrent() {
       if (!active) {
         throw new Error("project memory request has ended");
       }
-      params.context?.signal?.throwIfAborted();
-      params.context?.assertCurrent();
+      assertCallerCurrent();
     },
   };
   let provider: MemoryProviderHandle | null = null;
   let lines: string[] = [];
+  const selectedPluginId = normalizePluginsConfig(params.cfg.plugins).slots.memory;
   try {
-    const { getActiveMemoryProviderCore } = await import("../plugins/memory-runtime.js");
+    const [{ getActiveMemoryProviderCore }, { assertMemoryCallerCurrent }] = await Promise.all([
+      import("../plugins/memory-runtime.js"),
+      import("../plugins/memory-audience.js"),
+    ]);
+    assertCallerCurrent = () => assertMemoryCallerCurrent(caller);
     const lookup = await getActiveMemoryProviderCore({
       cfg: params.cfg,
       agentId: params.agentId,
       context,
     });
     provider = lookup.provider;
-    if (
-      lookup.provider?.candidates &&
+    if (!lookup.provider) {
+      log.debug(
+        `project memory recall denied by ${lookup.providerId ?? selectedPluginId ?? "selected memory plugin"}: ${lookup.error ?? "provider unavailable"}`,
+      );
+    } else if (
+      lookup.provider.candidates &&
       lookup.provider.capabilities.candidates.includes("project")
     ) {
       const results = await lookup.provider.candidates({
         kind: "project",
-        activeProjectKeys: [...params.activeProjectKeys],
+        // buildProjectMemoryBootstrap applies the all-of key check when the provider cannot filter.
+        ...(lookup.provider.capabilities.projectFilter
+          ? { activeProjectKeys: [...params.activeProjectKeys] }
+          : {}),
         limit: 48,
       });
       context.assertCurrent();
@@ -231,8 +250,15 @@ export async function prepareProjectMemoryBootstrap(params: {
         entries: results.hits,
         activeProjectKeys: params.activeProjectKeys,
       });
+    } else {
+      log.debug(
+        `project memory recall unsupported by ${lookup.providerId ?? selectedPluginId ?? "selected memory plugin"}`,
+      );
     }
-  } catch {
+  } catch (error) {
+    log.debug(
+      `project memory recall failed for ${selectedPluginId ?? "selected memory plugin"}: ${String(error)}`,
+    );
     lines = [];
   } finally {
     active = false;
@@ -240,16 +266,20 @@ export async function prepareProjectMemoryBootstrap(params: {
       await provider?.close();
     } catch (error) {
       // Project recall is optional: a failed lease release omits recall, never the attempt.
-      log.debug(`project memory cleanup failed: ${String(error)}`);
+      log.debug(
+        `project memory cleanup failed for ${selectedPluginId ?? "selected memory plugin"}: ${String(error)}`,
+      );
       lines = [];
     }
   }
   try {
-    // Cleanup may yield after selection; the owning run still controls release.
-    params.context?.signal?.throwIfAborted();
-    params.context?.assertCurrent();
+    // Cleanup may yield after selection; the owning run and its audience still control release.
+    assertCallerCurrent();
     return lines;
-  } catch {
+  } catch (error) {
+    log.debug(
+      `project memory recall denied after provider close for ${selectedPluginId ?? "selected memory plugin"}: ${String(error)}`,
+    );
     return [];
   }
 }

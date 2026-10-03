@@ -16,6 +16,39 @@ function requireAttackSurfaceSummary(
 }
 
 describe("security audit attack surface summary", () => {
+  it("warns for each agent opting its GitHub identity into sandboxed execution", () => {
+    const identity = { profileId: "ghp_0123456789abcdef0123456789abcdef" };
+    const optedIn = { ...identity, allowInSandbox: true };
+    const optedOut = { ...identity, allowInSandbox: false };
+    const findings = collectAttackSurfaceSummaryFindings({
+      agents: {
+        ownership: "explicit",
+        entries: {
+          release: { tools: { github: optedIn } },
+          maintenance: { tools: { github: optedIn } },
+          disabled: { tools: { github: optedOut } },
+          default: { tools: { github: identity } },
+          unconfigured: {},
+        },
+      },
+    }).filter((finding) => finding.checkId === "sandbox.github_identity_exposed");
+    expect(findings).toEqual(
+      ["release", "maintenance"].map((agentId) =>
+        expect.objectContaining({
+          checkId: "sandbox.github_identity_exposed",
+          severity: "warn",
+          detail: expect.stringContaining(`agents.entries.${agentId}.tools.github.allowInSandbox`),
+          remediation: expect.stringContaining(
+            `agents.entries.${agentId}.tools.github.allowInSandbox`,
+          ),
+        }),
+      ),
+    );
+    for (const finding of findings) {
+      expect(finding.detail).toContain("sandboxed execution");
+    }
+  });
+
   it("includes an attack surface summary (info)", () => {
     const cfg: OpenClawConfig = {
       channels: { whatsapp: { groupPolicy: "open" }, telegram: { groupPolicy: "allowlist" } },

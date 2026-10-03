@@ -214,10 +214,13 @@ export default definePluginEntry({
                       sessionKey: ctx.sessionKey,
                       sessionId: ctx.sessionId,
                       sandboxed: ctx.sandboxed === true,
-                      senderIsOwner: ctx.senderIsOwner,
+                      audience: ctx.memoryAudience,
                     }
                   : { kind: "host", operation: "memory-wiki.tool" },
-                assertCurrent: ctx.assertInvocationCurrent,
+                assertCurrent() {
+                  ctx.assertInvocationCurrent();
+                  ctx.assertMemoryAudienceCurrent?.();
+                },
                 ...(resolved.signal ? { signal: resolved.signal } : {}),
               },
               ...(resolved.signal ? { signal: resolved.signal } : {}),

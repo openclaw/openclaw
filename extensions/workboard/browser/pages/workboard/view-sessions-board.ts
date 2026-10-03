@@ -134,6 +134,7 @@ export function renderSessionsBoard(props: {
       ${visibleError ? html`<div class="workboard-sessions__warning" role="alert">${visibleError}</div>` : nothing}
       ${snapshot?.warning ? html`<div class="workboard-sessions__warning" role="status">${snapshot.warning}</div>` : nothing}
       ${!snapshot && controller.loading ? html`<div role="status">${t("workboard.sessionsBoard.loading")}</div>` : nothing}
+      ${snapshot?.classifying && !visibleSessions.length ? html`<div role="status">${t("workboard.sessionsBoard.classifying")}</div>` : nothing}
       <div class="workboard-board-viewport">
         <div
           ${ref(boardScrollEdgesRef())}

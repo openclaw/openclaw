@@ -1307,9 +1307,9 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         self.ensureWindowSize()
         window.isHiddenForExperience = false
         window.isExcludedFromWindowsMenu = false
-        if window.isMiniaturized { window.deminiaturize(nil) }
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        if window.isMiniaturized { AppActivation.shared.deminiaturize(window: window) }
+        AppActivation.shared.makeKeyAndOrderFront(window: window)
+        AppActivation.shared.activate()
         self.onBecameKey?()
         self.onVisibilityChanged?(true)
         self.conversationController?.present(visible: true, active: window.isKeyWindow)
@@ -1319,7 +1319,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         guard let window else { return }
         window.isHiddenForExperience = true
         window.isExcludedFromWindowsMenu = true
-        if window.isMiniaturized { window.deminiaturize(nil) }
+        if window.isMiniaturized { AppActivation.shared.deminiaturize(window: window) }
         window.orderOut(nil)
         self.onVisibilityChanged?(false)
         self.conversationController?.present(visible: false, active: false)

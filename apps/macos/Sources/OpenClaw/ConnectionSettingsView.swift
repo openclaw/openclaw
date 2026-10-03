@@ -460,7 +460,7 @@ extension ConnectionSettingsView {
         """
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
-        alert.runModal()
+        AppActivation.shared.presentAlert(alert)
     }
 
     private func applyDiscoveredGateway(_: GatewayDiscoveryModel.DiscoveredGateway) {

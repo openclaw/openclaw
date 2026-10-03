@@ -10,6 +10,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { redactToolDetail } from "../logging/redact.js";
 import { shortenHomeInString } from "../utils.js";
+import { unwrapToolCallForDisplay } from "./tool-display-call.js";
 import {
   defaultTitle,
   formatDetailKey,
@@ -57,7 +58,8 @@ export function resolveToolDisplay(params: {
   meta?: string;
   detailMode?: ToolDetailMode;
 }): ToolDisplay {
-  const name = normalizeToolDisplayName(params.name);
+  const call = unwrapToolCallForDisplay({ name: params.name, args: params.args });
+  const name = normalizeToolDisplayName(call.name);
   const key = normalizeLowercaseStringOrEmpty(name);
   const spec = TOOL_MAP[key];
   const emoji = spec?.emoji ?? FALLBACK.emoji ?? "🧩";
@@ -65,7 +67,7 @@ export function resolveToolDisplay(params: {
   const label = spec?.label ?? title;
   const { verb, detail } = resolveToolVerbAndDetailForArgs({
     toolKey: key,
-    args: params.args,
+    args: call.args,
     meta: params.meta,
     spec,
     fallbackDetailKeys: FALLBACK.detailKeys,

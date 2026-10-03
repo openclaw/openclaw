@@ -90,6 +90,7 @@ import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
   ensureFlagCompatibility,
+  formatMs,
   resolveModelsTargetAgent,
 } from "./shared.js";
 
@@ -1568,10 +1569,8 @@ export async function modelsStatusCommand(
       }
 
       if (probeSummary) {
-        const [
-          { getTerminalTableWidth, renderTable },
-          { describeProbeSummary, formatProbeLatency, sortProbeResults },
-        ] = await Promise.all([terminalTableRuntimeLoader.load(), listProbeRuntimeLoader.load()]);
+        const [{ getTerminalTableWidth, renderTable }, { describeProbeSummary, sortProbeResults }] =
+          await Promise.all([terminalTableRuntimeLoader.load(), listProbeRuntimeLoader.load()]);
         runtime.log("");
         runtime.log(colorize(rich, theme.heading, "Auth probes"));
         if (probeSummary.results.length === 0) {
@@ -1593,7 +1592,7 @@ export async function modelsStatusCommand(
           };
           const rows = sorted.map((result) => {
             const status = colorize(rich, statusColor(result.status), result.status);
-            const latency = formatProbeLatency(result.latencyMs);
+            const latency = formatMs(result.latencyMs);
             const modelLabel = result.model ?? `${result.provider}/-`;
             const modeLabel = result.mode
               ? ` ${colorize(rich, theme.muted, `(${result.mode})`)}`

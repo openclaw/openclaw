@@ -736,10 +736,15 @@ Microsoft Teams supports `read`, `search`, `reactions`, `list-pins`, `member-inf
 `channel-info`, and `channel-list` under the [Teams access rules](/channels/msteams/access-control).
 
 Discord's `permissions` action inspects the bot's permissions for an allowed channel.
-Guild metadata reads require the requested guild to be allowed by the selected
+Guild-wide metadata reads require the requested guild to be allowed by the selected
 account's current configuration, with unrestricted or wildcard channel access.
+The narrow exception is an active `thread-list` naming a parent `channelId`: the
+parent must be allowed and its metadata must confirm the requested guild before
+the guild-wide fetch. The result includes only allowed threads under that parent
+and member records for those returned threads. An active list without a parent
+still requires guild-wide channel access; archived lists keep their channel-scoped path.
 Only direct operators receive the filtered-results relaxation for `channel-list`;
-delegated agents still require guild-wide channel access.
+delegated `channel-list` callers still require guild-wide channel access.
 
 The transport contract is mandatory for opt-in adapters:
 

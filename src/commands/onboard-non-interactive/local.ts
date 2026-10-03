@@ -219,7 +219,7 @@ export async function runNonInteractiveLocalSetup(params: {
     return;
   }
   nextConfig = gatewayResult.nextConfig;
-  nextConfig = applyNonInteractiveSkillsConfig({ nextConfig, opts, runtime });
+  nextConfig = applyNonInteractiveSkillsConfig({ nextConfig, opts });
 
   if (authChoice !== "skip") {
     // Auth-choice handling is loaded only when needed so skip-only onboarding

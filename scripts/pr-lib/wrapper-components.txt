@@ -197,6 +197,7 @@ scripts/watch-pr-ci.mts
 scripts/windows-cmd-helpers.mjs
 src/acp/event-ledger-bytes.ts
 src/agents/agent-bundle-mcp-names.ts
+src/agents/agent-create-error.ts
 src/agents/agent-dir-registry.ts
 src/agents/agent-roster.ts
 src/agents/agent-run-terminal-receipt.ts
@@ -536,6 +537,9 @@ src/config/sessions/session-entry-snapshots.ts
 src/config/sessions/session-entry-state-format.ts
 src/config/sessions/session-history-worker-errors.ts
 src/config/sessions/session-incognito-actor.ts
+src/config/sessions/session-incognito-lifecycle-contract.ts
+src/config/sessions/session-incognito-lifecycle.ts
+src/config/sessions/cli-session-binding.ts
 src/config/sessions/session-incognito-side-data-contract.ts
 src/config/sessions/session-incognito-transcript-contract.ts
 src/config/sessions/session-model-context-projection.ts
@@ -746,6 +750,7 @@ src/infra/gateway-owner-lease.read.ts
 src/infra/gateway-owner-lease.ts
 src/infra/gateway-lock-payload.ts
 src/infra/gateway-state-owner-directory.ts
+src/infra/gateway-state-owner-record.ts
 src/infra/gateway-state-owner.ts
 src/infra/gateway-process-argv.ts
 src/infra/gateway-scheduler.ts
@@ -1066,6 +1071,7 @@ src/plugins/compat/plugin-sdk-subpath-records.ts
 src/plugins/compat/registry-records.ts
 src/plugins/compat/registry.ts
 src/plugins/compat/session-persistence-records.ts
+src/plugins/compat/workspace-mutation-guard.ts
 src/plugins/config-activation-shared.ts
 src/plugins/config-contract-matches.ts
 src/plugins/config-normalization-shared.ts
@@ -1400,6 +1406,7 @@ src/state/agent-database-startup.ts
 src/state/agent-deletion-cleanup.ts
 src/state/agent-deletion-discovery.ts
 src/state/agent-deletion-journal-history.ts
+src/state/agent-deletion-journal-recovery.kernel.ts
 src/state/agent-deletion-journal-recovery.ts
 src/state/agent-deletion-journal.read.ts
 src/state/agent-deletion-journal.ts

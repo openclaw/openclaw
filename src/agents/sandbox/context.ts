@@ -18,6 +18,7 @@ import {
   readAdmittedRunOperatorAuthority,
   type AdmittedRunContext,
 } from "../admitted-run-context.js";
+import { resolveAgentConfig } from "../agent-scope-config.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import {
   resolveSubagentSessionAttachmentRootDir,
@@ -26,6 +27,7 @@ import {
 import { createSandboxBackend, getSandboxBackendWorkdirResolver } from "./backend.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
+import { SANDBOX_GITHUB_CONFIG_DIR } from "./constants.js";
 import { resolveSandboxDockerUser } from "./docker-user.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { hashTextSha256 } from "./hash.js";
@@ -288,6 +290,32 @@ async function resolveProvisionedSandboxContext(
 ): Promise<SandboxContext> {
   const selected = await prepareSandboxWorkspaceSelection(params, resolved);
   const { rawSessionKey, runtime, cfg, localWorkspace } = selected;
+  const config = params.config;
+  const allowGitHub =
+    config && resolveAgentConfig(config, runtime.agentId)?.tools?.github?.allowInSandbox === true;
+  if (allowGitHub && cfg.scope === "shared") {
+    const message = `GitHub identity for agent "${runtime.agentId}" cannot enter a shared sandbox; use agent or session scope.`;
+    sandboxLog.warn(message);
+    throw new Error(message);
+  }
+  const githubIdentity = allowGitHub
+    ? (await import("../github-tool-identity.js")).prepareGitHubToolEnvironment({
+        config,
+        agentId: runtime.agentId,
+      })
+    : undefined;
+  const githubMount = githubIdentity
+    ? await (async () => {
+        const hostPath = githubIdentity.localIdentityEnv.GH_CONFIG_DIR;
+        const stat = hostPath ? await fs.lstat(hostPath).catch(() => undefined) : undefined;
+        if (!hostPath || !stat?.isDirectory() || stat.isSymbolicLink()) {
+          throw new Error(
+            "Sandbox GitHub identity profile is unavailable; reconnect GitHub Identity.",
+          );
+        }
+        return { hostPath: await fs.realpath(hostPath), containerPath: SANDBOX_GITHUB_CONFIG_DIR };
+      })()
+    : undefined;
   if (cfg.prune.idleHours !== 0 || cfg.prune.maxAgeDays !== 0) {
     await (await import("./prune.js")).maybePruneSandboxes();
   }
@@ -308,7 +336,21 @@ async function resolveProvisionedSandboxContext(
     workspaceDir,
   });
   const resolvedCfg = docker === cfg.docker ? cfg : { ...cfg, docker };
-  const readOnlyResourceMounts =
+  const executionCfg = githubIdentity
+    ? {
+        ...resolvedCfg,
+        docker: {
+          ...docker,
+          env: {
+            ...docker.env,
+            ...githubIdentity.credentialScrubEnv,
+            ...githubIdentity.localIdentityEnv,
+            GH_CONFIG_DIR: SANDBOX_GITHUB_CONFIG_DIR,
+          },
+        },
+      }
+    : resolvedCfg;
+  let readOnlyResourceMounts =
     resolvedCfg.scope === "shared"
       ? undefined
       : await (async () => {
@@ -330,6 +372,9 @@ async function resolveProvisionedSandboxContext(
             return undefined;
           }
         })();
+  if (githubMount) {
+    (readOnlyResourceMounts ??= []).push(githubMount);
+  }
 
   const registeredRuntimeIds = await readRegisteredSandboxRuntimeIds({
     backendId: resolvedCfg.backend,
@@ -351,12 +396,13 @@ async function resolveProvisionedSandboxContext(
         agentWorkspaceDir,
         skillsWorkspaceDir,
         readOnlyResourceMounts,
-        cfg: resolvedCfg,
+        cfg: executionCfg,
         ...(params.requireCurrentConfig !== undefined
           ? { requireCurrentConfig: params.requireCurrentConfig }
           : {}),
       },
       readAdmittedRunOperatorAuthority(params.admittedRunContext),
+      githubIdentity,
     );
 
   const backend = localWorkspace
@@ -424,7 +470,7 @@ async function resolveProvisionedSandboxContext(
     runtimeLabel: backend.runtimeLabel,
     containerName: backend.runtimeId,
     containerWorkdir: backend.workdir,
-    docker: resolvedCfg.docker,
+    docker: executionCfg.docker,
     tools: resolvedCfg.tools,
     browserAllowHostControl: resolvedCfg.browser.allowHostControl,
     browser: browser ?? undefined,

@@ -1,7 +1,7 @@
 ---
-summary: "Gateway RPC families for system status, models, channels, plugins, messaging, and the operator terminal"
+summary: "Gateway RPC families for system status, memory, models, channels, plugins, messaging, and the operator terminal"
 read_when:
-  - Looking up a system, model, channel, or plugin RPC
+  - Looking up a system, memory, model, channel, or plugin RPC
   - Wiring operator terminal or messaging methods
   - Checking the scope a gateway method requires
 title: "Gateway protocol system and channel methods"
@@ -29,13 +29,23 @@ RPC method families for gateway status and identity, models and usage, channels 
 - `models.list` returns the runtime-allowed model catalog. See [`models.list` views](/gateway/protocol/operator-methods#models-list-views).
 - `usage.status` returns provider usage windows/remaining quota summaries. Clients advertising `usage-refreshing` receive an immediate `refreshing: true` placeholder on a cold cache and must refetch on a bounded schedule; other callers block for the cold provider read.
 - `usage.cost` returns aggregated cost usage summaries for a date range. Pass `agentId` for one agent, or `agentScope: "all"` to aggregate configured agents.
-- `doctor.memory.status` returns vector-memory / cached embedding readiness for the active default agent workspace. Pass `{ "probe": true }` or `{ "deep": true }` only for an explicit live embedding provider ping. Pass `{ "agentId": "agent-id" }` to scope Dreaming store stats to one agent workspace; omitting it aggregates configured Dreaming workspaces.
+- `doctor.memory.status` returns provider health for a native memory provider, or vector-memory / cached embedding readiness for a legacy provider. Pass `{ "probe": true }` or `{ "deep": true }` only for an explicit legacy embedding provider ping. Pass `{ "agentId": "agent-id" }` to scope Dreaming store stats to one agent workspace; omitting it aggregates configured Dreaming workspaces.
 - `doctor.memory.dreamDiary`, `doctor.memory.backfillDreamDiary`, `doctor.memory.resetDreamDiary`, `doctor.memory.resetGroundedShortTerm`, `doctor.memory.repairDreamingArtifacts`, and `doctor.memory.dedupeDreamDiary` accept optional `{ "agentId": "agent-id" }`; omitted, they operate on the configured default agent workspace.
 - `sessions.usage` returns per-session usage summaries. Pass `agentId` for one agent, or `agentScope: "all"` to list configured agents together.
   Both usage methods accept `mode: "specific"` with an IANA `timeZone` for DST-aware calendar-day boundaries and buckets. `utcOffset` remains supported for older clients and as a fallback when the Gateway runtime does not recognize the requested zone.
 - `sessions.usage.timeseries` returns timeseries usage for one session.
 - `sessions.usage.logs` returns usage log entries for one session.
   Both detail methods accept the selected row's `key` and optional `agentId`. Preserve both fields when opening details for an unqualified key such as `global`.
+
+## Memory
+
+- `memory.search` with `version: 2` searches the selected provider and returns provider-scoped references. Omitting `version`, or sending `version: 1`, uses the legacy file-shaped contract only for legacy providers. A native provider returns an error naming the plugin; retry with `version: 2`.
+- `memory.get` resolves a provider-scoped reference through the selected provider.
+- `memory.status` reports selected-provider health.
+
+These methods require authenticated operator read authority. `memory.get` and
+`memory.status` use the provider-runtime contract directly; `memory.search`
+selects that contract when `version: 2` is present.
 
 ## Channels and login helpers
 

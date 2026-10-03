@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/state/openclaw-agent-execution-incognito.lifecycle.test.ts",
   "src/agents/bash-tools.visible-subagent-notify.test.ts",
   "src/system-agent/audit.test.ts",
   "src/system-agent/operations.test.ts",
@@ -158,8 +159,10 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/agent-tools.safe-bins.test.ts",
   "src/agents/agent-tools.workspace-paths.test.ts",
   "src/agents/agent-create.integration.test.ts",
+  "src/agents/agent-create.workspace-worker.test.ts",
   "src/agents/sandbox.resolveSandboxContext.test.ts",
   "src/agents/workspace-alias-rebind.test.ts",
+  "src/agents/bootstrap-files.test.ts",
   "src/agents/workspace-attestation.worker.test.ts",
   "src/agents/workspace-bootstrap-publish.test.ts",
   "src/agents/workspace-sqlite-safety.test.ts",
@@ -751,6 +754,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/context.opencode-go.test.ts",
   "src/agents/simple-completion-runtime.selected-model.test.ts",
   "src/agents/tools/pdf-tool.resources.test.ts",
+  "src/talk/agent-consult-runtime.lineage.test.ts",
+  "src/talk/agent-consult-runtime.storage.test.ts",
   "src/tts/tts-summary.static-catalog.test.ts",
   "src/tts/tts-summary.selection.test.ts",
   "src/agents/prepared-model-catalog.resources.test.ts",

@@ -79,14 +79,12 @@ export function createPolicyDoctorChecks(): readonly HealthCheck[] {
     [
       CHECK_IDS.policyIngressOpenGroupsDenied,
       "Channel group access does not use open group policy when denied.",
-      async (ctx, findings) =>
-        repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyIngressOpenGroupsDenied),
+      repairPolicyAutomaticNarrower,
     ],
     [
       CHECK_IDS.policyIngressGroupMentionRequired,
       "Channel group access keeps mention gates enabled when required.",
-      async (ctx, findings) =>
-        repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyIngressGroupMentionRequired),
+      repairPolicyAutomaticNarrower,
     ],
     [
       CHECK_IDS.policyRoutingBindingsRequired,
@@ -107,8 +105,7 @@ export function createPolicyDoctorChecks(): readonly HealthCheck[] {
     [
       CHECK_IDS.policyGatewayNonLoopbackBind,
       "Gateway bind posture matches policy exposure requirements.",
-      (ctx, findings) =>
-        previewPolicyReviewRequiredRepair(ctx, findings, CHECK_IDS.policyGatewayNonLoopbackBind),
+      previewPolicyReviewRequiredRepair,
     ],
     [
       CHECK_IDS.policyGatewayAuthDisabled,
@@ -121,21 +118,18 @@ export function createPolicyDoctorChecks(): readonly HealthCheck[] {
     [
       CHECK_IDS.policyGatewayControlUiInsecure,
       "Gateway Control UI insecure exposure toggles remain disabled by policy.",
-      (ctx, findings) =>
-        repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyGatewayControlUiInsecure),
+      repairPolicyAutomaticNarrower,
     ],
     [CHECK_IDS.policyGatewayTailscaleFunnel, "Gateway Tailscale Funnel exposure matches policy."],
     [
       CHECK_IDS.policyGatewayRemoteEnabled,
       "Remote gateway mode matches policy.",
-      (ctx, findings) =>
-        repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyGatewayRemoteEnabled),
+      repairPolicyAutomaticNarrower,
     ],
     [
       CHECK_IDS.policyGatewayHttpEndpointEnabled,
       "Gateway HTTP API endpoints match policy.",
-      (ctx, findings) =>
-        repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyGatewayHttpEndpointEnabled),
+      repairPolicyAutomaticNarrower,
     ],
     [
       CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted,
@@ -144,15 +138,13 @@ export function createPolicyDoctorChecks(): readonly HealthCheck[] {
     [
       CHECK_IDS.policyGatewayNodeCommandDenied,
       "Gateway node command allowlists match policy.",
-      (ctx, findings) =>
-        previewPolicyReviewRequiredRepair(ctx, findings, CHECK_IDS.policyGatewayNodeCommandDenied),
+      previewPolicyReviewRequiredRepair,
     ],
     [CHECK_IDS.policyAgentsWorkspaceAccessDenied, "Agent sandbox workspace access matches policy."],
     [
       CHECK_IDS.policyAgentsToolNotDenied,
       "Agent workspace mutation/runtime tools are denied when policy requires it.",
-      (ctx, findings) =>
-        repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyAgentsToolNotDenied),
+      repairPolicyAutomaticNarrower,
     ],
     [CHECK_IDS.policyToolsProfileUnapproved, "Configured tool profiles match policy allow rules."],
     [
@@ -168,8 +160,7 @@ export function createPolicyDoctorChecks(): readonly HealthCheck[] {
     [
       CHECK_IDS.policyToolsElevatedEnabled,
       "Elevated tool mode remains disabled when policy requires it.",
-      (ctx, findings) =>
-        repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyToolsElevatedEnabled),
+      repairPolicyAutomaticNarrower,
     ],
     [
       CHECK_IDS.policyToolsAlsoAllowMissing,
@@ -182,8 +173,7 @@ export function createPolicyDoctorChecks(): readonly HealthCheck[] {
     [
       CHECK_IDS.policyToolsRequiredDenyMissing,
       "Configured tool deny lists include tools required by policy.",
-      (ctx, findings) =>
-        repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyToolsRequiredDenyMissing),
+      repairPolicyAutomaticNarrower,
     ],
     [CHECK_IDS.policySandboxModeUnapproved, "Sandbox mode config satisfies policy requirements."],
     [
@@ -221,12 +211,7 @@ export function createPolicyDoctorChecks(): readonly HealthCheck[] {
     [
       CHECK_IDS.policyDataHandlingTelemetryContentCapture,
       "Telemetry content capture remains disabled when policy denies it.",
-      (ctx, findings) =>
-        repairPolicyAutomaticNarrower(
-          ctx,
-          findings,
-          CHECK_IDS.policyDataHandlingTelemetryContentCapture,
-        ),
+      repairPolicyAutomaticNarrower,
     ],
     [
       CHECK_IDS.policyDataHandlingSessionRetentionNotEnforced,

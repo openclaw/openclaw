@@ -51,7 +51,7 @@ describe("plugin discovery identity and local join", () => {
             ...(includeTools ? ["tools: media_render"] : []),
           ],
           hooks: [],
-          mcpServers: [],
+          mcpServers: ["supported", "unsupported"],
           cliCommands: [],
           cliBackends: [],
           skills: [],
@@ -75,11 +75,11 @@ describe("plugin discovery identity and local join", () => {
         components: {
           mapped: [],
           skills: [],
-          mcpServers: [],
+          mcpServers: ["supported"],
           commands: [],
           hooks: [],
           lspServers: [],
-          unavailable: { capabilities: [], mcpServers: [], lspServers: [] },
+          unavailable: { capabilities: [], mcpServers: ["unsupported"], lspServers: [] },
         },
         reviewToken: "media-review",
         grants: {
@@ -108,6 +108,8 @@ describe("plugin discovery identity and local join", () => {
       expect(detail.providers).toEqual(includeOverview ? ["media-models"] : undefined);
       expect(detail.channels).toBeUndefined();
       expect(detail.uiCapabilities).toEqual(includeOverview ? ["page", "widget"] : undefined);
+      expect(detail.mcpServers).toEqual(["supported"]);
+      expect(detail.mcpServerDetails).toBeUndefined();
       expect(Value.Check(PluginDiscoveryDetailSchema, detail)).toBe(true);
     },
   );

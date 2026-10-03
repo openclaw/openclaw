@@ -189,17 +189,7 @@ function splitTableAtRow(
 }
 
 function isFencedCodeSource(source: string): boolean {
-  const firstLineEnd = source.indexOf("\n");
-  const firstLine = source.slice(0, firstLineEnd === -1 ? source.length : firstLineEnd);
-  let indent = 0;
-  while (indent < firstLine.length && firstLine[indent] === " ") {
-    indent += 1;
-  }
-  if (indent > 3) {
-    return false;
-  }
-  const marker = firstLine.slice(indent);
-  return marker.startsWith("```") || marker.startsWith("~~~");
+  return /^ {0,3}(?:`{3}|~{3})/.test(source);
 }
 
 export function createDocxMarkdownChunk(markdown: string): DocxMarkdownChunk {

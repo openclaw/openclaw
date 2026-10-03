@@ -182,11 +182,9 @@ function expectNoTwilioStreamState(providerLocal: TwilioProvider) {
   const state = providerLocal as unknown as {
     callStreamMap: Map<string, string>;
     streamAuthTokens: Map<string, string>;
-    activeStreamCalls: Set<string>;
   };
   expect(state.callStreamMap.size).toBe(0);
   expect(state.streamAuthTokens.size).toBe(0);
-  expect(state.activeStreamCalls.size).toBe(0);
 }
 
 function expectPlivoCallStateReleased(

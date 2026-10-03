@@ -65,14 +65,7 @@ type ResolveDriveCommentEventParams = {
   abortSignal?: AbortSignal;
 };
 
-type FeishuRequestClient = ReturnType<typeof createFeishuClient> & {
-  request(params: {
-    method: "GET" | "POST";
-    url: string;
-    data: unknown;
-    timeout: number;
-  }): Promise<unknown>;
-};
+type FeishuRequestClient = ReturnType<typeof createFeishuClient>;
 
 type FeishuOpenApiResponse<T> = {
   code?: number;
@@ -412,7 +405,7 @@ async function requestFeishuOpenApi<T>(params: {
   };
 
   const result = await raceWithTimeoutAndAbort(
-    params.client.request({
+    params.client.request<T>({
       method: params.method,
       url: params.url,
       data: params.data ?? {},
@@ -1080,9 +1073,7 @@ export async function resolveDriveCommentEventTurn(params: ResolveDriveCommentEv
 
   const client = createClient
     ? createClient(account ?? ({ accountId } as ResolvedFeishuAccount))
-    : (createFeishuClient(
-        (await import("./accounts.js")).resolveFeishuAccount({ cfg, accountId }),
-      ) as FeishuRequestClient);
+    : createFeishuClient((await import("./accounts.js")).resolveFeishuAccount({ cfg, accountId }));
   const context = await fetchDriveCommentContext({
     client,
     fileToken,

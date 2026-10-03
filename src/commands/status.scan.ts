@@ -47,8 +47,6 @@ export async function scanStatus(
       const result = await executeStatusScanFromOverview({
         overview,
         resolveMemory: async () => null,
-        channelIssues: overview.channelIssues,
-        channels: overview.channels,
         pluginCompatibility: [],
       });
       progress.tick();

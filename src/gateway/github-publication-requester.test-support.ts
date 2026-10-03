@@ -356,6 +356,9 @@ export async function prepareVisitorPublicationFixture(f: {
     async readSessionFacts() {
       throw new Error("Unexpected session facts request");
     },
+    subscribeSessionChanges() {
+      throw new Error("Unexpected session changes subscription");
+    },
     async request() {
       throw new Error("Unexpected Gateway request");
     },

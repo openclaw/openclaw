@@ -2,10 +2,7 @@ import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js
 import { isExecutionIdentityCollectionEnabled } from "../../../audit/audit-config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
-import {
-  getCanonicalGatewayContextResolver,
-  getPluginRuntimeGatewayRequestScope,
-} from "../../../plugins/runtime/gateway-request-scope.js";
+import { getCanonicalGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { recordSessionCreated } from "../../../sessions/session-created.js";
 import { recordSessionParticipantBestEffort } from "../../../sessions/session-participant-recording.js";
 import { recordSubagentSpawned } from "../../../sessions/session-state-events.js";
@@ -15,11 +12,7 @@ import {
   summarizeSpawnError,
   type SpawnBackendAdapter,
 } from "../../spawn-pipeline.js";
-import {
-  getGatewayToolCallerIdentity,
-  resolveGatewayToolOperatorSelection,
-  withGatewayToolOperatorContinuation,
-} from "../../tools/gateway-caller-context.js";
+import { withGatewayToolOperatorContinuation } from "../../tools/gateway-caller-context.js";
 import { cleanupMaterializedSubagentAttachments } from "../subagent-attachment-cleanup.js";
 import { activateSwarmRun } from "../swarm/swarm-scheduler.js";
 import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
@@ -47,7 +40,11 @@ import {
   buildSubagentExecutionSessionSpawnContext,
   withSubagentGatewayExecutionIdentity,
 } from "./subagent-spawn-execution-identity.js";
-import { callNativeSubagentGateway, readGatewayRunId } from "./subagent-spawn-gateway.js";
+import {
+  callNativeSubagentGateway,
+  captureSubagentSpawnGatewayContext,
+  readGatewayRunId,
+} from "./subagent-spawn-gateway.js";
 import { buildSubagentLaunchRequest } from "./subagent-spawn-launch-request.js";
 import { createSubagentSpawnLifecycleEmitter } from "./subagent-spawn-lifecycle.js";
 import { resolveSubagentSpawnRequest } from "./subagent-spawn-request.js";
@@ -68,15 +65,7 @@ export async function spawnSubagentDirect(
   const label = params.label?.trim() || "";
   const requestThreadBinding = params.thread === true;
   const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
-  const gatewayCaller = getGatewayToolCallerIdentity();
-  const gatewayScope = getPluginRuntimeGatewayRequestScope();
-  const gatewayContextResolver =
-    gatewayCaller?.gatewayContextResolver ??
-    gatewayScope?.resolveGatewayContext ??
-    gatewayScope?.context?.resolveGatewayContext;
-  const operatorAuthority =
-    resolveGatewayToolOperatorSelection().operatorAuthority ??
-    gatewayScope?.client?.internal?.operatorRunAuthority;
+  const { gatewayContextResolver, operatorAuthority } = captureSubagentSpawnGatewayContext();
   const requestResolution = await resolveSubagentSpawnRequest(params, ctx);
   if (!requestResolution.ok) {
     return requestResolution.result;
@@ -179,6 +168,8 @@ export async function spawnSubagentDirect(
       label: label || undefined,
       incognito,
       requesterInternalKey,
+      senderIsOwner: ctx.senderIsOwner,
+      expectedParentSessionId: ctx.expectedParentSessionId,
       creationPolicy,
       completionOwnerSessionKey: ownership.completionRequesterSessionKey,
       spawnedWorkspaceDir,

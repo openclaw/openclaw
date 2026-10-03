@@ -1,5 +1,3 @@
-// Outbound target normalization trims user input, applies plugin normalizers,
-// and optionally resolves directory-backed destinations.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -26,13 +24,13 @@ function resolveChannelPluginForTargetRead(channelId: ChannelId): ChannelPlugin 
   return getLoadedChannelPluginForRead(channelId) ?? getChannelPlugin(channelId);
 }
 
-function stripPluginTargetPrefix(raw: string, plugin: ChannelPlugin): string {
+export function stripNormalizedTargetProviderPrefixes(
+  raw: string,
+  prefixes: readonly string[],
+): string {
   let target = raw.trim();
-  const prefixes = [plugin.id, ...(plugin.messaging?.targetPrefixes ?? [])]
-    .map((prefix) => normalizeOptionalLowercaseString(String(prefix)))
-    .filter((prefix): prefix is string => Boolean(prefix));
   while (target) {
-    const lowered = normalizeOptionalLowercaseString(target) ?? "";
+    const lowered = target.toLowerCase();
     const prefix = prefixes.find((candidate) => lowered.startsWith(`${candidate}:`));
     if (!prefix) {
       return target;
@@ -52,7 +50,12 @@ export function resolveReservedTargetLiteral(params: {
   if (!raw || !plugin || !reservedLiterals?.length) {
     return undefined;
   }
-  const stripped = stripPluginTargetPrefix(raw, plugin);
+  const stripped = stripNormalizedTargetProviderPrefixes(
+    raw,
+    [plugin.id, ...(plugin.messaging?.targetPrefixes ?? [])]
+      .map((prefix) => normalizeOptionalLowercaseString(String(prefix)))
+      .filter((prefix): prefix is string => Boolean(prefix)),
+  );
   if (!stripped || /^[@#]/.test(stripped) || /^(channel|group|user):/i.test(stripped)) {
     return undefined;
   }
@@ -97,9 +100,6 @@ function resolvePreparedPluginSignatureId(plugin: ChannelPlugin): number {
   return id;
 }
 
-/**
- * Applies a channel plugin normalizer and falls back to trimmed input.
- */
 export function normalizeTargetForProvider(
   provider: string,
   raw = "",
@@ -114,14 +114,8 @@ export function normalizeTargetForProvider(
   return normalizeOptionalString(normalizer?.(raw) ?? fallback);
 }
 
-/**
- * Directory target kinds accepted by plugin-backed target resolution.
- */
 type TargetResolveKindLike = ChannelDirectoryEntryKind | "channel";
 
-/**
- * Resolved outbound target returned by a channel plugin target resolver.
- */
 export type ResolvedPluginMessagingTarget = {
   to: string;
   kind: TargetResolveKindLike;
@@ -130,9 +124,6 @@ export type ResolvedPluginMessagingTarget = {
   resolutionSource: "plugin";
 };
 
-/**
- * Produces raw and provider-normalized forms of a nonblank target input.
- */
 export function resolveNormalizedTargetInput(
   provider: string,
   raw?: string,
@@ -148,9 +139,6 @@ export function resolveNormalizedTargetInput(
   };
 }
 
-/**
- * Detects whether input is specific enough to invoke plugin target resolution.
- */
 export function looksLikeTargetId(params: {
   channel: ChannelId;
   raw: string;
@@ -174,9 +162,6 @@ export function looksLikeTargetId(params: {
   );
 }
 
-/**
- * Resolves a normalized target through the channel plugin when a resolver is available.
- */
 export async function maybeResolvePluginMessagingTarget(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -226,9 +211,6 @@ export async function maybeResolvePluginMessagingTarget(params: {
   };
 }
 
-/**
- * Builds a cache signature for target-resolution behavior exposed by a channel plugin.
- */
 export function buildTargetResolverSignature(
   channel: ChannelId,
   preparedPlugin?: ChannelPlugin,
