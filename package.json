@@ -418,6 +418,7 @@
     "scripts/install-cli.sh",
     "scripts/install-policy.sh",
     "scripts/install.ps1",
+    "scripts/openclaw-immutable-launcher.mjs",
     "scripts/prepare-git-hooks.mjs",
     "scripts/prepare-native-protocol.mjs",
     "scripts/runtime-postbuild-shared.mjs",

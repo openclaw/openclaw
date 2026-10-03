@@ -3,9 +3,13 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
+import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import {
   borrowOpenClawStateDatabaseForAsyncRead,
   openClawStateDatabaseCache as cache,
+  retainOpenClawStateDatabase,
+  retainOpenClawStateDatabaseForIdle,
+  retainOpenClawStateDatabaseForIndependentRead,
 } from "./openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase, runWithOpenClawStateBusyTimeout } from "./openclaw-state-db.js";
 
@@ -54,19 +58,79 @@ it.each(["path", "supplied", "busy-timeout"] as const)(
   },
 );
 
-it("pins shared-state readers through idle expiry and starts idleness at release", () => {
+it.each(["reader", "retention"] as const)("suspends idle timers until %s release", async (kind) => {
   const pathname = path.join(tempDirs.make("shared-idle-pin-"), "state.sqlite");
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const database = openOpenClawStateDatabase({ path: pathname });
-  const borrow = borrowOpenClawStateDatabaseForAsyncRead(pathname);
-  expect(borrow).toBeDefined();
-  vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS + 100);
-  expect(database.db.isOpen).toBe(true);
-  borrow?.release();
+  // WAL maintenance owns a separate periodic timer while the connection is open.
+  await database.walMaintenance.stop();
+  const borrow = kind === "reader" ? borrowOpenClawStateDatabaseForAsyncRead(pathname) : undefined;
+  const release =
+    kind === "reader" ? () => borrow!.release() : retainOpenClawStateDatabaseForIdle(database);
+  try {
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS + 100);
+    expect(database.db.isOpen).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    release();
+  }
   vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
   expect(database.db.isOpen).toBe(true);
   vi.advanceTimersByTime(1);
   expect(database.db.isOpen).toBe(false);
+  release();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it.each(["release", "scope close"] as const)(
+  "restarts idleness after a transferred maintenance borrow ends through %s",
+  async (ending) => {
+    const pathname = path.join(tempDirs.make("shared-idle-transfer-"), "state.sqlite");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const scope = createOpenClawDatabaseMaintenanceScope();
+    const { database, writer } = scope.run(() => {
+      const opened = openOpenClawStateDatabase({ path: pathname });
+      return { database: opened, writer: retainOpenClawStateDatabase(opened) };
+    });
+    try {
+      await database.walMaintenance.stop();
+      const reader = retainOpenClawStateDatabaseForIndependentRead(pathname)!;
+      try {
+        reader.observe();
+      } finally {
+        reader.release();
+      }
+      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+      expect(database.db.isOpen).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+      if (ending === "release") {
+        writer.release();
+      } else {
+        await scope.close();
+      }
+      vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+      expect(database.db.isOpen).toBe(true);
+      vi.advanceTimersByTime(1);
+      expect(database.db.isOpen).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      writer.release();
+      await scope.close();
+    }
+  },
+);
+
+it("clears idle timers on explicit close without rearming on a late pin release", () => {
+  const pathname = path.join(tempDirs.make("shared-idle-close-"), "state.sqlite");
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const database = openOpenClawStateDatabase({ path: pathname });
+  const release = retainOpenClawStateDatabaseForIdle(database);
+  expect(vi.getTimerCount()).toBeGreaterThan(0);
+  cache.closeOpenClawStateDatabaseByPath(pathname);
+  expect(database.db.isOpen).toBe(false);
+  expect(vi.getTimerCount()).toBe(0);
+  release();
+  expect(vi.getTimerCount()).toBe(0);
 });
 
 it("defers idle close while a native transaction is active", () => {

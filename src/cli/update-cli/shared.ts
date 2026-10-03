@@ -89,6 +89,7 @@ export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"
   dryRun?: boolean;
   channel?: string;
   tag?: string;
+  sha?: string;
   timeout?: string;
   yes?: boolean;
 };

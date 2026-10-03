@@ -4,6 +4,7 @@ import { isVitestRuntimeEnv } from "../../../infra/env.js";
 import { SqliteSnapshotCleanupError } from "../../../infra/sqlite-readonly-location-cleanup.js";
 import type { DatabasePathIdentity } from "../../../infra/sqlite-worker-identity.js";
 import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
+import { freezeJsonSnapshot } from "../../../shared/immutable-data.js";
 import {
   isStateDatabaseReadAdmissionInvalidatedError,
   type OpenClawStateDatabaseReadAdmission,
@@ -28,10 +29,10 @@ import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
 } from "../../../state/openclaw-state-worker-error.js";
+import { immutableSubagentRun } from "./subagent-registry-memory.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { rememberSubagentRunVersion } from "./subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
 import { SubagentSessionReadLookup } from "./subagent-session-read-scope.js";
 
 type SubagentRunChange<T> = { entry: T | undefined };
@@ -276,6 +277,7 @@ export function loadPersistedSubagentRunsForRead<T extends SubagentRunReadRecord
     throw new Error("Subagent session-list facts must be prepared before synchronous reads");
   }
   const runs = applySubagentRunChanges(cache.load(), cache.state.changes);
+  runs.forEach(freezeJsonSnapshot);
   const admission = captureSubagentFactsAdmission();
   cache.state = {
     snapshot: runs,
@@ -303,7 +305,6 @@ export function getSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
     load?: () => Iterable<T>;
     selectCached?: (lookup: SubagentSessionReadLookup) => readonly string[];
     fresh?: boolean;
-    borrowPersisted?: boolean;
     matches: (entry: SubagentRunReadRecord) => boolean;
   },
 ): Map<string, T> {
@@ -329,12 +330,7 @@ export function getSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
         : loadPersistedSubagentRunsForRead(cache, scope?.context).values();
       for (const entry of persisted) {
         if (!scope || scope.matches(entry)) {
-          merged.set(
-            entry.runId,
-            scope?.load && !scope.borrowPersisted
-              ? copySubagentRunRuntimeOwner(entry, structuredClone(entry))
-              : entry,
-          );
+          merged.set(entry.runId, entry);
         }
       }
     } catch {
@@ -345,12 +341,7 @@ export function getSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
     const state = selectSubagentCacheStateForRead(cache.state, scope?.context);
     for (const [runId, { entry }] of state.changes ?? []) {
       if (entry && (!scope || scope.matches(entry))) {
-        merged.set(
-          runId,
-          scope?.load && !scope.borrowPersisted
-            ? copySubagentRunRuntimeOwner(entry, structuredClone(entry))
-            : entry,
-        );
+        merged.set(runId, entry);
       } else {
         merged.delete(runId);
       }
@@ -388,6 +379,7 @@ export async function readCompactSubagentRuns(context: OpenClawStateWorkerContex
       cause: hydrateOpenClawStateWorkerError(failure, { includeOrdinary: true }),
     });
   }
+  reply.runs.forEach(freezeJsonSnapshot);
   return reply.runs;
 }
 
@@ -425,6 +417,7 @@ export async function readFullSubagentRuns(
     if (version) {
       rememberSubagentRunVersion(entry, version);
     }
+    immutableSubagentRun(entry);
   }
   return reply.runs;
 }
@@ -642,10 +635,7 @@ export function mergeSelectedFullRuns(
   const merged = new Map<string, SubagentRunRecord>();
   for (const [runId, entry] of selectedEntries(current ?? persisted, runIds)) {
     if (matches(entry)) {
-      merged.set(
-        runId,
-        current ? copySubagentRunRuntimeOwner(entry, structuredClone(entry)) : entry,
-      );
+      merged.set(runId, entry);
     }
   }
   const state = selectSubagentCacheStateForRead(cache.state, context);
@@ -661,7 +651,7 @@ export function mergeSelectedFullRuns(
   ) {
     for (const [runId, { entry }] of state.changes ? selectedEntries(state.changes, runIds) : []) {
       if (entry && matches(entry)) {
-        merged.set(runId, copySubagentRunRuntimeOwner(entry, structuredClone(entry)));
+        merged.set(runId, entry);
       } else {
         merged.delete(runId);
       }

@@ -18,7 +18,7 @@ import type { ToolSummaryTrace } from "../embedded-agent-runner/types.js";
 import {
   extractToolErrorMessage,
   sanitizeToolArgs,
-  sanitizeToolResult,
+  prepareToolResult,
 } from "../embedded-agent-tool-results.js";
 import { runAgentHarnessAfterToolCallHook } from "../harness/hook-helpers.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
@@ -149,6 +149,7 @@ export function createCliEventHandlers(params: {
   };
   const emitToolResult = (event: CliToolResultDelta, tracked: boolean) => {
     observedCliActivity = true;
+    const readResult = prepareToolResult(event.result);
     const summary = recordToolSummary(event, event.isError);
     const firstTerminal = !summary.terminalObserved;
     summary.terminalObserved = true;
@@ -166,7 +167,7 @@ export function createCliEventHandlers(params: {
       !loopbackOutcome &&
       stripOpenClawMcpToolPrefix(event.name) === event.name
     ) {
-      const result = sanitizeToolResult(event.result);
+      const result = readResult();
       void runAgentHarnessAfterToolCallHook({
         toolName: normalizeCliToolName(event.name),
         toolCallId: event.toolCallId,
@@ -215,7 +216,7 @@ export function createCliEventHandlers(params: {
           name: event.name,
           toolCallId: event.toolCallId,
           isError: event.isError,
-          result: sanitizeToolResult(event.result),
+          result: readResult(),
           ...(tracked && startedArgs ? { args: sanitizeToolArgs(startedArgs) } : {}),
           ...(resultContentSource ? { resultContentSource } : {}),
         },
