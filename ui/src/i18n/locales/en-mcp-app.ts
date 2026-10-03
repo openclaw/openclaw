@@ -46,6 +46,7 @@ const enMcpApp = {
     sendMessage: "Send message",
     unavailable: "MCP App unavailable: {error}",
     errors: {
+      sessionUnavailable: "The App conversation could not be opened",
       gatewayUnavailable: "MCP App gateway unavailable",
       mountUnavailable: "MCP App mount unavailable",
       sandboxTimedOut: "MCP App sandbox timed out",
