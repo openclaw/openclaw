@@ -22,6 +22,7 @@ import { SessionMutationAuthorizationChangedError } from "../session-mutation-au
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "../session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "../session-worker-placement-context.js";
+import { formatForLog } from "../ws-log.js";
 import {
   buildAbortedChatSendPayload,
   readPreRegisteredRun,
@@ -111,7 +112,11 @@ export function respondChatSendAdmissionError(
     );
     return;
   }
-  respond(false, undefined, errorShapeFromError(ErrorCodes.INVALID_REQUEST, error));
+  respond(
+    false,
+    undefined,
+    errorShapeFromError(ErrorCodes.INVALID_REQUEST, error, { message: formatForLog(error) }),
+  );
 }
 
 export type ChatSendPreAdmissionParams = {

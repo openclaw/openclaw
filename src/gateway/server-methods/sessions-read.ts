@@ -18,6 +18,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { SessionTranscriptColdError } from "../../config/sessions/session-cold-storage-state.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   isIncognitoSessionKey,
   normalizeAgentId,
@@ -85,7 +86,13 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         if (error instanceof SessionMutationAuthorizationChangedError) {
           throw error;
         }
-        respond(false, undefined, errorShapeFromError(ErrorCodes.UNAVAILABLE, error));
+        respond(
+          false,
+          undefined,
+          errorShapeFromError(ErrorCodes.UNAVAILABLE, error, {
+            message: formatErrorMessage(error),
+          }),
+        );
       }
       return;
     }
@@ -258,7 +265,11 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
       }
-      respond(false, undefined, errorShapeFromError(ErrorCodes.UNAVAILABLE, error));
+      respond(
+        false,
+        undefined,
+        errorShapeFromError(ErrorCodes.UNAVAILABLE, error, { message: formatErrorMessage(error) }),
+      );
     }
   },
   "sessions.list": withSessionListDiagnostics(async (args, diagnostics) => {
