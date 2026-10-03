@@ -16525,10 +16525,22 @@ esac
       .filter(Boolean);
 
     expect(skillFiles.length).toBeGreaterThan(0);
-    const ignored = spawnSync("git", ["check-ignore", "--no-index", "--stdin"], {
-      encoding: "utf8",
-      input: `${skillFiles.join("\n")}\n`,
-    });
+    // Repository sync rules must not inherit a developer's local info/exclude.
+    const repo = tempDirs.make("skill-ignore-rules-");
+    execFileSync("git", ["init", "-q", "--template=", repo]);
+    const ignored = spawnSync(
+      "git",
+      [
+        `--git-dir=${join(repo, ".git")}`,
+        `--work-tree=${process.cwd()}`,
+        "-c",
+        "core.excludesFile=",
+        "check-ignore",
+        "--no-index",
+        "--stdin",
+      ],
+      { encoding: "utf8", input: `${skillFiles.join("\n")}\n` },
+    );
     expect(ignored.status).toBe(1);
     expect(ignored.stdout).toBe("");
     expect(ignored.stderr).toBe("");

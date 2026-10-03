@@ -214,6 +214,13 @@ catalog-confirmed public check and plugin IDs are included; unknown IDs and code
 remain complete locally and are redacted publicly. Older runs cannot recover facts that their updater did not record. Existing history
 and report size limits still apply.
 
+Failed updates always retain a reason code and a failure fact, including failures
+before the first command runs. Git failures use codes such as `fetch-failed`,
+`git-root-unresolved`, `unsupported_git_channel`, and
+`snapshot-capacity-insufficient`. A refusal while recovery still owns the run uses
+`update-recovery-pending`; an otherwise unclassified failure uses `update-failed`.
+The check and code remain visible when private diagnostic text must be redacted.
+
 npm failure records keep the first five sanitized error lines in order. Lines over
 200 UTF-8 bytes retain a prefix followed by a space and an explicit `…[truncated]`
 marker within that budget. A failed package baseline scan records
