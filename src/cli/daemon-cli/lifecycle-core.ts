@@ -88,6 +88,14 @@ async function maybeAugmentSystemdHints(hints: string[]): Promise<string[]> {
   ];
 }
 
+function mergeWarnings(
+  captured: readonly string[],
+  reported?: readonly string[],
+): string[] | undefined {
+  const combined = [...captured, ...(reported ?? [])];
+  return combined.length > 0 ? combined : undefined;
+}
+
 async function failServiceNotLoaded(params: {
   serviceNoun: string;
   service: GatewayService;
@@ -245,12 +253,11 @@ export async function runServiceStart(params: {
     reportedWarnings?: readonly string[];
   }) => {
     await params.postStartCheck?.({ json, stdout, warnings, warn, fail });
-    const combinedWarnings = [...warnings, ...(result.reportedWarnings ?? [])];
     emitMessage({
       ok: true,
       result: "started",
       message: result.message,
-      warnings: combinedWarnings.length ? combinedWarnings : undefined,
+      warnings: mergeWarnings(warnings, result.reportedWarnings),
       service: buildDaemonServiceSnapshot(params.service, result.loaded),
     });
   };
