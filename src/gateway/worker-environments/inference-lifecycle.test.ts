@@ -215,11 +215,7 @@ describe("worker inference manager", () => {
             });
           });
           const workerService = {};
-          registerWorkerInferenceSessionControl(workerService, {
-            reserveDrain: instance.reserveSessionDrain,
-            captureCancel: instance.captureSessionCancellation,
-            resolveTarget: instance.resolveSessionTargetForRunId,
-          });
+          registerWorkerInferenceSessionControl(workerService, instance);
           const original = createSink();
           const successor = createSink("successor");
           let successorStart: Promise<unknown> | undefined;

@@ -17,7 +17,6 @@ import { resolveFastModeForElapsed, resolveFastModeState } from "../../agents/fa
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import {
-  buildModelAliasIndex,
   normalizeProviderId,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
@@ -124,14 +123,17 @@ function toWorkerStreamEvent(
         timestamp: event.partial.timestamp,
       };
     case "text_start":
-    case "text_end": {
+    case "text_end":
+    case "thinking_end": {
       const content = event.partial.content[event.contentIndex];
+      const signature =
+        event.type === "thinking_end"
+          ? content?.type === "thinking" && content.thinkingSignature
+          : content?.type === "text" && content.textSignature;
       return {
         type: event.type,
         contentIndex: event.contentIndex,
-        ...(content?.type === "text" && content.textSignature
-          ? { contentSignature: content.textSignature }
-          : {}),
+        ...(signature ? { contentSignature: signature } : {}),
       };
     }
     case "thinking_start":
@@ -139,16 +141,6 @@ function toWorkerStreamEvent(
     case "text_delta":
     case "thinking_delta":
       return { type: event.type, contentIndex: event.contentIndex, delta: event.delta };
-    case "thinking_end": {
-      const content = event.partial.content[event.contentIndex];
-      return {
-        type: "thinking_end",
-        contentIndex: event.contentIndex,
-        ...(content?.type === "thinking" && content.thinkingSignature
-          ? { contentSignature: content.thinkingSignature }
-          : {}),
-      };
-    }
     case "toolcall_start":
     case "toolcall_delta":
     case "toolcall_end":
@@ -211,28 +203,24 @@ async function resolveApprovedModel(params: {
     const agentDir = runtimeSnapshot.agentDir;
     const workspaceDir =
       runtimeSnapshot.workspaceDir ?? resolveAgentWorkspaceDir(lifecycleConfig, target.agentId);
-    const manifestSnapshot = runtimeSnapshot.metadataSnapshot;
-    const defaultModel = resolveDefaultModelForAgent({
+    const selection = {
       cfg: lifecycleConfig,
       agentId: target.agentId,
-      manifestPlugins: manifestSnapshot,
+      manifestPlugins: runtimeSnapshot.metadataSnapshot,
       ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-    });
-    const aliasIndex = buildModelAliasIndex({
-      cfg: lifecycleConfig,
-      agentId: target.agentId,
+    };
+    const defaultModel = resolveDefaultModelForAgent(selection);
+    const policy = createModelVisibilityPolicy({
+      ...selection,
+      catalog: runtimeSnapshot.modelCatalog.entries,
       defaultProvider: defaultModel.provider,
-      manifestPlugins: manifestSnapshot,
-      ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+      defaultModel,
     });
     const resolved = resolveModelRefFromString({
-      cfg: lifecycleConfig,
-      agentId: target.agentId,
+      ...selection,
       raw: `${request.modelRef.provider}/${request.modelRef.model}`,
       defaultProvider: defaultModel.provider,
-      aliasIndex,
-      manifestPlugins: manifestSnapshot,
-      ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+      aliasIndex: policy.selectionAliasIndex,
     });
     if (
       !resolved ||
@@ -240,15 +228,6 @@ async function resolveApprovedModel(params: {
     ) {
       return undefined;
     }
-    const policy = createModelVisibilityPolicy({
-      cfg: lifecycleConfig,
-      catalog: runtimeSnapshot.modelCatalog.entries,
-      defaultProvider: defaultModel.provider,
-      defaultModel,
-      agentId: target.agentId,
-      manifestPlugins: manifestSnapshot,
-      ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-    });
     const resolvedKey = resolveModelCatalogIdentityKey({
       provider: resolved.ref.provider,
       id: resolved.ref.model,

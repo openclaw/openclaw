@@ -11,7 +11,7 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { hashWorkerCredential } from "./credential.js";
-import { captureWorkerInferenceCancellation } from "./inference-control-internal.js";
+import { getWorkerInferenceSessionControl } from "./inference-control-internal.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { publishWorkerEnvironmentFixture } from "./placement-test-fixtures.js";
@@ -583,11 +583,9 @@ describe("worker environment service", () => {
     });
     expect(signals[0]?.aborted).toBe(false);
 
-    const originalCancellation = captureWorkerInferenceCancellation(
+    const originalCancellation = getWorkerInferenceSessionControl(
       workerService,
-      sessionId,
-      first.runId,
-    );
+    )?.captureSessionCancellation(sessionId, first.runId);
     expect(originalCancellation?.runIds).toEqual([first.runId]);
     await store.releaseTurn(first);
     expect(signals[0]?.aborted).toBe(true);
@@ -614,7 +612,10 @@ describe("worker environment service", () => {
     expect(await originalCancellation?.cancel()).toEqual([]);
     expect(signals[1]?.aborted).toBe(false);
     expect(
-      captureWorkerInferenceCancellation(workerService, sessionId, first.runId)?.runIds,
+      getWorkerInferenceSessionControl(workerService)?.captureSessionCancellation(
+        sessionId,
+        first.runId,
+      ).runIds,
     ).toEqual([first.runId]);
     await expect(store.releaseTurn(first)).rejects.toThrow("turn claim changed before release");
     expect(signals[1]?.aborted).toBe(false);
