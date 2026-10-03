@@ -263,6 +263,7 @@ describe("configured plugin generation recovery", () => {
   it.each([
     { borrowed: false, fails: false },
     { borrowed: true, fails: false },
+    { borrowed: false, fails: true },
     { borrowed: true, fails: true },
   ])(
     "republishes retired Gateway facts once (borrowed=$borrowed, failure=$fails)",

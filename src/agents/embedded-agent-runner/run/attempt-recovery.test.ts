@@ -241,24 +241,34 @@ describe("recoverEmbeddedRunAttempt", () => {
     expect(fixture.failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
 
-  it("limits output recovery to one continuation across progress and elapsed outage windows", async () => {
+  it("allows only one output-limit continuation even after successful model progress", async () => {
+    const { recovery, recover, failoverRetryController, continueFromCurrentTranscript } =
+      await recoverAfterTransportDrop(outputLimitScenario);
+    expect(recovery.action).toBe("retry");
+    failoverRetryController.observeAttempt({
+      providerRetryMaxRetries: 8,
+      hasSuccessfulModelResponse: true,
+    });
+
+    expect(await recover()).toEqual({ action: "proceed" });
+    expect(failoverRetryController.transientRetryCount).toBe(1);
+    expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
+    expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+  });
+
+  it("continues slow output generation without consuming the transient outage window", async () => {
     const startedAt = Date.now();
     const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
     try {
       const { recovery, recover, failoverRetryController, continueFromCurrentTranscript } =
         await recoverAfterTransportDrop(outputLimitScenario);
       expect(recovery.action).toBe("retry");
-      failoverRetryController.observeAttempt({
-        providerRetryMaxRetries: 8,
-        hasSuccessfulModelResponse: true,
-      });
       now.mockReturnValue(startedAt + 16 * 60_000);
 
       expect(await recover()).toMatchObject({ action: "proceed" });
       expect(failoverRetryController.transientRetryCount).toBe(1);
       expect(continueFromCurrentTranscript).toHaveBeenCalledTimes(1);
-      expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
-      expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
       now.mockReturnValue(startedAt + 32 * 60_000);
       await expect(
         failoverRetryController.maybeRetryTransient({ reason: "server_error" }),

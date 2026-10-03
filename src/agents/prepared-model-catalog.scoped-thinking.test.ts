@@ -493,6 +493,12 @@ describe("loadProviderScopedThinkingCatalog", () => {
   it.each([
     { name: "missing thinking", model: entry, route: undefined, visible: true },
     {
+      name: "text-only",
+      model: { ...entry, reasoning: true, input: ["text"] },
+      route: entry,
+      visible: true,
+    },
+    {
       name: "vision",
       model: { ...entry, reasoning: true, input: ["text", "image"] },
       route: entry,

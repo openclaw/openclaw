@@ -53,23 +53,26 @@ describe("embedded attempt backend", () => {
     expect(replacement.acceptedSessionSpawns ?? []).toEqual([]);
   });
 
-  it("does not trust attempt-supplied settlement", async () => {
-    harnessMocks.runAttempt.mockResolvedValueOnce(
-      makeEmbeddedRunnerAttempt({
-        agentHarnessId: "codex",
-        yieldDetected: true,
-        requesterContinuationSettled: true,
-        acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:subagent:child" }],
-      }),
-    );
-    const result = await runEmbeddedAttemptWithBackend({
-      admittedRunContext: { operationalRunInstance: createOperationalRunInstanceRef("test") },
-    } as never);
-    expect(result.requesterContinuationSettled).toBeUndefined();
-    expect(result.acceptedSessionSpawns).toEqual([
-      { runId: "child", childSessionKey: "agent:main:subagent:child" },
-    ]);
-  });
+  it.each(["openclaw", "codex"])(
+    "does not trust attempt-supplied settlement from %s",
+    async (agentHarnessId) => {
+      harnessMocks.runAttempt.mockResolvedValueOnce(
+        makeEmbeddedRunnerAttempt({
+          agentHarnessId,
+          yieldDetected: true,
+          requesterContinuationSettled: true,
+          acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:subagent:child" }],
+        }),
+      );
+      const result = await runEmbeddedAttemptWithBackend({
+        admittedRunContext: { operationalRunInstance: createOperationalRunInstanceRef("test") },
+      } as never);
+      expect(result.requesterContinuationSettled).toBeUndefined();
+      expect(result.acceptedSessionSpawns).toEqual([
+        { runId: "child", childSessionKey: "agent:main:subagent:child" },
+      ]);
+    },
+  );
 
   it.each([true, false])(
     "keeps runtime model selection only for prepared ownership (%s)",

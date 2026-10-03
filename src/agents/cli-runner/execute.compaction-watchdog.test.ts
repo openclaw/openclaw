@@ -224,6 +224,7 @@ it.each([false, true])(
     const started = createDeferred<number>();
     const ping = createDeferred();
     const pinged = createDeferred();
+    const finish = createDeferred();
     context.executionTarget = {
       kind: "plugin",
       async *execute(execution) {
@@ -235,7 +236,7 @@ it.each([false, true])(
         await ping.promise;
         yield { type: "stream_event", event: { type: "ping" } };
         pinged.resolve();
-        await waitUntilAborted(execution);
+        await Promise.race([waitUntilAborted(execution), finish.promise]);
         yield RESULT;
       },
     };
@@ -247,30 +248,36 @@ it.each([false, true])(
       name: "FailoverError",
       cliTimeout: { mode: "no-output", compactionActive: true, activeToolCount: withTool ? 1 : 0 },
     });
-    const startedAt = await started.promise;
-    if (withTool) {
-      await vi.advanceTimersByTimeAsync(0);
-      await waitForDiagnosticEventsDrained();
-      const snapshot = getDiagnosticSessionActivitySnapshot(context.params);
-      expect(snapshot).toMatchObject({
-        activeWorkKind: "tool_call",
-        activeBackendLivenessDeadlineAtMs: startedAt + WORK_GRACE_MS,
-      });
-      expect(
-        resolveRunStaleThresholdMs(snapshot, snapshot.lastProgressAgeMs ?? 0, STUCK_SESSION_MS),
-      ).toBe(WORK_GRACE_MS);
+    try {
+      const startedAt = await started.promise;
+      if (withTool) {
+        await vi.advanceTimersByTimeAsync(0);
+        await waitForDiagnosticEventsDrained();
+        const snapshot = getDiagnosticSessionActivitySnapshot(context.params);
+        expect(snapshot).toMatchObject({
+          activeWorkKind: "tool_call",
+          activeBackendLivenessDeadlineAtMs: startedAt + WORK_GRACE_MS,
+        });
+        expect(
+          resolveRunStaleThresholdMs(snapshot, snapshot.lastProgressAgeMs ?? 0, STUCK_SESSION_MS),
+        ).toBe(WORK_GRACE_MS);
+      }
+      await vi.advanceTimersByTimeAsync(WORK_GRACE_MS - 60_000);
+      expect(settled).toBe(false);
+      ping.resolve();
+      await pinged.promise;
+      await vi.advanceTimersByTimeAsync(62_000);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(WORK_GRACE_MS - 64_000);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(settled).toBe(true);
+      await rejection;
+    } finally {
+      ping.resolve();
+      finish.resolve();
+      await Promise.allSettled([run, rejection]);
     }
-    await vi.advanceTimersByTimeAsync(WORK_GRACE_MS - 60_000);
-    expect(settled).toBe(false);
-    ping.resolve();
-    await pinged.promise;
-    await vi.advanceTimersByTimeAsync(62_000);
-    expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(WORK_GRACE_MS - 64_000);
-    expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(4_000);
-    expect(settled).toBe(true);
-    await rejection;
   },
 );
 
