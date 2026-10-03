@@ -58,7 +58,7 @@ function normalizeHealthChecks(
         `doctor contribution ${contributionId} must specify health check ids when it declares multiple healthChecks`,
       );
     }
-    return { ...check, id, kind: "core", source: "doctor" };
+    return Object.assign({}, check, { id, kind: "core" as const, source: "doctor" });
   });
 }
 

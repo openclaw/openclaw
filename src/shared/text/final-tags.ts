@@ -19,7 +19,7 @@ function parseAttributeList(text: string): boolean {
   let index = skipWhitespace(text, 0);
   while (index < text.length) {
     attribute.lastIndex = index;
-    if (!attribute.exec(text)) {
+    if (!attribute.test(text)) {
       return false;
     }
     index = skipWhitespace(text, attribute.lastIndex);

@@ -62,20 +62,20 @@ function requestMatchesAccountId(entry: PairingRequest, normalizedAccountId: str
 }
 
 function pruneExcessRequestsByAccount(reqs: PairingRequest[]) {
-  if (reqs.length <= CHANNEL_PAIRING_PENDING_MAX) {
-    return { requests: reqs, removed: false };
+  const grouped = new Map<string, Array<[number, PairingRequest]>>();
+  for (const [index, entry] of reqs.entries()) {
+    const accountId = resolvePairingRequestAccountId(entry);
+    const entries = grouped.get(accountId) ?? [];
+    entries.push([index, entry]);
+    grouped.set(accountId, entries);
   }
-  const grouped = Map.groupBy(reqs.entries(), ([, entry]) => resolvePairingRequestAccountId(entry));
 
   const droppedIndexes = new Set<number>();
   for (const entries of grouped.values()) {
-    if (entries.length <= CHANNEL_PAIRING_PENDING_MAX) {
-      continue;
-    }
     const sorted = entries.toSorted(
       ([, left], [, right]) => resolveLastSeenAt(left) - resolveLastSeenAt(right),
     );
-    for (const [index] of sorted.slice(0, sorted.length - CHANNEL_PAIRING_PENDING_MAX)) {
+    for (const [index] of sorted.slice(0, -CHANNEL_PAIRING_PENDING_MAX)) {
       droppedIndexes.add(index);
     }
   }

@@ -22,7 +22,7 @@ import { BOARD_REPORT_WIDGET_KIND, parseBoardReport } from "./board-report.js";
 import { BOARD_WEBSITE_WIDGET_KIND, parseBoardWebsite } from "./board-website.js";
 import { GITHUB_ACTIONS_GRANT_PREFIX } from "./github-actions-capability.js";
 
-export type BoardWidgetHtmlDocument = {
+type BoardWidgetHtmlDocument = {
   html: string;
   revision: number;
   sha256: string;
@@ -32,10 +32,7 @@ export type BoardWidgetHtmlDocument = {
   resourceOrigins?: string[];
 };
 export type BoardWidgetHtmlViewMetadata = Omit<BoardWidgetHtmlDocument, "html">;
-export type BoardWidgetRegisteredDocument = Omit<
-  BoardWidgetHtmlDocument,
-  "html" | "resourceOrigins"
-> & {
+type BoardWidgetRegisteredDocument = Omit<BoardWidgetHtmlDocument, "html" | "resourceOrigins"> & {
   pluginKind: string;
   source: string;
   title?: string;

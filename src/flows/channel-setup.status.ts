@@ -472,11 +472,13 @@ export function resolveChannelSetupSelectionOptions(params: {
       const hint = formatSetupSelectionHint(
         [statusHint, disabledHint].filter(Boolean).join(" · ") || undefined,
       );
-      return {
-        value: entry.id,
-        label: formatSetupSelectionLabel(entry.meta.selectionLabel ?? entry.meta.label, entry.id),
-        ...(hint ? { hint } : {}),
-      };
+      return Object.assign(
+        {
+          value: entry.id,
+          label: formatSetupSelectionLabel(entry.meta.selectionLabel ?? entry.meta.label, entry.id),
+        },
+        hint ? { hint } : undefined,
+      );
     });
 }
 

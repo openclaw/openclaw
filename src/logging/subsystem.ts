@@ -39,9 +39,8 @@ export type SubsystemLogger = {
 type ChalkInstance = InstanceType<typeof Chalk>;
 
 const inspectValue: ((value: unknown) => string) | null = (() => {
-  const getBuiltinModule = process.getBuiltinModule;
   try {
-    const inspect = getBuiltinModule?.("util").inspect;
+    const inspect = process.getBuiltinModule?.("util").inspect;
     return typeof inspect === "function" ? inspect : null;
   } catch {
     return null;

@@ -25,11 +25,7 @@ export async function resolveProviderPluginSetupOptions(params: {
       workspaceDir: params.workspaceDir,
       env: params.env,
     })
-    .map((entry) => ({
-      value: entry.value,
-      label: entry.label,
-      ...(entry.hint ? { hint: entry.hint } : {}),
-    }))
+    .map(({ value, label, hint }) => Object.assign({ value, label }, hint ? { hint } : undefined))
     .toSorted(
       (left, right) =>
         left.label.localeCompare(right.label) || left.value.localeCompare(right.value),

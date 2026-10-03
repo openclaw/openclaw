@@ -2082,7 +2082,6 @@ src/fleet/backup.runtime.ts	3
 src/fleet/service-support.runtime.ts	1
 src/flows/channel-setup.status.ts	2
 src/flows/channel-setup.ts	3
-src/flows/doctor-core-checks.runtime.ts	2
 src/flows/doctor-core-checks.ts	1
 src/flows/doctor-health-contributions-final.ts	1
 src/flows/doctor-health-contributions.ts	1
@@ -2441,14 +2440,13 @@ src/logging/diagnostic-support-redaction.ts	1
 src/logging/diagnostic.ts	1
 src/logging/json-console-line.ts	2
 src/logging/levels.ts	2
-src/logging/log-file-shared.ts	1
 src/logging/logger.ts	7
 src/logging/parse-log-line.ts	1
 src/logging/redact-internal-state.ts	1
 src/logging/redact.ts	2
 src/logging/secret-redaction-registry.ts	1
 src/logging/state.ts	6
-src/logging/subsystem.ts	3
+src/logging/subsystem.ts	1
 src/mcp/channel-bridge.ts	4
 src/mcp/channel-shared.ts	2
 src/mcp/codex-supervision-tools-serve.ts	6
@@ -2480,7 +2478,7 @@ src/meeting-bot/plugin-entry.ts	5
 src/meeting-bot/plugin-shell.ts	1
 src/meeting-bot/realtime-tool-continuity.ts	2
 src/meeting-bot/runtime-facade.ts	4
-src/meeting-bot/runtime-probes.ts	8
+src/meeting-bot/runtime-probes.ts	6
 src/meeting-bot/runtime-setup.ts	1
 src/meeting-bot/session-runtime.ts	4
 src/meeting-bot/session-speech-readiness.ts	1
@@ -2735,7 +2733,7 @@ src/shared/config-eval.ts	1
 src/shared/deferred.ts	1
 src/shared/frontmatter.ts	1
 src/shared/global-singleton.ts	4
-src/shared/json-schema-defaults.ts	25
+src/shared/json-schema-defaults.ts	21
 src/shared/message-content-blocks.ts	2
 src/shared/node-list-parse.ts	3
 src/shared/node-presence.ts	1
@@ -2831,9 +2829,9 @@ src/utils/usage-format.ts	1
 src/version.ts	5
 src/video-generation/capability-overlays.ts	1
 src/video-generation/runtime.ts	1
-src/web-fetch/runtime.ts	3
+src/web-fetch/runtime.ts	2
 src/web-search/runtime-execution.ts	1
-src/web-search/runtime.ts	3
+src/web-search/runtime.ts	2
 src/web/provider-runtime-shared.ts	1
 src/wizard/clack-navigation-prompts.ts	11
 src/wizard/clack-prompter.ts	2
