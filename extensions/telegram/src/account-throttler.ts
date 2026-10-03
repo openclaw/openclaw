@@ -245,12 +245,14 @@ class GroupRequestScheduler {
       () => undefined,
       () => undefined,
     );
+    const aborted = waitForAbortSignal(controller.signal);
     return Promise.race([
       result,
-      waitForAbortSignal(controller.signal).then(() => {
+      aborted.then(() => {
         throw new DOMException("Chat action canceled", "AbortError");
       }),
     ]).finally(() => {
+      aborted.release();
       signal?.removeEventListener("abort", abort);
       controller.abort();
     });
