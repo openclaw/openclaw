@@ -6,15 +6,21 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
+import { upsertClawCronRef } from "../claws/cron.js";
 import { buildClawRemovePlan, readClawStatus } from "../claws/lifecycle-state.js";
 import { resolveClawMonitorCleanupBinding } from "../claws/monitor-cleanup-binding.js";
 import type { ClawMonitorCleanupGateway } from "../claws/monitor-cleanup-contract.js";
+import { readPortableHeartbeatState } from "../claws/portable-heartbeat-state.js";
+import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { clearCronJobActive, markCronJobActive } from "../cron/active-jobs.js";
+import { readDefaultProactiveJobReceiptInDatabase } from "../cron/proactive-job-receipt.js";
+import { writeCronJobScratch } from "../cron/scratch-store.js";
 import {
   getSuspensionVisibleCronTaskRunCount,
   waitForActiveCronTaskRuns,
 } from "../cron/service/active-run-cancellation.js";
 import * as sessionReaper from "../cron/session-reaper.js";
+import { cronStoreKey } from "../cron/store/key.js";
 import { upsertCronJobRow } from "../cron/store/row-codec.js";
 import {
   findActiveCronRunReceiptInDatabase,
@@ -23,6 +29,7 @@ import {
   releaseLocalCronRunReceiptOwnership,
 } from "../cron/store/run-receipt-store.js";
 import { claimCronRunReceiptInDatabaseForTest } from "../cron/store/run-receipt-store.test-support.js";
+import * as deviceIdentity from "../infra/device-identity-async.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import {
   beginAgentDeletionJournal,
@@ -104,9 +111,9 @@ describe("Claw serving monitor cleanup", () => {
         },
       },
     });
-    expect(plan.blockers).toHaveLength(2);
+    expect(plan.blockers).toHaveLength(1);
     const jobs = plan.actions.filter((action) => action.kind === "scheduledJob");
-    expect(jobs).toHaveLength(2);
+    expect(jobs).toHaveLength(1);
     for (const job of jobs) {
       expect(job).toMatchObject({
         action: "retain",
@@ -122,12 +129,98 @@ describe("Claw serving monitor cleanup", () => {
     const plan = await current.plan();
     expect(plan.blockers).toEqual([]);
     expect(plan.actions.filter((action) => action.kind === "cronJob")).toHaveLength(1);
-    expect(plan.actions.filter((action) => action.kind === "scheduledJob")).toHaveLength(2);
+    expect(plan.actions.filter((action) => action.kind === "scheduledJob")).toHaveLength(1);
     expect(await current.apply(plan)).toMatchObject({
       status: "complete",
       cronJobs: [expect.objectContaining({ manifestId: "daily", action: "removed" })],
     });
   });
+
+  it("removes an imported ordinary automation through the serving owner and retains its provisioning receipt", async () => {
+    const current = await fixture(false, undefined, false, true);
+    const storePath = current.state.statePath("cron", "jobs.json");
+    const database = openOpenClawStateDatabase();
+    const receipt = readDefaultProactiveJobReceiptInDatabase(database.db, storePath, "worker");
+    expect(receipt).toBeDefined();
+    const monitors = await current.gateway.inspect("worker");
+    expect(monitors).toHaveLength(1);
+    expect(monitors.some((monitor) => monitor.id === receipt!.jobId)).toBe(false);
+    const plan = await current.plan();
+    expect(plan.blockers).toEqual([]);
+    expect(await current.apply(plan)).toMatchObject({ status: "complete", agentRemoved: true });
+    expect(await current.cron.readJob(receipt!.jobId)).toBeUndefined();
+    expect(
+      (await readPortableHeartbeatState("worker", current.getConfig(), {})).ref,
+    ).toBeUndefined();
+    expect(readDefaultProactiveJobReceiptInDatabase(database.db, storePath, "worker")).toEqual(
+      receipt,
+    );
+  });
+
+  it.each(["job", "scratch", "scratch-before-cancellation", "released-ref", "receipt"])(
+    "refuses to quiesce an imported ordinary automation after its %s changes",
+    async (changed) => {
+      const current = await fixture(false, undefined, false, true);
+      const ref = (await readPortableHeartbeatState("worker", current.getConfig(), {})).ref!;
+      const storePath = current.state.statePath("cron", "jobs.json");
+      const monitors = await current.gateway.inspect("worker");
+      const editScratch = async () => {
+        expect(
+          (
+            await writeCronJobScratch({
+              storePath,
+              jobId: ref.schedulerJobId!,
+              content: "operator-owned scratch",
+              expectedRevision: 1,
+            })
+          ).ok,
+        ).toBe(true);
+      };
+      const originalQuiesce = current.cron.quiesceJobs.bind(current.cron);
+      const quiesce =
+        changed === "scratch-before-cancellation"
+          ? vi.spyOn(current.cron, "quiesceJobs").mockImplementationOnce(async (...args) => {
+              await editScratch();
+              return await originalQuiesce(...args);
+            })
+          : undefined;
+      if (changed === "job") {
+        await current.cron.update(ref.schedulerJobId!, { name: "operator-owned edit" });
+      } else if (changed === "scratch") {
+        await editScratch();
+      } else if (changed === "released-ref") {
+        upsertClawCronRef({ ...ref, status: "removed" });
+      } else if (changed === "receipt") {
+        openOpenClawStateDatabase()
+          .db.prepare("DELETE FROM config_machine_state WHERE state_key = ?")
+          .run(`automation-default:${cronStoreKey(storePath)}:worker`);
+        expect(
+          readDefaultProactiveJobReceiptInDatabase(
+            openOpenClawStateDatabase().db,
+            storePath,
+            "worker",
+          ),
+        ).toBeUndefined();
+      }
+      try {
+        await current.withDeletion(async (deletion) => {
+          await expect(
+            current.gateway.quiesce("worker", deletion.entry.operationId, monitors),
+          ).rejects.toThrow(
+            changed === "scratch-before-cancellation"
+              ? "changed before monitor cancellation"
+              : "Independent or changed cron job",
+          );
+          expect(await current.cron.readJob(ref.schedulerJobId!)).toBeDefined();
+          await expect(
+            fs.access(path.join(current.workspaceDir, "SOUL.md")),
+          ).resolves.toBeUndefined();
+        });
+      } finally {
+        quiesce?.mockRestore();
+      }
+    },
+  );
 
   it("requires authenticated administrator scope for the monitor phase method", () => {
     expect(isGatewayMethodClassified("claws.monitors")).toBe(true);
@@ -189,6 +282,31 @@ describe("Claw serving monitor cleanup", () => {
           list.mockRestore();
         }
       });
+    },
+  );
+
+  it.each(["runtime", "source"])(
+    "rejects a changed %s configuration while preparing the Workshop scheduler seed",
+    async (changed) => {
+      const current = await fixture(false);
+      const originalLoad = deviceIdentity.loadOrCreateProcessDeviceIdentityAsync;
+      const identity = vi
+        .spyOn(deviceIdentity, "loadOrCreateProcessDeviceIdentityAsync")
+        .mockImplementationOnce(async (...args) => {
+          const result = await originalLoad(...args);
+          if (changed === "runtime") {
+            current.getConfig().skills!.workshop!.autonomous!.mode = "auto";
+          } else {
+            setRuntimeConfigSnapshot(current.getConfig(), structuredClone(current.getConfig()));
+          }
+          return result;
+        });
+      try {
+        await expect(current.gateway.inspect("worker")).rejects.toThrow("configuration changed");
+        expect(readAgentDeletionJournal("worker")).toBeUndefined();
+      } finally {
+        identity.mockRestore();
+      }
     },
   );
 
@@ -530,13 +648,12 @@ describe("Claw serving monitor cleanup", () => {
   });
 
   it.each([false, true])(
-    "removes both config-owned monitor families (enabled=%s)",
+    "removes the config-owned Workshop monitor (enabled=%s)",
     async (enabled) => {
       const current = await fixture(enabled);
       const plan = await current.plan();
       expect(plan.blockers).toEqual([]);
       expect(plan.actions.filter((action) => action.kind === "scheduledJob")).toEqual([
-        expect.objectContaining({ action: "remove", blocked: false }),
         expect.objectContaining({ action: "remove", blocked: false }),
       ]);
       const result = await current.apply(plan);
@@ -569,7 +686,7 @@ describe("Claw serving monitor cleanup", () => {
       id: variant.startsWith("changed-") ? monitor.id : "independent",
       ...(variant === "ordinary" ? { declarationKey: "operator-job" } : {}),
       ...(variant === "changed-name" ? { name: "operator name" } : {}),
-      ...(variant === "changed-wake" ? { wakeMode: "now" as const } : {}),
+      ...(variant === "changed-wake" ? { wakeMode: "next-heartbeat" as const } : {}),
       ...(variant === "changed-delivery" ? { delivery: { mode: "announce" as const } } : {}),
       ...(variant === "imported" ? { declarationKey: "heartbeat-task:worker:imported" } : {}),
       ...(variant === "reassigned" ? { agentId: "other", owner: { agentId: "worker" } } : {}),
@@ -592,19 +709,26 @@ describe("Claw serving monitor cleanup", () => {
     );
   });
 
-  it("keeps files and a durable retry fence while a cancelled runner core is held", async () => {
+  it("keeps files and a durable retry fence while a cancelled portable automation runner is held", async () => {
     const started = createDeferred<AbortSignal>();
     const release = createDeferred();
-    const current = await fixture(true, async ({ abortSignal }) => {
-      if (!abortSignal) {
-        throw new Error("Missing cancellation signal");
-      }
-      started.resolve(abortSignal);
-      await release.promise;
-      return { status: "ok" };
-    });
+    const current = await fixture(
+      true,
+      async ({ abortSignal }) => {
+        if (!abortSignal) {
+          throw new Error("Missing cancellation signal");
+        }
+        started.resolve(abortSignal);
+        await release.promise;
+        return { status: "ok" };
+      },
+      false,
+      true,
+    );
+    const portableJobId = (await readPortableHeartbeatState("worker", current.getConfig(), {})).ref!
+      .schedulerJobId;
     const monitor = (await current.cron.list({ includeDisabled: true })).find(
-      (job) => job.agentId === "worker" && job.payload.kind === "agentTurn",
+      (job) => job.id === portableJobId,
     )!;
     const run = current.cron.run(monitor.id, "force");
     const signal = await started.promise;

@@ -152,6 +152,7 @@ const STATE_MIGRATION_ALLOWED_MISSING_TABLES = {
   17: LAZY_ADDITIVE_STATE_TABLES,
   18: LAZY_ADDITIVE_STATE_TABLES,
   19: LAZY_ADDITIVE_STATE_TABLES,
+  20: LAZY_ADDITIVE_STATE_TABLES,
 } as const satisfies Record<number, readonly string[]>;
 type OpenClawStateMigrationVersion = keyof typeof STATE_MIGRATION_ALLOWED_MISSING_TABLES;
 
@@ -248,7 +249,7 @@ export const openClawStateMigrationAssertions = new Map<
   number,
   (database: DatabaseSync, options: { pathname: string }) => void
 >(
-  ([5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19] as const).map(
+  ([5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20] as const).map(
     (version) =>
       [
         version,

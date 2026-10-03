@@ -34,7 +34,6 @@ it("serves health and commits an agent before projecting the remaining fleet", a
     cronEnabled: false,
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(),
   });
   const server = createTestGatewayServer({ resolvedAuth: AUTH_NONE });

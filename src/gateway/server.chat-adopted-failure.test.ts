@@ -17,7 +17,7 @@ import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../agents/failover/user-copy.js";
 import { withFullRuntimeReplyConfig } from "../auto-reply/reply/get-reply-fast-path.js";
 import * as replyRun from "../auto-reply/reply/get-reply-run.js";
-import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
+import { getReplyFromConfigInternal } from "../auto-reply/reply/get-reply.js";
 import { clearConfigCache, getRuntimeConfig, readConfigFileSnapshot } from "../config/config.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
@@ -184,7 +184,11 @@ describe("chat.send quoted model profiles", () => {
     await prepareGatewayReplyRuntimeForTest({ force: true });
     context = createDirectChatContext({ getRuntimeConfig });
     gatewayReplyMock.mockImplementation((ctx, options, config) =>
-      getReplyFromConfig(ctx, options, withFullRuntimeReplyConfig(config ?? getRuntimeConfig())),
+      getReplyFromConfigInternal(
+        ctx,
+        options,
+        withFullRuntimeReplyConfig(config ?? getRuntimeConfig()),
+      ),
     );
     dispatchInboundMessageMock.mockReset();
     // Directive parsing, profile resolution, and session writes stay on the real chat path.

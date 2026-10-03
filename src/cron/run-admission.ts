@@ -39,7 +39,8 @@ export function prepareCronRunAdmission(params: {
   toolsAllow?: string[];
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   executionIdentity?: CronExecutionIdentityAdmission;
-  ingressBoundary?: "cron.isolated-agent" | "cron.script";
+  ingressBoundary?: "cron.isolated-agent" | "cron.session-agent" | "cron.script";
+  onAdmitted?: (context: AdmittedRunContext) => void;
   resolveGatewayContext?: GatewayContextResolver;
 }) {
   const { runId, scheduledToolPolicy } = params;
@@ -64,6 +65,7 @@ export function prepareCronRunAdmission(params: {
     onAdmitted: (admitted) => {
       bindGatewayContextResolver(admitted, resolveGatewayContext);
       assertAdmitted = resolveAdmittedRunActiveAssertion(admitted);
+      params.onAdmitted?.(admitted);
     },
   });
   const preparedRunAdmission = params.executionIdentity?.onPostAdmission

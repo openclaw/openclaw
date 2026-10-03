@@ -55,11 +55,11 @@ test("keeps thinking defaults separate for distinct literal model IDs", async ()
 });
 
 test.each(["origin", "notice"])(
-  "resets a heartbeat fallback whose %s names another literal model",
+  "resets an automatic fallback whose %s names another literal model",
   async (source) => {
-    await withStateDirEnv("reply-heartbeat-origin-", async () => {
+    await withStateDirEnv("reply-fallback-origin-", async () => {
       const entry: SessionEntry = {
-        sessionId: "heartbeat",
+        sessionId: "fallback",
         updatedAt: 1,
         providerOverride: "custom",
         modelOverride: "fallback",
@@ -83,14 +83,13 @@ test.each(["origin", "notice"])(
         cfg: { plugins: { enabled: false } },
         agentCfg: undefined,
         sessionEntry: entry,
-        sessionStore: { heartbeat: entry },
-        sessionKey: "heartbeat",
+        sessionStore: { fallback: entry },
+        sessionKey: "fallback",
         defaultProvider: "custom",
         defaultModel: "custom/model",
         provider: "custom",
         model: "fallback",
         hasModelDirective: false,
-        isHeartbeat: true,
       });
       expect(selection).toMatchObject({
         provider: "custom",
@@ -125,7 +124,7 @@ type SelectionCase = {
   inherited?: boolean;
   locked?: boolean;
   configuredProvider?: boolean;
-  heartbeat?: boolean;
+  turnOverride?: boolean;
   operatorRestricted?: boolean;
   operatorRejected?: boolean;
 };
@@ -133,7 +132,7 @@ type SelectionCase = {
 test.each<SelectionCase>([
   { name: "resolved alias-like model", pin: "middle", expected: "middle" },
   { name: "legacy raw model normalized once", pin: "latest", expected: "middle", raw: true },
-  { name: "explicit heartbeat override", pin: "middle", expected: "heartbeat", heartbeat: true },
+  { name: "explicit turn override", pin: "middle", expected: "override", turnOverride: true },
   { name: "role-denied stored pin", pin: "middle", expected: "default", operatorRestricted: true },
   {
     name: "role-denied inherited pin",
@@ -267,10 +266,9 @@ test.each<SelectionCase>([
           defaultProvider: "custom",
           defaultModel: "default",
           provider: fixture.inherited ? provider : "custom",
-          model: fixture.heartbeat ? "heartbeat" : fixture.inherited ? fixture.pin : "default",
+          model: fixture.turnOverride ? "override" : fixture.inherited ? fixture.pin : "default",
           hasModelDirective: false,
-          isHeartbeat: fixture.heartbeat,
-          hasResolvedHeartbeatModelOverride: fixture.heartbeat,
+          hasResolvedTurnModelOverride: fixture.turnOverride,
           preparedModelCatalog,
           ...(fixture.operatorRestricted
             ? {

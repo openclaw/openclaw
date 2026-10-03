@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
@@ -51,6 +52,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { digestClawBytes } from "./digest.js";
 import type { ClawMonitorCleanupGateway, ClawMonitorSnapshot } from "./monitor-cleanup-contract.js";
+import type { AttachedCronJob } from "./monitor-cleanup.read.types.js";
 import { deleteCachedClawInstallSchemaVersion } from "./provenance-runtime-read.js";
 import type { PersistedClawInstall } from "./provenance.js";
 import type { PersistedClawWorkspaceFile } from "./workspace.js";
@@ -125,26 +127,20 @@ export function deletionEffects(
   };
 }
 
-export type AttachedCronJob = {
-  id: string;
-  name: string;
-  enabled: boolean;
-  agentId: string | null;
-  ownerAgentId: string | null;
-  storeKey: string;
-  declarationKey: string | null;
-  revision?: string;
-};
+export type { AttachedCronJob } from "./monitor-cleanup.read.types.js";
 
 /** Inventories cron jobs that would retain a reference to a removed agent. */
-export function readAttachedCronJobs(
+function readAttachedCronJobs(
   agentId: string,
   options: OpenClawStateDatabaseOptions,
 ): AttachedCronJob[] {
-  const { db } = openOpenClawStateDatabase(options);
-  if (!tableExists(db, "cron_jobs")) {
-    return [];
-  }
+  return readAttachedCronJobsInDatabase(openOpenClawStateDatabase(options).db, agentId);
+}
+
+export function readAttachedCronJobsInDatabase(
+  db: DatabaseSync,
+  agentId: string,
+): AttachedCronJob[] {
   const { compiled, bind } = compileSqliteQueryBindings<string>((parameter) => {
     const boundAgentId = parameter((value) => value);
     return getNodeSqliteKysely<ClawRemovalDatabase>(db)

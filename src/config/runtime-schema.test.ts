@@ -386,7 +386,7 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     },
   );
 
-  it("projects strict heartbeat visibility for external channels and their accounts", () => {
+  it("preserves declared external channel and account schemas", () => {
     mockLoadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
       plugins: [
@@ -420,92 +420,21 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     const result = loadGatewayRuntimeConfigSchema();
     const schema = result.schema as { properties?: Record<string, unknown> };
     const channels = schema.properties?.channels as { properties?: Record<string, unknown> };
-    const heartbeatVisibility = {
+    expect(channels.properties?.["external-chat"]).toEqual({
       type: "object",
-      properties: {
-        showOk: { type: "boolean" },
-        showAlerts: { type: "boolean" },
-        useIndicator: { type: "boolean" },
-      },
-      additionalProperties: false,
-    };
-
-    expect(channels.properties?.["external-chat"]).toMatchObject({
       additionalProperties: false,
       properties: {
-        heartbeatVisibility,
+        endpoint: { type: "string" },
         accounts: {
+          type: "object",
           additionalProperties: {
+            type: "object",
             additionalProperties: false,
-            properties: { heartbeatVisibility },
+            properties: { endpoint: { type: "string" } },
           },
         },
       },
     });
-  });
-
-  it("projects canonical heartbeats into composed schemas and referenced open accounts", () => {
-    mockLoadPluginManifestRegistry.mockReturnValue({
-      diagnostics: [],
-      plugins: [
-        {
-          id: "external-chat",
-          origin: "workspace",
-          channels: ["external-chat"],
-          channelConfigs: {
-            "external-chat": {
-              schema: {
-                $defs: { Account: {} },
-                anyOf: [
-                  { type: "object", additionalProperties: true },
-                  {
-                    type: "object",
-                    properties: {
-                      accounts: {
-                        type: "object",
-                        additionalProperties: { $ref: "#/$defs/Account" },
-                      },
-                    },
-                    additionalProperties: false,
-                  },
-                ],
-              },
-            },
-          },
-        },
-      ],
-    });
-
-    const result = loadGatewayRuntimeConfigSchema();
-    const schema = result.schema as { properties?: Record<string, unknown> };
-    const channels = schema.properties?.channels as { properties?: Record<string, unknown> };
-    const heartbeatVisibility = {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        showOk: { type: "boolean" },
-        showAlerts: { type: "boolean" },
-        useIndicator: { type: "boolean" },
-      },
-    };
-
-    const projected = channels.properties?.["external-chat"] as Record<string, unknown>;
-    expect(projected).toMatchObject({
-      properties: { heartbeatVisibility },
-      anyOf: [
-        { additionalProperties: true, properties: { heartbeatVisibility } },
-        {
-          additionalProperties: false,
-          properties: {
-            heartbeatVisibility,
-            accounts: {
-              additionalProperties: { properties: { heartbeatVisibility } },
-            },
-          },
-        },
-      ],
-    });
-    expect(projected.$defs).toEqual({ Account: {} });
   });
 
   it("reuses the current gateway plugin metadata snapshot for config schema requests", () => {

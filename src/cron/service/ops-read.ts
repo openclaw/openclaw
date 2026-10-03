@@ -28,6 +28,7 @@ import type {
 } from "./list-page-types.js";
 import { locked } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
+import { reloadProvisionedCronJobs } from "./ops-lifecycle.js";
 import { ensureLoadedForRead, resolveCurrentDefaultAgentId } from "./ops-shared.js";
 import type { CronServiceState } from "./state.js";
 import { captureCronJobMutationSource, ensureLoaded } from "./store.js";
@@ -72,7 +73,18 @@ export async function readJob(state: CronServiceState, id: string) {
   return await locked(
     state,
     async () => {
-      await ensureLoadedForRead(state);
+      if (
+        state.deps.cronEnabled &&
+        state.schedulerStarted &&
+        !state.stopped &&
+        !state.store?.jobs.some((job) => job.id === id)
+      ) {
+        // Setup in another process acknowledges its newly committed ID through cron.get.
+        // Existing IDs remain resident reads; an empty scheduler has no tick to adopt new jobs.
+        await reloadProvisionedCronJobs(state);
+      } else {
+        await ensureLoadedForRead(state);
+      }
       return state.store?.jobs.find((job) => job.id === id);
     },
     { readOnly: true },

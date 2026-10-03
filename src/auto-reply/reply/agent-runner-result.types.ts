@@ -34,7 +34,7 @@ export type FinalizeReplyAgentRunInput = Pick<
   activeSessionStore: Record<string, SessionEntry> | undefined;
   blockReplyPipeline: BlockReplyPipeline | null;
   cfg: OpenClawConfig;
-  isHeartbeat: boolean;
+
   pendingToolTasks: Set<Promise<void>>;
   preflightCompactionApplied: boolean | undefined;
   replyMediaContext: ReplyMediaContext;

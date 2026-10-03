@@ -15,13 +15,6 @@ scenario:
   regressionRefs:
     - openclaw/openclaw#132890
   gatewayConfigPatch:
-    agents:
-      defaults:
-        heartbeat:
-          every: 24h
-          target: qa-channel
-          to: dm:qa-operator
-          directPolicy: allow
     tools:
       codeMode: false
       exec:
@@ -32,16 +25,15 @@ scenario:
   objective: Prove real cron and process completion events start internal turns that successfully delegate work through the configured live runtime.
   successCriteria:
     - A naturally fired main-session systemEvent creates a successful native child through sessions_spawn.
-    - An OpenClaw background exec finishes only after its initiating model turn ends, and its completion event creates a second successful native child.
+    - With cron disabled, a background exec completes during an active second turn and creates exactly one child after that turn settles.
     - Each parent transcript records a successful sessions_spawn call, and the matching native child run completes successfully.
     - Each child successfully reads and returns a fresh marker that was absent from every parent instruction.
   docsRefs:
     - docs/automation/cron-jobs.md
     - docs/gateway/background-process.md
-    - docs/gateway/heartbeat.md
     - docs/tools/subagents.md
   codeRefs:
-    - src/infra/heartbeat-runner-execution.ts
+    - src/auto-reply/reply/session-event-handoff.ts
     - src/agents/bash-tools.exec-runtime.ts
     - src/agents/subagents/spawn/subagent-spawn.ts
   execution:
@@ -56,6 +48,8 @@ scenario:
       requiredProviderMode: live-frontier
       parentSessionKey: agent:qa:main
       fireDelayMs: 5000
+      originalTarget: dm:qa-operator
+      secondTurnTarget: dm:qa-busy-operator
       cases:
         - exec
         - cron
@@ -86,6 +80,21 @@ flow:
               expr: config.cases
             item: eventKind
             actions:
+              - call: patchConfig
+                args:
+                  - env:
+                      ref: env
+                    patch:
+                      cron:
+                        enabled:
+                          expr: "eventKind === 'cron'"
+              - call: env.gateway.call
+                saveAs: cronStatus
+                args: [cron.status, {}]
+              - assert:
+                  expr: "cronStatus.enabled === (eventKind === 'cron')"
+                  message:
+                    expr: "`Wrong scheduler state for ${eventKind} event proof: ${JSON.stringify(cronStatus)}`"
               - set: attemptId
                 value:
                   expr: randomUUID()
@@ -245,6 +254,67 @@ flow:
                     - set: parentBefore
                       value:
                         ref: initialTurn
+                    - set: busyScript
+                      value:
+                        expr: "`qa-event-busy-${attemptId}.cjs`"
+                    - set: busyStartedFile
+                      value:
+                        expr: "`qa-event-busy-started-${attemptId}`"
+                    - set: busyReleaseFile
+                      value:
+                        expr: "`qa-event-busy-release-${attemptId}`"
+                    - call: fs.writeFile
+                      args:
+                        - expr: path.join(env.gateway.workspaceDir, busyScript)
+                        - expr: |-
+                            `const fs = require('node:fs');
+                            fs.writeFileSync(${JSON.stringify(busyStartedFile)}, 'active');
+                            const deadline = Date.now() + 240000;
+                            const timer = setInterval(() => {
+                              if (Date.now() >= deadline) { clearInterval(timer); process.exitCode = 2; return; }
+                              if (!fs.existsSync(${JSON.stringify(busyReleaseFile)})) return;
+                              clearInterval(timer);
+                              process.stdout.write(${JSON.stringify('QA-BUSY-WORK-DONE\n')});
+                            }, 100);`
+                        - utf8
+                    - call: startAgentRun
+                      saveAs: busyRun
+                      args:
+                        - ref: env
+                        - sessionKey:
+                            expr: config.parentSessionKey
+                          taskTracking: false
+                          to:
+                            expr: config.secondTurnTarget
+                          message:
+                            expr: |-
+                              `Use the OpenClaw ${execToolName} tool to run node ${busyScript} with yieldMs=1000. If it returns a process session, use the OpenClaw process tool with action=poll and timeout=30000 repeatedly until that process exits. Do not poll any other process. Do not interrupt this work for background notifications, read files, or spawn children in this turn. When this exact process exits successfully, finish with exactly QA-BUSY-TURN-DONE-${attemptId}.`
+                          timeoutMs: 30000
+                    - call: waitForCondition
+                      saveAs: busyStartedMarker
+                      args:
+                        - lambda:
+                            async: true
+                            expr: "fs.readFile(path.join(env.gateway.workspaceDir, busyStartedFile), 'utf8').then((value) => value === 'active' ? value : undefined).catch((error) => { if (error.code === 'ENOENT') return undefined; throw error; })"
+                        - expr: liveTurnTimeoutMs(env, 120000)
+                        - 100
+                    - assert:
+                        expr: "busyStartedMarker === 'active'"
+                        message: Busy process did not write its exact started marker.
+                    - set: busyStartedAt
+                      value:
+                        expr: Date.now()
+                    - call: env.gateway.call
+                      saveAs: busyBeforeRelease
+                      args:
+                        - agent.wait
+                        - runId:
+                            expr: busyRun.runId
+                          timeoutMs: 1
+                        - timeoutMs: 30000
+                    - assert:
+                        expr: "busyBeforeRelease.status === 'timeout' && busyBeforeRelease.timeoutPhase === 'gateway_draining' && busyBeforeRelease.providerStarted !== false"
+                        message: Second turn already ended before the original process was released.
                     - set: releasedAt
                       value:
                         expr: Date.now()
@@ -263,7 +333,81 @@ flow:
                         - 100
                     - assert:
                         expr: "Number.isSafeInteger(processCompletion.completedAt) && processCompletion.completedAt >= releasedAt"
-                        message: Background process completed before the initiating turn ended.
+                        message: Background process did not complete after release during the second turn.
+                    - call: env.gateway.call
+                      saveAs: busyAfterCompletion
+                      args:
+                        - agent.wait
+                        - runId:
+                            expr: busyRun.runId
+                          timeoutMs: 1
+                        - timeoutMs: 30000
+                    - assert:
+                        expr: "busyAfterCompletion.status === 'timeout' && busyAfterCompletion.timeoutPhase === 'gateway_draining' && busyAfterCompletion.providerStarted !== false"
+                        message: The process completion interrupted or ended the active second turn.
+                    # In-flight tools need not be in the durable transcript yet.
+                    # Task creation, not a late tool result, owns child acceptance.
+                    - call: runQaCli
+                      saveAs: busyTasks
+                      args:
+                        - ref: env
+                        - [tasks, list, --json, --runtime, subagent]
+                        - timeoutMs:
+                            expr: liveTurnTimeoutMs(env, 60000)
+                          json: true
+                    - set: busyChildren
+                      value:
+                        expr: "(busyTasks.tasks ?? []).filter((task) => task.label === childLabel && task.requesterSessionKey === config.parentSessionKey && task.createdAt >= attemptStartedAt)"
+                    - assert:
+                        expr: "busyChildren.length === 0"
+                        message:
+                          expr: "`Child task accepted before the active second turn settled: ${JSON.stringify(busyChildren.map(({ taskId, createdAt, status }) => ({ taskId, createdAt, status })))}`"
+                    - set: busyReleasedAt
+                      value:
+                        expr: Date.now()
+                    - call: fs.writeFile
+                      args:
+                        - expr: path.join(env.gateway.workspaceDir, busyReleaseFile)
+                        - release
+                        - utf8
+                    - call: waitForAgentRun
+                      saveAs: busyWaited
+                      args:
+                        - ref: env
+                        - expr: busyRun.runId
+                        - expr: liveTurnTimeoutMs(env, 240000)
+                    - assert:
+                        expr: "['ok', 'completed', 'succeeded'].includes(busyWaited.status) && Number.isFinite(busyWaited.endedAt)"
+                        message:
+                          expr: "`second turn failed: ${JSON.stringify(busyWaited)}`"
+                    - set: observeExecCompletion
+                      value:
+                        expr: "() => ({ attemptId, cronEnabled: cronStatus.enabled, busyStartedMarker, busyStartedAt, releasedAt, processCompletedAt: processCompletion.completedAt, busyBeforeRelease, busyAfterCompletion, busyReleasedAt, busyEndedAt: busyWaited.endedAt, busyWaitStatus: busyWaited.status, childrenWhileBusy: busyChildren.length, transportAccountId: transport.accountId, expectedBusyTarget: config.secondTurnTarget, expectedChildTarget: config.originalTarget, messages: state.getSnapshot().messages.filter((message) => message.direction === 'outbound').map((message) => ({ accountId: message.accountId, conversation: message.conversation, deleted: message.deleted === true, busyMarker: String(message.text ?? '').includes(`QA-BUSY-TURN-DONE-${attemptId}`), childMarker: String(message.text ?? '').includes(expectedMarker) })) })"
+                    - call: fs.writeFile
+                      args:
+                        - expr: "path.join(env.outputDir, `exec-completion-${env.runtimeId}-before-wait.json`)"
+                        - expr: "JSON.stringify(observeExecCompletion(), null, 2)"
+                        - utf8
+                    - try:
+                        actions:
+                          - waitForOutbound:
+                              conversation:
+                                id:
+                                  expr: config.secondTurnTarget.replace(/^dm:/, '')
+                                kind: direct
+                              textIncludes:
+                                expr: "`QA-BUSY-TURN-DONE-${attemptId}`"
+                              timeoutMs:
+                                expr: liveTurnTimeoutMs(env, 60000)
+                        catchAs: busyDeliveryError
+                        catch:
+                          - call: fs.writeFile
+                            args:
+                              - expr: "path.join(env.outputDir, `exec-completion-${env.runtimeId}-failure.json`)"
+                              - expr: "JSON.stringify(observeExecCompletion(), null, 2)"
+                              - utf8
+                          - throw:
+                              expr: "`Busy-turn outbound marker was not observed: ${String(busyDeliveryError)}; lifecycle=${JSON.stringify(observeExecCompletion())}`"
               - call: waitForCondition
                 saveAs: completedChild
                 args:
@@ -281,9 +425,20 @@ flow:
                   - afterEventCursor:
                       expr: parentBefore.eventCursor
               - assert:
-                  expr: "parentAfter.successfulToolCallCounts.sessions_spawn === 1 && ['read', 'exec', 'process', 'gateway_exec', 'gateway_process'].every((name) => (parentAfter.assistantToolCallCounts[name] ?? 0) === 0)"
+                  expr: "parentAfter.successfulToolCallCounts.sessions_spawn === 1 && parentAfter.assistantToolCallCounts.sessions_spawn === 1 && (parentAfter.assistantToolCallCounts.read ?? 0) === 0 && (eventKind === 'exec' || ['exec', 'process', 'gateway_exec', 'gateway_process'].every((name) => (parentAfter.assistantToolCallCounts[name] ?? 0) === 0))"
                   message:
-                    expr: "`${eventKind} wake did not successfully spawn exactly once without reading the child marker itself: ${JSON.stringify(parentAfter.assistantToolCallCounts)}`"
+                    expr: "`${eventKind} wake must attempt and successfully spawn exactly once without reading the child marker itself: ${JSON.stringify({ attempts: parentAfter.assistantToolCallCounts, successful: parentAfter.successfulToolCallCounts })}`"
+              - if:
+                  expr: "eventKind === 'exec'"
+                  then:
+                    - assert:
+                        expr: "parentAfter.assistantToolCallCounts[execToolName] === 1 && parentAfter.successfulToolCallCounts[execToolName] === 1"
+                        message:
+                          expr: "`Settled second turn must contain exactly one successful busy exec: ${JSON.stringify({ attempts: parentAfter.assistantToolCallCounts, successful: parentAfter.successfulToolCallCounts })}`"
+                    - assert:
+                        expr: "Number.isFinite(completedChild.createdAt) && completedChild.createdAt >= busyWaited.endedAt"
+                        message:
+                          expr: "`Child task was created before the second turn ended: ${JSON.stringify({ childCreatedAt: completedChild.createdAt, busyEndedAt: busyWaited.endedAt, processCompletedAt: processCompletion.completedAt, busyReleasedAt })}`"
               - call: readSessionTranscriptSummary
                 saveAs: childTranscript
                 args:
@@ -298,5 +453,100 @@ flow:
                   message: Child spawn chronology does not follow the real event producer.
               - set: appendVerdict
                 value:
-                  expr: "verdicts.push({ source: eventKind, providerMode: env.providerMode, model: env.primaryModel, parent: config.parentSessionKey, child: completedChild.childSessionKey, spawnAccepted: true, childSucceeded: true, childReadVerified: true, heartbeatTarget: 'qa-channel' })"
+                  expr: "verdicts.push({ source: eventKind, providerMode: env.providerMode, model: env.primaryModel, parent: config.parentSessionKey, child: completedChild.childSessionKey, spawnAccepted: true, childSucceeded: true, childReadVerified: true, cronEnabled: eventKind === 'cron', target: config.originalTarget })"
       detailsExpr: JSON.stringify(verdicts)
+    - name: fences a process completion from a reset successor
+      actions:
+        - set: resetAttempt
+          value:
+            expr: randomUUID()
+        - set: staleMarker
+          value:
+            expr: "`QA-STALE-PROCESS-${resetAttempt}`"
+        - set: resetGate
+          value:
+            expr: "`qa-reset-release-${resetAttempt}`"
+        - set: resetFinished
+          value:
+            expr: "`qa-reset-finished-${resetAttempt}`"
+        - set: resetScript
+          value:
+            expr: "`qa-reset-process-${resetAttempt}.cjs`"
+        - call: fs.writeFile
+          args:
+            - expr: path.join(env.gateway.workspaceDir, resetScript)
+            - expr: |-
+                `const fs = require('node:fs');
+                const deadline = Date.now() + 240000;
+                const timer = setInterval(() => {
+                  if (Date.now() >= deadline) { clearInterval(timer); process.exitCode = 2; return; }
+                  if (!fs.existsSync(${JSON.stringify(resetGate)})) return;
+                  clearInterval(timer);
+                  fs.writeFileSync(${JSON.stringify(resetFinished)}, 'finished');
+                  process.stdout.write(${JSON.stringify(staleMarker + '\n')});
+                }, 100);`
+            - utf8
+        - call: runAgentPrompt
+          args:
+            - ref: env
+            - sessionKey:
+                expr: config.parentSessionKey
+              message:
+                expr: "`Start node ${resetScript} using OpenClaw ${execToolName} with background=true, call no other tools, and finish with exactly QA-RESET-PROCESS-STARTED.`"
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 120000)
+        - call: readRawQaSessionStore
+          saveAs: beforeResetStore
+          args:
+            - ref: env
+        - call: env.gateway.call
+          saveAs: resetResult
+          args:
+            - sessions.reset
+            - key:
+                expr: config.parentSessionKey
+              reason: reset
+            - timeoutMs:
+                expr: liveTurnTimeoutMs(env, 60000)
+        - assert:
+            expr: "resetResult.ok === true && Boolean(resetResult.entry?.lifecycleRevision) && resetResult.entry.lifecycleRevision !== beforeResetStore[config.parentSessionKey]?.lifecycleRevision"
+            message: Reset must advance the session lifecycle before the old process exits.
+        - call: fs.writeFile
+          args:
+            - expr: path.join(env.gateway.workspaceDir, resetGate)
+            - release
+            - utf8
+        - call: waitForCondition
+          saveAs: resetFinishedMarker
+          args:
+            - lambda:
+                async: true
+                expr: "fs.readFile(path.join(env.gateway.workspaceDir, resetFinished), 'utf8').then((value) => value === 'finished' ? value : undefined).catch((error) => { if (error.code === 'ENOENT') return undefined; throw error; })"
+            - 30000
+            - 100
+        - assert:
+            expr: "resetFinishedMarker === 'finished'"
+            message: Reset process did not write its exact finished marker.
+        - call: runAgentPrompt
+          args:
+            - ref: env
+            - sessionKey:
+                expr: config.parentSessionKey
+              message: "Reply exactly QA-RESET-SUCCESSOR-READY. Do not use any tools."
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 120000)
+        - call: env.gateway.call
+          saveAs: successorHistory
+          args:
+            - chat.history
+            - sessionKey:
+                expr: config.parentSessionKey
+              limit: 100
+            - timeoutMs: 30000
+        - assert:
+            expr: "!JSON.stringify(successorHistory.messages ?? []).includes(staleMarker) && JSON.stringify(successorHistory.messages ?? []).includes('QA-RESET-SUCCESSOR-READY')"
+            message: The reset successor received stale process completion context or did not remain usable.
+        - assert:
+            expr: "!state.getSnapshot().messages.some((message) => message.direction === 'outbound' && String(message.text ?? '').includes(staleMarker))"
+            message: A stale process notification escaped to a channel after reset.
+      detailsExpr: "JSON.stringify({ resetFenced: true, oldProcessExited: true, resetFinishedMarker, successorLifecycleRevision: resetResult.entry.lifecycleRevision })"

@@ -49,6 +49,63 @@ describe("cron protocol validators", () => {
     expectCases(validateCronAddParams, true, [minimalAddParams]);
   });
 
+  it("accepts ordinary automation execution policy and nullable policy clears", () => {
+    const policy = {
+      activeHours: { start: "08:00", end: "24:00", timezone: "America/New_York" },
+      idleOnly: true,
+      payload: {
+        kind: "agentTurn",
+        message: "Check the automation scratch.",
+        skipIfScratchEmpty: true,
+        includeReasoning: false,
+      },
+      delivery: { mode: "announce", target: "owner", directPolicy: "allow" },
+    };
+    expect(validateCronAddParams(add({ ...policy, sessionTarget: "isolated" }))).toBe(true);
+    expect(validateCronUpdateParams(update(policy))).toBe(true);
+    const clears = {
+      activeHours: null,
+      idleOnly: null,
+      delivery: { target: null, directPolicy: null },
+    };
+    expect(validateCronUpdateParams(update(clears))).toBe(true);
+    expect(validateCronAddParams(add(clears))).toBe(false);
+    expectCases(validateCronAddParams, false, [
+      add({ delivery: { mode: "webhook", to: "https://example.test/result", target: "owner" } }),
+      add({
+        delivery: { mode: "webhook", to: "https://example.test/result", directPolicy: "block" },
+      }),
+    ]);
+  });
+
+  it.each([
+    { activeHours: { start: "24:00", end: "09:00" } },
+    { activeHours: { start: "08:00", end: "24:01" } },
+    { idleOnly: "true" },
+    { payload: { kind: "agentTurn", message: "check", skipIfScratchEmpty: "true" } },
+    { payload: { kind: "agentTurn", message: "check", includeReasoning: "false" } },
+    { delivery: { mode: "announce", target: "last" } },
+    { delivery: { mode: "announce", directPolicy: "unknown" } },
+    { payload: { kind: "heartbeat" } },
+  ])("rejects invalid execution policy %j in create and patch inputs", (policy) => {
+    expect(validateCronAddParams(add(policy))).toBe(false);
+    expect(validateCronUpdateParams(update(policy))).toBe(false);
+  });
+
+  it("does not report retired heartbeat payloads as executable jobs", () => {
+    expect(
+      Value.Check(CronJobSchema, {
+        ...minimalAddParams,
+        payload: { kind: "heartbeat" },
+        id: "retired-monitor",
+        enabled: true,
+        createdAtMs: 1,
+        updatedAtMs: 2,
+        state: {},
+      }),
+    ).toBe(false);
+  });
+
   it("accepts create results with a dry-run delivery preview", () => {
     const job = {
       ...minimalAddParams,
@@ -106,7 +163,7 @@ describe("cron protocol validators", () => {
       action: "finished",
       status: "ok",
       delivery: {
-        intended: { channel: "telegram", to: "chat-1", source: "explicit" },
+        intended: { channel: "telegram", to: "chat-1", source: "owner" },
         resolved: { channel: "telegram", to: "chat-1", ok: true },
         messageToolSentTo: [{ channel: "telegram", to: "chat-1", threadId: "topic-1" }],
         fallbackUsed: false,

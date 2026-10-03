@@ -1,19 +1,39 @@
 /** Integration tests for the public Bash/process tool factories. */
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { enqueueSessionEventForHost as enqueueSessionEvent } from "../auto-reply/reply/session-event-handoff.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
-import { requestHeartbeatAndWait, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import {
   peekSystemEventEntries,
   peekSystemEvents,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { getFinishedSession, waitForExecScope } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import * as supervisorExit from "./bash-tools.exec-runtime.test-support.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
 import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import { getBashShellConfig } from "./shell-utils.js";
+
+vi.mock("../auto-reply/reply/session-event-handoff.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../auto-reply/reply/session-event-handoff.js")>();
+  return { ...actual, enqueueSessionEventForHost: vi.fn(actual.enqueueSessionEventForHost) };
+});
+vi.mock("../auto-reply/dispatch.js", () => ({
+  dispatchInboundMessageWithRoutedChannelDispatcher: vi.fn(async (params) => {
+    params.replyOptions.turnAdoptionLifecycle.onDeferred();
+    return { deferredToActiveRun: true };
+  }),
+}));
 
 vi.mock("../infra/channel-summary.js", () => ({
   buildChannelSummary: vi.fn(async () => []),
@@ -307,82 +327,58 @@ it("isolates process lists and polling by scopeKey", async () => {
 });
 
 describe("background completion notifications", () => {
-  async function drainWakes() {
-    const dispose = setHeartbeatWakeHandler(async () => ({ status: "ran", durationMs: 0 }));
-    try {
-      await expect(
-        requestHeartbeatAndWait(
-          {
-            source: "other",
-            intent: "immediate",
-            reason: "test-cleanup",
-            coalesceMs: 0,
-          },
-          { abortSignal: AbortSignal.timeout(isWin ? 12_000 : 5_000) },
-        ),
-      ).resolves.toEqual({ status: "ran", durationMs: 0 });
-    } finally {
-      dispose();
-    }
-  }
-  beforeEach(drainWakes);
-  afterEach(drainWakes);
+  let state: OpenClawTestState;
+  beforeEach(async () => {
+    state = await createOpenClawTestState({ layout: "state-only", prefix: "bash-notify-" });
+    setRuntimeConfigSnapshot({});
+    vi.mocked(enqueueSessionEvent).mockClear();
+  });
+  afterEach(async () => {
+    resetSystemEventsForTest();
+    clearRuntimeConfigSnapshot();
+    await state.cleanup();
+  });
 
-  it("routes a completion event and heartbeat wake to the originating session", async () => {
-    const wake = vi.fn<NonNullable<Parameters<typeof setHeartbeatWakeHandler>[0]>>(async () => ({
-      status: "skipped",
-      reason: "disabled",
-    }));
-    const dispose = setHeartbeatWakeHandler(wake);
-    try {
-      const id = await startBackground(
-        notifyTool({
-          messageProvider: "telegram",
-          currentChannelId: "telegram:-100123:topic:47",
-          currentThreadTs: "47",
-        }),
-        shellEcho("notify"),
-      );
-      await waitForExecScope(scopeKey);
-      expect(getFinishedSession(id)).toMatchObject({
-        id,
-        terminalStatus: "completed",
-        exitCode: 0,
-      });
-      expect(peekSystemEventEntries(sessionKey)).toContainEqual(
-        expect.objectContaining({
-          contextKey: `exec:${id}`,
-          deliveryContext: {
-            channel: "telegram",
-            to: "telegram:-100123:topic:47",
-            threadId: "47",
-            accountId: undefined,
-          },
-        }),
-      );
-      await expect
-        .poll(() => wake.mock.calls.at(0)?.[0], {
-          timeout: isWin ? 12_000 : 5_000,
-          interval: isWin ? 15 : 2,
-        })
-        .toEqual({
-          source: "exec-event",
-          intent: "event",
-          reason: "exec-event",
-          sessionKey,
-        });
-      expect(
-        await drainFormattedSystemEvents({
-          cfg: {},
-          agentId: "main",
-          sessionKey,
-          isMainSession: false,
-          isNewSession: false,
-        }),
-      ).toBeUndefined();
-    } finally {
-      dispose();
-    }
+  it("hands off a completion event to the originating session", async () => {
+    const id = await startBackground(
+      notifyTool({
+        messageProvider: "telegram",
+        currentChannelId: "telegram:-100123:topic:47",
+        currentThreadTs: "47",
+      }),
+      shellEcho("notify"),
+    );
+    await waitForExecScope(scopeKey);
+    expect(getFinishedSession(id)).toMatchObject({ id, terminalStatus: "completed", exitCode: 0 });
+    expect(peekSystemEventEntries(sessionKey)).toContainEqual(
+      expect.objectContaining({
+        contextKey: `exec:${id}`,
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:-100123:topic:47",
+          threadId: "47",
+          accountId: undefined,
+        },
+      }),
+    );
+    expect(enqueueSessionEvent).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        source: "exec",
+        agentId: "main",
+        sessionKey,
+        expectedTarget: expect.objectContaining({ agentId: "main", sessionKey }),
+      }),
+    );
+    expect(
+      await drainFormattedSystemEvents({
+        cfg: {},
+        agentId: "main",
+        sessionKey,
+        isMainSession: false,
+        isNewSession: false,
+      }),
+    ).toBeUndefined();
   });
 
   it("consumes only the acknowledged poll's completion event", async () => {

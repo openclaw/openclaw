@@ -61,7 +61,7 @@ export async function recoverCronRunForTest(
 type RecoveryStateOverrides = Partial<
   Pick<
     Parameters<typeof createCronServiceState>[0],
-    "cronConfig" | "enqueueSystemEvent" | "requestHeartbeat" | "sendCronFailureAlert"
+    "cronConfig" | "enqueueSessionEvent" | "sendCronFailureAlert"
   >
 >;
 
@@ -78,7 +78,7 @@ export function makeCronRecoveryState(
     log,
     nowMs: () => nowMs,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     ...overrides,
   });

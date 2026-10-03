@@ -46,6 +46,42 @@ subpaths, including older published `@openclaw/discord` packages. Upgrade affect
 plugins before upgrading the host. Not every export has a path-only replacement;
 see the [per-surface mappings](/plugins/sdk-migration/import-paths#removed-command-and-channel-facades).
 
+### Heartbeat execution and reply helpers
+
+The Heartbeat-to-Automations cutover removes the following SDK surfaces with
+explicit maintainer approval on October 3, 2026:
+
+- `openclaw/plugin-sdk/heartbeat-runtime`, including `requestHeartbeat`.
+- `api.runtime.system.requestHeartbeat`, `requestHeartbeatNow`, and
+  `runHeartbeatOnce`.
+- The `reply-runtime` exports `HEARTBEAT_PROMPT`, `HEARTBEAT_TOKEN`,
+  `DEFAULT_HEARTBEAT_ACK_MAX_CHARS`, `resolveHeartbeatPromptCore`,
+  `stripHeartbeatToken`, and `resolveHeartbeatReplyPayload`.
+- The `agent-harness-runtime` exports `HeartbeatToolResponse`,
+  `HEARTBEAT_RESPONSE_TOOL_NAME`, and `normalizeHeartbeatToolResponse`.
+- The `provider-model-shared` exports `GPT5_HEARTBEAT_PROMPT_OVERLAY` and
+  `GPT5_FRIENDLY_PROMPT_OVERLAY`, plus the `includeHeartbeatGuidance` option on
+  `resolveGpt5SystemPromptContribution`.
+- The `GetReplyOptions` fields `isHeartbeat`, `useHeartbeatFailureCopy`,
+  `heartbeatModelOverride`, `enableHeartbeatTool`, and `forceHeartbeatTool`, plus
+  the `typingPolicy: "heartbeat"` value.
+
+This is a breaking plugin-SDK change. Plugins importing removed names must be
+updated before upgrading the host; deprecated aliases are not retained.
+Schedule recurring work through ordinary [Automations](/automation/cron-jobs).
+For immediate follow-ups, use `api.runtime.system.enqueueSessionEvent` with an
+explicit agent and session, and inspect the returned settlement receipt. Capture
+the original destination before awaited work with `captureSessionEventTarget`;
+see [system utilities](/plugins/sdk-runtime/state-and-system#state-config-and-system-namespaces).
+Configure model and delivery policy on the automation instead of reply options.
+Ordinary internal events use `typingPolicy: "system_event"`; silent replies use
+`SILENT_REPLY_TOKEN` and `isSilentReplyText` from `reply-runtime`.
+
+The non-deprecated `heartbeat_prompt_contribution` hook remains available only for
+receipt-owned migrated/default proactive automations. Historical transcript
+recognition and the protocol-v4 wire adapters also remain supported; they do not
+provide a plugin execution API.
+
 ### Process-global API-provider publication
 
 `registerApiProvider(...)` and `unregisterApiProviders(...)` were removed from

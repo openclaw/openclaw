@@ -7,7 +7,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
-import { getReplyFromConfig } from "./get-reply.js";
+import { getReplyFromConfigInternal } from "./get-reply.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 
 vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
@@ -56,7 +56,7 @@ it.each([
     await state.writeConfig(cfg);
     const body = "/dashboard release health";
     const sessionKey = "agent:main:dashboard-proof";
-    const reply = await getReplyFromConfig(
+    const reply = await getReplyFromConfigInternal(
       finalizeInboundContext({
         Body: body,
         RawBody: body,

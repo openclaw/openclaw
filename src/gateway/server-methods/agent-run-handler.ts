@@ -5,7 +5,7 @@ import { createAgentTurnIo } from "../agent-turn/io.js";
 import { captureAgentTurnPrincipal, resolveAgentTurnRunObserver } from "../agent-turn/principal.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
-import type { AgentRunRequest } from "./agent-request-types.js";
+import type { AgentRpcRunRequest, AgentRunRequest } from "./agent-request-types.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -49,7 +49,14 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
   if (!runtimeAuthority.ensureActive()) {
     return;
   }
-  const request = params as AgentRunRequest;
+  const rpcRequest = params as AgentRpcRunRequest;
+  const request: AgentRunRequest = {
+    ...rpcRequest,
+    bootstrapContextRunKind:
+      rpcRequest.bootstrapContextRunKind === "heartbeat"
+        ? "cron"
+        : rpcRequest.bootstrapContextRunKind,
+  };
   const principal = captureAgentTurnPrincipal(client);
   const preflight = prepareAgentRequestPreflight({ request, context, client: principal, io });
   if (!preflight) {

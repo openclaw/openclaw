@@ -55,23 +55,31 @@ async function runSystemGatewayCommand(
   }
 }
 
-/** Register Gateway-backed system event, heartbeat, and presence commands. */
+/** Register Gateway-backed session event and presence commands. */
 export function registerSystemCli(program: Command) {
   const system = program
     .command("system")
-    .description("System tools (events, heartbeat, presence)")
+    .description("System tools (session events, presence)")
     .addHelpText("after", () => formatDocsHelp("/cli/system"));
   setCommandJsonMode(system, "output", ({ argv }) => isSystemMachineOutput(argv));
 
   addGatewayClientOptions(
     system
       .command("event")
-      .description("Enqueue a system event and optionally trigger a heartbeat")
+      .description("Submit a session event (use --mode now for immediate processing)")
       .requiredOption("--text <text>", "System event text")
-      .option("--mode <mode>", "Wake mode (now|next-heartbeat)", "next-heartbeat")
+      .option(
+        "--mode <mode>",
+        "now: process immediately; next-heartbeat: deprecated scheduled-job deferral",
+        "next-heartbeat",
+      )
       .option(
         "--session-key <sessionKey>",
         "Target a specific session for the event (defaults to the agent's main session)",
+      )
+      .addHelpText(
+        "after",
+        "\nPrefer --mode now for new calls. The legacy next-heartbeat mode requires a scheduled target unless --session-key is explicit (immediate). Use openclaw automations for delayed work.\n",
       )
       .option("--json", "Output JSON", false),
   ).action(async (opts: SystemEventOpts) => {
@@ -105,20 +113,14 @@ export function registerSystemCli(program: Command) {
     );
   });
 
-  const heartbeat = system.command("heartbeat").description("Heartbeat controls");
-
-  for (const [parent, name, description, method, params] of [
-    [heartbeat, "last", "Show the last heartbeat event", "last-heartbeat", undefined],
-    [heartbeat, "enable", "Enable heartbeats", "set-heartbeats", { enabled: true }],
-    [heartbeat, "disable", "Disable heartbeats", "set-heartbeats", { enabled: false }],
-    [system, "presence", "List system presence entries", "system-presence", undefined],
-  ] as const) {
-    addGatewayClientOptions(
-      parent.command(name).description(description).option("--json", "Output JSON", false),
-    ).action(async (opts: SystemGatewayOpts) => {
-      await runSystemGatewayCommand(opts, () =>
-        callGatewayFromCli(method, opts, params, { expectFinal: false }),
-      );
-    });
-  }
+  addGatewayClientOptions(
+    system
+      .command("presence")
+      .description("List system presence entries")
+      .option("--json", "Output JSON", false),
+  ).action(async (opts: SystemGatewayOpts) => {
+    await runSystemGatewayCommand(opts, () =>
+      callGatewayFromCli("system-presence", opts, undefined, { expectFinal: false }),
+    );
+  });
 }

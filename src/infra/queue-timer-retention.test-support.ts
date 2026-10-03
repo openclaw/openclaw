@@ -2,17 +2,11 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage, createHook } from "node:async_hooks";
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
-import { MessageChannel } from "node:worker_threads";
 import { enqueueCommandInLane, getQueueSize } from "../process/command-queue.js";
 import { BoundedSerialQueue } from "../shared/bounded-serial-queue.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
 import { collectForRetentionCheck } from "../test-utils/retention.js";
-import {
-  requestSessionEventWake,
-  requestSessionEventWakeAndWait,
-  setSessionEventWakeHandler,
-} from "./session-event-wake.js";
 import { ensureTerminalUploadCleanup, stageTerminalUpload } from "./terminal-file-upload.js";
 
 const [resource, rootArgument] = process.argv.slice(2);
@@ -96,10 +90,17 @@ async function queueFixture(): Promise<Fixture> {
 
 async function timerFixture(): Promise<Fixture> {
   const timers: WeakRef<object>[] = [];
+  let noticeTimerCreated: (() => void) | undefined;
   const hook = createHook({
     init(_id, type, _trigger, value) {
       if (type === "Timeout") {
-        timers.push(new WeakRef(value));
+        const noticeTimer = (value as { _idleTimeout: number })._idleTimeout === 20_000;
+        if (resource !== "session-notice" || noticeTimer) {
+          timers.push(new WeakRef(value));
+        }
+        if (noticeTimer) {
+          noticeTimerCreated?.();
+        }
       }
     },
   });
@@ -142,14 +143,40 @@ async function timerFixture(): Promise<Fixture> {
       },
     };
   }
-  assert.equal(resource, "wake");
-  const dispose = setSessionEventWakeHandler(async () => ({ status: "ran", durationMs: 0 }));
+  assert.equal(resource, "session-notice");
+  const { setRuntimeConfigSnapshot } = await import("../config/runtime-snapshot.js");
+  const { upsertSessionEntryCore } = await import("../config/sessions/session-accessor.js");
+  const { publishSystemEventStoreResolver } = await import("./system-event-ownership.js");
+  const { peekSystemEventEntries, resetSystemEventsForTest } = await import("./system-events.js");
+  const { enqueueSessionStateNotice } = await import("../sessions/session-state-notices.js");
+  const { drainGlobalSingletonLifecycleState } = await import("../shared/global-singleton.js");
+  const { closeOpenClawAgentDatabasesAsync } = await import("../state/openclaw-agent-db.js");
+  const { closeOpenClawStateDatabaseAsync } = await import("../state/openclaw-state-db.js");
+  const sessionKey = "agent:main:retention";
+  const storePath = path.join(root, "sessions.sqlite");
+  setRuntimeConfigSnapshot({
+    agents: { entries: { main: {} } },
+    session: { store: storePath },
+  });
+  await upsertSessionEntryCore(
+    { agentId: "main", sessionKey, storePath },
+    { sessionId: "notice-retention", updatedAt: 1 },
+  );
+  publishSystemEventStoreResolver(() => storePath);
+  const enqueue = (lastSeenSequence: number) =>
+    enqueueSessionStateNotice({
+      watcherSessionKey: sessionKey,
+      watcherStorePath: storePath,
+      targetSessionKey: "agent:main:subagent:child",
+      lastSeenSequence,
+    });
+  const queued = createDeferredCore();
+  noticeTimerCreated = () => queued.resolve();
   hook.enable();
   let references: WeakRef<object>[];
   try {
-    references = await completedCaller(() => {
-      requestSessionEventWake({ source: "other", intent: "event", coalesceMs: 120_000 });
-    });
+    references = await completedCaller(() => enqueue(1));
+    await queued.promise;
   } finally {
     hook.disable();
   }
@@ -157,29 +184,30 @@ async function timerFixture(): Promise<Fixture> {
     references,
     assertAlive,
     reuse: async () => {
-      // The product wake is unref'ed; own process liveness until its delivery settles.
-      const lifetime = new MessageChannel();
-      lifetime.port1.on("message", () => {});
+      const requeued = createDeferredCore();
+      noticeTimerCreated = () => requeued.resolve();
+      hook.enable();
       try {
-        assert.deepEqual(
-          await requestSessionEventWakeAndWait({
-            source: "other",
-            intent: "event",
-            coalesceMs: 0,
-          }),
-          { status: "ran", durationMs: 0 },
-        );
+        enqueue(2);
+        await requeued.promise;
+        assert.equal(peekSystemEventEntries(sessionKey).length, 2);
       } finally {
-        lifetime.port1.close();
-        lifetime.port2.close();
+        hook.disable();
       }
     },
-    close: async () => dispose(),
+    close: async () => {
+      resetSystemEventsForTest();
+      await drainGlobalSingletonLifecycleState("restart");
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
+    },
   };
 }
 
 const fixture =
-  resource === "terminal" || resource === "wake" ? await timerFixture() : await queueFixture();
+  resource === "terminal" || resource === "session-notice"
+    ? await timerFixture()
+    : await queueFixture();
 try {
   await collectForRetentionCheck(`queue-${resource}`);
   fixture.assertAlive();

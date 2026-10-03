@@ -3,7 +3,7 @@ import type { AgentParamsSchema } from "../../../packages/gateway-protocol/src/s
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 
-export type AgentRunRequest = Omit<
+export type AgentRpcRunRequest = Omit<
   Static<typeof AgentParamsSchema>,
   "attachments" | "internalEvents" | "inputProvenance"
 > & {
@@ -16,4 +16,9 @@ export type AgentRunRequest = Omit<
   internalEvents?: AgentInternalEvent[];
   inputProvenance?: InputProvenance;
   workspaceDir?: string;
+};
+
+/** Runtime requests contain only canonical execution kinds after protocol adaptation. */
+export type AgentRunRequest = Omit<AgentRpcRunRequest, "bootstrapContextRunKind"> & {
+  bootstrapContextRunKind?: "default" | "cron";
 };

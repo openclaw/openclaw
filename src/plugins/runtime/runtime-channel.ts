@@ -56,6 +56,11 @@ import {
 } from "../../channels/plugins/conversation-bindings.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import { recordInboundSession } from "../../channels/session.js";
+import type {
+  ChannelTurnDeliveryAdapter,
+  ChannelTurnResult,
+  RunChannelTurnParams,
+} from "../../channels/turn/types.js";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
@@ -77,6 +82,12 @@ import {
   removeChannelAllowFromStoreEntry,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
+import {
+  publicChannelTurn,
+  publicChannelTurnParams,
+  publicReplyOptions,
+  type PublicChannelTurnParams,
+} from "../../plugin-sdk/reply-options.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { createChannelRuntimeContextRegistry } from "./channel-runtime-contexts.js";
@@ -108,14 +119,23 @@ const runChannelTurn = createLazyRuntimeMethod(
   createLazyRuntimeModule(() => import("../../channels/turn/run-channel-turn.js")),
   (runtime) => runtime.runChannelTurn,
   // SAFETY: Forwarding async overloads unchanged preserves the raw-event and dispatch-result generics.
-) as PluginRuntime["channel"]["inbound"]["run"];
+) as typeof import("../../channels/turn/run-channel-turn.js").runChannelTurn;
 
 export function createRuntimeChannel(options?: {
-  dispatchReplyFromConfig?: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
+  dispatchReplyFromConfig?: typeof dispatchLowLevelChannelReplyFromConfig;
 }): PluginRuntime["channel"] {
+  const runInbound = <TRaw, TResult>(
+    params: PublicChannelTurnParams<TRaw, TResult, ChannelTurnDeliveryAdapter>,
+  ): Promise<ChannelTurnResult<TResult>> => {
+    // SAFETY: Core's implementation accepts this delivery-adapter union and preserves TRaw/TResult; its public overloads split the two adapters.
+    const run = runChannelTurn as (
+      value: RunChannelTurnParams<TRaw, TResult, ChannelTurnDeliveryAdapter>,
+    ) => Promise<ChannelTurnResult<TResult>>;
+    return run(publicChannelTurnParams(params));
+  };
   const dispatchInbound: PluginRuntime["channel"]["inbound"]["dispatch"] = async (params) =>
     (await loadChannelTurnLifecycle()).dispatchRoutedChannelTurn({
-      ...params,
+      ...publicChannelTurn(params),
       ...(options?.dispatchReplyFromConfig
         ? { dispatchReplyFromConfig: options.dispatchReplyFromConfig }
         : {}),
@@ -127,10 +147,10 @@ export function createRuntimeChannel(options?: {
       resolveStable: resolveStableChannelIngressPolicy,
     },
     buildContext: buildChannelInboundEventContext,
-    run: runChannelTurn,
+    run: runInbound,
     runPreparedReply: runPreparedChannelTurn,
     dispatch: dispatchInbound,
-    dispatchReply: dispatchAssembledChannelTurn,
+    dispatchReply: (params) => dispatchAssembledChannelTurn(publicChannelTurn(params)),
   } satisfies PluginRuntime["channel"]["inbound"];
   const sessionRuntime = {
     resolveStorePath: resolveSessionStorePathCore,
@@ -156,12 +176,19 @@ export function createRuntimeChannel(options?: {
       convertMarkdownTables,
     },
     reply: {
-      dispatchReplyWithBufferedBlockDispatcher: dispatchReplyWithBufferedBlockDispatcherCore,
+      dispatchReplyWithBufferedBlockDispatcher: (params) =>
+        dispatchReplyWithBufferedBlockDispatcherCore({
+          ...params,
+          replyOptions: publicReplyOptions(params.replyOptions),
+        }),
       createReplyDispatcherWithTyping,
       resolveEffectiveMessagesConfig,
       resolveHumanDelayConfig,
-      dispatchReplyFromConfig:
-        options?.dispatchReplyFromConfig ?? dispatchLowLevelChannelReplyFromConfig,
+      dispatchReplyFromConfig: (params) =>
+        (options?.dispatchReplyFromConfig ?? dispatchLowLevelChannelReplyFromConfig)({
+          ...params,
+          replyOptions: publicReplyOptions(params.replyOptions),
+        }),
       withReplyDispatcher,
       settleReplyDispatcher,
       finalizeInboundContext,

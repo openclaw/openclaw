@@ -372,6 +372,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/claws/package-removal-status.test.ts",
   "src/claws/package-remove.test.ts",
   "src/claws/provenance-deletion.test.ts",
+  "src/claws/portable-heartbeat.test.ts",
   "src/claws/provenance-write.test.ts",
   "src/claws/package-update.test.ts",
   "src/claws/packages.runtime.test.ts",

@@ -68,7 +68,16 @@ export {
 export { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
 export type { CanonicalSessionReaderContinuation } from "../../../../src/config/sessions/session-canonical-key.js";
 export type { SessionEntry } from "../../../../src/config/sessions/types.js";
-export { isExecCompletionEvent } from "../../../../src/infra/heartbeat-events-filter.js";
+/** Historical command notices are runtime context, not user-authored memory. */
+export function isExecCompletionEvent(event: string): boolean {
+  const trimmed = event.trimStart();
+  return (
+    /^exec finished(?::|\s*\()/i.test(trimmed) ||
+    /^exec (completed|failed) \(([a-z0-9_-]{1,64}), (code -?\d+|signal [^)]+)\)(?: :: ([\s\S]*))?$/i.test(
+      trimmed,
+    )
+  );
+}
 export {
   parseSqliteSessionFileMarker,
   resolveStorePath,

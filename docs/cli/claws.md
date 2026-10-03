@@ -440,23 +440,36 @@ openclaw claws migrate research-agent \
 ```
 
 Migration supports Claw v1 agent identity and OpenClaw profile settings, plus
-the existing `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and
-`HEARTBEAT.md` prompt files. It fails closed when a setting cannot be
+the existing `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, and `TOOLS.md` prompt files.
+The deprecated portable `agent.heartbeat` settings and `HEARTBEAT.md` input
+import into an ordinary automation and its scratch, without installing runtime
+heartbeat configuration or a managed heartbeat prompt file. Migration fails
+closed when a setting cannot be
 represented faithfully, workspace ownership is ambiguous, a selected file is
 unsafe, or likely secret material is detected. Selected files are recorded
 with their existing content digests and are not rewritten. `BOOTSTRAP.md`,
 credentials, sessions, transcripts, databases, and every other workspace entry
 remain local and outside Claw ownership.
 
-Inherited model, subagent allowlist/delegation, heartbeat schedule, sandbox
+Inherited model, subagent allowlist/delegation, sandbox
 mode/scope/workspace access, and human-delay defaults are copied into the
-generated profile. Host ownership pointers such as `heartbeat.agentId` remain in
-OpenClaw config. Other inherited agent defaults that Claw v1 cannot carry,
+generated profile. Other inherited agent defaults that Claw v1 cannot carry,
 including provider params, skills, model policy/catalog, or unsupported
-heartbeat/sandbox fields and custom compaction settings, block migration with
+sandbox fields and custom compaction settings, block migration with
 their setting paths in the diagnostic. An empty compaction placeholder or the
 effective `safeguard` default materialized by OpenClaw has no effect beyond the
 runtime default and is ignored.
+
+The portable v1 heartbeat adapter can carry `every`, `activeHours`,
+`lightContext`, `isolatedSession`, and `timeoutSeconds`. Its ordinary job and
+scratch become the runtime owners. Claw updates retain the job identity and
+history, and check job and scratch revisions before changing them. Local edits,
+deletion, ambiguous ownership, or job policies that cannot round-trip through the
+portable format require explicit reconciliation; export and update do not
+silently drop those policies or recreate a deleted job. Removing the portable
+declaration from an updated package releases its artifact ownership while
+retaining the ordinary job and scratch. Use Automations to remove a job you no
+longer want.
 
 `claws status` and `claws update` use the generated package after migration.
 Removing an adopted Claw releases its ownership records while retaining the

@@ -200,7 +200,6 @@ it.each<{
         }
         const { replyPayloads } = await buildReplyPayloads({
           payloads: [finalPayload],
-          isHeartbeat: false,
           didLogHeartbeatStrip: false,
           blockStreamingEnabled: true,
           blockReplyPipeline: pipeline,
@@ -339,7 +338,6 @@ it("dispatchReplyFromConfig reserves a source before concurrent fragment prepara
         await Promise.all([prefix, suffix]);
         const { replyPayloads } = await buildReplyPayloads({
           payloads: [{ text: "See [" }],
-          isHeartbeat: false,
           didLogHeartbeatStrip: false,
           blockStreamingEnabled: true,
           blockReplyPipeline: pipeline,

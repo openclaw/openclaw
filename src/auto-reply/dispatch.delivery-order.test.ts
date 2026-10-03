@@ -23,7 +23,7 @@ vi.mock("./reply/dispatch-from-config.js", () => ({
     hoisted.dispatchReplyFromConfigMock(...args),
 }));
 
-const { dispatchInboundMessageWithBufferedDispatcher } = await import("./dispatch.js");
+const { dispatchInboundMessageWithBufferedDispatcherInternal } = await import("./dispatch.js");
 
 type Delivery = {
   kind: "tool" | "block" | "final";
@@ -96,7 +96,7 @@ function dispatchWithDeliveries(
     onFreshSettledDelivery?: () => object | void | Promise<object | void>;
   } = {},
 ) {
-  return dispatchInboundMessageWithBufferedDispatcher({
+  return dispatchInboundMessageWithBufferedDispatcherInternal({
     ctx,
     cfg: {} as OpenClawConfig,
     dispatcherOptions: {

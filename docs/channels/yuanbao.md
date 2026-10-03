@@ -288,7 +288,6 @@ Use `bindings` to route Yuanbao DMs or groups to different agents:
   agents: {
     ownership: "explicit",
     defaults: {
-      heartbeat: { agentId: "main" },
       systemAgent: { agentId: "main" },
     },
     entries: {

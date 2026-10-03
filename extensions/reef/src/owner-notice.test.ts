@@ -75,7 +75,7 @@ function createNoticeStore() {
 }
 
 describe("createReefOwnerNoticeHandler", () => {
-  it("queues a generic owner notice in the peer session and wakes on request", async () => {
+  function fixture() {
     const runtime = createPluginRuntimeMock();
     vi.mocked(runtime.channel.routing.resolveAgentRoute).mockReturnValue({
       agentId: "main",
@@ -86,47 +86,86 @@ describe("createReefOwnerNoticeHandler", () => {
       lastRoutePolicy: "session",
       matchedBy: "default",
     });
-    vi.mocked(runtime.system.enqueueSystemEvent).mockReturnValue(true);
     const notify = createReefOwnerNoticeHandler({
       runtime,
       cfg: {},
       accountId: "default",
       handle: "bob",
     });
+    return { runtime, notify };
+  }
 
-    await notify({
+  it("does not acknowledge an owner notice before its session follow-up settles", async () => {
+    const { runtime, notify } = fixture();
+    let settle!: (value: {
+      status: "completed";
+      executionStarted: boolean;
+      delivered: boolean;
+    }) => void;
+    const settled = new Promise<{
+      status: "completed";
+      executionStarted: boolean;
+      delivered: boolean;
+    }>((resolve) => {
+      settle = resolve;
+    });
+    vi.mocked(runtime.system.enqueueSessionEvent).mockReturnValue({
+      id: "notice",
+      cancel: vi.fn(),
+      settled,
+    });
+    let finished = false;
+    const pending = notify({
       text: "owner notice",
       peer: "alice",
       contextKey: "reef:owner:alice",
       wakeAgent: true,
+    }).then(() => {
+      finished = true;
     });
-
-    expect(runtime.system.enqueueSystemEvent).toHaveBeenCalledWith("owner notice", {
+    await Promise.resolve();
+    expect(finished).toBe(false);
+    expect(runtime.system.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith("owner notice", {
+      agentId: "main",
       sessionKey: "agent:main:reef:direct:alice",
       contextKey: "reef:owner:alice",
     });
-    expect(runtime.system.requestHeartbeat).toHaveBeenCalledWith({
-      source: "other",
-      intent: "immediate",
-      reason: "reef:delivery-rejected",
-      agentId: "main",
-      sessionKey: "agent:main:reef:direct:alice",
-    });
+    expect(runtime.system.enqueueSystemEvent).not.toHaveBeenCalled();
+    settle({ status: "completed", executionStarted: true, delivered: true });
+    await pending;
+    expect(finished).toBe(true);
   });
 
-  it("does not wake when the generic notice is already queued", async () => {
-    const runtime = createPluginRuntimeMock();
-    vi.mocked(runtime.system.enqueueSystemEvent).mockReturnValue(false);
-    const notify = createReefOwnerNoticeHandler({
-      runtime,
-      cfg: {},
-      accountId: "default",
-      handle: "bob",
+  it("leaves passive owner notices queued without starting a model turn", async () => {
+    const { runtime, notify } = fixture();
+    await notify({ text: "owner notice", contextKey: "reef:owner:alice", wakeAgent: false });
+    expect(runtime.system.enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith("owner notice", {
+      sessionKey: "agent:main:reef:direct:alice",
+      contextKey: "reef:owner:alice",
     });
+    expect(runtime.system.enqueueSessionEvent).not.toHaveBeenCalled();
+  });
 
-    await notify({ text: "owner notice", contextKey: "reef:owner:bob", wakeAgent: true });
-
-    expect(runtime.system.requestHeartbeat).not.toHaveBeenCalled();
+  it("retains failed owner notices with their producer instead of acknowledging a bare enqueue", async () => {
+    const { runtime, notify } = fixture();
+    vi.mocked(runtime.system.enqueueSessionEvent).mockReturnValue({
+      id: "notice",
+      cancel: vi.fn(),
+      settled: Promise.resolve({
+        status: "failed",
+        executionStarted: false,
+        delivered: false,
+        error: "destination replaced",
+      }),
+    });
+    await expect(
+      notify({
+        text: "owner notice",
+        peer: "alice",
+        contextKey: "reef:owner:alice",
+        wakeAgent: true,
+      }),
+    ).rejects.toThrow("destination replaced");
   });
 });
 

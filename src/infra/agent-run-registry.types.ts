@@ -7,6 +7,11 @@ import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js"
 
 export type AgentRunModel = { provider: string; model: string };
 
+export type AutomationResult = {
+  outcome: "no_change" | "progress" | "done" | "blocked" | "needs_attention";
+  summary: string;
+};
+
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
 export type AgentRunContext = {
   /** Trusted refusal fact consumed only by this run's existing terminal mutation. */
@@ -24,7 +29,6 @@ export type AgentRunContext = {
   lifecycleStartedAt?: number;
   activeModel?: AgentRunModel;
   verboseLevel?: VerboseLevel;
-  isHeartbeat?: boolean;
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
   projectSessionActive?: boolean;
@@ -37,8 +41,17 @@ export type AgentRunContext = {
   projectSessionLifecycle?: boolean;
   /** Sticky diagnostic provenance only; never authorization for recovery work. */
   mainSessionRestartRecovery?: true;
-  /** Active cadence state by job; admission permits one invocation per job. */
-  cronRunsByJobId?: Map<string, { pacingEnabled: boolean; nextCheckMs?: number }>;
+  /** Active invocation state by job; admission permits one invocation per job. */
+  cronRunsByJobId?: Map<
+    string,
+    {
+      pacingEnabled: boolean;
+      nextCheckMs?: number;
+      assertCurrent?: () => void;
+      closed?: boolean;
+      result?: AutomationResult;
+    }
+  >;
   /** Timestamp when this context was first registered (for TTL-based cleanup). */
   registeredAt?: number;
   /** Bounded presentation facts from this registration's accepted events; never authority. */

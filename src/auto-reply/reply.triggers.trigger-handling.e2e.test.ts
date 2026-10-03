@@ -30,7 +30,7 @@ import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./r
 import type { MsgContext } from "./templating.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
-type GetReplyFromConfig = typeof import("./reply/get-reply.js").getReplyFromConfig;
+type GetReplyFromConfig = typeof import("./reply/get-reply.js").getReplyFromConfigInternal;
 
 async function withUnavailableThinkingCatalog(
   run: (
@@ -127,11 +127,13 @@ installTriggerHandlingReplyHarness((impl) => {
   capturedGetReplyFromConfig = impl;
 });
 
-function getReplyFromConfig(
+function getReplyFromConfigInternal(
   ...args: Parameters<GetReplyFromConfig>
 ): ReturnType<GetReplyFromConfig> {
   if (!capturedGetReplyFromConfig) {
-    throw new Error("Expected trigger handling reply harness to install getReplyFromConfig");
+    throw new Error(
+      "Expected trigger handling reply harness to install getReplyFromConfigInternal",
+    );
   }
   return capturedGetReplyFromConfig(...args);
 }
@@ -241,7 +243,7 @@ function makeStartupContextCfg(home: string, startupContext?: { applyOn: Array<"
 }
 
 async function runAuthorizedSmsCommand(body: string, cfg: ReturnType<typeof makeCfg>) {
-  return await getReplyFromConfig(makeAuthorizedSmsCommandMessage(body), {}, cfg);
+  return await getReplyFromConfigInternal(makeAuthorizedSmsCommandMessage(body), {}, cfg);
 }
 
 function firstMockCallArg(
@@ -269,7 +271,7 @@ async function expectNextRunUsesTargetSession(
 ) {
   mockRunEmbeddedAgentText("ok", 5);
 
-  await getReplyFromConfig(
+  await getReplyFromConfigInternal(
     makeTelegramSessionMessage("hi", params.targetSessionKey),
     {},
     params.cfg,
@@ -340,7 +342,7 @@ async function expectResetBlockedForNonOwner(params: {
     store: join(home, "blocked-reset.sessions.json"),
   };
   await withUnavailableThinkingCatalog(async (catalog) => {
-    const res = await getReplyFromConfig(
+    const res = await getReplyFromConfigInternal(
       {
         Body: command,
         From: "+1003",
@@ -362,7 +364,7 @@ function mockEmbeddedOk() {
 
 async function runInlineUnauthorizedCommand(params: { home: string; command: "/status" }) {
   const cfg = makeUnauthorizedWhatsAppCfg(params.home);
-  const res = await getReplyFromConfig(
+  const res = await getReplyFromConfigInternal(
     {
       Body: `please ${params.command} now`,
       From: "+2001",
@@ -379,7 +381,7 @@ async function runInlineUnauthorizedCommand(params: { home: string; command: "/s
 describe("trigger handling", () => {
   registerGroupIntroPromptCases();
   registerTriggerHandlingUsageSummaryCases({
-    getReplyFromConfig: () => getReplyFromConfig,
+    getReplyFromConfigInternal: () => getReplyFromConfigInternal,
   });
 
   for (const testCase of [
@@ -400,7 +402,7 @@ describe("trigger handling", () => {
         runEmbeddedAgentMock.mockImplementation(async () => {
           throw new Error(testCase.error);
         });
-        const errorRes = await getReplyFromConfig(BASE_MESSAGE, {}, makeCfg(home));
+        const errorRes = await getReplyFromConfigInternal(BASE_MESSAGE, {}, makeCfg(home));
         expect(maybeReplyText(errorRes), testCase.error).toBe(testCase.expected);
         expect(runEmbeddedAgentMock, testCase.error).toHaveBeenCalledOnce();
       });
@@ -424,7 +426,7 @@ describe("trigger handling", () => {
             agentMeta: { sessionId: "s", provider: "p", model: "m" },
           },
         });
-        const res = await getReplyFromConfig(BASE_MESSAGE, {}, makeCfg(home));
+        const res = await getReplyFromConfigInternal(BASE_MESSAGE, {}, makeCfg(home));
         expect(maybeReplyText(res)).toBe(testCase.expected);
         expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
       }
@@ -524,23 +526,17 @@ describe("trigger handling", () => {
           options: {},
           expectedPrompt: currentBody,
         },
-        {
-          label: "heartbeat",
-          request: {
-            Body: "HEARTBEAT /think:high",
-            From: "+1003",
-            To: "+1003",
-          },
-          options: { isHeartbeat: true },
-          expectedPrompt: undefined,
-        },
       ] as const;
 
       for (const testCase of thinkCases) {
         const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
         runEmbeddedAgentMock.mockReset();
         mockRunEmbeddedAgentOk();
-        const res = await getReplyFromConfig(testCase.request, testCase.options, makeCfg(home));
+        const res = await getReplyFromConfigInternal(
+          testCase.request,
+          testCase.options,
+          makeCfg(home),
+        );
         const text = maybeReplyText(res);
         expect(text, testCase.label).toBe("ok");
         expect(text, testCase.label).not.toMatch(/Thinking level set/i);
@@ -554,43 +550,26 @@ describe("trigger handling", () => {
     });
   });
 
-  it("resolves heartbeat model selection from overrides", async () => {
+  it("uses a turn-local model override without changing the stored selection", async () => {
     await withTempHome(async (home) => {
-      const modelCases = [
-        {
-          label: "heartbeat-override",
-          setup: (cfg: ReturnType<typeof makeCfg>) => {
-            cfg.agents = {
-              ...cfg.agents,
-              defaults: {
-                ...cfg.agents?.defaults,
-                heartbeat: { model: "anthropic/claude-haiku-4-5-20251001" },
-              },
-            };
-          },
-          expected: { provider: "anthropic", model: "claude-haiku-4-5-20251001" },
-        },
-        {
-          label: "stored-override",
-          setup: () => undefined,
-          expected: { provider: "openai", model: "gpt-5.4" },
-        },
-      ] as const;
-
-      for (const testCase of modelCases) {
-        const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
-        runEmbeddedAgentMock.mockReset();
-        mockEmbeddedOkPayload();
-        const cfg = makeCfg(home);
-        cfg.session = { ...cfg.session, store: join(home, `${testCase.label}.sessions.json`) };
-        await writeStoredModelOverride(cfg);
-        testCase.setup(cfg);
-        await getReplyFromConfig(BASE_MESSAGE, { isHeartbeat: true }, cfg);
-
-        const call = firstMockCallArg(runEmbeddedAgentMock, "embedded OpenClaw agent");
-        expect(call?.provider).toBe(testCase.expected.provider);
-        expect(call?.model).toBe(testCase.expected.model);
-      }
+      const cfg = makeCfg(home);
+      await writeStoredModelOverride(cfg);
+      const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
+      mockEmbeddedOkPayload();
+      await getReplyFromConfigInternal(
+        BASE_MESSAGE,
+        { modelOverride: "anthropic/claude-haiku-4-5-20251001" },
+        cfg,
+      );
+      const first = firstMockCallArg(runEmbeddedAgentMock, "embedded OpenClaw agent");
+      expect(first.provider).toBe("anthropic");
+      expect(first.model).toBe("claude-haiku-4-5-20251001");
+      runEmbeddedAgentMock.mockReset();
+      mockEmbeddedOkPayload();
+      await getReplyFromConfigInternal(BASE_MESSAGE, undefined, cfg);
+      const next = firstMockCallArg(runEmbeddedAgentMock, "embedded OpenClaw agent");
+      expect(next.provider).toBe("openai");
+      expect(next.model).toBe("gpt-5.4");
     });
   });
 
@@ -611,7 +590,7 @@ describe("trigger handling", () => {
       );
       mockSuccessfulCompaction();
 
-      const res = await getReplyFromConfig(
+      const res = await getReplyFromConfigInternal(
         {
           ...request,
           CommandAuthorized: true,
@@ -638,7 +617,7 @@ describe("trigger handling", () => {
         { storePath, sessionKey },
         { sessionId: "compact-worker-session", updatedAt: Date.now() },
       );
-      const res = await getReplyFromConfig(
+      const res = await getReplyFromConfigInternal(
         {
           Body: "/compact",
           From: "+1004",
@@ -708,7 +687,7 @@ describe("trigger handling", () => {
       );
       expect(getFollowupQueueDepth(targetSessionKey)).toBe(1);
 
-      const res = await getReplyFromConfig(
+      const res = await getReplyFromConfigInternal(
         {
           Body: "/stop",
           From: "telegram:111",
@@ -746,7 +725,7 @@ describe("trigger handling", () => {
 
       await seedTargetSession(storePath, targetSessionKey);
 
-      const res = await getReplyFromConfig(
+      const res = await getReplyFromConfigInternal(
         makeNativeTelegramCommandMessage({
           body: "/model openai/gpt-4.1-mini",
           slashSessionKey,
@@ -803,7 +782,7 @@ describe("trigger handling", () => {
         },
       );
 
-      const res = await getReplyFromConfig(
+      const res = await getReplyFromConfigInternal(
         makeNativeTelegramCommandMessage({
           body: "/model deepseek/deepseek-v4-pro",
           slashSessionKey,
@@ -869,7 +848,7 @@ describe("trigger handling", () => {
 
       await seedTargetSession(storePath, targetSessionKey);
 
-      const res = await getReplyFromConfig(
+      const res = await getReplyFromConfigInternal(
         makeNativeTelegramCommandMessage({
           body: `/model openai/gpt-5.4@${TEST_SECONDARY_PROFILE_ID}`,
           slashSessionKey,
@@ -900,13 +879,13 @@ describe("trigger handling", () => {
 
   it("handles bare session reset, inline commands, and unauthorized inline status", async () => {
     await withTempHome(async (home) => {
-      await expectBareNewOrResetAcknowledged({ home, body: "/new", getReplyFromConfig });
+      await expectBareNewOrResetAcknowledged({ home, body: "/new", getReplyFromConfigInternal });
       for (const command of ["/new", "/reset"] as const) {
         await expectResetBlockedForNonOwner({ home, command });
       }
       await expectInlineCommandHandledAndStripped({
         home,
-        getReplyFromConfig,
+        getReplyFromConfigInternal,
         body: "please /whoami now",
         stripToken: "/whoami",
         blockReplyContains: "Identity",

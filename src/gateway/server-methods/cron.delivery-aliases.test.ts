@@ -59,7 +59,6 @@ it("persists canonical delivery for published cron.add and cron.update request a
     defaultAgentId: "main",
     log: cronLogger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(),
   });
   const context = createDirectChatContext({ cron, cronStorePath: storePath, getRuntimeConfig });

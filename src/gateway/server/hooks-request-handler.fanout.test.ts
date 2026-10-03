@@ -655,6 +655,47 @@ describe("hook fan-out dispatch", () => {
     expect(dispatchWakeHook).not.toHaveBeenCalled();
   });
 
+  test.each(["wake", "mapped-wake"])(
+    "rejects %s when hook config changes while wake dispatch prepares its target",
+    async (route) => {
+      const initial = {
+        ...createHooksConfig(),
+        mappings: resolveHookMappings({
+          mappings: [
+            { match: { path: "mapped-wake" }, action: "wake", textTemplate: "stale wake" },
+          ],
+        }),
+      };
+      let current = initial;
+      const preparing = createDeferred();
+      const prepared = createDeferred();
+      const { handler, dispatchWakeHook } = createFanOutHandler({
+        hooksConfig: initial,
+        getHooksConfig: () => current,
+        dispatchWakeHook: async (_value, _agentId, isHooksConfigCurrent) => {
+          preparing.resolve();
+          await prepared.promise;
+          return isHooksConfigCurrent?.() === false ? null : { eventOutcome: "queued" };
+        },
+      });
+      readJsonBodyMock.mockResolvedValueOnce({ ok: true, value: { text: "stale wake" } });
+      const response = createResponse();
+      const handling = handler(createHookRequest({ url: `/hooks/${route}` }), response.res);
+      await preparing.promise;
+      current = { ...initial };
+      prepared.resolve();
+      await handling;
+
+      expect(dispatchWakeHook).toHaveBeenCalledOnce();
+      expect(response.res.statusCode).toBe(409);
+      expect(JSON.parse(response.getBody())).toEqual({
+        ok: false,
+        error: "hook configuration changed; retry request",
+      });
+      expect(response.end).toHaveBeenCalledOnce();
+    },
+  );
+
   test("rechecks hook config inside direct agent dispatch", async () => {
     const initial = createHooksConfig();
     const replacement = { ...initial };

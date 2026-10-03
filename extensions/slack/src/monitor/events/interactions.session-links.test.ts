@@ -1,18 +1,19 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createContext } from "./interactions.test-support.js";
 
-const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
-const requestHeartbeatMock = vi.hoisted(() => vi.fn());
+const enqueueSessionEventMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    id: "interaction",
+    cancel: vi.fn(),
+    settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: true }),
+  })),
+);
 const dispatchPluginInteractiveHandlerMock = vi.hoisted(() =>
   vi.fn(async () => ({ matched: false, handled: false, duplicate: false })),
 );
-vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/system-event-runtime")>()),
-  enqueueRoutedSystemEvent: enqueueSystemEventMock,
-}));
-vi.mock("openclaw/plugin-sdk/heartbeat-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/heartbeat-runtime")>()),
-  requestHeartbeat: requestHeartbeatMock,
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
+  getSlackRuntime: () => ({ system: { enqueueSessionEvent: enqueueSessionEventMock } }),
 }));
 vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>()),
@@ -77,8 +78,7 @@ describe("Slack link-only button acknowledgments", () => {
     const app = await clickLinkButton(testCase.actionId, testCase.value);
 
     expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
-    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
     expect(app.client.chat.update).not.toHaveBeenCalled();
   });
 

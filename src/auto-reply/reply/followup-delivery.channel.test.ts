@@ -212,7 +212,6 @@ describe("follow-up delivery channel boundary", () => {
           runId: "run-1",
           outcome: { kind: "rejected", payload: { text, isError: true } },
         },
-        opts: { isHeartbeat: true },
       });
 
       expect(decision).toMatchObject(

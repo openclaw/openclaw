@@ -19,11 +19,17 @@ import {
   withGatewayToolCallerIdentity,
 } from "./tools/gateway-caller-context.js";
 
-const requestHeartbeatMock = vi.hoisted(() => vi.fn());
+const enqueueSessionEventMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventWithReceiptMock = vi.hoisted(() => vi.fn());
 const supervisorMock = vi.hoisted(() => ({ spawn: vi.fn() }));
-vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeat: requestHeartbeatMock,
+vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
+  captureSessionEventTargetForHost: async (agentId: string, sessionKey: string) => ({
+    agentId,
+    sessionKey,
+    sessionId: sessionKey,
+    generation: "test",
+  }),
+  enqueueSessionEventForHost: enqueueSessionEventMock,
 }));
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEventWithReceipt: enqueueSystemEventWithReceiptMock,
@@ -34,7 +40,7 @@ vi.mock("../process/supervisor/index.js", () => ({
 
 beforeEach(() => {
   resetProcessRegistryForTests();
-  requestHeartbeatMock.mockReset();
+  enqueueSessionEventMock.mockReset();
   enqueueSystemEventWithReceiptMock.mockReset();
   enqueueSystemEventWithReceiptMock.mockReturnValue(vi.fn(() => true));
   supervisorMock.spawn.mockReset();
@@ -314,7 +320,7 @@ it.each([
 
 describe("terminal execution-context release", () => {
   it.each([
-    { path: "notify", trace: ["task", "enqueue", "wake"] },
+    { path: "notify", trace: ["task", "enqueue"] },
     { path: "quiet", trace: ["task"] },
     { path: "unrouted", trace: ["task"] },
     { path: "observed", trace: ["task"] },
@@ -325,13 +331,18 @@ describe("terminal execution-context release", () => {
       const observed: string[] = [];
       const removal = vi.fn(() => true);
       const deliveryContext = { channel: "telegram", to: "synthetic-chat" };
-      enqueueSystemEventWithReceiptMock.mockImplementation((_text, options) => {
+      enqueueSessionEventMock.mockImplementation((_text, options) => {
         observed.push("enqueue");
         expect(options.deliveryContext).toEqual(deliveryContext);
-        return removal;
-      });
-      requestHeartbeatMock.mockImplementation(() => {
-        observed.push("wake");
+        return {
+          id: "exec-event",
+          cancel: removal,
+          settled: Promise.resolve({
+            status: "completed",
+            executionStarted: true,
+            delivered: false,
+          }),
+        };
       });
       supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
         ...runtimeManagedRun(input, path === "quiet" ? "" : "retained output\n"),
@@ -365,13 +376,14 @@ describe("terminal execution-context release", () => {
         "agentId",
         "eventRouting",
         "notifyDeliveryContext",
+        "notifySessionTarget",
         "notifyOnExit",
         "notifyOnExitEmptySuccess",
         "stdin",
       ] as const) {
         expect(retained?.[field], field).toBeUndefined();
       }
-      expect(retained?.notifyOnExitRemoval).toBe(trace.includes("wake") ? removal : undefined);
+      expect(retained?.notifyOnExitRemoval).toBe(trace.includes("enqueue") ? removal : undefined);
       expect(removal).not.toHaveBeenCalled();
     },
   );
@@ -381,7 +393,6 @@ describe("exec settlement recovery", () => {
   it.each([
     { boundary: "persistent task", asynchronous: false },
     { boundary: "enqueue", asynchronous: false },
-    { boundary: "wake", asynchronous: false },
     { boundary: "task", asynchronous: true },
     { boundary: "persistent task", asynchronous: true },
     { boundary: "stdin", asynchronous: true },
@@ -397,18 +408,20 @@ describe("exec settlement recovery", () => {
       const identities: Array<ReturnType<typeof getGatewayToolCallerIdentity>> = [];
       const scopeKey = `settlement-recovery:${boundary}:${asynchronous}`;
       const failure = new Error("process settlement failed");
-      enqueueSystemEventWithReceiptMock.mockImplementation(() => {
+      enqueueSessionEventMock.mockImplementation(() => {
         observed.push("enqueue");
         if (boundary === "enqueue") {
           throw failure;
         }
-        return vi.fn(() => true);
-      });
-      requestHeartbeatMock.mockImplementation(() => {
-        observed.push("wake");
-        if (boundary === "wake") {
-          throw failure;
-        }
+        return {
+          id: "exec-event",
+          cancel: vi.fn(() => true),
+          settled: Promise.resolve({
+            status: "completed",
+            executionStarted: true,
+            delivered: false,
+          }),
+        };
       });
       supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
         ...runtimeManagedRun(input, "process output\n"),
@@ -487,18 +500,18 @@ describe("exec settlement recovery", () => {
         if (boundary === "persistent task") {
           await expect(run.promise).rejects.toBe(failure);
         } else {
-          await expect(run.promise).resolves.toMatchObject({ status: "failed" });
+          await expect(run.promise).resolves.toMatchObject({
+            status: boundary === "enqueue" ? "completed" : "failed",
+          });
         }
         await joined;
         expect(observed).toEqual([
           "task:completed",
           ...(boundary === "stdin" ? ["stdin"] : []),
-          ...(boundary === "enqueue" || boundary === "wake" ? ["enqueue"] : []),
-          ...(boundary === "wake" ? ["wake"] : []),
-          "task:failed",
+          ...(boundary === "enqueue" ? ["enqueue"] : ["task:failed"]),
           "scope-released",
         ]);
-        expect(identities).toEqual([undefined, undefined]);
+        expect(identities).toEqual(boundary === "enqueue" ? [undefined] : [undefined, undefined]);
         expect(getActiveBackgroundExecSessionCount()).toBe(0);
         expect(run.session.finalizing).toBe(false);
         expect(run.session.terminalStatus).toBe("completed");
@@ -513,6 +526,7 @@ describe("exec settlement recovery", () => {
           "agentId",
           "eventRouting",
           "notifyDeliveryContext",
+          "notifySessionTarget",
           "notifyOnExit",
           "notifyOnExitEmptySuccess",
         ] as const) {

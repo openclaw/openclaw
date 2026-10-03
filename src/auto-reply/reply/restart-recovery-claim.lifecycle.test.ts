@@ -159,7 +159,6 @@ it.each([
           }
           const settled = await handleReplyAgentRunError(new Error("Backend stopped"), {
             resolveVisibleReplyDelivery: async () => false,
-            isHeartbeat: false,
             replyExpectation: "required",
             isRestartRecoveryArmed: controller.isArmed,
             replyOperation: operation,

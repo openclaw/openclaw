@@ -1,28 +1,37 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
+import { enqueueSessionEventForHost as enqueueSessionEvent } from "../auto-reply/reply/session-event-handoff.js";
 import {
-  seedMainSessionStore,
-  setupTelegramHeartbeatPluginRuntimeForTests,
-  withTempTelegramHeartbeatSandbox,
-} from "../infra/heartbeat-runner.test-utils.js";
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import {
+  consumeSelectedSystemEventEntries,
   enqueueSystemEventEntry,
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { startDeferredNotifyRun } from "./bash-tools.notify-on-exit-ack.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 
-const requestHeartbeatMock = vi.hoisted(() => vi.fn());
 const supervisorSpawnMock = vi.hoisted(() => vi.fn());
 const randomMock = vi.hoisted(() => vi.fn(() => 0));
 
-vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/heartbeat-wake.js")>()),
-  requestHeartbeat: requestHeartbeatMock,
+vi.mock("../auto-reply/reply/session-event-handoff.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../auto-reply/reply/session-event-handoff.js")>();
+  return { ...actual, enqueueSessionEventForHost: vi.fn(actual.enqueueSessionEventForHost) };
+});
+vi.mock("../auto-reply/dispatch.js", () => ({
+  dispatchInboundMessageWithRoutedChannelDispatcher: vi.fn(async (params) => {
+    params.replyOptions.turnAdoptionLifecycle.onDeferred();
+    return { deferredToActiveRun: true };
+  }),
 }));
 vi.mock("../infra/secure-random.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/secure-random.js")>()),
@@ -45,16 +54,20 @@ const execute = (action: "poll" | "clear", sessionId: string) =>
 const poll = (sessionId: string) => execute("poll", sessionId);
 const contexts = () => peekSystemEventEntries(QUEUE_KEY).map((event) => event.contextKey);
 
-beforeEach(() => {
-  setupTelegramHeartbeatPluginRuntimeForTests();
+let state: OpenClawTestState;
+beforeEach(async () => {
+  state = await createOpenClawTestState({ layout: "state-only", prefix: "exec-occurrence-" });
+  setRuntimeConfigSnapshot({ agents: { entries: { main: {}, research: {} } } });
   const now = Date.now();
   vi.spyOn(Date, "now").mockReturnValue(now);
 });
-afterEach(() => {
+afterEach(async () => {
   resetProcessRegistryForTests();
   resetSystemEventsForTest();
   vi.clearAllMocks();
   vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
+  await state.cleanup();
 });
 
 it("keeps selected-agent global completions scoped to their owner", async () => {
@@ -65,8 +78,14 @@ it("keeps selected-agent global completions scoped to their owner", async () => 
   });
   await process.finish();
 
-  expect(requestHeartbeatMock).toHaveBeenCalledWith(
-    expect.objectContaining({ agentId: "research" }),
+  expect(enqueueSessionEvent).toHaveBeenCalledWith(
+    expect.any(String),
+    expect.objectContaining({
+      source: "exec",
+      agentId: "research",
+      sessionKey: "global",
+      expectedTarget: expect.objectContaining({ agentId: "research" }),
+    }),
   );
   expect(peekSystemEventEntries("agent:research:global")).toHaveLength(1);
   expect(peekSystemEventEntries("agent:main:global")).toEqual([]);
@@ -94,68 +113,28 @@ it("isolates identical completions across exact full-slug reuse", async () => {
   expect(contexts()).toEqual(["exec:amber-atlas", "marker"]);
 });
 
-it("keeps an identical successor queued when heartbeat consumes a stale snapshot", async () => {
-  await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { workspace: tmpDir, heartbeat: { every: "5m", target: "telegram" } } },
-      channels: { telegram: { allowFrom: ["*"] } },
-      session: { mainKey: "notify-ack", store: storePath },
-    };
-    const sessionKey = await seedMainSessionStore(storePath, cfg, {
-      lastChannel: "telegram",
-      lastProvider: "telegram",
-      lastTo: "-100123",
-      lastThreadId: 42,
-    });
-    expect(sessionKey).toBe(QUEUE_KEY);
-
-    const first = await startNotifyRun();
-    await first.finish();
-    const firstQueued = peekSystemEventEntries(QUEUE_KEY);
-    expect(firstQueued).toHaveLength(1);
-
-    let successor: Awaited<ReturnType<typeof startNotifyRun>> | undefined;
-    replySpy.mockImplementation(async () => {
-      const result = await poll(first.run.session.id);
-      expect(peekSystemEventEntries(QUEUE_KEY)).toEqual(firstQueued);
-      acknowledgeInternalToolResult(result);
-      await execute("clear", first.run.session.id);
-      const replacement = await startNotifyRun();
-      successor = replacement;
-      await replacement.finish();
-      const replacementQueued = peekSystemEventEntries(QUEUE_KEY);
-      expect(replacementQueued).toHaveLength(1);
-      expect(replacementQueued[0]?.id).not.toBe(firstQueued[0]?.id);
-      expect(replacementQueued[0]).toEqual({ ...firstQueued[0], id: replacementQueued[0]?.id });
-      return { text: "Handled the exec completion" };
-    });
-    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "100123" });
-
-    const result = await runHeartbeatOnce({
-      cfg,
-      agentId: "main",
-      source: "exec-event",
-      intent: "event",
-      reason: "exec-event",
-      deps: {
-        getQueueSize: () => 0,
-        getReplyFromConfig: replySpy,
-        telegram: sendTelegram,
-      },
-    });
-
-    expect(result.status).toBe("ran");
-    expect(sendTelegram).toHaveBeenCalledOnce();
-    if (!successor) {
-      throw new Error("heartbeat reply did not enqueue the successor completion");
-    }
-    expect(successor.run.session.id).toBe(first.run.session.id);
-    const successorQueued = peekSystemEventEntries(QUEUE_KEY);
-    expect(successorQueued).toHaveLength(1);
-
-    const successorResult = await poll(successor.run.session.id);
-    expect(peekSystemEventEntries(QUEUE_KEY)).toEqual(successorQueued);
-    acknowledgeInternalToolResult(successorResult);
-    expect(peekSystemEventEntries(QUEUE_KEY)).toEqual([]);
+it("keeps an identical successor queued when an earlier consumer settles", async () => {
+  const first = await startNotifyRun();
+  await first.finish();
+  const snapshot = peekSystemEventEntries(QUEUE_KEY);
+  const receipt = vi.mocked(enqueueSessionEvent).mock.results.at(-1)!.value;
+  const result = await poll(first.run.session.id);
+  expect(peekSystemEventEntries(QUEUE_KEY)).toEqual(snapshot);
+  acknowledgeInternalToolResult(result);
+  await execute("clear", first.run.session.id);
+  const successor = await startNotifyRun();
+  await successor.finish();
+  expect(successor.run.session.id).toBe(first.run.session.id);
+  await expect(receipt.settled).resolves.toMatchObject({
+    status: "cancelled",
+    executionStarted: false,
   });
+  expect(consumeSelectedSystemEventEntries(QUEUE_KEY, snapshot)).toEqual([]);
+  const queued = peekSystemEventEntries(QUEUE_KEY);
+  expect(queued).toHaveLength(1);
+  expect(queued[0]?.id).not.toBe(snapshot[0]?.id);
+  const successorResult = await poll(successor.run.session.id);
+  expect(peekSystemEventEntries(QUEUE_KEY)).toEqual(queued);
+  acknowledgeInternalToolResult(successorResult);
+  expect(peekSystemEventEntries(QUEUE_KEY)).toEqual([]);
 });

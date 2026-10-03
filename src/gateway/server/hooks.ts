@@ -6,6 +6,11 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { listAgentIds } from "../../agents/agent-scope.js";
+import {
+  captureSessionEventTargetForHost,
+  enqueueSessionEventForHost,
+  type SessionEventTarget,
+} from "../../auto-reply/reply/session-event-handoff.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import { getRuntimeConfig } from "../../config/io.js";
@@ -20,24 +25,22 @@ import type { CronExecutionIdentityAdmission } from "../../cron/service/state.js
 import type { CronJob } from "../../cron/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
-import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { validateExplicitMessageAccountSelection } from "../../infra/outbound/message-account-selection.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
+import {
+  consumeSelectedSystemEventEntries,
+  enqueueSystemEvent,
+  enqueueSystemEventEntry,
+} from "../../infra/system-events.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { isUnscopedSessionKeySentinel, toAgentStoreSessionKey } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  type HookAgentDispatchPayload,
-  type HooksConfigResolved,
-  normalizeHookDispatchSessionKey,
-} from "../hooks.js";
+import type { HookAgentDispatchPayload, HooksConfigResolved } from "../hooks.js";
 import type { HookAgentCompletion, HookAgentDispatchResult } from "../hooks.types.js";
 import {
   createScheduledGatewayRunner,
@@ -45,6 +48,7 @@ import {
 } from "../scheduled-run-gateway-context.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
+import { createPluginHookDispatcher } from "./hooks-plugin-dispatch.js";
 import { createHooksRequestHandler, type HookClientIpConfig } from "./hooks-request-handler.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -58,7 +62,8 @@ const HOOK_AGENT_PREPARATION_ERROR = "hook agent run failed before entering the 
 
 type HookEventTarget = {
   eventSessionKey: string;
-  heartbeatTarget: { agentId?: string; sessionKey?: string };
+  agentId: string;
+  expectedTarget?: SessionEventTarget;
 };
 
 function resolveHookEventTarget(params: {
@@ -71,7 +76,7 @@ function resolveHookEventTarget(params: {
     // but never force an agent-qualified session key that the runner ignores.
     return {
       eventSessionKey: "global",
-      heartbeatTarget: { agentId: params.resolvedAgentId },
+      agentId: params.resolvedAgentId,
     };
   }
   const eventSessionKey = params.sessionKey
@@ -87,7 +92,7 @@ function resolveHookEventTarget(params: {
     : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.resolvedAgentId });
   return {
     eventSessionKey,
-    heartbeatTarget: { agentId: params.resolvedAgentId, sessionKey: eventSessionKey },
+    agentId: params.resolvedAgentId,
   };
 }
 
@@ -210,10 +215,6 @@ async function validateHookAgentDeliveryAccount(params: {
   };
 }
 
-type PluginHookDispatch = PluginRuntime["hooks"]["dispatchHookAgentTurn"];
-type PluginHookDispatchParams = Parameters<PluginHookDispatch>[0];
-type PluginHookDispatchResult = Awaited<ReturnType<PluginHookDispatch>>;
-
 /** Creates one lifecycle-owned dispatcher shared by HTTP hooks and trusted plugins. */
 export function createGatewayHookDispatcher(params: {
   deps: CliDeps;
@@ -260,34 +261,65 @@ export function createGatewayHookDispatcher(params: {
   const loadIsolatedAgentModule = () =>
     (isolatedAgentModulePromise ??= import("../../cron/isolated-agent.js"));
 
-  const dispatchWakeHook = (
+  const dispatchWakeHook = async (
     value: { text: string; mode: "now" | "next-heartbeat"; sessionKey?: string },
     agentId: string,
+    isHooksConfigCurrent?: () => boolean,
   ) => {
-    // A targeted wake must enqueue and wake the same canonical store key;
-    // otherwise the heartbeat runs for one agent while its event waits elsewhere.
     const target = resolveHookEventTarget({
       cfg: getRuntimeConfig(),
       resolvedAgentId: agentId,
       sessionKey: value.sessionKey,
     });
-    const sessionKey = target.eventSessionKey;
-    const eventOptions = { sessionKey };
-    const queued = enqueueSystemEvent(
-      value.text,
-      isUnscopedSessionKeySentinel(sessionKey)
-        ? withSystemEventOwner(eventOptions, agentId)
-        : eventOptions,
-    );
-    if (value.mode === "now") {
-      requestHeartbeat({
-        source: "hook",
-        intent: "immediate",
-        reason: "hook:wake",
-        ...target.heartbeatTarget,
-      });
+    if (value.mode === "next-heartbeat") {
+      if (isHooksConfigCurrent?.() === false) {
+        return null;
+      }
+      const queued = enqueueSystemEvent(
+        value.text,
+        withSystemEventOwner({ sessionKey: target.eventSessionKey }, target.agentId),
+      );
+      return { eventOutcome: queued ? "queued" : "coalesced" } as const;
     }
-    return { eventOutcome: queued ? "queued" : "coalesced" } as const;
+    const expectedTarget = await captureSessionEventTargetForHost(
+      target.agentId,
+      target.eventSessionKey,
+    );
+    if (isHooksConfigCurrent?.() === false) {
+      return null;
+    }
+    const eventOptions = withSystemEventOwner(
+      { sessionKey: target.eventSessionKey, deliveryContext: expectedTarget.deliveryContext },
+      target.agentId,
+    );
+    const occurrence = enqueueSystemEventEntry(value.text, eventOptions);
+    if (!occurrence) {
+      return { eventOutcome: "coalesced" } as const;
+    }
+    try {
+      const receipt = enqueueSessionEventForHost(value.text, {
+        agentId: target.agentId,
+        sessionKey: target.eventSessionKey,
+        source: "hook",
+        occurrence,
+        expectedTarget,
+      });
+      void receipt.settled.then((outcome) => {
+        if (outcome.status !== "completed") {
+          logHooks.warn(
+            "hook wake failed",
+            sanitizeHookLogMetadata({
+              status: outcome.status,
+              error: outcome.error,
+            }),
+          );
+        }
+      });
+    } catch (error) {
+      consumeSelectedSystemEventEntries(eventOptions.sessionKey, [occurrence]);
+      throw error;
+    }
+    return { eventOutcome: "queued" } as const;
   };
 
   const dispatchAgentHook = async (
@@ -356,8 +388,8 @@ export function createGatewayHookDispatcher(params: {
       createdAtMs: nowMs,
       updatedAtMs: nowMs,
       schedule: { kind: "at", at: resolveTimestampMsToIsoString(nowMs) },
+      wakeMode: "now",
       sessionTarget: value.sessionMode === "persistent" ? `session:${sessionKey}` : "isolated",
-      wakeMode: value.wakeMode,
       payload: {
         kind: "agentTurn",
         message: value.message,
@@ -372,7 +404,7 @@ export function createGatewayHookDispatcher(params: {
     };
     let hookEventTarget: HookEventTarget | undefined;
     const resolveGlobalTerminalAgentId = (status: string): string | undefined => {
-      const acceptedAgentId = hookEventTarget?.heartbeatTarget.agentId;
+      const acceptedAgentId = hookEventTarget?.agentId;
       // Agent id is the stable principal: mutable config reloads preserve admission,
       // but a principal absent from the fresh roster cannot receive terminal output.
       if (acceptedAgentId && listAgentIds(getRuntimeConfig()).includes(acceptedAgentId)) {
@@ -385,53 +417,79 @@ export function createGatewayHookDispatcher(params: {
       });
       return undefined;
     };
-    const announceHookEvent = (
+    const announceHookEvent = async (
       eventTarget: HookEventTarget,
       text: string,
       status: string,
-      reason: string,
     ) => {
       if (status !== "ok" && !claimFailureNotice(value.replayKey)) {
         return;
       }
-      const eventSessionKey = eventTarget.eventSessionKey;
-      const isGlobalEvent = isUnscopedSessionKeySentinel(eventSessionKey);
-      let heartbeatTarget = eventTarget.heartbeatTarget;
-      if (isGlobalEvent && hookEventTarget) {
-        const globalTerminalAgentId = resolveGlobalTerminalAgentId(status);
-        if (!globalTerminalAgentId) {
+      try {
+        const eventSessionKey = eventTarget.eventSessionKey;
+        const isGlobalEvent = isUnscopedSessionKeySentinel(eventSessionKey);
+        let eventAgentId = eventTarget.agentId;
+        if (isGlobalEvent && hookEventTarget) {
+          const globalTerminalAgentId = resolveGlobalTerminalAgentId(status);
+          if (!globalTerminalAgentId) {
+            return;
+          }
+          eventAgentId = globalTerminalAgentId;
+        }
+        if (value.wakeMode === "next-heartbeat") {
+          enqueueSystemEvent(
+            text,
+            withSystemEventOwner({ sessionKey: eventSessionKey }, eventAgentId),
+          );
           return;
         }
-        heartbeatTarget = { agentId: globalTerminalAgentId };
-      }
-      const eventOptions = { sessionKey: eventSessionKey };
-      enqueueSystemEvent(
-        text,
-        isGlobalEvent && heartbeatTarget.agentId
-          ? withSystemEventOwner(eventOptions, heartbeatTarget.agentId)
-          : eventOptions,
-      );
-      if (value.wakeMode === "now") {
-        requestHeartbeat({
+        const expectedTarget =
+          eventTarget.expectedTarget ??
+          (hookEventTarget
+            ? undefined
+            : await captureSessionEventTargetForHost(eventAgentId, eventSessionKey));
+        if (!expectedTarget) {
+          throw new Error("Hook terminal target could not be captured before the run");
+        }
+        const receipt = enqueueSessionEventForHost(text, {
+          agentId: eventAgentId,
+          sessionKey: eventSessionKey,
           source: "hook",
-          intent: "immediate",
-          reason,
-          ...heartbeatTarget,
+          expectedTarget,
+        });
+        void receipt.settled.then((outcome) => {
+          if (outcome.status !== "completed") {
+            logHooks.warn("hook terminal event not delivered", {
+              ...logContext,
+              ...sanitizeHookLogMetadata({ status: outcome.status, error: outcome.error }),
+            });
+          }
+        });
+      } catch (error) {
+        logHooks.warn("hook terminal event not delivered", {
+          ...logContext,
+          ...sanitizeHookLogMetadata({ error: formatErrorMessage(error) }),
         });
       }
     };
-    const reportHookFailure = (err: unknown) => {
+    const reportHookFailure = async (err: unknown) => {
       completion.resolve(logHookRunTerminal({ status: "error", error: String(err) }));
-      announceHookEvent(
-        hookEventTarget ??
-          resolveHookEventTarget({
-            cfg: getRuntimeConfig(),
-            resolvedAgentId: value.effectiveAgentId,
-          }),
-        `Hook ${safeName} (error): ${String(err)}`,
-        "error",
-        `hook:${jobId}:error`,
-      );
+      try {
+        await announceHookEvent(
+          hookEventTarget ??
+            resolveHookEventTarget({
+              cfg: getRuntimeConfig(),
+              resolvedAgentId: value.effectiveAgentId,
+            }),
+          `Hook ${safeName} (error): ${String(err)}`,
+          "error",
+        );
+      } catch (reportError) {
+        logHooks.warn("hook terminal event not delivered", {
+          ...logContext,
+          ...sanitizeHookLogMetadata({ error: formatErrorMessage(reportError) }),
+        });
+      }
     };
     let dispatchCfg: OpenClawConfig;
     try {
@@ -480,12 +538,12 @@ export function createGatewayHookDispatcher(params: {
       }
       admission.resolve(result);
     };
-    const failAdmission = (err: unknown) => {
+    const failAdmission = async (err: unknown) => {
       if (admissionTimedOut) {
         return;
       }
       settleAdmission(createHookAdmissionFailure({ runId }));
-      reportHookFailure(err);
+      await reportHookFailure(err);
     };
     const admissionTimeoutError = new Error(HOOK_AGENT_START_ADMISSION_TIMEOUT_ERROR);
     const startupAbortController = new AbortController();
@@ -543,6 +601,10 @@ export function createGatewayHookDispatcher(params: {
               resolvedAgentId: agentId,
             });
             hookEventTarget = eventTarget;
+            eventTarget.expectedTarget = await captureSessionEventTargetForHost(
+              eventTarget.agentId,
+              eventTarget.eventSessionKey,
+            );
             const { runCronIsolatedAgentTurn } = await loadIsolatedAgentModule();
             // Lazy module loading is the last Gateway-owned async boundary before
             // cron preparation, so recheck the deadline after it settles.
@@ -610,15 +672,10 @@ export function createGatewayHookDispatcher(params: {
               (value.deliver && result.delivered !== true && result.deliveryAttempted !== true);
             completion.resolve(logHookRunTerminal(result));
             if (shouldAnnounce) {
-              announceHookEvent(
-                eventTarget,
-                `${prefix}: ${summary}`.trim(),
-                result.status,
-                `hook:${jobId}`,
-              );
+              await announceHookEvent(eventTarget, `${prefix}: ${summary}`.trim(), result.status);
             }
           } catch (err) {
-            failAdmission(err);
+            await failAdmission(err);
           }
         }),
       "hooks:agent-dispatch",
@@ -627,103 +684,7 @@ export function createGatewayHookDispatcher(params: {
     return await admission.promise;
   };
 
-  const pluginHookReplays = new Map<
-    string,
-    { createdAt: number; result: Promise<PluginHookDispatchResult> }
-  >();
-  const dispatchHookAgentTurn = async (
-    value: PluginHookDispatchParams,
-    pluginId: string,
-  ): Promise<PluginHookDispatchResult> => {
-    const agentId = normalizeOptionalString(value.agentId);
-    if (!agentId) {
-      return { ok: false, reason: "agentId is required" };
-    }
-    const sessionKey = normalizeHookDispatchSessionKey({
-      sessionKey: value.sessionKey,
-      targetAgentId: agentId,
-    });
-    if (
-      sessionKey !== value.sessionKey ||
-      !sessionKey.startsWith("hook:") ||
-      sessionKey.length <= 5 ||
-      /[\s\p{Cc}]/u.test(sessionKey)
-    ) {
-      return {
-        ok: false,
-        reason: "sessionKey must start with hook: and contain no whitespace or control characters",
-      };
-    }
-    if (value.externalContentSource !== "email") {
-      return { ok: false, reason: "externalContentSource must be email" };
-    }
-    const run = async (): Promise<PluginHookDispatchResult> => {
-      const result = await dispatchAgentHook(
-        {
-          name: value.name,
-          agentId,
-          effectiveAgentId: agentId,
-          sessionKey,
-          message: value.message,
-          deliver: value.deliver,
-          model: value.model,
-          thinking: value.thinking,
-          timeoutSeconds: value.timeoutSeconds,
-          idempotencyKey: value.idempotencyKey,
-          sessionMode: "isolated",
-          sourcePath: `plugin:${pluginId}`,
-          wakeMode: "now",
-          channel: "last",
-          delivery: value.deliver ? { mode: "announce", channel: "last" } : { mode: "none" },
-          externalContentSource: "email",
-        },
-        pluginId,
-      );
-      return result.ok ? { ok: true, runId: result.runId } : { ok: false, reason: result.error };
-    };
-    const idempotencyKey = normalizeOptionalString(value.idempotencyKey);
-    if (!idempotencyKey) {
-      return await run();
-    }
-    const now = Date.now();
-    for (const [key, entry] of pluginHookReplays) {
-      if (entry.createdAt < now - DEDUPE_TTL_MS) {
-        pluginHookReplays.delete(key);
-      }
-    }
-    const replayKey = JSON.stringify({
-      pluginId,
-      idempotencyKey,
-      name: value.name,
-      agentId,
-      sessionKey,
-      message: value.message,
-      externalContentSource: value.externalContentSource,
-      deliver: value.deliver,
-      model: value.model,
-      thinking: value.thinking,
-      timeoutSeconds: value.timeoutSeconds,
-    });
-    const replay = pluginHookReplays.get(replayKey);
-    if (replay) {
-      return await replay.result;
-    }
-    const result = run().then(
-      (outcome) => {
-        if (!outcome.ok) {
-          pluginHookReplays.delete(replayKey);
-        }
-        return outcome;
-      },
-      (error: unknown) => {
-        pluginHookReplays.delete(replayKey);
-        throw error;
-      },
-    );
-    pluginHookReplays.set(replayKey, { createdAt: now, result });
-    pruneMapToMaxSize(pluginHookReplays, DEDUPE_MAX);
-    return await result;
-  };
+  const dispatchHookAgentTurn = createPluginHookDispatcher(dispatchAgentHook);
 
   return { dispatchWakeHook, dispatchAgentHook, dispatchHookAgentTurn };
 }

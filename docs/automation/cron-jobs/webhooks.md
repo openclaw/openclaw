@@ -143,7 +143,7 @@ limits, routing policy, and error responses.
 
 <AccordionGroup>
   <Accordion title="POST /hooks/wake">
-    Enqueue a trusted notification for the selected agent's main session and optionally request an immediate heartbeat:
+    Enqueue a trusted notification for the selected agent's main session and request normal session processing:
 
     ```bash
     curl --include http://127.0.0.1:18789/hooks/wake \
@@ -152,7 +152,7 @@ limits, routing policy, and error responses.
       --data '{"text":"The sample import completed","mode":"now","agentId":"main"}'
     ```
 
-    HTTP `200` includes `eventOutcome: "queued"` when the queue accepts the wake or `eventOutcome: "coalesced"` when the same wake is already the queue's most recent pending event. With `mode: "now"`, a wake is requested in either case; the response does not mean a heartbeat completed. Use `mode: "next-heartbeat"` to avoid requesting an immediate wake.
+    HTTP `200` includes `eventOutcome: "queued"` when the queue accepts the notice or `eventOutcome: "coalesced"` when the same notice is already pending. With `mode: "now"`, a newly queued notice requests normal session processing; the response does not mean execution completed. The legacy `mode: "next-heartbeat"` spelling defers to a valid scheduled target and does not start a separate heartbeat engine.
 
     A supplied `agentId` must name a configured agent. Supply it explicitly when the fleet has no implicit or retained legacy owner. A caller-selected `sessionKey` requires `mode: "now"`, `hooks.allowRequestSessionKey: true`, and the configured prefix policy; deferred wakes use the main session.
 

@@ -35,7 +35,7 @@ function createCronService(storePath: string, cronEnabled = true) {
     cronEnabled,
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   services.add(service);
@@ -251,11 +251,13 @@ describe("CronService declarative jobs", () => {
       },
       skills: { workshop: { autonomous: { mode: "auto" } } },
     };
-    const project = () => {
-      const [spec] = resolveSkillCollectionReviewMonitorSpecs(cfg, []);
+    const project = async () => {
+      const [spec] = await resolveSkillCollectionReviewMonitorSpecs(cfg, [], {
+        schedulerSeed: "test-seed",
+      });
       return spec!.input;
     };
-    const created = await add(cron, project(), { enabledExplicit: true, systemOwned: true });
+    const created = await add(cron, await project(), { enabledExplicit: true, systemOwned: true });
     expect(created.job).toMatchObject({
       enabled: false,
       displayName: expect.stringContaining("no-rooted-runtime"),
@@ -265,7 +267,10 @@ describe("CronService declarative jobs", () => {
       (await loadCronStore(storePath)).jobs.find((job) => job.id === created.id),
     ).toMatchObject({ enabled: false, displayName: created.job.displayName });
     cfg.agents!.defaults!.model = "anthropic/claude-sonnet-4-6";
-    const recovered = await add(cron, project(), { enabledExplicit: true, systemOwned: true });
+    const recovered = await add(cron, await project(), {
+      enabledExplicit: true,
+      systemOwned: true,
+    });
     expect(recovered).toMatchObject({
       id: created.id,
       created: false,

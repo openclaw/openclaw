@@ -314,7 +314,7 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
     // A sender-scoped denial downgrades the sender's effective delivery, but
     // the session-stable mode feeds CLI binding facts shared by sender-less
     // synthetic turns; downgrading it too splits the policy hash and resets
-    // the CLI session on chat<->heartbeat transitions.
+    // the CLI session on chat<->event transitions.
     expectPolicyFields(
       resolveSourceReplyVisibilityPolicy({
         cfg: globalToolOnlyReplyConfig,
@@ -427,18 +427,12 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
         InputProvenance: { kind: "internal_system" as const, sourceTool: "restart-sentinel" },
       },
     },
-    {
-      name: "heartbeat handoff",
-      ctx: { ChatType: "direct" },
-      isHeartbeat: true,
-    },
-  ])("keeps $name overrides out of session-stable policy", ({ ctx, isHeartbeat }) => {
+  ])("keeps $name overrides out of session-stable policy", ({ ctx }) => {
     expectPolicyFields(
       resolveSourceReplyVisibilityPolicy({
         cfg: emptyConfig,
         ctx,
         requested: "message_tool_only",
-        isHeartbeat,
         sendPolicy: "allow",
       }),
       {

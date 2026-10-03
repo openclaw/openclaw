@@ -76,7 +76,6 @@ function createPluginReloadHandler(
   let reloadState: ReturnType<ReloadParams["getState"]> = {
     hooksConfig: null,
     hookClientIpConfig: {},
-    heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
     cronState: {
       cron: { start: vi.fn(), stop: vi.fn() } as never,
       storePath: fixture.state.path("cron.sqlite"),

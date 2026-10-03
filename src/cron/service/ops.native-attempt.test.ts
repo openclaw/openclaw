@@ -93,7 +93,6 @@ describe("native attempt queued automation admission", () => {
           defaultAgentId: "main",
           log: createNoopLogger(),
           enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
           runIsolatedAgentJob,
           onEvent: (event) => {
             if (event.action === "finished") {

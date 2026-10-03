@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
-import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import type { dispatchInboundMessageInternal } from "../../auto-reply/dispatch.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
@@ -224,7 +224,7 @@ describe("registered progress refresh admission", () => {
       await dispatched.promise;
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(intentCount);
       for (const [params] of dispatchInboundMessageMock.mock.calls) {
-        const admitted = params as Parameters<typeof dispatchInboundMessage>[0];
+        const admitted = params as Parameters<typeof dispatchInboundMessageInternal>[0];
         expect(admitted.toolsAllow).toContain("progress_card");
         expect(admitted.toolsAllow).not.toContain("exec");
         await admitted.replyOptions?.userTurnTranscriptRecorder?.persistApproved();
@@ -301,7 +301,7 @@ describe("registered progress refresh admission", () => {
           projectSessionActive: false,
         });
         const dispatch = dispatchInboundMessageMock.mock.calls[0]?.[0] as Parameters<
-          typeof dispatchInboundMessage
+          typeof dispatchInboundMessageInternal
         >[0];
         expect(dispatch.ctx.InternalTurnSource).toBe("progress-card-refresh");
         expect(dispatch.ctx.InputProvenance).toMatchObject({ sourceTool: "progress_card_refresh" });
@@ -522,7 +522,7 @@ describe("registered progress refresh admission", () => {
       expect(queueMessage).not.toHaveBeenCalled();
       expect(claim).toHaveBeenCalledOnce();
       const human = dispatchInboundMessageMock.mock.calls[1]?.[0] as Parameters<
-        typeof dispatchInboundMessage
+        typeof dispatchInboundMessageInternal
       >[0];
       expect(human.ctx.InputProvenance).toBeUndefined();
       expect(human.toolsAllow).toBeUndefined();

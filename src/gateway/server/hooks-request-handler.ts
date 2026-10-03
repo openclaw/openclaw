@@ -69,7 +69,8 @@ type HookDispatchers = {
   dispatchWakeHook: (
     value: { text: string; mode: "now" | "next-heartbeat"; sessionKey?: string },
     agentId: string,
-  ) => WakeResult;
+    isHooksConfigCurrent?: () => boolean,
+  ) => WakeResult | null | Promise<WakeResult | null>;
   dispatchAgentHook: (
     value: HookAgentDispatchPayload,
   ) => HookAgentDispatchResult | Promise<HookAgentDispatchResult>;
@@ -352,11 +353,11 @@ export function createHooksRequestHandler(
       return resolution;
     };
     // Callers own the success response so mappings can dispatch several wakes first.
-    const dispatchWake = (
+    const dispatchWake = async (
       value: Parameters<HookDispatchers["dispatchWakeHook"]>[0],
       targetAgentId: string,
       source: HookSessionKeySource,
-    ): WakeResult | null => {
+    ): Promise<WakeResult | null> => {
       let dispatchSessionKey: string | undefined;
       if (value.sessionKey) {
         const sessionKey = resolveHookSessionKey({
@@ -381,7 +382,11 @@ export function createHooksRequestHandler(
       if (rejectChangedHooksConfig()) {
         return null;
       }
-      return dispatchWakeHook(dispatchValue, targetAgentId);
+      return await dispatchWakeHook(
+        dispatchValue,
+        targetAgentId,
+        () => !rejectChangedHooksConfig(),
+      );
     };
 
     if (subPath === "wake") {
@@ -394,7 +399,11 @@ export function createHooksRequestHandler(
       if (!target) {
         return true;
       }
-      const directWakeResult = dispatchWake(normalized.value, target.effectiveAgentId, "request");
+      const directWakeResult = await dispatchWake(
+        normalized.value,
+        target.effectiveAgentId,
+        "request",
+      );
       if (!directWakeResult) {
         return true;
       }
@@ -655,7 +664,7 @@ export function createHooksRequestHandler(
               if (!target) {
                 return true;
               }
-              const dispatched = dispatchWake(
+              const dispatched = await dispatchWake(
                 { text: action.text, mode: action.mode, sessionKey: action.sessionKey },
                 target.effectiveAgentId,
                 action.sessionKeySource === "static" ? "mapping-static" : "mapping-templated",

@@ -17,7 +17,6 @@ import {
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { widenOfficialExternalChannelSecretSchema } from "./official-external-channel-secret-schema.js";
 import type { ChannelUiMetadata, PluginUiMetadata } from "./schema.js";
-import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 
 type ChannelSchemaMetadataWithOwnership = ChannelUiMetadata & {
   schemaPluginId?: string;
@@ -46,8 +45,6 @@ const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
   bundled: 3,
 };
 
-const CHANNEL_HEARTBEAT_VISIBILITY_JSON_SCHEMA =
-  ChannelHeartbeatVisibilitySchema.unwrap().toJSONSchema({ target: "draft-07" });
 const CHANNEL_CONFIG_SCHEMA_MAX_TRAVERSAL_DEPTH = 256;
 
 function assertChannelConfigSchemaTraversalDepth(
@@ -68,90 +65,6 @@ function assertChannelConfigSchemaTraversalDepth(
   for (const child of children) {
     assertChannelConfigSchemaTraversalDepth(child, depth + 1, seen);
   }
-}
-
-function normalizeCoreOwnedChannelSchema(schema: Record<string, unknown>): Record<string, unknown> {
-  const normalized = structuredClone(schema);
-  let changed = false;
-  const normalizeNode = (
-    node: Record<string, unknown>,
-    accountMap = false,
-    rootScope = true,
-  ): void => {
-    let withinRootScope = rootScope && (node === normalized || typeof node.$id !== "string");
-    if (typeof node.$ref === "string") {
-      const match = withinRootScope
-        ? /^#\/(\$defs|definitions)\/([A-Za-z0-9_.-]+)$/.exec(node.$ref)
-        : null;
-      const definitions = match?.[1] ? normalized[match[1]] : undefined;
-      const target = isRecord(definitions) && match?.[2] ? definitions[match[2]] : undefined;
-      if (
-        !isRecord(target) ||
-        Object.keys(node).some(
-          (key) => !["$ref", "$defs", "definitions", "$id", "$schema"].includes(key),
-        ) ||
-        ["$id", "$anchor", "$dynamicAnchor", "$recursiveAnchor", "$schema", "$ref"].some((key) =>
-          Object.hasOwn(target, key),
-        )
-      ) {
-        return;
-      }
-      // Inline only this owner; changing shared definitions would affect unrelated consumers.
-      const owner = { ...node };
-      Object.assign(node, structuredClone(target), owner);
-      delete node.$ref;
-      changed = true;
-      withinRootScope = node === normalized;
-    }
-
-    for (const key of ["allOf", "anyOf", "oneOf"] as const) {
-      const variants = node[key];
-      for (const variant of Array.isArray(variants) ? variants : []) {
-        if (isRecord(variant)) {
-          normalizeNode(variant, accountMap, withinRootScope);
-        }
-      }
-    }
-
-    if (accountMap) {
-      if (node.additionalProperties === true) {
-        node.additionalProperties = {};
-        changed = true;
-      }
-      const entries = [
-        node.additionalProperties,
-        ...Object.values(isRecord(node.properties) ? node.properties : {}),
-        ...Object.values(isRecord(node.patternProperties) ? node.patternProperties : {}),
-      ];
-      for (const entry of entries) {
-        if (isRecord(entry)) {
-          normalizeNode(entry, false, withinRootScope);
-        }
-      }
-      return;
-    }
-
-    const properties = isRecord(node.properties) ? node.properties : {};
-    if (
-      JSON.stringify(properties.heartbeatVisibility) !==
-      JSON.stringify(CHANNEL_HEARTBEAT_VISIBILITY_JSON_SCHEMA)
-    ) {
-      node.properties = {
-        ...properties,
-        heartbeatVisibility: CHANNEL_HEARTBEAT_VISIBILITY_JSON_SCHEMA,
-      };
-      changed = true;
-    }
-
-    // Account maps are containers; only each account entry owns heartbeat visibility.
-    const accounts = properties.accounts;
-    if (isRecord(accounts)) {
-      normalizeNode(accounts, true, withinRootScope);
-    }
-  };
-
-  normalizeNode(normalized);
-  return changed ? normalized : schema;
 }
 
 /** Collects plugin config UI metadata with deterministic origin precedence and output ordering. */
@@ -200,17 +113,12 @@ function prepareChannelConfigSchema(
     if (schema !== undefined) {
       assertChannelConfigSchemaTraversalDepth(schema);
     }
-    const coreOwnedSchema =
-      origin === "bundled" || schema === undefined
-        ? schema
-        : normalizeCoreOwnedChannelSchema(schema);
-    return widenOfficialExternalChannelSecretSchema({ channelId, schema: coreOwnedSchema });
+    return widenOfficialExternalChannelSecretSchema({ channelId, schema });
   } catch (error) {
     if (origin === "bundled") {
       throw error;
     }
-    // Normalization and official-channel widening both clone and walk the schema, so a deeply
-    // nested external manifest is rejected here, before any validator runs. Surfacing the raw
+    // Deeply nested external manifests are rejected before validation. Surfacing the raw
     // schema keeps metadata collection total and leaves the diagnostic to the validation owner.
     return schema;
   }

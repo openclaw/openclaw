@@ -155,7 +155,6 @@ describe("MCP automation creator capture", () => {
         defaultAgentId: "main",
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       });
       const context = createDirectChatContext({

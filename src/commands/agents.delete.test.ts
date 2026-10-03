@@ -383,7 +383,7 @@ describe("agents delete command", () => {
       const workspace = path.join(stateDir, "workspace-shared");
       const cfg: OpenClawConfig = {
         agents: {
-          defaults: { heartbeat: { agentId: "ops" }, systemAgent: { agentId: "ops" } },
+          defaults: { systemAgent: { agentId: "ops" } },
           entries: { main: { workspace }, ops: { workspace } },
         },
         talk: { agentId: "ops", provider: "test-provider" },
@@ -401,11 +401,7 @@ describe("agents delete command", () => {
         workspaceRetained: true,
         workspaceRetainedReason: "shared",
         cronCleanupSkipped: true,
-        clearedOwnerRefs: [
-          "agents.defaults.heartbeat.agentId",
-          "agents.defaults.systemAgent.agentId",
-          "talk.agentId",
-        ],
+        clearedOwnerRefs: ["agents.defaults.systemAgent.agentId", "talk.agentId"],
       });
       expect(readJson()).not.toHaveProperty("purgeFailed");
       expect(readJson()).not.toHaveProperty("transport");
@@ -414,7 +410,6 @@ describe("agents delete command", () => {
         expect.stringContaining('cron cleanup was skipped for deleted agent "ops"'),
       );
       const written = configMocks.replaceConfigFile.mock.calls[0]?.[0].sourceConfig;
-      expect(written?.agents?.defaults?.heartbeat).toBeUndefined();
       expect(written?.agents?.defaults?.systemAgent).toBeUndefined();
       expect(written?.talk).toEqual({ provider: "test-provider" });
       expect(workspaceStateMocks.deleteWorkspaceState).not.toHaveBeenCalled();
@@ -492,10 +487,9 @@ describe("agents delete command", () => {
           makeCronJob({ id: "remove", agentId: "main" }),
           makeCronJob({ id: "keep", agentId: "ops" }),
           makeCronJob({
-            id: "heartbeat",
+            id: "proactive",
             agentId: "ops",
-            declarationKey: "heartbeat:ops",
-            payload: { kind: "heartbeat" },
+            payload: { kind: "agentTurn", message: "Review the scratch checklist." },
           }),
           makeCronJob({ id: "dreaming", declarationKey: "memory-core:memory-dreaming-promotion" }),
         ],
@@ -548,7 +542,7 @@ describe("agents delete command", () => {
       });
       expect((await loadCronStore(cronPath)).jobs.map((job) => job.id)).toEqual([
         "keep",
-        "heartbeat",
+        "proactive",
         "dreaming",
       ]);
       for (const file of [mainAgentDir, ...externalFiles]) {

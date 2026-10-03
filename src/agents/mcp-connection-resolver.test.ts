@@ -301,7 +301,6 @@ describe("mcp connection resolver helpers", () => {
       let gatewayState: GatewayReloadProofState = {
         hooksConfig: null,
         hookClientIpConfig: { trustedProxies: undefined, allowRealIpFallback: false },
-        heartbeatRunner: { stop() {}, updateConfig() {} },
         cronState: {
           cron: {
             async start() {},

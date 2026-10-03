@@ -18,7 +18,7 @@ import {
 import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { dispatchInboundMessageWithBufferedDispatcher } from "./dispatch.js";
+import { dispatchInboundMessageWithBufferedDispatcherInternal } from "./dispatch.js";
 
 const finalText = "```ts\n" + "const answer = 42;\n".repeat(20) + "```";
 const finalMediaUrl = "https://example.test/final.png";
@@ -51,7 +51,7 @@ it.each([
   "fallback-direct-recovery-owned",
   "fallback-direct-rejected",
 ] as const)(
-  "dispatchInboundMessageWithBufferedDispatcher settles %s streamed blocks before final suppression",
+  "dispatchInboundMessageWithBufferedDispatcherInternal settles %s streamed blocks before final suppression",
   async (scenario) => {
     const timesOut = scenario === "timeout" || scenario === "timeout-media";
     const fallback = scenario.startsWith("fallback-");
@@ -356,7 +356,7 @@ it.each([
         },
         cfg,
       };
-      const dispatch = dispatchInboundMessageWithBufferedDispatcher({
+      const dispatch = dispatchInboundMessageWithBufferedDispatcherInternal({
         ...dispatchParams,
         replyOptions: {
           blockReplyTimeoutMs: timesOut ? 50 : undefined,
@@ -454,11 +454,11 @@ it.each([
       });
       if (scenario === "concurrent") {
         let otherDispatch:
-          | ReturnType<typeof dispatchInboundMessageWithBufferedDispatcher>
+          | ReturnType<typeof dispatchInboundMessageWithBufferedDispatcherInternal>
           | undefined;
         try {
           await withTestTimeout(blockStarted.promise, 10000, "first transport start");
-          otherDispatch = dispatchInboundMessageWithBufferedDispatcher({
+          otherDispatch = dispatchInboundMessageWithBufferedDispatcherInternal({
             ...dispatchParams,
             ctx: {
               ...dispatchParams.ctx,

@@ -100,7 +100,7 @@ describe("one-shot recovery", () => {
           scheduler: createTestGatewayScheduler(clock.clock),
           nowMs: clock.clock.now,
           enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
+          enqueueSessionEvent: vi.fn(),
           runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
           runCommandJob,
           onEvent,

@@ -4,7 +4,7 @@ import type { ReplyExpectation } from "../../agents/reply-completion.js";
 import type { ScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../../agents/subagents/announce/subagent-announce-handoff.js";
 import type { ChatType } from "../../channels/chat-type.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
 import type { ImageContent } from "../../llm/types.js";
@@ -23,7 +23,7 @@ import type { ReplyOperationStaleReason } from "./reply-run-finalization-lease.j
 
 export type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 
-export type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup";
+export type ReplyTurnKind = "visible" | "background" | "queued_followup";
 
 export type ReplyBackendQueueMessageOptions = {
   /** Prepared context for this queue item, separate from its transcript and answer text. */

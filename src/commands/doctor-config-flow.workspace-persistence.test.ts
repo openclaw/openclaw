@@ -18,6 +18,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { prepareAutomaticHeartbeatRepair } from "./doctor-automatic-heartbeat-repair.js";
 import {
   prepareDoctorContext,
   withDoctorConfigMaintenance,
@@ -25,6 +26,51 @@ import {
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 
 describe("Doctor workspace persistence", () => {
+  it.each(["admitted", "external", "included", "newer", "unrelated-invalid"] as const)(
+    "admits only complete updater heartbeat normalization (%s)",
+    async (boundary) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        await withEnvAsync(
+          {
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+            OPENCLAW_UPDATE_IN_PROGRESS: "1",
+            OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+            OPENCLAW_CONFIG_READONLY: boundary === "external" ? "1" : undefined,
+            OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: undefined,
+          },
+          async () => {
+            const agents = {
+              defaults: { heartbeat: { every: "30m" } },
+              entries: { main: { workspace: path.join(home, "workspace") } },
+            };
+            const configPath = await writeOpenClawConfig(home, {
+              ...(boundary === "newer" ? { meta: { lastTouchedVersion: "9999.1.1" } } : {}),
+              agents: boundary === "included" ? { $include: "agents.json" } : agents,
+              gateway: {
+                mode: "local",
+                ...(boundary === "unrelated-invalid" ? { port: "bad" } : {}),
+              },
+              plugins: { enabled: false },
+            });
+            if (boundary === "included") {
+              await fs.writeFile(
+                path.join(path.dirname(configPath), "agents.json"),
+                JSON.stringify(agents),
+              );
+            }
+            const original = await fs.readFile(configPath, "utf8");
+            const admission = await prepareAutomaticHeartbeatRepair({ nonInteractive: true });
+            expect(Boolean(admission)).toBe(boundary === "admitted");
+            expect(await fs.readFile(configPath, "utf8")).toBe(original);
+            expect(admission?.snapshot.sourceConfig.agents?.defaults?.heartbeat).toEqual(
+              boundary === "admitted" ? { every: "30m" } : undefined,
+            );
+          },
+        );
+      });
+    },
+  );
+
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
   });
@@ -281,7 +327,7 @@ describe("Doctor workspace persistence", () => {
             expect(saved.config.agents?.ownership).toBe("explicit");
             expect(saved.config.agents?.entries?.main?.workspace).toBe(workspace);
             expect(saved.config.agents?.defaults?.systemAgent).toEqual({ agentId: "main" });
-            expect(saved.config.agents?.defaults?.heartbeat).toEqual({ agentId: "main" });
+            expect(saved.config.agents?.defaults?.heartbeat).toBeUndefined();
             expect(saved.config.bindings).toBeUndefined();
             expect(resolveAgentWorkspaceDir(saved.config, "main")).toBe(workspace);
             for (const [name, content] of Object.entries(originals)) {
@@ -296,32 +342,27 @@ describe("Doctor workspace persistence", () => {
     },
   );
 
-  it("repairs noncanonical workspace and heartbeat values through persistence", async () => {
+  it("retains malformed heartbeat hours when durable migration refuses retirement", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-        const agent = {
-          workspace: null,
-          heartbeat: { every: "30m", activeHours: { start: "99:99", end: "17:00" } },
-        };
+        const heartbeat = { every: "30m", activeHours: { start: "99:99", end: "17:00" } };
         const configPath = await writeOpenClawConfig(home, {
-          agents: { list: [{ id: " Ops ", ...agent }] },
+          agents: { list: [{ id: " Ops ", workspace: null, heartbeat }] },
           gateway: { mode: "local" },
           plugins: { enabled: false },
         });
-        const before = await readConfigFileSnapshot();
-        expect(before.valid).toBe(false);
-        expect(readAgentRosterProperty(before.sourceConfig)?.value).toHaveLength(1);
+        const original = await fs.readFile(configPath, "utf8");
+        expect((await readConfigFileSnapshot()).valid).toBe(false);
 
-        const ctx = await prepareDoctorContext(configPath);
-        expect(ctx.configResult.shouldWriteConfig).toBe(true);
-        expect(ctx.cfg.agents?.entries?.ops).toEqual({ heartbeat: { every: "30m" } });
-        await runInitialConfigWriteHealth(ctx);
+        await expect(prepareDoctorContext(configPath)).rejects.toThrow("activeHours");
 
-        const saved = JSON.parse(await fs.readFile(configPath, "utf-8"));
-        expect(saved.agents.entries.ops).toEqual({ heartbeat: { every: "30m" } });
-        expect(saved.agents).not.toHaveProperty("list");
-        expect((await readConfigFileSnapshot()).valid).toBe(true);
-        expect((await prepareDoctorContext(configPath)).configResult.shouldWriteConfig).toBe(false);
+        expect(await fs.readFile(configPath, "utf8")).toBe(original);
+        const saved = await readConfigFileSnapshot();
+        expect(saved.valid).toBe(false);
+        expect(readAgentRosterProperty(saved.sourceConfig)).toMatchObject({
+          kind: "list",
+          value: [{ heartbeat }],
+        });
       });
     });
   });
@@ -412,14 +453,25 @@ describe("Doctor workspace persistence", () => {
               main: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
               ops: undefined,
             });
-            expect.soft(rows).toHaveLength(1);
+            expect.soft(rows).toHaveLength(2);
             expect.soft(rows[0]?.agent_id).toBe("main");
             expect
               .soft(
                 rows.map((row) => JSON.parse(row.job_json)),
                 `pass ${pass}`,
               )
-              .toMatchObject([{ agentId: "main", payload: { model: "openai/gpt-5.6-sol" } }]);
+              .toMatchObject([
+                {
+                  id: "retained-owner",
+                  agentId: "main",
+                  payload: { model: "openai/gpt-5.6-sol" },
+                },
+                {
+                  agentId: "ops",
+                  payload: { kind: "agentTurn" },
+                  delivery: { mode: "announce", target: "owner" },
+                },
+              ]);
             if (pass === 2) {
               expect.soft(policies).toEqual(firstPolicies);
               expect.soft(rows).toEqual(firstRows);

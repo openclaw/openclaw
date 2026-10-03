@@ -5,24 +5,13 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveHeartbeatAgents, resolveHeartbeatIntervalMs } from "../infra/heartbeat-config.js";
-import { resolveHeartbeatDeliveryTarget } from "../infra/outbound/targets.js";
+import { resolveProactiveDeliveryTarget } from "../infra/outbound/targets.js";
 import { loadLegacySessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import { resolveAgentIdFromSessionKey, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
+import { resolveHeartbeatAgents, resolveHeartbeatIntervalMs } from "./doctor-heartbeat-legacy.js";
 
-/**
- * Detect heartbeat configs that pin a non-existent session. The runtime
- * resolves `heartbeat.session` to a sessionKey via `resolveHeartbeatSession`;
- * a missing last route skips before the model, while a missing explicit target
- * runs and drops its reply. Common cause: the configured Slack
- * channel ID does not match any channel the agent has ever joined (e.g.,
- * heartbeat pins channel `c0b2eddpw95` but the agent only has sessions in
- * `c0ag7jag35g`, or the agent has no Slack bot at all).
- *
- * Warning only — repair would mean rewriting the config, which is the
- * operator's intent to express.
- */
+/** Warn without rewriting an operator's legacy session or delivery target. */
 export async function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): Promise<string[]> {
   const warnings: string[] = [];
   const sessionScope = cfg.session?.scope ?? "per-sender";
@@ -54,10 +43,10 @@ export async function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig):
     if (target === "none") {
       continue;
     }
-    const deliveryWithoutSession = await resolveHeartbeatDeliveryTarget({
+    const deliveryWithoutSession = await resolveProactiveDeliveryTarget({
       cfg,
       agentId,
-      heartbeat: heartbeatConfig,
+      policy: heartbeatConfig,
     });
     if (deliveryWithoutSession.channel !== "none" && deliveryWithoutSession.to) {
       continue;
@@ -100,10 +89,8 @@ export async function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig):
     }).path;
     const ownerTarget = target === undefined || target === "owner";
     const missingRouteOutcome = ownerTarget
-      ? `  Heartbeats will skip with reason="no-route" until a configured owner resolves to a direct message.`
-      : deliveryWithoutSession.reason === "no-route"
-        ? `  Heartbeats will skip with reason="no-route" until that session has a delivery route.`
-        : `  Heartbeats will run but resolve delivery to channel="none"/reason="no-target", so replies are dropped.`;
+      ? "  After migration, the automation uses standard delivery handling; a missing owner route can cause a delivery failure instead of skipping the run."
+      : "  After migration, the automation uses standard delivery handling; a missing session route or recipient can cause a delivery failure instead of skipping the run.";
     const fix = ownerTarget
       ? `  Fix: set commands.ownerAllowFrom=["telegram:123456789"] or a channel allowFrom to a direct-message owner; for explicit delivery, set heartbeat.target="telegram" with heartbeat.to="123456789"; use heartbeat.target="none" to suppress delivery.`
       : `  Fix: point heartbeat.session at a session the agent actually owns, set heartbeat.target="none" to suppress delivery, or remove the heartbeat.session field to fall back to the agent main session.`;

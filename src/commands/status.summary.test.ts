@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
+import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import {
   clearActiveCredentialDegradedOwner,
@@ -14,6 +15,7 @@ import {
 } from "./status.summary.test-support.js";
 
 const statusSummaryMocks = vi.hoisted(() => ({
+  readHeartbeatSummarySnapshot: vi.fn(async () => [] as import("../cron/types.js").CronJob[]),
   hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
   buildChannelSummary: vi.fn(async () => ["ok"]),
   resolveProviderStaticModel: vi.fn(),
@@ -23,8 +25,10 @@ const statusSummaryMocks = vi.hoisted(() => ({
       entry: Record<string, unknown>;
     }>
   >(() => []),
-  loadExactSessionEntryReadOnly:
-    vi.fn<typeof import("../config/sessions/session-accessor.js").loadExactSessionEntryReadOnly>(),
+  readSessionEntriesFromStoreInWorker:
+    vi.fn<
+      typeof import("../config/sessions/session-entry-read-runtime.js").readSessionEntriesFromStoreInWorker
+    >(),
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
@@ -94,14 +98,16 @@ vi.mock("../config/sessions/paths.js", () => ({
   resolveSessionStorePathCore: vi.fn(() => "/tmp/sessions.json"),
 }));
 
-vi.mock("../config/sessions/session-accessor.js", () => ({
-  loadExactSessionEntryReadOnly: statusSummaryMocks.loadExactSessionEntryReadOnly,
+vi.mock("../infra/heartbeat-summary-snapshot.js", async (original) => ({
+  ...(await original<typeof import("../infra/heartbeat-summary-snapshot.js")>()),
+  readHeartbeatSummarySnapshot: statusSummaryMocks.readHeartbeatSummarySnapshot,
 }));
 
 vi.mock("../config/sessions/session-entry-read-runtime.js", async () => {
   const { createSessionStoreSummaryReaderStub } =
     await import("../config/sessions/session-store-summary.test-support.js");
   return {
+    readSessionEntriesFromStoreInWorker: statusSummaryMocks.readSessionEntriesFromStoreInWorker,
     withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub((scope, options) => {
       const entries = statusSummaryMocks
         .listSessionEntriesCore(scope)
@@ -194,6 +200,7 @@ describe("getStatusSummary", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    statusSummaryMocks.readHeartbeatSummarySnapshot.mockResolvedValue([]);
     setActiveDegradedPlugins([]);
     clearActiveCredentialDegradedOwner("account", "telegram:work");
     setActiveDegradedSecretOwners([]);
@@ -201,14 +208,17 @@ describe("getStatusSummary", () => {
     statusSummaryMocks.resolveProviderStaticModel.mockReset();
     statusSummaryMocks.listSessionEntriesCore.mockReturnValue([]);
     vi.mocked(peekSystemEvents).mockReset().mockReturnValue([]);
-    statusSummaryMocks.loadExactSessionEntryReadOnly.mockImplementation(({ sessionKey }) => {
-      const entry = statusSummaryMocks
+    statusSummaryMocks.readSessionEntriesFromStoreInWorker.mockImplementation(async (input) => ({
+      kind: "session-exact-entries",
+      lifecycleTimestamps: {},
+      entries: statusSummaryMocks
         .listSessionEntriesCore()
-        .find((candidate) => candidate.sessionKey === sessionKey)?.entry;
-      return entry
-        ? { sessionKey, entry: { sessionId: sessionKey, updatedAt: 0, ...entry } }
-        : undefined;
-    });
+        .filter(({ sessionKey }) => input.sessionKeys?.includes(sessionKey))
+        .map(({ sessionKey, entry }) => ({
+          sessionKey,
+          entry: { sessionId: sessionKey, updatedAt: 0, ...entry },
+        })),
+    }));
     vi.mocked(statusSummaryRuntime.resolveAuthoredModelContextTokens).mockReturnValue(undefined);
     vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mockReturnValue(200_000);
     vi.mocked(statusSummaryRuntime.resolveSessionRuntime).mockReturnValue({
@@ -253,7 +263,6 @@ describe("getStatusSummary", () => {
         agents: {
           ownership: "explicit",
           entries: { research: {}, ops: {} },
-          defaults: { heartbeat: { agentId: "ops", every: "0m" } },
         },
         session: { scope, mainKey: "inbox" },
       },
@@ -268,33 +277,45 @@ describe("getStatusSummary", () => {
     ]);
   });
 
-  it.each([false, true])("reads the configured heartbeat route (empty=%s)", async (empty) => {
-    const main = "agent:main:main";
-    const configured = "agent:main:telegram:alerts";
-    statusSummaryMocks.listSessionEntriesCore.mockReturnValue([
-      {
-        sessionKey: empty ? main : configured,
-        entry: {
-          delivery: normalizeSessionDeliveryState({ context: { channel: "telegram", to: "123" } }),
+  it.each([false, true])(
+    "reads the converted automation session route (empty=%s)",
+    async (empty) => {
+      const main = "agent:main:main";
+      const configured = "agent:main:telegram:alerts";
+      statusSummaryMocks.listSessionEntriesCore.mockReturnValue([
+        {
+          sessionKey: empty ? main : configured,
+          entry: {
+            delivery: normalizeSessionDeliveryState({
+              context: { channel: "telegram", to: "123" },
+            }),
+          },
         },
-      },
-      { sessionKey: empty ? configured : main, entry: {} },
-    ]);
-    const summary = await getStatusSummary({
-      config: {
-        agents: { defaults: { heartbeat: { target: "last", session: "telegram:alerts" } } },
-      },
-    });
-    expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(empty);
-  });
+        { sessionKey: empty ? configured : main, entry: {} },
+      ]);
+      statusSummaryMocks.readHeartbeatSummarySnapshot.mockResolvedValue([
+        makeCronJob({
+          agentId: "main",
+          sessionTarget: "session:agent:main:telegram:alerts",
+          delivery: { mode: "announce", channel: "last" },
+        }),
+      ]);
+      const summary = await getStatusSummary({ config: {} });
+      expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(empty);
+    },
+  );
 
   it("does not read an unused route for a disabled heartbeat", async () => {
-    const summary = await getStatusSummary({
-      config: { agents: { defaults: { heartbeat: { target: "owner", every: "0m" } } } },
-      includeChannelSummary: false,
-    });
+    statusSummaryMocks.readHeartbeatSummarySnapshot.mockResolvedValue([
+      makeCronJob({
+        agentId: "main",
+        enabled: false,
+        delivery: { mode: "announce", target: "owner" },
+      }),
+    ]);
+    const summary = await getStatusSummary({ config: {}, includeChannelSummary: false });
     expect(summary.heartbeat.agents[0]).toMatchObject({ enabled: false, waitingForRoute: false });
-    expect(statusSummaryMocks.loadExactSessionEntryReadOnly).not.toHaveBeenCalled();
+    expect(statusSummaryMocks.readSessionEntriesFromStoreInWorker).not.toHaveBeenCalled();
   });
 
   it("skips session model discovery and projection when sensitive output is disabled", async () => {

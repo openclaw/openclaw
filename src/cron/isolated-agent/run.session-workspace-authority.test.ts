@@ -238,7 +238,15 @@ describe("scheduled workspace authority through creator, storage, scheduler and 
       defaultAgentId: "main",
       log: createNoopLogger(),
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
+      runSessionEvent: (request) =>
+        runCronIsolatedAgentTurn({
+          ...request,
+          cfg: config,
+          deps: {},
+          agentId: "main",
+          message: request.text,
+          sessionKey: targetKey,
+        }),
       runIsolatedAgentJob: (request) =>
         runCronIsolatedAgentTurn({
           ...request,

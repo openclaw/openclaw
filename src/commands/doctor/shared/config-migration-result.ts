@@ -9,9 +9,12 @@ import type {
   PreparedPostSessionPluginMigration,
 } from "../../../infra/state-migrations.types.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
+import type { AutomaticHeartbeatRepairAdmission } from "../../doctor-automatic-heartbeat-repair.js";
 import type { CronCodexRuntimePolicyTarget } from "../cron/store-migration.js";
 
 export type DoctorConfigPreflightOptions = {
+  /** Scoped updater normalization after maintenance and verified database backup admission. */
+  automaticHeartbeatRepair?: AutomaticHeartbeatRepairAdmission;
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
   migrateState?: boolean;
   /** Select Doctor normalization without enabling repair-only migrations. */

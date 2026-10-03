@@ -199,11 +199,8 @@ it.each(["before", "after"])(
       await writer.sync();
       expect((await writer.stat()).nlink).toBeGreaterThan(0);
       await f.migrate();
-      if (phase === "after") {
-        expect(await f.archivedContents()).toContain("Late edit after interruption");
-      } else {
-        expect(await fs.readFile(f.sourcePath, "utf8")).toBe("Late edit after interruption");
-      }
+      expect(await f.archivedContents()).toContain("Late edit after interruption");
+      await expect(fs.access(f.sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await writer.close();
     }

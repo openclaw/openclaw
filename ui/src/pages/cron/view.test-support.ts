@@ -45,7 +45,6 @@ function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
     error: null,
     busy: false,
     form: { ...DEFAULT_CRON_FORM },
-    heartbeatScratch: "",
     fieldErrors: {},
     canSubmit: true,
     editingJob: null,

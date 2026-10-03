@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  claimAgentRunContext,
-  clearAgentRunContext,
-  consumeCronNextCheckProposal,
-} from "../../infra/agent-run-registry.js";
+import { consumeCronNextCheckProposal } from "../../infra/agent-run-registry.automation.js";
+import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createCronTool } from "./cron-tool.js";
 
 const RUN_ID = "paced-run";
@@ -23,7 +20,7 @@ function createScopedTool(jobId = JOB_ID) {
 function registerRun(pacingEnabled: boolean) {
   claimAgentRunContext(RUN_ID, {
     sessionKey: `agent:main:cron:${JOB_ID}`,
-    cronRunsByJobId: new Map([[JOB_ID, { pacingEnabled }]]),
+    cronRunsByJobId: new Map([[JOB_ID, { pacingEnabled, assertCurrent: () => {} }]]),
   });
 }
 
@@ -78,7 +75,7 @@ describe("cron next_check action", () => {
     });
 
     claimAgentRunContext(RUN_ID, {
-      cronRunsByJobId: new Map([["next-job", { pacingEnabled: true }]]),
+      cronRunsByJobId: new Map([["next-job", { pacingEnabled: true, assertCurrent: () => {} }]]),
     });
     await createScopedTool("next-job").execute("call-next-check-next-job", {
       action: "next_check",

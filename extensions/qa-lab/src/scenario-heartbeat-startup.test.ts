@@ -11,8 +11,7 @@ import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 const monitor = {
   id: "qa-monitor",
   agentId: "qa",
-  payload: { kind: "heartbeat" },
-  declarationKey: "heartbeat:qa",
+  payload: { kind: "agentTurn", message: "QA migrated proactive automation." },
   enabled: true,
 };
 
@@ -80,8 +79,8 @@ describe("heartbeat scenario scheduled-service startup convergence", () => {
   it.each([
     ["absent", []],
     ["wrong agent", [{ ...monitor, agentId: "other" }]],
-    ["wrong payload", [{ ...monitor, payload: { kind: "agentTurn" } }]],
-    ["wrong declaration", [{ ...monitor, declarationKey: "heartbeat:other" }]],
+    ["wrong payload", [{ ...monitor, payload: { kind: "systemEvent" } }]],
+    ["wrong prompt", [{ ...monitor, payload: { kind: "agentTurn", message: "unrelated" } }]],
     ["disabled", [{ ...monitor, enabled: false }]],
     ["missing identity", [{ ...monitor, id: "" }]],
   ] as const)("fails within the readiness budget when the monitor is %s", async (_label, jobs) => {

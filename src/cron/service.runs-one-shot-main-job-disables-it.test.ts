@@ -1,12 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { resolveAgentMainSessionKey } from "../config/sessions.js";
-import {
-  drainSystemEventEntries,
-  enqueueSystemEventWithReceipt,
-  peekSystemEventEntries,
-  resetSystemEventsForTest,
-} from "../infra/system-events.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -14,7 +7,7 @@ import {
 import { CronService, type CronEvent } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
-import type { CronJobCreate } from "./types.js";
+import type { CronDelivery, CronJobCreate } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-one-shot-" });
 const atMs = Date.parse("2025-12-13T00:00:02.000Z");
@@ -35,41 +28,22 @@ const isolatedJob = (overrides: Partial<CronJobCreate> = {}): CronJobCreate =>
     ...overrides,
   });
 
-function sessionKey(target?: { agentId?: string; sessionKey?: string }) {
-  return (
-    target?.sessionKey ??
-    resolveAgentMainSessionKey({ cfg: {}, agentId: target?.agentId ?? "main" })
-  );
-}
-
 async function fixture(
-  options: Partial<
-    Pick<CronServiceDeps, "runIsolatedAgentJob" | "requestHeartbeatAndWait" | "nowMs">
-  > & { removable?: boolean } = {},
+  options: Partial<Pick<CronServiceDeps, "runIsolatedAgentJob" | "runSessionEvent" | "nowMs">> = {},
 ) {
   const store = await makeStorePath();
   const clock = createGatewaySchedulerClock(Date.now());
   const finished = createDeferred<CronEvent>();
-  const enqueueSystemEvent = options.removable
-    ? vi.fn((text: string, opts?: Parameters<CronServiceDeps["enqueueSystemEvent"]>[1]) => {
-        const remove = enqueueSystemEventWithReceipt(text, {
-          sessionKey: sessionKey(opts),
-          contextKey: opts?.contextKey,
-          deliveryContext: opts?.deliveryContext,
-        });
-        return remove ? { accepted: true, remove } : { accepted: false };
-      })
-    : vi.fn();
-  const requestHeartbeat = vi.fn();
+  const enqueueSystemEvent = vi.fn();
+  const runSessionEvent = options.runSessionEvent ?? vi.fn(async () => ({ status: "ok" as const }));
   const deps = {
     scheduler: createTestGatewayScheduler(clock.clock),
     storePath: store.storePath,
     cronEnabled: true,
     log: logger,
     enqueueSystemEvent,
-    requestHeartbeat,
+    runSessionEvent,
     nowMs: options.nowMs,
-    requestHeartbeatAndWait: options.requestHeartbeatAndWait,
     runIsolatedAgentJob:
       options.runIsolatedAgentJob ?? vi.fn(async () => ({ status: "ok" as const })),
     onEvent: (event: CronEvent) => {
@@ -84,14 +58,8 @@ async function fixture(
     await service.status();
     service.stop();
     await store.cleanup();
-    resetSystemEventsForTest();
   };
-  const expectEmptyQueue = () => {
-    for (const [, target] of enqueueSystemEvent.mock.calls) {
-      expect(peekSystemEventEntries(sessionKey(target))).toHaveLength(0);
-    }
-  };
-  return { cron, deps, clock, finished: finished.promise, cleanup, expectEmptyQueue };
+  return { cron, deps, clock, finished: finished.promise, cleanup };
 }
 
 describe("CronService one-shot lifecycle", () => {
@@ -103,14 +71,16 @@ describe("CronService one-shot lifecycle", () => {
       await clock.advanceTo(atMs);
       await finished;
       expect(cron.getJob(job.id)?.enabled).toBe(false);
-      expect(deps.enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith("hello", {
-        agentId: "main",
-        contextKey: `cron:${job.id}`,
-      });
-      expect(deps.requestHeartbeat).toHaveBeenCalled();
+      expect(deps.runSessionEvent).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          text: "hello",
+          job: expect.objectContaining({ id: job.id, sessionTarget: "main" }),
+        }),
+      );
+      expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
       expect((await cron.update(job.id, { enabled: true })).state.nextRunAtMs).toBeUndefined();
       await clock.advanceBy(1_000);
-      expect(deps.enqueueSystemEvent).toHaveBeenCalledOnce();
+      expect(deps.runSessionEvent).toHaveBeenCalledOnce();
     } finally {
       await cleanup();
     }
@@ -166,7 +136,7 @@ describe("CronService one-shot lifecycle", () => {
         ...(reason ? { deliverySuppressionReason: reason } : {}),
       });
       expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(deps.requestHeartbeat).not.toHaveBeenCalled();
+      expect(deps.runSessionEvent).not.toHaveBeenCalled();
       const retained = cron.getJob(job.id);
       if (completion === "succeeded") {
         expect(retained).toBeUndefined();
@@ -198,80 +168,111 @@ describe("CronService one-shot lifecycle", () => {
     }
   });
 
-  it("removes a queued main-session event when an immediate heartbeat fails", async () => {
-    const requestHeartbeatAndWait = vi.fn(async () => {
-      throw new Error("heartbeat failed");
+  it("reports the exact failed main-session occurrence after durable settlement", async () => {
+    const runSessionEvent = vi.fn(async () => {
+      throw new Error("session execution failed");
     });
-    const { cron, deps, cleanup, expectEmptyQueue } = await fixture({
-      requestHeartbeatAndWait,
-      removable: true,
-    });
+    const { cron, deps, cleanup } = await fixture({ runSessionEvent });
     try {
       const job = await cron.add(
         mainJob({ schedule: { kind: "at", at: new Date(1).toISOString() } }),
       );
-      await cron.run(job.id, "force");
-      expect(requestHeartbeatAndWait).toHaveBeenCalledOnce();
-      expect(deps.requestHeartbeat).not.toHaveBeenCalled();
-      expect(deps.enqueueSystemEvent).toHaveBeenCalledOnce();
-      expectEmptyQueue();
+      const onSettledResult = vi.fn(() => {
+        expect(cron.getJob(job.id)?.state.lastRunStatus).toBe("error");
+      });
+      await cron.run(job.id, "force", { onSettledResult });
+      expect(runSessionEvent).toHaveBeenCalledOnce();
+      expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(onSettledResult).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          status: "error",
+          error: expect.stringContaining("session execution failed"),
+        }),
+      );
       expect(cron.getJob(job.id)?.state).toMatchObject({
         lastRunStatus: "error",
-        lastError: expect.stringContaining("heartbeat failed"),
+        lastError: expect.stringContaining("session execution failed"),
       });
     } finally {
       await cleanup();
     }
   });
 
-  it("retries disabled one-shot main wakes without leaving failed-attempt system events", async () => {
-    resetSystemEventsForTest();
-    let now = atMs;
-    const consumedTexts: string[] = [];
-    const requestHeartbeatAndWait = vi.fn(
-      async (opts?: Parameters<NonNullable<CronServiceDeps["requestHeartbeatAndWait"]>>[0]) => {
-        if (requestHeartbeatAndWait.mock.calls.length < 3) {
-          return { status: "skipped" as const, reason: "disabled" };
-        }
-        consumedTexts.push(...drainSystemEventEntries(sessionKey(opts)).map((event) => event.text));
-        return { status: "ran" as const, durationMs: 1 };
-      },
-    );
-    const { cron, deps, cleanup, expectEmptyQueue } = await fixture({
-      requestHeartbeatAndWait,
-      nowMs: () => now,
-      removable: true,
-    });
+  it("disables a skipped one-shot without retrying it", async () => {
+    const runSessionEvent = vi.fn(async () => ({ status: "skipped" as const, error: "disabled" }));
+    const { cron, deps, cleanup } = await fixture({ runSessionEvent, nowMs: () => atMs });
     try {
       const job = await cron.add(mainJob());
-      for (const [attempt, delay] of [
-        [1, 30_000],
-        [2, 90_000],
-      ] as const) {
-        await cron.run(job.id, "due");
-        const stored = cron.getJob(job.id);
-        expect(stored).toMatchObject({
-          enabled: true,
-          state: {
-            lastStatus: "skipped",
-            lastError: "disabled",
-            consecutiveSkipped: attempt,
-            nextRunAtMs: atMs + delay,
-          },
-        });
-        expectEmptyQueue();
-        now = atMs + delay;
-      }
       await cron.run(job.id, "due");
-      expect(cron.getJob(job.id)).toBeUndefined();
-      expect(requestHeartbeatAndWait).toHaveBeenCalledTimes(3);
-      expect(deps.requestHeartbeat).not.toHaveBeenCalled();
-      expect(consumedTexts).toEqual(["hello"]);
-      expectEmptyQueue();
+      expect(cron.getJob(job.id)).toMatchObject({
+        enabled: false,
+        state: { lastStatus: "skipped", lastError: "disabled", consecutiveSkipped: 1 },
+      });
+      expect(cron.getJob(job.id)?.state.nextRunAtMs).toBeUndefined();
+      expect(runSessionEvent).toHaveBeenCalledOnce();
+      expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
     } finally {
       await cleanup();
     }
   });
+
+  it.each([
+    {
+      name: "owner route and account",
+      configured: { mode: "announce", target: "owner", accountId: "bound", directPolicy: "block" },
+      expected: {
+        mode: "announce",
+        target: "owner",
+        accountId: "bound",
+        directPolicy: "block",
+        to: undefined,
+        threadId: undefined,
+      },
+    },
+    {
+      name: "silent policy",
+      configured: { mode: "none" },
+      expected: {
+        mode: "none",
+        to: "another-recipient",
+        accountId: "other",
+        threadId: "other-thread",
+      },
+    },
+  ] satisfies Array<{ name: string; configured: CronDelivery; expected: Partial<CronDelivery> }>)(
+    "preserves stored $name during a per-occurrence delivery override",
+    async ({ configured, expected }) => {
+      const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>(async () => ({
+        status: "ok",
+      }));
+      const { cron, cleanup } = await fixture({ runIsolatedAgentJob });
+      try {
+        const job = await cron.add(isolatedJob({ delivery: configured, deleteAfterRun: false }));
+        const onSettledResult = vi.fn();
+        await cron.run(job.id, "force", {
+          delivery: {
+            mode: "announce",
+            target: undefined,
+            to: "another-recipient",
+            accountId: "other",
+            threadId: "other-thread",
+          },
+          onSettledResult,
+        });
+        expect(runIsolatedAgentJob).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            job: expect.objectContaining({ delivery: expect.objectContaining(expected) }),
+          }),
+        );
+        expect(cron.getJob(job.id)?.delivery).toEqual(configured);
+        expect(onSettledResult).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ status: "ok" }),
+        );
+      } finally {
+        await cleanup();
+      }
+    },
+  );
 
   it.each([false, true])(
     "retries lifecycle claim conflicts only before execution starts (started=%s)",
@@ -296,7 +297,7 @@ describe("CronService one-shot lifecycle", () => {
           expect(stored?.state.nextRunAtMs).toBeTypeOf("number");
         }
         expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(deps.requestHeartbeat).not.toHaveBeenCalled();
+        expect(deps.runSessionEvent).not.toHaveBeenCalled();
       } finally {
         await cleanup();
       }
@@ -307,7 +308,7 @@ describe("CronService one-shot lifecycle", () => {
     const { cron, cleanup } = await fixture();
     try {
       await expect(
-        cron.add(mainJob({ payload: { kind: "agentTurn", message: "nope" } })),
+        cron.add(mainJob({ payload: { kind: "command", argv: ["invalid-main-command"] } })),
       ).rejects.toThrow(/main cron jobs require/);
       await expect(cron.add(mainJob({ sessionTarget: "isolated" }))).rejects.toThrow(
         /isolated.*cron jobs require/,

@@ -20,7 +20,7 @@ import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.j
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { FsSafeError, root } from "../infra/fs-safe.js";
+import { FsSafeError } from "../infra/fs-safe.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { runWithAgentCreationClaim } from "../state/agent-creation-claim.js";
 import { resolveAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.js";
@@ -37,6 +37,7 @@ import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js"
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { resolveUserPath } from "../utils.js";
 import { DuplicateAgentError } from "./agent-create-error.js";
+import { writeIdentityFile } from "./agent-create-identity.js";
 import { normalizeAgentDirRegistryPath } from "./agent-dir-registry.js";
 import { claimCompletedAgentDeletion } from "./agent-lifecycle-registry.js";
 import { listAgentRoles, loadAgentRole } from "./agent-roles.js";
@@ -48,8 +49,6 @@ import {
   mergeIdentityMarkdownContent,
   sanitizeAgentIdentityLine,
 } from "./identity-file.js";
-import { createWorkspaceFileMutationGuard } from "./workspace-file-mutation-guard.js";
-import type { WorkspaceStateGuard } from "./workspace-state-store.worker-contract.js";
 import {
   DEFAULT_IDENTITY_FILENAME,
   ensureAgentWorkspace,
@@ -126,6 +125,8 @@ type CreateAgentParams = {
   prepareConfigCommit?: () => Promise<ConfigCommitReceipt | void>;
   /** Observe published config before post-commit bookkeeping that may still fail. */
   onCommitted?: (result: CreateAgentSuccess & { config: OpenClawConfig }) => void;
+  /** Provider cadence resolved from staged onboarding before config publication. */
+  proactiveCadenceMs?: number;
   provenance?: { createdVia: AgentCreatedVia; creatorAgentId?: string };
 };
 
@@ -271,33 +272,6 @@ export async function checkAgentCreationGate(agentId: string): Promise<CreateErr
   return await withConfigMutationExclusive(
     async (lockedConfig) => await evaluateMainCreationGate(lockedConfig, normalizeAgentId(agentId)),
   );
-}
-
-async function writeIdentityFile(params: {
-  workspaceDir: string;
-  identity: NonNullable<ReturnType<typeof createAgentIdentityConfig>>;
-  guard?: WorkspaceStateGuard;
-}): Promise<void> {
-  const beforeFileMutation = createWorkspaceFileMutationGuard(params.guard);
-  const workspaceRoot = await root(params.workspaceDir);
-  let existing: string | undefined;
-  try {
-    const result = await workspaceRoot.read(DEFAULT_IDENTITY_FILENAME, {
-      hardlinks: "reject",
-    });
-    existing = result.buffer.toString("utf-8");
-  } catch (error) {
-    if (!(error instanceof FsSafeError && error.code === "not-found")) {
-      throw error;
-    }
-  }
-  const content = mergeIdentityMarkdownContent(existing, params.identity);
-  beforeFileMutation?.();
-  // Root.write rechecks after its own async preparation and before each mutation.
-  await workspaceRoot.write(DEFAULT_IDENTITY_FILENAME, content, {
-    encoding: "utf8",
-    assertBeforeMutation: beforeFileMutation,
-  });
 }
 
 export async function createAgent(params: CreateAgentParams): Promise<CreateAgentResult> {
@@ -681,6 +655,12 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       }
       if (result.status === "created") {
         recordAgentProvenance(agentId, params.provenance ?? { createdVia: "operator" });
+        const { provisionDefaultProactiveJob } = await import("../cron/default-proactive-job.js");
+        await provisionDefaultProactiveJob(result.config, agentId, {
+          cadenceMs: params.proactiveCadenceMs,
+          commitGuard: assertHost,
+          recoveryHoldPredicate: recoveryHoldPredicate(),
+        });
       }
       if (recoveryPaths.length > 0) {
         assertRecoveryCurrent();

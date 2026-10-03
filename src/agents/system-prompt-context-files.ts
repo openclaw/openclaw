@@ -14,20 +14,12 @@ const CONTEXT_FILE_ORDER = new Map<string, number>([
   ["memory.md", 70],
 ]);
 
-const DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK =
-  /Default heartbeat prompt:\r?\n`(?:Read HEARTBEAT\.md if it exists|Follow the heartbeat monitor scratch context when provided\.)[^`\r\n]*HEARTBEAT_OK\.`/gu;
 function normalizeContextFilePath(pathValue: string): string {
   return pathValue.trim().replace(/\\/g, "/");
 }
 
 export function isBootstrapContextFile(pathValue: string): boolean {
   return /(^|[\\/])BOOTSTRAP\.md$/iu.test(pathValue.trim());
-}
-
-function sanitizeContextFileContentForPrompt(content: string): string {
-  // Old workspace templates otherwise route Claude subscriptions to paid extra
-  // usage; heartbeat behavior remains in the actual scheduled user turn.
-  return content.replaceAll(DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK, "").replace(/\n{3,}/g, "\n\n");
 }
 
 export function prepareContextFilesForPrompt<T extends EmbeddedContextFile>(
@@ -97,7 +89,7 @@ export function buildProjectContextSection(files: ReturnType<typeof prepareConte
   }
   lines.push("");
   for (const { file } of files) {
-    lines.push(`## ${file.path}`, "", sanitizeContextFileContentForPrompt(file.content), "");
+    lines.push(`## ${file.path}`, "", file.content, "");
   }
   return lines;
 }

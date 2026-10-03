@@ -1,6 +1,22 @@
 // Shared agent/reply runtime helpers for channel plugins. Keep channel plugins
 // off direct src/auto-reply imports by routing common reply primitives here.
 
+import {
+  dispatchInboundMessageInternal,
+  dispatchInboundMessageWithBufferedDispatcherInternal,
+  dispatchInboundMessageWithDispatcherInternal,
+} from "../auto-reply/dispatch.js";
+import { getReplyFromConfigInternal } from "../auto-reply/reply/get-reply.js";
+import {
+  dispatchReplyWithBufferedBlockDispatcherCore,
+  dispatchReplyWithDispatcherCore,
+} from "../auto-reply/reply/provider-dispatcher.js";
+import {
+  publicReplyOptions,
+  type GetReplyOptions,
+  type PublicReplyParams,
+} from "./reply-options.js";
+
 export {
   chunkMarkdownText,
   chunkMarkdownTextWithMode,
@@ -10,25 +26,45 @@ export {
   resolveTextChunkLimit,
 } from "../auto-reply/chunk.js";
 export type { ChunkMode } from "../auto-reply/chunk.js";
-export {
-  dispatchInboundMessage,
-  dispatchInboundMessageWithBufferedDispatcher,
-  dispatchInboundMessageWithDispatcher,
-  settleReplyDispatcher,
-} from "../auto-reply/dispatch.js";
+export { settleReplyDispatcher } from "../auto-reply/dispatch.js";
+export function dispatchInboundMessage(
+  params: PublicReplyParams<Parameters<typeof dispatchInboundMessageInternal>[0]>,
+) {
+  return dispatchInboundMessageInternal({
+    ...params,
+    replyOptions: publicReplyOptions(params.replyOptions),
+  });
+}
+export function dispatchInboundMessageWithBufferedDispatcher(
+  params: PublicReplyParams<
+    Parameters<typeof dispatchInboundMessageWithBufferedDispatcherInternal>[0]
+  >,
+) {
+  return dispatchInboundMessageWithBufferedDispatcherInternal({
+    ...params,
+    replyOptions: publicReplyOptions(params.replyOptions),
+  });
+}
+export function dispatchInboundMessageWithDispatcher(
+  params: PublicReplyParams<Parameters<typeof dispatchInboundMessageWithDispatcherInternal>[0]>,
+) {
+  return dispatchInboundMessageWithDispatcherInternal({
+    ...params,
+    replyOptions: publicReplyOptions(params.replyOptions),
+  });
+}
 export {
   normalizeGroupActivation,
   parseActivationCommand,
 } from "../auto-reply/group-activation.js";
-export {
-  HEARTBEAT_PROMPT,
-  DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-  resolveHeartbeatPromptCore,
-  stripHeartbeatToken,
-} from "../auto-reply/heartbeat.js";
-export { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
-export { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
-export { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+export function getReplyFromConfig(
+  ctx: Parameters<typeof getReplyFromConfigInternal>[0],
+  opts?: GetReplyOptions,
+  config?: Parameters<typeof getReplyFromConfigInternal>[2],
+) {
+  return getReplyFromConfigInternal(ctx, publicReplyOptions(opts), config);
+}
+export { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 export { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 export { isBtwRequestText } from "../auto-reply/reply/btw-command.js";
 export { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
@@ -37,10 +73,22 @@ export {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../auto-reply/inbound-debounce.js";
-export {
-  dispatchReplyWithBufferedBlockDispatcherCore as dispatchReplyWithBufferedBlockDispatcher,
-  dispatchReplyWithDispatcherCore as dispatchReplyWithDispatcher,
-} from "../auto-reply/reply/provider-dispatcher.js";
+export function dispatchReplyWithBufferedBlockDispatcher(
+  params: PublicReplyParams<Parameters<typeof dispatchReplyWithBufferedBlockDispatcherCore>[0]>,
+) {
+  return dispatchReplyWithBufferedBlockDispatcherCore({
+    ...params,
+    replyOptions: publicReplyOptions(params.replyOptions),
+  });
+}
+export function dispatchReplyWithDispatcher(
+  params: PublicReplyParams<Parameters<typeof dispatchReplyWithDispatcherCore>[0]>,
+) {
+  return dispatchReplyWithDispatcherCore({
+    ...params,
+    replyOptions: publicReplyOptions(params.replyOptions),
+  });
+}
 export {
   createReplyDispatcher,
   createReplyDispatcherWithTyping,
@@ -58,10 +106,10 @@ export type {
 } from "../auto-reply/reply/reply-dispatcher.js";
 export { createReplyReferencePlanner } from "../auto-reply/reply/reply-reference.js";
 export type {
-  GetReplyOptions,
   BlockReplyContext,
   SourceReplyDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
+export type { GetReplyOptions } from "./reply-options.js";
 export type { ReplyPayload } from "./reply-payload.js";
 export type {
   ChannelStructuredContextEntry,

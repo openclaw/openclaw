@@ -37,7 +37,6 @@ describe("scheduled policy preservation across payload conversions", () => {
         cronEnabled: false,
         log: logger,
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       });
       const input: CronJobCreate = {

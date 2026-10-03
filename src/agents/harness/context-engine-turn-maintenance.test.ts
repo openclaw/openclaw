@@ -180,7 +180,6 @@ async function createAcceptedTurn(
     database,
     engineId: lease.effectiveEngineId,
     ownerPluginId: lease.effectiveEnginePluginId,
-    isHeartbeat: false,
   });
   await source.release();
   const pendingTurn = () =>

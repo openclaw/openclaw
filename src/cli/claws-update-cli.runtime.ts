@@ -21,6 +21,7 @@ import {
 } from "./claws-cli-output.js";
 import { waitUntilGatewayAgentAvailable } from "./claws-cli.gateway-readiness.js";
 import type { ClawsUpdateOptions } from "./claws-cli.js";
+import { listCronJobsFromGateway } from "./cron-cli/list-jobs.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { resolvePluginBatchReload } from "./plugins-lifecycle-client.js";
 
@@ -191,6 +192,8 @@ export async function runClawsUpdateCommand(
           waitUntilAgentAvailable: waitUntilGatewayAgentAvailable,
           add: async (input) => await callGatewayFromCli("cron.add", {}, input),
           get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),
+          list: async (agentId) =>
+            await listCronJobsFromGateway({}, { agentId, includeDisabled: true }),
           remove: async (id) => await callGatewayFromCli("cron.remove", {}, { id }),
         },
       },

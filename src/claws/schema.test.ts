@@ -1077,7 +1077,7 @@ describe("buildClawAddPlan", () => {
     expect(repeated.planIntegrity).toBe(first.planIntegrity);
     // Existing consent tokens bind this description for profiles without the new fields.
     expect(first.capabilityChanges.find((change) => change.kind === "agent")?.reason).toBe(
-      "The new agent declares sandbox, tool, memory-search, or recurring heartbeat capabilities.",
+      "The new agent declares sandbox, tool, or memory-search capabilities.",
     );
     expect(changed.planIntegrity).not.toBe(first.planIntegrity);
     expect(changedCapability.planIntegrity).not.toBe(first.planIntegrity);

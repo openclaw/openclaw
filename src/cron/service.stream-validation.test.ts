@@ -31,7 +31,7 @@ async function createCron(triggersEnabled: boolean) {
     cronConfig: { triggers: { enabled: triggersEnabled } },
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   await cron.start();
@@ -104,7 +104,7 @@ describe("cron stream schedule validation", () => {
     const { storePath } = await makeStorePath();
     let jobId = "";
     const historyAtAlert: unknown[][] = [];
-    const enqueueSystemEvent = vi.fn(() => {
+    const enqueueSessionEvent = vi.fn(() => {
       historyAtAlert.push(
         readCronRunHistoryPageForTests({
           storeKey: cronStoreKey(storePath),
@@ -122,8 +122,8 @@ describe("cron stream schedule validation", () => {
         failureAlert: { enabled: true, after: 5, cooldownMs: 0 },
       },
       log: logger,
-      enqueueSystemEvent,
-      requestHeartbeat: vi.fn(),
+      enqueueSystemEvent: vi.fn(),
+      enqueueSessionEvent,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     await cron.start();
@@ -142,7 +142,7 @@ describe("cron stream schedule validation", () => {
         streamStatus: "error",
         streamRestartExhausted: true,
       });
-      expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      expect(enqueueSessionEvent).toHaveBeenCalledWith(
         'Automation "stream" failed 5 times\nCheck automation history for details.',
         expect.any(Object),
       );

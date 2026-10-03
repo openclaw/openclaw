@@ -35,3 +35,8 @@ export function fakeRunner(
   };
   return { calls, runCommand };
 }
+
+export function commandPort(argv: string[]): number {
+  const portFlag = argv[0] === "scp" ? "-P" : "-p";
+  return Number(argv[argv.indexOf(portFlag) + 1]);
+}

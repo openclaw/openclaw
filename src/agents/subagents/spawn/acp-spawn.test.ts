@@ -75,7 +75,6 @@ const hoisted = vi.hoisted(() => ({
   loadSessionStoreMock: vi.fn(),
   readAcpSessionMetaMock: vi.fn(),
   resolveStorePathMock: vi.fn(),
-  areHeartbeatsEnabledMock: vi.fn(),
   cleanupFailedAcpSpawnMock: vi.fn(),
   closeRuntimeOnFailureMock: vi.fn(),
   registerSubagentRunMock: vi.fn(),
@@ -137,8 +136,13 @@ vi.mock("../../../gateway/call.js", () => ({
   callGateway: hoisted.callGatewayMock,
 }));
 
-vi.mock("../../../infra/heartbeat-wake.js", () => ({
-  areHeartbeatsEnabled: hoisted.areHeartbeatsEnabledMock,
+vi.mock("../../../auto-reply/reply/session-event-handoff.js", () => ({
+  captureSessionEventTargetForHost: async (agentId: string, sessionKey: string) => ({
+    agentId,
+    sessionKey,
+    sessionId: "original-requester",
+    generation: "test",
+  }),
 }));
 
 vi.mock("./acp-spawn-parent-stream.js", () => ({
@@ -462,11 +466,7 @@ function mockSessionStore(entries: Record<string, SessionEntry> = {}) {
   );
 }
 
-function configureHeartbeatParent(sessionKey: string, envelope: Partial<SessionEntry> = {}) {
-  const cfg = hoisted.state.cfg;
-  cfg.agents = {
-    defaults: { ...cfg.agents?.defaults, heartbeat: { every: "30m", target: "last" } },
-  };
+function configureRoutedParent(sessionKey: string, envelope: Partial<SessionEntry> = {}) {
   mockSessionStore({
     [sessionKey]: {
       sessionId: "parent-sess-1",
@@ -505,7 +505,6 @@ describe("spawnAcpDirect", () => {
     setActivePluginRegistry(createTestRegistry());
     acpRuntimeRegistryTesting.resetAcpRuntimeBackendsForTests();
     replaceSpawnConfig(createDefaultSpawnConfig());
-    hoisted.areHeartbeatsEnabledMock.mockReset().mockReturnValue(true);
     hoisted.cleanupFailedAcpSpawnMock.mockReset().mockResolvedValue(undefined);
     hoisted.closeRuntimeOnFailureMock.mockReset().mockResolvedValue(undefined);
     hoisted.registerSubagentRunMock.mockReset().mockResolvedValue(undefined);
@@ -1361,7 +1360,7 @@ describe("spawnAcpDirect", () => {
   });
 
   it("implicitly streams mode=run ACP spawns for subagent requester sessions", async () => {
-    const context = configureHeartbeatParent("agent:main:subagent:parent");
+    const context = configureRoutedParent("agent:main:subagent:parent");
     const firstHandle = createRelayHandle(new Promise<void>(() => {}));
     const secondHandle = createRelayHandle();
     hoisted.startAcpSpawnParentStreamRelayMock
@@ -1401,7 +1400,7 @@ describe("spawnAcpDirect", () => {
   });
 
   it("does not implicitly stream for ACP requester sessions inside a subagent envelope", async () => {
-    const context = configureHeartbeatParent("agent:main:acp:child", {
+    const context = configureRoutedParent("agent:main:acp:child", {
       spawnedBy: "agent:main:subagent:parent",
       spawnDepth: 1,
       subagentRole: "orchestrator",

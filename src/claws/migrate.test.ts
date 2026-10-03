@@ -49,7 +49,6 @@ describe("Claw migration planning", () => {
   it("builds a stable read-only plan without creating a package or state database", async () => {
     const { workspace, env, build } = await fixture({
       name: "Existing worker",
-      heartbeat: { every: "30m" },
     });
     const first = await build();
     const second = await build();
@@ -166,6 +165,14 @@ describe("Claw migration planning", () => {
     await expect(build()).rejects.toMatchObject({ code: "workspace_ownership_unclaimed" });
   });
 
+  it("requires Doctor before adopting legacy heartbeat runtime settings", async () => {
+    const { env, config } = await fixture({ heartbeat: { every: "37m" } });
+    await expect(
+      buildClawMigrationPlan({ agentId: "worker", config, options: { env } }),
+    ).rejects.toMatchObject({ code: "heartbeat_migration_required" });
+    expect(readClawInstallRecord("worker", { env })).toBeUndefined();
+  });
+
   it("captures a representable inherited default model in the generated package", async () => {
     const { workspace, env } = await fixture();
     const config = {
@@ -179,7 +186,6 @@ describe("Claw migration planning", () => {
             maxConcurrent: DEFAULT_SUBAGENT_MAX_CONCURRENT,
             archiveAfterMinutes: DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
           },
-          heartbeat: { agentId: "worker", every: "45m" },
           sandbox: { mode: "non-main", scope: "agent", workspaceAccess: "rw" },
           humanDelay: { mode: "custom", minMs: 100, maxMs: 300 },
         },
@@ -199,11 +205,9 @@ describe("Claw migration planning", () => {
     expect(migration.addPlan.agent.config.model).toEqual(migration.profile?.agent.model);
     expect(migration.profile?.agent).toMatchObject({
       subagents: { allowAgents: ["researcher"], delegationMode: "prefer" },
-      heartbeat: { every: "45m" },
       sandbox: { mode: "non-main", scope: "agent", workspaceAccess: "rw" },
       humanDelay: { mode: "custom", minMs: 100, maxMs: 300 },
     });
-    expect(migration.profile?.agent.heartbeat).not.toHaveProperty("agentId");
   });
 
   it("migrates a representable string model setting", async () => {

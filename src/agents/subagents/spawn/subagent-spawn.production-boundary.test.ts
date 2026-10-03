@@ -83,6 +83,7 @@ import {
   createSpawnOperatorSource,
   readBoundExecutionState,
   registerYieldedRequesterBatchCase,
+  throwBoundFailures,
 } from "./subagent-spawn.production-boundary.test-support.js";
 import { registerOperatorSpawnRollbackCases } from "./subagent-spawn.rollback.test-support.js";
 import { registerManagedWorktreeSpawnCases } from "./subagent-spawn.worktree.test-support.js";
@@ -344,17 +345,6 @@ async function closeBoundGateway(
     }
   }
   return failures;
-}
-
-function throwBoundFailures(failures: unknown[]) {
-  if (failures.length === 1) {
-    throw failures[0];
-  }
-  if (failures.length > 1) {
-    throw new AggregateError(failures, "Spawn proof and fixture cleanup failed", {
-      cause: failures[0],
-    });
-  }
 }
 
 async function createGuestParent(audit = true) {

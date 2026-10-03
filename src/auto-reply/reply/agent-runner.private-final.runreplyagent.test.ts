@@ -84,7 +84,6 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     summaryLine?: string;
     strandedReplyRetry?: boolean;
     sendPolicyDenied?: boolean;
-    isHeartbeat?: boolean;
     terminalReplyExpectation?: "required" | "optional";
     pendingContinuation?: boolean;
     onDeliberateSilentTerminalReply?: () => void;
@@ -161,9 +160,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
         sourceReplyDeliveryMode: "message_tool_only",
         terminalReplyExpectation:
           params.terminalReplyExpectation ??
-          (params.isHeartbeat || params.inboundEventKind === "room_event"
-            ? "optional"
-            : "required"),
+          (params.inboundEventKind === "room_event" ? "optional" : "required"),
       },
     });
 
@@ -201,7 +198,6 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
         typingMode: "instant",
         opts: {
           runId,
-          isHeartbeat: params.isHeartbeat,
           onDeliberateSilentTerminalReply: params.onDeliberateSilentTerminalReply,
           onObservedReplyDelivery: params.onObservedReplyDelivery,
         },
@@ -412,7 +408,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
 
   it.each([
     { name: "room event", params: { inboundEventKind: "room_event" } },
-    { name: "heartbeat", params: { isHeartbeat: true } },
+    { name: "optional reply", params: { terminalReplyExpectation: "optional" } },
     { name: "denied send policy", params: { sendPolicyDenied: true } },
   ] satisfies Array<{ name: string; params: Parameters<typeof runPrivateFinalCase>[0] }>)(
     "does not recover a $name",
@@ -422,7 +418,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
         "message-tool-not-called",
       );
       expectNoRecovery();
-      if (params.isHeartbeat) {
+      if (params.terminalReplyExpectation === "optional") {
         expect(
           normalizeReplyPayloads(result).some((payload) => payload.text === strandedDiagnosticText),
         ).toBe(false);

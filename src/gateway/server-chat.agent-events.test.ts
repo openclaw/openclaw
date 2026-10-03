@@ -1,4 +1,4 @@
-// Server chat agent-event tests protect event fanout, heartbeat visibility,
+// Server chat agent-event tests protect event fanout, source visibility,
 // session lifecycle persistence, and subscriber registry behavior.
 
 import { expectDefined } from "@openclaw/normalization-core";
@@ -54,14 +54,6 @@ vi.mock("../config/io.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
 }));
 
-vi.mock("../infra/heartbeat-visibility.js", () => ({
-  resolveHeartbeatVisibility: vi.fn(() => ({
-    showOk: false,
-    showAlerts: true,
-    useIndicator: true,
-  })),
-}));
-
 vi.mock("./session-utils.js", () => {
   const loadSessionEntry = vi.fn(() => ({
     cfg: {},
@@ -79,7 +71,6 @@ vi.mock("./session-utils.js", () => {
 });
 
 import { getRuntimeConfig } from "../config/io.js";
-import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { makeClient, registerNodeSession } from "./node-registry.test-helpers.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
@@ -111,11 +102,6 @@ describe("agent event handler", () => {
     lineageProjection = undefined;
     resetAgentEventsForTest({ preserveListeners: true });
     vi.mocked(getRuntimeConfig).mockReturnValue({});
-    vi.mocked(resolveHeartbeatVisibility).mockReturnValue({
-      showOk: false,
-      showAlerts: true,
-      useIndicator: true,
-    });
     vi.mocked(loadSessionEntry)
       .mockReset()
       .mockReturnValue({
@@ -312,15 +298,12 @@ describe("agent event handler", () => {
     h.handler.dispose();
   });
 
-  it.each(["silent", "heartbeat"])("does not revive widgets from a %s turn", (mode) => {
+  it("does not revive widgets from a silent turn", () => {
     const h = createHarness();
     h.registerNamed("widgets");
-    if (mode === "heartbeat") {
-      registerAgentRunContext("run-widgets", { sessionKey: "session-widgets", isHeartbeat: true });
-    }
     h.emitMany("run-widgets", [
       ["tool", { phase: "result", name: "show_widget", result: widgetResult("hidden") }],
-      ["assistant", { text: mode === "silent" ? "NO_REPLY" : "" }],
+      ["assistant", { text: "NO_REPLY" }],
       ["lifecycle", { phase: "end" }],
     ]);
     expect(h.chat().at(-1)?.[1].message).toBeUndefined();
@@ -1440,29 +1423,16 @@ describe("agent event handler", () => {
   });
 
   it("skips unused verbosity reads for registered visible without nodes tool deltas", () => {
-    const audience = {
-      audience: "visible without nodes",
-      visible: true,
-      subscribed: false,
-      heartbeat: false,
-    };
-
     const h = createHarness();
     const runId = "run-unused-verbosity";
     const sessionKey = "session-unused-verbosity";
     h.nodeHasSessionSubscribers.mockReturnValue(false);
     registerAgentRunContext(runId, {
       sessionKey,
-      isControlUiVisible: audience.visible,
-      isHeartbeat: audience.heartbeat,
+      isControlUiVisible: true,
       verboseLevel: "full",
     });
-    if (audience.subscribed) {
-      h.sessionMessageSubscribers.subscribe("conn-selected", sessionKey);
-    }
-    if (audience.visible && !audience.heartbeat) {
-      h.chatRunState.toolEventRecipients.add(runId, "conn-selected");
-    }
+    h.chatRunState.toolEventRecipients.add(runId, "conn-selected");
     const stop = onAgentRuntimeEvent(h.handler);
     try {
       for (let added = 1; added <= 32; added++) {
@@ -1476,15 +1446,10 @@ describe("agent event handler", () => {
       expect(h.broadcast).not.toHaveBeenCalled();
       expect(h.nodeSendToSession).not.toHaveBeenCalled();
       const delivered = h.targetedAgent();
-      if ((audience.subscribed || audience.visible) && !audience.heartbeat) {
-        expect(delivered.map(([, payload]) => payload.data.diff)).toEqual(
-          Array.from({ length: 32 }, (_, index) => ({ added: index + 1, removed: 0 })),
-        );
-        expect(delivered.every((call) => call[2].has("conn-selected"))).toBe(true);
-      } else {
-        expect(delivered).toHaveLength(0);
-        expect(loadGatewaySessionLifecycleSnapshotMock).not.toHaveBeenCalled();
-      }
+      expect(delivered.map(([, payload]) => payload.data.diff)).toEqual(
+        Array.from({ length: 32 }, (_, index) => ({ added: index + 1, removed: 0 })),
+      );
+      expect(delivered.every((call) => call[2].has("conn-selected"))).toBe(true);
     } finally {
       stop();
       h.handler.dispose();
@@ -1576,36 +1541,6 @@ describe("agent event handler", () => {
       ["agent", "client-tool", "work", new Set(["conn-overlap", "conn-run-only"])],
       ["session.tool", "client-tool", "work", new Set(["conn-session-only"])],
     ]);
-  });
-
-  it("suppresses heartbeat tool events for Control UI and verbose node subscribers", () => {
-    const h = createHarness({
-      resolveSessionKeyForRun: () => "session-heartbeat",
-    });
-
-    registerAgentRunContext("run-heartbeat-tool", {
-      sessionKey: "session-heartbeat",
-      isHeartbeat: true,
-      verboseLevel: "on",
-    });
-    h.toolEventRecipients.add("run-heartbeat-tool", "conn-run");
-    h.sessionEventSubscribers.subscribe("conn-session");
-
-    h.emit(
-      "run-heartbeat-tool",
-      "tool",
-      {
-        phase: "start",
-        name: "read",
-        toolCallId: "tool-heartbeat-1",
-        args: { path: "HEARTBEAT.md" },
-      },
-      { ts: 1_234 },
-    );
-
-    expect(h.broadcastToConnIds).not.toHaveBeenCalled();
-    const nodeToolCalls = h.nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
-    expect(nodeToolCalls).toHaveLength(0);
   });
 
   it("broadcasts terminal session status to session subscribers on lifecycle end", async () => {

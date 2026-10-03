@@ -65,7 +65,7 @@ function makeService(
     cronEnabled: true,
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     runCommandJob,
     onEvent,
@@ -100,7 +100,7 @@ describe("cron run receipt settlement", () => {
         cronEnabled: true,
         log: logger,
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
+        enqueueSessionEvent: vi.fn(),
         runSchedulerOwned: (run) => {
           schedulerEntries += 1;
           return context.run("scheduler", run);

@@ -46,9 +46,9 @@ describe("resolveSettledTurnFinalizationRequest", () => {
     expect(
       resolveSettledTurnFinalizationRequest({
         runParams: {
-          sessionId: "session:settled-heartbeat",
-          runId: "run:settled-heartbeat",
-          trigger: "heartbeat",
+          sessionId: "session:settled-automation",
+          runId: "run:settled-automation",
+          trigger: "cron",
         } as never,
         attempt,
         activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },

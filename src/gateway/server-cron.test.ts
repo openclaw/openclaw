@@ -1,4 +1,4 @@
-// Gateway cron tests cover isolated agent turns, heartbeat wakeups, completion
+// Gateway cron tests cover isolated and ordinary session turns, completion
 // delivery, lifecycle cleanup, hook emission, and SSRF-guarded webhooks.
 import { createServer } from "node:http";
 import os from "node:os";
@@ -19,6 +19,7 @@ import {
   createEmbeddedRunHandle,
   testing as embeddedRunsTesting,
 } from "../agents/embedded-agent-runner/runs.test-support.js";
+import { createReplyOperation, replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { CronService } from "../cron/service.js";
@@ -26,8 +27,7 @@ import { onTimer as onCronTimer } from "../cron/service/timer.test-support.js";
 import { resolveSkillCollectionReviewMonitorSpecs } from "../cron/skill-collection-review-monitor.js";
 import { loadCronStore } from "../cron/store.js";
 import { cronStoreKey } from "../cron/store/key.js";
-import { resolveHeartbeatSession } from "../infra/heartbeat-runner-session.js";
-import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
+import type { CronJob, CronJobCreate, CronRunOutcome } from "../cron/types.js";
 import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
@@ -64,8 +64,8 @@ type RunCronIsolatedAgentTurnMock = (params: {
 const {
   enqueueSystemEventMock,
   systemEventReceiptRemoveMock,
-  requestHeartbeatMock,
-  requestHeartbeatAndWaitMock,
+  enqueueSessionEventMock,
+  runSessionEventMock,
   loadConfigMock,
   fetchWithSsrFGuardMock,
   sendCronAnnouncePayloadStrictMock,
@@ -83,10 +83,15 @@ const {
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
   systemEventReceiptRemoveMock: vi.fn(() => true),
-  requestHeartbeatMock: vi.fn(),
-  requestHeartbeatAndWaitMock: vi.fn<(...args: unknown[]) => Promise<HeartbeatRunResult>>(
-    async () => ({ status: "ran", durationMs: 1 }),
-  ),
+  enqueueSessionEventMock: vi.fn((..._args: unknown[]) => ({
+    id: "event",
+    cancel: () => true,
+    settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
+  })),
+  runSessionEventMock: vi.fn<(...args: unknown[]) => Promise<CronRunOutcome>>(async () => ({
+    status: "ok",
+    summary: "ok",
+  })),
   loadConfigMock: vi.fn(),
   fetchWithSsrFGuardMock: vi.fn(),
   sendCronAnnouncePayloadStrictMock: vi.fn<
@@ -171,28 +176,23 @@ function enqueueSystemEventWithReceipt(text: string, opts?: unknown) {
   return systemEventReceiptRemoveMock;
 }
 
-vi.mock("../infra/system-events.js", () => ({
+vi.mock("../infra/system-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/system-events.js")>()),
   enqueueSystemEvent,
   enqueueSystemEventWithReceipt,
 }));
 
-vi.mock("../infra/heartbeat-wake.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
-    "../infra/heartbeat-wake.js",
-  );
-  return {
-    ...actual,
-    requestHeartbeat: requestHeartbeatMock,
-    requestHeartbeatAndWait: requestHeartbeatAndWaitMock,
-  };
-});
-
-vi.mock("../infra/heartbeat-runner.js", () => ({
-  // Heartbeat monitor convergence enumerates agents at cron start; keep it
-  // inert so these tests exercise cron wiring, not heartbeat enrollment.
-  resolveHeartbeatAgents: () => [],
-  resolveHeartbeatSchedulerSeed: () => "test-seed",
+vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
+  enqueueSessionEventForHost: enqueueSessionEventMock,
+  captureSessionEventTargetForHost: async (agentId: string, sessionKey: string) => ({
+    agentId,
+    sessionKey,
+    sessionId: "original",
+    generation: "process",
+  }),
+  assertSessionEventTargetCurrent: () => {},
 }));
+vi.mock("../cron/session-run.js", () => ({ runCronSessionTurn: runSessionEventMock }));
 
 vi.mock("../infra/restart-coordinator.js", async () => {
   const actual = await vi.importActual<typeof import("../infra/restart-coordinator.js")>(
@@ -270,7 +270,6 @@ import {
 } from "../cron/service/active-run-cancellation.js";
 import { resetActiveCronTaskRunsForTests } from "../cron/service/active-run-cancellation.test-support.js";
 import type { CronExecutionIdentityAdmission, CronServiceState } from "../cron/service/state.js";
-import type { CronJob, CronJobCreate } from "../cron/types.js";
 import { fireOnExitJob } from "./server-cron-event-dispatch.js";
 import { buildGatewayCronService as buildGatewayCronServiceRuntime } from "./server-cron.js";
 
@@ -363,14 +362,11 @@ function getCronState(service: CronServiceFixture): CronServiceState {
   return (service.cron as unknown as { state: CronServiceState }).state;
 }
 
-type CronTestDeps = Omit<CronServiceState["deps"], "enqueueSystemEvent" | "requestHeartbeat"> & {
+type CronTestDeps = Omit<CronServiceState["deps"], "enqueueSystemEvent"> & {
   enqueueSystemEvent?: (
     text: string,
     opts?: Partial<Parameters<NonNullable<CronServiceState["deps"]["enqueueSystemEvent"]>>[1]>,
   ) => unknown;
-  requestHeartbeat?: (
-    opts?: Partial<Parameters<NonNullable<CronServiceState["deps"]["requestHeartbeat"]>>[0]>,
-  ) => void;
 };
 
 function getCronDeps(service: CronServiceFixture): CronTestDeps {
@@ -488,15 +484,6 @@ function callArg(
   return call[argIndex];
 }
 
-function lastMockCall(mock: { mock: { calls: Array<Array<unknown>> } }, label: string) {
-  const calls = mock.mock.calls;
-  const call = calls[calls.length - 1];
-  if (!call) {
-    throw new Error(`Expected last mock call: ${label}`);
-  }
-  return call;
-}
-
 function expectHookContext(callIndex: number, fields: { config?: unknown; hasGetCron?: boolean }) {
   const context = requireRecord(
     callArg(runCronChangedMock, callIndex, 1, "cron_changed context"),
@@ -526,8 +513,8 @@ describe("buildGatewayCronService", () => {
     resetActiveCronTaskRunsForTests();
     enqueueSystemEventMock.mockClear();
     systemEventReceiptRemoveMock.mockClear();
-    requestHeartbeatMock.mockClear();
-    requestHeartbeatAndWaitMock.mockReset();
+    enqueueSessionEventMock.mockClear();
+    runSessionEventMock.mockReset().mockResolvedValue({ status: "ok", summary: "ok" });
     loadConfigMock.mockClear();
     fetchWithSsrFGuardMock.mockClear();
     sendCronAnnouncePayloadStrictMock.mockClear();
@@ -561,7 +548,7 @@ describe("buildGatewayCronService", () => {
   it("finishes an accepted config replacement without a second reconciliation request", async () => {
     const cfg = {
       ...createCronConfig("server-cron-accepted-replacement"),
-      agents: { entries: { main: { heartbeat: { every: "1h" } } } },
+      skills: { workshop: { autonomous: { mode: "off" } } },
     } satisfies OpenClawConfig;
     const state = loadCronService(cfg);
     const inventoryStarted = createDeferred();
@@ -578,15 +565,15 @@ describe("buildGatewayCronService", () => {
       await inventoryStarted.promise;
       loadConfigMock.mockReturnValue({
         ...cfg,
-        agents: { entries: { main: { heartbeat: { every: "2h" } } } },
+        skills: { workshop: { autonomous: { mode: "auto" } } },
       });
       releaseInventory.resolve();
       await expect(reconcile).resolves.toBe("converged");
       expect(await listJobs({ includeDisabled: true })).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            payload: { kind: "heartbeat" },
-            schedule: expect.objectContaining({ everyMs: 7_200_000 }),
+            declarationKey: "skill-collection-review:main",
+            enabled: true,
           }),
         ]),
       );
@@ -602,7 +589,7 @@ describe("buildGatewayCronService", () => {
       skills: { workshop: { autonomous: { mode: "auto" } } },
     } satisfies OpenClawConfig;
     const state = loadCronService(cfg);
-    const [spec] = resolveSkillCollectionReviewMonitorSpecs(cfg, [], {
+    const [spec] = await resolveSkillCollectionReviewMonitorSpecs(cfg, [], {
       schedulerSeed: "test-seed",
     });
 
@@ -678,10 +665,7 @@ describe("buildGatewayCronService", () => {
     });
   });
 
-  it.each([
-    { monitor: "heartbeat", blockedInventory: 1 },
-    { monitor: "skill review", blockedInventory: 2 },
-  ])(
+  it.each([{ monitor: "skill review", blockedInventory: 1 }])(
     "supersedes an in-flight $monitor reconciliation before mutation",
     async ({ blockedInventory }) => {
       const autoConfig = {
@@ -728,7 +712,7 @@ describe("buildGatewayCronService", () => {
   );
 
   it.each(
-    (["heartbeat", "skill-collection-review"] as const).flatMap((family) =>
+    (["skill-collection-review"] as const).flatMap((family) =>
       (["stop", "replace", "supersede"] as const).map((action) => ({ family, action })),
     ),
   )("observes $action between committed $family monitor mutations", async ({ family, action }) => {
@@ -738,14 +722,12 @@ describe("buildGatewayCronService", () => {
       cron: { ...baseConfig.cron, enabled: false },
       agents: {
         ownership: "explicit",
-        defaults: { heartbeat: { every: "1h" } },
         entries: { a: {}, b: {} },
       },
       skills: { workshop: { autonomous: { mode: "off" } } },
     } satisfies OpenClawConfig;
     const replacement = {
       ...cfg,
-      agents: { ...cfg.agents, defaults: { heartbeat: { every: "2h" } } },
       skills: { workshop: { autonomous: { mode: "auto" } } },
     } satisfies OpenClawConfig;
     const state = loadCronService(cfg);
@@ -789,11 +771,7 @@ describe("buildGatewayCronService", () => {
           await expect(nextPass).resolves.toBe("converged");
         }
         expect(committed).not.toContainEqual(
-          expect.objectContaining(
-            family === "heartbeat"
-              ? { agentId: "b", everyMs: 3_600_000 }
-              : { agentId: "b", enabled: false },
-          ),
+          expect.objectContaining({ agentId: "b", enabled: false }),
         );
         const jobs = (await state.cron.list({ includeDisabled: true })).filter((job) =>
           job.declarationKey?.startsWith(`${family}:`),
@@ -802,9 +780,7 @@ describe("buildGatewayCronService", () => {
           jobs.map((job) => job.agentId).toSorted((a, b) => String(a).localeCompare(String(b))),
         ).toEqual(["a", "b"]);
         for (const job of jobs) {
-          expect(job).toMatchObject(
-            family === "heartbeat" ? { schedule: { everyMs: 7_200_000 } } : { enabled: true },
-          );
+          expect(job).toMatchObject({ enabled: true });
         }
       }
     } finally {
@@ -817,7 +793,7 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("converges Workshop after a heartbeat inventory failure and cancels its retry on stop", async () => {
+  it("converges Workshop after an inventory failure and cancels pending retries on stop", async () => {
     const clock = createGatewaySchedulerClock(Date.now());
     const cfg = {
       ...createCronConfig("server-cron-monitor-partial-failure"),
@@ -831,6 +807,8 @@ describe("buildGatewayCronService", () => {
 
     try {
       await expect(state.reconcileSystemJobs()).resolves.toBe("retry-scheduled");
+      expect(await listJobs({ includeDisabled: true })).toEqual([]);
+      await clock.advanceBy(30_000);
       expect(await listJobs({ includeDisabled: true })).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -840,6 +818,8 @@ describe("buildGatewayCronService", () => {
           }),
         ]),
       );
+      inventory.mockRejectedValueOnce(new Error("inventory failed again"));
+      await expect(state.reconcileSystemJobs()).resolves.toBe("retry-scheduled");
       state.cron.stop();
       const callsBeforeStop = inventory.mock.calls.length;
       await clock.advanceBy(30_000);
@@ -1045,8 +1025,7 @@ describe("buildGatewayCronService", () => {
     getConcreteCron,
     addCronJob,
     runExit,
-    requestHeartbeatAndWaitMock,
-    enqueueSystemEventMock,
+    runSessionEventMock,
   });
 
   it.each(["disable", "handoff"] as const)(
@@ -1098,7 +1077,7 @@ describe("buildGatewayCronService", () => {
         });
         await vi.waitFor(() => expect(finished).toBe(true));
         expect(isGatewayWorkAdmissionClosed()).toBe(true);
-        expect(requestHeartbeatAndWaitMock).not.toHaveBeenCalled();
+        expect(runSessionEventMock).not.toHaveBeenCalled();
       } finally {
         previous.cron.stop();
         next.cron.stop();
@@ -1208,7 +1187,7 @@ describe("buildGatewayCronService", () => {
         noOutputTimedOut: false,
       });
 
-      await vi.waitFor(() => expect(requestHeartbeatAndWaitMock).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(runSessionEventMock).toHaveBeenCalledOnce());
       expect(state.cron.getJob(job.id)?.enabled).toBe(false);
     });
   });
@@ -1228,9 +1207,9 @@ describe("buildGatewayCronService", () => {
       const releasePayload = createDeferred();
       const payloadFinished = createDeferred();
       const { spawn } = mockCronSupervisor(first, second);
-      requestHeartbeatAndWaitMock.mockImplementationOnce(async () => {
+      runSessionEventMock.mockImplementationOnce(async () => {
         await releasePayload.promise;
-        return { status: "ran", durationMs: 1 };
+        return { status: "ok", summary: "completed" };
       });
       const state = loadCronService(createCronConfig("server-cron-on-exit-rearm"));
       let nowMs = 1_700_000_000_000;
@@ -1253,7 +1232,7 @@ describe("buildGatewayCronService", () => {
         });
         await state.reconcileExitWatchers();
         firstExit.resolve(runExit({ reason: "exit", exitCode: 0 }));
-        await vi.waitFor(() => expect(requestHeartbeatAndWaitMock).toHaveBeenCalledOnce());
+        await vi.waitFor(() => expect(runSessionEventMock).toHaveBeenCalledOnce());
         expect(state.cron.getJob(job.id)?.enabled).toBe(false);
         await state.reconcileExitWatchers();
         expect(spawn).toHaveBeenCalledOnce();
@@ -1279,7 +1258,7 @@ describe("buildGatewayCronService", () => {
           expect(state.cron.getJob(job.id)?.enabled).toBe(true);
           secondExit.resolve(runExit({ reason: "exit", exitCode: 0 }));
         }
-        await vi.waitFor(() => expect(requestHeartbeatAndWaitMock).toHaveBeenCalledTimes(2));
+        await vi.waitFor(() => expect(runSessionEventMock).toHaveBeenCalledTimes(2));
         expect(spawn).toHaveBeenCalledTimes(2);
         expect(state.cron.getJob(job.id)?.enabled).toBe(false);
       } finally {
@@ -1334,7 +1313,7 @@ describe("buildGatewayCronService", () => {
 
       await vi.waitFor(() => expect(state.cron.getJob(job.id)?.enabled).toBe(false));
       expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
-      expect(requestHeartbeatAndWaitMock).not.toHaveBeenCalled();
+      expect(runSessionEventMock).not.toHaveBeenCalled();
 
       state.cron.resumeScheduling();
       expect(suspensionAdmission?.release()).toBe(true);
@@ -1359,9 +1338,9 @@ describe("buildGatewayCronService", () => {
         await predecessorRelease.promise;
       };
       if (sessionTarget === "main") {
-        requestHeartbeatAndWaitMock.mockImplementationOnce(async () => {
+        runSessionEventMock.mockImplementationOnce(async () => {
           await holdPredecessor();
-          return { status: "ran", durationMs: 1 };
+          return { status: "ok", summary: "completed" };
         });
       } else {
         runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
@@ -1407,7 +1386,7 @@ describe("buildGatewayCronService", () => {
         }
         await completion.value;
         const payloadRunner =
-          sessionTarget === "main" ? requestHeartbeatAndWaitMock : runCronIsolatedAgentTurnMock;
+          sessionTarget === "main" ? runSessionEventMock : runCronIsolatedAgentTurnMock;
         expect(payloadRunner).toHaveBeenCalledTimes(2);
         expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
         expect(state.cron.getJob(job.id)?.enabled).toBe(false);
@@ -1524,8 +1503,11 @@ describe("buildGatewayCronService", () => {
     const sessionId = "shared-main-session";
     const sessionKey = "agent:main:main";
 
-    async function cleanupTimedOutCronRun(state: CronServiceFixture) {
-      const job = await addAgentTurnJob(state, "shared session turn", "work");
+    async function cleanupTimedOutCronRun(
+      state: CronServiceFixture,
+      sessionTarget: "isolated" | "main" = "isolated",
+    ) {
+      const job = await addAgentTurnJob(state, "shared session turn", "work", { sessionTarget });
       abortAndDrainEmbeddedAgentRunMock.mockImplementation(abortAndDrainEmbeddedAgentRun);
       await getCronDeps(state).cleanupTimedOutAgentRun?.({
         job,
@@ -1534,44 +1516,105 @@ describe("buildGatewayCronService", () => {
       });
     }
 
-    function registerRun(runId: string) {
+    const replyOwners: Array<ReturnType<typeof createReplyOperation>> = [];
+
+    function registerRun(
+      runId: string,
+      kind: "embedded" | "cli" = "embedded",
+      onAbort?: () => void,
+    ) {
+      if (kind === "cli") {
+        const operation = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
+        const abort = vi.fn(() => {
+          operation.complete();
+          onAbort?.();
+        });
+        operation.attachBackend({ kind: "cli", runId, cancel: abort });
+        operation.setPhase("running");
+        replyOwners.push(operation);
+        return { abort, isActive: () => replyRunRegistry.get(sessionKey) === operation };
+      }
       const handle = createEmbeddedRunHandle({
         runId,
-        abort: vi.fn(() => clearActiveEmbeddedRun(sessionId, handle, sessionKey)),
+        abort: vi.fn(() => {
+          clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+          onAbort?.();
+        }),
       });
       setActiveEmbeddedRun(sessionId, handle, sessionKey);
-      return handle;
+      return { abort: handle.abort, isActive: () => isEmbeddedAgentRunHandleActive(sessionId) };
     }
 
     afterEach(() => {
+      for (const operation of replyOwners.splice(0)) {
+        operation.complete();
+      }
       embeddedRunsTesting.resetActiveEmbeddedRuns();
       abortAndDrainEmbeddedAgentRunMock.mockReset();
     });
 
-    it("leaves a replacement run and its MCP runtime intact after the cron run ended", async () => {
-      await withCronService(createCronConfig("server-cron-timeout-replacement"), async (state) => {
-        const replacement = registerRun("replacement-run");
+    it.each(["embedded", "cli"] as const)(
+      "leaves a replacement %s run and its MCP runtime intact after the cron run ended",
+      async (kind) => {
+        await withCronService(
+          createCronConfig("server-cron-timeout-replacement"),
+          async (state) => {
+            const replacement = registerRun("replacement-run", kind);
 
+            await cleanupTimedOutCronRun(state, kind === "cli" ? "main" : "isolated");
+
+            expect(replacement.abort).not.toHaveBeenCalled();
+            expect(replacement.isActive()).toBe(true);
+            expect(retireSessionMcpRuntimeMock).not.toHaveBeenCalled();
+          },
+        );
+      },
+    );
+
+    it.each(["embedded", "cli"] as const)(
+      "aborts the %s cron run and retires its MCP runtime while it still owns the session",
+      async (kind) => {
+        await withCronService(createCronConfig("server-cron-timeout-owner"), async (state) => {
+          const original = registerRun("cron-run", kind);
+
+          await cleanupTimedOutCronRun(state, kind === "cli" ? "main" : "isolated");
+
+          expect(original.abort).toHaveBeenCalledOnce();
+          expect(original.isActive()).toBe(false);
+          expect(retireSessionMcpRuntimeMock).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ sessionId, reason: "cron-timeout-cleanup" }),
+          );
+        });
+      },
+    );
+    it("keeps a successor reply even when the old embedded handle still matches", async () => {
+      await withCronService(createCronConfig("server-cron-timeout-two-owners"), async (state) => {
+        const original = registerRun("cron-run");
+        const successor = registerRun("reply-successor", "cli");
         await cleanupTimedOutCronRun(state);
-
-        expect(replacement.abort).not.toHaveBeenCalled();
-        expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
+        expect(original.abort).not.toHaveBeenCalled();
+        expect(successor.abort).not.toHaveBeenCalled();
+        expect(successor.isActive()).toBe(true);
         expect(retireSessionMcpRuntimeMock).not.toHaveBeenCalled();
       });
     });
 
-    it("aborts the cron run and retires its MCP runtime while it still owns the session", async () => {
-      await withCronService(createCronConfig("server-cron-timeout-owner"), async (state) => {
-        const original = registerRun("cron-run");
-
-        await cleanupTimedOutCronRun(state);
-
-        expect(original.abort).toHaveBeenCalledOnce();
-        expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(false);
-        expect(retireSessionMcpRuntimeMock).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ sessionId, reason: "cron-timeout-cleanup" }),
-        );
-      });
+    it("keeps the MCP runtime of a successor admitted while timeout drainage settles", async () => {
+      await withCronService(
+        createCronConfig("server-cron-timeout-drain-successor"),
+        async (state) => {
+          const successorReady = createDeferred<ReturnType<typeof registerRun>>();
+          const original = registerRun("cron-run", "cli", () => {
+            queueMicrotask(() => successorReady.resolve(registerRun("reply-successor", "cli")));
+          });
+          await cleanupTimedOutCronRun(state, "main");
+          const successor = await successorReady.promise;
+          expect(original.abort).toHaveBeenCalledOnce();
+          expect(successor.abort).not.toHaveBeenCalled();
+          expect(successor.isActive()).toBe(true);
+          expect(retireSessionMcpRuntimeMock).not.toHaveBeenCalled();
+        },
+      );
     });
   });
 
@@ -1982,7 +2025,7 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("routes main-target jobs to the scoped session for enqueue + wake", async () => {
+  it("routes main-target jobs to the scoped session for ordinary execution", async () => {
     const cfg = createCronConfig("server-cron");
     await withCronService(cfg, async (state) => {
       const job = await addSystemEventJob(state, "canonicalize-session-key", "hello", {
@@ -1992,18 +2035,15 @@ describe("buildGatewayCronService", () => {
 
       await state.cron.run(job.id, "force");
 
-      expect(callArg(enqueueSystemEventMock, 0, 0, "system event text")).toBe("hello");
-      const eventOptions = requireRecord(
-        callArg(enqueueSystemEventMock, 0, 1, "system event options"),
-        "options",
+      expect(runSessionEventMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          text: "hello",
+          job: expect.objectContaining({ id: job.id }),
+        }),
       );
-      expect(eventOptions.sessionKey).toBe("agent:main:main");
-      const heartbeatRequest = requireRecord(
-        callArg(requestHeartbeatMock, 0, 0, "heartbeat request"),
-        "request",
-      );
-      expect(heartbeatRequest.agentId).toBe("main");
-      expect(heartbeatRequest.sessionKey).toBe("agent:main:main");
+      expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     });
   });
 
@@ -2964,392 +3004,63 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("routes global-scope main cron jobs through the global queue for queued wakes", async () => {
-    const cfg = {
-      ...createCronConfig("server-cron-global-queued"),
-      session: { mainKey: "main", scope: "global" },
-    } as OpenClawConfig;
-    await withCronService(cfg, async (state) => {
-      const job = await addSystemEventJob(state, "global-queued", "hello global", {
-        sessionTarget: "main",
-      });
-
-      await state.cron.run(job.id, "force");
-
-      expect(callArg(enqueueSystemEventMock, 0, 0, "system event text")).toBe("hello global");
-      const eventOptions = requireRecord(
-        callArg(enqueueSystemEventMock, 0, 1, "system event options"),
-        "options",
-      );
-      expect(eventOptions.sessionKey).toBe("agent:main:global");
-      const heartbeatRequest = requireRecord(
-        callArg(requestHeartbeatMock, 0, 0, "heartbeat request"),
-        "request",
-      );
-      expect(heartbeatRequest.agentId).toBe("main");
-      expect(heartbeatRequest.sessionKey).toBe("global");
-    });
-  });
-
-  it("routes global-scope immediate main cron jobs through the global heartbeat lane", async () => {
-    const cfg = {
-      ...createCronConfig("server-cron-global-now"),
-      session: { mainKey: "main", scope: "global" },
-    } as OpenClawConfig;
-    await withCronService(cfg, async (state) => {
-      const job = await addSystemEventJob(state, "global-now", "hello now", {
-        sessionTarget: "main",
-        wakeMode: "now",
-      });
-
-      await state.cron.run(job.id, "force");
-
-      const eventOptions = requireRecord(
-        callArg(enqueueSystemEventMock, 0, 1, "system event options"),
-        "options",
-      );
-      expect(eventOptions.sessionKey).toBe("agent:main:global");
-      const heartbeatRun = requireRecord(
-        callArg(requestHeartbeatAndWaitMock, 0, 0, "heartbeat run options"),
-        "heartbeat run options",
-      );
-      expect(heartbeatRun.agentId).toBe("main");
-      expect(heartbeatRun.sessionKey).toBe("global");
-      expect(heartbeatRun.heartbeat).toEqual({
-        target: "last",
-        to: undefined,
-        accountId: undefined,
-      });
-    });
-  });
-
-  it("forwards heartbeat overrides through the cron wake adapter", () => {
-    const cfg = createCronConfig("server-cron-heartbeat-override");
-    const state = loadCronService(cfg);
-    try {
-      const cronDeps = getCronDeps(state);
-
-      cronDeps?.requestHeartbeat?.({
-        source: "cron",
-        intent: "event",
-        reason: "cron:test",
-        sessionKey: "discord:channel:ops",
-        heartbeat: { target: "last" },
-        scheduledEveryMs: 15 * 60_000,
-      });
-
-      expect(requestHeartbeatMock).toHaveBeenCalledWith({
-        source: "cron",
-        intent: "event",
-        reason: "cron:test",
-        agentId: "main",
-        sessionKey: "agent:main:discord:channel:ops",
-        heartbeat: { target: "last", to: undefined, accountId: undefined },
-        scheduledEveryMs: 15 * 60_000,
-      });
-    } finally {
-      state.cron.stop();
-    }
-  });
-
-  it("returns the settled heartbeat result through the cron wake adapter", async () => {
-    requestHeartbeatAndWaitMock.mockResolvedValueOnce({
-      status: "failed",
-      reason: "agent-runner-failure",
-    });
-    await withCronService(createCronConfig("server-cron-heartbeat-settlement"), async (state) => {
-      const lifecycle = { abortSignal: new AbortController().signal };
-      await expect(
-        getCronState(state).deps.requestHeartbeatAndWait?.(
-          {
-            source: "interval",
-            intent: "task",
-            reason: "heartbeat-task:report",
+  it.each(["next-heartbeat", "now"] as const)(
+    "routes global-scope main jobs through ordinary session execution for %s",
+    async (wakeMode) => {
+      const cfg = {
+        ...createCronConfig("server-cron-global"),
+        session: { mainKey: "main", scope: "global" },
+      } as OpenClawConfig;
+      await withCronService(cfg, async (state) => {
+        const job = await addSystemEventJob(state, "global", "hello global", {
+          sessionTarget: "main",
+          wakeMode,
+        });
+        await state.cron.run(job.id, "force");
+        expect(runSessionEventMock).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
             agentId: "main",
-            scheduledEveryMs: 15 * 60_000,
-            tasks: [{ jobId: "report", name: "report", prompt: "Run report" }],
-          },
-          lifecycle,
-        ),
-      ).resolves.toEqual({ status: "failed", reason: "agent-runner-failure" });
-      expect(requestHeartbeatAndWaitMock).toHaveBeenCalledWith(
-        {
-          source: "interval",
-          intent: "task",
-          reason: "heartbeat-task:report",
-          agentId: "main",
-          sessionKey: undefined,
-          heartbeat: undefined,
-          scheduledEveryMs: 15 * 60_000,
-          tasks: [{ jobId: "report", name: "report", prompt: "Run report" }],
-        },
-        lifecycle,
-      );
-    });
-  });
-
-  it("passes awaited target-last wakes as destination-only overrides", async () => {
-    const cfg = {
-      ...createCronConfig("server-cron-awaited-heartbeat-route"),
-      agents: {
-        defaults: {
-          heartbeat: {
-            every: "1h",
-            prompt: "Default heartbeat prompt",
-            target: "none",
-            directPolicy: "block",
-            timeoutSeconds: 900,
-            to: "telegram:dm",
-            accountId: "default",
-          },
-        },
-      },
-    } as OpenClawConfig;
-    await withCronService(cfg, async (state) => {
-      const cronDeps = getCronDeps(state);
-
-      await cronDeps.requestHeartbeatAndWait?.(
-        {
-          source: "cron",
-          intent: "immediate",
-          reason: "cron:test",
-          sessionKey: "telegram:group:123:topic:456",
-          heartbeat: { target: "last" },
-        },
-        {},
-      );
-
-      const call = requireRecord(
-        callArg(requestHeartbeatAndWaitMock, 0, 0, "heartbeat run options"),
-        "heartbeat run options",
-      );
-      expect(call.sessionKey).toBe("agent:main:telegram:group:123:topic:456");
-      expect(call.heartbeat).toEqual({
-        target: "last",
-        to: undefined,
-        accountId: undefined,
+            sessionKey: "global",
+            text: "hello global",
+            job: expect.objectContaining({ id: job.id }),
+          }),
+        );
+        expect(enqueueSystemEventMock).not.toHaveBeenCalled();
       });
-      expect(
-        cronDeps?.resolveHeartbeatTimeoutMs?.({
-          source: "cron",
-          intent: "immediate",
-          reason: "cron:test",
-          agentId: "main",
-          heartbeat: { target: "last" },
-        }),
-      ).toBe(900_000);
-    });
-  });
+    },
+  );
 
-  it("preserves the unlimited agent timeout for heartbeat watchdogs", () => {
-    const cfg = {
-      ...createCronConfig("server-cron-unlimited-heartbeat"),
-      agents: {
-        defaults: {
-          timeoutSeconds: 0,
-          heartbeat: { every: "1h" },
-        },
-      },
-    } as OpenClawConfig;
-    const state = loadCronService(cfg);
-    try {
-      expect(
-        getCronDeps(state)?.resolveHeartbeatTimeoutMs?.({
-          source: "cron",
-          intent: "immediate",
-          reason: "cron:test",
-          agentId: "main",
-          heartbeat: { target: "last" },
-        }),
-      ).toBeUndefined();
-    } finally {
-      state.cron.stop();
-    }
-  });
-
-  it("does not inherit explicit heartbeat destinations for queued target-last wakes", async () => {
-    const cfg = {
-      ...createCronConfig("server-cron-queued-heartbeat-route"),
-      agents: {
-        defaults: {
-          heartbeat: {
-            every: "1h",
-            prompt: "Default heartbeat prompt",
-            target: "none",
-            directPolicy: "block",
-            to: "telegram:dm",
-            accountId: "default",
-          },
-        },
-      },
-    } as OpenClawConfig;
-    await withCronService(cfg, async (state) => {
-      const job = await addSystemEventJob(state, "queued-heartbeat-route", "hello", {
+  it("records the exact ordinary session turn failure", async () => {
+    runSessionEventMock.mockResolvedValueOnce({ status: "error", error: "agent-runner-failure" });
+    await withCronService(createCronConfig("server-cron-session-settlement"), async (state) => {
+      const job = await addSystemEventJob(state, "failed session turn", "Run report", {
         sessionTarget: "main",
-        sessionKey: "telegram:group:123:topic:456",
+        deleteAfterRun: false,
       });
-
       await state.cron.run(job.id, "force");
-
-      const call = requireRecord(
-        callArg(requestHeartbeatMock, 0, 0, "heartbeat request"),
-        "heartbeat request",
-      );
-      expect(call.agentId).toBe("main");
-      expect(call.sessionKey).toBe("agent:main:main");
-      expect(call.heartbeat).toEqual({
-        target: "last",
-        to: undefined,
-        accountId: undefined,
+      expect(state.cron.getJob(job.id)?.state).toMatchObject({
+        lastRunStatus: "error",
+        lastError: "agent-runner-failure",
       });
     });
   });
 
-  it("preserves untargeted cron wake requests for heartbeat fanout", () => {
-    const cfg = {
-      session: { mainKey: "main" },
-      cron: { store: path.join(os.tmpdir(), `server-cron-untargeted-${Date.now()}`, "cron.json") },
-      agents: {
-        entries: {
-          primary: { model: "test/primary" },
-          ops: { model: "test/ops" },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    const state = loadCronService(cfg);
-    try {
-      const cronDeps = getCronDeps(state);
-
-      cronDeps?.requestHeartbeat?.({
-        source: "cron",
-        intent: "immediate",
-        reason: "cron:job:failure-alert",
-      });
-
-      expect(requestHeartbeatMock).toHaveBeenCalledWith({
-        source: "cron",
-        intent: "immediate",
-        reason: "cron:job:failure-alert",
-        agentId: undefined,
-        sessionKey: undefined,
-        heartbeat: undefined,
-      });
-    } finally {
-      state.cron.stop();
-    }
-  });
-
-  it("defaults monitor wakes to heartbeat.session without overriding explicit wake sessions", () => {
-    const cfg = {
-      ...createCronConfig("server-cron-heartbeat-session"),
-      agents: {
-        defaults: {
-          heartbeat: {
-            every: "5m",
-            session: "ops-heartbeat",
-          },
-        },
-        entries: {
-          primary: {},
-        },
-      },
-    } as OpenClawConfig;
-    const state = loadCronService(cfg);
-    try {
-      const cronDeps = getCronDeps(state);
-
-      cronDeps?.requestHeartbeat?.({
-        source: "interval",
-        agentId: "primary",
-      });
-
-      const monitorWake = requireRecord(
-        callArg(requestHeartbeatMock, 0, 0, "monitor heartbeat request"),
-        "monitor heartbeat request",
-      );
-      expect(monitorWake).toMatchObject({
-        source: "interval",
-        agentId: "primary",
-        sessionKey: undefined,
-      });
-      expect(
-        resolveHeartbeatSession(
-          cfg,
-          "primary",
-          cfg.agents?.defaults?.heartbeat,
-          monitorWake.sessionKey as string | undefined,
-        ).sessionKey,
-      ).toBe("agent:primary:ops-heartbeat");
-
-      requestHeartbeatMock.mockClear();
-      cronDeps?.requestHeartbeat?.({ source: "cron", agentId: "primary" });
-      const cronEventWake = requireRecord(
-        callArg(requestHeartbeatMock, 0, 0, "cron event heartbeat request"),
-        "cron event heartbeat request",
-      );
-      expect(cronEventWake).toMatchObject({
-        source: "cron",
-        agentId: "primary",
-        sessionKey: "agent:primary:main",
-      });
-
-      requestHeartbeatMock.mockClear();
-      expect(
-        state.cron.wake({
-          mode: "now",
-          text: "wake now",
-          agentId: "primary",
-          sessionKey: "user-session",
-        }),
-      ).toEqual({ ok: true });
-
-      const explicitWake = requireRecord(
-        callArg(requestHeartbeatMock, 0, 0, "explicit heartbeat request"),
-        "explicit heartbeat request",
-      );
-      expect(explicitWake).toMatchObject({
-        source: "manual",
-        agentId: "primary",
-        sessionKey: "agent:primary:user-session",
-      });
-      expect(
-        resolveHeartbeatSession(
-          cfg,
-          "primary",
-          cfg.agents?.defaults?.heartbeat,
-          explicitWake.sessionKey as string,
-        ).sessionKey,
-      ).toBe("agent:primary:user-session");
-    } finally {
-      state.cron.stop();
-    }
-  });
-
-  it("routes relative cron wake session keys to the configured default agent", () => {
+  it("routes relative wake session keys to the configured default agent", () => {
     const cfg = createCronConfig("server-cron-relative-default");
     cfg.agents = { entries: { primary: { model: "test/primary" } } };
     const state = loadCronService(cfg);
     try {
-      const cronDeps = getCronDeps(state);
-
-      cronDeps?.enqueueSystemEvent?.("hello", {
-        sessionKey: "discord:channel:ops",
-      });
-      cronDeps?.requestHeartbeat?.({
-        source: "cron",
-        intent: "event",
-        reason: "cron:test",
-        sessionKey: "discord:channel:ops",
-      });
-
-      const enqueueCall = lastMockCall(enqueueSystemEventMock, "enqueue system event");
-      const wakeCall = lastMockCall(requestHeartbeatMock, "request heartbeat");
-      expect((enqueueCall?.[1] as { sessionKey?: string } | undefined)?.sessionKey).toBe(
-        "agent:primary:discord:channel:ops",
+      expect(
+        state.cron.wake({ mode: "now", text: "hello", sessionKey: "discord:channel:ops" }),
+      ).toEqual({ ok: true });
+      expect(enqueueSessionEventMock).toHaveBeenCalledExactlyOnceWith(
+        "hello",
+        expect.objectContaining({
+          source: "cron",
+          agentId: "primary",
+          sessionKey: "agent:primary:discord:channel:ops",
+        }),
       );
-      const wakeRequest = wakeCall?.[0] as { agentId?: string; sessionKey?: string } | undefined;
-      expect(wakeRequest?.agentId).toBe("primary");
-      expect(wakeRequest?.sessionKey).toBe("agent:primary:discord:channel:ops");
     } finally {
       state.cron.stop();
     }
@@ -3365,72 +3076,34 @@ describe("buildGatewayCronService", () => {
     };
     const state = loadCronService(cfg);
     try {
-      const cronDeps = getCronDeps(state);
-
       expect(() =>
-        cronDeps?.enqueueSystemEvent?.("hello", {
+        state.cron.wake({
+          mode: "now",
+          text: "hello",
           sessionKey: "agent:ghost:discord:channel:ops",
         }),
       ).toThrow("cron job agent is unavailable: ghost");
-      expect(() =>
-        cronDeps?.requestHeartbeat?.({
-          source: "cron",
-          intent: "event",
-          reason: "cron:test",
-          sessionKey: "agent:ghost:discord:channel:ops",
-        }),
-      ).toThrow("cron job agent is unavailable: ghost");
-      expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-      expect(requestHeartbeatMock).not.toHaveBeenCalled();
+      expect(enqueueSessionEventMock).not.toHaveBeenCalled();
     } finally {
       state.cron.stop();
     }
   });
 
   it("threads cron wake sessionKey through the CronService adapter", () => {
-    const cfg = {
-      session: { mainKey: "main" },
-      cron: {
-        store: path.join(os.tmpdir(), `server-cron-wake-service-${Date.now()}`, "cron.json"),
-      },
-      agents: {
-        entries: {
-          primary: { model: "test/primary" },
-          ops: { model: "test/ops" },
-        },
-      },
-    } as unknown as OpenClawConfig;
+    const cfg = createCronConfig("server-cron-wake-service");
+    cfg.agents = { entries: { primary: {}, ops: {} } };
     const state = loadCronService(cfg);
     try {
       const sessionKey = "agent:ops:cron:nightly:run:abc-123";
-      expect(
-        state.cron.wake({
-          mode: "now",
-          text: "hello",
+      expect(state.cron.wake({ mode: "now", text: "hello", sessionKey })).toEqual({ ok: true });
+      expect(enqueueSessionEventMock).toHaveBeenCalledExactlyOnceWith(
+        "hello",
+        expect.objectContaining({
+          source: "cron",
+          agentId: "ops",
           sessionKey,
         }),
-      ).toEqual({ ok: true });
-
-      const enqueueCall = lastMockCall(enqueueSystemEventMock, "enqueue system event");
-      const wakeCall = lastMockCall(requestHeartbeatMock, "request heartbeat");
-      expect(enqueueCall?.[0]).toBe("hello");
-      expect((enqueueCall?.[1] as { sessionKey?: string } | undefined)?.sessionKey).toMatch(
-        /^agent:ops:/,
       );
-      const wakeRequest = wakeCall?.[0] as
-        | {
-            source?: string;
-            intent?: string;
-            reason?: string;
-            agentId?: string;
-            sessionKey?: string;
-          }
-        | undefined;
-      expect(wakeRequest?.source).toBe("manual");
-      expect(wakeRequest?.intent).toBe("immediate");
-      expect(wakeRequest?.reason).toBe("wake");
-      expect(wakeRequest?.agentId).toBe("ops");
-      expect(wakeRequest?.sessionKey).toMatch(/^agent:ops:/);
     } finally {
       state.cron.stop();
     }
@@ -3443,19 +3116,18 @@ describe("buildGatewayCronService", () => {
         defaults: { systemAgent: { agentId: "ops" } },
         entries: { main: {}, ops: {} },
       },
-    } as OpenClawConfig;
+    } satisfies OpenClawConfig;
     const state = loadCronService(cfg);
     try {
       expect(state.cron.wake({ mode: "now", text: "system wake" })).toEqual({ ok: true });
-
-      const enqueueCall = lastMockCall(enqueueSystemEventMock, "enqueue system event");
-      const wakeCall = lastMockCall(requestHeartbeatMock, "request heartbeat");
-      expect(enqueueCall?.[1]).toMatchObject({ sessionKey: "agent:ops:main" });
-      expect(wakeCall?.[0]).toMatchObject({
-        source: "manual",
-        agentId: "ops",
-        sessionKey: "agent:ops:main",
-      });
+      expect(enqueueSessionEventMock).toHaveBeenCalledExactlyOnceWith(
+        "system wake",
+        expect.objectContaining({
+          agentId: "ops",
+          sessionKey: "agent:ops:main",
+          source: "cron",
+        }),
+      );
     } finally {
       state.cron.stop();
     }
@@ -3560,7 +3232,7 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("passes opaque custom session targets through to isolated cron runs", async () => {
+  it("passes opaque custom session targets through to ordinary cron runs", async () => {
     const cfg = createCronConfig("server-cron-custom-session");
     await withCronService(cfg, async (state) => {
       const sessionKey = "agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
@@ -3570,8 +3242,13 @@ describe("buildGatewayCronService", () => {
 
       await state.cron.run(job.id, "force");
 
-      const options = expectIsolatedRunFields({ sessionKey });
-      expect(requireRecord(options.job, "isolated job").id).toBe(job.id);
+      expect(runSessionEventMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          sessionKey,
+          job: expect.objectContaining({ id: job.id }),
+        }),
+      );
+      expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
     });
   });
 
@@ -3803,71 +3480,21 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("does not reuse startup heartbeat policy for an agent missing from the runtime roster", async () => {
-    const tmpDir = path.join(os.tmpdir(), `server-cron-agent-heartbeat-${Date.now()}`);
-    const startupCfg = {
-      session: {
-        mainKey: "main",
-      },
-      cron: {
-        store: path.join(tmpDir, "cron.json"),
-      },
-      agents: {
-        defaults: {
-          workspace: path.join(tmpDir, "workspace"),
-          heartbeat: {
-            target: "main",
-            deliveryFormat: "text",
-          },
-        },
-        entries: {
-          main: {},
-          yinze: {
-            workspace: path.join(tmpDir, "workspace-yinze"),
-            heartbeat: {
-              target: "last",
-              deliveryFormat: "markdown",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const reloadedCfg = {
-      session: {
-        mainKey: "main",
-      },
-      cron: {
-        store: path.join(tmpDir, "cron.json"),
-      },
-      agents: {
-        defaults: {
-          workspace: path.join(tmpDir, "workspace"),
-          heartbeat: {
-            target: "main",
-            deliveryFormat: "text",
-          },
-        },
-        entries: { main: {} },
-      },
-    } as OpenClawConfig;
-    loadConfigMock.mockReturnValue(reloadedCfg);
-
-    const state = createCronService(startupCfg);
+  it("does not route events to an agent removed from the current roster", () => {
+    const cfg = createCronConfig("server-cron-retired-agent-event");
+    cfg.agents = { entries: { main: {}, yinze: {} } };
+    loadConfigMock.mockReturnValue({ ...cfg, agents: { entries: { main: {} } } });
+    const state = createCronService(cfg);
     try {
-      const cronDeps = getCronDeps(state);
       expect(() =>
-        cronDeps.requestHeartbeatAndWait?.(
-          {
-            source: "cron",
-            intent: "immediate",
-            agentId: "yinze",
-            sessionKey: "agent:yinze:main",
-            heartbeat: {},
-          },
-          {},
-        ),
+        state.cron.wake({
+          mode: "now",
+          text: "late event",
+          agentId: "yinze",
+          sessionKey: "agent:yinze:main",
+        }),
       ).toThrow("cron job agent is unavailable: yinze");
-      expect(requestHeartbeatAndWaitMock).not.toHaveBeenCalled();
+      expect(enqueueSessionEventMock).not.toHaveBeenCalled();
     } finally {
       state.cron.stop();
     }
@@ -3927,7 +3554,7 @@ describe("buildGatewayCronService", () => {
     addSystemEventJob,
     loadConfigMock,
     runCronIsolatedAgentTurnMock,
-    requestHeartbeatAndWaitMock,
+    runSessionEventMock,
   });
 
   it("cleans a failed scheduled activation before a later cron-expression tick executes", async () => {

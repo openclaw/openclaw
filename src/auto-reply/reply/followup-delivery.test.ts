@@ -3,8 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
-import type { AgentTurnExecutionResult, SettledAgentTurn } from "./agent-runner-execution.types.js";
+import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
+import {
+  createAccounting,
+  createDefaults,
+  createSettledExecution,
+  createTurn,
+} from "./followup-delivery.test-support.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 import type { FollowupRun } from "./queue/types.js";
 
@@ -40,94 +46,6 @@ vi.mock("./route-reply.js", () => ({
   isRoutableChannel: (channel: string | undefined) => channel === "discord" || channel === "slack",
   routeReply: (...args: unknown[]) => deliveryState.routeReply(...args),
 }));
-
-function createTurn(overrides: Partial<AdmittedFollowupTurn> = {}): AdmittedFollowupTurn {
-  return {
-    runId: "run-1",
-    queued: {
-      prompt: "queued",
-      enqueuedAt: 1,
-      originatingChannel: "discord",
-      originatingTo: "channel:C1",
-      run: {
-        agentId: "agent",
-        agentDir: "/tmp/agent",
-        sessionId: "session",
-        sessionKey: "main",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp",
-        config: {},
-        provider: "anthropic",
-        model: "claude",
-        messageProvider: "discord",
-        timeoutMs: 1_000,
-        blockReplyBreak: "message_end",
-      },
-    },
-    operation: {} as AdmittedFollowupTurn["operation"],
-    config: {},
-    session: {
-      kind: "session",
-      key: "main",
-      current: () => undefined,
-      publish: () => undefined,
-      adopt: () => undefined,
-    },
-    sendPolicy: "allow",
-    preflightCompactionApplied: false,
-    ...overrides,
-  };
-}
-
-function createSettledExecution(finalText = ""): { runId: string; outcome: SettledAgentTurn } {
-  return {
-    runId: "run-1",
-    outcome: {
-      kind: "settled",
-      status: "ok",
-      result: {
-        payloads: finalText ? [{ text: finalText }] : [],
-        meta: { durationMs: 0, finalAssistantVisibleText: finalText },
-      },
-      resolved: { provider: "anthropic", model: "claude" },
-      fallback: { exhausted: false, attempts: [] },
-      autoCompactionCount: 0,
-      didLogHeartbeatStrip: false,
-    },
-  };
-}
-
-function createAccounting(
-  payloadArray: ReplyPayload[] = [],
-  overrides: Record<string, unknown> = {},
-) {
-  return {
-    payloadArray,
-    providerUsed: "anthropic",
-    modelUsed: "claude",
-    preserveUserFacingSessionState: false,
-    replyUsageState: {},
-    usage: undefined,
-    terminalFailurePayload: undefined,
-    ...overrides,
-  } as never;
-}
-
-const createDefaults = (onBlockReply: (payload: ReplyPayload) => Promise<void>) => ({
-  defaultModel: "claude",
-  typingMode: "never" as const,
-  typing: {
-    onReplyStart: vi.fn(async () => {}),
-    startTypingLoop: vi.fn(async () => {}),
-    startTypingOnText: vi.fn(async () => {}),
-    refreshTypingTtl: vi.fn(),
-    isActive: vi.fn(() => false),
-    markRunComplete: vi.fn(),
-    markDispatchIdle: vi.fn(),
-    cleanup: vi.fn(),
-  },
-  opts: { onBlockReply },
-});
 
 describe("resolveFollowupDeliveryDecision", () => {
   const sourceReplyTarget = {
@@ -259,7 +177,7 @@ describe("resolveFollowupDeliveryDecision", () => {
   );
 
   it.each(["required", "optional"] as const)(
-    "honors a queued %s reply expectation over heartbeat drain options and NO_REPLY",
+    "honors a queued %s reply expectation over NO_REPLY",
     async (expectation) => {
       const turn = createTurn();
       turn.queued.run.terminalReplyExpectation = expectation;
@@ -270,7 +188,6 @@ describe("resolveFollowupDeliveryDecision", () => {
         turn,
         execution,
         accounting: createAccounting([{ text: "NO_REPLY" }]),
-        opts: { isHeartbeat: true },
       });
 
       if (expectation === "optional") {
@@ -680,6 +597,27 @@ describe("resolveFollowupDeliveryDecision", () => {
 });
 
 describe("deliverFollowupDecision", () => {
+  it("keeps internal occurrence delivery with its producer when the origin is routable", async () => {
+    const turn = createTurn();
+    const deliver = vi.fn(async () => {});
+    turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver };
+    turn.queued.run.internalEventExecution = { onStarted: () => {}, onTerminal: () => {} };
+    deliveryState.routeReply.mockClear();
+
+    await deliverFollowupDecision({
+      decision: { kind: "deliver", payloads: [{ text: "internal result" }] },
+      turn,
+      defaults: createDefaults(vi.fn()),
+      runId: "run-1",
+      runFollowup: vi.fn(),
+    });
+
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({ payloads: [{ text: "internal result" }] }),
+    );
+    expect(deliveryState.routeReply).not.toHaveBeenCalled();
+  });
+
   it("keeps dispatcher-only delivery out of a routable origin", async () => {
     const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
     deliveryState.followupRoute = { route: "dispatcher" };

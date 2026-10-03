@@ -1,11 +1,23 @@
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import type { DurableMessageBatchSendResult } from "../channels/message/runtime.js";
+import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import {
+  prepareGatewaySuspend,
+  resumeGatewaySuspend,
+} from "../infra/gateway-suspend-coordinator.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import {
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import type { HealthSummary } from "./health/types.js";
+import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
+import { handleNodeEvent } from "./server-node-events.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import type { loadSessionEntry as loadSessionEntryType } from "./session-utils.js";
 
@@ -78,19 +90,29 @@ const runtimeMocks = vi.hoisted(() => ({
   },
   deleteMediaBuffer: vi.fn(async () => {}),
   deliverOutboundPayloads: vi.fn(async () => {}),
-  enqueueSystemEvent: vi.fn(),
+  enqueueSystemEventEntry: vi.fn(),
+  captureSessionEventTarget: vi.fn(async (agentId: string, sessionKey: string) => ({
+    agentId,
+    sessionKey,
+  })),
+  enqueueSessionEvent: vi.fn(),
   formatForLog: vi.fn((err: unknown) => (err instanceof Error ? err.message : String(err))),
   getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
   INLINE_IMAGE_DURABLE_OMISSION_MARKER:
     "[image attachment omitted: durable managed media claim unavailable]",
   loadOrCreateProcessDeviceIdentity: loadOrCreateProcessDeviceIdentityMock,
   loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
+  resolveGatewaySessionStoreTargetInWorker: vi.fn(
+    async ({ key }: { key: string; agentId?: string }) => {
+      const loaded = buildSessionLookup(key);
+      return { ...loaded, store: loaded.entry ? { [loaded.canonicalKey]: loaded.entry } : {} };
+    },
+  ),
   upsertSessionEntryCore: vi.fn(),
   normalizeChannelId: normalizeChannelIdMock,
   normalizeMainKey: vi.fn((key?: string | null) => key?.trim() || "agent:main:main"),
   parseMessageWithAttachments: parseMessageWithAttachmentsMock,
   registerApnsRegistration: registerApnsRegistrationMock,
-  requestHeartbeat: vi.fn(),
   resolveSystemMainSessionTarget: vi.fn(() => ({
     agentId: "ops",
     sessionKey: "agent:ops:main",
@@ -178,9 +200,9 @@ vi.mock("../infra/device-pairing.js", async (importOriginal) => ({
   updatePairedDevicePresence: updatePairedDevicePresenceMock,
 }));
 
-vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/heartbeat-wake.js")>()),
-  requestHeartbeat: runtimeMocks.requestHeartbeat,
+vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
+  captureSessionEventTargetForHost: runtimeMocks.captureSessionEventTarget,
+  enqueueSessionEventForHost: runtimeMocks.enqueueSessionEvent,
 }));
 
 vi.mock("../infra/push-apns.js", async (importOriginal) => ({
@@ -191,7 +213,7 @@ vi.mock("../infra/push-apns.js", async (importOriginal) => ({
 
 vi.mock("../infra/system-events.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/system-events.js")>()),
-  enqueueSystemEvent: runtimeMocks.enqueueSystemEvent,
+  enqueueSystemEventEntry: runtimeMocks.enqueueSystemEventEntry,
 }));
 
 vi.mock("../media/store.js", async (importOriginal) => ({
@@ -221,6 +243,10 @@ vi.mock("./session-utils.js", async (importOriginal) => ({
   loadSessionEntry: runtimeMocks.loadSessionEntry,
   resolveGatewayModelSupportsImages: runtimeMocks.resolveGatewayModelSupportsImages,
   resolveSessionModelRef: runtimeMocks.resolveSessionModelRef,
+}));
+
+vi.mock("./session-utils-store-worker.js", () => ({
+  resolveGatewaySessionStoreTargetInWorker: runtimeMocks.resolveGatewaySessionStoreTargetInWorker,
 }));
 
 vi.mock("./ws-log.js", async (importOriginal) => ({
@@ -261,5 +287,116 @@ export function makeNodeClient(connId: string, nodeId: string): GatewayWsClient 
         nonce: "nonce",
       },
     } as GatewayWsClient["connect"],
+  };
+}
+
+export function resetNodeEventTestState() {
+  resetGatewayWorkAdmission();
+  runtimeMocks.enqueueSessionEvent.mockReset().mockReturnValue({
+    settled: Promise.resolve({ status: "completed" }),
+  });
+  runtimeMocks.enqueueSystemEventEntry
+    .mockReset()
+    .mockImplementation((text: string) => ({ id: "event", text }));
+  runtimeMocks.captureSessionEventTarget.mockClear();
+  runtimeMocks.agentCommandFromIngress.mockClear();
+  runtimeMocks.upsertSessionEntryCore.mockClear();
+  runtimeMocks.loadSessionEntry.mockClear();
+  runtimeMocks.loadSessionEntry.mockImplementation((sessionKey: string) =>
+    buildSessionLookup(sessionKey),
+  );
+  runtimeMocks.resolveGatewaySessionStoreTargetInWorker.mockClear();
+  runtimeMocks.resolveGatewaySessionStoreTargetInWorker.mockImplementation(async ({ key }) => {
+    const loaded = buildSessionLookup(key);
+    return { ...loaded, store: loaded.entry ? { [loaded.canonicalKey]: loaded.entry } : {} };
+  });
+  runtimeMocks.agentCommandFromIngress.mockResolvedValue({ status: "ok" } as never);
+  runtimeMocks.upsertSessionEntryCore.mockImplementation(async (_scope, patch) => patch);
+}
+
+export const sentDurableMessageBatchResult: Extract<
+  DurableMessageBatchSendResult,
+  { status: "sent" }
+> = {
+  status: "sent",
+  results: [],
+  receipt: { platformMessageIds: [], parts: [], sentAt: 1 },
+};
+
+export function nodeEvent(event: string, payload: unknown): NodeEvent {
+  return { event, payloadJSON: JSON.stringify(payload) };
+}
+
+export function eventResult(event: string, reason: string, handled = false) {
+  return { ok: true, event, handled, reason };
+}
+
+export function waitForFast<T>(callback: () => T | Promise<T>) {
+  return vi.waitFor(callback, { interval: 1 });
+}
+
+export async function runAdmittedNodeEvent(
+  ctx: NodeEventContext,
+  nodeId: string,
+  event: Parameters<typeof handleNodeEvent>[2],
+): Promise<void> {
+  const admission = tryBeginGatewayRootWorkAdmission();
+  expect(admission).not.toBeNull();
+  try {
+    await admission?.run(() => handleNodeEvent(ctx, nodeId, event));
+  } finally {
+    admission?.release();
+  }
+}
+
+export function expectSuspendBusyWithRootWork(requestId: string): void {
+  expect(
+    prepareGatewaySuspend({
+      requestId,
+      pauseScheduling: vi.fn(),
+      resumeScheduling: vi.fn(),
+    }),
+  ).toMatchObject({
+    status: "busy",
+    blockers: expect.arrayContaining([expect.objectContaining({ kind: "root-request", count: 1 })]),
+  });
+}
+
+export function expectSuspendReady(requestId: string): void {
+  const result = prepareGatewaySuspend({
+    requestId,
+    pauseScheduling: vi.fn(),
+    resumeScheduling: vi.fn(),
+  });
+  expect(result).toMatchObject({ status: "ready", activeCount: 0, blockers: [] });
+  if (result.status === "ready") {
+    expect(resumeGatewaySuspend(result.suspensionId)).toMatchObject({
+      ok: true,
+      status: "running",
+      resumed: true,
+    });
+  }
+}
+
+export function buildCtx(
+  opts: { authorizeNodeSystemRunEvent?: NodeEventContext["authorizeNodeSystemRunEvent"] } = {},
+): NodeEventContext {
+  return {
+    deps: {} as CliDeps,
+    broadcast: () => {},
+    nodeSendToSession: () => {},
+    nodeSubscribe: () => {},
+    nodeUnsubscribe: () => {},
+    broadcastVoiceWakeChanged: () => {},
+    addChatRun: () => {},
+    removeChatRun: () => undefined,
+    chatAbortControllers: new Map(),
+    dedupe: new Map(),
+    agentRunSeq: new Map(),
+    getHealthCache: () => null,
+    refreshHealthSnapshot: async () => ({}) as HealthSummary,
+    loadGatewayModelCatalog: async () => [],
+    authorizeNodeSystemRunEvent: opts.authorizeNodeSystemRunEvent ?? (() => false),
+    logGateway: { warn: () => {} },
   };
 }

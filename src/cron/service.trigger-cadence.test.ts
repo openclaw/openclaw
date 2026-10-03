@@ -18,7 +18,7 @@ function createTriggerDeps(
     cronEnabled: true,
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    runSessionEvent: vi.fn(async () => ({ status: "ok" as const })),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     evaluateCronTrigger,
   };
@@ -58,7 +58,7 @@ describe("cron trigger cadence", () => {
       await cron.start();
 
       expect(evaluateCronTrigger).toHaveBeenCalledTimes(2);
-      expect(deps.enqueueSystemEvent).toHaveBeenCalledOnce();
+      expect(deps.runSessionEvent).toHaveBeenCalledOnce();
       expect(cron.getJob(job.id)?.state.nextRunAtMs).toBe(nextAt);
     } finally {
       cron.stop();
@@ -164,7 +164,7 @@ describe("cron trigger cadence", () => {
       expect(persisted?.state.lastRunAtMs).toBeUndefined();
       expect(evaluateCronTrigger).toHaveBeenCalledOnce();
       expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(deps.requestHeartbeat).not.toHaveBeenCalled();
+      expect(deps.runSessionEvent).not.toHaveBeenCalled();
     } finally {
       cron.stop();
     }
@@ -199,8 +199,12 @@ describe("cron trigger cadence", () => {
     const cron = new CronService(createTriggerDeps(storePath, evaluateCronTrigger));
     try {
       await cron.start();
+      expect(evaluateCronTrigger).not.toHaveBeenCalled();
+      expect(cron.getJob("missed-watcher")?.state.nextRunAtMs).toBe(nowMs + 120_000);
+      vi.setSystemTime(nowMs + 120_000);
+      await cron.run("missed-watcher", "due");
       expect(evaluateCronTrigger).toHaveBeenCalledOnce();
-      expect(cron.getJob("missed-watcher")?.state.nextRunAtMs).toBe(nowMs + 30_000);
+      expect(cron.getJob("missed-watcher")?.state.nextRunAtMs).toBe(nowMs + 150_000);
     } finally {
       cron.stop();
     }

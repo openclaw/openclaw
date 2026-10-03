@@ -149,7 +149,7 @@ async function createFixture(option: CiAutomationOption) {
     defaultAgentId: "main",
     log: createNoopLogger(),
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn(),
     onEvent: (event) => {
       if (event.action === "finished") {
         finished.resolve(event);

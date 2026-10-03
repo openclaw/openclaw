@@ -84,6 +84,7 @@ describe("gateway caller context wrapper", () => {
     await withGatewayToolCallerIdentity(
       {
         ...identity,
+        sessionEventToolsAllow: ["read", "process"],
         assertToolAllowed: (name) => {
           if (name === "exec") {
             throw new Error("exec denied");
@@ -94,6 +95,7 @@ describe("gateway caller context wrapper", () => {
         withGatewayToolCallerIdentity(
           {
             ...identity,
+            sessionEventToolsAllow: ["read", "exec"],
             assertToolAllowed: (name) => {
               if (name === "process") {
                 throw new Error("process denied");
@@ -103,6 +105,7 @@ describe("gateway caller context wrapper", () => {
           () =>
             withGatewayToolCallerIdentity(identity, () => {
               const caller = getGatewayToolCallerIdentity();
+              expect(caller?.sessionEventToolsAllow).toEqual(["read"]);
               expect(() => caller?.assertToolAllowed?.("exec")).toThrow("exec denied");
               expect(() => caller?.assertToolAllowed?.("process")).toThrow("process denied");
               expect(() => caller?.assertToolAllowed?.("read")).not.toThrow();

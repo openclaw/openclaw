@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { WebSocket } from "ws";
-import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
+import type { dispatchInboundMessageInternal } from "../auto-reply/dispatch.js";
 import {
   markCommandReplyForDelivery,
   setReplyPayloadMetadata,
@@ -65,7 +65,7 @@ describe("chat command transcript context", () => {
       const created = await rpcReq(ws, "sessions.create", { key: sessionKey, agentId: "main" });
       expect(created, JSON.stringify(created)).toMatchObject({ ok: true });
       dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
-        const { dispatcher } = args as Parameters<typeof dispatchInboundMessage>[0];
+        const { dispatcher } = args as Parameters<typeof dispatchInboundMessageInternal>[0];
         const finalPayload = { text: scenario.reply };
         if (scenario.kind === "pure") {
           setReplyPayloadMetadata(finalPayload, { contextFreeCommand: true });

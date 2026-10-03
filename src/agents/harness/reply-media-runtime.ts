@@ -105,7 +105,6 @@ export async function prepareHarnessReplyMedia(params: {
     messagingToolSentTargets: result.messagingToolSentTargets,
     messagingToolSourceReplyPayloads: result.messagingToolSourceReplyPayloads,
     didSendDeterministicApprovalPrompt: result.didSendDeterministicApprovalPrompt,
-    heartbeatToolResponse: result.heartbeatToolResponse,
     runAborted: result.terminal.kind === "aborted",
   });
   const sources = [

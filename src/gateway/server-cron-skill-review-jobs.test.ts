@@ -234,7 +234,7 @@ describe("reconcileSkillCollectionReviewJobs", () => {
 
   it.each([
     { modelOverride: "claude-sonnet-4-6", providerOverride: "anthropic" },
-    { modelOverride: "gpt-blocked", providerOverride: "openai", agentRuntimeOverride: "openclaw" },
+    { agentRuntimeOverride: "openclaw" },
   ])("preserves an existing review with stored execution preferences: %j", async (preferences) => {
     const testState = await createOpenClawTestState({ label: "skill-review-preferences" });
     const cron = new CronService({
@@ -243,7 +243,6 @@ describe("reconcileSkillCollectionReviewJobs", () => {
       cronEnabled: false,
       log: logger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
     });
     const cfg: OpenClawConfig = {
@@ -252,7 +251,7 @@ describe("reconcileSkillCollectionReviewJobs", () => {
           main: {
             model: "openai/gpt-blocked",
             models: {
-              "openai/gpt-blocked": { agentRuntime: { id: "codex" } },
+              "openai/gpt-blocked": { agentRuntime: { id: "unsupported-harness" } },
               "anthropic/claude-sonnet-4-6": {},
             },
           },
@@ -304,7 +303,6 @@ describe("reconcileSkillCollectionReviewJobs", () => {
       cronEnabled: false,
       log: logger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     };
     let cron = new CronService(deps);
@@ -377,7 +375,6 @@ describe("reconcileSkillCollectionReviewJobs", () => {
       cronEnabled: true,
       log: logger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
     const config = (mode: "auto" | "off") =>

@@ -24,6 +24,10 @@ const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(async () => ({ path: "/tmp/openclaw.json" })),
   inspectPortUsage: vi.fn(async () => null),
   resolveGatewayBindHost: vi.fn(async () => "127.0.0.1"),
+  resolveStatusAutomations: vi.fn(async () => ({
+    ok: true,
+    value: { enabled: true, jobs: 0, nextWakeAtMs: null },
+  })),
   resolveStatusGatewayDiagnosticsSafe: vi.fn(async () => ({ ok: true, value: {} })),
   resolveStatusGatewayHealthSafe: vi.fn(async () => undefined),
   resolveNodeExecEligibility: vi.fn(() => ({ canExec: false })),
@@ -79,6 +83,7 @@ vi.mock("../status-overview-rows.ts", () => ({
   buildStatusAllOverviewRows: mocks.buildStatusAllOverviewRows,
 }));
 vi.mock("../status-runtime-shared.ts", () => ({
+  resolveStatusAutomations: mocks.resolveStatusAutomations,
   resolveStatusGatewayDiagnosticsSafe: mocks.resolveStatusGatewayDiagnosticsSafe,
   resolveStatusGatewayHealthSafe: mocks.resolveStatusGatewayHealthSafe,
 }));

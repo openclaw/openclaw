@@ -47,7 +47,7 @@ function source(
 ) {
   const request = client.request.bind(client);
   client.request = ((method, ...args) =>
-    method === "last-heartbeat"
+    method === "cron.status"
       ? pingRequest(method, ...args)
       : request(method, ...args)) as GatewayBrowserClient["request"];
   return createApplicationGateway({

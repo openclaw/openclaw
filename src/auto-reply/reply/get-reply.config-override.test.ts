@@ -37,7 +37,8 @@ const mocks = vi.hoisted(() => ({
   initSessionState: vi.fn(),
 }));
 registerGetReplyRuntimeOverrides(mocks);
-const { getReplyFromConfig } = await import("../../plugin-sdk/reply-runtime.js");
+const { getReplyFromConfigInternal } = await import("./get-reply.js");
+const { getReplyFromConfig: getReplyFromSdk } = await import("../../plugin-sdk/reply-runtime.js");
 const { getRuntimeConfig: loadConfigMock } = await import("../../config/config.js");
 const { runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js");
 const { resolveDefaultModel: resolveDefaultModelMock } =
@@ -138,7 +139,7 @@ function createPreparedDispatchRuntime(
   });
 }
 
-describe("getReplyFromConfig configOverride", () => {
+describe("getReplyFromConfigInternal configOverride", () => {
   beforeEach(async () => {
     vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
     const sessionDiff = await import("../../sessions/session-diff.js");
@@ -160,13 +161,13 @@ describe("getReplyFromConfig configOverride", () => {
     }));
   });
 
-  it("rejects forged operator authority at the public SDK reply entry", async () => {
+  it("rejects forged operator authority at host reply admission", async () => {
     const assertCurrent = vi.fn();
     const plain = { profileId: "guest", scopes: ["operator.admin"], assertCurrent };
     const issued = createAdmittedRunOperatorAuthority(plain);
     for (const operatorAuthority of [plain, { ...issued }]) {
       const options = { runId: "forged-operator", operatorAuthority };
-      await expect(getReplyFromConfig(buildGetReplyCtx(), options, {})).rejects.toThrow(
+      await expect(getReplyFromConfigInternal(buildGetReplyCtx(), options, {})).rejects.toThrow(
         "operator run authority must be issued by the host",
       );
     }
@@ -175,7 +176,7 @@ describe("getReplyFromConfig configOverride", () => {
     expect(mocks.initSessionState).not.toHaveBeenCalled();
     expect(runPreparedReplyMock).not.toHaveBeenCalled();
   });
-  it("pins the issued operator source once through public reply option copies", async () => {
+  it("pins the issued operator source once through host reply option copies", async () => {
     const issued = createAdmittedRunOperatorAuthority({
       profileId: "guest",
       scopes: ["operator.write"],
@@ -189,7 +190,7 @@ describe("getReplyFromConfig configOverride", () => {
         return reads === 1 ? issued : { ...issued, scopes: ["operator.admin"] };
       },
     };
-    await expect(getReplyFromConfig(buildGetReplyCtx(), options, {})).resolves.toEqual({
+    await expect(getReplyFromConfigInternal(buildGetReplyCtx(), options, {})).resolves.toEqual({
       text: "ok",
     });
     expect(reads).toBe(1);
@@ -202,7 +203,7 @@ describe("getReplyFromConfig configOverride", () => {
       ...resolvedConfig,
       agents: { defaults: { userTimezone: "UTC" } },
     });
-    await getReplyFromConfig(buildGetReplyCtx(), undefined, {
+    await getReplyFromConfigInternal(buildGetReplyCtx(), undefined, {
       agents: { defaults: { userTimezone: "America/New_York" } },
     });
     expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
@@ -212,7 +213,7 @@ describe("getReplyFromConfig configOverride", () => {
     mocks.initSessionState.mockRejectedValueOnce(new SessionResetCleanupError(message));
     const runState: ReplyOperationRunState = {};
     const opts: InternalGetReplyOptions = { [REPLY_OPERATION_RUN_STATE]: runState };
-    await expect(getReplyFromConfig(buildGetReplyCtx(), opts, {})).resolves.toEqual({
+    await expect(getReplyFromConfigInternal(buildGetReplyCtx(), opts, {})).resolves.toEqual({
       text: message,
     });
     expect(runState.preRunRejection).toBe("session-directive-rejected");
@@ -223,7 +224,7 @@ describe("getReplyFromConfig configOverride", () => {
     mocks.captureBaseline.mockRejectedValueOnce(
       new SessionWorkStartInvalidatedError("session changed during baseline capture"),
     );
-    await expect(getReplyFromConfig(ctx, undefined, {})).rejects.toBeInstanceOf(
+    await expect(getReplyFromConfigInternal(ctx, undefined, {})).rejects.toBeInstanceOf(
       SessionWorkStartInvalidatedError,
     );
     expect(runPreparedReplyMock).not.toHaveBeenCalled();
@@ -236,7 +237,7 @@ describe("getReplyFromConfig configOverride", () => {
     const body = "/model ollama/picker-secondary -s";
     await bindPreparedReplyDispatchRuntime(
       preparedRuntime,
-      getReplyFromConfig,
+      getReplyFromSdk,
     )(
       buildGetReplyCtx({
         Body: body,
@@ -264,7 +265,10 @@ describe("getReplyFromConfig configOverride", () => {
       config: { agents: { entries: { worker: {} } } },
     });
     await expect(
-      bindPreparedReplyDispatchRuntime(preparedRuntime, getReplyFromConfig)(buildGetReplyCtx()),
+      bindPreparedReplyDispatchRuntime(
+        preparedRuntime,
+        getReplyFromConfigInternal,
+      )(buildGetReplyCtx()),
     ).rejects.toThrow("reply model catalog owner changed from main to worker");
   });
 });
@@ -339,14 +343,14 @@ function runParams() {
   return vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0];
 }
 async function expectPreparedReply(cfg: OpenClawConfig, options?: InternalGetReplyOptions) {
-  await expect(getReplyFromConfig(buildGetReplyCtx(), options, cfg)).resolves.toEqual({
+  await expect(getReplyFromConfigInternal(buildGetReplyCtx(), options, cfg)).resolves.toEqual({
     text: "ok",
   });
   expect(runPreparedReplyMock).toHaveBeenCalledOnce();
   return runParams();
 }
 
-describe("getReplyFromConfig auto-fallback primary probes", () => {
+describe("getReplyFromConfigInternal auto-fallback primary probes", () => {
   beforeEach(async () => {
     delete process.env.OPENCLAW_TEST_FAST;
     const catalog = await import("../../agents/model-catalog.runtime.js");
@@ -373,30 +377,29 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     );
     vi.mocked(runPreparedReplyMock).mockResolvedValue({ text: "ok" });
   });
-  it("suppresses heartbeat model overrides for a model-locked session", async () => {
+  it("suppresses turn-local model overrides for a model-locked session", async () => {
     const { sessionKey } = await mockAutoFallbackSession(true);
     mockFallbackDirectiveResult(sessionKey, { resolvedThinkLevel: "off" });
     await expectPreparedReply(makeReasoningModelConfig(), {
-      isHeartbeat: true,
-      heartbeatModelOverride: "openai/gpt-5.5@openai:metered",
+      modelOverride: "openai/gpt-5.5@openai:metered",
     });
     expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
     expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toMatchObject({
       provider: "anthropic",
       model: "claude-fallback",
-      hasResolvedHeartbeatModelOverride: false,
+      hasResolvedTurnModelOverride: false,
     });
     expect(runParams()).toMatchObject({ provider: "anthropic", model: "claude-fallback" });
     expect(runParams()?.autoFallbackPrimaryProbe).toBeUndefined();
     expect(runParams()).not.toHaveProperty("configuredProfileId", "openai:metered");
   });
-  it("keeps an explicit heartbeat profile on its turn without persisting it into chat", async () => {
+  it("keeps an explicit turn-local profile on its turn without persisting it into chat", async () => {
     const { sessionKey, storePath } = await mockAutoFallbackSession();
     mockFallbackDirectiveResult(sessionKey, { provider: "openai", model: "gpt-5.5" });
     const cfg = makeReasoningModelConfig();
-    await getReplyFromConfig(
+    await getReplyFromConfigInternal(
       buildGetReplyCtx(),
-      { isHeartbeat: true, heartbeatModelOverride: "openai/gpt-5.5@openai:metered" },
+      { modelOverride: "openai/gpt-5.5@openai:metered" },
       cfg,
     );
     expect(runParams()).toMatchObject({
@@ -405,7 +408,7 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
       configuredProfileId: "openai:metered",
     });
     expect(loadSessionEntry({ storePath, sessionKey })?.authProfileOverride).toBeUndefined();
-    await getReplyFromConfig(buildGetReplyCtx(), undefined, cfg);
+    await getReplyFromConfigInternal(buildGetReplyCtx(), undefined, cfg);
     expect(vi.mocked(runPreparedReplyMock).mock.calls[1]?.[0]).not.toHaveProperty(
       "configuredProfileId",
       "openai:metered",

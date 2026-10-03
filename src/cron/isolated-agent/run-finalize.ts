@@ -10,12 +10,14 @@ import {
   CODE_MODE_MCP_CATALOG_MISS_MESSAGE,
   isEmbeddedRunTerminalToolFailure,
 } from "../../agents/embedded-agent-runner/terminal-tool-failure.js";
+import { shouldSuppressReasoningPayload } from "../../auto-reply/reply-payload.js";
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions.js";
 import {
   resolveProjectedSessionContextTokens,
   resolveTrustedSessionContextTokens,
 } from "../../config/sessions/context-token-provenance.js";
+import type { AutomationResult } from "../../infra/agent-run-registry.types.js";
 import { resolveSourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
@@ -47,6 +49,7 @@ const cronContextRuntimeLoader = createLazyImportLoader(() => import("./run-cont
 
 export async function finalizeCronRun(params: {
   prepared: PreparedCronRunContext;
+  automationResult?: AutomationResult;
   execution: CronExecutionResult;
   abortReason: () => string;
   isAborted: () => boolean;
@@ -64,7 +67,10 @@ export async function finalizeCronRun(params: {
       terminalReplyKind: finalRunResult.meta?.terminalReplyKind,
     })
   ).disposition;
-  const payloads = finalRunResult.payloads ?? [];
+  const includeReasoning = prepared.agentPayload?.includeReasoning === true;
+  const payloads = (finalRunResult.payloads ?? []).filter(
+    (payload) => !shouldSuppressReasoningPayload(payload),
+  );
   const cleanupRunSession = async (reason: string) => {
     await cleanupCronRunSessionAfterRun({
       job: prepared.input.job,
@@ -229,6 +235,12 @@ export async function finalizeCronRun(params: {
     embeddedRunError,
     agentReportedFailure,
   } = cronPayloadOutcome;
+  if (includeReasoning && !hasFatalErrorPayload && deliveryDisposition.kind === "visible") {
+    deliveryPayloads = [
+      ...(finalRunResult.payloads ?? []).filter(shouldSuppressReasoningPayload),
+      ...deliveryPayloads,
+    ];
+  }
   const terminalToolFailure = finalRunResult.meta?.terminalToolFailure;
   const hasTerminalToolFailure = isEmbeddedRunTerminalToolFailure(terminalToolFailure);
   if (hasFatalErrorPayload && hasTerminalToolFailure) {
@@ -269,6 +281,9 @@ export async function finalizeCronRun(params: {
             }
           : {}),
       ...output,
+      ...(params.automationResult && !hasFatalErrorPayload && !failure
+        ? { summary: `${params.automationResult.outcome}: ${params.automationResult.summary}` }
+        : {}),
       replyDisposition,
       deliveryState: result?.deliveryState,
       delivered:
@@ -292,25 +307,29 @@ export async function finalizeCronRun(params: {
     });
   };
   const acceptedSessionSpawn = hasAcceptedSessionSpawn(finalRunResult.acceptedSessionSpawns);
-  const heartbeatOnlyResponse =
+  const quietResponse =
     prepared.deliveryRequested && !hasFatalErrorPayload && deliveryDisposition.kind !== "visible";
-  const heartbeatControlOnlyResponse =
-    heartbeatOnlyResponse &&
+  const controlOnlyResponse =
+    quietResponse &&
     (deliveryDisposition.kind === "empty" ||
-      (deliveryDisposition.kind === "heartbeat" && deliveryDisposition.controlOnly));
+      (deliveryDisposition.kind === "silent" && deliveryDisposition.controlOnly));
   const spawnOnlyHandoff =
     acceptedSessionSpawn &&
-    (heartbeatControlOnlyResponse ||
+    (controlOnlyResponse ||
       (deliveryPayloads.length === 0 && normalizeOptionalString(synthesizedText) === undefined));
-  if (spawnOnlyHandoff && heartbeatControlOnlyResponse) {
-    // Parent heartbeat acknowledgments cannot fulfill child delivery; one-shot
+  if (spawnOnlyHandoff && controlOnlyResponse) {
+    // Parent silent replies cannot fulfill child delivery; one-shot
     // cleanup must wait for actual descendant output before retiring the job.
     deliveryPayloads = [];
     synthesizedText = undefined;
     summary = undefined;
     outputText = undefined;
   }
-  const skipHeartbeatDelivery = heartbeatOnlyResponse && !spawnOnlyHandoff;
+  const skipQuietDelivery = quietResponse && !spawnOnlyHandoff;
+  const noChange = params.automationResult?.outcome === "no_change" && !hasFatalErrorPayload;
+  const policySuppression = !prepared.resolvedDelivery.ok
+    ? prepared.resolvedDelivery.deliverySuppressionReason
+    : undefined;
   const sourceDeliveryOutcome = resolveSourceDeliveryOutcome(prepared.sourceDelivery, {
     didSendViaMessageTool: finalRunResult.didSendViaMessagingTool,
     messageToolSentTargets: finalRunResult.messagingToolSentTargets,
@@ -376,11 +395,15 @@ export async function finalizeCronRun(params: {
     deliveryPlan: prepared.deliveryPlan,
     deliveryRequested: prepared.deliveryRequested,
     undeliveredRunStatus: hasFatalErrorPayload || pendingPresentationWarningError ? "error" : "ok",
-    skipDelivery: skipHeartbeatDelivery
-      ? hasIntentionalSilentReply
+    skipDelivery:
+      policySuppression ??
+      (noChange
         ? "silent"
-        : deliveryDisposition.kind
-      : undefined,
+        : skipQuietDelivery
+          ? hasIntentionalSilentReply
+            ? "silent"
+            : deliveryDisposition.kind
+          : undefined),
     spawnOnlyHandoff,
     sourceDeliveryOutcome,
     queueSourceSessionMessageToolAwareness,

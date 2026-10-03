@@ -197,42 +197,9 @@ it("publishes membership and participant changes through the actor catalog", asy
   ).toEqual([]);
 });
 
-it("preserves heartbeat claims and rejects reactions without a current message", async () => {
+it("rejects reactions without a current message", async () => {
   const sessionKey = key("outcome");
   await create("outcome");
-  await actor.sessions.sideData(authority, {
-    type: "session.heartbeat.persist",
-    input: {
-      session_key: sessionKey,
-      run_session_key: sessionKey,
-      outcome: "progress",
-      summary: "Synthetic task advanced",
-      response_reason: null,
-      priority: null,
-      next_check: null,
-      task_names_json: null,
-      wake_source: null,
-      wake_reason: null,
-      occurred_at: 14_000,
-      updated_at: 14_000,
-      context_run_id: null,
-      context_claimed_at: null,
-    },
-  });
-  for (const runId of ["run-one", "run-one"]) {
-    expect(
-      await actor.sessions.sideData(authority, {
-        type: "session.heartbeat.claim",
-        input: { sessionKey, runId },
-      }),
-    ).toMatchObject({ outcome: "progress", summary: "Synthetic task advanced" });
-  }
-  expect(
-    await actor.sessions.sideData(authority, {
-      type: "session.heartbeat.claim",
-      input: { sessionKey, runId: "run-two" },
-    }),
-  ).toBeUndefined();
   expect(
     await actor.sessions.sideData(authority, {
       type: "session.progressCard.get",

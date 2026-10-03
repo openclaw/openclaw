@@ -95,7 +95,6 @@ describe("claws lifecycle cli e2e", () => {
       agents: {
         defaults: {
           model: { primary: "provider/default", fallbacks: ["provider/fallback"] },
-          heartbeat: { agentId: "main" },
           systemAgent: { agentId: "main" },
         },
         entries: { main: { name: "Existing agent", workspace } },
@@ -381,7 +380,6 @@ describe("claws lifecycle cli e2e", () => {
         const canonicalStateDir = await realpath(instance.stateDir);
         expect(config.agents).toEqual({
           defaults: {
-            heartbeat: { agentId: "main" },
             systemAgent: { agentId: "main" },
           },
           entries: { main: { workspace: join(canonicalStateDir, "workspace") } },
@@ -467,7 +465,6 @@ describe("claws lifecycle cli e2e", () => {
       agent: { finalId: "workspace-agent" },
       workspaceFiles: [
         expect.objectContaining({ path: "SOUL.md" }),
-        expect.objectContaining({ path: "HEARTBEAT.md" }),
         expect.objectContaining({ path: "reference/policy.md" }),
       ],
     });

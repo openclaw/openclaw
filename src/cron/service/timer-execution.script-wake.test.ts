@@ -1,170 +1,110 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { HeartbeatRunOptions } from "../../infra/heartbeat-runner-execution.js";
-import {
-  resolveHeartbeatPreflight,
-  resolveHeartbeatRunPrompt,
-} from "../../infra/heartbeat-runner-prompt.js";
-import { startHeartbeatRunner } from "../../infra/heartbeat-runner-scheduler.js";
-import { requestHeartbeatAndWait } from "../../infra/heartbeat-wake.js";
-import {
-  drainSystemEvents,
-  enqueueSystemEvent as queueSystemEvent,
-  peekSystemEventEntries,
-} from "../../infra/system-events.js";
+import type { SessionEventTarget } from "../../auto-reply/reply/session-event-contract.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import type { CronJob } from "../types.js";
+import type { CronStoredJob } from "../types.js";
 import { createCronServiceState } from "./state.js";
 import { executeJobCore } from "./timer-execution.js";
 
-describe("cron script immediate wake", () => {
-  it.each([
-    {
-      name: "main-session notification",
-      sessionTarget: "main",
-      notify: "The deployment queue needs attention.",
-      expectedText: "The deployment queue needs attention.",
-      contextKey: "cron:script-job:script",
-      wake: "now",
-      immediate: true,
-    },
-    {
-      name: "isolated wake-only completion",
-      sessionTarget: "isolated",
-      expectedText: "script job script job completed",
-      contextKey: "cron:script-job:script-wake",
-      wake: "now",
-      immediate: true,
-    },
-    {
-      name: "deferred main-session notification",
-      sessionTarget: "main",
-      notify: "Keep this reminder for the next heartbeat.",
-      expectedText: "Keep this reminder for the next heartbeat.",
-      contextKey: "cron:script-job:script",
-      wake: "next-heartbeat",
-      immediate: false,
-    },
-  ] as const)(
-    "honors a $name when recurring heartbeat cadence is disabled",
-    async ({ sessionTarget, expectedText, contextKey, wake, immediate, ...result }) => {
-      vi.useFakeTimers();
-      const now = Date.parse("2026-08-24T12:00:00.000Z");
-      vi.setSystemTime(now);
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: { heartbeat: { every: "0m" } },
-          entries: { main: {}, finn: {} },
-        },
-      };
-      const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: "finn" });
-      const prompts: string[] = [];
-      const pendingWakes: Array<ReturnType<typeof requestHeartbeatAndWait>> = [];
-      const runOnce = vi.fn(async (options: HeartbeatRunOptions) => {
-        const prompt = resolveHeartbeatRunPrompt({
-          cfg,
-          preflight: await resolveHeartbeatPreflight({
-            cfg,
-            agentId: "finn",
-            sessionKey: options.sessionKey,
-            heartbeat: options.heartbeat,
-            source: options.source,
-            reason: options.reason,
-          }),
-          canRelayToUser: true,
-          scheduledTasks: [],
-          useHeartbeatResponseTool: false,
-        });
-        expect(prompt.hasCronEvents).toBe(true);
-        prompts.push(prompt.prompt);
-        return { status: "ran" as const, durationMs: 1 };
-      });
-      const runner = startHeartbeatRunner({
-        cfg,
-        readCurrentConfig: () => cfg,
-        runOnce,
-      });
+vi.mock("../proactive-job-receipt.js", () => ({
+  readDefaultProactiveJobReceiptsAsync: async () => ({}),
+}));
 
-      try {
-        const state = createCronServiceState({
-          scheduler: createTestGatewayScheduler(),
-          storePath: "/tmp/cron-script-wake-state.sqlite",
-          cronEnabled: true,
-          cronConfig: { triggers: { enabled: true } },
-          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-          nowMs: () => now,
-          enqueueSystemEvent: (text, options) =>
-            queueSystemEvent(text, {
-              sessionKey,
-              contextKey: options?.contextKey,
-              deliveryContext: options?.deliveryContext,
-            }),
-          requestHeartbeat: (wakeRequest) => {
-            pendingWakes.push(
-              requestHeartbeatAndWait({ ...wakeRequest, sessionKey, coalesceMs: 0 }),
-            );
-          },
-          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-          runScriptJob: vi.fn(async () => ({
-            status: "ok" as const,
-            ...("notify" in result ? { notify: result.notify } : {}),
-            wake,
-          })),
-        });
-        const job: CronJob = {
-          id: "script-job",
-          name: "script job",
-          agentId: "finn",
-          enabled: true,
-          createdAtMs: now - 60_000,
-          updatedAtMs: now,
-          schedule: { kind: "every", everyMs: 60_000, anchorMs: now - 60_000 },
-          sessionTarget,
-          wakeMode: "now",
-          payload: { kind: "script", script: "return { wake: 'now' }" },
-          state: {},
-        };
+const target: SessionEventTarget = {
+  agentId: "finn",
+  sessionKey: "agent:finn:main",
+  sessionId: "original-session",
+  generation: "original-generation",
+};
 
-        await expect(executeJobCore(state, job)).resolves.toMatchObject({ status: "ok" });
-        expect(peekSystemEventEntries(sessionKey)).toEqual([
-          expect.objectContaining({ text: expectedText, contextKey }),
-        ]);
+function createFixture(wake: "now" | "next-heartbeat", cronEnabled = true) {
+  const enqueueSessionEvent = vi.fn();
+  const deferSessionEvent = vi.fn();
+  const captureSessionEventTarget = vi.fn(async () => target);
+  const state = createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
+    storePath: "/unused",
+    cronEnabled,
+    cronConfig: { triggers: { enabled: true } },
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    enqueueSystemEvent: vi.fn(),
+    enqueueSessionEvent,
+    deferSessionEvent,
+    captureSessionEventTarget,
+    resolveSessionEventTarget: () => ({ agentId: "finn", sessionKey: target.sessionKey }),
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    runScriptJob: vi.fn(async () => ({
+      status: "ok" as const,
+      notify: "Review the result.",
+      wake,
+    })),
+  });
+  state.stopped = false;
+  const job: CronStoredJob = {
+    id: "script-job",
+    name: "Script",
+    agentId: "finn",
+    enabled: true,
+    createdAtMs: 1,
+    updatedAtMs: 1,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload: { kind: "script", script: "return { wake: 'now' }" },
+    state: {},
+  };
+  return { state, job, enqueueSessionEvent, deferSessionEvent, captureSessionEventTarget };
+}
 
-        await vi.advanceTimersByTimeAsync(1);
-        await Promise.all(pendingWakes);
+describe("script follow-up handoff", () => {
+  it("sends an immediate follow-up to the captured session while scheduling is disabled", async () => {
+    const fixture = createFixture("now", false);
+    const result = await executeJobCore(fixture.state, fixture.job);
+    expect(result.status).toBe("ok");
+    expect(fixture.captureSessionEventTarget.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(fixture.state.deps.runScriptJob!).mock.invocationCallOrder[0]!,
+    );
+    expect(fixture.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith("Review the result.", {
+      agentId: "finn",
+      expectedTarget: target,
+    });
+    expect(fixture.state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(fixture.deferSessionEvent).not.toHaveBeenCalled();
+  });
 
-        if (!immediate) {
-          expect(runOnce).not.toHaveBeenCalled();
-          expect(peekSystemEventEntries(sessionKey)).toEqual([
-            expect.objectContaining({ text: expectedText, contextKey }),
-          ]);
-          return;
-        }
+  it("attaches deferred follow-up to an enabled ordinary scheduled session job", async () => {
+    const fixture = createFixture("next-heartbeat");
+    const receiver: CronStoredJob = {
+      ...fixture.job,
+      id: "ordinary-receiver",
+      sessionTarget: "session:agent:finn:main",
+      payload: { kind: "agentTurn", message: "Review pending notices." },
+      state: { nextRunAtMs: 60_000 },
+    };
+    fixture.state.store = { version: 1, jobs: [receiver] };
+    expect(await executeJobCore(fixture.state, fixture.job)).toMatchObject({
+      status: "ok" as const,
+    });
+    expect(fixture.deferSessionEvent).toHaveBeenCalledExactlyOnceWith(
+      "Review the result.",
+      receiver,
+      target,
+    );
+    expect(fixture.enqueueSessionEvent).not.toHaveBeenCalled();
+    receiver.enabled = false;
+    expect(await executeJobCore(fixture.state, fixture.job)).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("No enabled ordinary scheduled session job"),
+    });
+    expect(fixture.deferSessionEvent).toHaveBeenCalledTimes(1);
+  });
 
-        expect(runOnce).toHaveBeenCalledOnce();
-        expect(runOnce).toHaveBeenCalledWith(
-          expect.objectContaining({
-            agentId: "finn",
-            sessionKey,
-            source: "notifications-event",
-            intent: "immediate",
-            reason: "wake",
-          }),
-        );
-        expect(prompts[0]).toContain(expectedText);
-        expect(prompts[0]).toContain("Please relay this reminder to the user");
-      } finally {
-        try {
-          // Stopping the runner retains unfinished notifications for its successor.
-          await vi.advanceTimersByTimeAsync(1);
-          await Promise.all(pendingWakes);
-        } finally {
-          runner.stop();
-          drainSystemEvents(sessionKey);
-          vi.useRealTimers();
-        }
-      }
-    },
-  );
+  it("records a visible error when the original destination cannot be captured", async () => {
+    const fixture = createFixture("now");
+    fixture.state.deps.captureSessionEventTarget = async () => undefined;
+    expect(await executeJobCore(fixture.state, fixture.job)).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("no original session target"),
+    });
+    expect(fixture.enqueueSessionEvent).not.toHaveBeenCalled();
+  });
 });

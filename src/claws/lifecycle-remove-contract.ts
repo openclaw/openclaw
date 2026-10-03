@@ -83,7 +83,7 @@ export type ClawRemoveApplyOptions = ClawRemovePlanOptions & {
   trashPath?: ClawTrashPath;
   consentPlanIntegrity?: string;
   unsetMcpServer?: typeof unsetConfiguredMcpServer;
-  cronGateway?: Pick<ClawCronGateway, "get" | "remove">;
+  cronGateway?: Pick<ClawCronGateway, "get" | "list" | "remove">;
 };
 
 export const CLAW_REMOVE_RESULT_SCHEMA_VERSION = "openclaw.clawRemoveResult.v1" as const;

@@ -7,7 +7,9 @@ import type {
 import type { PluginHookAgentTrigger } from "../../src/plugin-sdk/types.js";
 
 function registerScopedReplyHook(api: OpenClawPluginApi): void {
-  api.on("before_agent_reply", async () => undefined, { eligibleTriggers: ["heartbeat", "cron"] });
+  api.on("before_agent_reply", async () => undefined, {
+    eligibleTriggers: ["event", "heartbeat", "cron"],
+  });
 
   // @ts-expect-error Trigger eligibility is only supported for before_agent_reply.
   api.on("before_tool_call", async () => undefined, { eligibleTriggers: ["heartbeat"] });
@@ -39,7 +41,7 @@ void registerAuthorizedPromptHook;
 // plugin entry hook option contracts
 // exposes scoped reply and prompt authority options through the public plugin API
 expectTypeOf<OpenClawPluginApi["on"]>().toBeFunction();
-expectTypeOf<PluginHookAgentTrigger>().toEqualTypeOf<"cron" | "heartbeat" | "user">();
+expectTypeOf<PluginHookAgentTrigger>().toEqualTypeOf<"cron" | "event" | "heartbeat" | "user">();
 expectTypeOf<WorkerMachineOption>().toEqualTypeOf<{
   readonly id: string;
   readonly label: string;

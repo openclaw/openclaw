@@ -549,7 +549,7 @@ export function createThreadRequestAttemptParams(params: {
   authProfileProviders?: Record<string, string>;
   runtimeExternalProfileIds?: string[];
   bootstrapContextMode?: "full" | "lightweight";
-  bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+  bootstrapContextRunKind?: "default" | "cron";
   images?: EmbeddedRunAttemptParams["images"];
   modelId?: string;
 }): EmbeddedRunAttemptParams {

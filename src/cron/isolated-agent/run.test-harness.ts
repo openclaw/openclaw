@@ -10,31 +10,11 @@ import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-erro
 import { runInitialModelFallbackAttempt } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { makeCronSession } from "./run-session-fixtures.test-support.js";
 
-// Central mock harness for isolated cron agent run orchestration tests.
-type CronSessionEntry = {
-  sessionId: string;
-  updatedAt: number;
-  systemSent: boolean;
-  skillsSnapshot: unknown;
-  model?: string;
-  modelProvider?: string;
-  cliSessionBindings?: SessionEntry["cliSessionBindings"];
-  [key: string]: unknown;
-};
-
-type CronSession = {
-  storePath: string;
-  store: Record<string, unknown>;
-  sessionEntry: CronSessionEntry;
-  lifecycleRevision: string;
-  systemSent: boolean;
-  isNewSession: boolean;
-  [key: string]: unknown;
-};
+export { makeCronSession, makeCronSessionEntry } from "./run-session-fixtures.test-support.js";
 
 type SessionAccessorModule = typeof import("../../config/sessions/session-accessor.js");
 
@@ -102,6 +82,25 @@ export const removeCronRunContinuationSessionIfIdleMock = vi.fn();
 export const callGatewayMock = vi.fn();
 export const hasUsableWebSearchProviderMock = vi.fn();
 export const readSessionMessagesAsyncMock = vi.fn();
+export const readCronScratchSnapshotMock = vi.fn();
+export const appendSessionRuntimeContextMock = vi.fn();
+vi.mock("../scratch-read.js", () => ({ readCronScratchSnapshot: readCronScratchSnapshotMock }));
+vi.mock("../../sessions/runtime-context.js", () => ({
+  appendSessionRuntimeContext: appendSessionRuntimeContextMock,
+}));
+vi.mock("../../auto-reply/reply/session-event-handoff.js", () => ({
+  captureSessionEventTargetForHost: vi.fn(async (agentId: string, sessionKey: string) => ({
+    agentId,
+    sessionKey,
+    sessionId: "test-session-id",
+    storePath: "/tmp/store.json",
+    generation: "test",
+  })),
+  assertSessionEventTargetCurrent: vi.fn(),
+}));
+vi.mock("../../config/sessions/session-delivery-generation.js", () => ({
+  prepareSessionGenerationFacts: vi.fn(async () => ({ assertCurrent: vi.fn(), release: vi.fn() })),
+}));
 
 const resolveBootstrapWarningSignaturesSeenMock = vi.fn<() => string[]>();
 const resolveCronStyleNowMock = vi.fn();
@@ -405,36 +404,6 @@ vi.mock("./session.js", () => ({
   prepareCronSession: resolveCronSessionMock,
 }));
 
-export function makeCronSessionEntry(overrides?: Record<string, unknown>): CronSessionEntry {
-  return {
-    sessionId: "test-session-id",
-    updatedAt: 0,
-    systemSent: false,
-    skillsSnapshot: undefined,
-    ...overrides,
-  };
-}
-
-export function makeCronSession(overrides?: Record<string, unknown>): CronSession {
-  const session = {
-    storePath: "/tmp/store.json",
-    store: {},
-    sessionEntry: makeCronSessionEntry(),
-    lifecycleRevision: "test-lifecycle-revision",
-    initialSessionEntry: undefined,
-    systemSent: false,
-    isNewSession: true,
-    ...overrides,
-  } as CronSession;
-  // Real resolveCronSession stamps the run's lifecycleRevision onto the live
-  // sessionEntry so the accessor-backed persist path can prove ownership on
-  // later writes. Mirror that here unless a test seeds its own revision.
-  if (session.sessionEntry.lifecycleRevision === undefined) {
-    session.sessionEntry.lifecycleRevision = session.lifecycleRevision;
-  }
-  return session;
-}
-
 function makeDefaultModelFallbackResult() {
   return {
     result: {
@@ -594,6 +563,8 @@ function resetRunConfigMocks(): void {
 }
 
 function resetRunExecutionMocks(): void {
+  readCronScratchSnapshotMock.mockReset().mockResolvedValue(undefined);
+  appendSessionRuntimeContextMock.mockReset().mockResolvedValue(undefined);
   isCliProviderMock.mockReturnValue(false);
   resolveBootstrapWarningSignaturesSeenMock.mockReturnValue([]);
   resolveFastModeStateMock.mockImplementation((params) => resolveFastModeStateImpl(params));

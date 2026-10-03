@@ -354,7 +354,6 @@ final class StatusMenuRenderer: NSObject {
         var entries = [
             debugItem("config", String(localized: "Open Config Folder"), "folder"),
             debugItem("health", String(localized: "Run Health Check Now"), "stethoscope"),
-            debugItem("heartbeat", String(localized: "Send Test Heartbeat"), "waveform.path.ecg"),
         ]
 
         #if DEBUG
@@ -498,7 +497,6 @@ final class StatusMenuRenderer: NSObject {
         switch id {
         case "config": DebugActions.openConfigFolder()
         case "health": Task { await HealthStore.shared.refresh(onDemand: true) }
-        case "heartbeat": Task { _ = await DebugActions.sendTestHeartbeat() }
         case "pairing":
             #if DEBUG
             DebugActions.showPairingPanelDemo()

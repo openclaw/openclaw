@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   rootWrite: vi.fn(),
   mkdir: vi.fn(),
   recordAgentProvenance: vi.fn(),
+  provisionDefaultProactiveJob: vi.fn(),
   readAgentDeletionJournal: vi.fn(() => undefined as Record<string, unknown> | undefined),
   claimCompletedAgentDeletion: vi.fn(() => true),
   migrateLegacyMainSessionKeys: vi.fn(),
@@ -53,6 +54,10 @@ vi.mock("../state/agent-deletion-journal.js", () => ({
 
 vi.mock("../state/agent-provenance.js", () => ({
   recordAgentProvenance: mocks.recordAgentProvenance,
+}));
+
+vi.mock("../cron/default-proactive-job.js", () => ({
+  provisionDefaultProactiveJob: mocks.provisionDefaultProactiveJob,
 }));
 
 vi.mock("../config/sessions/legacy-main-session-migration.js", () => ({
@@ -280,7 +285,13 @@ describe("createAgent", () => {
   });
 
   it("defaults the workspace through the agent-scoped resolver", async () => {
-    const result = await createAgent({ name: "Researcher" });
+    mocks.provisionDefaultProactiveJob.mockImplementationOnce(async (config, agentId, options) => {
+      expect(config).toBe(mocks.persisted);
+      expect(agentId).toBe("researcher");
+      expect(options.cadenceMs).toBe(3_600_000);
+      options.commitGuard();
+    });
+    const result = await createAgent({ name: "Researcher", proactiveCadenceMs: 3_600_000 });
 
     expect(mocks.resolveAgentWorkspaceDir).toHaveBeenCalledWith(expect.any(Object), "researcher");
     expect(result).toMatchObject({
@@ -292,6 +303,7 @@ describe("createAgent", () => {
     expect(mocks.recordAgentProvenance).toHaveBeenCalledWith("researcher", {
       createdVia: "operator",
     });
+    expect(mocks.provisionDefaultProactiveJob).toHaveBeenCalledOnce();
   });
 
   it("accepts a complete staged entry", async () => {

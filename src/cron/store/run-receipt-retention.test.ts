@@ -45,7 +45,7 @@ describe("pending cron receipt retention", () => {
         cronEnabled,
         log: logger,
         enqueueSystemEvent() {},
-        requestHeartbeat() {},
+        enqueueSessionEvent() {},
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         runCommandJob,
       });

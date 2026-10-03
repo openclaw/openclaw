@@ -188,7 +188,6 @@ describe("runReplyAgent final MEDIA replies", () => {
       }
       const { replyPayloads } = await buildReplyPayloads({
         payloads: [{ text: "here is the chart\nMEDIA:./out/generated.png" }],
-        isHeartbeat: false,
         didLogHeartbeatStrip: false,
         blockStreamingEnabled: false,
         blockReplyPipeline: null,
@@ -261,7 +260,6 @@ describe("runReplyAgent final MEDIA replies", () => {
         throw new Error("runReplyAgent did not pass replyMediaContext to the agent turn");
       }
       const commonParams = {
-        isHeartbeat: false,
         didLogHeartbeatStrip: false,
         blockStreamingEnabled: false,
         blockReplyPipeline: null,

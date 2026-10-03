@@ -583,6 +583,8 @@ describe("normalizeCronJobCreate", () => {
       thinking: " high ",
       timeoutSeconds: 45,
       lightContext: true,
+      skipIfScratchEmpty: true,
+      includeReasoning: false,
       toolsAllow: [" read "],
       allowUnsafeExternalContent: true,
     });
@@ -596,6 +598,8 @@ describe("normalizeCronJobCreate", () => {
       thinking: "high",
       timeoutSeconds: 45,
       lightContext: true,
+      skipIfScratchEmpty: true,
+      includeReasoning: false,
       toolsAllow: ["read"],
       allowUnsafeExternalContent: true,
     });
@@ -611,6 +615,8 @@ describe("normalizeCronJobCreate", () => {
       thinking: "high",
       timeoutSeconds: 45,
       lightContext: true,
+      skipIfScratchEmpty: true,
+      includeReasoning: false,
       toolsAllow: ["exec"],
       allowUnsafeExternalContent: true,
     };
@@ -625,6 +631,10 @@ describe("normalizeCronJobCreate", () => {
 
 describe("normalizeCronJobPatch", () => {
   it.each<[UnknownRecord, UnknownRecord]>([
+    [
+      { message: " \tCheck the inbox.\r\n  NO_REPLY when quiet.\n ", text: " text " },
+      { message: " \tCheck the inbox.\r\n  NO_REPLY when quiet.\n ", text: "text" },
+    ],
     [
       { message: 7, text: null, model: {}, thinking: false, fallbacks: [7], toolsAllow: "read" },
       { message: 7, text: null },

@@ -81,7 +81,6 @@ export type AgentEventRuntimePayload = AgentEventPayload & {
   readonly mainSessionRestartRecovery?: true;
   readonly projectSessionLifecycle?: boolean;
   readonly projectSessionMessages?: boolean;
-  readonly isHeartbeat?: boolean;
   readonly verboseLevel?: AgentRunContext["verboseLevel"];
   readonly registeredAt?: number;
 };
@@ -108,7 +107,6 @@ const AGENT_EVENT_ROUTING_FIELDS = [
   ["projectSessionLifecycle", "projectSessionLifecycle"],
   ["projectSessionMessages", "projectSessionMessages"],
   ["mainSessionRestartRecovery", "mainSessionRestartRecovery"],
-  ["isHeartbeat", "isHeartbeat"],
   ["verboseLevel", "verboseLevel"],
   ["registeredAt", "registeredAt"],
 ] as const;

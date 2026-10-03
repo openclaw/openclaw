@@ -150,12 +150,14 @@ describe("runCronIsolatedAgentTurn invocation ownership", () => {
         rotateAgentEventLifecycleGeneration();
       }
       const onExecutionStarted = vi.fn();
+      const onExecutionPhase = vi.fn();
       let invocationRunId = "";
       runEmbeddedAgentMock.mockImplementationOnce(async (runParams) => {
         invocationRunId = expectCronInvocationContext(runParams);
         if (failure) {
           throw new Error("runner failed");
         }
+        runParams.onExecutionPhase?.({ phase: "model_call_started" });
         await runParams.onExecutionStarted?.();
         return { payloads: [{ text: "test output" }], meta: { agentMeta: {} } };
       });
@@ -163,6 +165,7 @@ describe("runCronIsolatedAgentTurn invocation ownership", () => {
         const result = await runCronIsolatedAgentTurn({
           ...makeParams(target),
           onExecutionStarted,
+          onExecutionPhase,
         });
         expect(result).toMatchObject(
           failure ? { status: "error", error: "runner failed" } : { status: "ok" },
@@ -172,6 +175,9 @@ describe("runCronIsolatedAgentTurn invocation ownership", () => {
         expect(getAgentRunContext("test-session-id")).toEqual(expectedContext);
         expect(cronSession.store).toEqual({});
         if (!failure) {
+          expect(onExecutionPhase).toHaveBeenCalledWith(
+            expect.objectContaining({ runId: invocationRunId, phase: "model_call_started" }),
+          );
           expect(onExecutionStarted).toHaveBeenCalledExactlyOnceWith(
             expect.objectContaining({ sessionId: "test-session-id", runId: invocationRunId }),
           );

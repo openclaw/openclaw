@@ -25,8 +25,8 @@ import {
   resolveModelRefFromString,
 } from "../../../agents/model-selection-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { resolveHeartbeatAgents } from "../../../infra/heartbeat-config.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
+import { resolveHeartbeatAgents } from "../../doctor-heartbeat-legacy.js";
 import { sanitizeDoctorNote } from "../emit-notes.js";
 
 type AuthStores = Map<string | undefined, ReturnType<typeof loadAuthProfileStoreForSecretsRuntime>>;

@@ -1,20 +1,57 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import {
-  DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-  stripHeartbeatToken,
-} from "../../../../src/auto-reply/heartbeat.js";
+
+// Historical transcripts keep their original bytes after heartbeat retirement.
+// This display-only contract must not depend on the retired execution engine.
+const HISTORICAL_HEARTBEAT_ACK_MAX_CHARS = 300;
+const HISTORICAL_HEARTBEAT_TOKEN = "HEARTBEAT_OK";
+
+function stripHistoricalToken(raw: string): { text: string; didStrip: boolean } {
+  let text = raw.trim();
+  let didStrip = false;
+  while (text) {
+    if (text.startsWith(HISTORICAL_HEARTBEAT_TOKEN)) {
+      text = text.slice(HISTORICAL_HEARTBEAT_TOKEN.length).trimStart();
+      didStrip = true;
+    } else if (/HEARTBEAT_OK[^\w]{0,4}$/.test(text)) {
+      const index = text.lastIndexOf(HISTORICAL_HEARTBEAT_TOKEN);
+      const before = text.slice(0, index).trimEnd();
+      text = before
+        ? `${before}${text.slice(index + HISTORICAL_HEARTBEAT_TOKEN.length).trimStart()}`.trimEnd()
+        : "";
+      didStrip = true;
+    } else {
+      break;
+    }
+  }
+  return { text: text.replace(/\s+/g, " ").trim(), didStrip };
+}
 
 export function stripHeartbeatTokenForDisplay(
   raw: string,
-  maxAckChars = DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+  maxAckChars = HISTORICAL_HEARTBEAT_ACK_MAX_CHARS,
 ): { shouldSkip: boolean; text: string } {
-  const result = stripHeartbeatToken(raw, { mode: "message" });
-  const text = result.didStrip && /^[*`~_]+$/.test(result.text) ? "" : result.text;
-  return {
-    shouldSkip: result.shouldSkip || (result.didStrip && text.length <= maxAckChars),
-    text,
-  };
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { shouldSkip: true, text: "" };
+  }
+  if (!trimmed.includes(HISTORICAL_HEARTBEAT_TOKEN)) {
+    return { shouldSkip: false, text: trimmed };
+  }
+  const original = stripHistoricalToken(trimmed);
+  const normalized = stripHistoricalToken(
+    trimmed
+      .replace(/<[^>]*>/g, " ")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/^[*`~_]+/, "")
+      .replace(/[*`~_]+$/, ""),
+  );
+  const result = original.didStrip && original.text ? original : normalized;
+  if (!result.didStrip) {
+    return { shouldSkip: false, text: trimmed };
+  }
+  const text = /^[*`~_]+$/.test(result.text) ? "" : result.text;
+  return { shouldSkip: text.length === 0 || text.length <= maxAckChars, text };
 }
 
 function resolveDisplayContent(content: unknown): {

@@ -701,20 +701,18 @@ describe("harness context engine lifecycle", () => {
       runtimeContext: {},
       runMaintenance: async () => undefined,
       warn: () => {},
-      isHeartbeat: true,
     });
 
     const ingestBatchCalls = (ingestBatch as unknown as { mock: { calls: unknown[][] } }).mock
       .calls;
     const ingestBatchParams = ingestBatchCalls[0]?.[0] as
-      | { isHeartbeat?: boolean; messages?: AgentMessage[]; sessionKey?: string }
+      | { messages?: AgentMessage[]; sessionKey?: string }
       | undefined;
     expect(ingestBatchParams?.messages).toEqual([turnUser, turnAssistant]);
-    expect(ingestBatchParams?.isHeartbeat).toBe(true);
     expect(ingestBatchParams?.sessionKey).toBe(sessionParams.sessionKey);
   });
 
-  it("forwards heartbeat state to per-message ingest fallbacks", async () => {
+  it("preserves session ownership in per-message ingest fallbacks", async () => {
     const turnUser = textMessage("user", "new ask", 4);
     const turnAssistant = textMessage("assistant", "new answer", 6);
     const ingest = vi.fn(async () => ({ ingested: true }));
@@ -733,14 +731,12 @@ describe("harness context engine lifecycle", () => {
       runtimeContext: {},
       runMaintenance: async () => undefined,
       warn: () => {},
-      isHeartbeat: true,
     });
 
     const ingestCalls = (ingest as unknown as { mock: { calls: unknown[][] } }).mock.calls;
     expect(ingestCalls).toHaveLength(2);
     for (const call of ingestCalls) {
-      const ingestParams = call[0] as { isHeartbeat?: boolean; sessionKey?: string };
-      expect(ingestParams.isHeartbeat).toBe(true);
+      const ingestParams = call[0] as { sessionKey?: string };
       expect(ingestParams.sessionKey).toBe(sessionParams.sessionKey);
     }
   });

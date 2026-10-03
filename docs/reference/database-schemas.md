@@ -11,6 +11,11 @@ title: "Database schemas"
 
 OpenClaw stores control-plane state in the shared state database and agent data in one SQLite database per agent. Schema migrations run forward when a database opens. Older OpenClaw builds refuse databases written by a newer schema.
 
+Current shared state uses [schema 21](/reference/database-schemas/state-schema-history#state-schema-21),
+which fences ordinary automation policies after Heartbeat retirement without adding
+tables. The agent schema remains 24. Deferred physical cleanup is recorded in the
+[state storage README](https://github.com/openclaw/openclaw/blob/main/src/state/README.md).
+
 Schema-version, integrity, canonical-index, and table-existence checks belong to open/admission and the migration owner after migrations; runtime paths must carry admitted schema facts with the handle, never re-query them, and use fresh `PRAGMA data_version` probes to observe foreign commits on the next unpinned read while preserving active SQLite snapshots. Existing per-call checks are legacy and must be migrated when touched.
 
 Shared-state and agent read-only connections reuse bounded prepared statements under their native connection lifecycle. Queries still execute on every read. Read admission shares one freshness probe within its synchronous operation; schema-fact lookups reuse the admitted handle without probing again. Write transactions refresh after acquiring `BEGIN`, before consuming those facts. Explicit fresh probes always execute, even inside another read operation. A foreign commit compares the schema and user versions before retaining or replacing schema facts, preserving active SQLite snapshots. Closing or replacing the connection clears retained statements and facts.

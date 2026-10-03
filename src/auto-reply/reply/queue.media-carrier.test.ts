@@ -119,7 +119,7 @@ describe("followup prompt metadata carrier", () => {
           sessionKey: key,
           touchActiveSessionEntry: async () => {},
           typing,
-          typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+          typingSignals: createTypingSignaler({ typing, mode: "never" }),
           toolAuthorityFingerprint: "media-authority",
         }),
       ).resolves.toBe("handled");

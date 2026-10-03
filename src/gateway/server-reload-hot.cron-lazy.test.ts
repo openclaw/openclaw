@@ -56,7 +56,6 @@ async function createFixture() {
   let state: ReturnType<GatewayReloadHandlerParams["getState"]> = {
     hooksConfig: null,
     hookClientIpConfig: { trustedProxies: [], allowRealIpFallback: false },
-    heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() },
     cronState: previous,
   };
   const setState = vi.fn<GatewayReloadHandlerParams["setState"]>((value) => {

@@ -96,7 +96,6 @@ describe("session lifecycle persistence owner", () => {
       lifecycleGeneration: { value: "generation-recovery", enumerable: false },
       mainSessionRestartRecovery: { value: true, enumerable: false },
       controlUiVisible: { value: true, enumerable: false },
-      isHeartbeat: { value: false, enumerable: false },
     });
     const { owner } = fixture();
 
@@ -108,7 +107,6 @@ describe("session lifecycle persistence owner", () => {
         lifecycleGeneration: "generation-recovery",
         mainSessionRestartRecovery: true,
         controlUiVisible: true,
-        isHeartbeat: false,
       }),
     });
     await owner.drain();

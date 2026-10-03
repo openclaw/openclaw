@@ -17,7 +17,6 @@ import {
   type CronRunMode,
   type CronUpdatePrecondition,
   type CronUpdateOptions,
-  type CronWakeMode,
   createCronServiceState,
 } from "./service/state.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
@@ -146,8 +145,12 @@ export class CronService implements CronServiceContract {
     return await mutationOps.removeAgentJobsTransactional(this.state, agentId, commit);
   }
 
-  async quiesceJobs(jobs: readonly { id: string; revision: string }[], commitGuard: () => void) {
-    await mutationOps.quiesceJobs(this.state, jobs, commitGuard);
+  async quiesceJobs(
+    jobs: readonly { id: string; revision: string }[],
+    commitGuard: () => void,
+    withCurrent?: (cancel: () => void) => Promise<void>,
+  ) {
+    await mutationOps.quiesceJobs(this.state, jobs, commitGuard, withCurrent);
   }
 
   async run(
@@ -259,7 +262,7 @@ export class CronService implements CronServiceContract {
       : this.state.deps.defaultAgentId;
   }
 
-  wake(opts: { mode: CronWakeMode; text: string; sessionKey?: string; agentId?: string }) {
+  wake(opts: Parameters<CronServiceContract["wake"]>[0]) {
     return runOps.wakeNow(this.state, opts);
   }
 }

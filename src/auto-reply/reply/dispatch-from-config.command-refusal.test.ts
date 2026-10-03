@@ -20,7 +20,7 @@ import { dispatchReplyFromConfig } from "./dispatch-from-config.js";
 import { buildNoVisibleReplyFallbackText } from "./dispatch-from-config.payloads.js";
 import type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
-import { getReplyFromConfig } from "./get-reply.js";
+import { getReplyFromConfigInternal } from "./get-reply.js";
 import { resetInboundDedupe } from "./inbound-dedupe.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 
@@ -118,7 +118,7 @@ async function send(params: { sender: string; body: string; native: boolean }) {
       },
       cfg,
       dispatcher,
-      replyResolver: getReplyFromConfig,
+      replyResolver: getReplyFromConfigInternal,
     });
   } finally {
     dispatcher.markComplete();

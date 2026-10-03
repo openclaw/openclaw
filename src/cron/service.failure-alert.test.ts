@@ -71,9 +71,9 @@ describe("CronService failure alerts", () => {
     );
   });
 
-  it("keeps fallback events and immediate wakes on the failing job owner", async () => {
+  it("keeps fallback session events on the failing job owner", async () => {
     await withAlerts(
-      async ({ cron, enqueueSystemEvent, requestHeartbeat, addJob }) => {
+      async ({ cron, enqueueSessionEvent, addJob }) => {
         const sessionKey = "agent:work:cron:failure-alert";
         const job = await addJob("work-owned failure", {
           agentId: "work",
@@ -83,17 +83,10 @@ describe("CronService failure alerts", () => {
 
         await cron.run(job.id, "force");
 
-        expect(enqueueSystemEvent).toHaveBeenCalledWith(
+        expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
           expect.stringContaining('Automation "work-owned failure" failed 1 times'),
           { agentId: "work", sessionKey, contextKey: `cron:${job.id}:failure-alert` },
         );
-        expect(requestHeartbeat).toHaveBeenCalledWith({
-          source: "notifications-event",
-          intent: "immediate",
-          reason: "wake",
-          agentId: "work",
-          sessionKey,
-        });
       },
       {
         useFallback: true,
@@ -102,7 +95,7 @@ describe("CronService failure alerts", () => {
   });
 
   it("falls back once when alert delivery rejects after settling as not delivered", async () => {
-    await withAlerts(async ({ cron, sendCronFailureAlert, enqueueSystemEvent, addJob }) => {
+    await withAlerts(async ({ cron, sendCronFailureAlert, enqueueSessionEvent, addJob }) => {
       sendCronFailureAlert.mockImplementationOnce(async (alert) => {
         await alert.onDeliverySettled({
           delivered: false,
@@ -116,7 +109,8 @@ describe("CronService failure alerts", () => {
       await cron.run(job.id, "force");
 
       expect(sendCronFailureAlert).toHaveBeenCalledOnce();
-      await vi.waitFor(() => expect(enqueueSystemEvent).toHaveBeenCalledOnce());
+      await sendCronFailureAlert.mock.results[0]?.value.catch(() => undefined);
+      expect(enqueueSessionEvent).toHaveBeenCalledOnce();
     });
   });
 

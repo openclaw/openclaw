@@ -1,5 +1,5 @@
 // Gateway chat runtime projects agent events into chat/session subscriber
-// streams, lifecycle persistence, heartbeat visibility, and live UI updates.
+// streams, lifecycle persistence, source visibility, and live UI updates.
 import { performance } from "node:perf_hooks";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Value } from "typebox/value";
@@ -51,11 +51,6 @@ import type {
   GatewayBroadcastOpts,
   GatewayBroadcastToConnIdsFn,
 } from "./server-broadcast-types.js";
-import {
-  normalizeHeartbeatChatFinalText,
-  resolveHeartbeatFlag,
-  shouldHideHeartbeatChatOutput,
-} from "./server-chat-heartbeat.js";
 import {
   createSessionEventSnapshotBuilder,
   createSessionLifecyclePublisher,
@@ -542,7 +537,6 @@ export function createAgentEventHandler({
             {
               agentId: terminalAgentId,
               controlUiVisible: isControlUiVisible,
-              isHeartbeat: resolveHeartbeatFlag(clientRunId, evt.runId, evt.isHeartbeat),
               firstAssistantTimingEntry: finished,
               abortErrorMessage: readToolValidationErrorSummary(evt.data?.toolErrorSummary),
               yielded: yieldedWaiting ? true : undefined,
@@ -702,7 +696,6 @@ export function createAgentEventHandler({
     opts?: {
       controlUiVisible?: boolean;
       firstAssistantTimingEntry?: ChatRunEntry;
-      isHeartbeat?: boolean;
     },
   ) => {
     cancelPendingChatDeltaFlush(clientRunId);
@@ -770,7 +763,7 @@ export function createAgentEventHandler({
     sourceRunId: string,
     seq: number,
     input: NonNullable<ReturnType<typeof resolveAssistantTextInput>>,
-    opts?: { controlUiVisible?: boolean; isCurrent?: () => boolean; isHeartbeat?: boolean },
+    opts?: { controlUiVisible?: boolean; isCurrent?: () => boolean },
   ) => {
     const run = chatRunState.getOrCreate(clientRunId);
     const previousRawText = run.rawBuffer ?? "";
@@ -792,9 +785,6 @@ export function createAgentEventHandler({
           return;
         }
         const projected = chatRunState.resolveBuffer(clientRunId);
-        if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId, opts?.isHeartbeat)) {
-          return;
-        }
         broadcastChatDelta(
           sessionKey,
           agentId,
@@ -808,33 +798,23 @@ export function createAgentEventHandler({
       return;
     }
     const projected = chatRunState.resolveBuffer(clientRunId);
-    if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId, opts?.isHeartbeat)) {
-      return;
-    }
     const mergedText = projected.suppress ? "" : projected.text;
     broadcastChatDelta(sessionKey, agentId, clientRunId, sourceRunId, seq, mergedText, opts);
   };
 
   const resolveBufferedChatTextState = (
     clientRunId: string,
-    sourceRunId: string,
-    options?: { final?: boolean; suppressLeadFragments?: boolean; isHeartbeat?: boolean },
+    options?: { final?: boolean; suppressLeadFragments?: boolean },
   ) => {
     const bufferedText = chatRunState
       .resolveBuffer(clientRunId, { final: options?.final })
       .text.trim();
-    const normalizedHeartbeatText = normalizeHeartbeatChatFinalText({
-      runId: clientRunId,
-      sourceRunId,
-      text: bufferedText,
-      isHeartbeat: options?.isHeartbeat,
-    });
-    const projected = projectLiveAssistantBufferedText(normalizedHeartbeatText.text.trim(), {
+    const projected = projectLiveAssistantBufferedText(bufferedText, {
       suppressLeadFragments: options?.suppressLeadFragments,
     });
     return {
       text: projected.text.trim(),
-      shouldSuppressSilent: normalizedHeartbeatText.suppress || projected.suppress,
+      shouldSuppressSilent: projected.suppress,
     };
   };
 
@@ -847,7 +827,6 @@ export function createAgentEventHandler({
     opts?: {
       controlUiVisible?: boolean;
       firstAssistantTimingEntry?: ChatRunEntry;
-      isHeartbeat?: boolean;
     },
     resolved?: { text: string; shouldSuppressSilent: boolean },
   ) => {
@@ -860,18 +839,9 @@ export function createAgentEventHandler({
           text: streamed.text.trim(),
           shouldSuppressSilent: resolved?.shouldSuppressSilent || streamed.suppress,
         }
-      : resolveBufferedChatTextState(clientRunId, sourceRunId, {
+      : resolveBufferedChatTextState(clientRunId, {
           suppressLeadFragments: true,
-          isHeartbeat: opts?.isHeartbeat,
         });
-    const shouldSuppressHeartbeatStreaming = shouldHideHeartbeatChatOutput(
-      clientRunId,
-      sourceRunId,
-      opts?.isHeartbeat,
-    );
-    if (shouldSuppressHeartbeatStreaming) {
-      return;
-    }
 
     // Suppression replaces a prior visible snapshot; omission would leave the UI
     // materializing stale text at a message-less final. Empty untouched runs no-op.
@@ -952,13 +922,11 @@ export function createAgentEventHandler({
       yielded?: true;
       errorObservation?: unknown;
       assistantTranscriptIdempotencyKey?: string;
-      isHeartbeat?: boolean;
     },
   ) => {
-    const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
+    const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, {
       final: true,
       suppressLeadFragments: false,
-      isHeartbeat: opts?.isHeartbeat,
     });
     // Flush any paced delta so streaming clients receive the complete text
     // before the final event.
@@ -1265,8 +1233,6 @@ export function createAgentEventHandler({
       : undefined;
     const restartRecoveryAgentId = evt.agentId ?? sessionAgentId;
     const clientRunId = chatLink?.clientRunId ?? evt.runId;
-    const isHeartbeat = runContext?.isHeartbeat ?? evt.isHeartbeat;
-    const heartbeatPolicy = resolveHeartbeatFlag(clientRunId, evt.runId, evt.isHeartbeat);
     // A detached worker may reuse its correlation id under a new claim.
     // Retire its old text before the new owner can append or flush it.
     if (chatRunState.runs.get(clientRunId)?.bufferIsCurrent?.() === false) {
@@ -1314,12 +1280,8 @@ export function createAgentEventHandler({
           sessionKey,
           ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
           ...(spawnedBy && { spawnedBy }),
-          ...(isHeartbeat !== undefined && { isHeartbeat }),
         }
-      : {
-          ...eventForClients,
-          ...(isHeartbeat !== undefined && { isHeartbeat }),
-        };
+      : eventForClients;
     const hasSessionMessageSubscribers =
       projectSessionMessages && sessionKey
         ? resolveSessionDeliveryKeys(sessionKey, sessionAgentId).some(
@@ -1329,7 +1291,6 @@ export function createAgentEventHandler({
     const last = agentRunSeq.get(evt.runId) ?? 0;
     const isToolEvent = evt.stream === "tool";
     const isItemEvent = evt.stream === "item";
-    const suppressHeartbeatToolEvents = isToolEvent && heartbeatPolicy === true;
     if (last > 0 && evt.seq !== last + 1) {
       flushBufferedAgentDeltaIfNeeded(clientRunId);
       if (isControlUiVisible) {
@@ -1341,7 +1302,6 @@ export function createAgentEventHandler({
             ts: Date.now(),
             sessionKey,
             ...(spawnedBy && { spawnedBy }),
-            ...(isHeartbeat !== undefined && { isHeartbeat }),
             data: {
               reason: "seq gap",
               expected: last + 1,
@@ -1374,7 +1334,7 @@ export function createAgentEventHandler({
         ...(explanation ? { explanation } : {}),
       };
     }
-    if (recordsInFlightProgress && !isAborted && !suppressHeartbeatToolEvents) {
+    if (recordsInFlightProgress && !isAborted) {
       // Persist the client-facing identity after run/session remapping. Route
       // changes discard transient UI rows, so history replay must use the same
       // payload identity as live delivery or tool results cannot reconcile.
@@ -1432,8 +1392,7 @@ export function createAgentEventHandler({
         toolPhase === "start" &&
         (isControlUiVisible || hasSessionMessageSubscribers) &&
         sessionKey &&
-        !isAborted &&
-        !suppressHeartbeatToolEvents
+        !isAborted
       ) {
         flushBufferedChatDeltaIfNeeded(
           sessionKey,
@@ -1453,12 +1412,7 @@ export function createAgentEventHandler({
       // messages to messaging surfaces (Telegram, Discord, etc.). Carry the
       // delivery key so scoped clients must also own the session subscription.
       const runToolRecipients = toolEventRecipients.get(evt.runId);
-      if (
-        isControlUiVisible &&
-        !suppressHeartbeatToolEvents &&
-        runToolRecipients &&
-        runToolRecipients.size > 0
-      ) {
+      if (isControlUiVisible && runToolRecipients && runToolRecipients.size > 0) {
         broadcastToConnIds(
           "agent",
           sessionKey
@@ -1476,12 +1430,7 @@ export function createAgentEventHandler({
           },
         );
       }
-      if (
-        !isControlUiVisible &&
-        sessionKey &&
-        hasSessionMessageSubscribers &&
-        !suppressHeartbeatToolEvents
-      ) {
+      if (!isControlUiVisible && sessionKey && hasSessionMessageSubscribers) {
         sendAgentPayload(sessionKey, agentPayload, {
           agentId: sessionAgentId,
           controlUiVisible: false,
@@ -1493,7 +1442,7 @@ export function createAgentEventHandler({
       // not know the runId in advance, so they cannot register as run-scoped
       // tool recipients. Mirror tool lifecycle onto a session-scoped event so
       // they can render live pending tool cards without polling history.
-      if (isControlUiVisible && sessionKey && !suppressHeartbeatToolEvents) {
+      if (isControlUiVisible && sessionKey) {
         const sessionSubscribers = excludeConnIds(
           sessionEventSubscribers.getAll(),
           runToolRecipients,
@@ -1528,7 +1477,6 @@ export function createAgentEventHandler({
             evt.seq,
             {
               controlUiVisible: isControlUiVisible,
-              isHeartbeat: heartbeatPolicy,
             },
           );
         }
@@ -1563,13 +1511,7 @@ export function createAgentEventHandler({
     }
 
     if ((isControlUiVisible || hasSessionMessageSubscribers) && sessionKey) {
-      if (
-        isToolEvent &&
-        evt.data.phase === "result" &&
-        !evt.data.isError &&
-        !isAborted &&
-        !suppressHeartbeatToolEvents
-      ) {
+      if (isToolEvent && evt.data.phase === "result" && !evt.data.isError && !isAborted) {
         const result = extractChatToolResultCanvasPreview(evt.data.result);
         if (result?.preview.surface === "assistant_message") {
           const blocks = appendChatCanvasBlocks(
@@ -1597,7 +1539,7 @@ export function createAgentEventHandler({
       }
       // Send tool events to node/channel subscribers only when verbose is enabled;
       // WS clients already received the event above via broadcastToConnIds.
-      if (isControlUiVisible && isToolEvent && !suppressHeartbeatToolEvents) {
+      if (isControlUiVisible && isToolEvent) {
         sendNodeToolPayload(evt, sessionKey, sessionAgentId, agentPayload);
       }
       const assistantLiveChatInput =
@@ -1620,7 +1562,6 @@ export function createAgentEventHandler({
           {
             controlUiVisible: isControlUiVisible,
             isCurrent,
-            isHeartbeat: heartbeatPolicy,
           },
         );
       }

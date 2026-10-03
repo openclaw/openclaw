@@ -56,7 +56,7 @@ describe("CronService silent failure alerts", { concurrent: false }, () => {
           },
           log: createNoopLogger(),
           enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
+          enqueueSessionEvent: vi.fn(),
           sendCronFailureAlert,
           runIsolatedAgentJob: async (runParams) =>
             await runCronIsolatedAgentTurn({

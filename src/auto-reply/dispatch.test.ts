@@ -76,9 +76,9 @@ vi.mock("./reply/reply-dispatcher.js", async () => {
 });
 
 const {
-  dispatchInboundMessage,
-  dispatchInboundMessageWithDispatcher,
-  dispatchInboundMessageWithBufferedDispatcher,
+  dispatchInboundMessageInternal,
+  dispatchInboundMessageWithDispatcherInternal,
+  dispatchInboundMessageWithBufferedDispatcherInternal,
   dispatchInboundMessageWithProjectedDispatcher,
 } = await import("./dispatch.js");
 const { recordReplyUsageState } = await import("./reply/reply-usage-state.js");
@@ -152,7 +152,7 @@ describe("withReplyDispatcher", () => {
     });
   });
 
-  it("dispatchInboundMessage owns dispatcher lifecycle", async () => {
+  it("dispatchInboundMessageInternal owns dispatcher lifecycle", async () => {
     const order: string[] = [];
     const dispatcher = {
       sendToolResult: () => true,
@@ -177,7 +177,7 @@ describe("withReplyDispatcher", () => {
       },
     );
 
-    await dispatchInboundMessage({
+    await dispatchInboundMessageInternal({
       ctx: buildTestCtx(),
       cfg: {} as OpenClawConfig,
       dispatcher,
@@ -201,7 +201,7 @@ describe("withReplyDispatcher", () => {
     });
 
     try {
-      await dispatchInboundMessage({
+      await dispatchInboundMessageInternal({
         ctx: buildTestCtx({
           Provider: "signal",
           Surface: "signal",
@@ -305,7 +305,7 @@ describe("withReplyDispatcher", () => {
     },
   );
 
-  it("dispatchInboundMessageWithBufferedDispatcher cleans up typing after a resolver starts it", async () => {
+  it("dispatchInboundMessageWithBufferedDispatcherInternal cleans up typing after a resolver starts it", async () => {
     const typing = {
       onReplyStart: vi.fn(async () => {}),
       startTypingLoop: vi.fn(async () => {}),
@@ -324,7 +324,7 @@ describe("withReplyDispatcher", () => {
     });
     hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
 
-    await dispatchInboundMessageWithBufferedDispatcher({
+    await dispatchInboundMessageWithBufferedDispatcherInternal({
       ctx: buildTestCtx(),
       cfg: {} as OpenClawConfig,
       dispatcherOptions: {
@@ -354,7 +354,7 @@ describe("withReplyDispatcher", () => {
       counts: { tool: 0, block: 0, final: 0 },
     });
 
-    await dispatchInboundMessageWithBufferedDispatcher({
+    await dispatchInboundMessageWithBufferedDispatcherInternal({
       ctx: buildTestCtx(),
       cfg: {} as OpenClawConfig,
       dispatcherOptions: { deliver: async () => undefined },
@@ -380,7 +380,7 @@ describe("withReplyDispatcher", () => {
       counts: { tool: 0, block: 0, final: 0 },
     });
 
-    await dispatchInboundMessageWithBufferedDispatcher({
+    await dispatchInboundMessageWithBufferedDispatcherInternal({
       ctx: buildTestCtx(),
       cfg: {} as OpenClawConfig,
       toolsAllow: ["message"],
@@ -402,7 +402,7 @@ describe("withReplyDispatcher", () => {
     hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
     hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
 
-    await dispatchInboundMessageWithDispatcher({
+    await dispatchInboundMessageWithDispatcherInternal({
       ctx: buildTestCtx({
         From: "whatsapp:+15551234567",
         To: "whatsapp:+15557654321",
@@ -466,7 +466,7 @@ describe("withReplyDispatcher", () => {
     hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
     hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
 
-    await dispatchInboundMessageWithDispatcher({
+    await dispatchInboundMessageWithDispatcherInternal({
       ctx: buildTestCtx({ Surface: "telegram", SessionKey: "agent:test:session" }),
       cfg: {} as OpenClawConfig,
       dispatcherOptions: {
@@ -538,7 +538,7 @@ describe("withReplyDispatcher", () => {
       return { text: "ok" };
     });
 
-    await dispatchInboundMessageWithDispatcher({
+    await dispatchInboundMessageWithDispatcherInternal({
       ctx: buildTestCtx({ Surface: "telegram", SessionKey: "agent:test:session" }),
       cfg: {} as OpenClawConfig,
       dispatcherOptions: {
@@ -591,7 +591,7 @@ describe("withReplyDispatcher", () => {
     hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
     hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
 
-    await dispatchInboundMessageWithDispatcher({
+    await dispatchInboundMessageWithDispatcherInternal({
       ctx: buildTestCtx({
         Surface: "telegram",
         SessionKey: "agent:test:session",
@@ -796,7 +796,7 @@ describe("withReplyDispatcher", () => {
     hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
     hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
 
-    await dispatchInboundMessageWithDispatcher({
+    await dispatchInboundMessageWithDispatcherInternal({
       ctx: buildTestCtx({ Surface: "telegram", SessionKey: "agent:test:session" }),
       cfg: {} as OpenClawConfig,
       dispatcherOptions: {
@@ -840,7 +840,7 @@ describe("withReplyDispatcher", () => {
       }),
     };
 
-    await dispatchInboundMessage({
+    await dispatchInboundMessageInternal({
       ctx: buildTestCtx({ Surface: "discord", SessionKey: "agent:test:session" }),
       cfg: {} as OpenClawConfig,
       dispatcher,
@@ -885,7 +885,7 @@ describe("withReplyDispatcher", () => {
       appendBeforeDeliver: vi.fn(),
     };
 
-    await dispatchInboundMessage({
+    await dispatchInboundMessageInternal({
       ctx: buildTestCtx({ Surface: "discord", SessionKey: "agent:test:session" }),
       cfg: {} as OpenClawConfig,
       dispatcher,
@@ -910,7 +910,7 @@ describe("withReplyDispatcher", () => {
       counts: { tool: 0, block: 0, final: 1 },
     });
 
-    const result = await dispatchInboundMessage({
+    const result = await dispatchInboundMessageInternal({
       ctx: buildTestCtx(),
       cfg: {} as OpenClawConfig,
       dispatcher,
@@ -932,7 +932,7 @@ describe("withReplyDispatcher", () => {
     });
     hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
 
-    await dispatchInboundMessageWithBufferedDispatcher({
+    await dispatchInboundMessageWithBufferedDispatcherInternal({
       ctx: buildTestCtx({
         SessionKey: "agent:test:telegram:slash:8231046597",
         CommandSource: "native",
@@ -962,7 +962,7 @@ describe("withReplyDispatcher", () => {
     });
     hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
 
-    await dispatchInboundMessageWithBufferedDispatcher({
+    await dispatchInboundMessageWithBufferedDispatcherInternal({
       ctx: buildTestCtx({
         SessionKey: "agent:test:main",
         ChatType: "dm",
@@ -1003,7 +1003,7 @@ describe("withReplyDispatcher", () => {
     hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
     hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
 
-    await dispatchInboundMessageWithDispatcher({
+    await dispatchInboundMessageWithDispatcherInternal({
       ctx: buildTestCtx({ Surface: "telegram", SessionKey: "agent:test:session" }),
       cfg: {} as OpenClawConfig,
       dispatcherOptions: {
@@ -1058,7 +1058,7 @@ describe("withReplyDispatcher", () => {
     });
     hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
 
-    await dispatchInboundMessageWithBufferedDispatcher({
+    await dispatchInboundMessageWithBufferedDispatcherInternal({
       ctx: buildTestCtx({
         SessionKey: "agent:test:main",
         CommandSource: "native",

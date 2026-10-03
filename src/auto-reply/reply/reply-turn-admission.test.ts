@@ -19,6 +19,7 @@ import {
 import { REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS } from "./reply-run-registry.contracts.js";
 import {
   createReplyOperation,
+  markReplyOperationExecutionStarted,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   replyRunRegistry,
 } from "./reply-run-registry.js";
@@ -200,7 +201,7 @@ it("waits for recovery release before admitting a queued successor", async () =>
   await Promise.resolve();
   expect(settled).toBe(false);
   await expect(
-    admit({ storePath, expectedSessionId: sessionId, kind: "heartbeat" }),
+    admit({ storePath, expectedSessionId: sessionId, kind: "background" }),
   ).resolves.toEqual({ status: "skipped", reason: "active-run" });
   release.release();
   owned(await successor).complete();
@@ -352,11 +353,11 @@ it("keeps an already-waiting follow-up behind the delivery barrier", async () =>
     owned(await admission).complete();
   }
 });
-it("skips heartbeat turns while delivery settles", async () => {
+it("skips background turns while delivery settles", async () => {
   const active = operation();
   const barrier = createDeferred();
   active.completeWithAfterClearBarrier(barrier.promise);
-  await expect(admit({ sessionId: "heartbeat-session", kind: "heartbeat" })).resolves.toEqual({
+  await expect(admit({ sessionId: "background-session", kind: "background" })).resolves.toEqual({
     status: "skipped",
     reason: "active-run",
   });
@@ -426,7 +427,33 @@ it("defers takeover to the blocked-tool floor while a quiet tool is active", asy
   result.complete();
   controller.abort();
 });
-it.each(["heartbeat", "queued_followup"] as const)(
+it.each([false, true])(
+  "foreground supersedes only unstarted background work (started=%s)",
+  async (started) => {
+    const background = operation({ turnKind: "background" });
+    if (started) {
+      markReplyOperationExecutionStarted(background);
+    }
+    const result = await admit({ waitForActive: false });
+    try {
+      if (started) {
+        expect(result).toMatchObject({ status: "skipped", reason: "active-run" });
+        expect(background.abortSignal.aborted).toBe(false);
+      } else {
+        expect(background.result).toMatchObject({
+          kind: "aborted",
+          code: "aborted_for_supersession",
+        });
+      }
+    } finally {
+      background.complete();
+      if (result.status === "owned") {
+        result.operation.complete();
+      }
+    }
+  },
+);
+it.each(["background", "queued_followup"] as const)(
   "does not let %s turns reclaim a stale active operation",
   async (kind) => {
     vi.useFakeTimers();

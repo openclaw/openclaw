@@ -14,6 +14,7 @@ export function createRestartSentinelSessionFixture(
 ): RestartSentinelSessionFixture {
   return {
     cfg: {},
+    agentId: "main",
     entry,
     store: {},
     storePath: "/tmp/sessions.json",

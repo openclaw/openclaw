@@ -1,11 +1,13 @@
+// Deprecated v4 projection of ordinary automation outcomes; no execution state lives here.
+import type { CronEvent } from "../cron/service/state.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 
-export type HeartbeatIndicatorType = "ok" | "alert" | "error";
+type HeartbeatIndicatorType = "ok" | "alert" | "error";
 
-const TARGET_NONE_MESSAGE = "Heartbeat delivery is disabled by configuration (target: none).";
+const TARGET_NONE_MESSAGE = "Proactive automation delivery is disabled.";
 const NO_ROUTE_MESSAGE =
-  "Heartbeat has no delivery route yet. Message your bot once, or set agents.defaults.heartbeat.target.";
+  "Proactive automation has no delivery route. Configure its delivery in Automations; run openclaw doctor --fix for legacy configuration.";
 
 export type HeartbeatEventPayload = {
   ts: number;
@@ -25,23 +27,6 @@ export type HeartbeatEventPayload = {
   /** Indicator type for UI status display. */
   indicatorType?: HeartbeatIndicatorType;
 };
-
-export function resolveIndicatorType(
-  status: HeartbeatEventPayload["status"],
-): HeartbeatIndicatorType | undefined {
-  switch (status) {
-    case "ok-empty":
-    case "ok-token":
-      return "ok";
-    case "sent":
-      return "alert";
-    case "failed":
-      return "error";
-    case "skipped":
-      return undefined;
-  }
-  throw new Error("Unsupported heartbeat status");
-}
 
 type HeartbeatEventState = {
   lastHeartbeat: HeartbeatEventPayload | null;
@@ -67,6 +52,36 @@ export function emitHeartbeatEvent(evt: Omit<HeartbeatEventPayload, "ts">) {
   };
   state.lastHeartbeat = enriched;
   notifyListeners(state.listeners, enriched);
+}
+
+/** Called only for receipt-owned converted/default jobs after canonical settlement. */
+export function emitLegacyHeartbeatCronOutcome(evt: CronEvent): void {
+  if (evt.action !== "finished") {
+    return;
+  }
+  emitHeartbeatEvent({
+    status:
+      evt.status === "error" || evt.completionStatus === "failed" || evt.deliveryError
+        ? "failed"
+        : evt.status === "skipped" || evt.completionStatus === "unknown"
+          ? "skipped"
+          : evt.delivered
+            ? "sent"
+            : "ok-empty",
+    preview: evt.summary?.slice(0, 2000),
+    reason:
+      evt.error ??
+      evt.deliveryError ??
+      evt.deliverySuppressionReason ??
+      (evt.completionStatus === "unknown"
+        ? "Automation completion is unknown; inspect its run history."
+        : undefined),
+    durationMs: evt.durationMs,
+    silent: !evt.delivered,
+    channel: evt.delivery?.resolved?.channel,
+    to: evt.delivery?.resolved?.to ?? undefined,
+    accountId: evt.delivery?.resolved?.accountId,
+  });
 }
 
 export function onHeartbeatEvent(listener: (evt: HeartbeatEventPayload) => void): () => void {

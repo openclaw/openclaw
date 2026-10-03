@@ -276,7 +276,6 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       sessionTarget,
       sessionFile: "session.jsonl",
       prePromptMessageCount: 101,
-      isHeartbeat: false,
       tokenBudget: undefined,
       runtimeContext: undefined,
     });

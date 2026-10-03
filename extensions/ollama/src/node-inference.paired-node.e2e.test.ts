@@ -69,11 +69,12 @@ describe("Ollama paired-node Gateway inference", () => {
             controlUi: { enabled: false },
             nodes: { commands: { allow: ["ollama.models", "ollama.chat"] } },
           },
+          cron: { enabled: false },
           plugins: {
             allow: ["ollama"],
           },
           agents: {
-            defaults: { heartbeat: { every: "0m" }, skipBootstrap: true },
+            defaults: { skipBootstrap: true },
             entries: { main: { tools: { allow: ["node_inference"] } } },
           },
           models: {

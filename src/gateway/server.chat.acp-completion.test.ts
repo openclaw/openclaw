@@ -6,7 +6,7 @@ import { afterAll, afterEach, describe, expect, test, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
-import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
+import type { dispatchInboundMessageInternal } from "../auto-reply/dispatch.js";
 import { createDispatchReplyOperationCoordinator } from "../auto-reply/reply/dispatch-from-config.lifecycle.js";
 import { createAcpSessionMeta } from "../auto-reply/reply/test-fixtures/acp-runtime.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -235,13 +235,13 @@ describe("Gateway ACP completion ownership", () => {
       "../auto-reply/dispatch.js",
     );
     dispatchInboundMessageMock.mockImplementation(async (input: unknown) => {
-      // SAFETY: The Gateway mock adapter forwards the real dispatchInboundMessage parameters.
+      // SAFETY: The Gateway mock adapter forwards the real dispatchInboundMessageInternal parameters.
       const {
         ctx,
         cfg,
         dispatcher,
         replyOptions: inboundReplyOptions,
-      } = input as Parameters<typeof dispatchInboundMessage>[0];
+      } = input as Parameters<typeof dispatchInboundMessageInternal>[0];
       // Gateway admission outlives ACP dispatch and owns source transcript finalization.
       const release = getSessionWorkAdmissionRelease({
         scope: storePath,
@@ -254,7 +254,7 @@ describe("Gateway ACP completion ownership", () => {
       if (runId) {
         dispatchAdmissions.get(runId)?.resolve({ runId, release });
       }
-      return actualDispatch.dispatchInboundMessage({
+      return actualDispatch.dispatchInboundMessageInternal({
         ctx,
         cfg,
         dispatcher,

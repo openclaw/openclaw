@@ -28,13 +28,13 @@ describe("embedded attempt context injection", () => {
       completedCalls: 0,
     },
     {
-      name: "heartbeat always filters bootstrap",
+      name: "lightweight automation permits continuation skip",
       mode: "continuation-skip",
       bootstrap: "none",
-      runKind: "heartbeat",
-      continuation: false,
-      resolve: true,
-      completedCalls: 0,
+      runKind: "cron",
+      continuation: true,
+      resolve: false,
+      completedCalls: 1,
     },
     {
       name: "limited bootstrap permits continuation skip",
@@ -59,7 +59,7 @@ describe("embedded attempt context injection", () => {
       contextInjectionMode: testCase.mode,
       bootstrapMode: testCase.bootstrap,
       bootstrapContextRunKind: testCase.runKind,
-      bootstrapContextMode: testCase.runKind === "heartbeat" ? "lightweight" : "full",
+      bootstrapContextMode: testCase.runKind === "cron" ? "lightweight" : "full",
       hasCompletedBootstrapTurn,
       resolveBootstrapContextForRun,
     });

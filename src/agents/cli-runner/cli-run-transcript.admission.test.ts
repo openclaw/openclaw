@@ -74,7 +74,6 @@ vi.mock("../../routing/session-key.js", () => ({
   parseAgentSessionKey: () => ({ agentId: "logical" }),
 }));
 vi.mock("../agent-scope.js", () => ({ resolveSessionAgentId: () => "logical" }));
-vi.mock("../bootstrap-mode.js", () => ({ isHeartbeatLifecycleRunKind: vi.fn() }));
 vi.mock("../harness/agent-end-side-effects.js", () => ({
   awaitAgentEndSideEffects: vi.fn(),
   runAgentEndSideEffects: vi.fn(),

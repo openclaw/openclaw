@@ -251,7 +251,6 @@ describe("visible yielded session continuation", () => {
           yielded: event.data.yielded === true,
           aborted: event.data.aborted === true,
           contextPresent: context !== undefined,
-          isHeartbeat: context?.isHeartbeat,
         });
         if (event.runId === requester?.runId && event.data.yielded === true) {
           requesterYielded.resolve();
@@ -514,7 +513,6 @@ describe("visible yielded session continuation", () => {
               defaults: {
                 workspace,
                 skipBootstrap: true,
-                heartbeat: { every: "0m" },
                 model: { primary: provider.modelRef },
                 models: {
                   [provider.modelRef]: { params: { transport: "sse", openaiWsWarmup: false } },

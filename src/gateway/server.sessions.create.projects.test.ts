@@ -14,7 +14,7 @@ import { requireGit } from "../agents/worktrees/git.js";
 import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { materializeManagedWorktreeFixture } from "../agents/worktrees/service.test-support.js";
-import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
+import type { dispatchInboundMessageInternal } from "../auto-reply/dispatch.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
   listSessionPendingInputs,
@@ -153,7 +153,9 @@ test.each([
     const materialization = createDeferredCore<typeof project>();
     projectCloneMocks.materialize.mockReturnValueOnce(materialization.promise);
     dispatchInboundMessageMock.mockImplementation(async (dispatchParams: unknown) => {
-      const { replyOptions } = dispatchParams as Parameters<typeof dispatchInboundMessage>[0];
+      const { replyOptions } = dispatchParams as Parameters<
+        typeof dispatchInboundMessageInternal
+      >[0];
       await replyOptions?.userTurnTranscriptRecorder?.persistApproved();
       return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
     });

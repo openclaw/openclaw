@@ -97,8 +97,8 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     }).path;
     expect(warnings[0]).toContain(`no entry in ${databasePath}`);
     expect(warnings[0]).not.toContain(`no entry in ${storePath}`);
-    expect(warnings[0]).toContain('reason="no-target"');
-    expect(warnings[0]).toContain("Heartbeats will run");
+    expect(warnings[0]).toContain("missing session route or recipient");
+    expect(warnings[0]).toContain("delivery failure instead of skipping the run");
   });
 
   it("does not read a canonical database as JSON for a missing heartbeat target", async () => {
@@ -207,7 +207,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     writeStore(cfg, {});
 
     const warning = (await describeHeartbeatSessionTargetIssues(cfg))[0];
-    expect(warning).toContain('reason="no-route"');
+    expect(warning).toContain("missing owner route can cause a delivery failure");
     expect(warning).toContain('commands.ownerAllowFrom=["telegram:123456789"]');
     expect(warning).toContain('heartbeat.target="telegram"');
     expect(warning).toContain('heartbeat.to="123456789"');

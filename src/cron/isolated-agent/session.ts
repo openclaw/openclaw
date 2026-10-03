@@ -192,7 +192,7 @@ export async function prepareCronSession(params: CronSessionParams) {
   });
 }
 
-/** Resolves prepared rows; heartbeat can supply its writer-owned current row. */
+/** Resolves prepared rows within the ordinary scheduled session owner. */
 export function resolveCronSession(
   params: CronSessionParams & {
     store: Record<string, SessionEntry>;
@@ -211,16 +211,9 @@ export function resolveCronSession(
   const sourceSessionDiffers = Boolean(sourceSessionKey && sourceSessionKey !== params.sessionKey);
   const targetEntry = store[params.sessionKey];
   const entry = store[sourceSessionKey || params.sessionKey];
-  // Guard the run's target row even when a differing source session seeds the
-  // carried preferences. A forced isolated heartbeat may replace its archived
-  // synthetic row, but trusted initialization must still finish first.
-  const canRollArchivedHeartbeat =
-    params.forceNew === true &&
-    targetEntry?.archivedAt !== undefined &&
-    targetEntry.initializationPending !== true &&
-    Boolean(targetEntry.heartbeatIsolatedBaseSessionKey?.trim());
+  // Guard the target row even when another session supplies carried preferences.
   const sessionWorkStartError = resolveSessionWorkStartError(params.sessionKey, targetEntry);
-  if (sessionWorkStartError && !canRollArchivedHeartbeat) {
+  if (sessionWorkStartError) {
     throw new Error(sessionWorkStartError);
   }
 

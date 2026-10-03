@@ -22,10 +22,8 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveHeartbeatSchedulerSeed } from "../infra/heartbeat-runner.js";
-import { resolveHeartbeatPhaseMs } from "../infra/heartbeat-schedule.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { ManifestModelIdNormalizationSource } from "../plugins/manifest-model-id-normalization.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
@@ -36,6 +34,7 @@ import {
 import { supportsCronExecutionRoot } from "./execution-root-runtime.js";
 import { resolveCronAgentConfigFromSnapshot } from "./isolated-agent/run-config.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
+import { resolveSchedulePhaseMs } from "./schedule-phase.js";
 import { partitionSystemMonitors } from "./system-monitor-jobs.js";
 import { SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX } from "./system-owned-declaration.js";
 import type { CronJob, CronJobCreate } from "./types.js";
@@ -186,23 +185,33 @@ export function skillCollectionReviewMonitorAgentId(job: CronJob): string | unde
   return key.slice(SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX.length) || undefined;
 }
 
-function hasStoredExecutionPreference(
+async function hasStoredExecutionPreference(
   cfg: OpenClawConfig,
   agentId: string,
   jobId: string,
-): boolean {
+): Promise<boolean> {
   try {
-    const entry = loadSessionEntryReadOnly({
-      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
-      sessionKey: resolveCronAgentSessionKey({
-        sessionKey: `cron:${jobId}`,
+    return await withSessionEntryReadOnlyInWorker(
+      {
         agentId,
-        mainKey: cfg.session?.mainKey,
-        cfg,
-      }),
-      readConsistency: "latest",
-    });
-    return Boolean(entry?.modelOverride || entry?.agentRuntimeOverride);
+        storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
+        sessionKey: resolveCronAgentSessionKey({
+          sessionKey: `cron:${jobId}`,
+          agentId,
+          mainKey: cfg.session?.mainKey,
+          cfg,
+        }),
+        readConsistency: "latest",
+        hydrateSkillPromptRefs: false,
+      },
+      () => {},
+      async (read) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        return Boolean(read.value?.modelOverride || read.value?.agentRuntimeOverride);
+      },
+    );
   } catch {
     // An unavailable session store is not evidence that no preference exists.
     return true;
@@ -210,12 +219,13 @@ function hasStoredExecutionPreference(
 }
 
 /** One system-owned review job per configured agent and its Workshop directory. */
-export function* resolveSkillCollectionReviewMonitorSpecs(
+export async function resolveSkillCollectionReviewMonitorSpecs(
   cfg: OpenClawConfig,
   jobs: readonly CronJob[],
-  options: { schedulerSeed?: string } = {},
-): IterableIterator<{ agentId: string; input: CronJobCreate }> {
-  const schedulerSeed = resolveHeartbeatSchedulerSeed(options.schedulerSeed);
+  options: { schedulerSeed: string },
+): Promise<Array<{ agentId: string; input: CronJobCreate }>> {
+  const { schedulerSeed } = options;
+  const specs: Array<{ agentId: string; input: CronJobCreate }> = [];
   const { retained } = partitionSystemMonitors(jobs, skillCollectionReviewMonitorAgentId);
   const workshopEnabled = resolveSkillWorkshopConfig(cfg).autonomous.mode === "auto";
   // Static projection consumes the selected generation, never provider load planning.
@@ -233,11 +243,11 @@ export function* resolveSkillCollectionReviewMonitorSpecs(
     const hasEligibleRuntime =
       configuredEligibility === false &&
       existing &&
-      hasStoredExecutionPreference(cfg, agentId, existing.id)
+      (await hasStoredExecutionPreference(cfg, agentId, existing.id))
         ? undefined
         : configuredEligibility;
     const enabled = workshopEnabled && hasEligibleRuntime !== false;
-    yield {
+    specs.push({
       agentId,
       input: {
         declarationKey: `${SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX}${agentId}`,
@@ -251,7 +261,7 @@ export function* resolveSkillCollectionReviewMonitorSpecs(
         schedule: {
           kind: "every",
           everyMs: SKILL_COLLECTION_REVIEW_EVERY_MS,
-          anchorMs: resolveHeartbeatPhaseMs({
+          anchorMs: resolveSchedulePhaseMs({
             schedulerSeed,
             agentId,
             intervalMs: SKILL_COLLECTION_REVIEW_EVERY_MS,
@@ -264,8 +274,9 @@ export function* resolveSkillCollectionReviewMonitorSpecs(
         },
         sessionTarget: "isolated",
         delivery: { mode: "none" },
-        wakeMode: "next-heartbeat",
+        wakeMode: "now",
       },
-    };
+    });
   }
+  return specs;
 }

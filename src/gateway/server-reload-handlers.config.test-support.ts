@@ -26,7 +26,7 @@ export function createMonitorPublicationFailure() {
         ({ db }) =>
           db.exec(`CREATE TRIGGER monitor_publication_failure BEFORE UPDATE ON cron_jobs
           WHEN json_extract(NEW.job_json, '$.agentId') = 'second'
-            AND json_extract(NEW.job_json, '$.schedule.everyMs') = 7200000
+            AND json_extract(NEW.job_json, '$.enabled') = 0
           BEGIN SELECT RAISE(FAIL, 'monitor write failed'); END`),
         { database },
       );
@@ -103,7 +103,6 @@ export function createHotTailPlan(overrides: Partial<GatewayReloadPlan> = {}): G
     reloadHooks: false,
     restartGmailWatcher: false,
     restartCron: false,
-    restartHeartbeat: false,
     reloadPlugins: false,
     restartChannels: new Set(),
     disposeMcpRuntimes: false,
@@ -221,7 +220,6 @@ export function createDefaultGatewayReloadState(
   return {
     hooksConfig: {} as never,
     hookClientIpConfig: {} as never,
-    heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
     cronState: createTestCronState(),
     ...overrides,
   };

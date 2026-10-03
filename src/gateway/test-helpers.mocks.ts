@@ -68,13 +68,15 @@ function createDispatchInboundMessageMockExports(
 ): typeof import("../auto-reply/dispatch.js") {
   return {
     ...actual,
-    dispatchInboundMessage: (...args: Parameters<typeof actual.dispatchInboundMessage>) => {
+    dispatchInboundMessageInternal: (
+      ...args: Parameters<typeof actual.dispatchInboundMessageInternal>
+    ) => {
       const impl = gatewayTestHoisted.dispatchInboundMessage.getMockImplementation();
       return impl
         ? (gatewayTestHoisted.dispatchInboundMessage(...args) as ReturnType<
-            typeof actual.dispatchInboundMessage
+            typeof actual.dispatchInboundMessageInternal
           >)
-        : actual.dispatchInboundMessage(...args);
+        : actual.dispatchInboundMessageInternal(...args);
     },
     dispatchInboundMessageWithProjectedDispatcher: (
       ...args: Parameters<typeof actual.dispatchInboundMessageWithProjectedDispatcher>
@@ -86,7 +88,7 @@ function createDispatchInboundMessageMockExports(
       const [params] = args;
       const { dispatcherOptions, ...dispatchParams } = params;
       const dispatcher = createReplyDispatcher(dispatcherOptions);
-      // The override bypasses dispatchInboundMessage's dispatcher lifecycle ownership.
+      // The override bypasses dispatchInboundMessageInternal's dispatcher lifecycle ownership.
       return withReplyDispatcher({
         dispatcher,
         run: () =>
@@ -305,12 +307,12 @@ vi.mock("/src/auto-reply/dispatch.js", async () => {
   return createDispatchInboundMessageMockExports(actual);
 });
 vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => ({
-  getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
+  getReplyFromConfigInternal: (...args: Parameters<GetReplyFromConfigFn>) =>
     gatewayTestHoisted.getReplyFromConfig(...args),
   prewarmConfigDrivenReplyRuntime: vi.fn(async () => {}),
 }));
 vi.mock("/src/auto-reply/reply/get-reply-from-config.runtime.js", () => ({
-  getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
+  getReplyFromConfigInternal: (...args: Parameters<GetReplyFromConfigFn>) =>
     gatewayTestHoisted.getReplyFromConfig(...args),
   prewarmConfigDrivenReplyRuntime: vi.fn(async () => {}),
 }));

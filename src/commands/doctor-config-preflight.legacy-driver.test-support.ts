@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, expect, it } from "vitest";
+import { afterAll, beforeAll, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { getCliProcessTestTimeout } from "../cli/cli-process-child.test-helpers.js";
 import { disableUpdatedPackageCompileCacheEnv } from "../cli/update-cli/update-command-service-env.js";
+import { makeCronJob } from "../cron/delivery.test-helpers.js";
+import { resolveCronJobsStorePathFromConfig, saveCronJobsStore } from "../cron/store.js";
 import {
   createUpdatePostInstallDoctorResultPath,
   consumeUpdatePostInstallDoctorResult,
@@ -30,6 +32,7 @@ import {
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import { restoreEmptyV21StorageForHistoricalFixture } from "../state/openclaw-agent-schema-v21.test-support.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -390,5 +393,161 @@ export function registerLegacyDriverTests(modes: readonly LegacyDriverMode[]) {
       );
     },
     getCliProcessTestTimeout(DOCTOR_CHILD_TIMEOUT_MS, DOCTOR_CHILD_TIMEOUT_MS),
+  );
+}
+
+/** Exercise the published fallback argv without a Gateway or service restart. */
+export function registerLegacyHeartbeatDriverTests() {
+  const dirs = createFixtureLifetime();
+  let runtimeRoot: string;
+  beforeAll(() => {
+    runtimeRoot = createBuiltRuntime(
+      fs.realpathSync(dirs.createTempDir("openclaw-heartbeat-driver-runtime-")),
+      undefined,
+      { emptyExtensions: true },
+    );
+  });
+  afterAll(() => dirs.cleanup());
+
+  it.each([
+    { version: "2026.9.2", explicitConfig: true },
+    { version: "2026.9.7", explicitConfig: true },
+    { version: "2026.9.7", explicitConfig: false },
+  ])(
+    "migrates heartbeat through published $version doctor --non-interactive (config=$explicitConfig)",
+    async ({ version, explicitConfig }) => {
+      await withOpenClawTestState(
+        {
+          scenario: "minimal",
+          // Both published package drivers use these markers in their fallback argv path.
+          env: {
+            OPENCLAW_UPDATE_IN_PROGRESS: "1",
+            OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+            OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART: "1",
+            OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: "0",
+            OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "0",
+            OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
+            OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+            OPENCLAW_UPDATE_POST_CORE: undefined,
+            OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          },
+        },
+        async (state) => {
+          await state.writeConfig({
+            meta: { lastTouchedVersion: version },
+            plugins: { enabled: false },
+            agents: {
+              ...(explicitConfig
+                ? {
+                    defaults: {
+                      heartbeat: {
+                        every: "30m",
+                        target: "none",
+                        prompt: "Check the synthetic migration fixture.",
+                        activeHours: { start: "09:00", end: "17:00", timezone: "UTC" },
+                      },
+                    },
+                  }
+                : {}),
+              entries: { main: { workspace: state.workspaceDir } },
+            },
+            gateway: { mode: "local", auth: { mode: "none" } },
+          });
+          const original = fs.readFileSync(state.configPath, "utf8");
+          const databasePath = openOpenClawStateDatabase().path;
+          if (!explicitConfig) {
+            const monitor = makeCronJob({
+              id: "published-monitor",
+              agentId: "main",
+              declarationKey: "heartbeat:main",
+              sessionTarget: "main",
+              schedule: { kind: "every", everyMs: 1_800_000, anchorMs: 37 },
+              payload: { kind: "systemEvent", text: "Legacy monitor" },
+            });
+            await saveCronJobsStore(resolveCronJobsStorePathFromConfig({}), {
+              version: 1,
+              jobs: [monitor],
+            });
+            await closeOpenClawStateDatabaseAsync();
+            const legacy = new DatabaseSync(databasePath);
+            try {
+              const row = legacy
+                .prepare("SELECT job_json FROM cron_jobs WHERE job_id = ?")
+                .get(monitor.id);
+              const definition = JSON.parse(String(row?.job_json));
+              definition.payload = { kind: "heartbeat" };
+              legacy
+                .prepare(
+                  "UPDATE cron_jobs SET payload_kind = 'heartbeat', job_json = ? WHERE job_id = ?",
+                )
+                .run(JSON.stringify(definition), monitor.id);
+            } finally {
+              legacy.close();
+            }
+          } else {
+            await closeOpenClawStateDatabaseAsync();
+          }
+          const result = await runBuiltRuntime(
+            runtimeRoot,
+            disableUpdatedPackageCompileCacheEnv({
+              ...process.env,
+              NODE_ENV: undefined,
+              VITEST: undefined,
+              VITEST_POOL_ID: undefined,
+              VITEST_WORKER_ID: undefined,
+            }),
+            ["doctor", "--non-interactive", "--no-workspace-suggestions"],
+            60_000,
+          );
+          const output = `${result.stdout}\n${result.stderr}`;
+          expect(result.signal, output).toBeNull();
+          expect(result.code, output).toBe(0);
+          expect(output).toContain(
+            "Retired heartbeat configuration after ordinary automation data was verified.",
+          );
+          expect(output).not.toContain("Gateway restarted");
+          const saved = JSON.parse(fs.readFileSync(state.configPath, "utf8"));
+          expect(saved.agents.defaults?.heartbeat).toBeUndefined();
+          expect(fs.readFileSync(`${state.configPath}.bak`, "utf8")).toBe(original);
+          const db = new DatabaseSync(databasePath, { readOnly: true });
+          try {
+            const jobs = db
+              .prepare("SELECT job_json FROM cron_jobs")
+              .all()
+              .map((row) => JSON.parse(String(row.job_json)));
+            expect(jobs).toContainEqual(
+              expect.objectContaining({
+                agentId: "main",
+                schedule: expect.objectContaining({ kind: "every", everyMs: 1_800_000 }),
+                payload: expect.objectContaining({ kind: "agentTurn" }),
+                ...(explicitConfig
+                  ? {
+                      payload: expect.objectContaining({
+                        kind: "agentTurn",
+                        message: "Check the synthetic migration fixture.",
+                      }),
+                      delivery: expect.objectContaining({ mode: "none" }),
+                      activeHours: { start: "09:00", end: "17:00", timezone: "UTC" },
+                    }
+                  : { id: "published-monitor" }),
+              }),
+            );
+          } finally {
+            db.close();
+          }
+          expect(
+            fs
+              .readdirSync(path.dirname(databasePath))
+              .some(
+                (name) =>
+                  name.startsWith(`${path.basename(databasePath)}.pre-startup-migration-`) &&
+                  name.endsWith(".bak"),
+              ),
+          ).toBe(true);
+        },
+      );
+    },
+    getCliProcessTestTimeout(60_000),
   );
 }

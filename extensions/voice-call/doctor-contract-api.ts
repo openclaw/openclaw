@@ -75,6 +75,8 @@ function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchema
       return "prepared workers -> one-use capacity and fixed workspace ownership";
     case "github-publication-requester-authority-v18":
       return "GitHub publication receipts -> original requesting authority";
+    case "automation-policy-fence-v21":
+      return "automations -> ordinary job timing and delivery policy compatibility";
     case "worker-placement-execution-mode-v8":
       return "cloud worker placements -> execution-mode claims";
     case "operator-approvals-system-agent":

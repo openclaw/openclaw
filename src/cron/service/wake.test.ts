@@ -1,31 +1,39 @@
 import { describe, expect, it, vi } from "vitest";
+import type { CronJob } from "../types.js";
 import { wake } from "./wake.js";
 
-function createState() {
-  const enqueueSystemEvent = vi.fn();
-  const requestHeartbeat = vi.fn();
+function createState(jobs: CronJob[] = []) {
+  const enqueueSessionEvent = vi.fn();
+  const deferSessionEvent = vi.fn();
   return {
     state: {
+      store: { version: 1, jobs },
+      stopped: false,
       deps: {
-        enqueueSystemEvent,
-        requestHeartbeat,
+        cronEnabled: true,
+        enqueueSessionEvent,
+        deferSessionEvent,
+        resolveSessionEventTarget: (opts?: { agentId?: string; sessionKey?: string }) => ({
+          agentId: opts?.agentId ?? "main",
+          sessionKey: opts?.sessionKey ?? `agent:${opts?.agentId ?? "main"}:main`,
+        }),
       },
     } as unknown as Parameters<typeof wake>[0],
-    enqueueSystemEvent,
-    requestHeartbeat,
+    enqueueSessionEvent,
+    deferSessionEvent,
   };
 }
 
 describe("wake (cron timer)", () => {
   it("returns ok:false on empty text without enqueueing or waking", () => {
-    const { state, enqueueSystemEvent, requestHeartbeat } = createState();
+    const { state, enqueueSessionEvent, deferSessionEvent } = createState();
     expect(wake(state, { mode: "now", text: "   " })).toEqual({ ok: false });
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(requestHeartbeat).not.toHaveBeenCalled();
+    expect(enqueueSessionEvent).not.toHaveBeenCalled();
+    expect(deferSessionEvent).not.toHaveBeenCalled();
   });
 
-  it("threads sessionKey to both enqueue and heartbeat on mode=now", () => {
-    const { state, enqueueSystemEvent, requestHeartbeat } = createState();
+  it("threads sessionKey into ordinary session admission on mode=now", () => {
+    const { state, enqueueSessionEvent, deferSessionEvent } = createState();
     expect(
       wake(state, {
         mode: "now",
@@ -33,26 +41,46 @@ describe("wake (cron timer)", () => {
         sessionKey: "agent:main:telegram:dm:42",
       }),
     ).toEqual({ ok: true });
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("ping", {
+    expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith("ping", {
       sessionKey: "agent:main:telegram:dm:42",
     });
-    expect(requestHeartbeat).toHaveBeenCalledWith({
-      source: "manual",
-      intent: "immediate",
-      reason: "wake",
-      sessionKey: "agent:main:telegram:dm:42",
-    });
+    expect(deferSessionEvent).not.toHaveBeenCalled();
   });
 
-  it("does not fire a wake on mode=next-heartbeat when no sessionKey is supplied", () => {
-    const { state, enqueueSystemEvent, requestHeartbeat } = createState();
+  it("defers untargeted next-heartbeat work to an enabled scheduled session job", () => {
+    const job: CronJob = {
+      id: "scheduled-session",
+      name: "scheduled session",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: { kind: "agentTurn", message: "check pending work" },
+      sessionTarget: "main",
+      wakeMode: "now",
+      state: { nextRunAtMs: 60_000 },
+    };
+    const { state, enqueueSessionEvent, deferSessionEvent } = createState([
+      { ...job, id: "other-owner", agentId: "other" },
+      job,
+    ]);
     expect(wake(state, { mode: "next-heartbeat", text: "ping" })).toEqual({ ok: true });
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("ping", undefined);
-    expect(requestHeartbeat).not.toHaveBeenCalled();
+    expect(deferSessionEvent).toHaveBeenCalledExactlyOnceWith("ping", job, undefined);
+    expect(enqueueSessionEvent).not.toHaveBeenCalled();
+  });
+
+  it("reports when no scheduled session can receive deferred work", () => {
+    const { state, enqueueSessionEvent, deferSessionEvent } = createState();
+    expect(wake(state, { mode: "next-heartbeat", text: "ping" })).toEqual({
+      ok: false,
+      reason: expect.stringContaining("No enabled ordinary scheduled session job"),
+    });
+    expect(enqueueSessionEvent).not.toHaveBeenCalled();
+    expect(deferSessionEvent).not.toHaveBeenCalled();
   });
 
   it("rejects subagent sessionKey targets without enqueueing or waking", () => {
-    const { state, enqueueSystemEvent, requestHeartbeat } = createState();
+    const { state, enqueueSessionEvent, deferSessionEvent } = createState();
     expect(
       wake(state, {
         mode: "now",
@@ -60,7 +88,7 @@ describe("wake (cron timer)", () => {
         sessionKey: "agent:main:subagent:worker",
       }),
     ).toEqual({ ok: false, reason: "unwakeable-session-key" });
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(requestHeartbeat).not.toHaveBeenCalled();
+    expect(enqueueSessionEvent).not.toHaveBeenCalled();
+    expect(deferSessionEvent).not.toHaveBeenCalled();
   });
 });

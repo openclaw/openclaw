@@ -14,10 +14,26 @@ describe("heartbeat active-hours runtime evidence", () => {
   it("observes active fire, quiet-hours skip, and reload fire", async () => {
     const artifactBase = await fs.mkdtemp(path.join(os.tmpdir(), "heartbeat-active-hours-"));
     tempDirs.push(artifactBase);
+    let now = Date.UTC(2026, 9, 2, 12);
     const evidence = await runHeartbeatActiveHoursRuntime({
       artifactBase,
       repoRoot: process.cwd(),
-      timeoutMs: 5_000,
+      clock: {
+        now: () => now,
+        monotonicNow: () => now,
+        arm: (run, delayMs) => {
+          let cancelled = false;
+          queueMicrotask(() => {
+            if (!cancelled) {
+              now += delayMs;
+              void run();
+            }
+          });
+          return () => {
+            cancelled = true;
+          };
+        },
+      },
     });
 
     expect(evidence.entries[0]?.result.status).toBe("pass");

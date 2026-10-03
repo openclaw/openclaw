@@ -7,7 +7,7 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/pr
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
-import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
+import { getReplyFromConfigInternal } from "../auto-reply/reply/get-reply.js";
 import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
 import * as goalOperationReads from "../config/sessions/goals-operations-read.js";
 import {
@@ -103,7 +103,7 @@ beforeEach(async () => {
   });
   bindSessionRowProjection(context, () => projection);
   // Keep reply admission and its cleanup real; only the embedded model execution is mocked.
-  gatewayReplyMock.mockImplementation(getReplyFromConfig);
+  gatewayReplyMock.mockImplementation(getReplyFromConfigInternal);
   dispatchInboundMessageMock.mockReset();
   runEmbeddedAgent.mockReset();
   modelStarted = createDeferred();

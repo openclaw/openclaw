@@ -57,3 +57,15 @@ export type NodeEvent = {
   event: string;
   payloadJSON?: string | null;
 };
+
+export type NodeEventHandleResult = {
+  ok: true;
+  event: string;
+  handled: boolean;
+  reason?: string;
+};
+
+export type NodeEventConnectionOptions = {
+  connId?: string;
+  isConnectionCurrent?: () => boolean | Promise<boolean>;
+};

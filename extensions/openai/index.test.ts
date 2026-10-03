@@ -9,7 +9,6 @@ import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   GPT5_BEHAVIOR_CONTRACT,
   GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY,
-  GPT5_HEARTBEAT_PROMPT_OVERLAY,
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,7 +17,6 @@ import plugin from "./index.js";
 
 const OPENAI_FRIENDLY_PROMPT_OVERLAY = GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY;
 const OPENAI_GPT5_BEHAVIOR_CONTRACT = GPT5_BEHAVIOR_CONTRACT;
-const OPENAI_HEARTBEAT_PROMPT_OVERLAY = GPT5_HEARTBEAT_PROMPT_OVERLAY;
 
 const runtimeMocks = vi.hoisted(() => ({
   ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
@@ -494,22 +492,6 @@ describe("openai plugin", () => {
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("Brief first-person feeling ok.");
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).not.toContain(
       "Use heartbeats to create useful proactive progress",
-    );
-    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
-      "Heartbeat = useful proactive progress, not chatter.",
-    );
-    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
-      "Wake, orient, use the provided monitor scratch, act.",
-    );
-    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
-      "Assigned/ongoing work: pursue spirit with judgment.",
-    );
-    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain("Prefer action/silent progress.");
-    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
-      'Never repetitive "same/no change/still" updates.',
-    );
-    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
-      "Interrupt only for meaningful development/result/blocker/decision/time risk.",
     );
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("Sparse natural emoji ok.");
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<persona_latch>");

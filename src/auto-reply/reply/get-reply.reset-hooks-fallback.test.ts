@@ -26,10 +26,10 @@ vi.mock("./commands-core.runtime.js", () => ({
 }));
 registerGetReplyRuntimeOverrides(mocks);
 
-let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
+let getReplyFromConfigInternal: typeof import("./get-reply.js").getReplyFromConfigInternal;
 
 async function loadGetReplyRuntimeForTest() {
-  ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
+  ({ getReplyFromConfigInternal } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
 }
 
 function createContinueDirectivesResult(resetHookTriggered: boolean) {
@@ -45,7 +45,7 @@ function createContinueDirectivesResult(resetHookTriggered: boolean) {
   });
 }
 
-describe("getReplyFromConfig reset-hook fallback", () => {
+describe("getReplyFromConfigInternal reset-hook fallback", () => {
   beforeAll(async () => {
     await loadGetReplyRuntimeForTest();
   });
@@ -80,7 +80,7 @@ describe("getReplyFromConfig reset-hook fallback", () => {
     mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: undefined });
     const onObservedReplyDelivery = vi.fn();
 
-    await getReplyFromConfig(buildNativeResetContext(), { onObservedReplyDelivery }, {});
+    await getReplyFromConfigInternal(buildNativeResetContext(), { onObservedReplyDelivery }, {});
 
     expect(mocks.emitResetCommandHooks).toHaveBeenCalledTimes(1);
     expect(mocks.emitResetCommandHooks).toHaveBeenCalledWith(
@@ -96,7 +96,7 @@ describe("getReplyFromConfig reset-hook fallback", () => {
     mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: undefined });
     mocks.resolveReplyDirectives.mockResolvedValue(createContinueDirectivesResult(true));
 
-    await getReplyFromConfig(buildNativeResetContext(), undefined, {});
+    await getReplyFromConfigInternal(buildNativeResetContext(), undefined, {});
 
     expect(mocks.emitResetCommandHooks).not.toHaveBeenCalled();
   });

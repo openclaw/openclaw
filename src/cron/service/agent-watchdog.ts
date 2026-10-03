@@ -139,17 +139,6 @@ export function createCronAgentWatchdog(params: {
       }
       startTimeout();
     },
-    replaceTimeout: (timeoutMs: number | undefined) => {
-      // A heartbeat handoff starts a distinct configured deadline. Keeping the
-      // original timer would still abort long heartbeat turns at the cron default.
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      timeoutId =
-        timeoutMs !== undefined && state !== "timed_out" && state !== "disposed"
-          ? setTimeout(() => setTimedOut(timeoutErrorMessage(activeExecution)), timeoutMs)
-          : undefined;
-    },
     noteLaneWait: () => {
       if (state === "waiting_for_runner") {
         observedLaneWait = true;

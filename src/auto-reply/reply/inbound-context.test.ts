@@ -55,12 +55,15 @@ describe("inbound context contract (providers + extensions)", () => {
     expect(ctx.Surface).toBeUndefined();
   });
 
-  it("preserves a typed wake without inventing a transport", () => {
-    const ctx = finalizeInboundContext({ Body: "Background work", InternalTurnSource: "exec" });
-    expect(ctx.InternalTurnSource).toBe("exec");
-    expect(ctx.Provider).toBeUndefined();
-    expect(ctx.OriginatingChannel).toBeUndefined();
-  });
+  it.each(["exec", "event", "cron"] as const)(
+    "preserves a typed %s without inventing a transport",
+    (source) => {
+      const ctx = finalizeInboundContext({ Body: "Background work", InternalTurnSource: source });
+      expect(ctx.InternalTurnSource).toBe(source);
+      expect(ctx.Provider).toBeUndefined();
+      expect(ctx.OriginatingChannel).toBeUndefined();
+    },
+  );
 
   it("removes a legacy wake label from the reply channel", () => {
     const ctx = finalizeInboundContextForSdk({

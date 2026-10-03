@@ -47,6 +47,8 @@ type GatewayToolCallerIdentity = {
   personalToolSelection?: GatewayToolOperatorSelection;
   agentId: string;
   sessionKey: string;
+  /** Restrict-only executable surface captured for internal follow-ups. */
+  sessionEventToolsAllow?: readonly string[];
   gatewayUiCommandTarget?: GatewayUiCommandTarget;
   /** Prepared requesting-tool posture; absent authority never bypasses approvals. */
   fullPermission?: boolean;
@@ -537,6 +539,12 @@ export async function withGatewayToolCallerIdentity<T>(
     {
       agentId: inheritedOwner?.agentId ?? identity.agentId.trim(),
       sessionKey: inheritedOwner?.sessionKey ?? identity.sessionKey.trim(),
+      sessionEventToolsAllow:
+        identity.sessionEventToolsAllow && inheritedOwner?.sessionEventToolsAllow
+          ? identity.sessionEventToolsAllow.filter((name) =>
+              inheritedOwner.sessionEventToolsAllow!.includes(name),
+            )
+          : (identity.sessionEventToolsAllow ?? inheritedOwner?.sessionEventToolsAllow),
       personalToolParticipants:
         inheritedOwner?.personalToolParticipants ?? identity.personalToolParticipants,
       personalToolUser: inheritedOwner?.personalToolUser ?? identity.personalToolUser,

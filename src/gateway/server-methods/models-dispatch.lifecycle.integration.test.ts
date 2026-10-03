@@ -187,7 +187,6 @@ async function withDispatchLifecycle(
       agents: {
         defaults: {
           skipBootstrap: true,
-          heartbeat: { every: "0m" },
           modelPolicy: { allow: ["opencode/*"] },
         },
         entries: { main: { workspace: state.workspaceDir } },

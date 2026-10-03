@@ -30,6 +30,10 @@ vi.mock("../infra/update-check-package-target.js", () => ({
 vi.mock("./node-runtime-diagnostics.js", () => ({ collectNodeRuntimeFindings: async () => [] }));
 vi.mock("./status.node-mode.js", () => ({ resolveNodeOnlyGatewayInfo: async () => null }));
 vi.mock("./status-runtime-shared.ts", () => ({
+  resolveStatusAutomations: async () => ({
+    ok: true,
+    value: { enabled: true, jobs: 0, nextWakeAtMs: null },
+  }),
   resolveStatusRuntimeSnapshot: async () => ({ ...baseStatusServices }),
   resolveStatusGatewayHealth: vi.fn(),
   resolveStatusSecurityAudit: vi.fn(),

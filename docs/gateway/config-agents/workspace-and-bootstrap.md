@@ -90,7 +90,7 @@ Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`
 
 ## `agents.defaults.skipOptionalBootstrapFiles`
 
-Skips creation of selected optional workspace files while still writing required bootstrap files (`AGENTS.md`, `BOOTSTRAP.md`). Valid values: `SOUL.md`, `USER.md`, and `IDENTITY.md` (`HEARTBEAT.md` is accepted but a no-op since heartbeat context moved to cron monitor scratch).
+Skips creation of selected optional workspace files while still writing required bootstrap files (`AGENTS.md`, `BOOTSTRAP.md`). Valid values: `SOUL.md`, `USER.md`, and `IDENTITY.md`. The legacy value `HEARTBEAT.md` is accepted but is a no-op; periodic checklists live in Automation job scratch.
 
 ```json5
 {
@@ -107,8 +107,8 @@ Skips creation of selected optional workspace files while still writing required
 Controls workspace bootstrap-file injection in the embedded runtime. Default: `"always"`. These modes do not control CLI-backed prompt preparation or prevent an agent from reading files with tools.
 
 - `"always"`: use normal workspace bootstrap injection, subject to the run's context mode and file filters.
-- `"continuation-skip"`: eligible continuation turns after a recorded full-bootstrap turn skip workspace bootstrap re-injection, reducing prompt size. Heartbeat runs, pending full-bootstrap setup, and post-compaction retries still use normal context resolution.
-- `"never"`: disable workspace bootstrap and context-file injection on every turn, including heartbeat and compaction-recovery turns. Use this for embedded agents with specialized bootstrap-free workflows.
+- `"continuation-skip"`: eligible continuation turns after a recorded full-bootstrap turn skip workspace bootstrap re-injection, reducing prompt size. Pending full-bootstrap setup and post-compaction retries still use normal context resolution.
+- `"never"`: disable workspace bootstrap and context-file injection on every turn, including scheduled and compaction-recovery turns. Use this for embedded agents with specialized bootstrap-free workflows.
 
 ```json5
 {

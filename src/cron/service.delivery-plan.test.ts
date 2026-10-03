@@ -26,7 +26,7 @@ it.each([
           delivered,
         })),
       },
-      async ({ cron, enqueueSystemEvent, requestHeartbeat }) => {
+      async ({ cron, enqueueSystemEvent, enqueueSessionEvent }) => {
         const job = await cron.add({
           name: "announce-delivered",
           enabled: true,
@@ -38,7 +38,7 @@ it.each([
         });
         expect(await cron.run(job.id, "force")).toEqual({ ok: true, ran: true });
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(requestHeartbeat).not.toHaveBeenCalled();
+        expect(enqueueSessionEvent).not.toHaveBeenCalled();
         expect(cron.getJob(job.id)?.state.lastDeliveryStatus).toBe(expected);
       },
     );

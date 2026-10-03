@@ -349,7 +349,7 @@ export function createDispatchReplyOperationCoordinator(params: {
     const activeReplyOperation = replyRunRegistry.get(dispatchOperationSessionKey);
     const activeEmbeddedSessionId = resolveActiveEmbeddedRunSessionId(dispatchOperationSessionKey);
     const allowGatewayEmbeddedQueueResolution =
-      replyTurnKind === "visible" &&
+      (replyTurnKind === "visible" || params.replyOptions?.internalEventExecution !== undefined) &&
       (params.replyOptions?.turnAdoptionLifecycle !== undefined ||
         params.allowActiveQueueResolution === true) &&
       activeReplyOperation === undefined &&
@@ -361,16 +361,18 @@ export function createDispatchReplyOperationCoordinator(params: {
       return { status: "ready" };
     }
     const allowActiveResolution =
-      replyTurnKind === "visible" && (phase === "pre_dispatch" || phase === "command_resolution");
+      (replyTurnKind === "visible" || params.replyOptions?.internalEventExecution !== undefined) &&
+      (phase === "pre_dispatch" || phase === "command_resolution");
     const allowGatewayQueueResolution =
       phase !== "pre_dispatch" &&
-      replyTurnKind === "visible" &&
+      (replyTurnKind === "visible" || params.replyOptions?.internalEventExecution !== undefined) &&
       (params.replyOptions?.turnAdoptionLifecycle !== undefined ||
         params.allowActiveQueueResolution === true) &&
       activeReplyOperation !== undefined &&
-      activeReplyOperation.turnKind !== "heartbeat";
+      (activeReplyOperation.turnKind !== "background" ||
+        params.replyOptions?.internalEventExecution !== undefined);
     if (allowGatewayQueueResolution) {
-      // Gateway and low-level plugin turns must reach getReplyFromConfig while the owner is active;
+      // Gateway and low-level plugin turns must reach getReplyFromConfigInternal while the owner is active;
       // that layer applies the session's steer/followup/collect/drop policy without concurrent runs.
       return { status: "ready" };
     }
@@ -515,6 +517,7 @@ export function createDispatchReplyOperationCoordinator(params: {
     dispatchReplyOperation = admission.operation;
     dispatchReplyOperation.retainFailureUntilComplete();
     dispatchAbortOperation = admission.operation;
+    params.replyOptions?.onReplyOperationOwned?.(admission.operation);
     return { status: "ready" };
   };
 
@@ -606,8 +609,17 @@ export function createDispatchReplyOperationCoordinator(params: {
       return;
     }
     const timeoutPolicy = params.dispatcher.resolveFollowupAdmissionBarrierTimeoutPolicy?.();
-    const complete = () =>
-      operation.completeWithAfterClearBarrier(waitForDispatchDelivery(), timeoutPolicy);
+    const complete = () => {
+      if (params.replyOptions?.internalEventExecution) {
+        // Source-owned effects need the admitted operation until delivery settles.
+        void waitForDispatchDelivery().then(
+          () => operation.complete(),
+          () => operation.complete(),
+        );
+      } else {
+        operation.completeWithAfterClearBarrier(waitForDispatchDelivery(), timeoutPolicy);
+      }
+    };
     // Abort races the resolver, not its bookkeeping. Retain this exact owner
     // until that work exits; delivery must remain after-clear to avoid queue cycles.
     if (dispatchLifecycleWork.owner.size > 0) {

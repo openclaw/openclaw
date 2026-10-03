@@ -6,10 +6,14 @@ import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-even
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { NodeEventContext } from "./server-node-events-types.js";
 
-const requestHeartbeat = vi.hoisted(() => vi.fn());
-vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/heartbeat-wake.js")>()),
-  requestHeartbeat,
+const enqueueSessionEvent = vi.hoisted(() =>
+  vi.fn((_text: string, _options: Record<string, unknown>) => ({
+    settled: Promise.resolve({ status: "completed" }),
+  })),
+);
+vi.mock("../auto-reply/reply/session-event-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../auto-reply/reply/session-event-handoff.js")>()),
+  enqueueSessionEventForHost: enqueueSessionEvent,
 }));
 
 const { handleNodeEvent } = await import("./server-node-events.js");
@@ -22,7 +26,7 @@ it.each([
   { name: "authorized exec completion", event: "exec.finished", explicit: true },
   { name: "unmatched exec completion", event: "exec.finished", explicit: true, denied: true },
 ])("preserves the loaded global owner for $name", async ({ name, event, explicit, denied }) => {
-  requestHeartbeat.mockClear();
+  enqueueSessionEvent.mockClear();
   resetSystemEventsForTest();
   await withOpenClawTestState(
     { label: "node-event-owner", layout: "state-only" },
@@ -98,31 +102,28 @@ it.each([
       if (denied) {
         expect(result).toMatchObject({ handled: false, reason: "unmatched_exec_event" });
         expect(peekSystemEvents("agent:research:global")).toEqual([]);
-        expect(requestHeartbeat).not.toHaveBeenCalled();
+        expect(enqueueSessionEvent).not.toHaveBeenCalled();
         return;
       }
       expect(result).toBeUndefined();
-      expect(peekSystemEvents("agent:research:global")).toEqual([
+      if (event === "notifications.changed") {
+        expect(peekSystemEvents("agent:research:global")).toEqual([
+          expect.stringContaining("Owned notification"),
+        ]);
+      }
+      expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining(
           event === "exec.finished" ? "owned exec result" : "Owned notification",
         ),
-      ]);
-      expect(requestHeartbeat).toHaveBeenCalledExactlyOnceWith(
-        event === "exec.finished"
-          ? {
-              source: "exec-event",
-              intent: "event",
-              reason: "exec-event",
-              coalesceMs: 0,
-              agentId: "research",
-            }
-          : {
-              source: "notifications-event",
-              intent: "event",
-              reason: "notifications-event",
-              agentId: "research",
-              sessionKey: "global",
-            },
+        expect.objectContaining({
+          agentId: "research",
+          sessionKey: "global",
+          expectedTarget: expect.objectContaining({
+            agentId: "research",
+            sessionKey: "global",
+            sessionId: "research-session",
+          }),
+        }),
       );
     },
   );

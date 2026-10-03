@@ -89,7 +89,6 @@ describe("block reply pipeline multi-assistant-message suppression", () => {
       const finalPayload = blockFor("Same answer", 1);
       const { replyPayloads } = await buildReplyPayloads({
         payloads: [finalPayload],
-        isHeartbeat: false,
         didLogHeartbeatStrip: false,
         blockStreamingEnabled: true,
         blockReplyPipeline: pipeline,

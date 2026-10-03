@@ -84,7 +84,7 @@ export function abortActiveCronTaskRuns(reason = "Gateway restarting."): number 
     handle.onCancel?.(reason);
     aborted += 1;
   }
-  // Shutdown also retires main-session runs without cancellation handles.
+  // Abort-ignoring cores retain bounded restart tracking until they settle.
   for (const promise of settlingCronTaskRuns.keys()) {
     startActiveCronTaskRunSettlementGrace(promise);
   }

@@ -20,8 +20,7 @@ Day-to-day operation of stored jobs: copy-ready CLI examples, the management com
       --name "Calendar check" \
       --at "20m" \
       --session main \
-      --system-event "Next heartbeat: check calendar." \
-      --wake now
+      --system-event "Check the calendar for upcoming events."
     ```
   </Tab>
   <Tab title="Recurring isolated job">

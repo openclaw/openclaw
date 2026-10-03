@@ -229,7 +229,6 @@ it.each(cases)(
           workspace,
           skipBootstrap: true,
           utilityModel: "",
-          heartbeat: { every: "0m" },
           model: { primary: `openai/${model}` },
           models: { [`openai/${model}`]: { agentRuntime: { id: "codex" } } },
           maxConcurrent: 2,

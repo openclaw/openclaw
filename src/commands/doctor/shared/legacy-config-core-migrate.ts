@@ -3,7 +3,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readAgentRosterProperty } from "../../../agents/agent-scope-config.js";
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { HeartbeatSchema } from "../../../config/zod-schema.agent-runtime.js";
 import { runPluginSetupConfigMigrations } from "../../../plugins/setup-registry.js";
 import { migrateLegacyCommandOwners } from "../../doctor-command-owner.js";
 import { applyChannelDoctorCompatibilityMigrations } from "./channel-legacy-config-migrate.js";
@@ -48,44 +47,6 @@ function repairAgentRoster(
         },
       }
     : cfg;
-}
-
-function repairInvalidHeartbeatActiveHours(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
-  const repairHeartbeat = (heartbeat: unknown, path: string): unknown => {
-    if (!isRecord(heartbeat) || !Object.hasOwn(heartbeat, "activeHours")) {
-      return heartbeat;
-    }
-    const result = HeartbeatSchema.safeParse({ activeHours: heartbeat.activeHours });
-    if (result.success) {
-      return heartbeat;
-    }
-
-    const { activeHours: _activeHours, ...rest } = heartbeat;
-    changes.push(
-      `Removed invalid ${path}.activeHours; heartbeats will use unrestricted hours until it is reconfigured.`,
-    );
-    return rest;
-  };
-
-  const defaultsHeartbeat = repairHeartbeat(
-    cfg.agents?.defaults?.heartbeat,
-    "agents.defaults.heartbeat",
-  );
-  const next = repairAgentRoster(cfg, (agent, path) => {
-    const heartbeat = repairHeartbeat(agent.heartbeat, `${path}.heartbeat`);
-    return heartbeat === agent.heartbeat ? agent : { ...agent, heartbeat };
-  });
-
-  if (defaultsHeartbeat === cfg.agents?.defaults?.heartbeat) {
-    return next;
-  }
-  return {
-    ...next,
-    agents: {
-      ...next.agents,
-      defaults: { ...next.agents?.defaults, heartbeat: defaultsHeartbeat },
-    },
-  } as OpenClawConfig;
 }
 
 function repairNullAgentWorkspaces(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
@@ -161,7 +122,6 @@ export function normalizeCompatibilityConfigValues(
     changes.push(...secretRefMarkers.changes);
   }
   next = normalizeLegacyOpenAICodexModelsAddMetadata(next, changes);
-  next = repairInvalidHeartbeatActiveHours(next, changes);
   next = repairNullAgentWorkspaces(next, changes);
   next = migrateLegacyCommandOwners(next, changes);
   next = pruneBindingsForMissingAgents(next, changes);

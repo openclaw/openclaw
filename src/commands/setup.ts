@@ -265,6 +265,8 @@ export async function setupCommand(
   const { resolveSessionTranscriptsDirForAgent } = await import("../config/sessions.js");
   const sessionsDir = resolveSessionTranscriptsDirForAgent(selectedAgentId);
   await fs.mkdir(sessionsDir, { recursive: true });
+  const { provisionDefaultProactiveJob } = await import("../cron/default-proactive-job.js");
+  await provisionDefaultProactiveJob(next, selectedAgentId);
   if (opts?.json) {
     writeRuntimeJson(runtime, {
       ok: true,

@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import {
-  validateConfigObjectRaw,
-  validateConfigObjectRawWithPlugins,
-  validateConfigObjectWithPlugins,
-} from "./validation.js";
+import { validateConfigObjectRaw, validateConfigObjectRawWithPlugins } from "./validation.js";
 
 vi.mock("../secrets/unsupported-surface-policy.js", async () => {
   const { isRecord } = await import("../utils.js");
@@ -199,57 +195,4 @@ it("enforces the gateway TCP port range", () => {
   for (const port of [1, 65_535]) {
     expect(validateConfigObjectRaw({ gateway: { port } }).ok).toBe(true);
   }
-});
-
-describe("ambient heartbeat ownership", () => {
-  function warnings(agents: unknown) {
-    const result = validateConfigObjectWithPlugins(
-      { agents },
-      {
-        pluginMetadataSnapshot: { manifestRegistry: { diagnostics: [], plugins: [] } },
-      },
-    );
-    expect(result.ok).toBe(true);
-    return result.warnings.filter(
-      (warning) => warning.path === "agents.defaults.heartbeat.agentId",
-    );
-  }
-
-  it("warns that an ownerless explicit multi-agent roster keeps heartbeats disabled", () => {
-    expect(warnings({ ownership: "explicit", entries: { main: {}, ops: {} } })).toEqual([
-      {
-        path: "agents.defaults.heartbeat.agentId",
-        message:
-          "Multi-agent config has no ambient heartbeat owner; heartbeats stay disabled until agents.defaults.heartbeat.agentId or agents.defaults.systemAgent.agentId is set.",
-      },
-    ]);
-  });
-
-  it.each([
-    {
-      name: "system owner",
-      agents: {
-        ownership: "explicit",
-        entries: { main: {}, ops: {} },
-        defaults: { systemAgent: { agentId: "ops" } },
-      },
-    },
-    {
-      name: "per-agent heartbeat",
-      agents: {
-        ownership: "explicit",
-        entries: { main: {}, ops: { heartbeat: { every: "30m" } } },
-      },
-    },
-    {
-      name: "broadcast heartbeat",
-      agents: {
-        ownership: "explicit",
-        entries: { main: {}, ops: {} },
-        defaults: { heartbeat: { every: "30m" } },
-      },
-    },
-  ])("does not warn for a $name", ({ agents }) => {
-    expect(warnings(agents)).toEqual([]);
-  });
 });

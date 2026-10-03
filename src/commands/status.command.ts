@@ -17,6 +17,7 @@ import { assertStatusUsageAgentScope, runStatusJsonCommand } from "./status-json
 import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
 import {
   reportStatusScanFailure,
+  resolveStatusAutomations,
   resolveStatusGatewayHealth,
   resolveStatusSecurityAudit,
   resolveStatusRuntimeSnapshot,
@@ -154,7 +155,6 @@ export async function statusCommand(
     securityAudit,
     usage,
     health,
-    lastHeartbeat,
     gatewayService: daemon,
     nodeService: nodeDaemon,
   } = await resolveStatusRuntimeSnapshot({
@@ -277,6 +277,12 @@ export async function statusCommand(
       gatewayServer: gatewayProbe?.server,
     },
   );
+  const automations = await resolveStatusAutomations({
+    config: scan.cfg,
+    ...probeBudget,
+    gatewayReachable: gatewayReachable && !nodeOnlyGateway,
+    gatewayStartupPhase: gatewayProbe?.startupPhase,
+  });
   const lines = await buildStatusCommandReportLines(
     await buildStatusCommandReportData({
       env: env ?? {},
@@ -287,7 +293,7 @@ export async function statusCommand(
       securityAudit,
       health,
       usageLines,
-      lastHeartbeat,
+      automations,
       agentStatus,
       channels,
       channelIssues,

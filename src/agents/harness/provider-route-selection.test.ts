@@ -43,7 +43,6 @@ function config(pinPrimary: boolean): OpenClawConfig {
       defaults: {
         model: "openai/gpt-5.5",
         models: pinPrimary ? { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } : {},
-        heartbeat: { model: "openai/gpt-5.4-mini" },
       },
     },
     models: {
@@ -182,7 +181,7 @@ describe("registered provider route selection", () => {
       requirement: "api-key",
     },
     {
-      label: "heartbeat inheriting subscription preference",
+      label: "automation model inheriting subscription preference",
       pinPrimary: true,
       subscription: true,
       modelId: "gpt-5.4-mini",

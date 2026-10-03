@@ -20,7 +20,7 @@ import { HISTORICAL_WEBHOOK_CHANNELS } from "./legacy-webhook-pins.js";
 
 const log = createSubsystemLogger("plugins/doctor-contracts");
 
-function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: string[]): void {
+export function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: string[]): void {
   const channels = isRecord(raw.channels) ? raw.channels : null;
   if (!channels) {
     return;

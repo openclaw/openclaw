@@ -19,7 +19,6 @@ import {
 import { parseClawManifest } from "../claws/schema.js";
 import { registerConfigWriteListener, resetConfigRuntimeState } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { applyHeartbeatMonitorJobs } from "../cron/heartbeat-monitor.js";
 import { cronJobReadView } from "../cron/job-read-view.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
 import { CronService } from "../cron/service.js";
@@ -74,14 +73,23 @@ export function useClawMonitorFixture() {
     enabled: boolean,
     runner?: CronServiceDeps["runIsolatedAgentJob"],
     withCron = false,
+    withPortableHeartbeat = false,
   ) {
     const state = await createOpenClawTestState({ label: "claw-monitor-removal" });
     cleanups.push(state.cleanup);
     await fs.writeFile(state.path("SOUL.md"), "synthetic managed file\n");
+    if (withPortableHeartbeat) {
+      await fs.writeFile(state.path("HEARTBEAT.md"), "synthetic portable checklist\n");
+    }
     const parsed = parseClawManifest({
       schemaVersion: 1,
       agent: { id: "worker", name: "Worker" },
-      workspace: { bootstrapFiles: { "SOUL.md": { source: "SOUL.md" } } },
+      workspace: {
+        bootstrapFiles: {
+          "SOUL.md": { source: "SOUL.md" },
+          ...(withPortableHeartbeat ? { "HEARTBEAT.md": { source: "HEARTBEAT.md" } } : {}),
+        },
+      },
       cronJobs: withCron
         ? [
             {
@@ -110,10 +118,17 @@ export function useClawMonitorFixture() {
         byteLength: 100,
       },
       context: { workspace: workspaceDir },
+      ...(withPortableHeartbeat
+        ? {
+            openClawProfile: {
+              schemaVersion: 1 as const,
+              agent: { heartbeat: { every: enabled ? "30m" : "0m", isolatedSession: true } },
+            },
+          }
+        : {}),
     });
     expect(addPlan.blockers).toEqual([]);
     let config: OpenClawConfig = {
-      agents: { defaults: { heartbeat: { every: enabled ? "30m" : "0m" } } },
       skills: { workshop: { autonomous: { mode: enabled ? "auto" : "off" } } },
     };
     const storePath = state.statePath("cron", "jobs.json");
@@ -131,14 +146,13 @@ export function useClawMonitorFixture() {
         !isAgentDeletionBlocked(agentId) &&
         listAgentEntries(config).some((agent) => agent.id === agentId),
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: runner ?? vi.fn(async () => ({ status: "ok" as const })),
     };
     const cron = new CronService(cronDeps);
     cleanups.push(async () => {
       cron.stop();
     });
-    await applyClawAddPlan(addPlan, {
+    const installed = await applyClawAddPlan(addPlan, {
       consentPlanIntegrity: addPlan.planIntegrity,
       commitConfig: async (transform) => {
         config = transform(config);
@@ -146,6 +160,9 @@ export function useClawMonitorFixture() {
         resetConfigRuntimeState();
       },
       cronGateway: {
+        list: async () => ({
+          jobs: (await cron.list({ includeDisabled: true })).map(cronJobReadView),
+        }),
         add: async (input) => {
           const normalized = normalizeCronJobCreate(input);
           if (!normalized) {
@@ -155,9 +172,9 @@ export function useClawMonitorFixture() {
         },
       },
     });
+    expect(installed.status, JSON.stringify(installed)).toBe("complete");
     let reconcilePending = false;
     const reconcile = async () => {
-      expect((await applyHeartbeatMonitorJobs({ cron, cfg: config })).ok).toBe(true);
       expect(
         (await reconcileSkillCollectionReviewJobs({ cron, cfg: config, logger })).ok,
         JSON.stringify(logger.warn.mock.calls.slice(-3)),
@@ -227,6 +244,9 @@ export function useClawMonitorFixture() {
         config,
         monitorGateway: gateway,
         cronGateway: {
+          list: async () => ({
+            jobs: (await cron.list({ includeDisabled: true })).map(cronJobReadView),
+          }),
           get: async (id) => {
             const job = await cron.readJob(id);
             return job ? cronJobReadView(job) : null;

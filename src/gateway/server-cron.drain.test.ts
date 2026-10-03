@@ -125,7 +125,7 @@ describe("gateway cron stop-and-drain automation ownership", () => {
       cancelAllMock.mockClear();
       const cfg: OpenClawConfig = {
         ...original.cfg,
-        agents: { entries: { main: { heartbeat: { every: "1h" } } } },
+        agents: { entries: { main: { default: true }, reviewer: {} } },
       };
       getRuntimeConfigMock.mockReturnValue(cfg);
       const entered = createDeferred();
@@ -193,9 +193,11 @@ describe("gateway cron stop-and-drain automation ownership", () => {
         expect(await listJobs({ includeDisabled: true })).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
-              agentId: "main",
-              payload: { kind: "heartbeat" },
-              schedule: expect.objectContaining({ everyMs: 3_600_000 }),
+              agentId: "reviewer",
+              declarationKey: "skill-collection-review:reviewer",
+              payload: expect.objectContaining({ kind: "agentTurn" }),
+              sessionTarget: "isolated",
+              schedule: expect.objectContaining({ everyMs: 7 * 24 * 60 * 60_000 }),
             }),
           ]),
         );

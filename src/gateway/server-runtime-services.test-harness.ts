@@ -4,24 +4,15 @@ import type { scheduleGatewayPostReadyMaintenance } from "./server-runtime-servi
 
 type StartSessionDeliveryRuntime =
   typeof import("../infra/session-delivery-queue-runtime.js").startSessionDeliveryRuntime;
-type StartHeartbeatRunner =
-  typeof import("../infra/heartbeat-runner-scheduler.js").startHeartbeatRunner;
 type DrainPendingDeliveries =
   typeof import("../infra/outbound/delivery-queue-recovery.js").drainPendingDeliveriesCore;
 type RecoverPendingDeliveries =
   typeof import("../infra/outbound/delivery-queue-recovery.js").recoverPendingDeliveries;
 
 const runtimeServiceMocks = vi.hoisted(() => {
-  const heartbeatRunner = {
-    stop: vi.fn(),
-    updateConfig: vi.fn(),
-  };
   const stopSessionUpstreamMonitor = vi.fn();
   const stopSessionDeliveryRuntime = vi.fn(async () => {});
   return {
-    heartbeatRunner,
-    startHeartbeatRunner: vi.fn<StartHeartbeatRunner>(() => heartbeatRunner),
-    runHeartbeatOnce: vi.fn(async () => ({ status: "ran" as const, durationMs: 1 })),
     startChannelHealthMonitor: vi.fn(() => ({
       stop: vi.fn(),
       shutdown: vi.fn(),
@@ -49,14 +40,6 @@ const runtimeServiceMocks = vi.hoisted(() => {
     assertQueuedConversationDeliveryAttemptAuthorized: vi.fn(),
   };
 });
-
-vi.mock("../infra/heartbeat-runner-scheduler.js", () => ({
-  startHeartbeatRunner: runtimeServiceMocks.startHeartbeatRunner,
-}));
-
-vi.mock("../infra/heartbeat-runner-run.js", () => ({
-  runHeartbeatOnce: runtimeServiceMocks.runHeartbeatOnce,
-}));
 
 vi.mock("../sessions/session-upstream-monitor.js", () => ({
   startSessionUpstreamMonitor: runtimeServiceMocks.startSessionUpstreamMonitor,
@@ -168,10 +151,6 @@ export function createMaintenanceHandles() {
 }
 
 export function resetRuntimeServiceMocks() {
-  runtimeServiceMocks.heartbeatRunner.stop.mockClear();
-  runtimeServiceMocks.heartbeatRunner.updateConfig.mockClear();
-  runtimeServiceMocks.startHeartbeatRunner.mockClear();
-  runtimeServiceMocks.runHeartbeatOnce.mockClear();
   runtimeServiceMocks.startChannelHealthMonitor.mockClear();
   runtimeServiceMocks.startSessionUpstreamMonitor.mockClear();
   runtimeServiceMocks.stopSessionUpstreamMonitor.mockClear();

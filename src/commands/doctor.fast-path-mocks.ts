@@ -174,6 +174,14 @@ vi.mock("../flows/doctor-startup-channel-maintenance.js", () => ({
   maybeRunDoctorStartupChannelMaintenance: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("./doctor-automatic-heartbeat-repair.js", () => ({
+  prepareAutomaticHeartbeatRepair: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./doctor-heartbeat-retirement.js", () => ({
+  retireHeartbeatWithDoctor: vi.fn(async (config: unknown) => config),
+}));
+
 vi.mock("./doctor-heartbeat-cadence-migration.js", () => ({
   collectHeartbeatCadenceMigrationFindings: vi.fn().mockResolvedValue([]),
   maybeMigrateHeartbeatCadenceToCron: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),

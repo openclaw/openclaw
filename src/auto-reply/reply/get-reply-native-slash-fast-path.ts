@@ -376,7 +376,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     }),
     triggerBodyNormalized: continuationTriggerBodyNormalized,
     resetTriggered: false,
-    hasResolvedHeartbeatModelOverride: false,
+    hasResolvedTurnModelOverride: false,
   });
   if (directiveResult.kind === "reply") {
     // The canonical directive owner already finalizes typing for every terminal reply.

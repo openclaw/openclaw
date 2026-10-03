@@ -178,7 +178,6 @@ async function runCommandPreflightMaintenance(
     sessionKey: prepared.sessionKey,
     runtimePolicySessionKey: prepared.sessionKey,
     storePath: prepared.storePath,
-    isHeartbeat: opts.bootstrapContextRunKind === "heartbeat",
     abortSignal: opts.abortSignal,
   };
   return memory.runSessionCompactionIfNeeded({

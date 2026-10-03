@@ -1,0 +1,31 @@
+title: Heartbeat baseline to ordinary automation migration
+scenario:
+  id: heartbeat-automation-migration-live
+  surface: automation
+  category: automation.heartbeat
+  coverage:
+    secondary:
+      - automation.heartbeat-scheduling
+      - automation.chat-announce-delivery
+  objective: Prove the same isolated heartbeat state fires and delivers before and after candidate Doctor migration.
+  successCriteria:
+    - The pinned pre-refactor baseline naturally fires a July-shaped heartbeat and delivers its marker.
+    - Candidate Doctor removes the legacy configuration while preserving job identity, cadence, active hours, and delivery route.
+    - The ordinary agentTurn job naturally fires and delivers a fresh marker exactly once.
+  docsRefs:
+    - docs/gateway/heartbeat.md
+    - docs/automation/cron-jobs.md
+  codeRefs:
+    - test/e2e/qa-lab/runtime/heartbeat-automation-migration-live.ts
+    - src/commands/doctor-heartbeat-cadence-migration.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/heartbeat-automation-migration-live.ts
+    summary: >-
+      Release-only live proof. Invoke the script with --baseline-root <path> for
+      the clean checkout pinned at b1c09f1088e0fba7b91c661d3b20b945c96ab141
+      and --output-dir <path> for evidence. Run on Crabbox/Testbox
+      with hydrated live-frontier credentials and OPENCLAW_BUILD_PRIVATE_QA=1.
+      The candidate checkout must be built or ready for the supported CLI wrapper.
+      The script owns both Gateway children, one synthetic qa-channel bus, and
+      isolated state; it never forces a cron occurrence.

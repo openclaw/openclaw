@@ -331,13 +331,13 @@ describe("incomplete-turn recovery policy", () => {
     ).toBe(false);
   });
 
-  it("settles a heartbeat reasoning-only stop as silence under its declared contract", () => {
+  it("settles an automation reasoning-only stop as silence under its declared contract", () => {
     const assistant = emptyAssistant({
       content: [
         {
           type: "thinking",
           thinking: "internal reasoning",
-          thinkingSignature: JSON.stringify({ id: "heartbeat_rs", type: "reasoning" }),
+          thinkingSignature: JSON.stringify({ id: "automation_rs", type: "reasoning" }),
         },
       ],
     });

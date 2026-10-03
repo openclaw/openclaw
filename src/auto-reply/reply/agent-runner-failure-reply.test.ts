@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { coerceToFailoverError, FailoverError } from "../../agents/failover-error.js";
-import {
-  GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
-} from "../../agents/failover/user-copy.js";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
@@ -143,21 +140,20 @@ describe("buildExternalRunFailureReply", () => {
     expect(reply.text).not.toContain("PRIVATE_CANARY");
   });
 
-  it("includes heartbeat preflight reasons without verbose opt-in", () => {
+  it("keeps uncurated preflight reasons behind verbose opt-in", () => {
     const message =
       "Codex session became active in another runner; wait for it to finish before continuing";
-    const reply = buildExternalRunFailureReply(
-      { message, error: new AgentHarnessPreflightError(message) },
-      { isHeartbeat: true },
-    );
+    const reply = buildExternalRunFailureReply({
+      message,
+      error: new AgentHarnessPreflightError(message),
+    });
 
-    expect(reply.text).toContain(`\n\nDetails: ${message}.\n`);
-    expect(reply.isGenericRunnerFailure).toBe(false);
-    expect(reply.text).not.toContain("/new");
+    expect(reply.text).toBe(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
+    expect(reply.isGenericRunnerFailure).toBe(true);
   });
 
   it.each(["401 unauthorized", "529 overloaded"])(
-    "keeps preflight %s diagnostics verbose-gated except for heartbeats",
+    "keeps preflight %s diagnostics verbose-gated",
     (failure) => {
       const message = `${failure}; reconnect before continuing. diagnostic-canary ${"x".repeat(1500)}`;
       const input = {
@@ -180,15 +176,6 @@ describe("buildExternalRunFailureReply", () => {
         text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
         isGenericRunnerFailure: true,
       });
-      const heartbeat = buildExternalRunFailureReply(input, {
-        isHeartbeat: true,
-        includeDetails: true,
-      });
-      expect(heartbeat.isGenericRunnerFailure).toBe(false);
-      expect(heartbeat.text).not.toContain("x".repeat(1500));
-      expect(heartbeat.text).toContain("reconnect before continuing");
-      expect(heartbeat.text).toContain("diagnostic-canary");
-      expect(heartbeat.text).not.toContain("/new");
       const verbose = buildExternalRunFailureReply(input, { includeDetails: true });
       expect(verbose.isGenericRunnerFailure).toBe(true);
       expect(verbose.text).toContain("reconnect before continuing");
@@ -197,20 +184,18 @@ describe("buildExternalRunFailureReply", () => {
     },
   );
 
-  it("keeps raw heartbeat failure details behind verbose opt-in", () => {
+  it("keeps raw failure details behind verbose opt-in", () => {
     const message = "Gateway SDK resource host is not bound";
     const input = { message, error: new Error(message) };
-    expect(buildExternalRunFailureReply(input, { isHeartbeat: true })).toEqual({
-      text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
-      isGenericRunnerFailure: false,
+    expect(buildExternalRunFailureReply(input)).toEqual({
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isGenericRunnerFailure: true,
     });
     const verbose = buildExternalRunFailureReply(input, {
-      isHeartbeat: true,
       includeDetails: true,
     });
-    expect(verbose.text).toContain(`\n\nDetails: ${message}.\n`);
-    expect(verbose.text).not.toContain("/new");
-    expect(verbose.isGenericRunnerFailure).toBe(false);
+    expect(verbose.text).toContain(message);
+    expect(verbose.isGenericRunnerFailure).toBe(true);
   });
 
   it("points unclassified failures to logs without exposing raw detail", () => {
@@ -310,30 +295,5 @@ describe("buildExternalRunFailureReply", () => {
       expect(reply.text).toContain("AI service is busy");
       expect(reply.text).not.toMatch(/local worker/i);
     }
-  });
-
-  it("uses generic copy when useHeartbeatFailureCopy is false even if isHeartbeat is true", () => {
-    const reply = buildExternalRunFailureReply(
-      { message: "test error", error: new Error("test") },
-      { isHeartbeat: true, useHeartbeatFailureCopy: false },
-    );
-    expect(reply.text).toBe(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
-    expect(reply.isGenericRunnerFailure).toBe(false);
-  });
-
-  it("uses heartbeat copy when useHeartbeatFailureCopy is true", () => {
-    const reply = buildExternalRunFailureReply(
-      { message: "test error", error: new Error("test") },
-      { isHeartbeat: true, useHeartbeatFailureCopy: true },
-    );
-    expect(reply.text).toBe(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT);
-  });
-
-  it("falls back to isHeartbeat when useHeartbeatFailureCopy is undefined", () => {
-    const reply = buildExternalRunFailureReply(
-      { message: "test error", error: new Error("test") },
-      { isHeartbeat: true },
-    );
-    expect(reply.text).toBe(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT);
   });
 });

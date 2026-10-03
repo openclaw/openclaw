@@ -27,6 +27,8 @@ export type AgentContextPruningConfig = NonNullable<SchemaAgentDefaultsConfig["c
 export type AgentContextLimitsConfig = NonNullable<SchemaAgentDefaultsConfig["contextLimits"]>;
 
 export type AgentDefaultsConfig = Omit<SchemaAgentDefaultsConfig, "sandbox"> & {
+  /** @deprecated Doctor input only; proactive checks are ordinary automation jobs. */
+  heartbeat?: LegacyHeartbeatConfig;
   /** @deprecated Doctor-only legacy input. */
   imageGenerationModel?: AgentToolModelConfig;
   /** @deprecated Doctor-only legacy input. */
@@ -55,3 +57,24 @@ export type AgentCompactionIdentifierPolicy = NonNullable<
   AgentCompactionConfig["identifierPolicy"]
 >;
 export type AgentCompactionConfig = NonNullable<SchemaAgentDefaultsConfig["compaction"]>;
+
+/** July 2026+ input for the one-way Heartbeat to Automations Doctor migration. */
+export type LegacyHeartbeatConfig = {
+  agentId?: string;
+  every?: string;
+  activeHours?: {
+    start?: string;
+    end?: string;
+    timezone?: string;
+  };
+  model?: string;
+  session?: string;
+  target?: string;
+  directPolicy?: "allow" | "block";
+  to?: string;
+  accountId?: string;
+  prompt?: string;
+  timeoutSeconds?: number;
+  lightContext?: boolean;
+  isolatedSession?: boolean;
+};

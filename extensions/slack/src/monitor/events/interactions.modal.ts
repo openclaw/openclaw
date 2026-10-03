@@ -384,6 +384,7 @@ async function emitSlackModalLifecycleEvent(params: {
         accountId: params.ctx.accountId,
       },
     },
+    params.ctx.runtime.log,
   );
 }
 

@@ -87,13 +87,12 @@ describe("plugin runtime refresh admission", () => {
       expect(onAttemptStart).toHaveBeenCalledTimes(2);
       const final = await buildReplyPayloads({
         payloads: result.payloads ?? [],
+        didLogHeartbeatStrip: false,
         messagingToolSentTexts: result.messagingToolSentTexts,
         messagingToolSentMediaUrls: result.messagingToolSentMediaUrls,
         messagingToolSentTargets: result.messagingToolSentTargets,
         messageProvider: "telegram",
         originatingTo: "telegram:123",
-        isHeartbeat: false,
-        didLogHeartbeatStrip: false,
         blockStreamingEnabled: false,
         blockReplyPipeline: null,
         replyToMode: "off",

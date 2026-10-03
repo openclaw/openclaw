@@ -103,7 +103,7 @@ async function withFamilyStore(
       log: createNoopLogger(),
       nowMs: () => 1_800_000_000_000,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
+      enqueueSessionEvent: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     try {

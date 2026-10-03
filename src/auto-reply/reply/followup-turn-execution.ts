@@ -90,8 +90,6 @@ export async function executeFollowupTurn(params: {
       cfg: turn.config,
     });
   turn.queued.run.terminalReplyExpectation = terminalReplyExpectation;
-  // Heartbeats can refresh a drain callback but never enter its queue.
-  const isHeartbeat = false;
   const roomEvent = turn.queued.currentInboundEventKind === "room_event";
   const progressAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
   const currentVerboseLevel = (): VerboseLevel => {
@@ -200,7 +198,6 @@ export async function executeFollowupTurn(params: {
   const baseTypingSignals = createTypingSignaler({
     typing: defaults.typing,
     mode: progressAllowed() ? defaults.typingMode : "never",
-    isHeartbeat,
   });
   const typingSignals: TypingSignaler = {
     ...baseTypingSignals,
@@ -216,7 +213,8 @@ export async function executeFollowupTurn(params: {
   };
   const progressOpts: InternalGetReplyOptions = {
     ...sourceOpts,
-    isHeartbeat,
+    internalEventExecution: turn.queued.run.internalEventExecution,
+    scheduledAutomation: turn.queued.run.scheduledAutomation,
     // Queue callbacks are refreshed per session, but authority belongs to the
     // queued turn. Never let a later callback widen or narrow an older item.
     operatorAuthority: turn.queued.operatorAuthority,
@@ -379,7 +377,6 @@ export async function executeFollowupTurn(params: {
           shouldEmitToolResult,
           shouldEmitToolOutput,
           pendingToolTasks,
-          isHeartbeat,
           sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
           runtimePolicySessionKey: turn.queued.run.runtimePolicySessionKey,
           getActiveSessionEntry: turn.session.current,
@@ -426,7 +423,6 @@ export async function executeFollowupTurn(params: {
         outcome: {
           kind: "rejected",
           payload: buildTerminalAgentRunFailureReplyPayload({
-            isHeartbeat,
             replyExpectation: terminalReplyExpectation,
             visibleReplyDelivered,
           }),

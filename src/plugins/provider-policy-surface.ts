@@ -25,6 +25,7 @@ const PROVIDER_POLICY_HOOK_KEYS = [
   "resolveFastModeSupport",
   "normalizeConfig",
   "applyConfigDefaults",
+  "resolveProactiveCadenceMs",
   "resolveConfigApiKey",
   "resolveThinkingProfile",
   "resolveToolSearchMode",

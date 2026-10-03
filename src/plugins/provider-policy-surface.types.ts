@@ -72,6 +72,8 @@ export type ProviderPolicySurface = {
   applyConfigDefaults?: (
     ctx: ProviderApplyConfigDefaultsContext,
   ) => OpenClawConfig | null | undefined;
+  /** Default cadence used only when provisioning a fresh proactive automation. */
+  resolveProactiveCadenceMs?: (ctx: ProviderApplyConfigDefaultsContext) => number | undefined;
   resolveConfigApiKey?: (ctx: ProviderResolveConfigApiKeyContext) => string | null | undefined;
   resolveThinkingProfile?: (
     ctx: ProviderDefaultThinkingPolicyContext,

@@ -40,7 +40,7 @@ export function registerRequiredReplyCompletionCases({
     });
 
     const { run } = createMinimalRun({
-      opts: { isHeartbeat: false, onPartialReply, onBlockReply, onReasoningStream },
+      opts: { onPartialReply, onBlockReply, onReasoningStream },
       blockStreamingEnabled: true,
       runOverrides: { silentExpected: true, terminalReplyExpectation: "optional" },
     });
@@ -67,7 +67,7 @@ export function registerRequiredReplyCompletionCases({
       });
 
       const { run } = createMinimalRun({
-        opts: { isHeartbeat: false, onPartialReply, onBlockReply, onReasoningStream },
+        opts: { onPartialReply, onBlockReply, onReasoningStream },
         blockStreamingEnabled: true,
         runOverrides: { silentExpected: true, terminalReplyExpectation },
       });
@@ -85,7 +85,7 @@ export function registerRequiredReplyCompletionCases({
     },
   );
 
-  it("delivers a required queued answer fallback from a heartbeat-owned drain", async () => {
+  it("delivers a required queued answer fallback from an event-owned drain", async () => {
     state.runEmbeddedAgentMock
       .mockResolvedValueOnce({ payloads: [], meta: {} })
       .mockResolvedValueOnce({
@@ -93,11 +93,17 @@ export function registerRequiredReplyCompletionCases({
         meta: { finalAssistantRawText: "NO_REPLY", finalAssistantVisibleText: "" },
       });
     const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
-    const heartbeat = createMinimalRun({
-      opts: { isHeartbeat: true, onBlockReply },
-      runOverrides: { terminalReplyExpectation: "optional" },
+    const internalEventExecution = { onStarted: vi.fn(), onTerminal: vi.fn() };
+    const event = createMinimalRun({
+      opts: { internalEventExecution, onBlockReply },
+      runOverrides: {
+        internalEventExecution,
+        inputProvenance: { kind: "internal_system", sourceTool: "exec" },
+        messageProvider: "event",
+        terminalReplyExpectation: "optional",
+      },
     });
-    await expect(heartbeat.run()).resolves.toBeUndefined();
+    await expect(event.run()).resolves.toBeUndefined();
     expect(onBlockReply).not.toHaveBeenCalled();
 
     const queued = createMinimalRun({

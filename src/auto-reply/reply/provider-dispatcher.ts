@@ -1,7 +1,7 @@
 // Dispatch adapters that bridge provider reply resolution into inbound dispatchers.
 import {
-  dispatchInboundMessageWithBufferedDispatcher,
-  dispatchInboundMessageWithDispatcher,
+  dispatchInboundMessageWithBufferedDispatcherInternal,
+  dispatchInboundMessageWithDispatcherInternal,
 } from "../dispatch.js";
 import type {
   DispatchReplyWithBufferedBlockDispatcher,
@@ -16,7 +16,7 @@ export type {
 /** Dispatch a reply using the buffered block dispatcher path. */
 export const dispatchReplyWithBufferedBlockDispatcherCore: DispatchReplyWithBufferedBlockDispatcher =
   async (params) => {
-    return await dispatchInboundMessageWithBufferedDispatcher({
+    return await dispatchInboundMessageWithBufferedDispatcherInternal({
       ctx: params.ctx,
       cfg: params.cfg,
       dispatcherOptions: params.dispatcherOptions,
@@ -29,7 +29,7 @@ export const dispatchReplyWithBufferedBlockDispatcherCore: DispatchReplyWithBuff
 
 /** Dispatch a reply using the standard dispatcher path. */
 export const dispatchReplyWithDispatcherCore: DispatchReplyWithDispatcher = async (params) => {
-  return await dispatchInboundMessageWithDispatcher({
+  return await dispatchInboundMessageWithDispatcherInternal({
     ctx: params.ctx,
     cfg: params.cfg,
     dispatcherOptions: params.dispatcherOptions,

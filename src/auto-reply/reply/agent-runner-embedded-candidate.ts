@@ -126,7 +126,11 @@ export async function runEmbeddedFallbackCandidate(
         messageActionTurnCapability: params.messageActionTurnCapability,
         lifecycleGeneration: params.getLifecycleGeneration(),
         allowGatewaySubagentBinding: true,
-        trigger: turn.isHeartbeat ? "heartbeat" : "user",
+        trigger: turn.followupRun.run.scheduledAutomation
+          ? "cron"
+          : turn.followupRun.run.internalEventExecution
+            ? "event"
+            : "user",
         cronCreatorAuthorityCapability: turn.opts?.cronCreatorAuthorityCapability,
         cronCreatorAuthorityUnavailableReason:
           turn.opts?.turnAdoptionLifecycle?.cronCreatorAuthorityUnavailable,
@@ -159,10 +163,17 @@ export async function runEmbeddedFallbackCandidate(
         explicitSkillSelections: turn.followupRun.explicitSkillSelections,
         extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
         sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
-        forceMessageTool: turn.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
-        // Heartbeat ambient routes are delivery context, never implicit message recipients.
-        // Omit false so subagent sessions keep their downstream default.
-        ...(turn.isHeartbeat ? { requireExplicitMessageTarget: true } : {}),
+        forceMessageTool:
+          turn.followupRun.run.scheduledAutomation?.sourceDelivery?.messageTool.force ??
+          turn.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
+        ...(turn.followupRun.run.scheduledAutomation
+          ? {
+              requireExplicitMessageTarget: true,
+              disableMessageTool:
+                turn.followupRun.run.scheduledAutomation.sourceDelivery?.messageTool.enabled ===
+                false,
+            }
+          : {}),
         cleanupBundleMcpOnRunEnd: turn.opts?.cleanupBundleMcpOnRunEnd,
         silentReplyPromptMode: turn.followupRun.run.silentReplyPromptMode,
         suppressNextUserMessagePersistence: params.suppressQueuedUserPersistenceForCandidate,
@@ -184,8 +195,6 @@ export async function runEmbeddedFallbackCandidate(
         disableTools: turn.opts?.disableTools,
         // Marks reply-owned policy; final attempt preparation binds its concrete route.
         toolAuthorityFingerprint: turn.replyOperation?.toolAuthorityFingerprint,
-        enableHeartbeatTool: turn.opts?.enableHeartbeatTool,
-        forceHeartbeatTool: turn.opts?.forceHeartbeatTool,
         bootstrapContextMode: turn.opts?.bootstrapContextMode,
         bootstrapContextRunKind: params.bootstrapContextRunKind,
         images: params.currentTurnImages.images,
@@ -203,10 +212,11 @@ export async function runEmbeddedFallbackCandidate(
         onDeferredLifecycleOwner: params.deferredLifecycle.adopt,
         onDeferredLifecycleAbort: params.deferredLifecycle.abort,
         onRetryWait: params.deferredLifecycle.beginRetryWait,
-        onExecutionStarted: (info) => {
+        onExecutionStarted: async (info) => {
           if (info?.lifecycleGeneration) {
             params.onLifecycleGeneration(info.lifecycleGeneration);
           }
+          await turn.followupRun.run.scheduledAutomation?.executionIdentity?.onExecutionStarted?.();
         },
         onExecutionPhase: (info) => {
           if (info.phase === "model_call_started" && attemptCompactionCount > 0) {

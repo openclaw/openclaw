@@ -106,7 +106,6 @@ function createAdmissionFixture() {
       resolvedBlockStreamingBreak: "message_end",
     },
     runtimePolicySessionKey: sessionKey,
-    isHeartbeat: false,
     explicitThinkingLevelOverride: undefined,
     effectiveQueueMode: undefined,
     promptSessionCtx: ctx,

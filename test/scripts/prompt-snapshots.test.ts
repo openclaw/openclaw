@@ -88,7 +88,7 @@ describe("happy path prompt snapshots", () => {
     const scenarios = [
       { name: "telegram-direct", replacements: [] },
       { name: "discord-group", replacements: ["sessions_spawn"] },
-      { name: "heartbeat-turn", replacements: ["openclaw_direct"] },
+      { name: "automation-turn", replacements: ["openclaw"] },
     ];
 
     for (const { name, replacements } of scenarios) {
@@ -151,6 +151,33 @@ describe("happy path prompt snapshots", () => {
     await expect(materializeCodexDynamicToolSnapshot("../outside")).rejects.toThrow(
       "Invalid Codex dynamic-tool snapshot scenario",
     );
+  });
+
+  it("shows an ordinary automation's prompt and its live self-management surface", () => {
+    const catalog = generated.find(
+      (file) => path.basename(file.path) === "codex-dynamic-tools.automation-turn.json",
+    );
+    expect(catalog).toBeDefined();
+    type Tool = { name: string; inputSchema?: { properties?: { action?: { enum?: string[] } } } };
+    const tools = (JSON.parse(catalog!.content) as Array<Tool & { tools?: Tool[] }>).flatMap(
+      (spec) => spec.tools ?? [spec],
+    );
+    expect(tools.map((tool) => tool.name)).not.toContain("heartbeat_respond");
+    const actions = tools.find((tool) => tool.name === "automations")?.inputSchema?.properties
+      ?.action?.enum;
+    expect(actions).toEqual(
+      expect.arrayContaining(["scratch_get", "scratch_set", "record_result"]),
+    );
+    for (const action of ["add", "update", "wake", "next_check"]) {
+      expect(actions).not.toContain(action);
+    }
+    const prompt = generated.find(
+      (file) => path.basename(file.path) === CODEX_PROMPT_SNAPSHOT_FILES["automation-turn"],
+    )?.content;
+    expect(prompt).toContain('"trigger": "cron"');
+    expect(prompt).toContain("This is an unattended scheduled run.");
+    expect(prompt).toContain("Automation scratch (revision 1):");
+    expect(prompt).toContain("If nothing needs doing, reply exactly NO_REPLY.");
   });
 
   it.each(Object.entries(CODEX_PROMPT_SNAPSHOT_FILES))(
@@ -315,7 +342,7 @@ describe("happy path prompt snapshots", () => {
   });
 
   it("keeps managed persona outside native collaboration and user-input history", async () => {
-    for (const scenario of ["telegram-direct", "discord-group", "heartbeat-turn"]) {
+    for (const scenario of ["telegram-direct", "discord-group", "automation-turn"]) {
       const snapshot = await materializeCodexPromptSnapshot(scenario);
       const turnSection = renderedPromptSection(
         snapshot,

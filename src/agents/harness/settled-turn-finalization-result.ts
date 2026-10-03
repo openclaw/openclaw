@@ -106,7 +106,6 @@ export function projectSettledTurnFinalizationAttemptResult(
     result.messagingToolSentMediaUrls.length > 0 ||
     result.messagingToolSentTargets.length > 0 ||
     (result.messagingToolSourceReplyPayloads?.length ?? 0) > 0 ||
-    result.heartbeatToolResponse ||
     (result.toolMediaUrls?.length ?? 0) > 0 ||
     (result.hostOwnedToolMediaUrls?.length ?? 0) > 0 ||
     result.toolAudioAsVoice ||

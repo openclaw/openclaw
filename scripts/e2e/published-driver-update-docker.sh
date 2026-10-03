@@ -27,6 +27,15 @@ cleanup() {
 trap cleanup EXIT
 ARTIFACT_DIR="${2:-$ROOT_DIR/.artifacts/published-driver-update}"
 DRIVER_TAG="${3:-latest}"
+PUBLISHED_DRIVER_SCENARIO="${4:-normal}"
+case "$PUBLISHED_DRIVER_SCENARIO" in
+  normal|heartbeat)
+    ;;
+  *)
+    echo "Expected published-driver scenario: normal or heartbeat" >&2
+    exit 2
+    ;;
+esac
 mkdir -p "$ARTIFACT_DIR"
 ARTIFACT_DIR="$(cd "$ARTIFACT_DIR" && pwd)"
 printf 'prepare-container\n' > "$ARTIFACT_DIR/phase.txt"
@@ -56,4 +65,4 @@ docker_e2e_run_with_harness \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
   node scripts/e2e/lib/upgrade-survivor/published-driver.mjs \
-    /tmp/openclaw-current.tgz /tmp/published-driver-artifacts "$DRIVER_TAG"
+    /tmp/openclaw-current.tgz /tmp/published-driver-artifacts "$DRIVER_TAG" "$PUBLISHED_DRIVER_SCENARIO"

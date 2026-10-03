@@ -375,13 +375,6 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
-    id: "heartbeat_respond",
-    description: "Accept heartbeat outcomes for post-turn handling",
-    sectionId: "automation",
-    profiles: [],
-    includeInOpenClawGroup: true,
-  },
-  {
     id: AUTOMATIONS_TOOL_NAME,
     description: CRON_TOOL_DISPLAY_SUMMARY,
     sectionId: "automation",

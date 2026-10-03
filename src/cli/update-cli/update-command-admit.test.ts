@@ -285,6 +285,85 @@ describe("candidate update admission", () => {
   );
 
   it.each([
+    "supported",
+    "unrelated invalid field",
+    "invalid heartbeat",
+    "read-only",
+    "future-written",
+    "included",
+    "changed source",
+  ] as const)(
+    "inspects %s heartbeat config without retiring or backing up live data",
+    async (kind) => {
+      const agents = {
+        entries: {
+          main: {
+            heartbeat: {
+              every: kind === "invalid heartbeat" ? "private-invalid-value" : "30m",
+              target: "none",
+            },
+          },
+        },
+      };
+      if (kind === "included") {
+        fs.writeFileSync(
+          path.join(path.dirname(configPath), "agents.json"),
+          JSON.stringify(agents),
+        );
+      }
+      writeConfig({
+        agents: kind === "included" ? { $include: "agents.json" } : agents,
+        ...(kind === "unrelated invalid field"
+          ? { gateway: { port: "private-invalid-value" } }
+          : {}),
+        ...(kind === "future-written" ? { meta: { lastTouchedVersion: "9999.1.1" } } : {}),
+      });
+      vi.stubEnv("OPENCLAW_CONFIG_READONLY", kind === "read-only" ? "1" : undefined);
+      vi.stubEnv("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS", undefined);
+      fs.writeFileSync(`${configPath}.bak`, "retained pre-upgrade backup\n");
+      let before = snapshotFiles();
+      if (kind === "changed source") {
+        const capture = schemaPreflight.captureTargetDatabaseSchemaContext;
+        vi.spyOn(schemaPreflight, "captureTargetDatabaseSchemaContext").mockImplementationOnce(
+          async (...args) => {
+            writeConfig({ agents, gateway: { port: "private-invalid-value" } });
+            before = snapshotFiles();
+            return capture(...args);
+          },
+        );
+      }
+
+      await updateAdmitCommand(contextPath);
+
+      expect(readVerdict()).toMatchObject(
+        kind === "supported"
+          ? {
+              verdict: "admit",
+              reasons: [],
+              warnings: [
+                { code: "config-warning", message: expect.stringContaining("legacy fields") },
+              ],
+              facts: {
+                checks: expect.arrayContaining([
+                  { name: "config", status: "warn" },
+                  { name: "database-schema", status: "ok" },
+                ]),
+              },
+            }
+          : {
+              verdict: "refuse",
+              reasons: [expect.objectContaining({ code: "invalid-config" })],
+            },
+      );
+      expect(process.exitCode).toBe(kind === "supported" ? 0 : 3);
+      expect(stdout).not.toContain("private-invalid-value");
+      expect(stderr).toBe("");
+      expect(snapshotFiles()).toEqual(before);
+      expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(false);
+    },
+  );
+
+  it.each([
     "cron/runs",
     "delivery-queue",
     "session-delivery-queue/failed",

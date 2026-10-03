@@ -231,69 +231,6 @@ describe("config validation metadata", () => {
     }
   });
 
-  it("normalizes composed local references without changing shared definitions", () => {
-    const account = accountSchema();
-    const schema = {
-      type: "object",
-      properties: {
-        appId: { type: "string" },
-        appSecret: { type: "string" },
-        accounts: {
-          type: "object",
-          properties: { default: { $ref: "#/$defs/Account" } },
-          patternProperties: { "^work-": { $ref: "#/$defs/Account" } },
-          additionalProperties: { $ref: "#/$defs/Account" },
-        },
-      },
-      required: ["appId", "appSecret"],
-      additionalProperties: false,
-    };
-    const root = { anyOf: [schema] };
-    const external = { $ref: "#/$defs/Root", $defs: { Root: root, Account: account } };
-    const original = structuredClone(external);
-    mockLoadPluginManifestRegistry.mockReturnValue(registry(feishuPlugin(external)));
-    const config = {
-      heartbeatVisibility: { showOk: true },
-      accounts: {
-        default: { heartbeatVisibility: { showOk: true } },
-        "work-qa": { heartbeatVisibility: { useIndicator: false } },
-        work: { heartbeatVisibility: { showAlerts: false } },
-      },
-    };
-    expect(validateFeishu(config).ok).toBe(true);
-    expect(
-      validateFeishu({
-        ...config,
-        accounts: { work: { heartbeatVisibility: { showAlerts: 0 } } },
-      }).ok,
-    ).toBe(false);
-    expect(external).toEqual(original);
-  });
-
-  it("replaces stale heartbeat declarations while preserving open custom fields", () => {
-    const schema = {
-      type: "object",
-      properties: {
-        heartbeatVisibility: false,
-        accounts: { type: "object", additionalProperties: true },
-      },
-      additionalProperties: true,
-    };
-    mockLoadPluginManifestRegistry.mockReturnValue(registry(feishuPlugin(schema)));
-    const base = {
-      customChannelField: true,
-      heartbeatVisibility: { showOk: true },
-      accounts: { work: { customAccountField: true, heartbeatVisibility: { showAlerts: false } } },
-    };
-    expect(validateFeishu(base).ok).toBe(true);
-    for (const config of [
-      { ...base, heartbeatVisibility: "enabled" },
-      { ...base, accounts: { work: { heartbeatVisibility: { showOk: "yes" } } } },
-    ]) {
-      expect(validateFeishu(config).ok).toBe(false);
-    }
-  });
-
   it("keeps schema ownership when closer root metadata shadows a later schema", () => {
     mockLoadPluginManifestRegistry.mockReturnValue(
       registry(

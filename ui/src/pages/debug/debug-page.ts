@@ -4,7 +4,7 @@ import { html } from "lit";
 import { state } from "lit/decorators.js";
 import type { EventLogEntry } from "../../api/event-log.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { HealthSnapshot, StatusSummary } from "../../api/types.ts";
+import type { CronStatus, HealthSnapshot, StatusSummary } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
@@ -33,7 +33,7 @@ class DebugPage extends OpenClawLightDomElement {
   @state() private debugStatus: StatusSummary | null = null;
   @state() private debugHealth: HealthSnapshot | null = null;
   @state() private debugModels: unknown[] = [];
-  @state() private debugHeartbeat: unknown = null;
+  @state() private debugAutomations: CronStatus | null = null;
   @state() private debugLanes: CommandLaneSnapshot[] = [];
   @state() private debugDynamic: CommandLaneDynamicSummary | null = null;
   @state() private debugCallMethod = "";
@@ -73,7 +73,7 @@ class DebugPage extends OpenClawLightDomElement {
       this.debugStatus = result.status;
       this.debugHealth = result.health;
       this.debugModels = result.models;
-      this.debugHeartbeat = result.heartbeat;
+      this.debugAutomations = result.automations;
       this.debugLanes = result.lanes;
       this.debugDynamic = result.dynamic;
     },
@@ -88,14 +88,14 @@ class DebugPage extends OpenClawLightDomElement {
       if (!client) {
         return initialState;
       }
-      const [heartbeat, lanes] = await Promise.all([
-        client.request("last-heartbeat", {}, { signal }),
+      const [automations, lanes] = await Promise.all([
+        client.request<CronStatus>("cron.status", {}, { signal }),
         loadCommandLaneDiagnostics(client, signal),
       ]);
-      return { heartbeat, ...lanes };
+      return { automations, ...lanes };
     },
     onComplete: (result) => {
-      this.debugHeartbeat = result.heartbeat;
+      this.debugAutomations = result.automations;
       this.debugLanes = result.lanes;
       this.debugDynamic = result.dynamic;
       this.debugLiveError = null;
@@ -110,7 +110,7 @@ class DebugPage extends OpenClawLightDomElement {
       this.debugStatus = null;
       this.debugHealth = null;
       this.debugModels = [];
-      this.debugHeartbeat = null;
+      this.debugAutomations = null;
       this.debugLanes = [];
       this.debugDynamic = null;
       this.debugCallResult = null;
@@ -237,7 +237,7 @@ class DebugPage extends OpenClawLightDomElement {
       status: this.debugStatus,
       health: this.debugHealth,
       models: this.debugModels,
-      heartbeat: this.debugHeartbeat,
+      automations: this.debugAutomations,
       lanes: this.debugLanes,
       dynamic: this.debugDynamic,
       diagnosticsError: this.debugDiagnosticsError ?? this.debugLiveError,

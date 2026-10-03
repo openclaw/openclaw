@@ -61,15 +61,16 @@ Use the phase-specific hooks for new plugins:
   a tool-backed capability and the same turn must be allowed to call that
   tool. See [Authorized prompt
   enrichment](/plugins/hooks/prompt-and-session#authorized-prompt-enrichment).
-- `heartbeat_prompt_contribution`: runs only for heartbeat turns and returns
+- `heartbeat_prompt_contribution`: contributes context to receipt-owned migrated/default proactive automation turns and returns
   `prependContext` or `appendContext`. Intended for background monitors that
   need to summarize current state without changing user-initiated turns.
 
-On the embedded and CLI prompt-preparation paths, ordering is: drain queued
-injections → `agent_turn_prepare` → heartbeat contribution (if applicable) →
-ordinary `before_prompt_build` → finalized tool policy → authorized prompt
-enrichment. `agent_turn_prepare` and queued-injection draining are not wired
-into the Codex or Copilot prompt paths.
+The ordinary automation runner applies `heartbeat_prompt_contribution` to eligible
+jobs before handing their request to session execution. On embedded and CLI
+prompt-preparation paths, ordering is: drain queued injections →
+`agent_turn_prepare` → ordinary `before_prompt_build` → finalized tool policy →
+authorized prompt enrichment. `agent_turn_prepare` and queued-injection draining
+are not wired into the Codex or Copilot prompt paths.
 
 For multiple registrations, the first defined provider/model override and
 `systemPrompt` win. Context additions concatenate in priority order, and tool

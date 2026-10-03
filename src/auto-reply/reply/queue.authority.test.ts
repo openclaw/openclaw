@@ -237,7 +237,6 @@ describe("followup queue authority", () => {
       sourceReplyDeliveryMode: "message_tool_only",
       sendPolicyDenied: false,
       successfulSourceReplyDelivery: false,
-      isHeartbeat: false,
       isRoomEvent: false,
     });
     if (recovery.kind !== "retry") {

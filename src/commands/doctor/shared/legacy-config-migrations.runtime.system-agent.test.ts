@@ -7,7 +7,7 @@ import type {
   AgentEntryConfig,
   OpenClawConfig,
 } from "../../../config/types.js";
-import { resolveHeartbeatAgents } from "../../../infra/heartbeat-config.js";
+import { resolveHeartbeatAgents } from "../../doctor-heartbeat-legacy.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 import { prepareLegacyConfigMigrationRuntime } from "./legacy-config-migrate.test-support.js";

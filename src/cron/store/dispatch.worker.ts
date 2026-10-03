@@ -34,8 +34,15 @@ const loadScheduler = createLazyRuntimeModule(() => import("./scheduler-state.wo
 let scheduler: typeof import("./scheduler-state.worker.js") | undefined;
 const loadStartup = createLazyRuntimeModule(() => import("./startup-plan.worker.js"));
 let startup: typeof import("./startup-plan.worker.js") | undefined;
+const loadProactive = createLazyRuntimeModule(() => import("../default-proactive-job.worker.js"));
+let proactive: typeof import("../default-proactive-job.worker.js") | undefined;
 
 export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> | undefined {
+  if (type === "cron.provisionDefaultProactive" && !proactive) {
+    return loadProactive().then((loaded) => {
+      proactive = loaded;
+    });
+  }
   if (type === "cron.planStartup" && !startup) {
     return loadStartup().then((loaded) => {
       startup = loaded;
@@ -100,6 +107,7 @@ export function isCronStateWorkerCommand(command: {
   input: unknown;
 }): command is SqliteWorkerCommand<CronStateWorkerOperations> {
   switch (command.type) {
+    case "cron.provisionDefaultProactive":
     case "cron.recordSkippedRuns":
     case "cron.planStartup":
     case "cron.mutateExternalState":
@@ -134,6 +142,11 @@ export function executeCronStateCommand(
   database: OpenClawStateDatabase,
 ): CronStateWorkerOperations[keyof CronStateWorkerOperations]["output"] {
   switch (command.type) {
+    case "cron.provisionDefaultProactive":
+      if (!proactive) {
+        throw new Error("Default automation provisioning worker is not prepared");
+      }
+      return proactive.provisionDefaultProactiveJobInWorker(database, command.input);
     case "cron.registerQuarantine":
       return runOpenClawStateWriteTransaction(
         ({ db }) => {

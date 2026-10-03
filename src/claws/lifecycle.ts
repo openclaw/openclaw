@@ -3,8 +3,9 @@ import { homedir } from "node:os";
 import { relative, resolve } from "node:path";
 import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { assertCronJobScratchContent } from "../cron/scratch-contract.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
-import { FsSafeError, root as fsSafeRoot, type Root } from "../infra/fs-safe.js";
+import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolveUserPath } from "../utils.js";
 import {
   clawAddCapabilityChange,
@@ -15,6 +16,7 @@ import {
 } from "./application-plan.js";
 import { digestClawBytes, digestClawValue } from "./digest.js";
 import { digestClawMcpServer } from "./mcp.js";
+import { planPortableHeartbeat } from "./portable-heartbeat.js";
 import { clawManifestWorkspaceConflictsWithPath } from "./schema.js";
 import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
 import { materializeClawToolProfile } from "./tool-profile-consent.js";
@@ -34,6 +36,12 @@ import {
   type ClawSourceIdentity,
   type ClawWorkspaceSourceSnapshot,
 } from "./types.js";
+import {
+  inspectWorkspaceFileAction,
+  workspaceSourceErrorCode,
+  workspaceSourceMessage,
+  type PendingWorkspaceFileAction,
+} from "./workspace-source-plan.js";
 
 const AGENT_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 
@@ -60,112 +68,6 @@ function canonicalWorkspacePath(value: string): string {
 
 function blocker(code: string, path: string, message: string): ClawDiagnostic {
   return { level: "error", code, phase: "plan", path, message };
-}
-
-type PendingWorkspaceFileAction = {
-  action: ClawAddPlanAction;
-  sourcePath: string;
-  manifestPath: string;
-  byteLength: number;
-  content?: Buffer;
-};
-
-function workspaceSourceErrorCode(
-  error: unknown,
-): "workspace_source_invalid" | "workspace_source_unsafe" | "workspace_source_too_large" {
-  if (error instanceof FsSafeError) {
-    if (error.code === "too-large") {
-      return "workspace_source_too_large";
-    }
-    if (error.code === "symlink" || error.code === "hardlink" || error.code === "path-mismatch") {
-      return "workspace_source_unsafe";
-    }
-  }
-  if (error instanceof Error && error.message.includes("symlinked directory")) {
-    return "workspace_source_unsafe";
-  }
-  return "workspace_source_invalid";
-}
-
-function workspaceSourceMessage(code: string, sourcePath: string): string {
-  if (code === "workspace_source_too_large") {
-    return `Workspace source ${JSON.stringify(sourcePath)} exceeds ${MAX_MANAGED_FILE_BYTES} bytes.`;
-  }
-  if (code === "workspace_sources_too_large") {
-    return `Workspace sources exceed ${MAX_MANAGED_WORKSPACE_BYTES} aggregate bytes.`;
-  }
-  if (code === "workspace_source_unsafe") {
-    return `Workspace source ${JSON.stringify(sourcePath)} must be a regular, non-symlinked, non-hardlinked file.`;
-  }
-  return `Workspace source ${JSON.stringify(sourcePath)} must resolve to a file inside the Claw package.`;
-}
-
-async function inspectWorkspaceFileAction(params: {
-  sourceRoot: Root;
-  source: ClawSourceIdentity;
-  workspace: string;
-  sourcePath: string;
-  targetPath: string;
-  id: string;
-  manifestPath: string;
-}): Promise<{
-  pending?: PendingWorkspaceFileAction;
-  action?: ClawAddPlanAction;
-  blocker?: ClawDiagnostic;
-}> {
-  const requestedSource = resolve(params.source.packageRoot, params.sourcePath);
-  const requestedTarget = resolve(params.workspace, params.targetPath);
-  try {
-    await assertNoSymlinkParents({
-      rootDir: params.source.packageRoot,
-      targetPath: requestedSource,
-      allowMissing: false,
-      messagePrefix: "Workspace source",
-    });
-    const opened = await params.sourceRoot.open(params.sourcePath, {
-      hardlinks: "reject",
-      symlinks: "reject",
-    });
-    await opened[Symbol.asyncDispose]();
-    if (opened.stat.size > MAX_MANAGED_FILE_BYTES) {
-      throw new FsSafeError(
-        "too-large",
-        `file exceeds limit of ${MAX_MANAGED_FILE_BYTES} bytes (got ${opened.stat.size})`,
-      );
-    }
-    return {
-      pending: {
-        sourcePath: params.sourcePath,
-        manifestPath: params.manifestPath,
-        byteLength: opened.stat.size,
-        action: {
-          kind: "workspaceFile",
-          id: params.id,
-          action: "write",
-          target: requestedTarget,
-          source: opened.realPath,
-          details: { expectedState: "absent" },
-          blocked: false,
-        },
-      },
-    };
-  } catch (error) {
-    const code = workspaceSourceErrorCode(error);
-    const message = workspaceSourceMessage(code, params.sourcePath);
-    const diagnostic = blocker(code, params.manifestPath, message);
-    return {
-      action: {
-        kind: "workspaceFile",
-        id: params.id,
-        action: "write",
-        target: requestedTarget,
-        source: requestedSource,
-        blocked: true,
-        reason: diagnostic.message,
-      },
-      blocker: diagnostic,
-    };
-  }
 }
 
 export async function buildClawAddPlan(params: {
@@ -203,6 +105,7 @@ export async function buildClawAddPlan(params: {
     context.sourceReferenceRoot ? sourceReferencePath(context.sourceReferenceRoot, path) : fallback;
   const sourceRoot = await fsSafeRoot(packageRoot);
   const blockers: ClawDiagnostic[] = [];
+  const diagnostics: ClawDiagnostic[] = [...(params.diagnostics ?? [])];
   const actions: ClawAddPlanAction[] = [];
   const capabilityChanges: ClawAddCapabilityChange[] = [];
   const readinessRequirements: ClawLocalPrerequisite[] = [];
@@ -222,9 +125,10 @@ export async function buildClawAddPlan(params: {
   const persistedOpenClawAgentSettings = params.reconstructLegacyDynamicToolProfilePlan
     ? openClawAgentSettings
     : materializeClawToolProfile(openClawAgentSettings);
+  const { heartbeat: _portableHeartbeat, ...runtimeAgentSettings } = persistedOpenClawAgentSettings;
   const agentConfig: ClawAddPlan["agent"]["config"] = {
     ...params.manifest.agent,
-    ...persistedOpenClawAgentSettings,
+    ...runtimeAgentSettings,
     id: finalId,
     workspace,
   };
@@ -245,7 +149,7 @@ export async function buildClawAddPlan(params: {
     details: { ...agentConfig, expectedState: "absent" },
     blocked: agentBlocked || !AGENT_ID_PATTERN.test(finalId),
   });
-  const agentCapability = clawAgentCapabilityChange(finalId, openClawAgentSettings);
+  const agentCapability = clawAgentCapabilityChange(finalId, runtimeAgentSettings);
   if (agentCapability) {
     capabilityChanges.push(agentCapability);
   }
@@ -431,6 +335,22 @@ export async function buildClawAddPlan(params: {
           maxBytes: MAX_MANAGED_FILE_BYTES,
           symlinks: "reject",
         });
+        if (pending.action.id === "HEARTBEAT.md") {
+          const content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+            read.buffer,
+          );
+          assertCronJobScratchContent(content);
+          if (/\b(?:heartbeat_respond|HEARTBEAT_OK)\b/.test(content)) {
+            diagnostics.push({
+              level: "warning",
+              phase: "plan",
+              code: "obsolete_heartbeat_instructions",
+              path: pending.manifestPath,
+              message:
+                "HEARTBEAT.md mentions retired heartbeat tools/tokens. Its bytes are preserved; review the instructions for ordinary automation tools and NO_REPLY.",
+            });
+          }
+        }
         pending.action.source = planSourcePath(pending.sourcePath, read.realPath);
         pending.action.digest = digestClawBytes(read.buffer);
       } catch (error) {
@@ -442,6 +362,27 @@ export async function buildClawAddPlan(params: {
         blockers.push(diagnostic);
       }
     }
+  }
+
+  const portableAction = planPortableHeartbeat(
+    actions,
+    params.openClawProfile?.agent.heartbeat,
+    finalId,
+  );
+  if (portableAction) {
+    capabilityChanges.push(
+      clawAddCapabilityChange({
+        kind: "cronJob",
+        id: portableAction.id,
+        path: "agent.heartbeat",
+        action: "schedule",
+        reason: portableAction.reason!,
+        effect: {
+          heartbeat: portableAction.details?.heartbeat,
+          scratchDigest: portableAction.digest,
+        },
+      }),
+    );
   }
 
   for (const [index, pkg] of params.manifest.packages.entries()) {
@@ -684,6 +625,6 @@ export async function buildClawAddPlan(params: {
     },
     extensions,
     blockers,
-    diagnostics: [...(params.diagnostics ?? []), ...notices],
+    diagnostics: [...diagnostics, ...notices],
   };
 }
