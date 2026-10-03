@@ -108,15 +108,10 @@ struct StatusMenuSummariesTests {
             _ = try await fixture.control.request(method: "health")
             await fixture.sessions.refresh()
             #expect(fixture.sessions.rows.map(\.label) == ["Gateway A"])
-            let lease = try #require(await fixture.gateway.captureServerLease())
             if transition == "replacement" {
                 fixture.revision.setValue(2)
             } else if transition == "reconnect" {
-                fixture.session.latestTask()?.emitReceiveFailure()
-                try await TestWait.state("retired session menu server lease") {
-                    !fixture.gateway.serverLeaseMatchesCurrentState(lease)
-                }
-                _ = try await fixture.gateway.acquireServerLease()
+                try await fixture.reconnect()
             }
 
             // The menu projects these values before refreshing over the network.
@@ -136,16 +131,11 @@ struct StatusMenuSummariesTests {
             _ = try await fixture.control.request(method: "health")
             let first = await SessionMenuPreviewLoader.load(sessionKey: "main", maxItems: 10, gateway: fixture.gateway)
             #expect(first.items.map(\.text) == ["Gateway A"])
-            let lease = try #require(await fixture.gateway.captureServerLease())
             if transition.hasSuffix("replacement") {
                 fixture.revision.setValue(2)
                 fixture.previewFails.setValue(transition == "failed-replacement")
             } else if transition == "reconnect" {
-                fixture.session.latestTask()?.emitReceiveFailure()
-                try await TestWait.state("retired session preview server lease") {
-                    !fixture.gateway.serverLeaseMatchesCurrentState(lease)
-                }
-                _ = try await fixture.gateway.acquireServerLease()
+                try await fixture.reconnect()
             }
 
             _ = try await fixture.control.request(method: "health")
@@ -436,6 +426,20 @@ private final class UsageGatewayFixture {
     func releaseCostResponses(for owner: String) {
         let responses = self.pendingCostResponses.withValue { $0.removeValue(forKey: owner) ?? [] }
         responses.forEach { $0() }
+    }
+
+    func reconnect() async throws {
+        let lease = try #require(await self.gateway.captureServerLease())
+        let deliveries = await self.gateway.subscribe()
+        let socket = try #require(self.session.latestTask())
+        socket.emitReceiveFailure()
+        let retired = await deliveries.first { delivery in
+            guard case .disconnected = delivery.event else { return false }
+            return delivery.serverLease == lease
+        }
+        try #require(retired != nil)
+        #expect(!self.gateway.serverLeaseMatchesCurrentState(lease))
+        _ = try await self.gateway.acquireServerLease()
     }
 
     func close() async {
