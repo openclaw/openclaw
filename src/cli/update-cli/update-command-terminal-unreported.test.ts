@@ -295,5 +295,15 @@ it.each(["lost-authority", "pending-publication", "completed-publication"] as co
     expect(onResult).not.toHaveBeenCalled();
     expect(mocks.action).not.toHaveBeenCalled();
     expect(mocks.diagnose).not.toHaveBeenCalled();
+    if (condition === "completed-publication") {
+      const errors = vi
+        .mocked(defaultRuntime.error)
+        .mock.calls.map(([line]) => String(line))
+        .join("\n");
+      expect(errors).toContain(
+        "Update result publication failed after update history was already finalized as succeeded",
+      );
+      expect(errors).not.toContain("Update recovery remains pending");
+    }
   },
 );

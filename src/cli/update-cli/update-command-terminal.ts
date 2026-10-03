@@ -206,6 +206,26 @@ export async function withUpdateCommandTerminalResult<T>(
       ) {
         throw error;
       }
+      if (run) {
+        const finalized = getUpdateRun(run.runId, { env: run.env });
+        if (finalized?.status === "succeeded") {
+          defaultRuntime.error(
+            `Update result publication failed after update history was already finalized as succeeded: ${formatErrorMessage(error)}`,
+          );
+          throw new UpdateCommandFinalizedRecoveryFailure({
+            runId: run.runId,
+            status: "ok",
+            mode: "unknown",
+            before: finalized.before,
+            after: finalized.after,
+            steps: [],
+            durationMs: Math.max(
+              0,
+              (finalized.finishedAtMs ?? finalized.updatedAtMs) - finalized.createdAtMs,
+            ),
+          });
+        }
+      }
       outcome = {
         error:
           "error" in outcome && outcome.error !== error
