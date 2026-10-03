@@ -4,6 +4,7 @@ import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/
 import type { ImageContent, TextContent } from "../../llm/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
+import type { SessionTreeEntry as CoreSessionTreeEntry } from "../runtime/index.js";
 import { SessionManagerAppend } from "./session-manager-append.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import type {
@@ -338,7 +339,7 @@ export class SessionManagerEntries extends SessionManagerAppend {
   }
 
   buildSessionContext(): SessionContext {
-    return buildCoreSessionContext(this.getBranch());
+    return buildCoreSessionContext(this.getBranch() as CoreSessionTreeEntry[]) as SessionContext;
   }
 
   async branchAsync(branchFromId: string): Promise<void> {
