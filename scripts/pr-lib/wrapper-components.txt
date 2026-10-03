@@ -158,6 +158,7 @@ scripts/lib/plain-gh.sh
 scripts/lib/record-shared.mjs
 scripts/lib/release-changelog.mjs
 scripts/lib/repo-root.mjs
+scripts/lib/test-runtime.mts
 scripts/lib/test-selector-source-facts.mts
 scripts/lib/test-source-term-matcher.mts
 scripts/lib/tsdown-declaration-boundary.mts
