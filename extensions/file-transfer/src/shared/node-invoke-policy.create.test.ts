@@ -85,16 +85,18 @@ describe("file.create node policy", () => {
     expect(invokeNode).toHaveBeenCalledOnce();
   });
 
-  it.each([{ sizeBytes: -1 }, { expectedSha256: "bad" }, { maxBytes: Infinity }])(
-    "rejects malformed metadata %j before node dispatch",
-    async (params) => {
-      const { ctx, invokeNode } = fixture();
-      ctx.params = { ...(ctx.params as object), ...params };
-      expect(await createFileTransferNodeInvokePolicy().handle(ctx)).toMatchObject({
-        ok: false,
-        code: "INVALID_PARAMS",
-      });
-      expect(invokeNode).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    { sizeBytes: -1 },
+    { sizeBytes: 1.5 },
+    { expectedSha256: "bad" },
+    { maxBytes: Infinity },
+  ])("rejects malformed metadata %j before node dispatch", async (params) => {
+    const { ctx, invokeNode } = fixture();
+    ctx.params = { ...(ctx.params as object), ...params };
+    expect(await createFileTransferNodeInvokePolicy().handle(ctx)).toMatchObject({
+      ok: false,
+      code: "INVALID_PARAMS",
+    });
+    expect(invokeNode).not.toHaveBeenCalled();
+  });
 });

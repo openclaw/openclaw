@@ -214,7 +214,10 @@ describe("FaceTime talk driver consult delivery", () => {
       });
       expect(mocks.bridge.submitToolResult).toHaveBeenCalledOnce();
       if (transition === "close") {
+        const consultParams = mocks.consult.mock.calls[0]?.[0] as { abortSignal: AbortSignal };
+        expect(consultParams.abortSignal.aborted).toBe(false);
         await driver.close("carrier-ended");
+        expect(consultParams.abortSignal.aborted).toBe(true);
       } else {
         await consult("item-replacement", "call-replacement", "Check my reminders instead.");
         expect(mocks.consult).toHaveBeenCalledTimes(2);

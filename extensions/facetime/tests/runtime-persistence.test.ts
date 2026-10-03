@@ -373,6 +373,35 @@ describe("FaceTime runtime asynchronous persistence", () => {
     }
   });
 
+  it("publishes cancellation intent before asking the helper to cancel", async () => {
+    const state = await pendingDialState();
+    const runtime = await createRuntime(state);
+    const write = suspendNextWrite(state);
+    mocks.helper.cancelOutgoingCall.mockImplementationOnce(async () => {
+      expect(await state.lookup("active")).toMatchObject({
+        dialID: "approved-dial",
+        delivery: "cancelling",
+      });
+      return pendingDialCancellationResult();
+    });
+    const hangingUp = runtime.hangup();
+    try {
+      await write.entered;
+      expect(mocks.helper.cancelOutgoingCall).not.toHaveBeenCalled();
+      expect(await state.lookup("active")).toMatchObject({ delivery: "accepted" });
+
+      write.release();
+      await expect(hangingUp).resolves.toMatchObject({ dialID: "approved-dial" });
+      expect(mocks.helper.cancelOutgoingCall).toHaveBeenCalledOnce();
+      await mocks.helperParams?.onMessage(outgoingCall("approved-dial", 6));
+      expect(await state.lookup("active")).toBeUndefined();
+    } finally {
+      write.release();
+      await hangingUp;
+      await runtime.stop();
+    }
+  });
+
   it("does not republish a terminal dial when stop overlaps delivery of its deletion result", async () => {
     const state = await pendingDialState();
     const runtime = await createRuntime(state);

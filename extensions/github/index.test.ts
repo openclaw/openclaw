@@ -8,6 +8,7 @@ import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-s
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiGitHubPreview } from "./api.js";
 import plugin from "./index.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 vi.mock("openclaw/plugin-sdk/gateway-method-runtime", () => ({
   dispatchGatewayMethod: vi.fn(),
@@ -93,6 +94,8 @@ describe("GitHub plugin ownership and RPC migration", () => {
 
   it("registers read-scoped methods lazily and removes surfaces on deactivation", () => {
     const registry = registered();
+    expect(manifest.activation.onStartup).toBe(true);
+    expect(manifest.contracts.gatewayMethodDispatch).toEqual(["authenticated-request"]);
     expect(registry.registry.gatewayMethodDescriptors).toEqual(
       expect.arrayContaining(
         ["github.preview", "github.image", "github.detail"].map((name) =>
@@ -107,6 +110,24 @@ describe("GitHub plugin ownership and RPC migration", () => {
     );
     expect(registry.registry.gatewayHandlers).not.toHaveProperty("controlUi.githubDetail");
     expect(registry.registry.gatewayHandlers).not.toHaveProperty("controlUi.githubPreview");
+    expect(registry.registry.controlUiDescriptors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "github",
+          descriptor: expect.objectContaining({
+            surface: "link-reader",
+            id: "github",
+            requiredScopes: ["operator.read"],
+            linkReader: expect.objectContaining({
+              hosts: ["github.com"],
+              detailMethod: "github.detail",
+              imageMethod: "github.image",
+              previewMethod: "github.preview",
+            }),
+          }),
+        }),
+      ]),
+    );
     expect(registry.registry.controlUiDescriptors).toHaveLength(2);
     expect(
       registry.registry.controlUiDescriptors[1]?.descriptor.linkReader?.previewMethod,
@@ -205,16 +226,19 @@ describe("GitHub plugin ownership and RPC migration", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("rejects a well-formed host preview for another resource", async () => {
-    vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({
-      ok: true,
-      payload: preview({ repo: "another-repo" }),
-    });
-    expectFailure(
-      await request("github.preview", { url: pullUrl }),
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
-  });
+  it.each([{ number: 2 }, { repo: "another-repo" }, { owner: "another-owner" }])(
+    "rejects a well-formed host preview for another resource: %j",
+    async (different) => {
+      vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({
+        ok: true,
+        payload: preview(different),
+      });
+      expectFailure(
+        await request("github.preview", { url: pullUrl }),
+        expect.objectContaining({ code: "UNAVAILABLE" }),
+      );
+    },
+  );
 
   it("uses the host identity adapter for documents and preserves files-page expansion", async () => {
     vi.stubEnv("GH_TOKEN", "unused-ambient-token");
@@ -370,13 +394,16 @@ describe("GitHub plugin ownership and RPC migration", () => {
         ok: true,
         payload: preview({ login: "selected-agent", title: "Refreshed" }),
       });
-    const params = { url: pullUrl, agentId: " alternate " };
+    const params = { url: `${pullUrl}/files?view=split#diff-one`, agentId: " alternate " };
     for (let requestIndex = 0; requestIndex < 2; requestIndex += 1) {
       const respond = await request("github.preview", params);
-      expectSuccess(respond, expect.objectContaining({ author: "selected-agent" }));
+      expectSuccess(
+        respond,
+        expect.objectContaining({ author: "selected-agent", url: params.url }),
+      );
     }
     const refreshed = await request("github.preview", { ...params, refresh: true });
-    expectSuccess(refreshed, expect.objectContaining({ title: "Refreshed" }));
+    expectSuccess(refreshed, expect.objectContaining({ title: "Refreshed", url: params.url }));
     const target = {
       kind: "pull",
       owner: "octocat",

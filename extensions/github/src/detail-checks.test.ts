@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadGitHubDetail } from "./detail.js";
 import type { GitHubTarget } from "./targets.js";
@@ -232,21 +233,24 @@ describe("GitHub PR checks through the document loader", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  it("does not substitute a branch or merge SHA for an invalid head", async () => {
-    const fetchMock = publicFetch();
-    fetchMock
-      .mockReset()
-      .mockResolvedValueOnce(json({ private: false, visibility: "public" }))
-      .mockResolvedValueOnce(json({ ...pull(), head: { sha: "../main", ref: "feature/checks" } }));
-    const detail = await loadGitHubDetail(target(), undefined, fetchMock);
-    expect(detail).toMatchObject({
-      body: "Keep the PR body",
-      partial: true,
-      checks: { state: "unavailable", items: [] },
-    });
-    expect(detail.checks?.commit).toBeUndefined();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
+  it.each([undefined, "abcdef0", "../main", "a".repeat(41)])(
+    "does not substitute a branch or merge SHA for invalid head %s",
+    async (headSha) => {
+      const fetchMock = publicFetch();
+      fetchMock
+        .mockReset()
+        .mockResolvedValueOnce(json({ private: false, visibility: "public" }))
+        .mockResolvedValueOnce(json({ ...pull(), head: { sha: headSha, ref: "feature/checks" } }));
+      const detail = await loadGitHubDetail(target(), undefined, fetchMock);
+      expect(detail).toMatchObject({
+        body: "Keep the PR body",
+        partial: true,
+        checks: { state: "unavailable", items: [] },
+      });
+      expect(detail.checks?.commit).toBeUndefined();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it.each([
     {
@@ -303,6 +307,39 @@ describe("GitHub PR checks through the document loader", () => {
       expect(result.checks?.items.every((item) => item.url === undefined)).toBe(true);
     },
   );
+
+  it("does not let a late old-head read overwrite the refreshed document cache", async () => {
+    const input = target();
+    const deferred = createDeferred<Response>();
+    const requested = createDeferred<void>();
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (url) => {
+      const path = new URL(url instanceof Request ? url.url : url).pathname;
+      if (path.endsWith("/pulls/1")) {
+        return json(pull());
+      }
+      if (path.endsWith("/check-runs")) {
+        requested.resolve();
+        return deferred.promise;
+      }
+      if (path.endsWith("/status")) {
+        return statuses();
+      }
+      return json({ private: false, visibility: "public" });
+    });
+    const older = loadGitHubDetail(input, undefined, fetchMock);
+    await requested.promise;
+    const freshFetch = publicFetch(
+      runs([run({ head_sha: nextSha, conclusion: "failure" })]),
+      statuses([], nextSha),
+      nextSha,
+    );
+    const fresh = await loadGitHubDetail(input, undefined, freshFetch, true);
+    deferred.resolve(runs([run()]));
+    expect((await older).checks).toMatchObject({ state: "success", commit: sha });
+    expect(fresh.checks).toMatchObject({ state: "failure", commit: nextSha });
+    expect(await loadGitHubDetail(input, undefined, fetchMock)).toBe(fresh);
+    expect(freshFetch).toHaveBeenCalledTimes(4);
+  });
 
   it("expires complete PR snapshots after 30 seconds rather than keeping checks for five minutes", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1000);

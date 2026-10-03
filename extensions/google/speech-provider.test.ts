@@ -6,7 +6,9 @@ import {
 import type { SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const transcode = vi.hoisted(() => vi.fn());
+const transcode = vi.hoisted(() =>
+  vi.fn<typeof import("openclaw/plugin-sdk/media-runtime").transcodeAudioBufferToOpus>(),
+);
 vi.mock("openclaw/plugin-sdk/media-runtime", async () => ({
   canonicalizeBase64: (await import("@openclaw/media-core/base64")).canonicalizeBase64,
   transcodeAudioBufferToOpus: transcode,
@@ -221,19 +223,35 @@ describe("Google speech provider", () => {
     expect(result.audioBuffer.subarray(44)).toEqual(PCM);
   });
 
-  it("falls back to GEMINI_API_KEY and the configured base URL", async () => {
+  it("synthesizes Opus voice notes with GEMINI_API_KEY and the configured base URL", async () => {
     vi.stubEnv("GEMINI_API_KEY", "env-google-key");
+    transcode.mockImplementationOnce(async ({ audioBuffer }) => {
+      expect(audioBuffer.subarray(0, 4).toString("ascii")).toBe("RIFF");
+      expect(audioBuffer.subarray(8, 12).toString("ascii")).toBe("WAVE");
+      expect(audioBuffer.subarray(44)).toEqual(PCM);
+      return Buffer.from("google-opus");
+    });
     expect(buildGoogleSpeechProvider().isConfigured({ providerConfig: {}, timeoutMs: 1 })).toBe(
       true,
     );
-    await synthesize({
+    const result = await synthesize({
       providerConfig: {},
       target: "voice-note",
+      timeoutMs: 12_345,
       cfg: googleConfig({ baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai" }),
     });
     expect(recorded()).toMatchObject({
       url: `https://generativelanguage.googleapis.com/v1beta/models/${LEGACY}:generateContent`,
       headers: { "x-goog-api-key": "env-google-key" },
+    });
+    expect(transcode).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ inputExtension: "wav", timeoutMs: 12_345 }),
+    );
+    expect(result).toEqual({
+      audioBuffer: Buffer.from("google-opus"),
+      outputFormat: "opus",
+      fileExtension: ".opus",
+      voiceCompatible: true,
     });
   });
 

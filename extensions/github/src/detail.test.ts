@@ -125,36 +125,51 @@ describe("GitHub detail selected read identity", () => {
     vi.restoreAllMocks();
   });
 
-  it("uses the prepared credential for the entire pull document and refresh", async () => {
-    const selected = identity();
-    const input = target("pull");
-    const fetchMock = authenticatedFetch(
-      item({ comments: 1, review_comments: 1, changed_files: 1 }),
-    );
-    const first = await loadGitHubDetail(input, selected, fetchMock);
-    expect(first).toMatchObject({
-      partial: false,
-      comments: expect.arrayContaining([expect.any(Object)]),
-    });
-    expect(first.checks).toMatchObject({ state: "neutral", commit: sha });
-    expect(first.metadata).toEqual([
-      { label: "Files", value: "1" },
-      { label: "Comments", value: "1" },
-      { label: "Branch", value: "feature → main" },
-    ]);
-    const cached = await loadGitHubDetail(input, selected, fetchMock);
-    expect(cached).toBe(first);
-    await loadGitHubDetail(input, selected, fetchMock, true);
-    for (const [, options] of fetchMock.mock.calls) {
-      expect(options?.headers).toHaveProperty("Authorization", "Bearer " + selected.token);
-    }
-    expect(
-      fetchMock.mock.calls.filter(([url]) =>
-        new URL(requestUrl(url)).pathname.endsWith("/pulls/1"),
-      ),
-    ).toHaveLength(2);
-    expect(selected.revalidate).toHaveBeenCalled();
-  });
+  it.each(["pull", "commit"] as const)(
+    "uses the prepared credential for the entire %s document and refresh",
+    async (kind) => {
+      const selected = identity();
+      const input = target(kind);
+      const payload =
+        kind === "commit"
+          ? commit({ commit: { ...commit().commit, comment_count: 1 } })
+          : item({ comments: 1, review_comments: 1, changed_files: 1 });
+      const fetchMock = authenticatedFetch(payload);
+      const first = await loadGitHubDetail(input, selected, fetchMock);
+      expect(first).toMatchObject({
+        partial: false,
+        comments: expect.arrayContaining([expect.any(Object)]),
+      });
+      if (kind === "pull") {
+        expect(first.checks).toMatchObject({
+          state: "neutral",
+          commit: sha,
+          summary: "No checks reported",
+          total: 0,
+          items: [],
+          truncated: false,
+        });
+        expect(first.metadata).toEqual([
+          { label: "Files", value: "1" },
+          { label: "Comments", value: "1" },
+          { label: "Branch", value: "feature → main" },
+        ]);
+      }
+      const cached = await loadGitHubDetail(input, selected, fetchMock);
+      expect(cached).toBe(first);
+      await loadGitHubDetail(input, selected, fetchMock, true);
+      for (const [, options] of fetchMock.mock.calls) {
+        expect(options?.headers).toHaveProperty("Authorization", "Bearer " + selected.token);
+      }
+      const itemPath = kind === "commit" ? "/commits/" + sha : "/pulls/1";
+      expect(
+        fetchMock.mock.calls.filter(([url]) =>
+          new URL(requestUrl(url)).pathname.endsWith(itemPath),
+        ),
+      ).toHaveLength(2);
+      expect(selected.revalidate).toHaveBeenCalled();
+    },
+  );
 
   it("keeps an exhausted anonymous quota separate from the selected credential", async () => {
     const input = target();
@@ -173,37 +188,40 @@ describe("GitHub detail selected read identity", () => {
     expect(authorized).toHaveBeenCalledTimes(3);
   });
 
-  it("retries optional credentials anonymously after HTTP 401, including cached delivery", async () => {
-    for (const cached of [false, true]) {
-      const input = target();
-      const selected = { ...identity(), optionalAuth: true as const };
-      const upstream = authenticatedFetch();
-      let unavailable = !cached;
-      const fetchMock = vi.fn<typeof fetch>(async (url, options) => {
-        const authorized = new Headers(options?.headers).has("Authorization");
-        if (unavailable && authorized) {
-          return json({}, 401);
+  it.each([401, 403, 429])(
+    "retries optional credentials anonymously after HTTP %s, including cached delivery",
+    async (status) => {
+      for (const cached of [false, true]) {
+        const input = target();
+        const selected = { ...identity(), optionalAuth: true as const };
+        const upstream = authenticatedFetch();
+        let unavailable = !cached;
+        const fetchMock = vi.fn<typeof fetch>(async (url, options) => {
+          const authorized = new Headers(options?.headers).has("Authorization");
+          if (unavailable && authorized) {
+            return json({}, status);
+          }
+          return upstream(url, options);
+        });
+        if (cached) {
+          await loadGitHubDetail(input, selected, fetchMock);
+          unavailable = true;
         }
-        return upstream(url, options);
-      });
-      if (cached) {
-        await loadGitHubDetail(input, selected, fetchMock);
-        unavailable = true;
+        await expect(loadGitHubDetail(input, selected, fetchMock)).resolves.toMatchObject({
+          title: "Read me",
+        });
+        const anonymous = fetchMock.mock.calls.filter(
+          ([, options]) => !new Headers(options?.headers).has("Authorization"),
+        );
+        expect(anonymous.map(([url]) => new URL(requestUrl(url)).pathname)).toEqual([
+          `/repos/${input.owner}/${input.repo}`,
+          `/repos/${input.owner}/${input.repo}/issues/1`,
+        ]);
+        expect(selected.revalidate).toHaveBeenCalled();
+        expect(selected.assertSelected).toHaveBeenCalled();
       }
-      await expect(loadGitHubDetail(input, selected, fetchMock)).resolves.toMatchObject({
-        title: "Read me",
-      });
-      const anonymous = fetchMock.mock.calls.filter(
-        ([, options]) => !new Headers(options?.headers).has("Authorization"),
-      );
-      expect(anonymous.map(([url]) => new URL(requestUrl(url)).pathname)).toEqual([
-        `/repos/${input.owner}/${input.repo}`,
-        `/repos/${input.owner}/${input.repo}/issues/1`,
-      ]);
-      expect(selected.revalidate).toHaveBeenCalled();
-      expect(selected.assertSelected).toHaveBeenCalled();
-    }
-  });
+    },
+  );
 
   it("does not bypass a managed identity after an authentication failure", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(json({}, 401));
@@ -217,6 +235,7 @@ describe("GitHub detail selected read identity", () => {
   it.each([
     { name: "private", repository: { id: 123, private: true, visibility: "private" } },
     { name: "internal", repository: { id: 123, private: false, visibility: "internal" } },
+    { name: "missing-visibility", repository: { id: 123, private: false } },
     { name: "replacement", repository: { id: 456, private: false, visibility: "public" } },
   ])(
     "does not deliver freshly read or cached content from a $name repository",
@@ -464,17 +483,45 @@ describe("GitHub detail public read boundary", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
-  it("caches secondary quota failures with retry-after", async () => {
+  const failures: Array<{ status: number; headers: Record<string, string>; expected: number }> = [
+    { status: 429, headers: {}, expected: 429 },
+    { status: 403, headers: { "x-ratelimit-remaining": "0" }, expected: 429 },
+    { status: 403, headers: { "retry-after": "60" }, expected: 429 },
+    { status: 403, headers: {}, expected: 403 },
+    { status: 503, headers: {}, expected: 502 },
+  ];
+  it.each(failures)(
+    "normalizes $status/$expected failures and caches repeated opens",
+    async ({ status, headers, expected }) => {
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(json({ message: "upstream" }, status, headers));
+      const input = target();
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await expect(loadGitHubDetail(input, undefined, fetchMock)).rejects.toMatchObject({
+          statusCode: expected,
+        });
+      }
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("expires cached visibility failures rather than making a missing repository permanently unavailable", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const input = target();
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(json({ message: "upstream" }, 403, { "retry-after": "60" }));
-    const input = target();
-    for (let attempt = 0; attempt < 2; attempt++) {
-      await expect(loadGitHubDetail(input, undefined, fetchMock)).rejects.toMatchObject({
-        statusCode: 429,
-      });
-    }
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+      .mockResolvedValueOnce(json({}, 404))
+      .mockResolvedValueOnce(json({ private: false, visibility: "public" }))
+      .mockResolvedValueOnce(json(item()));
+    await expect(loadGitHubDetail(input, undefined, fetchMock)).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    now.mockReturnValue(32_000);
+    await expect(loadGitHubDetail(input, undefined, fetchMock)).resolves.toMatchObject({
+      partial: false,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("bounds discussion, review context, and file patches with explicit partial flags", async () => {
@@ -655,7 +702,11 @@ describe("GitHub detail public read boundary", () => {
     const fetchMock = publicFetch(
       commit({ commit: { ...commit().commit, comment_count: 2 } }),
     ).mockResolvedValueOnce(json([first, second]));
-    const detail = await loadGitHubDetail(target("commit"), undefined, fetchMock);
+    const detail = await loadGitHubDetail(
+      { ...target("commit"), sha: sha.slice(0, 7).toUpperCase() },
+      undefined,
+      fetchMock,
+    );
     expect(detail).toMatchObject({
       partial: false,
       commentsTotal: 2,
@@ -675,7 +726,9 @@ describe("GitHub detail public read boundary", () => {
     ]);
     expect(detail.comments[1]?.context?.lineLabel).toBeUndefined();
     expect(detail.comments[1]?.context?.path).toBeUndefined();
-    expect(fetchMock.mock.calls[2]?.[0]).toContain("/commits/" + sha + "/comments?per_page=20");
+    expect(fetchMock.mock.calls[2]?.[0]).toContain(
+      "/commits/" + sha.slice(0, 7) + "/comments?per_page=20",
+    );
     for (const [, options] of fetchMock.mock.calls) {
       expect(options?.headers).not.toHaveProperty("Authorization");
     }
