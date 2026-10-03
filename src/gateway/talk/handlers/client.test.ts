@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import {
   loadSessionEntry,
   readSessionTranscriptMessageEvents,
@@ -23,11 +23,6 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { getActiveSessionWorkAdmissionCount } from "../../../sessions/session-lifecycle-admission.js";
-import {
-  authorizeClientVoiceConfirmation,
-  checkClientVoiceToolConfirmationPolicy,
-} from "../../../talk/client-voice-confirmation.js";
-import { resetClientVoiceConfirmationStateForTest } from "../../../talk/client-voice-confirmation.test-support.js";
 import {
   closeClientVoiceSession,
   createOrResumeClientVoiceSession,
@@ -55,6 +50,7 @@ import { talkClientHandlers } from "./client.js";
 const voiceMocks = vi.hoisted(() => ({
   resolveConfiguredRealtimeVoiceProvider: vi.fn(),
   consultRealtimeVoiceAgent: vi.fn(),
+  executionReady: vi.fn<() => Promise<void>>(),
   runEmbeddedAgent: vi.fn<typeof import("../../../agents/embedded-agent.js").runEmbeddedAgent>(),
 }));
 
@@ -75,6 +71,30 @@ vi.mock("../../../plugins/runtime/index.js", async () => {
 vi.mock("../../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: voiceMocks.runEmbeddedAgent,
 }));
+vi.mock("../../../shared/lazy-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../shared/lazy-runtime.js")>();
+  return {
+    ...actual,
+    createLazyRuntimeModule: <T>(importer: () => Promise<T>) => {
+      const load = actual.createLazyRuntimeModule(importer);
+      return Object.assign(
+        async () => {
+          const runtime = await load();
+          if (
+            runtime &&
+            typeof runtime === "object" &&
+            "runEmbeddedAgent" in runtime &&
+            runtime.runEmbeddedAgent === voiceMocks.runEmbeddedAgent
+          ) {
+            await voiceMocks.executionReady();
+          }
+          return runtime;
+        },
+        { peek: load.peek, clear: load.clear },
+      );
+    },
+  };
+});
 vi.mock("../../../agents/bootstrap-files.js", () => ({
   resolveBootstrapFilesForRun: async () => [],
 }));
@@ -99,16 +119,23 @@ const browserSession = {
 
 function configureDelegatedBrowserProvider(
   createBrowserSession: (request: BrowserRequest) => Promise<typeof browserSession>,
+  publicOnly = false,
 ) {
   const cancelBrowserSession = vi.fn(async () => undefined);
   const provider = {
     id: "openai",
-    capabilities: { transports: ["webrtc"], handlesAgentConsult: true, supportsToolCalls: false },
+    capabilities: {
+      transports: ["webrtc"],
+      ...(!publicOnly ? { handlesAgentConsult: true } : {}),
+      supportsToolCalls: false,
+    },
     createBrowserSession,
   };
-  Object.defineProperty(provider, Symbol.for("openclaw.internal.realtime-voice-provider.v1"), {
-    value: { isBrowserSessionConfigured: () => true, cancelBrowserSession },
-  });
+  if (!publicOnly) {
+    Object.defineProperty(provider, Symbol.for("openclaw.internal.realtime-voice-provider.v1"), {
+      value: { isBrowserSessionConfigured: () => true, cancelBrowserSession },
+    });
+  }
   voiceMocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
     provider,
     providerConfig: {},
@@ -173,9 +200,9 @@ async function invokeClose(params: Record<string, unknown>) {
   return respond;
 }
 
-async function createBrowserConsult() {
+async function createBrowserConsult(publicOnly = false) {
   const createBrowserSession = vi.fn(async (_request: BrowserRequest) => browserSession);
-  const fixture = configureDelegatedBrowserProvider(createBrowserSession);
+  const fixture = configureDelegatedBrowserProvider(createBrowserSession, publicOnly);
   const respond = vi.fn();
   await invokeCreate({
     params: { sessionKey, provider: "openai", model: "gpt-live-test" },
@@ -231,6 +258,7 @@ async function useRealConsultRuntime() {
 describe("talk.client.transcript", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    voiceMocks.executionReady.mockReset().mockResolvedValue(undefined);
     resetGatewayWorkAdmission();
     ownedVoiceSessionId = undefined;
     tempDir = await fs.realpath(
@@ -259,7 +287,6 @@ describe("talk.client.transcript", () => {
     }
     cleanupTalkConnection("conn-close", { warn: vi.fn() });
     clientVoiceSessionTesting.reset();
-    resetClientVoiceConfirmationStateForTest();
     vi.useRealTimers();
     await cleanupSessionStateForTest({ stateDir: tempDir });
     envSnapshot.restore();
@@ -472,24 +499,31 @@ describe("talk.client.transcript", () => {
     }
   });
 
-  it("admits a later sideband consult after its HTTP offer has released admission", async () => {
-    await useRealConsultRuntime();
-    const { consult } = await createBrowserConsult();
-    const resource = await completeOffer();
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
-    expect(isGatewayWorkAdmissionClosed()).toBe(false);
+  it.each([false, true])(
+    "admits later callbacks after offer release (public: %s)",
+    async (publicOnly) => {
+      await useRealConsultRuntime();
+      const { consult } = await createBrowserConsult(publicOnly);
+      const resource = await completeOffer();
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      expect(isGatewayWorkAdmissionClosed()).toBe(false);
 
-    await expect(
-      resource.runInAsyncScope(() => consult({ prompt: "Return the fixture status" })),
-    ).resolves.toEqual({ text: "fixture status" });
-    const [run] = voiceMocks.runEmbeddedAgent.mock.calls[0]!;
-    expect(resolveClientVoiceRunBinding(run.runId)).toMatchObject({
-      agentId: "main",
-      sessionKey,
-      voiceSessionId: ownedVoiceSessionId,
-    });
-    expect(getActiveSessionWorkAdmissionCount()).toBe(0);
-  });
+      await expect(
+        resource.runInAsyncScope(() => consult({ prompt: "Return the fixture status" })),
+      ).resolves.toEqual({ text: "fixture status" });
+      const [run] = voiceMocks.runEmbeddedAgent.mock.calls[0]!;
+      expect(resolveClientVoiceRunBinding(run.runId)).toMatchObject({
+        agentId: "main",
+        sessionKey,
+        voiceSessionId: ownedVoiceSessionId,
+      });
+      await expect(consult({ prompt: "Second independent request" })).resolves.toEqual({
+        text: "fixture status",
+      });
+      expect(voiceMocks.runEmbeddedAgent).toHaveBeenCalledTimes(2);
+      expect(getActiveSessionWorkAdmissionCount()).toBe(0);
+    },
+  );
 
   it("keeps an accepted consult admitted through offer completion and suspension", async () => {
     await useRealConsultRuntime();
@@ -636,47 +670,6 @@ describe("talk.client.transcript", () => {
     ).toHaveLength(1);
   });
 
-  it("uses server observation time for spoken-confirmation freshness", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(100);
-    const voiceSessionId = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey,
-      origin: "client",
-    });
-    await invokeTranscript({
-      sessionKey,
-      voiceSessionId,
-      entryId: "early-yes",
-      role: "user",
-      text: "yes",
-      timestamp: 10_000,
-    });
-    const policy = checkClientVoiceToolConfirmationPolicy({
-      agentId: "main",
-      voiceSessionId,
-      runId: "run-later",
-      toolName: "message",
-      toolParams: { action: "send", message: "later" },
-      now: 200,
-    });
-    expect(policy.allowed).toBe(false);
-    if (policy.allowed) {
-      throw new Error("expected confirmation request");
-    }
-    const confirmationId = policy.reason.match(/VOICE_CONFIRMATION_REQUIRED:([^\s]+)/)?.[1];
-    expect(confirmationId).toBeTruthy();
-
-    expect(() =>
-      authorizeClientVoiceConfirmation({
-        agentId: "main",
-        voiceSessionId,
-        confirmationId: confirmationId ?? "missing",
-        now: 201,
-      }),
-    ).toThrow("explicit spoken confirmation");
-  });
-
   it("accepts an idempotent close retry after the first response is lost", async () => {
     const voiceSessionId = createOrResumeClientVoiceSession({
       agentId: "main",
@@ -689,67 +682,52 @@ describe("talk.client.transcript", () => {
     expect(await invokeClose(params)).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
-  it.each(["close", "disconnect"] as const)(
-    "revokes a delegated browser session on %s without abandoning accepted work",
-    async (ending) => {
-      const createBrowserSession = vi.fn(async (_request: BrowserRequest) => browserSession);
-      const { cancelBrowserSession, client, clients, context } =
-        configureDelegatedBrowserProvider(createBrowserSession);
-      let finishConsult!: (value: { text: string }) => void;
-      const acceptedResult = new Promise<{ text: string }>((resolve) => {
-        finishConsult = resolve;
+  it.each(
+    [false, true].flatMap((publicOnly) =>
+      (["close", "disconnect"] as const).map((ending) => ({ publicOnly, ending })),
+    ),
+  )(
+    "keeps accepted work while runtime loading spans $ending (public: $publicOnly)",
+    async ({ ending, publicOnly }) => {
+      await useRealConsultRuntime();
+      const loading = createDeferred();
+      const resume = createDeferred();
+      voiceMocks.executionReady.mockImplementationOnce(async () => {
+        loading.resolve();
+        await resume.promise;
       });
-      voiceMocks.consultRealtimeVoiceAgent
-        .mockResolvedValue({ text: "Late task started" })
-        .mockReturnValueOnce(acceptedResult);
-      const respond = vi.fn();
-      await invokeCreate({
-        params: { sessionKey, provider: "openai", model: "gpt-live-test" },
-        respond,
-        context,
-        client,
-      } as never);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining(browserSession),
-        undefined,
+      const { consult, clients, client, context, cancelBrowserSession } =
+        await createBrowserConsult(publicOnly);
+      const accepted = consult({ prompt: "Read the project status" });
+      const settled = accepted.then(
+        (result) => ({ result }),
+        (error: unknown) => ({ error }),
       );
-      const result = respond.mock.calls[0]?.[1] as { voiceSessionId: string };
-      ownedVoiceSessionId = result.voiceSessionId;
-      const runAgentConsult = createBrowserSession.mock.calls[0]?.[0].runAgentConsult;
-      expect(runAgentConsult).toBeTypeOf("function");
-      const acceptedSignal = new AbortController().signal;
-      const accepted = runAgentConsult!({
-        prompt: "Read the project status",
-        signal: acceptedSignal,
-      });
-      await vi.waitFor(() => expect(voiceMocks.consultRealtimeVoiceAgent).toHaveBeenCalledOnce());
-
       try {
+        await awaitGateBeforeSettlement(
+          loading.promise,
+          accepted,
+          "Consult settled before loading",
+        );
+        expect(context.chatAbortControllers.size).toBe(1);
+        expect(voiceMocks.runEmbeddedAgent).not.toHaveBeenCalled();
         if (ending === "close") {
           expect(
             await invokeClose({ sessionKey, voiceSessionId: ownedVoiceSessionId }),
           ).toHaveBeenCalledWith(true, { ok: true }, undefined);
         } else {
           clients.delete(client);
-          cleanupTalkConnection("conn-close", context.logGateway);
+          cleanupTalkConnection(client.connId, context.logGateway);
         }
-        await expect(runAgentConsult!({ prompt: "Start another task" })).rejects.toThrow(
-          /closed|stopped/i,
-        );
-        await vi.waitFor(() => expect(cancelBrowserSession).toHaveBeenCalledOnce());
-        await vi.waitFor(() =>
-          expect(readLegacyVoiceBinding(client.connId, sessionKey)).toBeUndefined(),
-        );
-        const acceptedConsult = voiceMocks.consultRealtimeVoiceAgent.mock.calls[0]?.[0] as {
-          abortSignal: AbortSignal;
-        };
-        expect(acceptedConsult.abortSignal.aborted).toBe(false);
-        expect(voiceMocks.consultRealtimeVoiceAgent).toHaveBeenCalledOnce();
+        await expect(consult({ prompt: "Start another task" })).rejects.toThrow(/closed|stopped/i);
       } finally {
-        finishConsult({ text: "Accepted work finished" });
-        await accepted;
+        resume.resolve();
       }
+      expect(await settled).toEqual({ result: { text: "fixture status" } });
+      expect(voiceMocks.runEmbeddedAgent).toHaveBeenCalledOnce();
+      expect(context.chatAbortControllers.size).toBe(0);
+      expect(cancelBrowserSession).toHaveBeenCalledTimes(publicOnly ? 0 : 1);
+      expect(readLegacyVoiceBinding(client.connId, sessionKey)).toBeUndefined();
     },
   );
 
@@ -849,101 +827,117 @@ describe("talk.client.transcript", () => {
     },
   );
 
-  it("keeps the active selection when a pending same-id browser candidate fails", async () => {
-    const createBrowserSession = vi
-      .fn(async (_request: BrowserRequest) => browserSession)
-      .mockResolvedValueOnce(browserSession)
-      .mockRejectedValueOnce(new Error("Candidate rejected"));
-    const fixture = configureDelegatedBrowserProvider(createBrowserSession);
-    const respond = vi.fn();
-    const create = (voiceSessionId?: string) =>
-      invokeCreate({
-        params: { sessionKey, provider: "openai", voiceSessionId },
-        respond,
-        context: fixture.context,
-        client: fixture.client,
-      } as never);
-    await create();
-    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(browserSession), undefined);
-    const voiceSessionId = respond.mock.calls[0]?.[1].voiceSessionId as string;
-    ownedVoiceSessionId = voiceSessionId;
-    const original = resolveTalkVoiceSession({
-      kind: "client",
-      connId: fixture.client.connId,
-      voiceSessionId,
-    });
-    const control = createBrowserSession.mock.calls[0]?.[0].gatewayControl;
-    if (!control) {
-      throw new Error("Expected the original Gateway-owned browser control");
-    }
-    await create(voiceSessionId);
-    expect(respond).toHaveBeenLastCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("Candidate rejected") }),
-    );
-    expect(
-      resolveTalkVoiceSession({ kind: "client", connId: fixture.client.connId, voiceSessionId }),
-    ).toBe(original);
-    expect(() => control.bindControl?.({ sendUserMessage: vi.fn() })).not.toThrow();
-  });
+  it.each([false, true])(
+    "keeps the active selection when a pending same-id browser candidate fails (public: %s)",
+    async (publicOnly) => {
+      const createBrowserSession = vi
+        .fn(async (_request: BrowserRequest) => browserSession)
+        .mockResolvedValueOnce(browserSession)
+        .mockRejectedValueOnce(new Error("Candidate rejected"));
+      const fixture = configureDelegatedBrowserProvider(createBrowserSession, publicOnly);
+      const respond = vi.fn();
+      const create = (voiceSessionId?: string) =>
+        invokeCreate({
+          params: { sessionKey, provider: "openai", voiceSessionId },
+          respond,
+          context: fixture.context,
+          client: fixture.client,
+        } as never);
+      await create();
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining(browserSession),
+        undefined,
+      );
+      const voiceSessionId = respond.mock.calls[0]?.[1].voiceSessionId as string;
+      ownedVoiceSessionId = voiceSessionId;
+      const original = resolveTalkVoiceSession({
+        kind: "client",
+        connId: fixture.client.connId,
+        voiceSessionId,
+      });
+      const control = createBrowserSession.mock.calls[0]?.[0].gatewayControl;
+      expect(Boolean(control)).toBe(!publicOnly);
+      await create(voiceSessionId);
+      expect(respond).toHaveBeenLastCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ message: expect.stringContaining("Candidate rejected") }),
+      );
+      expect(
+        resolveTalkVoiceSession({ kind: "client", connId: fixture.client.connId, voiceSessionId }),
+      ).toBe(original);
+      expect(() => control?.bindControl?.({ sendUserMessage: vi.fn() })).not.toThrow();
+    },
+  );
 
-  it("cancels a provider that resolves after its browser disconnects without creating a chat", async () => {
-    let finishCreation!: (value: typeof browserSession) => void;
-    const created = new Promise<typeof browserSession>((resolve) => {
-      finishCreation = resolve;
-    });
-    const createBrowserSession = vi.fn(async (_request: BrowserRequest) => await created);
-    const { cancelBrowserSession, client, clients, context } =
-      configureDelegatedBrowserProvider(createBrowserSession);
-    const pendingSessionKey = "agent:main:pending-voice";
-    const respond = vi.fn();
-    const starting = invokeCreate({
-      params: { sessionKey: pendingSessionKey, provider: "openai", model: "gpt-live-test" },
-      respond,
-      context,
-      client,
-    } as never);
-    await vi.waitFor(() => expect(createBrowserSession).toHaveBeenCalledOnce());
-    const runAgentConsult = createBrowserSession.mock.calls[0]?.[0].runAgentConsult;
-    try {
-      await expect(runAgentConsult!({ prompt: "Too early" })).rejects.toThrow(/not active/);
+  it.each([false, true])(
+    "cancels a provider that resolves after its browser disconnects without creating a chat (public: %s)",
+    async (publicOnly) => {
+      let finishCreation!: (value: typeof browserSession) => void;
+      const created = new Promise<typeof browserSession>((resolve) => {
+        finishCreation = resolve;
+      });
+      const createBrowserSession = vi.fn(async (_request: BrowserRequest) => await created);
+      const { cancelBrowserSession, client, clients, context } = configureDelegatedBrowserProvider(
+        createBrowserSession,
+        publicOnly,
+      );
+      const pendingSessionKey = "agent:main:pending-voice";
+      const respond = vi.fn();
+      const starting = invokeCreate({
+        params: { sessionKey: pendingSessionKey, provider: "openai", model: "gpt-live-test" },
+        respond,
+        context,
+        client,
+      } as never);
+      await vi.waitFor(() => expect(createBrowserSession).toHaveBeenCalledOnce());
+      const runAgentConsult = createBrowserSession.mock.calls[0]?.[0].runAgentConsult;
+      try {
+        await expect(runAgentConsult!({ prompt: "Too early" })).rejects.toThrow(/not active/);
+        clients.delete(client);
+        cleanupTalkConnection(client.connId, context.logGateway);
+      } finally {
+        finishCreation(browserSession);
+        await starting;
+      }
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ message: expect.stringMatching(/closed|disconnected/) }),
+      );
+      expect(cancelBrowserSession).toHaveBeenCalledTimes(publicOnly ? 0 : 1);
+      expect(loadSessionEntry({ agentId: "main", sessionKey: pendingSessionKey })).toBeUndefined();
+      expect(voiceMocks.consultRealtimeVoiceAgent).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
+    "does not create a provider after the browser disconnects during context preparation (public: %s)",
+    async (publicOnly) => {
+      const createBrowserSession = vi.fn(async (_request: BrowserRequest) => browserSession);
+      const { client, clients, context } = configureDelegatedBrowserProvider(
+        createBrowserSession,
+        publicOnly,
+      );
+      const respond = vi.fn();
+      const starting = invokeCreate({
+        params: { sessionKey, provider: "openai", model: "gpt-live-test" },
+        respond,
+        context,
+        client,
+      } as never);
       clients.delete(client);
       cleanupTalkConnection(client.connId, context.logGateway);
-    } finally {
-      finishCreation(browserSession);
       await starting;
-    }
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringMatching(/closed|disconnected/) }),
-    );
-    expect(cancelBrowserSession).toHaveBeenCalledOnce();
-    expect(loadSessionEntry({ agentId: "main", sessionKey: pendingSessionKey })).toBeUndefined();
-    expect(voiceMocks.consultRealtimeVoiceAgent).not.toHaveBeenCalled();
-  });
-
-  it("does not create a provider after the browser disconnects during context preparation", async () => {
-    const createBrowserSession = vi.fn(async (_request: BrowserRequest) => browserSession);
-    const { client, clients, context } = configureDelegatedBrowserProvider(createBrowserSession);
-    const respond = vi.fn();
-    const starting = invokeCreate({
-      params: { sessionKey, provider: "openai", model: "gpt-live-test" },
-      respond,
-      context,
-      client,
-    } as never);
-    clients.delete(client);
-    cleanupTalkConnection(client.connId, context.logGateway);
-    await starting;
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("disconnected") }),
-    );
-    expect(createBrowserSession).not.toHaveBeenCalled();
-  });
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ message: expect.stringContaining("disconnected") }),
+      );
+      expect(createBrowserSession).not.toHaveBeenCalled();
+    },
+  );
 
   it("truncates UTF-16 safely and writes assistant metadata", async () => {
     const voiceSessionId = createOrResumeClientVoiceSession({

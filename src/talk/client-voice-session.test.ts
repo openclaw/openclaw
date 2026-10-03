@@ -7,14 +7,6 @@ import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import {
-  authorizeClientVoiceConfirmation,
-  checkClientVoiceToolConfirmationPolicy,
-} from "./client-voice-confirmation.js";
-import {
-  noteClientVoiceConfirmationUtteranceForTest as noteClientVoiceConfirmationUtterance,
-  resetClientVoiceConfirmationStateForTest,
-} from "./client-voice-confirmation.test-support.js";
-import {
   completeRun,
   recordMutation,
   seedSession,
@@ -26,7 +18,6 @@ import {
   closeRelayVoiceSessionRecord,
   closeStaleClientVoiceSessions,
   createOrResumeClientVoiceSession,
-  isClientVoiceSessionConfirmable,
   registerClientVoiceConsultRun,
   resolveClientVoiceRunBinding,
   resolveOpenClientVoiceSessionId,
@@ -76,7 +67,6 @@ describe("client voice session", () => {
 
   afterEach(async () => {
     clientVoiceSessionTesting.reset();
-    resetClientVoiceConfirmationStateForTest();
     await cleanupSessionStateForTest({ stateDir: tempDir });
     envSnapshot.restore();
     await fs.rm(tempDir, { recursive: true, force: true });
@@ -134,7 +124,7 @@ describe("client voice session", () => {
     ).toThrow("already closed");
   });
 
-  it("marks confirmability by declared capability, relay origin, or observed transcript", () => {
+  it("preserves declared transcript capability and transport origin", () => {
     const capable = createOrResumeClientVoiceSession({
       agentId: "main",
       sessionKey: "agent:main:main",
@@ -154,14 +144,12 @@ describe("client voice session", () => {
       origin: "relay",
       voiceSessionId: "voice-relay",
     });
-    const binding = (voiceSessionId: string) => ({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      voiceSessionId,
+    expect(clientVoiceSessionTesting.readRecord("main", capable)).toMatchObject({
+      transcriptCapable: true,
+      origin: "client",
     });
-    expect(isClientVoiceSessionConfirmable(binding(capable))).toBe(true);
-    expect(isClientVoiceSessionConfirmable(binding(legacy))).toBe(false);
-    expect(isClientVoiceSessionConfirmable(binding(relay))).toBe(true);
+    expect(clientVoiceSessionTesting.readRecord("main", legacy)?.transcriptCapable).not.toBe(true);
+    expect(clientVoiceSessionTesting.readRecord("main", relay)?.origin).toBe("relay");
   });
 
   it("closes idempotently without changing the first close time", async () => {
@@ -205,22 +193,6 @@ describe("client voice session", () => {
     });
     recordMutation(voiceSessionId);
     await completeRun(`run-${voiceSessionId}`);
-
-    const confirmation = checkClientVoiceToolConfirmationPolicy({
-      agentId: "main",
-      voiceSessionId,
-      toolName: "message",
-      toolParams: { channel: "discord", message: "send it" },
-      isConfirmable: () => true,
-      now: 10,
-    });
-    if (confirmation.allowed) {
-      throw new Error("expected a pending voice confirmation");
-    }
-    const confirmationId = confirmation.reason.match(/VOICE_CONFIRMATION_REQUIRED:([^\s]+)/)?.[1];
-    if (!confirmationId) {
-      throw new Error("expected a voice confirmation id");
-    }
 
     const transcriptWrite = createDeferred();
     const actualAppend = sessionAccessorMocks.actualAppendTranscriptMessage!;
@@ -267,21 +239,6 @@ describe("client voice session", () => {
       clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.digestDeliveredAt,
     ).toBeUndefined();
     await vi.waitFor(() => expect(sendDurableMessageBatch).toHaveBeenCalledOnce());
-
-    noteClientVoiceConfirmationUtterance({
-      agentId: "main",
-      voiceSessionId,
-      text: "yes",
-      timestamp: 11,
-    });
-    expect(() =>
-      authorizeClientVoiceConfirmation({
-        agentId: "main",
-        voiceSessionId,
-        confirmationId,
-        now: 12,
-      }),
-    ).toThrow("voice confirmation is missing");
 
     digestSend.resolve({ status: "sent" });
     await vi.waitFor(() =>

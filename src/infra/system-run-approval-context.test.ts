@@ -98,6 +98,22 @@ describe("resolveSystemRunApprovalRequestContext", () => {
 });
 
 describe("parsePreparedSystemRunPayload", () => {
+  test.each([null, { security: "invalid" }])(
+    "rejects invalid prepared snapshot instead of downgrading to legacy: %j",
+    (policySnapshot) => {
+      expect(
+        parsePreparedSystemRunPayload({
+          plan: {
+            argv: ["/usr/bin/printf", "ok"],
+            rawCommand: "/usr/bin/printf ok",
+            policySnapshot,
+          },
+          commandText: "/usr/bin/printf ok",
+        }),
+      ).toBeNull();
+    },
+  );
+
   test("parses legacy prepared payloads via top-level fallback command text", () => {
     expect(
       parsePreparedSystemRunPayload({

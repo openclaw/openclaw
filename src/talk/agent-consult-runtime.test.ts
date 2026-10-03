@@ -19,10 +19,8 @@ import {
   consultRealtimeVoiceAgent,
   REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION,
 } from "./agent-consult-runtime.js";
-import { checkClientVoiceToolConfirmationPolicy } from "./client-voice-confirmation.js";
 import {
   createOrResumeClientVoiceSession,
-  isClientVoiceSessionConfirmable,
   registerClientVoiceConsultRun,
   resolveClientVoiceRunBinding,
 } from "./client-voice-session.js";
@@ -217,7 +215,7 @@ describe("realtime voice agent consult runtime", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
-  it("binds GPT-Live delegated runs to spoken confirmation until completion", async () => {
+  it("retains the voice binding until delegated run completion", async () => {
     const { runtime, runEmbeddedAgent } = createAgentRuntime();
     const started = createDeferred();
     const release = createDeferred();
@@ -239,16 +237,6 @@ describe("realtime voice agent consult runtime", () => {
         sessionKey: "agent:main:main",
         voiceSessionId,
       });
-      expect(
-        checkClientVoiceToolConfirmationPolicy({
-          agentId: binding?.agentId,
-          voiceSessionId: binding?.voiceSessionId,
-          runId: params.runId,
-          toolName: "message",
-          toolParams: { action: "send", message: "Ship it" },
-          isConfirmable: () => Boolean(binding && isClientVoiceSessionConfirmable(binding)),
-        }),
-      ).toMatchObject({ allowed: false });
       started.resolve();
       await release.promise;
       emitTrustedDiagnosticEvent({

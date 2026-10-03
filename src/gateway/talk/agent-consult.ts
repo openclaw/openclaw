@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
@@ -15,7 +15,10 @@ import {
   buildRealtimeVoiceAgentConsultChatMessage,
 } from "../../talk/agent-consult-tool.js";
 import { abortChatRunById } from "../chat-abort.js";
+import { transferGatewayLocalUserIngress } from "../local-user-ingress.js";
+import { transferGatewayOperatorSourceIdentity } from "../operator-run-authority.js";
 import { handleTrustedInternalChatSend } from "../server-methods/chat-send-handler.js";
+import { gatewayClientSessionCreator } from "../server-methods/gateway-client-identity.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/shared-types.js";
 import { formatForLog } from "../ws-log.js";
 import { prepareTalkAgentConsultTranscript } from "./agent-consult-transcript.js";
@@ -42,6 +45,7 @@ export async function startTalkRealtimeAgentConsult(
   params: {
     sessionTarget: PreparedTalkSessionTarget;
     callId: string;
+    voiceSessionId: string;
     args: unknown;
     relaySessionId?: string;
     connId?: string;
@@ -54,12 +58,26 @@ export async function startTalkRealtimeAgentConsult(
   } catch (err) {
     return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)) };
   }
-  const idempotencyKey = `talk-${params.callId}-${randomUUID()}`;
   const normalizedTalk = normalizeTalkSection(request.context.getRuntimeConfig().talk);
   const authority = resolveTalkAgentConsultAuthority(
     request.client?.connect?.scopes,
     request.client,
   );
+  // Stable caller identity survives reconnect and permission changes. Grants
+  // authorize current access; they cannot mint fresh intent for the same call.
+  // Ingress/admission keep current authorization; chat owns reservation and replay.
+  const idempotencyKey =
+    "talk-" +
+    sha256Hex(
+      JSON.stringify([
+        gatewayClientSessionCreator(request.client)?.id ?? request.client?.authenticatedUserId,
+        authority.replyCaller?.ApprovalReviewerDeviceId,
+        params.sessionTarget.agentId,
+        params.sessionTarget.canonicalKey,
+        params.voiceSessionId,
+        params.callId,
+      ]),
+    );
   let acknowledgedRunId: string | undefined;
   const chatResponse = await new Promise<
     { ok: true; result: unknown } | { ok: false; error: ErrorShape } | undefined
@@ -143,6 +161,11 @@ export async function startTalkRealtimeAgentConsult(
         );
       },
     } satisfies GatewayRequestHandlerOptions;
+    if (request.client && chatSendOptions.client) {
+      // Capability projection does not create a new authenticated principal.
+      transferGatewayLocalUserIngress(request.client, chatSendOptions.client);
+      transferGatewayOperatorSourceIdentity(request.client, chatSendOptions.client);
+    }
     // Speech owns reusable history; keep consult scaffolding only in the lossless archive.
     const chatSendResult = handleTrustedInternalChatSend(chatSendOptions, undefined, {
       toolsAllow: authority.toolsAllow,

@@ -136,13 +136,14 @@ export function closeRelaySession(
   }
   const closing: NonNullable<RelaySession["closing"]> = { reason };
   session.closing = closing;
+  session.runAuthority?.release();
   const disposition =
     options?.disposition ??
     (isTalkVoiceSessionReplacing(session.id, session.connId, session.sessionTarget.agentId)
       ? "detach"
       : "abort");
   unregisterTalkVoiceSession(session.id, session.connId, session.sessionTarget.agentId);
-  session.confirmationReadiness.close();
+  session.transcriptReadiness.close();
   session.harness.close();
   session.outputOwnership.drain?.resolve();
   relaySessions.delete(session.id);

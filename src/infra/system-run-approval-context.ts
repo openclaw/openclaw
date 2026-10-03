@@ -115,7 +115,7 @@ export function parsePreparedSystemRunPayload(raw: unknown): PreparedRunPayload 
       ...(allowAlwaysCoverage ? { allowAlwaysCoverage } : {}),
     };
   }
-  if (!isRecord(raw.plan)) {
+  if (!isRecord(raw.plan) || raw.plan.policySnapshot !== undefined) {
     return null;
   }
   const legacyPlan = raw.plan;

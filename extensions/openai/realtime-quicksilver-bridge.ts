@@ -72,7 +72,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   private closing?: { connection: RealtimeVoiceSessionConnection; completion?: Promise<void> };
   private readonly lifecycle: RealtimeVoiceSessionLifecycle;
   private activeDelegations = new Set<string>();
-  private publicDelegations: OpenAILiveDelegationQueue | undefined;
+  private delegations: OpenAILiveDelegationQueue | undefined;
   private readonly transcript = new OpenAIQuicksilverTranscript();
   private readonly requestIds = createOpenAIQuicksilverRequestIds();
 
@@ -171,20 +171,18 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
       this.closeSocket("stale connection", connected.socket);
       return;
     }
-    if (isOpenAIGptLiveApiModel(this.config.model)) {
-      this.publicDelegations = new OpenAILiveDelegationQueue({
-        isActive: () => this.lifecycle.acceptsEvents(connection),
-        readInput: () => this.transcript.latestUserInput(),
-        dispatch: (id, input) => this.startDelegation(id, input, connection),
-        onExpired: (id) =>
-          this.sendContext(
-            "Ask the user to repeat their request; no user transcript was received.",
-            "speakable",
-            id,
-          ),
-        onError: () => this.fail(connection),
-      });
-    }
+    this.delegations = new OpenAILiveDelegationQueue({
+      isActive: () => this.lifecycle.acceptsEvents(connection),
+      readInput: () => this.transcript.latestUserInput(),
+      dispatch: (id, input) => this.startDelegation(id, input, connection),
+      onExpired: (id) =>
+        this.sendContext(
+          "Ask the user to repeat their request; no user transcript was received.",
+          "speakable",
+          id,
+        ),
+      onError: () => this.fail(connection),
+    });
     captureOpenAIQuicksilverTransportEvent(this.runtime, "local", "ws-open");
 
     let reachedReady = false;
@@ -527,13 +525,13 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
               ? `session.${event.role === "user" ? "input" : "output"}_transcript.delta`
               : `${event.role === "user" ? "input" : "output"}_transcript.added`,
       });
-      this.publicDelegations?.resume();
+      this.delegations?.resume();
       return;
     }
     if (event.kind === "delegation") {
-      if (this.publicDelegations) {
-        this.publicDelegations.enqueue(event.id);
-      } else {
+      if (isOpenAIGptLiveApiModel(this.config.model)) {
+        this.delegations?.enqueue(event.id);
+      } else if (this.delegations?.claim(event.id)) {
         this.startDelegation(
           event.id,
           event.prompt ?? this.transcript.latestUserInput(),
@@ -669,8 +667,8 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
   private resetTerminalState(): void {
     this.closeAudioOutput();
     this.socket?.stopAudio();
-    this.publicDelegations?.stop();
-    this.publicDelegations = undefined;
+    this.delegations?.stop();
+    this.delegations = undefined;
     this.activeDelegations.clear();
     this.transcript.clear();
   }

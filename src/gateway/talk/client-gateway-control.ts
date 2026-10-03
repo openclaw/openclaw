@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { formatErrorMessage as formatError, readErrorName } from "../../infra/errors.js";
 import {
@@ -12,8 +13,7 @@ import {
   parseRealtimeVoiceAgentControlToolArgs,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
 } from "../../talk/agent-run-control.js";
-import { createClientVoiceConfirmationReadiness } from "../../talk/client-voice-confirmation-readiness.js";
-import type { ClientVoiceConfirmationUtteranceContext } from "../../talk/client-voice-confirmation.js";
+import { createClientVoiceTranscriptReadiness } from "../../talk/client-voice-transcript-readiness.js";
 import type {
   RealtimeVoiceAgentConsultRunner,
   RealtimeVoiceCloseDisposition,
@@ -49,6 +49,7 @@ const owners = new Map<string, GatewayControlOwner>();
 const pendingOwners = new Set<GatewayControlOwner>();
 
 export type TalkAgentConsultAuthority = {
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   senderIsOwner: boolean;
   toolsAllow?: string[];
   replyCaller?: ReturnType<typeof resolveChatSendCallerContext>;
@@ -94,7 +95,6 @@ export function createTalkClientGatewayControlOwner(params: {
     entryId: string;
     role: "user" | "assistant";
     text: string;
-    confirmation?: ClientVoiceConfirmationUtteranceContext | null;
   }) => Promise<void>;
   flushTranscript: () => Promise<void>;
   closeLogicalSession: () => Promise<void>;
@@ -108,9 +108,7 @@ export function createTalkClientGatewayControlOwner(params: {
   const { signal } = lifetime;
   let transcriptSequence = 0;
   let acceptingProviderTranscripts = true;
-  const confirmationReadiness = createClientVoiceConfirmationReadiness({
-    agentId: params.sessionTarget.agentId,
-    voiceSessionId: params.voiceSessionId,
+  const transcriptReadiness = createClientVoiceTranscriptReadiness({
     flushTranscript: params.flushTranscript,
   });
   const entryPrefix = `gateway-${randomUUID()}`;
@@ -170,7 +168,7 @@ export function createTalkClientGatewayControlOwner(params: {
   const awaitProviderConsultReadiness = async (consultSignal: AbortSignal): Promise<void> => {
     assertActive();
     consultSignal.throwIfAborted();
-    await confirmationReadiness.wait(consultSignal);
+    await transcriptReadiness.wait(consultSignal);
     // Keep accepted work detached, but reject pending admission if either owner
     // changed while transcript writes were draining.
     assertActive();
@@ -386,8 +384,6 @@ export function createTalkClientGatewayControlOwner(params: {
     if (!acceptingProviderTranscripts || (signal.aborted && !final)) {
       return;
     }
-    const userTranscript =
-      role === "user" ? confirmationReadiness.observeUserTranscript(text, final) : undefined;
     if (!text.trim()) {
       return;
     }
@@ -417,15 +413,11 @@ export function createTalkClientGatewayControlOwner(params: {
         entryId,
         role,
         text,
-        ...(role === "user" ? { confirmation: userTranscript?.confirmation ?? null } : {}),
       })
-      .then(
-        () => userTranscript?.persisted(),
-        (error: unknown) => {
-          confirmationReadiness.fail(error);
-          warn(`talk Gateway control transcript failed: ${formatError(error)}`);
-        },
-      );
+      .then(undefined, (error: unknown) => {
+        transcriptReadiness.fail(error);
+        warn(`talk Gateway control transcript failed: ${formatError(error)}`);
+      });
     if (role === "user" && !signal.aborted) {
       runControl.handleSpoken(text, params.flushTranscript);
     }
@@ -599,7 +591,7 @@ export function createTalkClientGatewayControlOwner(params: {
       // preserveRuns keeps accepted work alive, not a retired transport's presentation authority.
       params.runAgentConsult.revokeRequesterFinal?.();
       lifetime.abort(new Error("Realtime voice session closed"));
-      confirmationReadiness.close();
+      transcriptReadiness.close();
       return closing;
     },
   };

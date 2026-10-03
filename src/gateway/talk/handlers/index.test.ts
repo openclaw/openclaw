@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /** Tests for talk gateway methods that coordinate speech and audio providers. */
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
@@ -17,11 +17,6 @@ import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import { setActiveDegradedSecretOwners } from "../../../secrets/runtime-degraded-state.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { resolveRealtimeVoiceAgentConsultToolsAllow } from "../../../talk/agent-consult-tool.js";
-import { checkClientVoiceToolConfirmationPolicy } from "../../../talk/client-voice-confirmation.js";
-import {
-  noteClientVoiceConfirmationUtteranceForTest as noteClientVoiceConfirmationUtterance,
-  resetClientVoiceConfirmationStateForTest,
-} from "../../../talk/client-voice-confirmation.test-support.js";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../talk/describe-view-tool.js";
 import type { RealtimeVoiceProviderResolveConfigContext } from "../../../talk/provider-types.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
@@ -38,6 +33,7 @@ import { prepareTalkAgentConsultTranscript } from "../agent-consult-transcript.j
 import { buildTalkRealtimeConfig } from "../session-config.js";
 import { preparedTalkSessionProjection as projection } from "../test-helpers.js";
 import { forgetLegacyVoiceBinding } from "./client-legacy-voice-bindings.js";
+import { createBrowserConsultOwnerFixture } from "./client-owner.test-support.js";
 import { talkConfigAccentCases } from "./config-accent.test-support.js";
 import {
   createTalkConfig,
@@ -116,7 +112,9 @@ const mocks = vi.hoisted(() => ({
     { role: "tool", text: "internal tool output" },
   ]),
   closeStaleClientVoiceSessions: vi.fn(async () => 0),
-  createOrResumeClientVoiceSession: vi.fn(() => "voice-test"),
+  createOrResumeClientVoiceSession: vi.fn<
+    typeof import("../../../talk/client-voice-session.js").createOrResumeClientVoiceSession
+  >(() => "voice-test"),
   ensureClientVoiceAgentSessionEntry: vi.fn(async () => "session-main"),
   resolveClientVoiceAgentSessionId: vi.fn<() => string | undefined>(() => "session-main"),
   assertClientVoiceSessionOpen: vi.fn(),
@@ -127,7 +125,7 @@ const mocks = vi.hoisted(() => ({
   gatewayControlActivate: vi.fn(),
   gatewayControlAdoptProvider: vi.fn(async () => undefined),
   gatewayControlClose: vi.fn(async () => undefined),
-  gatewayControl: { bindBridge: vi.fn() },
+  gatewayControl: { bindBridge: vi.fn(), bindControl: vi.fn() },
   createTalkClientGatewayControlOwner: vi.fn(),
   agentRuntime: {},
 }));
@@ -367,6 +365,14 @@ async function callTalkHandler(
 }
 
 beforeEach(() => {
+  mocks.createTalkClientGatewayControlOwner.mockImplementation((params) =>
+    createBrowserConsultOwnerFixture(params, {
+      activate: mocks.gatewayControlActivate,
+      adoptProvider: mocks.gatewayControlAdoptProvider,
+      close: mocks.gatewayControlClose,
+      control: mocks.gatewayControl,
+    }),
+  );
   setActiveDegradedSecretOwners([]);
   mocks.getRealtimeTranscriptionProvider.mockImplementation((providerId: string | undefined) => {
     const normalized = providerId?.trim().toLowerCase();
@@ -381,8 +387,6 @@ beforeEach(() => {
     );
   });
 });
-
-afterEach(() => resetClientVoiceConfirmationStateForTest());
 
 function markTalkOwnerCold(ownerId: string): void {
   setActiveDegradedSecretOwners([
@@ -2992,14 +2996,14 @@ describe("talk.client.toolCall handler", () => {
     expectRecordFields(chatInput.req, { method: "chat.send" });
     expectRecordFields(chatInput.params, { sessionKey: "agent:main:main", agentId: "main" });
     expect(chatInput.params?.message).toContain("What is in this repo?");
-    expect(chatInput.params?.idempotencyKey).toMatch(/^talk-call-1-/);
+    expect(chatInput.params?.idempotencyKey).toMatch(/^talk-[a-f0-9]{64}$/);
     expect(mockCallArg(mocks.chatSend, 0, 2)).toEqual({
       toolsAllow: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
       transcript: { display: false, excludeFromContext: true },
       prepareAssistantTranscriptMessage: prepareTalkAgentConsultTranscript,
     });
     const response = expectRespondOk(respond, { runId: "run-voice-1" }) as Record<string, unknown>;
-    expect(response.idempotencyKey).toMatch(/^talk-call-1-/);
+    expect(response.idempotencyKey).toMatch(/^talk-[a-f0-9]{64}$/);
   });
 
   it("returns the tool-call acknowledgement while the agent run continues", async () => {
@@ -3030,66 +3034,6 @@ describe("talk.client.toolCall handler", () => {
 
     expectRespondOk(respond, { runId: "run-active" });
     finishRun?.();
-  });
-
-  it("keeps the started run registered when refusal invalidates a detached confirmation", async () => {
-    const now = Date.now();
-    const challenge = checkClientVoiceToolConfirmationPolicy({
-      agentId: "main",
-      voiceSessionId: "voice-test",
-      runId: "run-original",
-      toolName: "message",
-      toolParams: { action: "send", message: "cancelled action" },
-      now,
-    });
-    if (challenge.allowed) {
-      throw new Error("expected voice confirmation challenge");
-    }
-    const confirmationId = challenge.reason.match(/VOICE_CONFIRMATION_REQUIRED:([^\s]+)/)?.[1];
-    if (!confirmationId) {
-      throw new Error("missing voice confirmation id");
-    }
-    noteClientVoiceConfirmationUtterance({
-      agentId: "main",
-      voiceSessionId: "voice-test",
-      text: "yes",
-      timestamp: now + 1,
-    });
-    mocks.chatSend.mockImplementationOnce(
-      async ({
-        respond,
-      }: {
-        respond: (ok: boolean, result?: unknown, error?: unknown) => void;
-      }) => {
-        noteClientVoiceConfirmationUtterance({
-          agentId: "main",
-          voiceSessionId: "voice-test",
-          text: "no",
-          timestamp: now + 3,
-        });
-        respond(true, { runId: "run-stale-confirmation" }, undefined);
-      },
-    );
-    const respond = vi.fn();
-
-    await callTalkHandler("talk.client.toolCall", {
-      params: {
-        sessionKey: "main",
-        voiceSessionId: "voice-test",
-        callId: "call-stale-confirmation",
-        name: "openclaw_agent_consult",
-        args: { question: "Do it", confirmationId },
-      },
-      respond,
-    });
-
-    expect(mocks.registerClientVoiceConsultRun).toHaveBeenCalledWith(
-      expect.objectContaining({
-        voiceSessionId: "voice-test",
-        runId: "run-stale-confirmation",
-      }),
-    );
-    expectRespondOk(respond, { runId: "run-stale-confirmation" });
   });
 
   it("passes configured consult thinking and fast-mode overrides to chat.send", async () => {
@@ -3293,35 +3237,11 @@ describe("talk.client.create handler", () => {
     mocks.resolveRealtimeVoiceAgentContextInstructions.mockResolvedValue(
       REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS,
     );
-    mocks.createOrResumeClientVoiceSession.mockReturnValue("voice-test");
+    mocks.createOrResumeClientVoiceSession.mockImplementation(
+      (params: { voiceSessionId?: string }) => params.voiceSessionId ?? "voice-test",
+    );
     mocks.resolveClientVoiceAgentSessionId.mockReturnValue("session-main");
     mocks.closeTalkClientGatewayControlSession.mockResolvedValue(false);
-    mocks.createTalkClientGatewayControlOwner.mockImplementation(
-      (params: {
-        runAgentConsult: ((args: unknown, signal?: AbortSignal) => Promise<{ text: string }>) & {
-          claimAppend?: () => boolean;
-          steer?: (params: { prompt: string; signal?: AbortSignal }) => Promise<{ text: string }>;
-        };
-      }) => {
-        const runAgentConsult = Object.assign(
-          ({ prompt, signal }: { prompt: string; signal?: AbortSignal }) =>
-            params.runAgentConsult({ question: prompt }, signal),
-          {
-            claimAppend: params.runAgentConsult.claimAppend,
-            steer: params.runAgentConsult.steer,
-          },
-        );
-        return {
-          signal: new AbortController().signal,
-          activate: mocks.gatewayControlActivate,
-          adoptProvider: mocks.gatewayControlAdoptProvider,
-          close: mocks.gatewayControlClose,
-          assertOpen: vi.fn(),
-          control: mocks.gatewayControl,
-          runAgentConsult,
-        };
-      },
-    );
   });
 
   it("builds realtime launch defaults from talk.realtime", () => {
@@ -3366,6 +3286,7 @@ describe("talk.client.create handler", () => {
     await callTalkHandler("talk.client.create", {
       params: {
         sessionKey: "main",
+        voiceSessionId: "voice-test",
         vadThreshold: 0.45,
         silenceDurationMs: 650,
         prefixPaddingMs: 250,
@@ -3520,7 +3441,7 @@ describe("talk.client.create handler", () => {
     )({ prompt: "Check the repository" });
     const consultInput = mockCallArg(mocks.consultRealtimeVoiceAgent) as Record<string, unknown>;
     expect(consultInput.senderIsOwner).toBe(false);
-    expect(consultInput).not.toHaveProperty("toolsAllow");
+    expect(consultInput.toolsAllow).toBeUndefined();
     expect(createInput).not.toHaveProperty("tools");
     expectRespondOk(respond, { provider: "openai", transport: "webrtc" });
   });
@@ -3606,6 +3527,7 @@ describe("talk.client.create handler", () => {
     await callTalkHandler("talk.client.create", {
       params: {
         sessionKey: "main",
+        voiceSessionId: "voice-test",
         model: "gpt-live-1",
         capabilities: ["voice-transcript"],
       },

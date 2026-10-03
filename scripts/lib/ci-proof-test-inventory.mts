@@ -3746,7 +3746,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/system-agent/system-agent.lifecycle.test.ts",
   "src/system-agent/verified-inference.test.ts",
   "src/talk/agent-consult-runtime.test.ts",
-  "src/talk/client-voice-confirmation-lifecycle.test.ts",
   "src/talk/client-voice-session-store.test.ts",
   "src/talk/client-voice-session.digest-retry.test.ts",
   "src/talk/client-voice-session.startup.test.ts",

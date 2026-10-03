@@ -11,18 +11,18 @@ export type ReplyExecOverrides = Pick<
 
 /** Resolves effective exec defaults for a reply run. */
 export function resolveReplyExecOverrides(params: {
-  directives: InlineDirectives;
+  directives?: InlineDirectives;
   sessionEntry?: SessionEntry;
   agentExecDefaults?: ReplyExecOverrides;
 }): ReplyExecOverrides | undefined {
   const host =
-    params.directives.execHost ??
+    params.directives?.execHost ??
     (params.sessionEntry?.execHost as ReplyExecOverrides["host"]) ??
     params.agentExecDefaults?.host;
-  const security = params.directives.execSecurity ?? params.agentExecDefaults?.security;
-  const ask = params.directives.execAsk ?? params.agentExecDefaults?.ask;
+  const security = params.directives?.execSecurity ?? params.agentExecDefaults?.security;
+  const ask = params.directives?.execAsk ?? params.agentExecDefaults?.ask;
   const node =
-    params.directives.execNode ?? params.sessionEntry?.execNode ?? params.agentExecDefaults?.node;
+    params.directives?.execNode ?? params.sessionEntry?.execNode ?? params.agentExecDefaults?.node;
   const nodeCwd =
     node && node === params.sessionEntry?.execNode ? params.sessionEntry.execCwd : undefined;
   if (!host && !security && !ask && !node && !nodeCwd) {

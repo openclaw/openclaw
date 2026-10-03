@@ -11,7 +11,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
-import { resetClientVoiceConfirmationStateForTest } from "./client-voice-confirmation.test-support.js";
 import {
   appendClientVoiceTranscript,
   appendRelayVoiceTranscript,
@@ -35,7 +34,6 @@ describe("client voice session startup", () => {
 
   afterEach(async () => {
     clientVoiceSessionTesting.reset();
-    resetClientVoiceConfirmationStateForTest();
     await cleanupSessionStateForTest({ stateDir: tempDir });
     envSnapshot.restore();
     await fs.rm(tempDir, { recursive: true, force: true });

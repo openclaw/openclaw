@@ -11,16 +11,6 @@ import {
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import type { PluginHookBeforeToolCallEvent } from "../plugins/types.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
-import {
-  authorizeClientVoiceConfirmation,
-  bindAuthorizedClientVoiceConfirmation,
-  checkClientVoiceToolConfirmationPolicy,
-} from "../talk/client-voice-confirmation.js";
-import {
-  noteClientVoiceConfirmationUtteranceForTest as noteClientVoiceConfirmationUtterance,
-  resetClientVoiceConfirmationStateForTest,
-} from "../talk/client-voice-confirmation.test-support.js";
-import * as clientVoiceSession from "../talk/client-voice-session.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
 import * as nodeHost from "./bash-tools.exec-host-node.js";
@@ -106,7 +96,6 @@ describe("Code Mode subscribed host denial", () => {
     await resetCodeModeTestState();
     resetGlobalHookRunner();
     resetAdjustedParamsByToolCallIdForTests();
-    resetClientVoiceConfirmationStateForTest();
     vi.restoreAllMocks();
   });
 
@@ -526,62 +515,6 @@ describe("Code Mode subscribed host denial", () => {
       `return await exec({ command: "printf no", host: "gateway" });`,
     );
     expect(details.status).toBe("failed");
-    expect(harness.spawn).not.toHaveBeenCalled();
-    expect(harness.remote).not.toHaveBeenCalled();
-  });
-  it("leaves the consumed voice grant consumed after host rejection and requires a new correction grant", async () => {
-    const harness = createHostHarness({ name: "voice-denial" });
-    const voiceSessionId = "host-denial-voice";
-    const binding = { agentId: "main", voiceSessionId, sessionKey: harness.sessionKey };
-    vi.spyOn(clientVoiceSession, "resolveClientVoiceRunBinding").mockImplementation((runId) =>
-      runId === harness.runId ? binding : undefined,
-    );
-    vi.spyOn(clientVoiceSession, "isClientVoiceSessionConfirmable").mockReturnValue(true);
-    // Explicit yieldMs keeps the granted final shape identical to the nested call.
-    const args = { command: "printf voice-denied", host: "node", yieldMs: 1000 };
-    const policy = {
-      agentId: "main",
-      voiceSessionId,
-      runId: harness.runId,
-      toolName: "exec",
-      toolParams: args,
-      isConfirmable: () => true,
-    };
-    const now = Date.now();
-    const challenge = checkClientVoiceToolConfirmationPolicy({ ...policy, now });
-    expect(challenge.allowed).toBe(false);
-    if (challenge.allowed) {
-      throw new Error("voice challenge expected");
-    }
-    const confirmationId = expectDefined(
-      challenge.reason.match(/VOICE_CONFIRMATION_REQUIRED:([^\s]+)/)?.[1],
-      "voice challenge id",
-    );
-    noteClientVoiceConfirmationUtterance({
-      agentId: "main",
-      voiceSessionId,
-      text: "yes",
-      timestamp: now + 1,
-    });
-    const grant = authorizeClientVoiceConfirmation({
-      agentId: "main",
-      voiceSessionId,
-      confirmationId,
-      now: now + 2,
-    });
-    bindAuthorizedClientVoiceConfirmation({ grant, runId: harness.runId });
-    expect(checkClientVoiceToolConfirmationPolicy(policy).allowed).toBe(true);
-    const denied = await harness.runToCompletion(`return await exec(${JSON.stringify(args)});`);
-    expect(denied.error).toContain("exec host not allowed");
-    expect(checkClientVoiceToolConfirmationPolicy(policy).allowed).toBe(false);
-    for (const input of [args, { ...args, host: "gateway" }]) {
-      const blocked = await harness.runToCompletion(`return await exec(${JSON.stringify(input)});`);
-      expect(blocked).toMatchObject({
-        status: "completed",
-        value: { status: "blocked", deniedReason: "client-voice-confirmation" },
-      });
-      expect(JSON.stringify(blocked.value)).toContain("VOICE_CONFIRMATION_REQUIRED");
-    }
     expect(harness.spawn).not.toHaveBeenCalled();
     expect(harness.remote).not.toHaveBeenCalled();
   });

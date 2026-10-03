@@ -60,8 +60,8 @@ import {
   upstream,
   withParkedNativeTask,
   withNativePlugin,
-  withRegisteredNativeEmbeddedRun,
 } from "./client-native-control.test-support.js";
+import { withRegisteredNativeEmbeddedRun } from "./client-native-run.test-support.js";
 
 // Observe the real admission function before the consult loader captures it for later tests.
 vi.mock("../../../agents/admitted-run-context.js", async (importOriginal) => {

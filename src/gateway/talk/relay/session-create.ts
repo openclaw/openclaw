@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../../talk/agent-consult-tool.js";
 import { buildRealtimeVoiceAgentCancelProviderResult } from "../../../talk/agent-run-control-shared.js";
-import { createClientVoiceConfirmationReadiness } from "../../../talk/client-voice-confirmation-readiness.js";
+import { createClientVoiceTranscriptReadiness } from "../../../talk/client-voice-transcript-readiness.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceAudioClearReason,
@@ -149,9 +149,7 @@ export function createTalkRealtimeRelaySession(
     },
   );
   const { agentId: relayAgentId, canonicalKey } = params.sessionTarget;
-  const confirmationReadiness = createClientVoiceConfirmationReadiness({
-    agentId: relayAgentId,
-    voiceSessionId: relaySessionId,
+  const transcriptReadiness = createClientVoiceTranscriptReadiness({
     flushTranscript: async () => {
       await getActiveRelay()?.voiceTranscriptQueue.flush();
     },
@@ -162,6 +160,7 @@ export function createTalkRealtimeRelaySession(
     sessionTarget: params.sessionTarget,
     ownerConnId: params.connId,
     authority: params.consultAuthority,
+    runAuthority: params.runAuthority,
     getVoiceSessionId: () => relaySessionId,
     initialItems: params.initialItems ?? [],
     runIdPrefix: "talk-realtime-relay-consult",
@@ -182,7 +181,7 @@ export function createTalkRealtimeRelaySession(
   const runAgentConsult = bindTalkRealtimeRelayAgentConsult(
     consultRunner.runPrompt,
     () => getActiveRelay() !== undefined,
-    (signal) => confirmationReadiness.wait(signal),
+    (signal) => transcriptReadiness.wait(signal),
   );
   const runControl = createTalkRealtimeRunControlOwner({
     controlSource: params.controlSource,
@@ -417,9 +416,6 @@ export function createTalkRealtimeRelaySession(
       if (role === "assistant" && outputOwnership.suppressingOutput) {
         return;
       }
-      if (!relay.closing && role === "user" && !final) {
-        confirmationReadiness.observeUserTranscript(text, false);
-      }
       const previousTranscriptSeq = relay.voiceTranscriptSeq;
       if (final && !enqueueRelayVoiceTranscript(relay, role, text)) {
         return;
@@ -589,13 +585,13 @@ export function createTalkRealtimeRelaySession(
   try {
     bridge = harness.createBridge(bridgeRequest);
   } catch (error) {
-    confirmationReadiness.close();
+    transcriptReadiness.close();
     throw publicError(error);
   }
   bridgeRef.current = bridge;
   const earlyTerminal = constructionTerminal.current;
   if (earlyTerminal) {
-    confirmationReadiness.close();
+    transcriptReadiness.close();
     harness.close();
     const reportCloseFailure = () =>
       params.context.logGateway.warn(
@@ -667,7 +663,8 @@ export function createTalkRealtimeRelaySession(
     voiceSessionCreated: false,
     voiceTranscriptSeq: 0,
     voiceTranscriptQueue: VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue(),
-    confirmationReadiness,
+    transcriptReadiness,
+    runAuthority: params.runAuthority,
     failSession,
   };
   relayRef.current = relay;

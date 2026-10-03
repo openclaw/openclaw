@@ -16,14 +16,6 @@ import {
 } from "../infra/diagnostic-events.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import {
-  type ClientVoiceConfirmationUtteranceContext,
-  deactivateClientVoiceConfirmationSession,
-  noteClientVoiceConfirmationUtterance,
-  prepareClientVoiceConfirmationTranscript,
-  recordClientVoiceConfirmationTranscriptAppend,
-  releaseClientVoiceConfirmationRun,
-} from "./client-voice-confirmation.js";
-import {
   CLIENT_VOICE_MUTATION_DIGEST_POLICY,
   ClientVoiceMutationDigestOwner,
   deliverClientVoiceMutationDigest,
@@ -164,7 +156,6 @@ function ensureToolEffectSubscription(): void {
         return;
       }
       voiceSessionByRunId.delete(event.runId);
-      releaseClientVoiceConfirmationRun(binding.agentId, binding.voiceSessionId, event.runId);
       mutationDigestDeliveryOwner.retry(binding);
     },
     { include: ["run.completed"] },
@@ -280,7 +271,7 @@ export async function ensureClientVoiceAgentSessionEntry(params: {
   return created.sessionId;
 }
 
-/** Correlate a consult run with its open call for confirmation and mutation evidence. */
+/** Correlate a consult run with its open call for voice identity and mutation evidence. */
 export function registerClientVoiceConsultRun(params: {
   agentId: string;
   sessionKey: string;
@@ -299,7 +290,7 @@ export function registerClientVoiceConsultRun(params: {
       recordClosed = record.status === "closed";
       // A close can race in while chat.send is still acking this run. The run has
       // already started, so bind it anyway (even on a closed record) to keep effect
-      // capture; aborting here would drop a just-confirmed high-impact action.
+      // capture; aborting here would lose the accepted action.
       if (!record.consultRunIds.includes(params.runId)) {
         record.consultRunIds.push(params.runId);
         record.updatedAt = Date.now();
@@ -310,19 +301,6 @@ export function registerClientVoiceConsultRun(params: {
     { operationLabel: "voice.session.register-consult" },
   );
   const previousBinding = voiceSessionByRunId.get(params.runId);
-  if (
-    previousBinding &&
-    (previousBinding.agentId !== params.agentId ||
-      previousBinding.voiceSessionId !== params.voiceSessionId)
-  ) {
-    // A run ID has one authoritative voice scope. Replacing it must retire the
-    // prior scope's post-close grant or completion can no longer find that owner.
-    releaseClientVoiceConfirmationRun(
-      previousBinding.agentId,
-      previousBinding.voiceSessionId,
-      params.runId,
-    );
-  }
   if (
     previousBinding?.agentId !== params.agentId ||
     previousBinding.voiceSessionId !== params.voiceSessionId ||
@@ -353,20 +331,6 @@ export function registerClientVoiceConsultRun(params: {
 /** Return the open voice-call binding for one executing run. */
 export function resolveClientVoiceRunBinding(runId?: string): ClientVoiceRunBinding | undefined {
   return runId ? voiceSessionByRunId.get(runId) : undefined;
-}
-
-/**
- * Confirmation applies only when the session can observe spoken approvals:
- * relay sessions (server hears utterances) or clients that report transcripts.
- * Legacy clients without transcript reporting keep pre-gate behavior.
- */
-export function isClientVoiceSessionConfirmable(binding: ClientVoiceRunBinding): boolean {
-  const record = readRecord(binding.agentId, binding.voiceSessionId);
-  return (
-    record?.origin === "relay" ||
-    record?.transcriptCapable === true ||
-    record?.hasUserTranscript === true
-  );
 }
 
 /** Validate ownership and open state before starting a voice-bound consult. */
@@ -439,22 +403,12 @@ function appendVoiceTranscript(params: {
   text: string;
   timestamp?: number;
   config?: OpenClawConfig;
-  confirmation?: ClientVoiceConfirmationUtteranceContext | null;
 }): Promise<void> {
   // Normalize before admission so the queued task retains only bounded text.
   const normalized = { ...params, text: normalizeVoiceTranscriptText(params.text) };
   if (!normalized.text) {
     return Promise.resolve();
   }
-  const confirmation =
-    normalized.role === "user"
-      ? prepareClientVoiceConfirmationTranscript({
-          agentId: normalized.agentId,
-          voiceSessionId: normalized.voiceSessionId,
-          entryId: normalized.entryId,
-          confirmation: normalized.confirmation,
-        })
-      : null;
   return runVoiceSessionOperation(
     normalized.agentId,
     normalized.voiceSessionId,
@@ -517,15 +471,6 @@ function appendVoiceTranscript(params: {
           now: timestamp,
         },
       );
-      // Publish the committed row before fallible bookkeeping; a retry can deduplicate it.
-      if (confirmation) {
-        recordClientVoiceConfirmationTranscriptAppend({
-          confirmation,
-          entryId: normalized.entryId,
-          text: normalized.text,
-          appended: appended.appended,
-        });
-      }
       if (appended.appended) {
         await publishTranscriptUpdate(
           { ...sessionTarget, sessionId: sessionEntry.sessionId },
@@ -540,8 +485,7 @@ function appendVoiceTranscript(params: {
           }
           assertOwnership(current, normalized);
           // Reaching here means this exact eventId is durably persisted (fresh append or
-          // idempotent dedup of our own prior write). Arm confirmation bookkeeping in both
-          // cases so a retry after a partial failure still records the user utterance.
+          // idempotent dedup of our own prior write). Retain the observed capability.
           if (normalized.role === "user") {
             current.hasUserTranscript = true;
           }
@@ -554,14 +498,6 @@ function appendVoiceTranscript(params: {
         { agentId: normalized.agentId },
         { operationLabel: "voice.transcript.confirm" },
       );
-      if (normalized.role === "user" && confirmation) {
-        noteClientVoiceConfirmationUtterance({
-          agentId: normalized.agentId,
-          voiceSessionId: normalized.voiceSessionId,
-          timestamp: Date.now(),
-          confirmation,
-        });
-      }
     },
     { weight: normalized.text.length },
   );
@@ -648,14 +584,6 @@ async function closeClientVoiceSessionInternal(params: {
   if (!closed) {
     throw new Error("voice session disappeared after close");
   }
-  // Transport close does not end consult runs: live bindings keep effect capture active,
-  // approved grants stay valid for those runs, and the digest waits for the last run.completed.
-  const liveRunIds = closed.consultRunIds.filter((runId) => {
-    const binding = voiceSessionByRunId.get(runId);
-    return binding?.voiceSessionId === params.voiceSessionId && binding.agentId === params.agentId;
-  });
-  deactivateClientVoiceConfirmationSession(params.agentId, params.voiceSessionId, liveRunIds);
-  // Record retry ownership only after canonical close and confirmation cleanup.
   // Channel delivery is best-effort and must never delay this durable boundary.
   mutationDigestDeliveryOwner.record({
     agentId: params.agentId,
