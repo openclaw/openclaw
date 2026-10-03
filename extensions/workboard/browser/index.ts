@@ -1,7 +1,7 @@
 import { defineControlUiPlugin } from "openclaw/plugin-sdk/control-ui";
 import { WorkboardCatalog } from "./catalog.ts";
 import { bindWorkboardHost } from "./host.ts";
-import { workboardBoardLabel } from "./lib/workboard/board-presentation.ts";
+import { workboardBoardName } from "./lib/workboard/board-presentation.ts";
 import { createWorkboardCapability } from "./lib/workboard/capability.ts";
 import { WORKBOARD_CHANGED_EVENT, type WorkboardBoardSummary } from "./lib/workboard/types.ts";
 import { createWorkboardPage, workboardPageTarget } from "./pages/workboard/workboard-page.ts";
@@ -11,38 +11,24 @@ import "./styles/workboard.css";
 import "./styles/widgets.css";
 import "./styles/session-chip.css";
 
+type NavigationBoard = Pick<WorkboardBoardSummary, "id" | "name" | "kind" | "icon" | "color">;
+
 export default defineControlUiPlugin({
   id: "workboard",
   activate(host) {
     const unbind = bindWorkboardHost(host);
     const workboard = createWorkboardCapability();
     const client = host;
-    const navigation = new Map<string, { signature: string; order: number; dispose: () => void }>();
-    const registerBoardNavigation = (
-      board: Pick<WorkboardBoardSummary, "id" | "name" | "icon" | "color">,
-      order = navigation.get(board.id)?.order ?? 20 + navigation.size,
-    ) => {
-      const label = workboardBoardLabel(board);
-      const signature = JSON.stringify([label, board.icon, board.color, order]);
-      if (navigation.get(board.id)?.signature === signature) {
-        return;
+    const navigation = new Map<
+      string,
+      { board: NavigationBoard; order: number; signature: string; dispose: () => void }
+    >();
+    const syncBoardNavigation = (boards: readonly NavigationBoard[]) => {
+      const nameCounts = new Map<string, number>();
+      for (const board of boards) {
+        const name = workboardBoardName(board);
+        nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
       }
-      navigation.get(board.id)?.dispose();
-      navigation.set(board.id, {
-        signature,
-        order,
-        dispose: host.ui.registerNavigation({
-          id: `board-${board.id}`,
-          parent: "workboard",
-          label,
-          page: workboardPageTarget(board.id),
-          icon: board.icon,
-          order,
-          defaultVisible: false,
-        }),
-      });
-    };
-    const catalog = new WorkboardCatalog(({ boards }) => {
       const currentIds = new Set(boards.map((board) => board.id));
       for (const [id, entry] of navigation) {
         if (!currentIds.has(id)) {
@@ -51,14 +37,45 @@ export default defineControlUiPlugin({
         }
       }
       for (const [index, board] of boards.entries()) {
-        registerBoardNavigation(board, 20 + index);
+        const name = workboardBoardName(board);
+        const label = (nameCounts.get(name) ?? 0) > 1 ? `${name} (${board.kind ?? "cards"})` : name;
+        const order = 20 + index;
+        const signature = JSON.stringify([label, board.icon, board.color, order]);
+        const entry = navigation.get(board.id);
+        if (entry?.signature === signature) {
+          entry.board = board;
+          continue;
+        }
+        entry?.dispose();
+        navigation.set(board.id, {
+          board,
+          order,
+          signature,
+          dispose: host.ui.registerNavigation({
+            id: `board-${board.id}`,
+            parent: "workboard",
+            label,
+            page: workboardPageTarget(board.id),
+            icon: board.icon,
+            order,
+            defaultVisible: false,
+          }),
+        });
       }
-    }, workboard);
+    };
+    const catalog = new WorkboardCatalog(({ boards }) => syncBoardNavigation(boards), workboard);
     const registrations = [
       host.ui.registerPage({
         id: "workboard",
         label: "Workboard",
-        mount: createWorkboardPage(workboard, registerBoardNavigation),
+        mount: createWorkboardPage(workboard, (board) => {
+          const boards = [...navigation.values()]
+            .toSorted((left, right) => left.order - right.order)
+            .map((entry) => entry.board);
+          const index = boards.findIndex((entry) => entry.id === board.id);
+          boards[index < 0 ? boards.length : index] = board;
+          syncBoardNavigation(boards);
+        }),
       }),
       host.ui.registerNavigation({
         id: "workboard",

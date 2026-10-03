@@ -73,6 +73,8 @@ openclaw plugins disable workboard
 
 While Workboard is open, its sidebar entry expands to show both Cards and
 Sessions boards, with the open board highlighted. Select a nested board to open it.
+Sidebar labels use the board name; boards with the same name include their kind
+in parentheses, such as **Planning (cards)** and **Planning (sessions)**.
 Boards you create in the Control UI are pinned in the sidebar immediately.
 Use **Customize** to pin any other board or remove a pin; removed pins stay removed.
 Pinned boards remain available as top-level entries when you leave Workboard,

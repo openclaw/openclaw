@@ -16,6 +16,24 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+function sessionsBoard(name: string) {
+  return {
+    id: "sessions",
+    name,
+    kind: "sessions",
+    total: 0,
+    active: 0,
+    archived: 0,
+    byStatus: {},
+    sessions: {
+      columns: [
+        { id: "working", label: "Working", description: "Active work", match: { run: ["active"] } },
+        { id: "done", label: "Done", description: "Completed work", fallback: true },
+      ],
+    },
+  };
+}
+
 it("keeps reassigned session cards current through events without polling", async () => {
   vi.useFakeTimers();
   const fixture = workboardTestHost();
@@ -79,25 +97,14 @@ it("keeps reassigned session cards current through events without polling", asyn
   }
 });
 
-it("keeps card and sessions navigation nested in catalog order and reconciles metadata and removal", async () => {
+it("keeps catalog navigation ordered and disambiguates names only while boards share them", async () => {
   vi.useFakeTimers();
   const fixture = workboardTestHost();
   const { host, connection, registrations } = fixture;
   connection.connected = true;
   const empty = { total: 0, active: 0, archived: 0, byStatus: {} };
   const operations = { ...empty, id: "ops", name: "Zebra", icon: "rocket", color: "blue" };
-  const sessions = {
-    ...empty,
-    id: "sessions",
-    name: "Alpha",
-    kind: "sessions",
-    sessions: {
-      columns: [
-        { id: "working", label: "Working", description: "Active work", match: { run: ["active"] } },
-        { id: "done", label: "Done", description: "Completed work", fallback: true },
-      ],
-    },
-  };
+  const sessions = sessionsBoard("Alpha");
   let boards = [operations, sessions];
   host.request = vi.fn(async () => ({ cards: [], boards })) as typeof host.request;
   const register = vi.spyOn(host.ui, "registerNavigation");
@@ -113,7 +120,7 @@ it("keeps card and sessions navigation nested in catalog order and reconciles me
       {
         id: "board-ops",
         parent: "workboard",
-        label: "Zebra (ops)",
+        label: "Zebra",
         icon: "rocket",
         defaultVisible: false,
         page: { id: "workboard", path: ["ops"] },
@@ -121,7 +128,7 @@ it("keeps card and sessions navigation nested in catalog order and reconciles me
       {
         id: "board-sessions",
         parent: "workboard",
-        label: "Alpha (sessions)",
+        label: "Alpha",
         defaultVisible: false,
         page: { id: "workboard", path: ["sessions"] },
       },
@@ -131,19 +138,35 @@ it("keeps card and sessions navigation nested in catalog order and reconciles me
     await vi.advanceTimersByTimeAsync(0);
     expect(register).not.toHaveBeenCalled();
 
-    boards = [sessions, { ...operations, name: "Operations", icon: "kanban", color: "green" }];
+    boards = [sessions, { ...operations, name: "Alpha", icon: "kanban", color: "green" }];
     fixture.emit("plugin.workboard.changed", {});
     await vi.advanceTimersByTimeAsync(0);
     expect(boardNavigation().map(({ id }) => id)).toEqual(["board-sessions", "board-ops"]);
+    expect(boardNavigation().map(({ label }) => label)).toEqual([
+      "Alpha (sessions)",
+      "Alpha (cards)",
+    ]);
     expect(registrations.get("navigation/board-ops")).toMatchObject({
-      label: "Operations (ops)",
       icon: "kanban",
     });
 
+    boards = [sessions, { ...operations, name: "Operations" }];
+    fixture.emit("plugin.workboard.changed", {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(boardNavigation().map(({ label }) => label)).toEqual(["Alpha", "Operations"]);
+
+    boards = [sessions, { ...operations, name: "Alpha" }];
+    fixture.emit("plugin.workboard.changed", {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(boardNavigation().map(({ label }) => label)).toEqual([
+      "Alpha (sessions)",
+      "Alpha (cards)",
+    ]);
     boards = [sessions];
     fixture.emit("plugin.workboard.changed", {});
     await vi.advanceTimersByTimeAsync(0);
     expect(boardNavigation().map(({ id }) => id)).toEqual(["board-sessions"]);
+    expect(boardNavigation().map(({ label }) => label)).toEqual(["Alpha"]);
     expect(host.ui.pinNavigation).not.toHaveBeenCalled();
   } finally {
     dispose?.();
@@ -151,12 +174,13 @@ it("keeps card and sessions navigation nested in catalog order and reconciles me
   expect([...registrations.keys()].filter((key) => key.startsWith("navigation/"))).toEqual([]);
 });
 
-it("registers a new board before pinning and keeps it through a stale catalog completion", async () => {
+it("disambiguates a created board and its sibling before pinning through a stale catalog completion", async () => {
   vi.useFakeTimers();
   const fixture = workboardTestHost();
   const { host, connection, registrations } = fixture;
   connection.connected = true;
   const board = { id: "created", name: "Created", icon: "rocket", createdAt: 1, updatedAt: 1 };
+  const existing = sessionsBoard("Created");
   const stale = createDeferred<unknown>();
   const refreshed = createDeferred<unknown>();
   let refreshing = false;
@@ -167,13 +191,19 @@ it("registers a new board before pinning and keeps it through a stale catalog co
       return { board };
     }
     if (method === "workboard.cards.list") {
-      return created ? refreshed.promise : refreshing ? stale.promise : { cards: [], boards: [] };
+      return created
+        ? refreshed.promise
+        : refreshing
+          ? stale.promise
+          : { cards: [], boards: [existing] };
     }
     return {};
   }) as typeof host.request;
   let pinnedNavigation: unknown;
+  let siblingAtPin: unknown;
   vi.mocked(host.ui.pinNavigation).mockImplementation((id) => {
     pinnedNavigation = registrations.get(`navigation/${id}`);
+    siblingAtPin = registrations.get("navigation/board-sessions");
   });
   const register = vi.spyOn(host.ui, "registerNavigation");
   const dispose = await workboardPlugin.activate(host);
@@ -183,6 +213,7 @@ it("registers a new board before pinning and keeps it through a stale catalog co
   const mounted = page.mount(container, createViewContext(host, {}));
   try {
     await vi.advanceTimersByTimeAsync(0);
+    expect(registrations.get("navigation/board-sessions")).toMatchObject({ label: "Created" });
     expectDefined(
       [...container.querySelectorAll<HTMLButtonElement>("button")].find(
         (button) => button.textContent?.trim() === "New board",
@@ -208,17 +239,18 @@ it("registers a new board before pinning and keeps it through a stale catalog co
     expect(pinnedNavigation).toMatchObject({
       id: "board-created",
       parent: "workboard",
-      label: "Created (created)",
+      label: "Created (cards)",
       icon: "rocket",
       defaultVisible: false,
     });
+    expect(siblingAtPin).toMatchObject({ label: "Created (sessions)" });
 
-    stale.resolve({ cards: [], boards: [] });
+    stale.resolve({ cards: [], boards: [existing] });
     await vi.advanceTimersByTimeAsync(0);
     expect(registrations.get("navigation/board-created")).toBe(pinnedNavigation);
     refreshed.resolve({
       cards: [],
-      boards: [{ ...board, total: 0, active: 0, archived: 0, byStatus: {} }],
+      boards: [existing, { ...board, total: 0, active: 0, archived: 0, byStatus: {} }],
     });
     await vi.advanceTimersByTimeAsync(0);
     register.mockClear();
