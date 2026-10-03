@@ -1,5 +1,8 @@
+import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import type { ControlUiNavigationItem } from "../../../../src/plugin-sdk/control-ui.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { icons } from "../../components/icons.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -51,6 +54,7 @@ function pluginNavigation(
   sidebar: SidebarLifecycleState,
   ids: string[],
   defaultVisible = false,
+  presentation: (id: string) => Pick<ControlUiNavigationItem, "parent" | "icon"> = () => ({}),
 ) {
   const openPage = vi.fn();
   const signal = new AbortController().signal;
@@ -58,7 +62,7 @@ function pluginNavigation(
     key: `example/${id}`,
     pluginId: "example",
     signal,
-    value: { id, label: id, defaultVisible, page: { id } },
+    value: { id, label: id, defaultVisible, page: { id }, ...presentation(id) },
     host: { navigation: { pageHref: () => `/plugin?plugin=example&id=${id}`, openPage } },
   }));
   Object.assign(context, {
@@ -347,16 +351,45 @@ describe("AppSidebar interleaved zone", () => {
     expect(sidebar.sidebarEntries).toEqual(["plugin:example/review", "route:usage"]);
   });
 
-  it("offers optional plugin destinations in the pin editor", async () => {
+  it("offers child destinations with their icons and preserves an explicit removal", async () => {
     const { sidebar, context } = await mountZone();
-    pluginNavigation(context, sidebar, ["review", "notes"]);
+    const register = () =>
+      pluginNavigation(context, sidebar, ["review", "notes"], false, (id) => ({
+        parent: "boards",
+        icon: id === "review" ? "activity" : "toString",
+      }));
+    register();
+    sidebar.sidebarEntries = ["route:usage", "plugin:example/review"];
+    sidebar.onUpdateSidebarEntries = (entries) => {
+      sidebar.sidebarEntries = entries;
+    };
     const nav = sidebar.querySelector<HTMLElement>(".sidebar-nav");
     nav?.dispatchEvent(
       new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 }),
     );
     await sidebar.updateComplete;
-    expect(sidebar.querySelector('wa-dropdown-item[value="plugin:example/review"]')).not.toBeNull();
-    expect(sidebar.querySelector('wa-dropdown-item[value="plugin:example/notes"]')).not.toBeNull();
+    const icon = document.createElement("div");
+    for (const [id, expectedIcon] of [
+      ["review", "activity"],
+      ["notes", "plug"],
+    ] as const) {
+      render(icons[expectedIcon], icon);
+      expect(
+        sidebar.querySelector(`wa-dropdown-item[value="plugin:example/${id}"] svg`)?.outerHTML,
+      ).toBe(icon.querySelector("svg")?.outerHTML);
+    }
+    sidebar.querySelector(".sidebar-pin-editor-menu")!.dispatchEvent(
+      new CustomEvent("wa-select", {
+        cancelable: true,
+        detail: { item: { value: "plugin:example/review" } },
+      }),
+    );
+    await sidebar.updateComplete;
+    expect(sidebar.sidebarEntries).toEqual(["route:usage"]);
+    register();
+    await sidebar.updateComplete;
+    expect(sidebar.sidebarEntries).toEqual(["route:usage"]);
+    expect(sidebar.querySelector('[data-sidebar-entry="plugin:example/review"]')).toBeNull();
   });
 
   it("writes reordered entries after a route drop", async () => {
