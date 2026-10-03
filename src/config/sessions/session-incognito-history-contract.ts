@@ -1,3 +1,5 @@
+import type { SessionEntrySnapshot } from "../../../packages/memory-host-sdk/src/host/session-files.js";
+import type { SessionResetRecallCutoff } from "../../../packages/memory-host-sdk/src/host/session-reset-recall.js";
 import type {
   SessionTranscriptProjectionSelection,
   SessionTranscriptProjectionSelectionResults,
@@ -13,6 +15,7 @@ import type {
   SessionPreviewItem,
   SessionTitleFields,
   SessionTranscriptEventMatch,
+  SessionTranscriptContextSnapshot,
   SessionTranscriptModelContext,
   SessionTranscriptWatermark,
 } from "./session-history-read.types.js";
@@ -29,6 +32,10 @@ export type IncognitoHistoryTarget = {
   lifecycleRevision?: string;
   admission?: UserTurnTranscriptAdmissionReceipt;
 };
+
+export type IncognitoContextReadResult<Value> =
+  | { ok: true; value: Value }
+  | { ok: false; message: string };
 
 type Reads = {
   [Key in keyof SessionTranscriptProjectionSelectionResults]: {
@@ -70,6 +77,16 @@ type Reads = {
     output: PreparedSessionTranscriptHydration;
   };
   stats: { input: Record<never, never>; output: SessionTranscriptStats };
+  "memory-entry": { input: Record<never, never>; output: SessionEntrySnapshot };
+  "memory-reset-recall": { input: Record<never, never>; output: SessionResetRecallCutoff };
+  "native-context": {
+    input: Record<never, never>;
+    output: IncognitoContextReadResult<SessionTranscriptContextSnapshot>;
+  };
+  "native-context-current": {
+    input: Pick<SessionTranscriptContextSnapshot, "version">;
+    output: IncognitoContextReadResult<void>;
+  };
 };
 
 export type IncognitoHistoryOperations = {

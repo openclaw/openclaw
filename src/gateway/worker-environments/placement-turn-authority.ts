@@ -4,6 +4,7 @@ import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { registerListener } from "../../shared/listeners.js";
 import {
   registerOpenClawStateDatabaseLifecycleListener,
   requireOpenClawStateDatabaseIdentity,
@@ -653,8 +654,7 @@ export async function preparePlacementTurnClaimAuthority(
           listener();
           return () => {};
         }
-        retained.listeners.add(listener);
-        return () => retained.listeners.delete(listener);
+        return registerListener(retained.listeners, listener);
       },
       release,
     };

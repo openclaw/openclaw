@@ -5,6 +5,7 @@ import {
   defineChannelAliasMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
+  hasConfiguredNextcloudTalkChannelState,
   listNextcloudTalkAccountIds,
   mergeNextcloudTalkAccountConfig,
 } from "../configured-state.js";
@@ -43,11 +44,10 @@ export function normalizeCompatibilityConfig({
       cfg: webhook.config,
       changes: webhook.changes,
     }),
-    historicalWebhookAccountIds:
-      cfg.channels?.["nextcloud-talk"]?.enabled === false
-        ? []
-        : listNextcloudTalkAccountIds(cfg).filter(
-            (accountId) => mergeNextcloudTalkAccountConfig(cfg, accountId).enabled !== false,
-          ),
+    historicalWebhookAccountIds: !hasConfiguredNextcloudTalkChannelState({ cfg })
+      ? []
+      : listNextcloudTalkAccountIds(cfg).filter(
+          (accountId) => mergeNextcloudTalkAccountConfig(cfg, accountId).enabled !== false,
+        ),
   };
 }

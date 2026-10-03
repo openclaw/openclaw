@@ -440,7 +440,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
         if (transcriptOnly && acceptedMessages.length === 1 && receipt) {
           // Leave the real committed transcript as the only durable evidence,
           // as when the process exits before the completion write is admitted.
-          receipt.complete = () => {
+          receipt.completeAsync = async () => {
             throw new Error("isolated process exit before completion persistence");
           };
         }

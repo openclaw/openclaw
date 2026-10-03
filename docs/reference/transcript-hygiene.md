@@ -191,6 +191,10 @@ inter-session user turns that only have provenance metadata.
 - Preserve replayable OpenAI Responses reasoning item payloads, including
   encrypted empty-summary items, so manual/WebSocket replay keeps required
   `rs_*` state paired with assistant output items.
+- Node turns canonicalize fresh reasoning signatures before returning the
+  completed assistant message, so live continuation and transcript storage use
+  the same signature bytes. Encrypted reasoning bytes, executable tool arguments,
+  and previously approved history remain unchanged.
 - Native ChatGPT Codex Responses follows Codex wire parity by replaying
   prior Responses reasoning/message/function payloads without prior item
   IDs while preserving session `prompt_cache_key`.

@@ -13,6 +13,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { RouteLocation } from "@openclaw/uirouter";
 import type { LitElement } from "lit";
 import { z } from "zod";
+import { registerListener } from "../../../src/shared/listeners.js";
 import { routeIdFromPath } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import type { StoredSidebarSessionFacts } from "../lib/chat/outbox-store-projection.ts";
@@ -556,10 +557,7 @@ export function createNativeConversationBridge(
     get presentation() {
       return presentation;
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     interceptNavigation,
     publishSessionFacts,
     dispose() {

@@ -75,8 +75,7 @@ export function subscribeModelCatalogCache(
   modelCatalogObservers.set(client, listeners);
   listeners.add(listener);
   return () => {
-    listeners.delete(listener);
-    if (listeners.size === 0) {
+    if (listeners.delete(listener) && listeners.size === 0) {
       modelCatalogObservers.delete(client);
     }
   };

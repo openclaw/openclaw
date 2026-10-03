@@ -144,6 +144,22 @@ October 1, 2026, with removal at the next Plugin SDK major
 (`next-plugin-sdk-major`); there is no calendar removal deadline. Bundled callers
 use the awaited methods. Do not add a sync fallback when adopting the new API.
 
+User-turn transcript recorders also provide optional
+`completeProcessingAsync(outcome)` and `waitForPendingInputSettlement()` methods.
+Await processing completion before publishing its outcome. Completion records
+processing separately from transcript consumption; it does not append or consume
+the pending input. The synchronous `completeProcessing` callback shipped in
+`v2026.9.8` retains its immediate result for existing SDK consumers. The host
+uses that legacy callback only when a supplied recorder has no async companion,
+never after an async failure or an undefined async result.
+
+`finishPendingInput(disposition)` still revokes prompt custody synchronously.
+After calling it, await `waitForPendingInputSettlement()` when available before
+releasing the turn's session admission. This joins accepted completion and
+disposition writes, including each original source of a collected input. An
+uncertain write outcome is preserved and must not be replayed through either
+callback. These additions change no schema, retention, or update behavior.
+
 ### Await extension session changes
 
 Extensions should await the new methods before reading or publishing their

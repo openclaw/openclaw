@@ -365,6 +365,21 @@ After repair completes and `openclaw config validate` succeeds, split the
 canonical config back into includes if desired, then validate it again. Keep
 the backups until the repaired config and migrated state have been verified.
 
+## Channel private-network opt-ins
+
+Matrix, Mattermost, and Tlon runtime paths read only
+`network.dangerouslyAllowPrivateNetwork` at the channel or account scope.
+Tlon retains its plugin-owned Doctor transform for the older flat
+`allowPrivateNetwork` key. It preserves an explicit canonical boolean, including
+`false`. Run `openclaw doctor --fix` before using that legacy config with a
+directly replaced binary. Updates invoke the same transform through Doctor and
+the normal config backup flow. Deferred plugin migrations retain their inputs
+for Doctor after installation; those inputs do not enable runtime private-network
+access.
+
+The Matrix and Mattermost flat-key migrations are retired. Repair their old
+config with `openclaw doctor --fix` on `2026.9.7` before upgrading.
+
 ## Channel webhook listeners
 
 Feishu, Microsoft Teams, Nextcloud Talk, and Telegram receive webhooks on Gateway

@@ -40,7 +40,6 @@ import { captureMatrixSendCurrentness, withoutMatrixSendCurrentness } from "./se
 import { MatrixSendScheduler } from "./send-scheduler.js";
 import { createMatrixGuardedFetch } from "./transport.js";
 import type { MatrixClientEventMap, MatrixCryptoBootstrapApi, MatrixRawEvent } from "./types.js";
-import type { MatrixVerificationSummary } from "./verification-manager.js";
 
 type MatrixCryptoRuntime = typeof import("./crypto-runtime.js");
 
@@ -102,7 +101,6 @@ export abstract class MatrixClientBase {
   protected readonly autoBootstrapCrypto: boolean;
   protected syncQuiescePromise: Promise<void> | null = null;
   protected stopPersistPromise: Promise<void> | null = null;
-  protected verificationSummaryListenerBound = false;
   protected currentSyncState: MatrixSyncState | null = null;
   protected currentSyncError: unknown = undefined;
   protected currentSyncFromCache = false;
@@ -303,6 +301,7 @@ export abstract class MatrixClientBase {
     }
 
     this.verificationManager ??= new runtime.MatrixVerificationManager({
+      onSummaryChanged: (summary) => this.emitter.emit("verification.summary", summary),
       trustOwnDeviceAfterSas: async (deviceId: string) => {
         const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
         if (typeof crypto?.crossSignDevice !== "function") {
@@ -360,12 +359,6 @@ export abstract class MatrixClientBase {
         isRoomEncrypted: async (roomId) =>
           (await this.getMessageWireEventType(roomId)) === "m.room.encrypted",
         downloadContent: (mxcUrl, opts) => this.downloadContent(mxcUrl, opts),
-      });
-    }
-    if (!this.verificationSummaryListenerBound) {
-      this.verificationSummaryListenerBound = true;
-      this.verificationManager.onSummaryChanged((summary: MatrixVerificationSummary) => {
-        this.emitter.emit("verification.summary", summary);
       });
     }
   }

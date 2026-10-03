@@ -2,6 +2,7 @@ import process from "node:process";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { restoreRuntimeTerminalState } from "../runtime.js";
+import { registerListener } from "../shared/listeners.js";
 import { isAbortError } from "./abort-signal.js";
 import { collectNestedErrorCandidates, extractErrorCodeOrErrno } from "./error-graph-internal.js";
 import { extractErrorCode, formatUncaughtError, readErrorCause, readErrorName } from "./errors.js";
@@ -27,10 +28,7 @@ function createErrorHandlerRegistry(globalKey: symbol, failureMessage: string) {
   }
   return {
     register(handler: UnhandledRejectionHandler): () => void {
-      handlers.add(handler);
-      return () => {
-        handlers.delete(handler);
-      };
+      return registerListener(handlers, handler);
     },
     isHandled(error: unknown): boolean {
       for (const handler of handlers) {

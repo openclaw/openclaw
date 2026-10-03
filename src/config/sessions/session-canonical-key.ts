@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import {
+  createSqliteQueryCache,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -63,7 +64,14 @@ type CanonicalSessionDatabase = Pick<
   | "session_windows"
   | "session_canonical_validation_pending"
 >;
-const mainKeyReaders = new WeakMap<DatabaseSync, () => { main_key: string } | undefined>();
+const mainKeyReader = createSqliteQueryCache((db) =>
+  prepareSqliteQueryTakeFirstSync<void, { main_key: string }>(db, () =>
+    getNodeSqliteKysely<CanonicalSessionDatabase>(db)
+      .selectFrom("session_key_contract")
+      .select("main_key")
+      .where("id", "=", 1),
+  ),
+);
 
 type ReaderAdmission = {
   mainKey: string;
@@ -346,17 +354,7 @@ export function assertCanonicalSessionKeyWrite(sessionKey: string, expectedAgent
 }
 
 export function readCanonicalSessionMainKey(database: { db: DatabaseSync }): string {
-  let read = mainKeyReaders.get(database.db);
-  if (!read) {
-    read = prepareSqliteQueryTakeFirstSync<void, { main_key: string }>(database.db, () =>
-      getNodeSqliteKysely<CanonicalSessionDatabase>(database.db)
-        .selectFrom("session_key_contract")
-        .select("main_key")
-        .where("id", "=", 1),
-    );
-    mainKeyReaders.set(database.db, read);
-  }
-  return normalizeMainKey(read()?.main_key);
+  return normalizeMainKey(mainKeyReader(database.db)()?.main_key);
 }
 
 export function assertCanonicalSessionEntryLineageWrite(entry: SessionEntry): void {

@@ -42,6 +42,10 @@ import { classifySessionKind } from "./classify-session-kind.js";
 import type { InputProvenance } from "./input-provenance.js";
 import type { SessionStateActorType } from "./session-state-event-kinds.js";
 import {
+  beginAmbientWatchPrune,
+  invalidateAmbientWatchReads,
+} from "./session-state-events.ambient-read.js";
+import {
   getSessionStateKysely,
   isAmbientGroupWatchCursor,
   isNotifiableWatcherKey,
@@ -63,7 +67,6 @@ const SESSION_STATE_PRUNE_INTERVAL_MS = 60 * 60_000;
 const log = createSubsystemLogger("sessions/state-events");
 let lastPruneAt = 0;
 let prunePending = false;
-
 /** Classify the actor once at producer boundaries; missing provenance is interactive human input. */
 export function classifySessionStateActor(opts: {
   inputProvenance?: InputProvenance;
@@ -296,6 +299,9 @@ export function handleSessionStateSessionReset(
   options: OpenClawStateDatabaseOptions = {},
 ): void {
   try {
+    invalidateAmbientWatchReads(
+      captureOpenClawStateReadWorkerContext(options).admission.identity.key,
+    );
     runOpenClawStateWriteTransaction(({ db }) => {
       executeSqliteQuerySync(
         db,
@@ -317,6 +323,9 @@ export function handleSessionStateSessionDeleted(
 ): void {
   deleteSessionUpstreamLink(sessionKey, agentId, options);
   try {
+    invalidateAmbientWatchReads(
+      captureOpenClawStateReadWorkerContext(options).admission.identity.key,
+    );
     runOpenClawStateWriteTransaction(({ db }) => {
       const kysely = getSessionStateKysely(db);
       for (const table of ["session_state_events", "session_state_heads"] as const) {
@@ -400,6 +409,9 @@ function pruneSessionStateEvents(
 ): void {
   const now = options.now ?? Date.now();
   try {
+    invalidateAmbientWatchReads(
+      captureOpenClawStateReadWorkerContext(options).admission.identity.key,
+    );
     runOpenClawStateWriteTransaction(
       ({ db }) => pruneSessionStateEventsInDatabase(db, now),
       options,
@@ -479,6 +491,8 @@ export async function recordSessionStateEventAsync(
         }
         if (recorded.row && !prunePending && now - lastPruneAt > SESSION_STATE_PRUNE_INTERVAL_MS) {
           prunePending = true;
+          const source = context.admission.identity.key;
+          const finishPrune = beginAmbientWatchPrune(source);
           try {
             await scope.execute({
               type: "sessionState.prune",
@@ -488,6 +502,7 @@ export async function recordSessionStateEventAsync(
           } catch (error) {
             log.warn(`failed to prune session state history: ${String(error)}`);
           } finally {
+            finishPrune();
             prunePending = false;
           }
         }
@@ -541,7 +556,7 @@ export async function recordSessionGoalChanged(params: {
   });
 }
 
-/** List durable ambient-group targets owned by one watcher; failures grant nothing. */
+/** Released synchronous SDK compatibility; runtime prompt preparation uses worker reads. */
 export function listAmbientGroupWatchTargets(
   watcherSessionKey: string,
   options: OpenClawStateDatabaseOptions = {},

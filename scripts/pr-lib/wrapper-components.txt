@@ -913,6 +913,7 @@ src/infra/sqlite-recovery-files.ts
 src/infra/sqlite-runtime-version.ts
 src/infra/sqlite-schema-contract-assembly.ts
 src/infra/sqlite-schema-contract.ts
+src/infra/sqlite-schema-ensure.ts
 src/infra/sqlite-schema-facts.ts
 src/infra/sqlite-schema-header.ts
 src/infra/sqlite-schema-issues.ts
@@ -1104,6 +1105,7 @@ src/plugins/compat/plugin-sdk-subpath-records.ts
 src/plugins/compat/registry-records.ts
 src/plugins/compat/registry.ts
 src/plugins/compat/session-persistence-records.ts
+src/plugins/compat/watched-sessions.ts
 src/plugins/compat/workspace-mutation-guard.ts
 src/plugins/config-activation-shared.ts
 src/plugins/config-contract-matches.ts

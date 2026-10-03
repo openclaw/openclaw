@@ -125,6 +125,7 @@ function createInputHandoff(sharedStore = false) {
       }
     } finally {
       receipt.finish(params.disposition ?? "interrupted");
+      await receipt.settled?.();
     }
     return receipt;
   };
