@@ -256,7 +256,7 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     // driver version so the future-version guard sees an upgrade, not a downgrade.
     if (compareReleaseVersions(build.version, driverVersion) < 0) {
       candidatePackage = await relabelCandidate(build.version, driverVersion);
-      build = { ...build, version: driverVersion, relabeledFrom: build.version };
+      build = { ...build, version: driverVersion };
     }
     const driverBuild = legacySqlite
       ? readJson(path.join(packageRoot, "dist/build-info.json"))

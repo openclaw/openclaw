@@ -73,4 +73,5 @@ export type MutableUpdateExecutionParams = {
     installTarget?: ResolvedGlobalInstallTarget,
   ) => Promise<void>;
   onActivation?: () => void;
+  onLocalTuiGateAcquired: (release: () => Promise<void>) => void;
 };

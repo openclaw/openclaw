@@ -76,6 +76,16 @@ vi.mock("../../daemon/service.js", async (original) => ({
     readRuntime: async () => ({ status: mocks.running ? "running" : "stopped" }),
   }),
 }));
+vi.mock("../../infra/local-tui-processes.js", async (original) => ({
+  ...(await original<typeof import("../../infra/local-tui-processes.js")>()),
+  announceLocalTuiUpdate: async () => ({ pid: 99, release: async () => {} }),
+  quiesceLocalTuiProcessesBeforeUpdate: async () => ({
+    lockPath: "test-local-tui-update-gate",
+    stopped: [],
+    warnings: [],
+    release: async () => {},
+  }),
+}));
 vi.mock("./update-command-service.js", async (original) => ({
   ...(await original<typeof import("./update-command-service.js")>()),
   maybeStopManagedServiceBeforeMutableUpdate: mocks.stop,
@@ -440,6 +450,7 @@ it.for([
         managedServiceRootRedirect: null,
         managedServiceRoot: rootA,
         recoveryState: { triageTarget: { env: state.env } },
+        onLocalTuiGateAcquired: vi.fn(),
         prepareMutableUpdate: async () => {
           fence.assertCurrent();
         },
@@ -749,6 +760,7 @@ it.each([
       managedServiceRootRedirect: null,
       managedServiceRoot: rootA,
       recoveryState: { triageTarget: { env: state.env } },
+      onLocalTuiGateAcquired: vi.fn(),
       prepareMutableUpdate: async () => {
         fence.assertCurrent();
       },

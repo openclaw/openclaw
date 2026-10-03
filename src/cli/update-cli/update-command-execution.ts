@@ -47,6 +47,7 @@ import {
   handoffUpdateFromGateway,
   parkForegroundUpdateForActivation,
 } from "./update-command-handoff.js";
+import { preflightUpdateLocalTui, stopAfterTuiGate } from "./update-command-local-tui.js";
 import {
   captureOwnedManagedUpdateContext,
   readUpdateCandidateSource,
@@ -96,7 +97,6 @@ export async function executeMutableUpdate(
     candidateAdmissionChecks,
   } satisfies Omit<Parameters<typeof inspectUpdateDatabaseContexts>[0], "roots">;
   const originalRun = opts.run;
-  const requesterAuthority = originalRun?.requesterAuthority;
   const {
     assertCurrent: assertExecutionCurrent,
     assertBoundChildCurrent,
@@ -199,7 +199,7 @@ export async function executeMutableUpdate(
       capable: doctorConfigWrites,
       runId: originalRun?.runId,
       executorFence: originalRun?.executorFence,
-      requester: requesterAuthority?.requester,
+      requester: originalRun?.requesterAuthority?.requester,
       inputHash: validatedConfigSnapshot?.hash,
       changes: doctorConfigChanges,
       databaseBackup: databaseCapture?.backup,
@@ -216,7 +216,7 @@ export async function executeMutableUpdate(
         ? [params.root, resolveGitInstallDir()]
         : [params.root]
       : null;
-  const stopManagedServiceBeforeMutableUpdate = async (
+  const stopServiceBeforeUpdate = async (
     mutationRoots: readonly string[] = [params.root],
     phase: "inspect" | "prepare" = "prepare",
   ) => {
@@ -510,7 +510,6 @@ export async function executeMutableUpdate(
           preManagedServiceStop,
         );
       }
-      // Health and candidate work can outlive the inspected service/config generation.
       await recheckSchemas(admittedTargetSchemaVersions);
       assertExecutionCurrent();
       const activationTimeoutMs =
@@ -545,7 +544,7 @@ export async function executeMutableUpdate(
         continue;
       }
       if (!servicePrepared) {
-        await stopManagedServiceBeforeMutableUpdate(roots);
+        await stopAfterTuiGate(params, roots, assertExecutionCurrent, stopServiceBeforeUpdate);
         // Preparation can hold Windows recovery custody without stopping a process.
         servicePrepared = true;
       }
@@ -580,6 +579,7 @@ export async function executeMutableUpdate(
     getDoctorContext,
   };
   try {
+    preflightUpdateLocalTui(params.root);
     if (params.updateInstallKind === "package" || params.updateInstallKind === "git") {
       admission = await inspectUpdateDatabaseContexts({
         ...databaseContextOptions,
@@ -591,7 +591,7 @@ export async function executeMutableUpdate(
       if (!stagedPluginAdmission) {
         await preflightPlugins(params.packageTargetVersion ?? null);
       }
-      await stopManagedServiceBeforeMutableUpdate(undefined, "inspect");
+      await stopServiceBeforeUpdate(undefined, "inspect");
       if (!stagedPluginAdmission) {
         await prepareMutableUpdate(admission?.managedEnv);
       }
@@ -641,7 +641,7 @@ export async function executeMutableUpdate(
           assertExecutionCurrent();
           await recheckSchemas(target.schemaVersions);
           if (!gitContextPrepared) {
-            await stopManagedServiceBeforeMutableUpdate(gitMutationRoots ?? undefined, "inspect");
+            await stopServiceBeforeUpdate(gitMutationRoots ?? undefined, "inspect");
             await prepareMutableUpdate(admission?.managedEnv);
             // Revalidation retains activation's stop and recovery state.
             gitContextPrepared = true;

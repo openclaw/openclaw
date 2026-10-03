@@ -1150,6 +1150,9 @@ export const zh_CN = {
       daemonRuntimeBunHint: "需要 Bun 1.4 或更高版本，并使用符合 WAL 重置安全要求的 node:sqlite。",
       editBootstrap: "之后可编辑 BOOTSTRAP.md 来修改 agent 的自我介绍方式。",
       bootstrapHatchMessage: "醒醒，我的朋友！",
+      tuiUpdatedBeforeLaunch:
+        "OpenClaw 在首次聊天打开前已更新。请运行以下命令启动更新后的 TUI：\n{command}",
+      tuiUpdatedBeforeLaunchTitle: "TUI 已更新",
       firstTerminalChat: '第一次终端聊天会发送："醒醒，我的朋友！"',
       gatewayInstallBlocked: "Gateway 安装被阻止：",
       gatewayInstallFixAuth: "修复 Gateway 认证配置/令牌输入后重新运行设置。",

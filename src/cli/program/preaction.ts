@@ -2,6 +2,7 @@
 import type { Command } from "commander";
 import type { StartupConfigPreflightOptions } from "../../commands/startup-config-preflight.js";
 import { setVerbose } from "../../globals.js";
+import { parseOpenClawProcessTitle } from "../../infra/openclaw-installation-id.js";
 import type { LogLevel } from "../../logging/levels.js";
 import { resolvePluginInstallInvalidConfigPolicy } from "../../plugins/install-config.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -27,6 +28,11 @@ const HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "-V", "--version"]);
 // long-running Gateway takes a distinct title (see gateway-cli/run-loop.ts), so lock readers and
 // operators can tell it apart from ordinary commands.
 function setProcessTitleForCommand() {
+  // TUI identity is installation-scoped so an updater can distinguish its own clients.
+  // All ordinary commands retain the canonical `openclaw` title established on main.
+  if (parseOpenClawProcessTitle(process.title)?.name === "openclaw-tui") {
+    return;
+  }
   if (process.title !== CLI_NAME) {
     process.title = CLI_NAME;
   }

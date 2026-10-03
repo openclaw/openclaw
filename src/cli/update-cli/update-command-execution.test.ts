@@ -270,6 +270,58 @@ describe("mutable update execution", () => {
       });
     },
   );
+
+  it("transfers the local TUI gate to the transaction finalization owner", async () => {
+    const release = vi.fn(async () => {});
+    mocks.maybeStopService.mockImplementation(async ({ phase }) => ({
+      ...inspectOrStopService(phase),
+      running: false,
+    }));
+    mocks.quiesceLocalTui.mockResolvedValue({
+      lockPath: "/tmp/openclaw-local-tui-update.lock",
+      stopped: [101],
+      warnings: [],
+      release,
+    });
+    mocks.runPackageUpdate.mockImplementation(async ({ beforeActivate }) => {
+      await beforeActivate();
+      expect(mocks.quiesceLocalTui).toHaveBeenCalledWith("/opt/openclaw", {
+        assertCurrent: expect.any(Function),
+      });
+      expect(release).not.toHaveBeenCalled();
+      return successfulUpdate;
+    });
+
+    const params = executionParams("package");
+    let releaseAfterFinalization: (() => Promise<void>) | undefined;
+    params.onLocalTuiGateAcquired = (releaseGate) => {
+      releaseAfterFinalization = releaseGate;
+    };
+    const execution = await executeMutableUpdate(await bindExecutionGuards(params));
+
+    expect(execution?.result.status).toBe("ok");
+    expect(release).not.toHaveBeenCalled();
+    await releaseAfterFinalization?.();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("checks Windows companions before starting candidate validation", async () => {
+    mocks.preflightLocalTui.mockImplementation(() => {
+      throw new Error("close Windows TUI first");
+    });
+
+    const execution = await executeMutableUpdate(
+      await bindExecutionGuards(executionParams("package")),
+    );
+
+    expect(execution).toMatchObject({
+      mutationStarted: false,
+      result: { status: "error", reason: "update-failed" },
+    });
+    expect(mocks.preflightLocalTui).toHaveBeenCalledWith("/opt/openclaw");
+    expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
+  });
+
   it("retains the live update run when stopped-service context capture fails", async () => {
     await withTestDir({ prefix: "partial-stop-recovery-owner-" }, async (dir) => {
       const control = path.join(dir, "leases");

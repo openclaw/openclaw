@@ -5,6 +5,10 @@ import type { SystemAgentOverview } from "./overview.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 import { readLastSystemAgentAuditEntry } from "./system-agent.test-helpers.js";
 
+const runNestedTuiAfterUpdateGate = vi.hoisted(() => vi.fn());
+
+vi.mock("../tui/tui-update-gate.js", () => ({ runNestedTuiAfterUpdateGate }));
+
 function createOverview(gatewayReachable: boolean): SystemAgentOverview {
   return {
     config: { path: "/tmp/openclaw.json", exists: true, valid: true, issues: [], hash: null },
@@ -138,5 +142,17 @@ describe("system-agent TUI operations", () => {
     });
     expect(result.nextInput).toBeUndefined();
     expect(lines.join("\n")).toContain("[openclaw] returned from agent");
+  });
+
+  it("reports when an update interrupts the requested agent chat", async () => {
+    const { runtime, lines } = createSystemAgentTestRuntime();
+    runNestedTuiAfterUpdateGate.mockResolvedValueOnce({ status: "updated" });
+
+    const result = await executeSystemAgentOperation({ kind: "open-tui" }, runtime, {
+      deps: { loadOverview: async () => createOverview(false) },
+    });
+
+    expect(result).toMatchObject({ applied: false, exitsInteractive: true });
+    expect(lines.join("\n")).toContain("Run `openclaw tui`");
   });
 });

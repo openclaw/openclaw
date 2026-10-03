@@ -169,6 +169,7 @@ it("settles a failed candidate without inference repair and preserves its proces
     shouldRestart: false,
     managedServiceRootRedirect: null,
     recoveryState: { triageTarget: { env } },
+    onLocalTuiGateAcquired: vi.fn(),
     prepareMutableUpdate: async () => {},
     packageTargetSchemaVersions: { state: 15, agent: 19 },
     packageInstallSpec: "openclaw@2026.9.4",

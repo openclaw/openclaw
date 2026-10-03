@@ -9,6 +9,19 @@ import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { quoteCliArg } from "../quote-cli-arg.js";
 
+vi.mock("./update-command-local-tui.js", () => ({
+  preflightUpdateLocalTui: () => {},
+  stopAfterTuiGate: async (
+    execution: { onLocalTuiGateAcquired: (release: () => Promise<void>) => void },
+    roots: readonly string[],
+    _assertCurrent: () => void,
+    stop: (roots: readonly string[]) => Promise<void>,
+  ) => {
+    execution.onLocalTuiGateAcquired(async () => {});
+    await stop(roots);
+  },
+}));
+
 function requireValue<T>(value: T | undefined, label: string): T {
   if (value === undefined) {
     throw new Error(`expected ${label}`);

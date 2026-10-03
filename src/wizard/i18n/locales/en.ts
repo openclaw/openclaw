@@ -1195,6 +1195,9 @@ export const en = {
       daemonRuntimeBunHint: "Requires Bun 1.4 or newer with WAL-reset-safe node:sqlite.",
       editBootstrap: "Edit BOOTSTRAP.md later to change how the agent introduces itself.",
       bootstrapHatchMessage: "Wake up, my friend!",
+      tuiUpdatedBeforeLaunch:
+        "OpenClaw updated before the first chat opened. Start the updated TUI with:\n{command}",
+      tuiUpdatedBeforeLaunchTitle: "TUI updated",
       firstTerminalChat: 'The first Terminal chat run will send: "Wake up, my friend!"',
       gatewayInstallBlocked: "Gateway install blocked:",
       gatewayInstallFixAuth: "Fix gateway auth config/token input and rerun setup.",

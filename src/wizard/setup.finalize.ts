@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { PreparedModelCatalogConfigReplacedError } from "../agents/prepared-model-catalog.errors.js";
@@ -42,12 +41,6 @@ import {
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import {
-  cancelProcessExitAfterTuiReturn,
-  resolveTuiShutdownHardExitMs,
-  runTui,
-  scheduleProcessExitAfterTuiReturn,
-} from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
 import { listConfiguredWebSearchProviders } from "../web-search/runtime.js";
 import { t } from "./i18n/index.js";
@@ -58,6 +51,7 @@ import {
   gatewayAuthUsesLocalPassword,
   resolveGatewayLocalPassword,
 } from "./setup.finalize-gateway-auth.js";
+import { runSetupTui } from "./setup.finalize-tui.js";
 import { getLocalizedGatewayDaemonRuntimeOptions } from "./setup.service-runtime.js";
 import type { GatewayWizardSettings, WizardFlow } from "./setup.types.js";
 
@@ -72,8 +66,6 @@ type FinalizeOnboardingOptions = {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
 };
-
-const HATCH_TUI_TIMEOUT_MS = 5 * 60 * 1000;
 
 async function startSessionGatewayForOnboarding(params: {
   nextConfig: OpenClawConfig;
@@ -952,63 +944,44 @@ export async function finalizeSetupWizard(
     );
 
     if (shouldLaunchTui) {
-      restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: false });
+      const sessionGatewayHandle = { current: sessionGateway };
       try {
-        await runTui({
-          ...(gatewayProbe.ok
-            ? {
-                config: nextConfig,
-                boundGateway: {
-                  // Proxy mode accepts the local password only over loopback,
-                  // so terminal handoff must not use an advertised interface.
-                  url: usesLocalPassword
-                    ? resolveLocalControlUiProbeLinks({
-                        bind: nextConfig.gateway?.bind ?? "loopback",
-                        port: settings.port,
-                        customBindHost: nextConfig.gateway?.customBindHost,
-                        basePath: undefined,
-                        tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
-                      }).wsUrl
-                    : displayLinks.wsUrl,
-                  ...(settings.authMode === "token" && settings.gatewayToken
-                    ? { token: settings.gatewayToken }
-                    : {}),
-                  ...(usesLocalPassword && resolvedGatewayPassword
-                    ? { password: resolvedGatewayPassword }
-                    : {}),
-                },
-              }
-            : { local: true }),
-          deliver: false,
+        const tuiResult = await runSetupTui({
+          config: nextConfig,
+          gatewayReachable: gatewayProbe.ok,
+          gatewayUrl: usesLocalPassword
+            ? resolveLocalControlUiProbeLinks({
+                bind: nextConfig.gateway?.bind ?? "loopback",
+                port: settings.port,
+                customBindHost: nextConfig.gateway?.customBindHost,
+                basePath: undefined,
+                tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
+              }).wsUrl
+            : displayLinks.wsUrl,
+          gatewayToken: settings.authMode === "token" ? settings.gatewayToken : undefined,
+          gatewayPassword: usesLocalPassword ? resolvedGatewayPassword : undefined,
           message: shouldSeedBootstrapHatch
             ? t("wizard.finalize.bootstrapHatchMessage")
             : undefined,
-          initialMessageTimeoutMs: HATCH_TUI_TIMEOUT_MS,
-        });
-      } finally {
-        restoreTerminalState("post-setup tui", { resumeStdinIfPaused: false });
-        if (sessionGateway) {
-          // The temporary Gateway can own the same provider and child-process teardown as
-          // local TUI mode. Reuse that longer budget while keeping shutdown bounded.
-          const cleanupExitTimer = scheduleProcessExitAfterTuiReturn({
-            delayMs: resolveTuiShutdownHardExitMs({ localMode: true }),
-          });
-          try {
+          sessionGateway: sessionGatewayHandle,
+          closeSessionGateway: async (activeSessionGateway) =>
             await closeSessionGatewayForOnboarding({
-              sessionGateway,
+              sessionGateway: activeSessionGateway,
               runtime,
               reason: "onboarding tui exited",
-            });
-            sessionGateway = undefined;
-          } finally {
-            cancelProcessExitAfterTuiReturn(cleanupExitTimer);
-          }
-        }
+            }),
+          onUpdated: async () =>
+            await prompter.note(
+              t("wizard.finalize.tuiUpdatedBeforeLaunch", {
+                command: formatCliCommand("openclaw tui"),
+              }),
+              t("wizard.finalize.tuiUpdatedBeforeLaunchTitle"),
+            ),
+        });
+        launchedTui = tuiResult === "ran";
+      } finally {
+        sessionGateway = sessionGatewayHandle.current;
       }
-      // Setup owns the temporary Gateway, so its cleanup must finish before
-      // the in-process TUI fallback is allowed to terminate the process.
-      scheduleProcessExitAfterTuiReturn();
-      launchedTui = true;
     }
 
     return { launchedTui };

@@ -441,8 +441,7 @@ export async function runRemoteGatewayInferenceOnboarding(
 
       // Keep resolved credentials in-process; child argv is observable to
       // other local users and must never carry the Gateway secret.
-      const runTui = deps.runTui ?? (await import("../tui/tui.js")).runTui;
-      await runTui({
+      const tuiOptions = {
         config: boundConfig,
         deliver: false,
         ...(agentDraft === "hatch" ? { message: t("wizard.finalize.bootstrapHatchMessage") } : {}),
@@ -453,7 +452,15 @@ export async function runRemoteGatewayInferenceOnboarding(
           ...(target.password ? { password: target.password } : {}),
           ...(target.tlsFingerprint ? { tlsFingerprint: target.tlsFingerprint } : {}),
         },
-      });
+      };
+      const tuiResult = deps.runTui
+        ? { status: "ran" as const, value: await deps.runTui(tuiOptions) }
+        : await (await import("../tui/tui-update-gate.js")).runNestedTuiAfterUpdateGate(tuiOptions);
+      if (tuiResult.status === "updated") {
+        runtime.error(
+          "OpenClaw updated before the agent chat opened. Run `openclaw tui` to open it with the updated CLI.",
+        );
+      }
     },
   });
 }

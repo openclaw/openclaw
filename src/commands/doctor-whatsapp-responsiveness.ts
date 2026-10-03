@@ -4,6 +4,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import { parseOpenClawProcessTitle } from "../infra/openclaw-installation-id.js";
 import type { StatusSummary } from "../status/summary.js";
 
 type LocalTuiProcess = {
@@ -17,7 +18,9 @@ const LOCAL_TUI_PROCESS_PROBE_TIMEOUT_MS = 1_000;
 
 function isLocalTuiCommand(command: string): boolean {
   const argv = command.trim().split(/\s+/u).filter(Boolean);
-  const executable = path.basename(argv[0] ?? "").replace(/\.exe$/iu, "");
+  const executable =
+    parseOpenClawProcessTitle(argv[0] ?? "")?.name ??
+    path.basename(argv[0] ?? "").replace(/\.exe$/iu, "");
   if (executable === "openclaw-tui") {
     return true;
   }

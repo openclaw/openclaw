@@ -473,9 +473,8 @@ export async function runSystemAgentTui(
     // an agent handoff uses the normal repair-oriented startup message.
     welcomeVariant = undefined;
     const backend = new SystemAgentTuiBackend(boundOpts, welcome, engine, route);
-    const runTui = boundOpts.runTui ?? (await import("../tui/tui.js")).runTui;
     try {
-      await runTui({
+      const tuiOptions = {
         local: true,
         session: SYSTEM_AGENT_SESSION_KEY,
         historyLimit: SYSTEM_AGENT_HISTORY_LIMIT,
@@ -483,7 +482,16 @@ export async function runSystemAgentTui(
         config: {},
         title: "openclaw setup",
         ...(initialMessage ? { message: initialMessage } : {}),
-      });
+      };
+      const result = boundOpts.runTui
+        ? { status: "ran" as const, value: await boundOpts.runTui(tuiOptions) }
+        : await (await import("../tui/tui-update-gate.js")).runNestedTuiAfterUpdateGate(tuiOptions);
+      if (result.status === "updated") {
+        runtime.error(
+          "OpenClaw updated before setup opened. Run `openclaw setup` again with the updated CLI.",
+        );
+        return;
+      }
     } finally {
       await backend.dispose();
     }

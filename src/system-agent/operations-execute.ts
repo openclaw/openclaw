@@ -650,11 +650,10 @@ export async function executeSystemAgentOperation(
         return { applied: false, message: setupNotice };
       }
       const session = agentId ? buildAgentMainSessionKey({ agentId }) : undefined;
-      const runTui = opts.deps?.runTui ?? (await import("../tui/tui.js")).runTui;
       // A reachable Gateway owns the state lock, so embedded mode would fail during hatch.
       // Keep embedded mode only as the no-Gateway fallback for standalone sessions.
       const useEmbeddedTui = !overview.gateway.reachable;
-      const result = await runTui({
+      const tuiOptions = {
         local: useEmbeddedTui,
         session,
         deliver: false,
@@ -662,14 +661,24 @@ export async function executeSystemAgentOperation(
         ...(operation.agentDraft === "hatch"
           ? { message: t("wizard.finalize.bootstrapHatchMessage") }
           : {}),
-      });
-      if (result?.exitReason === "return-to-system-agent") {
+      };
+      const result = opts.deps?.runTui
+        ? { status: "ran" as const, value: await opts.deps.runTui(tuiOptions) }
+        : await (await import("../tui/tui-update-gate.js")).runNestedTuiAfterUpdateGate(tuiOptions);
+      if (result.status === "updated") {
+        const message =
+          "OpenClaw updated before the agent chat opened. Run `openclaw tui` to open it with the updated CLI.";
+        runtime.log(message);
+        return { applied: false, exitsInteractive: true, message };
+      }
+      const tuiResult = result.value;
+      if (tuiResult?.exitReason === "return-to-system-agent") {
         runtime.log(
-          result.systemAgentMessage
-            ? `[openclaw] returned from agent with request: ${result.systemAgentMessage}`
+          tuiResult.systemAgentMessage
+            ? `[openclaw] returned from agent with request: ${tuiResult.systemAgentMessage}`
             : "[openclaw] returned from agent",
         );
-        return { applied: false, returnToShell: true, nextInput: result.systemAgentMessage };
+        return { applied: false, returnToShell: true, nextInput: tuiResult.systemAgentMessage };
       }
       return { applied: false, exitsInteractive: true };
     }

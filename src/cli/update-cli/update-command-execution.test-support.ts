@@ -7,6 +7,7 @@ import type { executeMutableUpdate } from "./update-command-execution.js";
 import type { PreManagedServiceStop } from "./update-command-service.js";
 
 const mocks = vi.hoisted(() => ({
+  announceLocalTui: vi.fn(),
   captureManagedContext: vi.fn(),
   captureManagedPreflight:
     vi.fn<
@@ -20,8 +21,13 @@ const mocks = vi.hoisted(() => ({
   hasSchemaRefusal: vi.fn(),
   maybeRestartService: vi.fn(),
   maybeStopService: vi.fn(),
+  quiesceLocalTui:
+    vi.fn<
+      typeof import("../../infra/local-tui-processes.js").quiesceLocalTuiProcessesBeforeUpdate
+    >(),
   prepareMutableUpdate: vi.fn<Parameters<typeof executeMutableUpdate>[0]["prepareMutableUpdate"]>(),
   pluginPreflight: vi.fn(),
+  preflightLocalTui: vi.fn(),
   pluginTargets: vi.fn(),
   pluginRecords: vi.fn(),
   npmMetadata: vi.fn(),
@@ -52,6 +58,12 @@ vi.mock("../../infra/update-global.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/update-global.js")>()),
   verifyPackageUpdateRecovery: mocks.verifyPackageRecovery,
 }));
+vi.mock("../../infra/local-tui-processes.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/local-tui-processes.js")>()),
+  announceLocalTuiUpdate: mocks.announceLocalTui,
+  preflightLocalTuiProcessesBeforeUpdate: mocks.preflightLocalTui,
+  quiesceLocalTuiProcessesBeforeUpdate: mocks.quiesceLocalTui,
+}));
 vi.mock("../../infra/update-candidate-canary.js", () => ({
   validateUpdateCandidateCanary: mocks.validateCanary,
 }));
@@ -78,7 +90,7 @@ vi.mock("../../infra/update-runner-git-recovery.js", async (importOriginal) => (
 }));
 
 vi.mock("../../runtime.js", () => ({
-  defaultRuntime: { error: mocks.runtimeError },
+  defaultRuntime: { error: mocks.runtimeError, log: vi.fn() },
 }));
 
 vi.mock("./schema-preflight.js", async (importOriginal) => ({
@@ -159,6 +171,7 @@ function executionParams(
     invocationCwd: "/work",
     recoveryState: { triageTarget: { env: {} } },
     prepareMutableUpdate: mocks.prepareMutableUpdate,
+    onLocalTuiGateAcquired: vi.fn(),
     packageTargetSchemaVersions: { state: 15, agent: 19 },
   };
 }
@@ -245,6 +258,14 @@ beforeEach(() => {
   mocks.maybeStopService.mockImplementation(async ({ phase }) => inspectOrStopService(phase));
   mocks.prepareMutableUpdate.mockResolvedValue(undefined);
   mocks.pluginPreflight.mockResolvedValue([]);
+  mocks.preflightLocalTui.mockImplementation(() => {});
+  mocks.announceLocalTui.mockResolvedValue({ pid: 99, release: vi.fn() });
+  mocks.quiesceLocalTui.mockResolvedValue({
+    lockPath: "/tmp/openclaw-local-tui-update.lock",
+    stopped: [],
+    warnings: [],
+    release: vi.fn(),
+  });
   mocks.readGitRecovery.mockResolvedValue({ serviceRestartSafe: true });
   mocks.runGitUpdate.mockResolvedValue({ ...successfulUpdate, mode: "git" });
   mocks.runPackageUpdate.mockResolvedValue(successfulUpdate);

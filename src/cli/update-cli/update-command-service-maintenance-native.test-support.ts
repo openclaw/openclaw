@@ -19,7 +19,8 @@ vi.mock("./update-command-run.js", async (original) => ({
   resolveUpdateCommandAdmissionEnv: async () => process.env,
   prepareMutableUpdateRuntime: async () => ({}),
 }));
-vi.mock("./update-command-initialization.js", () => ({
+vi.mock("./update-command-initialization.js", async (original) => ({
+  ...(await original<typeof import("./update-command-initialization.js")>()),
   updateStateNeedsInitialization: async () => false,
 }));
 vi.mock("./update-command-target.js", () => ({ resolveUpdateCommandTarget: command.target }));

@@ -47,6 +47,7 @@ describe("doctor WhatsApp responsiveness", () => {
         " 106 helper --note 'openclaw tui'",
         " 107 openclaw-helper openclaw terminal",
         " 108 openclaw --flag tui",
+        " 109 openclaw-tui@0123456789abcdef",
       ].join("\n"),
     });
     const findings = collectWhatsappResponsivenessHealthFindings({
@@ -58,7 +59,7 @@ describe("doctor WhatsApp responsiveness", () => {
       expect(findings).toEqual([]);
       expect(spawnSyncMock).not.toHaveBeenCalled();
     } else {
-      expect(findings).toEqual([expect.objectContaining({ target: "101, 104, 105" })]);
+      expect(findings).toEqual([expect.objectContaining({ target: "101, 104, 105, 109" })]);
       expect(spawnSyncMock).toHaveBeenCalledWith("ps", ["-axo", "pid=,command="], {
         encoding: "utf8",
         killSignal: "SIGKILL",
