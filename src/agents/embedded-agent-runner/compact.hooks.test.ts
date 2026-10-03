@@ -45,6 +45,11 @@ import { createExtensionRuntime, loadExtensionFromFactory } from "../sessions/ex
 import { SessionManager } from "../sessions/session-manager.js";
 import { SettingsManager } from "../sessions/settings-manager.js";
 import {
+  expectRecordFields,
+  findMockCall,
+  mockCallArg,
+} from "./compact.hooks.assertions.test-support.js";
+import {
   expectedNativeCompactionOptions,
   useCompactHooksSessionFixture,
 } from "./compact.hooks.fixture.test-support.js";
@@ -63,7 +68,6 @@ import {
   estimateTokensMock,
   getApiKeyForModelMock,
   getHistoryLimitFromSessionKeyMock,
-  getMemorySearchManagerMock,
   hookRunner,
   limitHistoryTurnsMock,
   listRegisteredPluginAgentPromptGuidanceMock,
@@ -77,7 +81,6 @@ import {
   resolveContextEngineMock,
   resolveEffectiveCompactionModeMock,
   resolveEmbeddedAgentStreamMock,
-  resolveMemorySearchConfigMock,
   resolveModelAsyncMock,
   resolveModelMock,
   resolveSandboxContextMock,
@@ -93,6 +96,14 @@ import {
   sessionManualCompactionMock,
   triggerInternalHookMock,
 } from "./compact.hooks.harness.js";
+import {
+  registerDirectProviderRefreshTests,
+  registerQueuedProviderRefreshTest,
+} from "./compact.hooks.memory-refresh.test-support.js";
+import {
+  getMemorySearchManagerMock,
+  resolveMemorySearchConfigMock,
+} from "./compact.hooks.memory.test-support.js";
 import {
   createCompactHooksAuthStorage,
   createCompactHooksPreparedModelRuntime,
@@ -168,25 +179,6 @@ function mockPendingNativeCompaction() {
   return pending;
 }
 
-function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
-
-function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected mock call ${callIndex}`);
-  }
-  return call[argIndex];
-}
-
 function plannedCompactionPluginSelections(
   config: OpenClawConfig,
   metadataSnapshot = createPluginMetadataSnapshotFixture({ plugins: [] }),
@@ -196,14 +188,6 @@ function plannedCompactionPluginSelections(
     "admitted compaction selection recipe",
   );
   return derive({ config, metadataSnapshot });
-}
-
-function findMockCall(mock: ReturnType<typeof vi.fn>, predicate: (arg: unknown[]) => boolean) {
-  const call = mock.mock.calls.find((entry) => predicate(entry));
-  if (!call) {
-    throw new Error("Expected matching mock call");
-  }
-  return call;
 }
 
 function mockResolvedModel(params?: {
@@ -410,7 +394,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   );
 
   it("restricts compact endpoint tools and omits private skills under a finite policy", async () => {
-    resolveSkillsPromptMock.mockReturnValue("PRIVATE_SKILL_MARKER");
+    resolveSkillsPromptMock.mockResolvedValue("PRIVATE_SKILL_MARKER");
     createOpenClawCodingToolsMock.mockReturnValue(
       ["read", "exec"].map((name) => ({
         name,
@@ -1651,6 +1635,12 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(settled).toBe(true);
   });
 
+  registerDirectProviderRefreshTests({
+    compactTesting: () => compactTesting,
+    compactionConfig,
+    sessionKey: TEST_SESSION_KEY,
+    sessionFile: () => TEST_SESSION_FILE,
+  });
   it("fires post-compaction memory sync without awaiting it in async mode", async () => {
     const sync = vi.fn<PostCompactionSync>(async () => {});
     const managerRequested = createDeferred();
@@ -1944,6 +1934,14 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
     mockResolvedModel();
     mockQueuedRouteAwareModel();
+  });
+
+  registerQueuedProviderRefreshTest({
+    compact: () => compactEmbeddedAgentSession,
+    wrappedArgs: wrappedCompactionArgs,
+    compactionConfig,
+    sessionKey: TEST_SESSION_KEY,
+    sessionId: () => TEST_SESSION_ID,
   });
 
   it.each([
@@ -2341,23 +2339,19 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
   });
 
   it("does not impose a second aggregate timeout on delegated native compaction", async () => {
-    const { markRuntimeCompactionDelegate } =
+    const { compactionWatchdogResets } =
       await import("../../context-engine/compaction-watchdog.js");
     const started = createDeferred<() => void>();
     const terminal = createDeferred<Awaited<ReturnType<ContextEngine["compact"]>>>();
-    // Mark only this invocation's delegate; shared mockReset does not clear WeakSet identity.
-    const compact = markRuntimeCompactionDelegate(
-      vi.fn<ContextEngine["compact"]>(async ({ runtimeContext }) => {
-        const resetTimeout = runtimeContext?.compactionTimeoutReset;
-        if (typeof resetTimeout !== "function") {
-          throw new Error("Delegated compaction must receive its progress reset callback");
-        }
-        started.resolve(() => {
-          resetTimeout();
-        });
-        return await terminal.promise;
-      }),
-    );
+    // Stand in for the runtime delegate: it finds the reset through the host signal.
+    const compact = vi.fn<ContextEngine["compact"]>(async ({ abortSignal }) => {
+      const resetTimeout = abortSignal && compactionWatchdogResets.get(abortSignal);
+      if (!resetTimeout) {
+        throw new Error("Delegated compaction must receive its progress reset callback");
+      }
+      started.resolve(resetTimeout);
+      return await terminal.promise;
+    });
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: false },
       compact,

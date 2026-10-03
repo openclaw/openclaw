@@ -20,9 +20,6 @@ const enforcedFiles = new Set([
   "src/gateway/server-node-events.ts",
 ]);
 
-/**
- * Finds legacy `agentCommand(...)` call lines in ingress-owned source.
- */
 function findLegacyAgentCommandCallLines(
   _content: string,
   _fileName: string,
@@ -34,9 +31,6 @@ function findLegacyAgentCommandCallLines(
   });
 }
 
-/**
- * Runs the ingress owner-context guard.
- */
 async function main() {
   await runCallsiteGuard({
     importMetaUrl: import.meta.url,

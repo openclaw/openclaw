@@ -7,6 +7,11 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 
+const schedulerLog = vi.hoisted(() => ({ debug: vi.fn(), trace: vi.fn(), error: vi.fn() }));
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => schedulerLog,
+}));
+
 function fixture() {
   const time = createGatewaySchedulerClock(1_000);
   const scheduler = createTestGatewayScheduler(time.clock);
@@ -132,34 +137,26 @@ describe("Gateway timed work", () => {
   });
 
   it.each([
-    { mode: undefined, nextWakeAtMs: 3_000 },
-    { mode: "replace" as const, nextWakeAtMs: 3_000 },
-    { mode: "earliest" as const, nextWakeAtMs: 2_000 },
-  ])("reschedules a pending deadline in $mode mode", async ({ mode, nextWakeAtMs }) => {
-    const { time, scheduler } = fixture();
-    const retiredRun = vi.fn();
-    const run = vi.fn();
-    const retired = scheduler.schedule({ id: "queue", atMs: 2_000, run: retiredRun });
-    scheduler.schedule({ id: "queue", atMs: 3_000, mode, run });
-    retired.cancel();
-    expect(scheduler.nextWakeAtMs).toBe(nextWakeAtMs);
-    await time.advanceTo(nextWakeAtMs);
-    expect(run).toHaveBeenCalledOnce();
-    expect(retiredRun).not.toHaveBeenCalled();
-    expect(scheduler.nextWakeAtMs).toBeNull();
-    await scheduler.stop();
-  });
-
-  it("brings a pending deadline forward in earliest mode", async () => {
-    const { time, scheduler } = fixture();
-    const run = vi.fn();
-    scheduler.schedule({ id: "queue", atMs: 10_000, run });
-    scheduler.schedule({ id: "queue", atMs: 5_000, mode: "earliest", run });
-    expect(scheduler.nextWakeAtMs).toBe(5_000);
-    await time.advanceTo(5_000);
-    expect(run).toHaveBeenCalledOnce();
-    await scheduler.stop();
-  });
+    { mode: undefined, atMs: 3_000, nextWakeAtMs: 3_000 },
+    { mode: "earliest" as const, atMs: 3_000, nextWakeAtMs: 2_000 },
+    { mode: "earliest" as const, atMs: 1_500, nextWakeAtMs: 1_500 },
+  ])(
+    "reschedules a pending deadline to $atMs in $mode mode",
+    async ({ mode, atMs, nextWakeAtMs }) => {
+      const { time, scheduler } = fixture();
+      const retiredRun = vi.fn();
+      const run = vi.fn();
+      const retired = scheduler.schedule({ id: "queue", atMs: 2_000, run: retiredRun });
+      scheduler.schedule({ id: "queue", atMs, mode, run });
+      retired.cancel();
+      expect(scheduler.nextWakeAtMs).toBe(nextWakeAtMs);
+      await time.advanceTo(nextWakeAtMs);
+      expect(run).toHaveBeenCalledOnce();
+      expect(retiredRun).not.toHaveBeenCalled();
+      expect(scheduler.nextWakeAtMs).toBeNull();
+      await scheduler.stop();
+    },
+  );
 
   it.each([{ delayMs: 2_000 }, { atMs: 6_500 }])(
     "does not postpone elapsed eligibility after a backward wall-clock correction: %j",
@@ -328,6 +325,26 @@ describe("Gateway timed work", () => {
     gate.resolve();
     await initial;
     expect(scheduler.nextWakeAtMs).toBeNull();
+    await scheduler.stop();
+  });
+
+  it("logs one-shot runs at debug and repeating cadence runs only at trace", async () => {
+    const { time, scheduler } = fixture();
+    schedulerLog.debug.mockClear();
+    schedulerLog.trace.mockClear();
+    const sample = vi.fn();
+    scheduler.schedule({ id: "event-loop-health", delayMs: 20, everyMs: 20, run: sample });
+    scheduler.schedule({ id: "approval", delayMs: 30, run: () => {} });
+    await time.advanceBy(20);
+    await time.advanceBy(20);
+    await time.advanceBy(20);
+    expect(sample).toHaveBeenCalledTimes(3);
+    expect(schedulerLog.debug.mock.calls).toEqual([["running approval"]]);
+    expect(schedulerLog.trace.mock.calls).toEqual([
+      ["running event-loop-health"],
+      ["running event-loop-health"],
+      ["running event-loop-health"],
+    ]);
     await scheduler.stop();
   });
 

@@ -1,6 +1,8 @@
 // Matrix tests cover completion storage failures during inbound dedupe migration.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createPersistentDedupeImportEntry,
@@ -54,31 +56,40 @@ function getMigration() {
   return migration;
 }
 
-function writeLegacyDedupeSource(stateDir: string, now: number, withMetadata = false) {
-  const root = path.join(
-    stateDir,
-    "matrix",
-    "accounts",
-    "home",
-    "matrix.example.org__bot",
-    "0123456789abcdef",
-  );
-  fs.mkdirSync(root, { recursive: true });
-  const jsonPath = path.join(root, "inbound-dedupe.json");
-  fs.writeFileSync(
-    jsonPath,
-    JSON.stringify({
-      version: 1,
-      entries: [{ key: "!room:example.org|$legacy", ts: now - 60_000 }],
-    }),
-  );
-  if (withMetadata) {
-    fs.writeFileSync(
-      path.join(root, "storage-meta.json"),
-      JSON.stringify({ accountId: "home", userId: "@home:example.org" }),
-    );
+function writeSqliteDedupeSource(
+  storageRootDir: string,
+  accountId: string,
+  eventId: string,
+  ts: number,
+): string {
+  const databasePath = path.join(storageRootDir, "state", "openclaw.sqlite");
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+  const roomId = "!room:example.org";
+  const key = `${accountId}:${createHash("sha256")
+    .update(`${accountId}\0${roomId}\0${eventId}`)
+    .digest("hex")}`;
+  const db = new DatabaseSync(databasePath);
+  try {
+    // July's per-account store used this row shape and schema version.
+    db.exec(`
+      CREATE TABLE plugin_state_entries (
+        plugin_id TEXT NOT NULL,
+        namespace TEXT NOT NULL,
+        entry_key TEXT NOT NULL,
+        value_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER,
+        PRIMARY KEY (plugin_id, namespace, entry_key)
+      ) STRICT;
+      PRAGMA user_version = 1;
+    `);
+    db.prepare(`
+      INSERT INTO plugin_state_entries VALUES ('matrix', 'inbound-dedupe', ?, ?, ?, NULL)
+    `).run(key, JSON.stringify({ roomId, eventId, ts }), ts);
+  } finally {
+    db.close();
   }
-  return jsonPath;
+  return databasePath;
 }
 
 describe("matrix inbound dedupe migration capacity", () => {
@@ -95,7 +106,16 @@ describe("matrix inbound dedupe migration capacity", () => {
   it("keeps sources when the completion namespace is full and imports them after capacity frees", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-capacity-");
     const now = Date.now();
-    const jsonPath = writeLegacyDedupeSource(stateDir, now, true);
+    const storageRootDir = path.join(
+      stateDir,
+      "matrix",
+      "accounts",
+      "home",
+      "matrix.example.org__bot",
+      "0123456789abcdef",
+    );
+    const databasePath = writeSqliteDedupeSource(storageRootDir, "home", "$legacy", now - 60_000);
+    const sourceBytes = fs.readFileSync(databasePath);
     const params = createMigrationParams(stateDir);
     const dedupeStore = params.context.openPluginStateKeyedStore<PersistentDedupeEntry>({
       namespace: resolveMatrixInboundDedupeStateNamespace(),
@@ -124,8 +144,7 @@ describe("matrix inbound dedupe migration capacity", () => {
     expect(result.warnings).toEqual([
       expect.stringContaining("Failed reserving Matrix inbound dedupe migration completion:"),
     ]);
-    expect(fs.existsSync(jsonPath)).toBe(true);
-    expect(fs.existsSync(`${jsonPath}.migrated`)).toBe(false);
+    expect(fs.readFileSync(databasePath)).toEqual(sourceBytes);
     await expect(dedupeStore.lookup(canonicalEntry.key)).resolves.toEqual(canonicalEntry.value);
     await expect(completionStore.entries()).resolves.toHaveLength(4);
     await expect(getMigration().detectLegacyState(params)).resolves.not.toBeNull();
@@ -135,8 +154,8 @@ describe("matrix inbound dedupe migration capacity", () => {
     await expect(getMigration().migrateLegacyState(params)).resolves.toEqual({
       changes: [
         "Migrated Matrix inbound dedupe markers to the claimable dedupe store (1 of 1 entries)",
-        `Archived Matrix inbound dedupe legacy source -> ${jsonPath}.migrated`,
-        "Recorded Matrix inbound dedupe migration completion (0 SQLite roots, 1 JSON roots scanned)",
+        `Retired Matrix inbound dedupe rows for ${storageRootDir}`,
+        "Recorded Matrix inbound dedupe migration completion (1 SQLite roots scanned)",
       ],
       warnings: [],
     });

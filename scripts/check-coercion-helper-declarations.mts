@@ -4,13 +4,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
+import { API } from "typescript/unstable/sync";
 import { isCodeFile, listRepoFilesSync } from "./check-file-utils.js";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
-import {
-  createNativeTypeScriptParser,
-  type NativeTypeScriptParser,
-} from "./lib/native-typescript.mts";
+import { writeLine } from "./lib/guard-inventory-utils.mjs";
 import { escapeRegExp } from "./lib/regexp.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { getPropertyNameText, toLine, unwrapExpression } from "./lib/ts-guard-utils.mts";
@@ -619,14 +617,7 @@ export function auditCoercionHelperDeclarations(
   };
 }
 
-function writeLine(stream: ScriptIo["stdout"] | ScriptIo["stderr"], value: string) {
-  stream.write(`${value}\n`);
-}
-
-function auditDefaultCanonicalExports(
-  repoRoot: string,
-  parser: NativeTypeScriptParser,
-): CanonicalCoercionExportAudit {
+function auditDefaultCanonicalExports(repoRoot: string, parser: API): CanonicalCoercionExportAudit {
   const canonicalModules = new Set<string>(CANONICAL_COERCION_MODULES);
   const mixedModules = new Set<string>(MIXED_CANONICAL_COERCION_MODULES);
   const auditedModules = [...CANONICAL_COERCION_MODULES, ...MIXED_CANONICAL_COERCION_MODULES];
@@ -636,7 +627,7 @@ function auditDefaultCanonicalExports(
       const exportedNames = findExportedCallableNames(
         source,
         file,
-        parser.parseSourceFile(file, source),
+        parser.createSourceFile(file, source),
       );
       if (!mixedModules.has(file)) {
         return [file, exportedNames] as const;
@@ -674,7 +665,7 @@ export async function runCoercionHelperDeclarationGuard(
   } = {},
 ) {
   const repoRoot = options.repoRoot ?? resolveRepoRoot(import.meta.url);
-  using parser = createNativeTypeScriptParser({ cwd: repoRoot });
+  using parser = new API({ cwd: repoRoot });
   const io = options.io ?? { stderr: process.stderr, stdout: process.stdout };
   const carveOuts = options.carveOuts ?? COERCION_HELPER_CARVE_OUTS;
   const relativeFiles = listRepoFilesSync(repoRoot, {
@@ -708,7 +699,7 @@ export async function runCoercionHelperDeclarationGuard(
           ...findBannedCoercionHelperDeclarations(
             result.value.source,
             result.value.file,
-            parser.parseSourceFile(result.value.file, result.value.source),
+            parser.createSourceFile(result.value.file, result.value.source),
           ),
         );
       }

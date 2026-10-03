@@ -1,4 +1,6 @@
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../../src/gateway/control-ui-contract.js";
+import { registerListener } from "../../../../src/shared/listeners.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import { formatUiError } from "../format-error.ts";
@@ -533,6 +535,10 @@ export function createSessionCapability(
   });
 
   const stopEvents = gateway.subscribeEvents((event) => {
+    if (event.event === CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT) {
+      githubPublication.observePullRequests(event.payload);
+      return;
+    }
     if (event.event === "config.changed" || event.event === "chat.metadata.changed") {
       roster.observations.descriptions.clear();
     }
@@ -633,6 +639,9 @@ export function createSessionCapability(
       return canonicalListRevision;
     },
     githubPublication,
+    get cachedRoutingDefaults() {
+      return cacheLifecycle.routingDefaults;
+    },
     whenCachedRosterSettled: () => cacheLifecycle.settled,
     captureConnectionScope: connection.capture,
     isConnectionScopeCurrent: connection.isCurrent,
@@ -644,9 +653,7 @@ export function createSessionCapability(
       if (!roster.isPrimaryList(scope)) {
         return roster.subscribeList(scope, listener);
       }
-      const notify = () => listener(roster.listSnapshot(scope));
-      listeners.add(notify);
-      return () => listeners.delete(notify);
+      return registerListener(listeners, () => listener(roster.listSnapshot(scope)));
     },
     refreshList: roster.refreshList,
     reconcile,
@@ -688,14 +695,8 @@ export function createSessionCapability(
     groupsRename: groups.rename,
     groupsUpdate: groups.update,
     groupsDelete: groups.delete,
-    subscribeCreated(listener) {
-      createdListeners.add(listener);
-      return () => createdListeners.delete(listener);
-    },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribeCreated: (listener) => registerListener(createdListeners, listener),
+    subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
       retirePresentation();
       cacheLifecycle.dispose();

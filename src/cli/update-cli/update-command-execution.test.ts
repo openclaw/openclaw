@@ -19,7 +19,7 @@ import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import * as readiness from "./update-command-readiness.js";
 import * as publication from "./update-command-service-revalidation.js";
 
-const { executionParams, inspectOrStopService, mocks, successfulUpdate } =
+const { bindExecutionGuards, executionParams, inspectOrStopService, mocks, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 
 describe("mutable update execution", () => {
@@ -154,7 +154,7 @@ describe("mutable update execution", () => {
             onActivation,
           };
           if (!trackRun) {
-            return executeMutableUpdate(params);
+            return executeMutableUpdate(await bindExecutionGuards(params));
           }
           runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
           params.opts.run = { runId, env };
@@ -162,7 +162,7 @@ describe("mutable update execution", () => {
             mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
               admitExecutor(await executor.enter(root));
             });
-            return executeMutableUpdate(params);
+            return executeMutableUpdate(await bindExecutionGuards(params));
           });
         });
         if (trackRun) {
@@ -241,12 +241,14 @@ describe("mutable update execution", () => {
             return { ...successfulUpdate, mode: "git" };
           },
         );
-        const execution = await executeMutableUpdate({
-          ...executionParams("git"),
-          root: targetRoot,
-          shouldRestart: false,
-          opts: { json: true, restart: false },
-        });
+        const execution = await executeMutableUpdate(
+          await bindExecutionGuards({
+            ...executionParams("git"),
+            root: targetRoot,
+            shouldRestart: false,
+            opts: { json: true, restart: false },
+          }),
+        );
         expect(await fs.readFile(artifact, "utf8")).toBe("retained serving runtime");
         expect(mocks.serviceStopped).toBe(false);
         if (destination === "disjoint") {
@@ -299,7 +301,7 @@ describe("mutable update execution", () => {
       });
       await withUpdateCommandExecutor(runId, async (executor) => {
         params.opts.run!.executorFence = await executor.enter(dir, { preflight: true });
-        const result = await executeMutableUpdate(params);
+        const result = await executeMutableUpdate(await bindExecutionGuards(params));
         expect(result?.result.status).toBe("error");
         expect(mocks.maybeRestartService).toHaveBeenCalledOnce();
         expect(recoveryRun).toBe(params.opts.run);
@@ -316,7 +318,9 @@ describe("mutable update execution", () => {
       }
       return inspectOrStopService(phase);
     });
-    const execution = await executeMutableUpdate(executionParams("package"));
+    const execution = await executeMutableUpdate(
+      await bindExecutionGuards(executionParams("package")),
+    );
     expect(execution).toMatchObject({
       mutationStarted: false,
       result: { status: "error", reason: "managed-service-preflight" },
@@ -351,11 +355,13 @@ describe("mutable update execution", () => {
             maintenance.maybeStopManagedServiceBeforeMutableUpdate,
           );
 
-          const execution = await executeMutableUpdate({
-            ...executionParams(kind),
-            shouldRestart,
-            opts: { json: true, restart: shouldRestart },
-          });
+          const execution = await executeMutableUpdate(
+            await bindExecutionGuards({
+              ...executionParams(kind),
+              shouldRestart,
+              opts: { json: true, restart: shouldRestart },
+            }),
+          );
 
           expect(execution?.result.status).toBe("ok");
           if (kind === "package") {
@@ -399,7 +405,9 @@ describe("mutable update execution", () => {
         }
         return inspectOrStopService("inspect");
       });
-      const execution = await executeMutableUpdate(executionParams("package"));
+      const execution = await executeMutableUpdate(
+        await bindExecutionGuards(executionParams("package")),
+      );
       expect(execution?.result.status).toBe("ok");
       expect(execution?.preManagedServiceStop?.serviceUpdateVerdict).toMatchObject({
         kind: "unavailable",
@@ -458,12 +466,14 @@ describe("mutable update execution", () => {
             return { ...successfulUpdate, status: "error", reason: "package-update-failed" };
           }
         });
-        const execution = await executeMutableUpdate({
-          ...executionParams("package"),
-          tag: "/tmp/candidate.tgz",
-          packageInstallSpec: "/tmp/candidate.tgz",
-          packageTargetVersion: undefined,
-        });
+        const execution = await executeMutableUpdate(
+          await bindExecutionGuards({
+            ...executionParams("package"),
+            tag: "/tmp/candidate.tgz",
+            packageInstallSpec: "/tmp/candidate.tgz",
+            packageTargetVersion: undefined,
+          }),
+        );
         expect(events).toEqual(
           outcome === "changed-owner"
             ? ["staged", "preflight"]
@@ -525,7 +535,7 @@ describe("mutable update execution", () => {
           params.packageTargetSchemaVersions = undefined;
         }
 
-        const execution = await executeMutableUpdate(params);
+        const execution = await executeMutableUpdate(await bindExecutionGuards(params));
 
         expect(mocks.validateCanary.mock.calls.length).toBe(0);
         expect(execution).toMatchObject({
@@ -576,12 +586,14 @@ describe("mutable update execution", () => {
           return successfulUpdate;
         });
 
-        const execution = await executeMutableUpdate({
-          ...executionParams("package"),
-          tag: "2026.9.2",
-          packageInstallSpec: "openclaw@2026.9.2",
-          packageTargetVersion: "2026.9.2",
-        });
+        const execution = await executeMutableUpdate(
+          await bindExecutionGuards({
+            ...executionParams("package"),
+            tag: "2026.9.2",
+            packageInstallSpec: "openclaw@2026.9.2",
+            packageTargetVersion: "2026.9.2",
+          }),
+        );
 
         expect(mocks.validateCanary.mock.calls.length).toBe(0);
         expect(execution).toMatchObject({
@@ -599,12 +611,14 @@ describe("mutable update execution", () => {
       status: "skipped",
       reason: "already-current",
     });
-    const execution = await executeMutableUpdate({
-      ...executionParams("package"),
-      tag: "/tmp/candidate.tgz",
-      packageInstallSpec: "/tmp/candidate.tgz",
-      packageTargetVersion: undefined,
-    });
+    const execution = await executeMutableUpdate(
+      await bindExecutionGuards({
+        ...executionParams("package"),
+        tag: "/tmp/candidate.tgz",
+        packageInstallSpec: "/tmp/candidate.tgz",
+        packageTargetVersion: undefined,
+      }),
+    );
     expect(execution?.result.reason).toBe("already-current");
     expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
     expect(mocks.pluginPreflight).not.toHaveBeenCalled();
@@ -658,7 +672,9 @@ describe("mutable update execution", () => {
         );
         mocks.pluginPreflight.mockImplementation(actual.preflightConfiguredNpmPluginTargets);
 
-        const execution = await executeMutableUpdate(executionParams("package"));
+        const execution = await executeMutableUpdate(
+          await bindExecutionGuards(executionParams("package")),
+        );
         const unclassifiedFailure = incompatible && failure === "throw";
 
         expect(execution?.result.status).toBe(unclassifiedFailure ? "error" : "ok");
@@ -702,7 +718,7 @@ describe("mutable update execution", () => {
   it("waits for plugin availability before preparing a package update", async () => {
     const available = createDeferred<[]>();
     mocks.pluginPreflight.mockImplementation(() => available.promise);
-    const execution = executeMutableUpdate(executionParams("package"));
+    const execution = executeMutableUpdate(await bindExecutionGuards(executionParams("package")));
     try {
       await vi.waitFor(() => expect(mocks.pluginPreflight).toHaveBeenCalledOnce());
       expect(mocks.serviceStopped).toBe(false);
@@ -728,7 +744,9 @@ describe("mutable update execution", () => {
       return context;
     });
 
-    const execution = await executeMutableUpdate(executionParams("package"));
+    const execution = await executeMutableUpdate(
+      await bindExecutionGuards(executionParams("package")),
+    );
 
     expect(execution?.result.reason).toBe("database-schema-preflight");
     expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
@@ -770,7 +788,7 @@ describe("mutable update execution", () => {
     });
 
     const params = executionParams("package");
-    const pendingExecution = executeMutableUpdate(params);
+    const pendingExecution = executeMutableUpdate(await bindExecutionGuards(params));
     try {
       await vi.waitFor(() => expect(events).toContain("schema-after-inspection"));
       expect(events.indexOf("schema-before-inspection")).toBeLessThan(
@@ -817,7 +835,9 @@ describe("mutable update execution", () => {
         indeterminate: [],
       }));
 
-      const execution = await executeMutableUpdate(executionParams("package"));
+      const execution = await executeMutableUpdate(
+        await bindExecutionGuards(executionParams("package")),
+      );
 
       expect(mocks.serviceStopped).toBe(false);
       expect(mocks.prepareMutableUpdate).toHaveBeenCalledTimes(phase === "after-prepare" ? 1 : 0);
@@ -915,7 +935,7 @@ describe("mutable update execution", () => {
             events.push("mutable-prepare");
             admitExecutor(await executor.enter(root));
           });
-          return executeMutableUpdate(params);
+          return executeMutableUpdate(await bindExecutionGuards(params));
         });
 
         expect(events).toEqual([

@@ -4,7 +4,10 @@ import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { appendPluginInstanceCleanupFailures } from "./host-hook-cleanup-result.js";
+import {
+  appendPluginInstanceCleanupFailures,
+  summarizePluginRetirementResults,
+} from "./host-hook-cleanup-result.js";
 import type { PluginHostCleanupResult } from "./host-hook-cleanup.types.js";
 import {
   createPluginCacheArtifacts,
@@ -521,19 +524,7 @@ export async function waitForPluginCacheRetirement(
   );
   state.retirements = state.retirements.filter((retirement) => !ready.includes(retirement));
   const results = await Promise.all(ready.map((retirement) => retirement.completion));
-  const failures = results.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  if (failures.length) {
-    throw new AggregateError(failures, "Plugin cache retirement failed");
-  }
-  const completed = results.flatMap((result) =>
-    result.status === "fulfilled" ? [result.value] : [],
-  );
-  return {
-    cleanupCount: completed.reduce((count, result) => count + result.cleanupCount, 0),
-    failures: completed.flatMap((result) => result.failures),
-  };
+  return summarizePluginRetirementResults(results, "Plugin cache retirement failed");
 }
 
 export function getPluginCacheRoot(rootDir: string): PluginRootCacheRecord {

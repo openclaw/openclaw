@@ -1,6 +1,10 @@
 import { nothing } from "lit";
-import { AsyncDirective } from "lit/async-directive.js";
 import { directive, type ElementPart } from "lit/directive.js";
+import {
+  PresentationAsyncDirective,
+  type PresentationBinding,
+  type PresentationValue,
+} from "../lit/presentation-binding.ts";
 import { linkReaderHovercardBootstrap as bootstrap } from "./link-reader-hovercard-registration.ts";
 import {
   prefetchLinkReader,
@@ -18,7 +22,7 @@ const PREFETCH_LIMIT = 8;
 const PREFETCH_DELAY_MS = 150;
 const SCAN_IDLE_TIMEOUT_MS = 500;
 
-class LinkReaderPrefetchDirective extends AsyncDirective {
+class LinkReaderPrefetchDirective extends PresentationAsyncDirective {
   private root: HTMLElement | undefined;
   private provider: Element | null = null;
   private readonly handleCapabilities = () => {
@@ -28,6 +32,12 @@ class LinkReaderPrefetchDirective extends AsyncDirective {
   };
   private sessionKey: string | undefined;
   private active = false;
+  protected override presentationChanged(binding?: PresentationBinding) {
+    if (binding?.isPresented() === false) {
+      this.active = false;
+      this.release();
+    }
+  }
   private cancelScan: (() => void) | undefined;
   private observer: IntersectionObserver | null = null;
   private mutations: MutationObserver | null = null;
@@ -52,14 +62,15 @@ class LinkReaderPrefetchDirective extends AsyncDirective {
     return claim;
   };
 
-  render(_sessionKey: string, _active = true, _connected = true) {
+  render(_sessionKey: string, _presented: PresentationValue, _connected = true) {
     return nothing;
   }
 
   override update(
     part: ElementPart,
-    [sessionKey, active = true, connected = true]: [string, boolean?, boolean?],
+    [sessionKey, presented, connected = true]: [string, PresentationValue, boolean?],
   ) {
+    this.updatePresentation(presented);
     if (sessionKey !== this.sessionKey || !connected) {
       this.release();
       this.attempted.clear();
@@ -77,19 +88,22 @@ class LinkReaderPrefetchDirective extends AsyncDirective {
       this.release();
       this.attempted.clear();
     }
-    this.active = active && connected;
+    this.active =
+      connected && (typeof presented === "boolean" ? presented : presented.isPresented());
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
     this.handleVisibilityChange();
     return nothing;
   }
 
   protected override disconnected(): void {
+    super.disconnected();
     this.provider?.removeEventListener("link-reader-capabilities-changed", this.handleCapabilities);
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.release();
   }
 
   protected override reconnected(): void {
+    super.reconnected();
     this.provider?.addEventListener("link-reader-capabilities-changed", this.handleCapabilities);
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
     this.handleVisibilityChange();

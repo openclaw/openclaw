@@ -80,7 +80,15 @@ extension GatewayLaunchAgentManager {
         profile: AppProfile,
         homeDirectory: URL) throws -> LegacyNodeInstallation
     {
-        let state = profile.stateDirectoryURL(homeDirectory: homeDirectory)
+        try self.legacyNodeInstallation(state: profile.stateDirectoryURL(homeDirectory: homeDirectory))
+    }
+
+    static func legacyManagedNodeCommand(stateDirectory: URL) throws -> [String]? {
+        guard case let .managed(command) = try self.legacyNodeInstallation(state: stateDirectory) else { return nil }
+        return command
+    }
+
+    private static func legacyNodeInstallation(state: URL) throws -> LegacyNodeInstallation {
         let fileManager = FileManager.default
         let wrapper = state.appendingPathComponent("bin/openclaw")
         var operatorWrapper = false

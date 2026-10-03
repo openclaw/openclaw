@@ -98,7 +98,7 @@ function matchesReefToolTarget(target: string, toolContext?: ChannelThreadingToo
   return normalizedCurrent !== undefined && normalizeReefTarget(target) === normalizedCurrent;
 }
 
-export const reefPlugin: ChannelPlugin<ReefAccount> = {
+export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
   id: "reef",
   meta: {
     id: "reef",
@@ -241,6 +241,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
     }),
   },
   gateway: {
+    apiVersion: 2,
     startAccount: async (ctx) => {
       if (!ctx.account.configured) {
         throw new Error("Reef requires handle, email, and guard config");
@@ -425,7 +426,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         {
           onError: (error, receiptId) =>
             ctx.log?.error?.(`reef rejection notice failed for ${receiptId}: ${String(error)}`),
-          signal: ctx.abortSignal,
+          scheduler: ctx.scheduler,
         },
       );
       const reconcile = async (signal: AbortSignal) => {
@@ -488,7 +489,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
       );
       try {
         await runReefChannelLifecycle({
-          parentSignal: ctx.abortSignal,
+          scheduler: ctx.scheduler,
           startInbox: (signal) => inbox.start(signal),
           reconcile: async (signal) => {
             // The overdue sweep must run even while the relay is unreachable:
@@ -522,6 +523,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           onReady: activate,
         });
       } finally {
+        await ctx.scheduler.stop();
         authority.release();
         ctx.setStatus({ accountId: "default", running: false, connected: false });
       }

@@ -306,9 +306,7 @@ export class ChatLog extends Container {
   ) {
     const existing = this.userComponents.get(options.messageId);
     if (existing) {
-      existing.setText(text);
-      existing.setImages(options.images ?? []);
-      return existing;
+      return this.addUser(text, options);
     }
 
     // Persisted execution ownership can differ from the originating send;

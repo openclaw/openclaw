@@ -10,15 +10,10 @@ import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcri
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
-  readSessionTranscriptRunId,
-  resolveTerminalAssistantTranscriptRunId,
-} from "../../sessions/transcript-events.js";
-import {
   ASSISTANT_DISPLAY_CONTENT_FIELD,
   projectAssistantDisplayContent,
   retainAssistantModelContent,
 } from "../../shared/assistant-display-content.js";
-import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
 import type { ChatAbortOrigin } from "./chat-aborted-partial.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
@@ -103,7 +98,6 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   const displayContent = preparedDisplayMessage.content;
   const canonicalContent = retainAssistantModelContent(displayContent);
   const rawDeliveryFacts = preparedDisplayMessage.openclawDelivery;
-  const abortRunId = params.abortMeta?.runId;
   const messageBody: AppendMessageArg & Record<string, unknown> = applyAssistantDeliveryDirectives({
     role: "assistant",
     content: canonicalContent,
@@ -170,7 +164,6 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
         message: projectAssistantDisplayContent(append.message),
       };
     }
-    let predicateDeclined = false;
     const turn = await persistSessionTranscriptTurn(
       {
         sessionKey: params.sessionKey ?? "",
@@ -193,18 +186,10 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
             idempotencyLookup: "scan-assistant",
             ...(params.abortMeta
               ? {
-                  shouldAppendInTransaction: (readLatestAssistantMessage) => {
-                    const latestAssistantMessage = readLatestAssistantMessage();
-                    const committedRunId = resolveTerminalAssistantTranscriptRunId(
-                      latestAssistantMessage,
-                      readSessionTranscriptRunId(latestAssistantMessage),
-                    );
-                    const committedText = extractAssistantPhaseText(latestAssistantMessage)?.trim();
-                    // The same run can commit before its live buffer clears. Recheck after
-                    // BEGIN IMMEDIATE so a direct writer cannot land between this fact and insert.
-                    predicateDeclined =
-                      committedRunId === abortRunId && committedText === params.message.trim();
-                    return !predicateDeclined;
+                  predicate: {
+                    kind: "latest-assistant-differs" as const,
+                    runId: params.abortMeta.runId,
+                    text: params.message.trim(),
                   },
                 }
               : {}),
@@ -220,7 +205,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     const appended = turn.messages[0];
     if (!appended) {
       // A declined predicate is a decision, not a failure: no row was wanted.
-      if (predicateDeclined) {
+      if (turn.predicateSkipped) {
         return { ok: true, skipped: true };
       }
       return { ok: false, error: "gateway-injected assistant message was not appended" };

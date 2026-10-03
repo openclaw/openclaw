@@ -619,7 +619,16 @@ describe("ask_user execution", () => {
     );
     finishRegistration?.({ id: questionId });
 
-    expect(steer).toHaveBeenCalledWith("Use this image", images);
+    expect(steer).toHaveBeenCalledWith(
+      "Use this image",
+      images,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    );
     await expect(pending).resolves.toMatchObject({ details: { status: "no_answer" } });
     expect(
       gateway.mock.mock.calls.filter(([method]) => method === "question.resolve"),
@@ -912,7 +921,16 @@ describe("ask_user execution", () => {
       sessionKey,
     );
 
-    expect(steer).toHaveBeenCalledWith("Use this image", images);
+    expect(steer).toHaveBeenCalledWith(
+      "Use this image",
+      images,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    );
     expect(gateway.mock).toHaveBeenCalledWith(
       "question.resolve",
       { timeoutMs: 10_000 },
@@ -1023,7 +1041,16 @@ describe("ask_user execution", () => {
       "agent:main:terminal-race",
     );
 
-    expect(steer).toHaveBeenCalledWith("Follow-up message", undefined);
+    expect(steer).toHaveBeenCalledWith(
+      "Follow-up message",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    );
     finishWait?.({ status: "cancelled" });
     await pending;
   });

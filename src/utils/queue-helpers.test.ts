@@ -1,5 +1,5 @@
 // Queue helper tests cover queue ordering and dedupe utility behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   applyQueueDropPolicy,
   applyQueueRuntimeSettings,
@@ -8,6 +8,7 @@ import {
   drainNextQueueItem,
   hasCrossChannelItems,
   previewQueueSummaryPrompt,
+  waitForQueueDebounce,
 } from "./queue-helpers.js";
 
 function createQueue<T>(items: T[], cap: number, dropPolicy: "old" | "summarize" = "old") {
@@ -133,6 +134,31 @@ describe("queue summary helpers", () => {
     applyQueueDropPolicy({ queue, summarize: (item) => item.text });
 
     expect(queue.summaryLines).toEqual([`${"a".repeat(158)}…`]);
+  });
+});
+
+describe("waitForQueueDebounce", () => {
+  it("settles one debounce window after the system clock moves backward", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    vi.useFakeTimers();
+    try {
+      const queue = { debounceMs: 1_000, lastEnqueuedAt: Date.now() };
+      let settled = false;
+      const wait = waitForQueueDebounce(queue).then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(500);
+      vi.setSystemTime(Date.now() - 60 * 60_000);
+      await vi.advanceTimersByTimeAsync(499);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+      await wait;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

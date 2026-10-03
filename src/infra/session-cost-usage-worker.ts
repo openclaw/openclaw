@@ -5,11 +5,9 @@ import {
 } from "@openclaw/normalization-core/error-coercion";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import {
-  listSessionTranscriptInstances,
-  readTranscriptStatsBatchReadOnlySync,
-} from "../config/sessions/session-accessor.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
+import { listSessionTranscriptInstances } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { readTranscriptStatsBatchReadOnlySync } from "../config/sessions/session-accessor.sqlite-read.js";
 import {
   getSessionKysely,
   resolveSqliteReadScope,
@@ -165,16 +163,20 @@ export async function executeUsageCostWorker(
       return result;
     },
   };
-  const inventory = (minMtimeMs?: number, sessionsDir?: string) =>
-    listUsageCountedTranscriptStats(location.agentId, {
-      ...access,
-      storePath: location.storePath,
-      sessionsDir,
-      minMtimeMs,
-    });
+  const inventory = async (sessionsDir?: string) =>
+    input.transcriptFiles
+      ? (await resolveUsageCostTranscriptFiles(input.transcriptFiles, access)).filter(
+          (file) => file !== undefined,
+        )
+      : listUsageCountedTranscriptStats(location.agentId, {
+          ...access,
+          storePath: location.storePath,
+          sessionsDir,
+        });
   if (operation.kind === "inventory") {
-    const files = operation.sessionFiles
-      ? (await resolveUsageCostTranscriptSources(operation.sessionFiles, access)).filter(
+    const selected = operation.sessionFiles ?? input.transcriptFiles;
+    let files = selected
+      ? (await resolveUsageCostTranscriptSources(selected, access)).filter(
           (file) => file !== undefined,
         )
       : await listUsageCountedTranscriptSources(location.agentId, {
@@ -182,6 +184,14 @@ export async function executeUsageCostWorker(
           storePath: location.storePath,
           minMtimeMs: operation.minMtimeMs,
         });
+    if (
+      input.transcriptFiles &&
+      operation.sessionFiles === undefined &&
+      operation.minMtimeMs !== undefined
+    ) {
+      const minMtimeMs = operation.minMtimeMs;
+      files = files.filter((file) => !(file.mtimeMs < minMtimeMs));
+    }
     return {
       kind: "inventory",
       files: files.map(({ kind, sourcePath, sessionId, mtimeMs }) => ({
@@ -392,7 +402,7 @@ export async function executeUsageCostWorker(
   const rows = await readMetadata();
   const byPath = new Map(rows.map((row) => [row.key, row]));
 
-  const discovered = await inventory(undefined, operation.sessionsDir);
+  const discovered = await inventory(operation.sessionsDir);
   const requestedFiles = (
     await resolveUsageCostTranscriptFiles(operation.sessionFiles ?? [], access)
   ).filter((file) => file !== undefined);

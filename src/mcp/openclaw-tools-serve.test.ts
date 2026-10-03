@@ -1,10 +1,10 @@
 // OpenClaw MCP tools tests cover core tool server startup and registration.
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { hashSystemAgentOperation } from "../system-agent/operator-approval.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { resolveToolsMcpAgentId } from "./agent-session-env.js";
 import {
   buildSystemAgentToolsMcpServerConfig,
@@ -22,7 +22,7 @@ import {
 } from "./openclaw-tools-serve.js";
 import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-mcp-subagent-policy-");
 
 vi.mock("../system-agent/overview.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../system-agent/overview.js")>();
@@ -69,7 +69,7 @@ afterEach(() => {
 
 describe("OpenClaw tools MCP server", () => {
   it("does not expose cron to a persisted sub-agent ACP session", async () => {
-    const tempDir = tempDirs.make("openclaw-mcp-subagent-policy-");
+    const tempDir = sessionDirs.make();
     const storePath = path.join(tempDir, "sessions.json");
     const sessionKey = "agent:main:acp:resumed-child";
     await replaceSessionEntry({ storePath, sessionKey }, {

@@ -570,6 +570,10 @@ export function buildInboundUserContextPrefix(
     requester_profile: requester
       ? { id: requester.id, display_name: sanitizeTranscriptField(requester.displayName) }
       : undefined,
+    // Inside the marked block so display, history and memory strippers drop it with the rest.
+    requester_profile_hint: requester
+      ? 'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.'
+      : undefined,
     chat_id: shouldIncludeConversationInfo ? normalizeOptionalString(ctx.OriginatingTo) : undefined,
     message_id: shouldIncludeConversationInfo ? resolvedMessageId : undefined,
     reply_to_id: shouldIncludeConversationInfo ? replyToId : undefined,
@@ -608,11 +612,6 @@ export function buildInboundUserContextPrefix(
     blocks.push(
       formatContextJsonBlock(markInboundContextLabel("Conversation info:"), conversationInfo),
     );
-    if (requester) {
-      blocks.push(
-        'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.',
-      );
-    }
   }
 
   const threadStarterBody = sanitizePromptBody(ctx.ThreadStarterBody);

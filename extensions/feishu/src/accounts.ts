@@ -6,22 +6,24 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-resolution";
-import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
+import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
 import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/secret-ref-readonly";
 import { normalizeOptionalString as normalizeString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
-  FeishuConfig,
   FeishuAccountConfig,
+  FeishuConfig,
   FeishuDefaultAccountSelectionSource,
   FeishuDomain,
   ResolvedFeishuAccount,
 } from "./types.js";
 
+type MergedFeishuAccountConfig = FeishuConfig & FeishuAccountConfig;
+
 const {
   listAccountIds: listFeishuAccountIds,
   resolveDefaultAccountId: resolveDefaultFeishuAccountId,
   resolveAccountConfig: resolveMergedFeishuAccountConfig,
-} = createAccountListHelpers<FeishuConfig>("feishu", {
+} = createAccountListHelpers<MergedFeishuAccountConfig>("feishu", {
   allowUnlistedDefaultAccount: true,
   omitKeys: ["defaultAccount"],
   nestedObjectKeys: ["tools"],
@@ -169,11 +171,10 @@ export function resolveDefaultFeishuAccountSelection(cfg: ClawdbotConfig): {
   };
 }
 
-/**
- * Merge top-level config with account-specific config.
- * Account-specific fields override top-level fields.
- */
-export function mergeFeishuAccountConfig(cfg: ClawdbotConfig, accountId: string): FeishuConfig {
+export function mergeFeishuAccountConfig(
+  cfg: ClawdbotConfig,
+  accountId: string,
+): MergedFeishuAccountConfig {
   const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
   const merged = resolveMergedFeishuAccountConfig(cfg, accountId);
   const topTools = feishuCfg?.tools;
@@ -207,12 +208,7 @@ export function resolveFeishuCredentials(
   if (!base) {
     return null;
   }
-  const eventSecrets = resolveFeishuEventSecrets(cfg, mode, options?.rootConfig);
-
-  return {
-    ...base,
-    ...eventSecrets,
-  };
+  return { ...base, ...resolveFeishuEventSecrets(cfg, mode, options?.rootConfig) };
 }
 
 export function inspectFeishuCredentials(cfg?: FeishuConfig, rootConfig?: ClawdbotConfig) {
@@ -238,20 +234,16 @@ function buildResolvedFeishuAccount(params: {
     : (defaultSelection?.source ?? "fallback");
   const feishuCfg = params.cfg.channels?.feishu as FeishuConfig | undefined;
 
-  const baseEnabled = feishuCfg?.enabled !== false;
   const merged = mergeFeishuAccountConfig(params.cfg, accountId);
-  const accountEnabled = merged.enabled !== false;
-  const enabled = baseEnabled && accountEnabled;
   const baseCreds = resolveFeishuBaseCredentials(merged, params.baseMode, params.cfg);
   const eventSecrets = resolveFeishuEventSecrets(merged, params.eventSecretMode, params.cfg);
-  const accountName = (merged as FeishuAccountConfig).name;
 
   return {
     accountId,
     selectionSource,
-    enabled,
+    enabled: feishuCfg?.enabled !== false && merged.enabled !== false,
     configured: Boolean(baseCreds),
-    name: typeof accountName === "string" ? accountName.trim() || undefined : undefined,
+    name: normalizeString(merged.name),
     appId: baseCreds?.appId,
     appSecret: baseCreds?.appSecret,
     encryptKey: eventSecrets.encryptKey,

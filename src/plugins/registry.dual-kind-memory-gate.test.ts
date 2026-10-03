@@ -160,10 +160,33 @@ describe("memory capability ownership", () => {
     expect(registry.registry.diagnostics.filter(({ level }) => level === "warn")).toHaveLength(1);
   });
 
+  it("strips the provider runtime from an unselected consolidation sidecar", () => {
+    const { registry, add, selected } = fixture();
+    add("memory-sidecar", {
+      providerRuntime: {
+        async open() {
+          return { provider: null };
+        },
+      },
+      promptBuilder: () => ["consolidation"],
+    });
+    const sidecar = selected();
+    expect(sidecar?.capability.providerRuntime).toBeUndefined();
+    expect(sidecar?.capability.promptBuilder?.({ availableTools: new Set() })).toEqual([
+      "consolidation",
+    ]);
+    expect(registry.registry.diagnostics.filter(({ level }) => level === "warn")).toHaveLength(1);
+  });
+
   it("merges sidecar consolidation without lending its recall authorization to the slot owner", async () => {
     const { config, add, selected } = fixture();
-    add("acme-memory", { runtime: createStubMemoryRuntime() }, { memorySlotSelected: true });
+    add(
+      "acme-memory",
+      { runtime: createStubMemoryRuntime(), recallToolNames: ["acme_recall"] },
+      { memorySlotSelected: true },
+    );
     add("memory-core", {
+      recallToolNames: ["memory_search", "memory_get"],
       deterministicRecallToolName: "memory_search",
       supportsPrivateTranscriptRecall: true,
       promptBuilder: () => ["sidecar prompt"],
@@ -174,6 +197,7 @@ describe("memory capability ownership", () => {
     expect(owner?.pluginId).toBe("acme-memory");
     expect(owner?.memorySlotSelected).toBe(true);
     expect(owner?.capability.deterministicRecallToolName).toBeUndefined();
+    expect(owner?.capability.recallToolNames).toEqual(["acme_recall"]);
     expect(owner?.capability.supportsPrivateTranscriptRecall).toBeUndefined();
     await expect(
       owner?.capability.runtime?.getMemorySearchManager({ cfg: config, agentId: "main" }),

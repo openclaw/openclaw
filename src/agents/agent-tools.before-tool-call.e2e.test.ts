@@ -2850,14 +2850,13 @@ describe("before_tool_call requireApproval handling", () => {
     ["an explicit timeout decision", PluginApprovalResolutions.TIMEOUT],
     ["an unknown decision", "approved"],
     ["a malformed truthy decision", true as unknown as string],
-  ])("blocks on %s even when deprecated timeoutBehavior is allow", async (_label, decision) => {
+  ])("blocks on %s", async (_label, decision) => {
     const onResolution = vi.fn();
     hookRunner.runBeforeToolCall.mockResolvedValue({
       params: { command: "safe-command" },
       requireApproval: {
-        title: "Lenient timeout",
+        title: "Required approval",
         description: "Must fail closed",
-        timeoutBehavior: "allow",
         onResolution,
       },
     });
@@ -3047,14 +3046,13 @@ describe("before_tool_call requireApproval handling", () => {
     expect(result).toHaveProperty("reason", "Registration returns no id");
   });
 
-  it("blocks on immediate null decision without calling waitDecision even when timeoutBehavior is allow", async () => {
+  it("blocks on immediate null decision without calling waitDecision", async () => {
     const onResolution = vi.fn();
 
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
         title: "No route",
         description: "No approval route available",
-        timeoutBehavior: "allow",
         onResolution,
       },
     });

@@ -58,7 +58,12 @@ vi.mock("openai/resources/responses/ws.js", () => ({
   },
 }));
 
-import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import {
+  configureAiTransportHost,
+  createAiTransportHost,
+  getAiTransportHost,
+  runWithAiTransportHost,
+} from "../host.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import {
   createOpenAIResponsesWebSocketStream,
@@ -385,5 +390,38 @@ describe("native OpenAI Responses WebSocket transport", () => {
     cleanupSessionResources("session-1");
     expect(websocketState.instances[0]?.closed).toBe(true);
     expect(websocketState.instances[1]?.closed).toBe(false);
+  });
+
+  it("keeps matching-session and all-session cleanup inside one runtime owner", async () => {
+    const firstHost = createAiTransportHost();
+    const secondHost = createAiTransportHost();
+    websocketState.responseBatches.push(
+      [completion("first-shared")],
+      [completion("first-other")],
+      [completion("second-shared")],
+    );
+    await runWithAiTransportHost(firstHost, () =>
+      consumeResponse(createStream({ model: "gpt-5.6-luna", input: [firstUser] })),
+    );
+    await runWithAiTransportHost(firstHost, () =>
+      consumeResponse(
+        createStream(
+          { model: "gpt-5.6-luna", input: [{ role: "user", content: "other" }] },
+          { sessionId: "other" },
+        ),
+      ),
+    );
+    await runWithAiTransportHost(secondHost, () =>
+      consumeResponse(createStream({ model: "gpt-5.6-luna", input: [firstUser] })),
+    );
+
+    cleanupSessionResources("session-1", firstHost);
+    expect(websocketState.instances.map(({ closed }) => closed)).toEqual([true, false, false]);
+
+    cleanupSessionResources(undefined, firstHost);
+    expect(websocketState.instances.map(({ closed }) => closed)).toEqual([true, true, false]);
+
+    cleanupSessionResources(undefined, secondHost);
+    expect(websocketState.instances.map(({ closed }) => closed)).toEqual([true, true, true]);
   });
 });

@@ -39,6 +39,25 @@ export function renderSessionsBoard(props: {
   const writable = host.connection.connected && host.connection.canWrite && !controller.busy;
   const visibleError = [props.pageError, controller.error].filter(Boolean).join("\n");
   const agents = listSelectableAgents(host.agents.rows);
+  const peopleOptions = [
+    { value: "everyone", label: t("workboard.sessionsBoard.everyone") },
+    { value: "me", label: t("workboard.sessionsBoard.involvingMe") },
+    ...(snapshot?.people ?? [])
+      .filter((person) => person.identity.id !== controller.viewerProfileId)
+      .map((person) => ({
+        value: `profile:${person.identity.id}`,
+        label: person.label || person.identity.id,
+      })),
+  ];
+  if (
+    controller.peopleFilter.startsWith("profile:") &&
+    !peopleOptions.some((option) => option.value === controller.peopleFilter)
+  ) {
+    peopleOptions.push({
+      value: controller.peopleFilter,
+      label: controller.peopleFilter.slice(8),
+    });
+  }
   const renderSession = (session: WorkboardSessionsBoardRead["sessions"][number]) => {
     const title = session.label || session.derivedTitle || session.key;
     const agentName = agentDisplayName(
@@ -95,21 +114,12 @@ export function renderSessionsBoard(props: {
         <div class="workboard-heading__actions settings-section__actions">
           ${host.connection.canWrite ? html`<button class="btn workboard-new-board" type="button" ?disabled=${!writable} @click=${props.onNewBoard}>${icons.plus}${t("workboard.newBoard")}</button>` : nothing}
           ${controller.hasDock ? html`<button class="btn workboard-board-agent" type="button" ?disabled=${!writable || !snapshot} @click=${() => controller.openAgent()}>${icons.messageSquare}${t("workboard.sessionsBoard.agent")}</button>` : nothing}
-          <button
-            class="btn btn--icon btn--ghost workboard-refresh"
-            type="button"
-            aria-label=${t("common.refresh")}
-            aria-busy=${controller.loading || controller.busy}
-            ?disabled=${!host.connection.connected || controller.loading || controller.busy}
-            @click=${() => (host.connection.canWrite ? controller.refresh() : controller.read())}
-          >
-            ${icons.refresh}
-          </button>
         </div>
       </header>
       <div class="workboard-toolbar">
         ${renderSelectPicker({ value: props.board.id, options: [{ value: "__all__", label: t("workboard.allBoards") }, ...props.boards.map((board) => ({ value: board.id, label: workboardBoardName(board) }))], accessibleLabel: t("workboard.boardFilter"), onSelect: props.onBoardChange })}
         <div class="workboard-agent-filter">${props.scopeControl}</div>
+        ${renderSelectPicker({ value: controller.peopleFilter, options: peopleOptions, accessibleLabel: t("workboard.sessionsBoard.peopleFilter"), searchable: true, disabled: !host.connection.connected || controller.busy || !snapshot, onSelect: (value) => controller.selectPeople(value) }, "workboard-people-filter")}
       </div>
       ${visibleError ? html`<div class="workboard-sessions__warning" role="alert">${visibleError}</div>` : nothing}
       ${snapshot?.warning ? html`<div class="workboard-sessions__warning" role="status">${snapshot.warning}</div>` : nothing}

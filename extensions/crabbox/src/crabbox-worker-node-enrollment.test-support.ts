@@ -1,10 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
+import { type FixtureReceiptChannel, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { expect } from "vitest";
 import type {
   CrabboxWorkerNodeEnrollment,
   CrabboxWorkerNodeRuntimePreparation,
 } from "./crabbox-worker-node-enrollment.js";
+
+export type DesktopFixture = {
+  enabled: boolean;
+  setup?: string;
+  display?: string;
+  dbus?: string;
+  runtimeDir?: string;
+};
 
 export function createWorkerArchiveFixture(): CrabboxWorkerNodeRuntimePreparation["workerBundle"] {
   return {
@@ -30,11 +39,15 @@ export function createNodeBootstrapFixture(
   };
 }
 
-export async function readLaunch(stateDir: string) {
-  const target = path.join(stateDir, "launch.json");
-  // File watchers can miss a fast atomic rename before their subscription is ready.
-  await expect.poll(() => fs.existsSync(target), { timeout: 30_000 }).toBe(true);
-  return JSON.parse(fs.readFileSync(target, "utf8")) as {
+export async function readLaunch(
+  stateDir: string,
+  receipts: FixtureReceiptChannel,
+  signal: AbortSignal,
+) {
+  // Enrollment writes node.pid before completing; the child publishes JSON before its receipt.
+  const pid = fs.readFileSync(path.join(stateDir, "node.pid"), "utf8").trim();
+  await withinTest(receipts.waitFor(stateDir, `launched:${pid}:ready`), signal);
+  return JSON.parse(fs.readFileSync(path.join(stateDir, "launch.json"), "utf8")) as {
     build: string;
     cli: string;
     args: string[];
@@ -43,4 +56,13 @@ export async function readLaunch(stateDir: string) {
     environment: Record<string, string>;
     enabledPlugins: string[];
   };
+}
+
+export async function expectSetupPhases(result: Promise<{ code: number | null; output: string }>) {
+  const completed = await result;
+  expect(completed.code).toBe(0);
+  const lines = completed.output.trim().split("\n");
+  // Crabbox consumes these stream markers; successful bootstrap emits no other data.
+  expect(lines.every((line) => /^CRABBOX_PHASE:[a-z.-]{1,80}$/.test(line))).toBe(true);
+  return lines.map((line) => line.slice("CRABBOX_PHASE:".length));
 }

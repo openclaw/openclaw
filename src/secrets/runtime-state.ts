@@ -1,5 +1,6 @@
 /** Holds active secrets runtime snapshots and their refresh lifecycle. */
 import { isDeepStrictEqual } from "node:util";
+import { copyCanonicalAuthProfileCredentialObservations } from "../agents/auth-profiles/credential-observation.js";
 import {
   AuthProfileMigrationRequiredError,
   clearAuthProfileMigrationDiagnostics,
@@ -215,10 +216,17 @@ function cloneSecretsRuntimeRefreshContext(
 }
 
 function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecretsRuntimeSnapshot {
+  const authStores = structuredClone(snapshot.authStores);
+  for (const [index, entry] of authStores.entries()) {
+    copyCanonicalAuthProfileCredentialObservations(
+      snapshot.authStores[index]!.store.profiles,
+      entry.store.profiles,
+    );
+  }
   return {
     sourceConfig: cloneConfigWithResolutionFacts(snapshot.sourceConfig),
     config: cloneConfigWithResolutionFacts(snapshot.config),
-    authStores: structuredClone(snapshot.authStores),
+    authStores,
     authStoreCredentialsRevision: snapshot.authStoreCredentialsRevision,
     authStoreSnapshotsRevision: snapshot.authStoreSnapshotsRevision,
     warnings: snapshot.warnings.map((warning) => ({ ...warning })),
@@ -522,6 +530,7 @@ function preserveResolvedAuthStoreSecretValues(
 ): Record<string, AuthProfileStore> {
   const next = structuredClone(restored);
   for (const [agentDir, store] of Object.entries(next)) {
+    copyCanonicalAuthProfileCredentialObservations(restored[agentDir]!.profiles, store.profiles);
     const previousStore = previous[agentDir];
     const candidateStore = candidate[agentDir];
     const currentStore = current[agentDir];
@@ -670,6 +679,9 @@ function mergeRollbackAuthStoreCredentials(
   snapshotOwners: Record<string, RuntimeAuthProfileStoreMutationOwner>,
 ): Record<string, AuthProfileStore> {
   const next = structuredClone(restored);
+  for (const [agentDir, store] of Object.entries(next)) {
+    copyCanonicalAuthProfileCredentialObservations(restored[agentDir]!.profiles, store.profiles);
+  }
   const agentDirs = new Set([
     ...Object.keys(baseline),
     ...Object.keys(candidate),
@@ -731,6 +743,10 @@ function mergeRollbackAuthStoreCredentials(
         !profileOwnerMutated
       ) {
         next[agentDir] = structuredClone(baselineStore);
+        copyCanonicalAuthProfileCredentialObservations(
+          baselineStore.profiles,
+          next[agentDir]!.profiles,
+        );
       } else {
         delete next[agentDir];
       }
@@ -832,7 +848,12 @@ function mergeRollbackAuthStoreCredentials(
         selectedSource = undefined;
       }
       if (credential && selectedSource) {
-        profiles[profileId] = structuredClone(credential);
+        const clonedCredential = structuredClone(credential);
+        copyCanonicalAuthProfileCredentialObservations(
+          { [profileId]: credential },
+          { [profileId]: clonedCredential },
+        );
+        profiles[profileId] = clonedCredential;
         selectedSources.set(profileId, selectedSource);
       }
     }

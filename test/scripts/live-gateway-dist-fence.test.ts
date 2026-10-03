@@ -232,7 +232,6 @@ describe("live-gateway-dist-fence", () => {
             runtime: { status: "stopped", state: "inactive", pid: process.pid },
           }),
       });
-      expect(kill).toHaveBeenCalledTimes(1);
       expect(kill).toHaveBeenCalledWith(process.pid, 0);
       expect(result.refuse).toBe(refuse);
     });

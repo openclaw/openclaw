@@ -1,8 +1,6 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
-import {
-  matchesAcpSessionControlBinding,
-  type AcpSessionControlBinding,
-} from "./session-control-owner.js";
+import { matchesAcpSessionControlBinding } from "./session-control-owner.js";
+import type { AcpSessionControlBinding } from "./session-meta-control.types.js";
 
 export type AcpSessionEntryExpectation = Pick<
   SessionEntry,

@@ -1,11 +1,12 @@
 // Resolve Openclaw Package Candidate tests cover resolve openclaw package candidate script behavior.
 import { execFile, spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { access, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanPackedOpenClawTarballs } from "../../scripts/lib/packed-openclaw-tarballs.mts";
 import {
   assertExpectedSha256ForTest,
@@ -23,15 +24,52 @@ import {
 } from "../../scripts/resolve-openclaw-package-candidate.mts";
 import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import {
-  isProcessAlive,
-  waitForChildClose,
-  waitForDead,
-  waitForPidFile,
-} from "../helpers/process-wait.js";
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
+import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const autoTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const autoTempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  // onTestFinished runs in reverse registration order, after process cleanup registered below.
+  beforeEach(({ onTestFinished }) => onTestFinished(cleanup));
+});
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
+
+async function fixturePidBeforeSettlement(pidPath: string, operation: PromiseLike<unknown>) {
+  const readPid = (error: unknown = new Error(`timeout waiting for pid in ${pidPath}`)) => {
+    const pid = existsSync(pidPath) ? Number(readFileSync(pidPath, "utf8")) : 0;
+    if (!Number.isInteger(pid) || pid <= 0) {
+      throw error;
+    }
+    return pid;
+  };
+  // The fixture writes the PID before its receipt; a separate output/exit can arrive first.
+  const settled = Promise.resolve(operation).then(
+    () => readPid(),
+    (error: unknown) => readPid(error),
+  );
+  return await Promise.race([receipts.waitFor(pidPath, "ready").then(() => readPid()), settled]);
+}
+
+async function waitForFixtureExit(pid: number, signal: AbortSignal) {
+  // The package runner sends group SIGKILL without always joining extinction. Foreign
+  // descendants have no child handle; only the test lifetime bounds their disappearance.
+  while (isProcessAlive(pid)) {
+    await delay(5, undefined, { signal }).catch((error: unknown) => {
+      throw new Error(`process still alive: ${pid}`, { cause: error });
+    });
+  }
+}
 
 const trustedPackageSource = {
   allowPrivateNetwork: true,
@@ -498,7 +536,7 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
     ).resolves.toBe("");
   });
 
-  it("kills timed-out package runner process groups", async () => {
+  it("kills timed-out package runner process groups", async ({ signal, onTestFinished }) => {
     if (process.platform === "win32") {
       return;
     }
@@ -506,45 +544,58 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
     const dir = autoTempDirs.make("openclaw-package-runner-timeout-");
     const childPidPath = path.join(dir, "child.pid");
     const childScript = [
+      fixtureReceiptClientSource(receipts.endpoint),
       "process.on('SIGTERM', () => {});",
       "setInterval(() => {}, 1000);",
-      `require('node:fs').writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+      "import fs from 'node:fs';",
+      `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+      `sendReceipt(${JSON.stringify(childPidPath)}, 'ready');`,
     ].join("\n");
     const parentScript = [
       "const { spawn } = require('node:child_process');",
-      `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+      `spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
       "setInterval(() => {}, 1000);",
     ].join("\n");
+    let command!: ReturnType<typeof runCommandForTest>;
     const releaseAndWait = startProcessWatchdogFixture(() =>
       expect(
-        runCommandForTest(process.execPath, ["-e", parentScript], {
+        (command = runCommandForTest(process.execPath, ["-e", parentScript], {
           killAfterMs: 25,
           timeoutMs: 500,
-        }),
+        })),
       ).rejects.toThrow(/timed out after 500ms/u),
     );
     const killSpy = vi.spyOn(process, "kill");
     let childPid: number | undefined;
-    try {
-      childPid = await waitForPidFile(childPidPath, 2_000);
-      expect(isProcessAlive(childPid)).toBe(true);
-      await releaseAndWait();
-      expect(killSpy).toHaveBeenCalledWith(expect.any(Number), "SIGKILL");
-      await waitForDead(childPid, 2_000);
-    } finally {
-      try {
-        await releaseAndWait();
-      } finally {
-        killSpy.mockRestore();
-        if (childPid !== undefined) {
-          killPidIfAlive(childPid);
-          await waitForDead(childPid, 2_000);
+    let cleanupPending: Promise<void> | undefined;
+    const cleanup = () =>
+      (cleanupPending ??= (async () => {
+        try {
+          await releaseAndWait();
+        } finally {
+          killSpy.mockRestore();
+          if (childPid !== undefined) {
+            killPidIfAlive(childPid);
+            await waitForFixtureExit(childPid, signal);
+          }
         }
-      }
+      })());
+    onTestFinished(cleanup);
+    try {
+      childPid = await withinTest(fixturePidBeforeSettlement(childPidPath, command), signal);
+      expect(isProcessAlive(childPid)).toBe(true);
+      await withinTest(releaseAndWait(), signal);
+      expect(killSpy).toHaveBeenCalledWith(expect.any(Number), "SIGKILL");
+      await waitForFixtureExit(childPid, signal);
+    } finally {
+      await cleanup();
     }
   });
 
-  it("clamps oversized package runner kill grace before scheduling", async () => {
+  it("clamps oversized package runner kill grace before scheduling", async ({
+    signal,
+    onTestFinished,
+  }) => {
     if (process.platform === "win32") {
       return;
     }
@@ -553,40 +604,52 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
     const childPidPath = path.join(dir, "child.pid");
     const cleanupPath = path.join(dir, "child.cleanup");
     const childScript = [
-      "const fs = require('node:fs');",
+      fixtureReceiptClientSource(receipts.endpoint),
+      "import fs from 'node:fs';",
       "process.on('SIGTERM', () => {",
       `  setTimeout(() => { fs.writeFileSync(${JSON.stringify(cleanupPath)}, 'clean'); process.exit(0); }, 75);`,
       "});",
       "setInterval(() => {}, 1000);",
       `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+      `sendReceipt(${JSON.stringify(childPidPath)}, 'ready');`,
     ].join("\n");
+    let command!: ReturnType<typeof runCommandForTest>;
     const releaseAndWait = startProcessWatchdogFixture(() =>
       expect(
-        runCommandForTest(process.execPath, ["-e", childScript], {
+        (command = runCommandForTest(process.execPath, ["--input-type=module", "-e", childScript], {
           killAfterMs: Number.MAX_SAFE_INTEGER,
           timeoutMs: 500,
-        }),
+        })),
       ).rejects.toThrow(/timed out after 500ms/u),
     );
     let childPid: number | undefined;
-    try {
-      childPid = await waitForPidFile(childPidPath, 2_000);
-      await releaseAndWait();
-      expect(readFileSync(cleanupPath, "utf8")).toBe("clean");
-      await waitForDead(childPid, 2_000);
-    } finally {
-      try {
-        await releaseAndWait();
-      } finally {
-        if (childPid !== undefined) {
-          killPidIfAlive(childPid);
-          await waitForDead(childPid, 2_000);
+    let cleanupPending: Promise<void> | undefined;
+    const cleanup = () =>
+      (cleanupPending ??= (async () => {
+        try {
+          await releaseAndWait();
+        } finally {
+          if (childPid !== undefined) {
+            killPidIfAlive(childPid);
+            await waitForFixtureExit(childPid, signal);
+          }
         }
-      }
+      })());
+    onTestFinished(cleanup);
+    try {
+      childPid = await withinTest(fixturePidBeforeSettlement(childPidPath, command), signal);
+      await withinTest(releaseAndWait(), signal);
+      expect(readFileSync(cleanupPath, "utf8")).toBe("clean");
+      expect(isProcessAlive(childPid)).toBe(false);
+    } finally {
+      await cleanup();
     }
   });
 
-  it("rejects timed-out package runner commands when descendants exit cleanly", async () => {
+  it("rejects timed-out package runner commands when descendants exit cleanly", async ({
+    signal,
+    onTestFinished,
+  }) => {
     if (process.platform === "win32") {
       return;
     }
@@ -595,7 +658,8 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
     const childPidPath = path.join(dir, "child.pid");
     const cleanupPath = path.join(dir, "child.cleanup");
     const childScript = [
-      "const fs = require('node:fs');",
+      fixtureReceiptClientSource(receipts.endpoint),
+      "import fs from 'node:fs';",
       "process.on('SIGTERM', () => {",
       "  setTimeout(() => {",
       `    fs.writeFileSync(${JSON.stringify(cleanupPath)}, 'clean');`,
@@ -604,40 +668,51 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
       "});",
       "setInterval(() => {}, 1000);",
       `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+      `sendReceipt(${JSON.stringify(childPidPath)}, 'ready');`,
     ].join("\n");
     const parentScript = [
       "const { spawn } = require('node:child_process');",
       "process.on('SIGTERM', () => process.exit(0));",
-      `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+      `spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
       "setInterval(() => {}, 1000);",
     ].join("\n");
+    let command!: ReturnType<typeof runCommandForTest>;
     const releaseAndWait = startProcessWatchdogFixture(() =>
       expect(
-        runCommandForTest(process.execPath, ["-e", parentScript], {
+        (command = runCommandForTest(process.execPath, ["-e", parentScript], {
           killAfterMs: 250,
           timeoutMs: 250,
-        }),
+        })),
       ).rejects.toThrow(/timed out after 250ms/u),
     );
     let childPid: number | undefined;
-    try {
-      childPid = await waitForPidFile(childPidPath, 2_000);
-      await releaseAndWait();
-      expect(readFileSync(cleanupPath, "utf8")).toBe("clean");
-      await waitForDead(childPid, 2_000);
-    } finally {
-      try {
-        await releaseAndWait();
-      } finally {
-        if (childPid !== undefined) {
-          killPidIfAlive(childPid);
-          await waitForDead(childPid, 2_000);
+    let cleanupPending: Promise<void> | undefined;
+    const cleanup = () =>
+      (cleanupPending ??= (async () => {
+        try {
+          await releaseAndWait();
+        } finally {
+          if (childPid !== undefined) {
+            killPidIfAlive(childPid);
+            await waitForFixtureExit(childPid, signal);
+          }
         }
-      }
+      })());
+    onTestFinished(cleanup);
+    try {
+      childPid = await withinTest(fixturePidBeforeSettlement(childPidPath, command), signal);
+      await withinTest(releaseAndWait(), signal);
+      expect(readFileSync(cleanupPath, "utf8")).toBe("clean");
+      await waitForFixtureExit(childPid, signal);
+    } finally {
+      await cleanup();
     }
   });
 
-  it("forwards external termination to package runner process groups", async () => {
+  it("forwards external termination to package runner process groups", async ({
+    signal,
+    onTestFinished,
+  }) => {
     if (process.platform === "win32") {
       return;
     }
@@ -649,13 +724,16 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
       path.resolve("scripts/resolve-openclaw-package-candidate.mts"),
     ).href;
     const childScript = [
+      fixtureReceiptClientSource(receipts.endpoint),
+      "import fs from 'node:fs';",
       "process.on('SIGTERM', () => {});",
       "setInterval(() => {}, 1000);",
-      `require('node:fs').writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+      `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+      `sendReceipt(${JSON.stringify(childPidPath)}, 'ready');`,
     ].join("\n");
     const parentScript = [
       "const { spawn } = require('node:child_process');",
-      `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+      `spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
       "setInterval(() => {}, 1000);",
     ].join("\n");
     const runnerScript = [
@@ -673,36 +751,46 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
       cwd: process.cwd(),
       stdio: ["ignore", "ignore", "pipe"],
     });
+    const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolve, reject) => {
+        runner.once("error", reject);
+        runner.once("close", (code, exitSignal) => resolve({ code, signal: exitSignal }));
+      },
+    );
     let childPid: number | undefined;
-    try {
-      childPid = await waitForPidFile(childPidPath, 2_000);
-      expect(isProcessAlive(childPid)).toBe(true);
-      const closed = waitForChildClose(runner, 7_000);
-      runner.kill("SIGTERM");
-      await expect(closed).resolves.toEqual({ signal: null, code: 143 });
-      expect(readFileSync(killPath, "utf8")).toBe("SIGKILL");
-      await waitForDead(childPid, 2_000);
-    } finally {
-      try {
-        if (runner.pid && isProcessAlive(runner.pid)) {
-          const closed = waitForChildClose(runner, 7_000);
-          // Let the runner clean its detached group even if readiness failed.
-          runner.kill("SIGTERM");
-          try {
-            await closed;
-          } finally {
-            if (isProcessAlive(runner.pid)) {
-              runner.kill("SIGKILL");
-              await waitForDead(runner.pid, 2_000);
+    let cleanupPending: Promise<void> | undefined;
+    const cleanup = () =>
+      (cleanupPending ??= (async () => {
+        try {
+          if (runner.pid && isProcessAlive(runner.pid)) {
+            // Let the runner clean its detached group even if readiness failed.
+            runner.kill("SIGTERM");
+            try {
+              await closed;
+            } finally {
+              if (isProcessAlive(runner.pid)) {
+                runner.kill("SIGKILL");
+                await closed;
+              }
             }
           }
+        } finally {
+          if (childPid !== undefined) {
+            killPidIfAlive(childPid);
+            await waitForFixtureExit(childPid, signal);
+          }
         }
-      } finally {
-        if (childPid !== undefined) {
-          killPidIfAlive(childPid);
-          await waitForDead(childPid, 2_000);
-        }
-      }
+      })());
+    onTestFinished(cleanup);
+    try {
+      childPid = await withinTest(fixturePidBeforeSettlement(childPidPath, closed), signal);
+      expect(isProcessAlive(childPid)).toBe(true);
+      runner.kill("SIGTERM");
+      await expect(withinTest(closed, signal)).resolves.toEqual({ signal: null, code: 143 });
+      expect(readFileSync(killPath, "utf8")).toBe("SIGKILL");
+      await waitForFixtureExit(childPid, signal);
+    } finally {
+      await cleanup();
     }
   });
 

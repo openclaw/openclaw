@@ -61,7 +61,7 @@ Managed profiles provide execution and coordination identity; they are not an OS
 
 OpenClaw `worker-turn` cloud workers receive the effective shared identity per turn through their private launch envelope. The worker writes the access token to a private per-turn profile in its throwaway state directory, with earlier profiles removed before the next binding; the same OS-user limit described above applies on the worker host. The sealed worker launcher gives each `exec` child the same launch-time credential binding as local exec. GitHub CLI must be installed on the worker host; the bundle includes the launcher, not `gh`. The checkout uses the session-owned branch and an HTTPS `origin` for GitHub repositories; HTTPS Git authentication uses `gh auth git-credential`, with inherited credential helpers cleared. Commits and pushes happen directly on the worker. Reconciliation returns file contents to the Gateway worktree, not commit history. At every turn start, the worker fast-forwards its checkout to the session branch on `origin` when the local branch is behind, bringing in history pushed by an earlier worker; a diverged local branch is left untouched. Paired devices' own GitHub CLI logins are not used for this binding.
 
-OpenClaw sandboxes, ordinary node-host exec, and Codex `remote-exec` placements still do not receive the Gateway's managed GitHub credentials. The `github_publish` tool remains available for remote-exec sessions: it records a bounded publication request without credentials or repository authority. After the exact workspace result is reconciled and accepted, the Gateway commits remaining changes as the verified effective GitHub user, pushes the authoritative session branch through a one-shot HTTPS credential helper, and creates or reuses a draft pull request.
+OpenClaw sandboxes exclude the Gateway's managed GitHub credentials by default; the [per-agent sandbox opt-in](/gateway/config-tools/github-identity#sandbox-opt-in) enables them for an agent's own Docker or Podman sandbox. Ordinary node-host exec and Codex `remote-exec` placements still do not receive these credentials. The `github_publish` tool remains available for remote-exec sessions: it records a bounded publication request without credentials or repository authority. After the exact workspace result is reconciled and accepted, the Gateway commits remaining changes as the verified effective GitHub user, pushes the authoritative session branch through a one-shot HTTPS credential helper, and creates or reuses a draft pull request.
 
 Publication may wait until the requesting turn finishes and its workspace is accepted. Its result is appended to the session transcript; this does not start another agent turn. When the authorized task also includes review, CI repair, or landing, the agent must arrange a separate continuation before ending the requesting turn. A draft PR or publication receipt does not complete a landing request.
 
@@ -71,7 +71,7 @@ The built-in, Codex, and Copilot tool surfaces use this same host-prepared avail
 
 Publication stages workspace changes with ordinary Git attribute conversion. It preserves unchanged committed file bytes, including existing CRLF line endings, rather than renormalizing unrelated tracked files.
 
-Session-only write access can publish ordinary source changes from the requester's own sessions through the configured shared account. Membership in another session does not grant that publication authority. Changes to GitHub Actions definitions in `.github/workflows/*.yml` or `.github/workflows/*.yaml` require the original requester's full operator write authority. This includes committed edits, deletions, and renames. If an accepted snapshot changes those definitions, publication preserves the saved work and asks a maintainer to publish it, or asks the requester to restore the definitions before requesting publication again. The check compares accepted content with the published branch or original pull request base, so unchanged workflow definitions do not block ordinary edits.
+Session-only write access can publish ordinary source changes from the requester's own sessions through the configured shared account. Membership in another session does not grant that publication authority. Changes to GitHub Actions definitions in `.github/workflows/*.yml` or `.github/workflows/*.yaml` require the original requester's full operator write authority. This includes committed edits, deletions, and renames. If an accepted snapshot changes those definitions, publication preserves the saved work and asks a maintainer to publish it, or asks the requester to restore the definitions before requesting publication again. The check compares exact paths, modes, and blobs (including deleted definitions) with the published branch or original pull request base. Unchanged published definitions remain allowed. An update inherited unchanged from the authenticated target branch is also allowed when the published definition still matches their unambiguous common ancestor. Newly authored changes and conflicting resolutions still require full write authority, even when the result matches the target branch. Repository-only checkpoints cannot prove unambiguous inheritance from a source base that has diverged from the target, or infer a merge from previously copied workflow contents; those ambiguous updates still require a maintainer.
 
 Local session-owned worktrees can use the same **Publish PR** action in the Control UI. The Gateway derives the managed worktree, repository, branch, base, and head from current session ownership. It never accepts those authority facts from the browser or model. Publication retries use a durable request ID, an exact commit marker, remote branch observation, and pull-request lookup by head branch so a Gateway restart or lost response does not create duplicate commits, pushes, or pull requests.
 
@@ -90,3 +90,69 @@ Removing an agent override or choosing native credentials deletes the associated
 Control UI issue and pull request hover previews use the selected agent's effective managed GitHub identity, including an inherited system identity. An unavailable managed identity produces an actionable error rather than switching to another credential. Without a managed selection, previews retain the optional `gateway.controlUi.github.token` service credential, shared `GH_TOKEN`/`GITHUB_TOKEN` environment fallback, and anonymous public access. Previews remain public-only, and their caches are scoped to the credential used. Project discovery continues to use the separate service credential. When this SecretRef is explicit, OpenClaw excludes its exact environment or store name from agent execution. A custom name does not clear unrelated `GH_TOKEN` or `GITHUB_TOKEN` values used by native identity; a ref named `GH_TOKEN` or `GITHUB_TOKEN` excludes that exact variable.
 
 If a preview or detail view reports “GitHub request is no longer active,” open it again to retry. This describes the interrupted request, not a change to your GitHub account; reconnecting GitHub is unnecessary.
+
+## Sandbox opt-in
+
+`agents.entries.<id>.tools.github.allowInSandbox` is an optional boolean that
+defaults to `false`. Enable it on an agent's managed identity when that agent
+needs GitHub access inside its own Docker or Podman sandbox, for example a
+release agent on a Gateway where every human role requires sandboxing:
+
+```json5
+{
+  agents: {
+    entries: {
+      release: {
+        sandbox: { mode: "all", scope: "agent" },
+        tools: {
+          github: {
+            profileId: "ghp_0123456789abcdef0123456789abcdef",
+            allowInSandbox: true,
+            gitAuthor: { name: "Release Agent", email: "release@example.com" },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Use the agent's existing generated `profileId`; the example is a placeholder.
+This setting is agent-only and is not accepted under global `tools.github`.
+Replacing or reconnecting the agent's managed identity preserves this setting;
+removing the agent override clears it.
+Omitting it or setting it to `false` keeps the existing sandbox behavior:
+`GH_CONFIG_DIR` is absent, and `GH_TOKEN` and `GITHUB_TOKEN` are blanked.
+
+With the opt-in, OpenClaw mounts only that agent's selected managed profile
+read-only at `/openclaw/github` through the existing sandbox bind plumbing and
+sets `GH_CONFIG_DIR` to that container path. Sandboxed exec receives the same
+configured Git author and committer metadata as host exec. The launch owner
+validates the profile immediately before each exec launch and forwards its
+access token privately as `GH_TOKEN`, with `GITHUB_TOKEN` cleared. A missing,
+tokenless, or insecure profile refuses execution; it does not fall back to
+another identity. The Gateway continues to own credential refresh, and existing
+processes retain their launch token.
+
+Enabling or disabling this setting changes the container's mounts. If its sandbox
+is already running, use `openclaw sandbox recreate --agent <id>` before retrying;
+OpenClaw preserves the running container and refuses to reuse stale mounts.
+
+The sandbox image must include `gh` for GitHub CLI commands, and GitHub requests
+still require network access under the sandbox's existing network policy. OpenClaw does not
+install a Git credential helper or change Git network authentication; Git uses
+the remotes and credential helpers configured inside the sandbox, as it does
+on the host. The profile is read-only, so run credential setup or rotation
+through the Gateway instead of `gh auth login` inside the sandbox.
+
+Effective `scope: "shared"` refuses identity injection and logs a warning naming
+the agent, because that container can serve other agents. Role-required
+sandboxes use their effective per-creator isolation and support the opt-in even
+when the configured default scope is `"shared"`. Other sandbox backends reject
+provisioning when the opt-in is enabled; they do not copy the managed profile to
+a remote environment.
+
+Read-only mounting protects the profile from modification, but sandboxed code
+can read and use its credentials. Every opted-in agent produces a WARN finding
+in `openclaw security audit`. Enable this only for agents whose sandboxed code
+is trusted with that account's GitHub access.

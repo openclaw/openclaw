@@ -473,12 +473,19 @@ suite.define(() => {
         signal.throwIfAborted();
         await state.writeConfig({
           agents: {
-            defaults: { workspace: mainWorkspace },
+            ownership: "explicit",
+            defaults: {
+              workspace: mainWorkspace,
+              systemAgent: { agentId: "main" },
+              heartbeat: { agentId: "main" },
+              sessionStore: { agentId: "main" },
+            },
             entries: {
-              main: { default: true, workspace: mainWorkspace },
+              main: { workspace: mainWorkspace },
               writer: { workspace: writerWorkspace },
             },
           },
+          talk: { agentId: "main" },
           gateway: {
             auth: { mode: "none" },
             controlUi: {

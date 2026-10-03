@@ -3,7 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { cloneAuthProfileStore } from "../agents/auth-profiles/clone.js";
 import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
+import {
+  observeCanonicalAuthProfileCredentials,
+  withCanonicalAuthProfileCredentialObserver,
+  type CanonicalAuthProfileCredentialObservation,
+} from "../agents/auth-profiles/credential-observation.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreCredentialsRevision,
@@ -14,6 +20,7 @@ import {
   setRuntimeAuthProfileStoreSnapshot,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import { testing as runtimeSnapshotsTesting } from "../agents/auth-profiles/runtime-snapshots.test-support.js";
+import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
@@ -184,6 +191,64 @@ describe("secrets runtime state", () => {
     runtimeSnapshotsTesting.resetPersistedMutationLineage();
     envSnapshot.restore();
   });
+
+  it.each(["activation", "rollback"] as const)(
+    "preserves exact canonical credential observations through %s without claiming runtime secrets",
+    async (phase) => {
+      const agentDir = "/tmp/openclaw-auth-observation-clones";
+      const databasePath = resolveAuthProfileDatabasePath(agentDir);
+      const canonical: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          inline: { type: "api_key", provider: "fixture", key: "canonical" },
+          ref: {
+            type: "api_key",
+            provider: "fixture",
+            keyRef: { source: "env", provider: "default", id: "OBSERVATION_TEST_KEY" },
+          },
+        },
+      };
+      observeCanonicalAuthProfileCredentials(databasePath, canonical.profiles);
+      const materialized = cloneAuthProfileStore(canonical);
+      materialized.profiles.ref = {
+        type: "api_key",
+        provider: "fixture",
+        keyRef: { source: "env", provider: "default", id: "OBSERVATION_TEST_KEY" },
+        key: "resolved-only",
+      };
+      materialized.profiles.external = {
+        type: "token",
+        provider: "fixture",
+        token: "external-only",
+      };
+      materialized.runtimeExternalProfileIds = ["external"];
+      activateSnapshot(preparedGatewayAuthSnapshot(agentDir, 19_001, materialized));
+      const previous = getActiveSecretsRuntimeSnapshotState()!;
+      if (phase === "rollback") {
+        const rotated = cloneAuthProfileStore(materialized);
+        rotated.profiles.inline = { type: "api_key", provider: "fixture", key: "rotated" };
+        observeCanonicalAuthProfileCredentials(databasePath, { inline: rotated.profiles.inline });
+        const candidate = preparedGatewayAuthSnapshot(agentDir, 19_002, rotated);
+        expect(activateSnapshotIfCurrent(candidate)).toBe(true);
+        expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
+      } else {
+        activateSnapshot(previous);
+      }
+      const observations: CanonicalAuthProfileCredentialObservation[] = [];
+      await withCanonicalAuthProfileCredentialObserver(
+        (value) => observations.push(value),
+        async () => {
+          const cached = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
+          expect(cached?.profiles.inline).toEqual(canonical.profiles.inline);
+          expect(cached?.profiles.ref).toMatchObject({ key: "resolved-only" });
+          expect(cached?.profiles.external).toMatchObject({ token: "external-only" });
+        },
+      );
+      expect(observations).toEqual([
+        { databasePath, profiles: { inline: canonical.profiles.inline! } },
+      ]);
+    },
+  );
 
   it("includes env shorthand SecretRefs in the reload contract", () => {
     const configWithRef = (apiKey: string): OpenClawConfig => ({

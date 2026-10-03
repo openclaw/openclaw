@@ -55,14 +55,12 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     payload: Parameters<NonNullable<GetReplyOptions["onPlanUpdate"]>>[0],
   ) => {
     const explanation = payload.explanation?.replace(/\s+/g, " ").trim();
-    const steps = (payload.steps ?? [])
-      .map((entry) => ({ step: entry.step.replace(/\s+/g, " ").trim(), status: entry.status }))
-      .filter((entry) => entry.step);
-    if (steps.length > 0) {
-      return formatPlanChecklistLines(steps, {
-        maxLines: steps.length,
-        maxLineChars: 120,
-      }).join("\n");
+    const lines = formatPlanChecklistLines(payload.steps ?? [], {
+      maxLines: payload.steps?.length ?? 0,
+      maxLineChars: 120,
+    });
+    if (lines.length > 0) {
+      return lines.join("\n");
     }
     // Generic notices retain their shipped receipt; prepared notes belong to literal-capable drafts.
     return payload.explanationFormat === "plain"
@@ -87,7 +85,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     markInboundDedupeReplayUnsafe();
     turnLedger.sendQueued("tool", replyPayload);
   };
-  // Track accumulated block text for TTS generation after streaming completes.
   // When block streaming succeeds, there's no final reply, so we need to generate
   // TTS audio separately from the accumulated block content.
   const progressState = {
@@ -175,15 +172,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   };
   const preserveProgressCallbackStartOrder =
     params.replyOptions?.preserveProgressCallbackStartOrder === true;
-  const reserveProgressCallbackStart = () => {
-    const previousStart = progressState.progressCallbackStartTail;
-    const start = createDeferredCore();
-    progressState.progressCallbackStartTail = start.promise;
-    return {
-      previousStart,
-      releaseStart: start.resolve,
-    };
-  };
   const wrapProgressCallback = <Args extends unknown[], Result extends boolean | void>(
     callback: ((...args: Args) => Promise<Result> | Result) | undefined,
     options?: {
@@ -198,10 +186,14 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     if (!callback) {
       return undefined;
     }
-    const runProgressCallback = async (
-      args: Args,
-      noteCallbackStarted: () => void,
-    ): Promise<Result | undefined> => {
+    return async (...args: Args): Promise<Result | undefined> => {
+      const start = preserveProgressCallbackStartOrder ? createDeferredCore() : undefined;
+      if (start) {
+        // Reserve source order synchronously, releasing on invocation rather than completion.
+        const previousStart = progressState.progressCallbackStartTail;
+        progressState.progressCallbackStartTail = start.promise;
+        await previousStart;
+      }
       try {
         if (isDispatchOperationAborted()) {
           return undefined;
@@ -224,7 +216,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
             await options?.onForward?.(...args);
           }
           const callbackResult = callback(...args);
-          noteCallbackStarted();
+          start?.resolve();
           const result = await callbackResult;
           if (result === false) {
             return result;
@@ -233,20 +225,8 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
         }
         return undefined;
       } finally {
-        noteCallbackStarted();
+        start?.resolve();
       }
-    };
-    return (...args: Args) => {
-      if (!preserveProgressCallbackStartOrder) {
-        return runProgressCallback(args, () => undefined);
-      }
-      // Reserve source order synchronously. Release after callback invocation, not completion,
-      // so async presentation work stays concurrent without letting later activity overtake it.
-      const start = reserveProgressCallbackStart();
-      return (async () => {
-        await start.previousStart;
-        return await runProgressCallback(args, start.releaseStart);
-      })();
     };
   };
 

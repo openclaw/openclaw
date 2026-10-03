@@ -82,7 +82,7 @@ const controlUiSurfaces = new Set<PluginControlUiDescriptor["surface"]>([
   "link-reader",
 ]);
 export function createControlUiRegistrar(state: PluginRegistryState) {
-  const { registry, createRegistration, pushDiagnostic, reportRegistrationError } = state;
+  const { registry, createIdentityRegistration, pushDiagnostic, reportRegistrationError } = state;
   return (record: PluginRecord, descriptor: PluginControlUiDescriptor) => {
     // SAFETY: Shipped flat JS descriptors may supply name; it is read as unknown and normalized below.
     const legacyDescriptor = descriptor as PluginControlUiDescriptor & { name?: unknown };
@@ -207,7 +207,8 @@ export function createControlUiRegistrar(state: PluginRegistryState) {
       );
     }
     registry.controlUiDescriptors.push(
-      createRegistration(record, {
+      // Descriptors are admitted metadata, so retained snapshots need no executable lease.
+      createIdentityRegistration(record, {
         descriptor: {
           ...descriptor,
           id,

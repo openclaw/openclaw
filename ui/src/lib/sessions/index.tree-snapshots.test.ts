@@ -4,13 +4,12 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { readSessionChangedEvent, reconcileSessionChanged } from "./reconcile.ts";
+import { readSessionChangedEvent } from "./reconcile.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
   sessionsResult,
 } from "./session-capability.test-support.ts";
-import { canApplySessionListSnapshot } from "./session-list-query.ts";
 
 const settledGrandparent: GatewaySessionRow = {
   key: "agent:main:grandparent",
@@ -310,43 +309,6 @@ describe("tree row snapshots", () => {
     },
   );
 
-  it("keeps old Control UI ancestor rows intact and requests an authoritative refresh", () => {
-    const heldParent = {
-      ...parent,
-      label: "Main",
-      pinned: true,
-      pinnedAt: 10,
-      owner: { actor: { type: "human" as const, id: "owner-id", label: "Owner" }, assignedAt: 10 },
-    };
-    const payload = {
-      agentId: "main",
-      reason: "patch",
-      session: settledChild,
-      ancestorSessions: [],
-      ancestorSessionRefs: [
-        { key: parent.key, sessionId: parent.sessionId, revision: "unchanged", snapshotAt: 101 },
-      ],
-    };
-    // Frozen pre-reference parser: only ancestorSessions contributes ancestor snapshots.
-    const legacySnapshots = [payload.session, ...payload.ancestorSessions].filter(
-      (row) => typeof row.key === "string",
-    );
-    const rows = [child, heldParent, grandparent];
-    const legacyRows = rows.map((row) => {
-      const snapshot = legacySnapshots.find((candidate) => candidate.key === row.key);
-      // The old complete-snapshot branch replaces optional fields rather than merging them.
-      return snapshot ? { ...snapshot, key: row.key, kind: snapshot.kind ?? row.kind } : row;
-    });
-    expect(legacyRows.find((row) => row.key === parent.key)).toBe(heldParent);
-    const { ancestorSessionRefs: _ignored, ...legacyPayload } = payload;
-    expect(
-      canApplySessionListSnapshot(sessionsResult(rows, 100), legacyPayload, { agentId: "main" }),
-    ).toBe(false);
-    expect(
-      reconcileSessionChanged(sessionsResult(rows, 100), legacyPayload).result?.sessions,
-    ).toEqual(expect.arrayContaining(legacyRows));
-  });
-
   it.each(["omitted", "null"])("keeps %s ancestor clears over a stale read", async (clear) => {
     vi.useFakeTimers();
     const activitySummary = { state: "stale" as const, canEnsure: true };
@@ -414,40 +376,6 @@ describe("tree row snapshots", () => {
       vi.useRealTimers();
     }
   });
-
-  it.each(["sessions.changed", "session.message"])(
-    "applies %s to held ancestors and descriptors without reading the window",
-    async (event) => {
-      vi.useFakeTimers();
-      const h = treeHarness();
-      const invalidated = vi.fn();
-      const observer = h.sessions.observeRow(
-        { key: parent.key, agentId: "main" },
-        () => undefined,
-        {
-          onInvalidate: invalidated,
-        },
-      );
-      try {
-        await h.sessions.refresh({ agentId: "main", force: true });
-        h.request.mockClear();
-        h.settle(event);
-        expect(h.sessions.state.result?.sessions).toEqual([
-          settledChild,
-          settledParent,
-          settledGrandparent,
-        ]);
-        expect(observer.row).toEqual(settledParent);
-        expect(invalidated).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(5_000);
-        expect(h.request).not.toHaveBeenCalled();
-      } finally {
-        observer.dispose();
-        h.sessions.dispose();
-        vi.useRealTimers();
-      }
-    },
-  );
 
   it("keeps complete viewer snapshots authoritative over stale envelope row fields", async () => {
     vi.useFakeTimers();

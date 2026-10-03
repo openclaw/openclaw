@@ -257,6 +257,26 @@ describe("update recovery manifest", () => {
     ).toThrow(/source/);
   });
 
+  it("records an omitted database only as excluded, never retained or missing", () => {
+    const value = fixture();
+    const database = value.databases[0]!.path;
+    const omitted = {
+      ...value,
+      databases: [],
+      excludedRoots: [database],
+      entries: value.entries.slice(0, 2),
+    };
+    expect(parse(omitted)).toEqual(omitted);
+    expect(() => parse({ ...omitted, entries: value.entries })).toThrow(/Excluded.*retained/);
+    expect(() => parse({ ...omitted, databases: value.databases })).toThrow(/SQLite inventory/);
+    expect(() => parse({ ...omitted, excludedRoots: [database, database] })).toThrow(/exclusions/);
+    for (const field of ["roots", "protectedPaths", "configPaths"] as const) {
+      expect(() => parse({ ...omitted, [field]: [...omitted[field], database] })).toThrow(
+        /exclusions/,
+      );
+    }
+  });
+
   it("binds each file to a unique constrained payload with digest and byte count", () => {
     const value = fixture();
     const file = {

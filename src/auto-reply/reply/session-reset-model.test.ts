@@ -1,9 +1,6 @@
 // Tests reset model selection and persisted model override cleanup.
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { buildModelAliasIndex } from "../../agents/model-selection-shared.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -11,10 +8,11 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import type { ModelAliasIndex } from "./model-selection-directive.js";
 
 const readPreparedModelCatalog = vi.hoisted(() => vi.fn(async () => modelCatalog));
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-reset-model-lock-");
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
@@ -74,7 +72,7 @@ async function applyResetFixture(params: {
 describe("applyResetModelOverride", () => {
   it.each(["initial", "persisted"])("honors the %s session model lock", async (owner) => {
     const fixture = createResetFixture({ modelSelectionLocked: owner === "initial" });
-    const storePath = path.join(tempDirs.make("openclaw-reset-model-lock-"), "sessions.json");
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
     const lockedEntry: SessionEntry = { ...fixture.sessionEntry, modelSelectionLocked: true };
     const sessionKey = "agent:main:dm:1";
     await replaceSessionEntry({ sessionKey, storePath }, lockedEntry);
@@ -351,7 +349,7 @@ describe("applyResetModelOverride", () => {
   });
 
   it("adopts a concurrent model winner instead of acknowledging the reset hint", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-model-race-"));
+    const tempRoot = sessionDirs.make();
     const storePath = path.join(tempRoot, "sessions.json");
     const fixture = createResetFixture();
     const concurrentEntry: SessionEntry = {
@@ -385,12 +383,11 @@ describe("applyResetModelOverride", () => {
       );
     } finally {
       clearSessionStoreCacheForTest();
-      fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });
 
   it("checks the persisted winner for an explicit same-value reset hint", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-model-race-"));
+    const tempRoot = sessionDirs.make();
     const storePath = path.join(tempRoot, "sessions.json");
     const fixture = createResetFixture({
       providerOverride: "minimax",
@@ -421,12 +418,11 @@ describe("applyResetModelOverride", () => {
       expect(fixture.sessionStore["agent:main:dm:1"]).toEqual(fixture.sessionEntry);
     } finally {
       clearSessionStoreCacheForTest();
-      fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });
 
   it("rejects a reset-model hint when the session rotates during persistence", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-model-rotation-"));
+    const tempRoot = sessionDirs.make();
     const storePath = path.join(tempRoot, "sessions.json");
     const fixture = createResetFixture();
     const rotatedEntry: SessionEntry = {
@@ -455,7 +451,6 @@ describe("applyResetModelOverride", () => {
       expect(loadSessionEntry({ sessionKey: "agent:main:dm:1", storePath })).toEqual(rotatedEntry);
     } finally {
       clearSessionStoreCacheForTest();
-      fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });
 

@@ -76,6 +76,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   if (opts.json) {
     defaultRuntime.writeJson({
       ...status,
+      extraServices: status.extraServices.map(({ sourcePath: _sourcePath, ...service }) => service),
       service: projectDaemonServiceForJson(status.service, { includeDefinitionPaths: false }),
     });
     return;

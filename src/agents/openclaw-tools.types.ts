@@ -3,21 +3,26 @@ import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ExecMode } from "../infra/exec-approvals.js";
+import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentRunClientContext, AgentRunMessageContext } from "./command/shared-types.js";
 import type { PreparedPairedComputerUse } from "./computer-use-node-capabilities.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "./exec-defaults.js";
+import type { InstalledSkill } from "./installed-skill-catalog.js";
 import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import type { CronToolOptions } from "./tools/cron-tool.types.js";
 import type { QuestionPromptDelivery } from "./tools/question-prompt-send.js";
+import type { SessionsYieldCallback } from "./tools/sessions-yield-tool.js";
 
 /** Options shared by the coding-tool factory and its OpenClaw tool surface. */
 export type OpenClawSharedToolsOptions = {
+  /** Complete model-discoverable catalog, prepared by the current host. */
+  installedSkills?: readonly InstalledSkill[];
   /**
    * How this run shows a blocking question tool's prompt. Harnesses that run tools
    * through the embedded tool lifecycle reserve the prompt themselves and leave this
@@ -28,6 +33,8 @@ export type OpenClawSharedToolsOptions = {
   toolBindings?: Readonly<Record<string, unknown>>;
   /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
   conversationRecall?: ConversationRecallContext;
+  /** Host-resolved memory partition shared by plugin tools for this turn. */
+  memoryAudience?: MemoryAudience;
   /** Trusted platform-native conversation id for the active inbound turn. */
   nativeChannelId?: string;
   /** Producer-authored bare upload handles mapped to exact sandbox paths. */
@@ -89,13 +96,15 @@ export type OpenClawSharedToolsOptions = {
   enableHeartbeatTool?: boolean;
   /** Host-only observation after a canonical progress-card replacement commits. */
   onProgressCardPlanSaved?: (unfinished: boolean) => void;
-  onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
+  onYield?: SessionsYieldCallback;
   claimYieldCompletion?: () => boolean | Promise<boolean>;
   /** Records hot-path tool-prep stages for reply startup diagnostics. */
   recordToolPrepStage?: (name: string) => void;
 };
 
 export type OpenClawToolsOptions = {
+  /** Host-projected default sandbox surface; cannot execute other session actions. */
+  sandboxSessionRenameOnly?: boolean;
   /** Host-issued source for session-control schema projection; execution rechecks the caller. */
   sessionControlAuthority?: import("./admitted-run-context.js").AdmittedRunOperatorAuthority;
   /** Host-qualified restricted preview target; never permits Gateway-local ports. */

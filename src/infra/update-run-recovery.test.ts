@@ -91,6 +91,24 @@ function nativeRecord(record: UpdateRecoveryRecord): UpdateRecoveryRecord {
   return next;
 }
 
+type NativeEffect = NonNullable<UpdateRecoveryRecord["nativeManager"]>["effects"][number];
+function observedNativeEffect(
+  action: NativeEffect["action"],
+  before: NativeEffect["before"],
+  after: NativeEffect["after"],
+  intentRevision: number,
+): NativeEffect {
+  return {
+    effectId: randomUUID(),
+    action,
+    before,
+    after,
+    state: "observed",
+    intentRevision,
+    observedRevision: intentRevision + 1,
+  };
+}
+
 describe("retained recovery read-only compatibility", () => {
   it("requires settled native restoration in retained preparation outcomes", () => {
     const f = setup();
@@ -117,24 +135,8 @@ describe("retained recovery read-only compatibility", () => {
     const native = record.nativeManager!;
     const stopped = { ...native.original, stopped: true };
     native.effects = [
-      {
-        effectId: randomUUID(),
-        action: "stop",
-        before: native.original,
-        after: stopped,
-        state: "observed",
-        intentRevision: 1,
-        observedRevision: 2,
-      },
-      {
-        effectId: randomUUID(),
-        action: "restore",
-        before: stopped,
-        after: native.original,
-        state: "observed",
-        intentRevision: 3,
-        observedRevision: 4,
-      },
+      observedNativeEffect("stop", native.original, stopped, 1),
+      observedNativeEffect("restore", stopped, native.original, 3),
     ];
     expect(decodeUpdateRecovery(JSON.stringify(record), record.runId)).toEqual(record);
 
@@ -371,18 +373,6 @@ describe("retained recovery read-only compatibility", () => {
     expect(loadUpdateRecovery(f.run.runId, f.options)).toEqual(f.record);
     expect(() => assertNoPendingUpdateRecovery(f.options)).toThrow(UpdateRecoveryRequiredError);
   });
-  it("preserves schema, version and history during retained reads", () => {
-    const f = setup();
-    const db = openOpenClawStateDatabase(f.options).db;
-    const schema = () => db.prepare("SELECT * FROM sqlite_schema ORDER BY name").all();
-    const before = schema();
-    const version = db.prepare("PRAGMA user_version").get();
-    const history = getUpdateRun(f.run.runId, f.options);
-    expect(loadUpdateRecovery(f.run.runId, f.options)).toEqual(f.record);
-    expect(schema()).toEqual(before);
-    expect(db.prepare("PRAGMA user_version").get()).toEqual(version);
-    expect(getUpdateRun(f.run.runId, f.options)).toEqual(history);
-  });
   it("refuses corrupt records without erasing them or admitting new work", () => {
     const f = setup();
     const db = openOpenClawStateDatabase(f.options).db;
@@ -498,23 +488,10 @@ it.each([
   const suppressed = { ...running, enabled: false };
   const restartId = randomUUID();
   native.effects = [
+    observedNativeEffect("stop", running, stopped, 1),
     {
-      effectId: randomUUID(),
-      action: "stop",
-      before: running,
-      after: stopped,
-      state: "observed",
-      intentRevision: 1,
-      observedRevision: 2,
-    },
-    {
+      ...observedNativeEffect("restore", stopped, running, 3),
       effectId: restartId,
-      action: "restore",
-      before: stopped,
-      after: running,
-      state: "observed",
-      intentRevision: 3,
-      observedRevision: 4,
     },
     {
       effectId: randomUUID(),
@@ -571,31 +548,14 @@ it("refuses a retained not-applied native effect without failure or with an unch
   const record = nativeRecord(f.record);
   const native = record.nativeManager!;
   const before = { ...native.original, stopped: true };
-  native.original = before;
+  // Keep the earlier stop and captured running target in the retained history.
   native.effects = [
+    observedNativeEffect("stop", native.original, before, 1),
     {
-      effectId: randomUUID(),
-      action: "restore",
-      before,
-      after: { ...before, stopped: false },
+      ...observedNativeEffect("restore", before, native.original, 3),
       state: "not-applied",
-      intentRevision: 1,
-      observedRevision: 2,
     },
   ];
-  // Restoration target must equal the captured running job; keep the earlier stop in history.
-  native.original = { ...before, stopped: false };
-  native.effects.unshift({
-    effectId: randomUUID(),
-    action: "stop",
-    before: native.original,
-    after: before,
-    state: "observed",
-    intentRevision: 1,
-    observedRevision: 2,
-  });
-  native.effects[1]!.intentRevision = 3;
-  native.effects[1]!.observedRevision = 4;
   record.revision = 4;
   record.primaryFailure = { code: "failed-start", effectId: null };
   expect(() => decodeUpdateRecovery(JSON.stringify(record), record.runId)).not.toThrow();

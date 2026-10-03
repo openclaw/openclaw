@@ -1,11 +1,10 @@
+import { isLegacyCodexProviderId } from "../../../../src/config/legacy-codex-provider.js";
 import { normalizeAgentModelRefForConfig } from "../../../../src/config/model-input.js";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 
-const LEGACY_OPENAI_PROVIDER_IDS = new Set(["codex", "openai-codex"]);
-
 export function normalizeChatModelProviderId(provider: string): string {
   const normalized = provider.trim().toLowerCase();
-  return LEGACY_OPENAI_PROVIDER_IDS.has(normalized) ? "openai" : normalized;
+  return isLegacyCodexProviderId(normalized) ? "openai" : normalized;
 }
 
 export function buildQualifiedChatModelValue(model: string, provider?: string | null): string {

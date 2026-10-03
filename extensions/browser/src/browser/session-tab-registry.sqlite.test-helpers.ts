@@ -52,6 +52,7 @@ type CleanupParams = SessionEntryCurrentPreparation & {
   ) => Promise<CloseTrackedCdpTargetResult>;
   getResolvedBrowserConfig?: () => ResolvedBrowserConfig | null;
   onWarn?: (message: string) => void;
+  onDebug?: (message: string) => void;
 };
 
 export type CloseOptions = {

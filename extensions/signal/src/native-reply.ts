@@ -33,10 +33,6 @@ function resolveSignalNativeReplyId(params: {
   return payloadReplyToId ?? contextReplyToId;
 }
 
-function isSignalStatusNoticePayload(payload: ReplyPayload): boolean {
-  return Boolean(payload.isCompactionNotice || payload.isFallbackNotice || payload.isStatusNotice);
-}
-
 export function createSignalNativeReplyIdPlan(params: {
   payload: ReplyPayload;
   replyContext?: SignalNativeReplyContext;
@@ -48,8 +44,11 @@ export function createSignalNativeReplyIdPlan(params: {
   }
   const isExplicitReply =
     params.payload.replyToTag === true || params.payload.replyToCurrent === true;
-  const isStatusNotice = isSignalStatusNoticePayload(params.payload);
-  if (isStatusNotice) {
+  if (
+    params.payload.isCompactionNotice ||
+    params.payload.isFallbackNotice ||
+    params.payload.isStatusNotice
+  ) {
     const resolve = params.replyToMode === "off" ? () => undefined : () => replyToId;
     return { peek: resolve, markSent: () => undefined };
   }

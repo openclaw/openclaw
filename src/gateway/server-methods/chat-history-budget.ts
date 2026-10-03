@@ -256,9 +256,6 @@ export function replaceOversizedChatHistoryMessages(params: {
 }): { messages: unknown[]; replacedCount: number } {
   const { messages, maxSingleMessageBytes } = params;
   const byteCounter = params.byteCounter ?? createChatHistoryByteCounter();
-  if (messages.length === 0) {
-    return { messages, replacedCount: 0 };
-  }
   let replacedCount = 0;
   const next = messages.map((message) => {
     if (byteCounter.messageBytes(message) <= maxSingleMessageBytes) {

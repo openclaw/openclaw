@@ -4,6 +4,20 @@ import Foundation
 import OpenClawProtocol
 import OSLog
 
+public enum RealtimeTalkRecovery {
+    private static let stableSessionSeconds: TimeInterval = 30
+    private static let restartDelaysNanoseconds: [UInt64] = [500_000_000, 2_000_000_000]
+
+    public static func restartAttempt(previousRapidRestarts: Int, activeDuration: TimeInterval) -> Int {
+        activeDuration >= self.stableSessionSeconds ? 1 : previousRapidRestarts + 1
+    }
+
+    public static func restartDelayNanoseconds(attempt: Int) -> UInt64? {
+        guard attempt > 0, attempt <= self.restartDelaysNanoseconds.count else { return nil }
+        return self.restartDelaysNanoseconds[attempt - 1]
+    }
+}
+
 public struct RealtimeTalkAudioFrame: Sendable {
     public let data: Data
     public let timestampMs: Double
@@ -131,7 +145,6 @@ private actor RealtimeAudioSender {
     private let request: @Sendable (String, [String: AnyCodable]?, Double) async throws -> Data
     private var relaySessionId: String?
     private var pendingSends = 0
-    private let maxPendingSends = 4
 
     init(
         relaySessionId: String,
@@ -147,7 +160,7 @@ private actor RealtimeAudioSender {
 
     func send(_ data: Data, timestampMs: Double) async -> RealtimeAudioSendOutcome {
         guard !Task.isCancelled, let relaySessionId else { return .inactive }
-        guard self.pendingSends < self.maxPendingSends else { return .saturated }
+        guard self.pendingSends < RealtimeTalkRelaySession.maxPendingAudioSends else { return .saturated }
         self.pendingSends += 1
         defer { self.pendingSends -= 1 }
         // The Gateway carries this straight into the provider's media timeline, and OpenAI rejects
@@ -237,14 +250,22 @@ public final class RealtimeTalkRelaySession {
     private nonisolated static let bargeInCooldownMs: Double = 900
     private nonisolated static let minOutputBeforeBargeInMs: Double = 250
     private nonisolated static let startupReadyTimeoutSeconds = 12
-    /// At the protocol's 20 ms cadence this bounds queued relay audio to 640 ms / 30,720 bytes.
-    /// Overflow terminates the session so recovery replaces a lagging playback path.
-    private nonisolated static let maxBufferedOutputChunks = 32
+    /// Providers may deliver a whole reply faster than realtime (xAI sends it in one burst), so the
+    /// bound must hold a full reply: 60 s of 20 ms frames (~2.9 MB at 24 kHz). Overflow still
+    /// terminates the session so recovery replaces a stalled playback path.
+    /// In-flight `talk.session.appendAudio` requests before input counts as stalled. Each mic
+    /// callback (~43 ms) is one request; Gateway round trips over Wi-Fi/Tailscale spike to ~1 s, so
+    /// 48 tolerates ~2 s of latency instead of the ~170 ms that 4 allowed.
+    nonisolated static let maxPendingAudioSends = 48
+    nonisolated static let maxBufferedOutputChunks = 3000
 
     private let transport: RealtimeTalkRelayTransport
     private let audioCapture: any RealtimeTalkAudioCapturing
     private let options: Options
     private let pcmPlayer: PCMStreamingAudioPlaying
+    private let output: RealtimeTalkOutput
+    private var outputEffectsTask: Task<Void, Never>?
+    private var outputLevelTask: Task<Void, Never>?
     private let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "RealtimeTalkRelay")
     private let onStatus: (String) -> Void
     private let onIssue: (RealtimeTalkRelayIssue) -> Void
@@ -253,9 +274,6 @@ public final class RealtimeTalkRelaySession {
     private let onInputLevel: (Double) -> Void
     private let onOutputLevel: (Double?) -> Void
     private let onTranscript: (RealtimeTalkTranscript) -> Void
-    /// Playback-time-aligned envelope of the assistant PCM the relay schedules;
-    /// drives the speaking waveform with real audio instead of a synthetic pulse.
-    private var outputEnvelope: PCMPlaybackEnvelope?
 
     private var relaySessionId: String?
     private var serverClose: (sessionId: String, task: Task<Void, Error>)?
@@ -265,33 +283,17 @@ public final class RealtimeTalkRelaySession {
     private var startupWaiter: CheckedContinuation<StartupWaitResult, Never>?
     private var pendingPreRelayEvents: [EventFrame] = []
     private var inputSampleRateHz = Double(RealtimeTalkRelaySession.defaultSampleRateHz)
-    private var outputSampleRateHz = Double(RealtimeTalkRelaySession.defaultSampleRateHz)
     private var supportsBargeIn: Bool? = true
     private var eventTask: Task<Void, Never>?
     private var toolCallTasks: [UUID: Task<Void, Never>] = [:]
     private var audioSendTasks: [UUID: Task<Void, Never>] = [:]
-    private var outputTask: Task<Void, Never>?
-    private var outputContinuation: AsyncThrowingStream<Data, Error>.Continuation?
-    /// Provider deltas may span any number of frames; retain only the partial tail so the
-    /// AsyncStream's 32 slots always contain bounded 20 ms PCM chunks.
-    private var pendingOutputAudio = Data()
-    private var outputSessionId = 0
-    private var pendingPlaybackMarks: [String] = []
     private var audioSender: RealtimeAudioSender?
     private var isInputPaused = false
-    private var isOutputPaused = false
     private var audioCaptureGeneration: UInt64 = 0
     private var isClosed = false
     private var lifecycleGeneration: UInt64 = 0
     private var outputCancellationGeneration: UInt64 = 0
-    private var isOutputPlaying = false
-    private var outputIdentity: OutputIdentity?
-    private var suppressedOutputIdentity: OutputIdentity?
-    private var awaitingOutputClear = false
-    private var cancelledOutputTurnId: String?
-    private var terminalOutputCancellationReason: String?
     private var outputCancellationTask: Task<Void, Never>?
-    private var outputStartedAtMs: Double?
     private var lastBargeInAtMs: Double = 0
     private var micLogFrameCount = 0
     private var micLogByteCount = 0
@@ -301,8 +303,6 @@ public final class RealtimeTalkRelaySession {
     private var suppressedEchoByteCount = 0
     private var suppressedEchoMaxRms: Float = 0
     private var lastSuppressedEchoLogAtMs: Double = 0
-    private var outputAudioChunkCount = 0
-    private var outputAudioByteCount = 0
 
     public var voiceSessionId: String? {
         self.relaySessionId
@@ -329,6 +329,11 @@ public final class RealtimeTalkRelaySession {
         self.audioCapture = audioCapture
         self.options = options
         self.pcmPlayer = pcmPlayer
+        let notifications = AsyncStream<Void>.makeStream()
+        self.output = RealtimeTalkOutput(
+            player: pcmPlayer,
+            transport: transport,
+            notification: notifications.continuation)
         self.onStatus = onStatus
         self.onIssue = onIssue
         self.onTermination = onTermination
@@ -336,12 +341,29 @@ public final class RealtimeTalkRelaySession {
         self.onInputLevel = onInputLevel
         self.onOutputLevel = onOutputLevel
         self.onTranscript = onTranscript
+        self.outputEffectsTask = Task { @MainActor [weak self] in
+            for await _ in notifications.stream {
+                guard let self else { return }
+                self.drainOutputEffects()
+            }
+        }
+    }
+
+    deinit {
+        self.eventTask?.cancel()
+        self.outputEffectsTask?.cancel()
+        self.outputLevelTask?.cancel()
     }
 
     public func start() async throws {
         self.lifecycleGeneration &+= 1
         let lifecycleGeneration = self.lifecycleGeneration
         self.isClosed = false
+        self.output.withLock {
+            $0.isClosed = false
+            $0.relaySessionId = nil
+            $0.resetRouting(lifecycleGeneration: lifecycleGeneration)
+        }
         self.hasReceivedReady = false
         self.hasReceivedFailure = false
         self.supportsBargeIn = nil
@@ -349,17 +371,17 @@ public final class RealtimeTalkRelaySession {
         self.startupWaiter = nil
         self.pendingPreRelayEvents.removeAll()
         self.onStatus("Connecting realtime…")
-        let eventStream = await self.transport.subscribeServerEvents(200)
-        switch await self.lifecycleStatus(lifecycleGeneration) {
+        let eventStream = await transport.subscribeServerEvents(200)
+        switch await lifecycleStatus(lifecycleGeneration) {
         case .current: break
         case .cancelledLocally: return
         case .routeLost: throw Self.gatewayRouteLostError()
         }
         self.startEventPump(stream: eventStream, lifecycleGeneration: lifecycleGeneration)
         do {
-            let result = try await self.createRelaySession()
+            let result = try await createRelaySession()
             let createdRelaySessionId = result.relaysessionid?.trimmedNonEmpty
-            let statusAfterCreate = await self.lifecycleStatus(lifecycleGeneration)
+            let statusAfterCreate = await lifecycleStatus(lifecycleGeneration)
             if statusAfterCreate != .current {
                 if let relaySessionId = createdRelaySessionId {
                     try? await self.beginServerClose(relaySessionId: relaySessionId).value
@@ -382,8 +404,10 @@ public final class RealtimeTalkRelaySession {
                 ])
             }
             self.relaySessionId = relaySessionId
-            let supportsBargeIn = await self.resolveSupportsBargeIn(result)
-            switch await self.lifecycleStatus(lifecycleGeneration) {
+            // Acknowledgments need identity during startup; routing stays gated until replay finishes.
+            self.output.withLock { $0.relaySessionId = relaySessionId }
+            let supportsBargeIn = await resolveSupportsBargeIn(result)
+            switch await lifecycleStatus(lifecycleGeneration) {
             case .current: break
             case .cancelledLocally: return
             case .routeLost: throw Self.gatewayRouteLostError()
@@ -393,15 +417,16 @@ public final class RealtimeTalkRelaySession {
                 relaySessionId: relaySessionId,
                 request: self.transport.request)
             self.configureAudioContract(result.audio)
-            try self.startMicrophonePump(lifecycleGeneration: lifecycleGeneration)
+            try startMicrophonePump(lifecycleGeneration: lifecycleGeneration)
             self.onStatus("Waiting for realtime…")
-            await self.drainPendingPreRelayEvents(lifecycleGeneration: lifecycleGeneration)
-            switch await self.lifecycleStatus(lifecycleGeneration) {
+            await drainPendingPreRelayEvents(lifecycleGeneration: lifecycleGeneration)
+            self.output.withLock { $0.startupRoutingReady = true }
+            switch await lifecycleStatus(lifecycleGeneration) {
             case .current: break
             case .cancelledLocally: return
             case .routeLost: throw Self.gatewayRouteLostError()
             }
-            switch await self.waitForStartupResult(
+            switch await waitForStartupResult(
                 timeoutSeconds: Self.startupReadyTimeoutSeconds,
                 lifecycleGeneration: lifecycleGeneration)
             {
@@ -413,7 +438,9 @@ public final class RealtimeTalkRelaySession {
         } catch {
             // A lost route must still surface: swallowing here would discard both the original
             // failure and the route loss, leaving the runtime with nothing to fall back from.
-            if await self.lifecycleStatus(lifecycleGeneration) == .cancelledLocally { return }
+            if await lifecycleStatus(lifecycleGeneration) == .cancelledLocally {
+                return
+            }
             let createdRelaySessionId = self.relaySessionId
             self.close(sendClose: false)
             if let createdRelaySessionId {
@@ -436,28 +463,37 @@ public final class RealtimeTalkRelaySession {
     private func close(sendClose: Bool) {
         guard !self.isClosed else { return }
         self.isClosed = true
+        self.outputCancellationGeneration &+= 1
+        self.outputCancellationTask?.cancel()
+        self.outputCancellationTask = nil
+        self.output.withLock { output in
+            let wasClosed = output.isClosed
+            output.isClosed = true
+            output.relaySessionId = nil
+            output.pendingPlaybackMarks.removeAll()
+            output.cancelledOutputTurnId = nil
+            output.terminalOutputCancellationReason = nil
+            output.isOutputPaused = false
+            output.retireCancellation()
+            if !wasClosed { output.stopOutputPlayback() }
+            output.reportSpeaking(false)
+        }
         self.lifecycleGeneration &+= 1
-        self.finishStartupWait(.cancelled)
-        self.stopMicrophonePump()
+        finishStartupWait(.cancelled)
+        stopMicrophonePump()
         self.eventTask?.cancel()
         self.eventTask = nil
         for task in self.toolCallTasks.values {
             task.cancel()
         }
-        self.pendingPlaybackMarks.removeAll()
         let audioSender = self.audioSender
         self.audioSender = nil
         Task { await audioSender?.close() }
-        self.retireOutputCancellation()
-        self.cancelledOutputTurnId = nil
-        self.terminalOutputCancellationReason = nil
-        self.isOutputPaused = false
-        self.stopOutputPlayback()
-        if sendClose, let relaySessionId = self.relaySessionId {
+        self.drainOutputEffects()
+        if sendClose, let relaySessionId {
             self.beginServerClose(relaySessionId: relaySessionId)
         }
-        self.relaySessionId = nil
-        self.onSpeakingChanged(false)
+        relaySessionId = nil
     }
 
     /// Deliberately not a `CancellationError`: the runtime treats those as caller-initiated and
@@ -507,10 +543,13 @@ public final class RealtimeTalkRelaySession {
     }
 
     public func setOutputPaused(_ paused: Bool) {
-        guard self.isOutputPaused != paused else { return }
-        self.isOutputPaused = paused
-        if paused, self.isOutputPlaying {
-            self.cancelOutput(reason: "pause")
+        let cancel = self.output.withLock { output in
+            guard output.isOutputPaused != paused else { return false }
+            output.isOutputPaused = paused
+            return paused && output.isOutputPlaying
+        }
+        if cancel {
+            cancelOutput(reason: "pause")
         }
     }
 
@@ -550,8 +589,9 @@ public final class RealtimeTalkRelaySession {
         }
         self.inputSampleRateHz = audio["inputSampleRateHz"]?.doubleValue
             ?? Double(Self.defaultSampleRateHz)
-        self.outputSampleRateHz = audio["outputSampleRateHz"]?.doubleValue
-            ?? Double(Self.defaultSampleRateHz)
+        self.output.withLock {
+            $0.outputSampleRateHz = audio["outputSampleRateHz"]?.doubleValue ?? Double(Self.defaultSampleRateHz)
+        }
     }
 
     private func resolveSupportsBargeIn(_ session: TalkSessionCreateResult) async -> Bool? {
@@ -577,15 +617,67 @@ public final class RealtimeTalkRelaySession {
         return entry?["supportsBargeIn"]?.boolValue ?? true
     }
 
+    private func drainOutputEffects() {
+        for effect in self.output.withLock({ $0.takeEffects() }) {
+            switch effect {
+            case let .speaking(speaking): self.onSpeakingChanged(speaking)
+            case .stopLegacyPlayer: _ = self.pcmPlayer.stop()
+            case .beginLevels:
+                self.outputLevelTask?.cancel()
+                self.outputLevelTask = Task { @MainActor [weak self] in
+                    while !Task.isCancelled {
+                        guard let self else { return }
+                        let level = self.output.withLock { $0.envelope.level() }
+                        guard let level else {
+                            self.onOutputLevel(nil)
+                            return
+                        }
+                        self.onOutputLevel(level)
+                        try? await Task.sleep(for: .milliseconds(33))
+                    }
+                }
+            case .cancelLevels:
+                self.outputLevelTask?.cancel()
+                self.outputLevelTask = nil
+                self.onOutputLevel(nil)
+            case .cancellationCleared:
+                if self.outputCancellationTask == nil, !self.output.withLock({ $0.awaitingOutputClear }) {
+                    self.retireOutputCancellation()
+                }
+            case let .failure(message): handleOutputPlaybackFailure(message)
+            }
+        }
+    }
+
     private func startEventPump(stream: AsyncStream<EventFrame>, lifecycleGeneration: UInt64) {
         self.eventTask?.cancel()
-        self.eventTask = Task { [weak self] in
-            for await event in stream {
-                if Task.isCancelled { return }
-                await self?.handleGatewayEvent(event, lifecycleGeneration: lifecycleGeneration)
+        let mainEvents = AsyncStream<(event: EventFrame, startup: Bool)>.makeStream()
+        let consumer = Task { @MainActor [weak self] in
+            for await delivery in mainEvents.stream {
+                guard !Task.isCancelled else { return }
+                await self?.handleGatewayEvent(delivery.event, lifecycleGeneration: lifecycleGeneration)
+                self?.output.withLock {
+                    $0.mainEventHandled(startup: delivery.startup, lifecycleGeneration: lifecycleGeneration)
+                }
             }
             guard !Task.isCancelled else { return }
             await self?.handleEventStreamEnded(lifecycleGeneration: lifecycleGeneration)
+        }
+        self.eventTask = Task.detached(priority: .high) { [output = self.output] in
+            await withTaskCancellationHandler {
+                for await event in stream {
+                    guard !Task.isCancelled else { break }
+                    let route = output.route(event, lifecycleGeneration: lifecycleGeneration)
+                    if !route.handled {
+                        mainEvents.continuation.yield((event, route.startup))
+                    }
+                }
+                mainEvents.continuation.finish()
+                await consumer.value
+            } onCancel: {
+                mainEvents.continuation.finish()
+                consumer.cancel()
+            }
         }
     }
 }
@@ -633,13 +725,17 @@ extension RealtimeTalkRelaySession {
             self.finishStartupWait(.ready)
             self.onStatus("Listening (Realtime)")
         case "audio":
-            self.handleOutputAudio(payload)
+            self.output.withLock { $0.handleOutputAudio(payload) }
+            self.drainOutputEffects()
         case "audioDone":
-            self.handleOutputAudioDone(payload)
+            self.output.withLock { $0.handleOutputAudioDone(payload) }
+            self.drainOutputEffects()
         case "clear":
-            self.handleOutputClear(payload)
+            self.output.withLock { $0.handleOutputClear(payload) }
+            self.drainOutputEffects()
         case "mark":
-            self.handlePlaybackMark(payload)
+            self.output.withLock { $0.handlePlaybackMark(payload) }
+            self.drainOutputEffects()
         case "transcript":
             self.handleTranscriptEvent(payload)
         case "toolCall":
@@ -662,8 +758,10 @@ extension RealtimeTalkRelaySession {
                 let termination: RealtimeTalkRelayTermination = if talkEvent?["type"]?.stringValue == "session.closed",
                                                                    talkEvent?["payload"]?.dictionaryValue?["reason"]?
                                                                        .stringValue == "output-cancelled",
-                                                                       let cancellationReason = self
-                                                                           .terminalOutputCancellationReason
+                                                                       let cancellationReason = output
+                                                                           .withLock({
+                                                                               $0.terminalOutputCancellationReason
+                                                                           })
                 {
                     .outputCancelled(reason: cancellationReason)
                 } else {
@@ -684,27 +782,6 @@ extension RealtimeTalkRelaySession {
         default:
             return
         }
-    }
-
-    private func handleOutputClear(_ payload: [String: AnyCodable]) {
-        let clearIdentity = OutputIdentity(payload)
-        // Provider clears retire playback; only turn.cancelled acknowledges turn cancellation.
-        let clearsSuppressed = self.awaitingOutputClear &&
-            payload["talkEvent"]?.dictionaryValue?["type"]?.stringValue == "turn.cancelled" &&
-            self.suppressedOutputIdentity == clearIdentity
-        if clearsSuppressed {
-            self.awaitingOutputClear = false
-            if self.outputCancellationTask == nil { self.retireOutputCancellation() }
-        }
-        let currentMatches = clearIdentity.turnId == nil || self.outputIdentity == clearIdentity
-        guard clearsSuppressed || currentMatches else { return }
-        let marks = self.takePendingPlaybackMarks()
-        // Cancellation already published the stopped state. A later clear with no
-        // active output only retires the fence; it must not emit a duplicate callback.
-        if self.isOutputPlaying || self.outputIdentity != nil {
-            self.stopOutputPlayback()
-        }
-        self.acknowledgePlaybackMarks(marks)
     }
 
     private func waitForStartupResult(
@@ -772,30 +849,14 @@ extension RealtimeTalkRelaySession {
             phase: payload["phase"]?.stringValue ?? phase)
     }
 
-    private func recordOutputAudioChunk(byteCount: Int) {
-        self.outputAudioChunkCount += 1
-        self.outputAudioByteCount += byteCount
-        guard self.outputAudioChunkCount == 1 || self.outputAudioChunkCount % 20 == 0 else { return }
-        self.logger.debug(
-            "talk realtime audio: chunks=\(self.outputAudioChunkCount) bytes=\(self.outputAudioByteCount)")
-    }
-
-    private func markOutputAudioStarted(nowMs: Double) {
-        if !self.isOutputPlaying {
-            self.outputStartedAtMs = nowMs
-        }
-        self.isOutputPlaying = true
-    }
-
     private func handleInputLevelDuringOutput(_ rms: Float, timestampMs: Double) {
-        guard self.isOutputPlaying else { return }
-        guard rms >= Self.bargeInRmsThreshold else { return }
-        if let outputStartedAtMs,
-           timestampMs - outputStartedAtMs < Self.minOutputBeforeBargeInMs
-        {
-            return
+        let shouldCancel = self.output.withLock { output in
+            guard output.isOutputPlaying, rms >= Self.bargeInRmsThreshold else { return false }
+            if let outputStartedAtMs = output.outputStartedAtMs,
+               timestampMs - outputStartedAtMs < Self.minOutputBeforeBargeInMs { return false }
+            return timestampMs - self.lastBargeInAtMs >= Self.bargeInCooldownMs
         }
-        guard timestampMs - self.lastBargeInAtMs >= Self.bargeInCooldownMs else { return }
+        guard shouldCancel else { return }
         self.lastBargeInAtMs = timestampMs
         self.cancelOutput(reason: "barge-in")
     }
@@ -1004,113 +1065,6 @@ extension RealtimeTalkRelaySession {
         guard await self.isCurrentLifecycle(lifecycleGeneration) else { throw CancellationError() }
     }
 
-    private func ensureOutputPlaybackStarted() {
-        guard self.outputContinuation == nil, self.outputTask == nil else { return }
-        self.outputSessionId += 1
-        let sessionId = self.outputSessionId
-        let envelope = self.outputEnvelope ?? PCMPlaybackEnvelope { [weak self] level in
-            self?.onOutputLevel(level)
-        }
-        envelope.begin(sampleRate: self.outputSampleRateHz)
-        self.outputEnvelope = envelope
-        let stream = AsyncThrowingStream<Data, Error>(
-            bufferingPolicy: .bufferingOldest(Self.maxBufferedOutputChunks))
-        { continuation in self.outputContinuation = continuation }
-        self.outputTask = Task { [weak self] in
-            guard let self else { return }
-            guard self.outputSessionId == sessionId, !self.isClosed, !Task.isCancelled else { return }
-            let result = await self.pcmPlayer.play(stream: stream, sampleRate: self.outputSampleRateHz)
-            await MainActor.run {
-                guard self.outputSessionId == sessionId else { return }
-                self.outputTask = nil
-                self.outputContinuation = nil
-                if !result.finished {
-                    if let interruptedAt = result.interruptedAt {
-                        self.logger.info("realtime output interrupted at \(interruptedAt, privacy: .public)s")
-                    }
-                    self.handleOutputPlaybackFailure(
-                        String(localized: "Realtime audio playback failed. Reconnecting…"))
-                    return
-                }
-                self.markOutputPlaybackFinished()
-            }
-        }
-    }
-
-    private func finishOutputPlaybackStream() {
-        guard let continuation = self.outputContinuation else { return }
-        if !self.pendingOutputAudio.isEmpty {
-            let trailingFrame = self.pendingOutputAudio
-            self.pendingOutputAudio.removeAll(keepingCapacity: true)
-            guard self.yieldOutputAudioFrame(trailingFrame) else { return }
-        }
-        continuation.finish()
-        self.outputContinuation = nil
-    }
-
-    private func markOutputPlaybackFinished() {
-        // Only drained playback completes output; elapsed time cannot prove the
-        // device finished queued audio. Publish the terminal transition once.
-        guard self.isOutputPlaying else { return }
-        self.isOutputPlaying = false
-        self.outputIdentity = nil
-        self.outputStartedAtMs = nil
-        self.outputEnvelope?.cancel()
-        self.onSpeakingChanged(false)
-        self.acknowledgePlaybackMarks(self.takePendingPlaybackMarks())
-    }
-
-    private func takePendingPlaybackMarks() -> [String] {
-        let marks = self.pendingPlaybackMarks
-        self.pendingPlaybackMarks.removeAll()
-        return marks
-    }
-
-    private func handlePlaybackMark(_ payload: [String: AnyCodable]) {
-        guard let markName = payload["markName"]?.stringValue?.trimmedNonEmpty else { return }
-        if self.isOutputPlaying {
-            self.pendingPlaybackMarks.append(markName)
-        } else {
-            self.acknowledgePlaybackMarks([markName])
-        }
-    }
-
-    private func acknowledgePlaybackMarks(_ marks: [String]) {
-        guard !marks.isEmpty,
-              let relaySessionId = self.relaySessionId
-        else { return }
-        for markName in marks {
-            Task { [transport, logger] in
-                let payload: [String: AnyCodable] = [
-                    "sessionId": AnyCodable(relaySessionId),
-                    "markName": AnyCodable(markName),
-                ]
-                do {
-                    _ = try await transport.request("talk.session.acknowledgeMark", payload, 8000)
-                } catch {
-                    let message = Self.safeLogMessage(error.localizedDescription)
-                    logger.warning(
-                        "talk realtime: mark acknowledgement failed=\(message, privacy: .public)")
-                }
-            }
-        }
-    }
-
-    private func stopOutputPlayback() {
-        self.outputSessionId += 1
-        self.outputContinuation?.finish()
-        self.outputContinuation = nil
-        self.pendingOutputAudio.removeAll(keepingCapacity: true)
-        self.outputTask?.cancel()
-        self.outputTask = nil
-        _ = self.pcmPlayer.stop()
-        self.isOutputPlaying = false
-        self.outputIdentity = nil
-        self.outputStartedAtMs = nil
-        self.outputEnvelope?.cancel()
-        self.onSpeakingChanged(false)
-    }
-
     private nonisolated static func safeLogMessage(_ value: String) -> String {
         let singleLine = value
             .replacingOccurrences(of: "\n", with: " ")
@@ -1143,29 +1097,25 @@ extension RealtimeTalkRelaySession {
 }
 
 extension RealtimeTalkRelaySession {
-    private struct OutputIdentity: Equatable {
-        let turnId: String?
-
-        init(_ payload: [String: AnyCodable]) {
-            self.turnId = payload["talkEvent"]?.dictionaryValue?["turnId"]?.stringValue?.trimmedNonEmpty
-        }
-    }
-
     @discardableResult
     public func cancelOutput(reason: String = "user") -> Bool {
         guard reason != "barge-in" || self.supportsBargeIn == true else { return false }
-        guard let relaySessionId,
-              let outputIdentity = self.outputIdentity,
-              let turnId = outputIdentity.turnId
-        else { return false }
+        guard let relaySessionId else { return false }
+        let turnId = self.output.withLock { output -> String? in
+            guard let identity = output.outputIdentity, let turnId = identity.turnId else { return nil }
+            output.terminalOutputCancellationReason = reason == "barge-in" ? nil : reason
+            output.suppressedOutputIdentity = identity
+            output.cancelledOutputTurnId = turnId
+            output.awaitingOutputClear = true
+            output.cancellationInFlight = true
+            output.stopOutputPlayback()
+            return turnId
+        }
+        guard let turnId else { return false }
+        self.drainOutputEffects()
         self.outputCancellationGeneration &+= 1
         let cancellationGeneration = self.outputCancellationGeneration
         self.outputCancellationTask?.cancel()
-        self.terminalOutputCancellationReason = reason == "barge-in" ? nil : reason
-        self.suppressedOutputIdentity = outputIdentity
-        self.cancelledOutputTurnId = outputIdentity.turnId
-        self.awaitingOutputClear = true
-        self.stopOutputPlayback()
         self.outputCancellationTask = Task { [weak self, transport] in
             let payload: [String: AnyCodable] = [
                 "sessionId": AnyCodable(relaySessionId),
@@ -1179,17 +1129,26 @@ extension RealtimeTalkRelaySession {
                 guard let self, self.isCurrentOutputCancellation(cancellationGeneration) else { return }
                 switch result.status?.stringValue {
                 case "stale", "idle":
-                    self.terminalOutputCancellationReason = nil
-                    self.acknowledgePlaybackMarks(self.takePendingPlaybackMarks())
-                    self.retireOutputCancellation()
+                    self.output.withLock { output in
+                        output.terminalOutputCancellationReason = nil
+                        output.acknowledgePlaybackMarks(output.takePendingPlaybackMarks())
+                        output.retireCancellation()
+                    }
+                    self.retireOutputCancellationTask()
                 case nil, "applied":
                     guard result.turnid == nil || result.turnid == turnId else {
                         throw URLError(.badServerResponse)
                     }
-                    if self.awaitingOutputClear {
-                        self.outputCancellationTask = nil
+                    let retired = self.output.withLock { output in
+                        output.cancellationInFlight = false
+                        if output.awaitingOutputClear { return false }
+                        output.retireCancellation()
+                        return true
+                    }
+                    if retired {
+                        self.retireOutputCancellationTask()
                     } else {
-                        self.retireOutputCancellation()
+                        self.outputCancellationTask = nil
                     }
                 default:
                     throw URLError(.badServerResponse)
@@ -1217,96 +1176,6 @@ extension RealtimeTalkRelaySession {
         generation == self.outputCancellationGeneration && !self.isClosed
     }
 
-    private func handleOutputAudio(_ payload: [String: AnyCodable]) {
-        guard !self.isOutputPaused else { return }
-        let incomingIdentity = OutputIdentity(payload)
-        guard let incomingTurnId = incomingIdentity.turnId else {
-            self.handleOutputPlaybackOverflow()
-            return
-        }
-        guard !self.awaitingOutputClear else { return }
-        guard incomingTurnId != self.cancelledOutputTurnId else { return }
-        guard let base64 = payload["audioBase64"]?.stringValue else { return }
-        guard let data = Data(base64Encoded: base64) else {
-            self.handleOutputPlaybackOverflow()
-            return
-        }
-        self.terminalOutputCancellationReason = nil
-        if let currentIdentity = self.outputIdentity,
-           currentIdentity != incomingIdentity
-        {
-            let marks = self.takePendingPlaybackMarks()
-            self.stopOutputPlayback()
-            self.acknowledgePlaybackMarks(marks)
-        } else if self.outputContinuation == nil, self.outputTask != nil {
-            self.stopOutputPlayback()
-        }
-        self.outputIdentity = incomingIdentity
-        self.recordOutputAudioChunk(byteCount: data.count)
-        self.markOutputAudioStarted(nowMs: ProcessInfo.processInfo.systemUptime * 1000)
-        self.onSpeakingChanged(true)
-        self.ensureOutputPlaybackStarted()
-        self.bufferOutputAudio(data)
-    }
-
-    private func bufferOutputAudio(_ data: Data) {
-        let frameByteCount = max(2, Int((self.outputSampleRateHz * 0.02).rounded()) * 2)
-        var offset = data.startIndex
-        if !self.pendingOutputAudio.isEmpty {
-            let fillCount = min(frameByteCount - self.pendingOutputAudio.count, data.count)
-            let fillEnd = data.index(offset, offsetBy: fillCount)
-            self.pendingOutputAudio.append(data[offset..<fillEnd])
-            offset = fillEnd
-            if self.pendingOutputAudio.count == frameByteCount {
-                let frame = self.pendingOutputAudio
-                self.pendingOutputAudio.removeAll(keepingCapacity: true)
-                guard self.yieldOutputAudioFrame(frame) else { return }
-            }
-        }
-        while data.distance(from: offset, to: data.endIndex) >= frameByteCount {
-            let frameEnd = data.index(offset, offsetBy: frameByteCount)
-            let frame = Data(data[offset..<frameEnd])
-            offset = frameEnd
-            guard self.yieldOutputAudioFrame(frame) else { return }
-        }
-        if offset < data.endIndex {
-            self.pendingOutputAudio.append(data[offset...])
-        }
-    }
-
-    private func yieldOutputAudioFrame(_ data: Data) -> Bool {
-        guard let continuation = self.outputContinuation else { return false }
-        switch continuation.yield(data) {
-        case .enqueued:
-            self.outputEnvelope?.append(data)
-            return true
-        case .dropped:
-            self.handleOutputPlaybackOverflow()
-            return false
-        case .terminated:
-            return false
-        @unknown default:
-            self.handleOutputPlaybackOverflow()
-            return false
-        }
-    }
-
-    private func handleOutputAudioDone(_ payload: [String: AnyCodable]) {
-        let incomingIdentity = OutputIdentity(payload)
-        if incomingIdentity.turnId != nil,
-           let outputIdentity,
-           outputIdentity != incomingIdentity
-        {
-            return
-        }
-        self.finishOutputPlaybackStream()
-    }
-
-    private func handleOutputPlaybackOverflow() {
-        self.handleOutputPlaybackFailure(
-            String(localized: "Realtime audio playback fell behind. Reconnecting…"))
-    }
-
     private func handleOutputPlaybackFailure(_ message: String) {
         guard !self.isClosed else { return }
         let issue = self.issue(
@@ -1318,12 +1187,15 @@ extension RealtimeTalkRelaySession {
         self.onTermination(.outputPlaybackOverflow)
     }
 
-    private func retireOutputCancellation() {
+    private func retireOutputCancellationTask() {
         self.outputCancellationGeneration &+= 1
         self.outputCancellationTask?.cancel()
         self.outputCancellationTask = nil
-        self.suppressedOutputIdentity = nil
-        self.awaitingOutputClear = false
+    }
+
+    private func retireOutputCancellation() {
+        self.output.withLock { $0.retireCancellation() }
+        self.retireOutputCancellationTask()
     }
 }
 
@@ -1381,12 +1253,12 @@ extension RealtimeTalkRelaySession {
     {
         guard self.isCurrentLifecycleLocally(lifecycleGeneration),
               self.audioCaptureGeneration == audioCaptureGeneration,
-              !self.isInputPaused, self.suppressedOutputIdentity == nil,
-              let audioSender = self.audioSender
+              !self.isInputPaused, self.output.withLock({ $0.suppressedOutputIdentity }) == nil,
+              let audioSender
         else { return nil }
         self.recordMicrophoneFrame(byteCount: encoded.count, rms: rms, timestampMs: timestampMs)
         // Continuous providers own interruptions and need input throughout playback.
-        if self.isOutputPlaying, self.supportsBargeIn == true {
+        if self.output.withLock({ $0.isOutputPlaying }), self.supportsBargeIn == true {
             if self.audioCapture.suppressesInputDuringOutput {
                 self.recordSuppressedOutputEchoFrame(
                     byteCount: encoded.count,
@@ -1403,7 +1275,7 @@ extension RealtimeTalkRelaySession {
             defer { self.audioSendTasks.removeValue(forKey: taskID) }
             guard self.isCurrentLifecycleLocally(lifecycleGeneration),
                   self.audioCaptureGeneration == audioCaptureGeneration,
-                  !self.isInputPaused, self.suppressedOutputIdentity == nil
+                  !self.isInputPaused, self.output.withLock({ $0.suppressedOutputIdentity }) == nil
             else { return }
             switch await audioSender.send(encoded, timestampMs: timestampMs) {
             case .sent, .inactive:
@@ -1471,6 +1343,7 @@ extension RealtimeTalkRelaySession {
     // periphery:ignore - package tests drive a relay session without a live gateway handshake.
     func _test_setRelaySessionId(_ relaySessionId: String) {
         self.relaySessionId = relaySessionId
+        self.output.withLock { $0.relaySessionId = relaySessionId }
     }
 
     // periphery:ignore - package tests inject gateway events without a live socket.
@@ -1509,22 +1382,23 @@ extension RealtimeTalkRelaySession {
 
     // periphery:ignore - package tests start output playback without decoding real audio.
     func _test_markOutputAudioStarted(nowMs: Double) {
-        self.markOutputAudioStarted(nowMs: nowMs)
+        self.output.withLock { $0.markOutputAudioStarted(nowMs: nowMs) }
     }
 
     // periphery:ignore - package tests finish playback without a real player callback.
     func _test_markOutputPlaybackFinished() {
-        self.markOutputPlaybackFinished()
+        self.output.withLock { $0.markOutputPlaybackFinished() }
+        self.drainOutputEffects()
     }
 
     // periphery:ignore - package tests observe barge-in timing state.
     func _test_outputStartedAtMs() -> Double? {
-        self.outputStartedAtMs
+        self.output.withLock { $0.outputStartedAtMs }
     }
 
     // periphery:ignore - package tests observe playback state without exposing it publicly.
-    func _test_isOutputPlaying() -> Bool {
-        self.isOutputPlaying
+    nonisolated func _test_isOutputPlaying() -> Bool {
+        self.output.withLock { $0.isOutputPlaying }
     }
 
     // periphery:ignore - package tests exercise the audio sender without a started session.

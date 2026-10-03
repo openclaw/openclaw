@@ -33,7 +33,7 @@ import {
 import { isKnownCoreSecretTargetId, isKnownSecretTargetId } from "../../secrets/target-registry.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
-import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
+import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 const teamScope = { kind: "team" } as const;
@@ -163,6 +163,47 @@ export function createSecretsHandlers(params: {
   ) => ReturnType<typeof resolveCommandSecretsFromActiveRuntimeSnapshot>;
   log?: SecretStoreLogger;
 }): GatewayRequestHandlers {
+  const mutateStore = async (
+    action: "set" | "delete",
+    name: string,
+    respond: RespondFn,
+    mutate: () => boolean,
+  ) => {
+    const method = `secrets.store.${action}`;
+    let committed = false;
+    try {
+      if (!mutate()) {
+        return;
+      }
+      committed = true;
+      const result = {
+        ok: true as const,
+        ...(await params.storeWriteService.reloadReference(name)),
+      };
+      if (!validateSecretsStoreMutationResult(result)) {
+        throw new Error(`${method} returned invalid payload.`);
+      }
+      respond(true, result);
+    } catch (error) {
+      if (!committed && error instanceof SecretStoreValidationError) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+        return;
+      }
+      params.log?.warn?.(`${method} failed: ${errorMessage(error)}`);
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          !committed
+            ? `${method} failed`
+            : action === "set"
+              ? "Secret store entry was saved, but post-write runtime refresh failed. Resolve provider errors and retry secrets.reload."
+              : "Secret store entry was deleted, but the active runtime could not refresh. Update the config reference or restore the entry, then retry secrets.reload.",
+        ),
+      );
+    }
+  };
   return {
     "secrets.reload": async ({ respond }) => {
       try {
@@ -279,9 +320,8 @@ export function createSecretsHandlers(params: {
     "secrets.store.set": defineValidatedGatewayHandler(
       "secrets.store.set",
       validateSecretsStoreSetParams,
-      async ({ params: requestParams, respond, client }) => {
-        let saved = false;
-        try {
+      ({ params: requestParams, respond, client }) =>
+        mutateStore("set", requestParams.name, respond, () => {
           holdGatewayPolicyResponse(respond);
           params.storeWriteService.write({
             name: requestParams.name,
@@ -292,78 +332,25 @@ export function createSecretsHandlers(params: {
               : {}),
             updatedBy: params.storeWriteService.resolveUpdatedBy(client),
           });
-          saved = true;
-          const reload = await params.storeWriteService.reloadReference(requestParams.name);
-          const result = {
-            ok: true as const,
-            ...reload,
-          };
-          if (!validateSecretsStoreMutationResult(result)) {
-            throw new Error("secrets.store.set returned invalid payload.");
-          }
-          respond(true, result);
-        } catch (error) {
-          if (!saved && error instanceof SecretStoreValidationError) {
-            respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
-            return;
-          }
-          params.log?.warn?.(`secrets.store.set failed: ${errorMessage(error)}`);
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.UNAVAILABLE,
-              saved
-                ? "Secret store entry was saved, but post-write runtime refresh failed. Resolve provider errors and retry secrets.reload."
-                : "secrets.store.set failed",
-            ),
-          );
-        }
-      },
+          return true;
+        }),
     ),
     "secrets.store.delete": defineValidatedGatewayHandler(
       "secrets.store.delete",
       validateSecretsStoreDeleteParams,
-      async ({ params: requestParams, respond, client, context }) => {
-        let deleted = false;
-        try {
+      ({ params: requestParams, respond, client, context }) =>
+        mutateStore("delete", requestParams.name, respond, () => {
           const agentId = client?.internal?.agentRuntimeIdentity?.agentId;
           if (agentId) {
             params.log?.debug?.(`secrets.store.delete requested by agent:${agentId}`);
           }
           if (!createAgentRuntimeAuthorityGuard(client, context, respond).ensureActive()) {
-            return;
+            return false;
           }
           holdGatewayPolicyResponse(respond);
           deleteSecretStoreEntry({ scope: teamScope, name: requestParams.name });
-          deleted = true;
-          const reload = await params.storeWriteService.reloadReference(requestParams.name);
-          const result = {
-            ok: true as const,
-            ...reload,
-          };
-          if (!validateSecretsStoreMutationResult(result)) {
-            throw new Error("secrets.store.delete returned invalid payload.");
-          }
-          respond(true, result);
-        } catch (error) {
-          if (!deleted && error instanceof SecretStoreValidationError) {
-            respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
-            return;
-          }
-          params.log?.warn?.(`secrets.store.delete failed: ${errorMessage(error)}`);
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.UNAVAILABLE,
-              deleted
-                ? "Secret store entry was deleted, but the active runtime could not refresh. Update the config reference or restore the entry, then retry secrets.reload."
-                : "secrets.store.delete failed",
-            ),
-          );
-        }
-      },
+          return true;
+        }),
     ),
   };
 }

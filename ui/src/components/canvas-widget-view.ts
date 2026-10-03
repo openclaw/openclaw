@@ -1,21 +1,44 @@
 import { consume } from "@lit/context";
+import {
+  GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
+  resolveSafeTimeoutDelayMs,
+} from "@openclaw/gateway-client/browser";
 import type { CanvasDocumentViewResult } from "@openclaw/gateway-protocol";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import { hasOperatorReadAccess } from "../app/operator-access.ts";
 import { t } from "../i18n/index.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-widget-frame-generation.ts";
 import { formatUiError } from "../lib/format-error.ts";
-import { WidgetSandboxHost, WIDGET_LOAD_TIMEOUT_MS } from "../lib/widget-sandbox-host.ts";
+import { isAwaitingGatewayFailure, isGatewayAvailable } from "../lib/gateway-availability.ts";
+import { generateUUID } from "../lib/uuid.ts";
+import {
+  WidgetSandboxHost,
+  WIDGET_LOAD_TIMEOUT_MS,
+  WIDGET_LOAD_NOTICE_MS,
+} from "../lib/widget-sandbox-host.ts";
 import { registerWidgetThemeFrame, postWidgetTheme } from "../lib/widget-theme.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import { forwardChatWheelToTranscript } from "../pages/chat/chat-scroll-input.ts";
 import { allowWidgetPrompt, dispatchWidgetPrompt } from "./mcp-app-security.ts";
 import { resolveSandboxHostUrl } from "./sandbox-host.ts";
 
 type WidgetClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
-type ViewBinding = { client: WidgetClient; generation: number; docId: string; sessionKey: string };
+type ViewBinding = {
+  client: WidgetClient;
+  generation: number;
+  docId: string;
+  sessionKey: string;
+  connectionRevision: number;
+  gatewayUrl: string;
+  profileId: string | null;
+  recoveryScope: string | undefined;
+};
 // One wake attempt per session/document per page load, including remounts.
 const reportedRuntimeErrors = new Set<string>();
 // Fresh renders ping the agent; old restored history only shows the notice.
@@ -66,14 +89,52 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
   @state() private view?: CanvasDocumentViewResult;
   @state() private error = "";
   @state() private runtimeError = "";
+  @state() private resourceError = false;
   @state() private contentHeight?: number;
   private binding?: ViewBinding;
   private sandboxHost?: WidgetSandboxHost;
   private promptPort?: MessagePort;
   private sandboxOrigin = "";
+  private scrollNonce = "";
   private releaseTheme?: () => void;
   private scriptsAllowed = true;
   private sandboxGeneration = 0;
+  private validated?: ViewBinding;
+  private viewOwner?: ViewBinding;
+  private retryTimer?: number;
+  private slowTimer?: number;
+  private retryDelayMs = 1_000;
+  @state() private pending = false;
+
+  constructor() {
+    super();
+    new SubscriptionsController(this).watchStore(() => this.context?.gateway);
+  }
+
+  private clearRetry(): void {
+    window.clearTimeout(this.slowTimer);
+    this.slowTimer = undefined;
+    window.clearTimeout(this.retryTimer);
+    this.retryTimer = undefined;
+  }
+
+  private scheduleRetry(binding: ViewBinding, retryAfterMs = 0): void {
+    if (this.retryTimer !== undefined) {
+      return;
+    }
+    this.pending = true;
+    this.retryTimer = window.setTimeout(
+      () => {
+        this.retryTimer = undefined;
+        if (this.isCurrent(binding)) {
+          this.binding = undefined;
+          this.requestUpdate();
+        }
+      },
+      resolveSafeTimeoutDelayMs(Math.max(this.retryDelayMs, retryAfterMs)),
+    );
+    this.retryDelayMs = Math.min(this.retryDelayMs * 2, 30_000);
+  }
 
   @property({ type: Boolean })
   get allowScripts(): boolean {
@@ -93,7 +154,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
   }
 
   get documentHtml(): string | undefined {
-    return this.isCurrent(this.binding) ? this.view?.html : undefined;
+    return this.sameOwner(this.viewOwner) ? this.view?.html : undefined;
   }
 
   override connectedCallback(): void {
@@ -108,13 +169,19 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
   }
 
   private clearView(): void {
+    this.clearRetry();
+    this.validated = undefined;
+    this.viewOwner = undefined;
+    this.sandboxGeneration += 1;
     this.runtimeError = "";
+    this.resourceError = false;
     this.binding = undefined;
     this.view = undefined;
     this.clearSandbox();
   }
 
   private clearSandbox(): void {
+    this.scrollNonce = "";
     this.sandboxHost?.dispose();
     this.sandboxHost = undefined;
     this.promptPort?.close();
@@ -124,51 +191,150 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
     this.contentHeight = undefined;
   }
 
-  private isCurrent(binding: ViewBinding | undefined): binding is ViewBinding {
+  private sameOwner(binding: ViewBinding | undefined): binding is ViewBinding {
+    const gateway = this.context?.gateway;
+    const snapshot = gateway?.snapshot;
     return Boolean(
       binding &&
-      this.isConnected &&
-      this.binding === binding &&
-      binding.client === this.context?.gateway.snapshot.client &&
+      gateway &&
+      snapshot &&
+      binding.client === snapshot.client &&
       binding.docId === this.docId &&
       binding.sessionKey === this.sessionKey &&
-      binding.generation === getCanvasWidgetFrameConnectionGeneration(),
+      binding.connectionRevision === gateway.connectionRevision &&
+      binding.gatewayUrl === gateway.connection.gatewayUrl &&
+      !snapshot.lastErrorAuthReason &&
+      snapshot.phase !== "stopped" &&
+      (snapshot.phase !== "connected" ||
+        ((!binding.profileId ||
+          !snapshot.selfUser?.id ||
+          binding.profileId === snapshot.selfUser.id) &&
+          binding.recoveryScope === snapshot.hello?.auth?.recoveryScope &&
+          hasOperatorReadAccess(snapshot.hello?.auth ?? null))),
+    );
+  }
+
+  private isCurrent(binding: ViewBinding | undefined): binding is ViewBinding {
+    return (
+      this.sameOwner(binding) &&
+      this.isConnected &&
+      this.binding === binding &&
+      isGatewayAvailable(this.context!.gateway.snapshot) &&
+      binding.generation === getCanvasWidgetFrameConnectionGeneration()
     );
   }
 
   override willUpdate(): void {
-    const client = this.context?.gateway.snapshot.client;
-    if (!client || !this.docId) {
+    const gateway = this.context?.gateway;
+    const client = gateway?.snapshot.client;
+    if (
+      (this.binding && !this.sameOwner(this.binding)) ||
+      (this.viewOwner && !this.sameOwner(this.viewOwner))
+    ) {
+      this.clearView();
+    }
+    if (!gateway || !client || !this.docId) {
       this.clearView();
       return;
     }
-    if (
-      this.binding?.client === client &&
-      this.binding.docId === this.docId &&
-      this.binding.sessionKey === this.sessionKey &&
-      this.binding.generation === this.connectionGeneration
-    ) {
+    // Content can outlive its socket, but prompts require a successful read in
+    // the current generation. Keep the private port inert rather than remounting.
+    if (!isGatewayAvailable(gateway.snapshot)) {
+      this.binding = undefined;
+      this.clearRetry();
+      this.validated = undefined;
+      this.sandboxHost?.setActive(false);
+      this.pending = true;
       return;
     }
-    this.clearView();
+    if (!hasOperatorReadAccess(gateway.snapshot.hello?.auth ?? null)) {
+      this.error = t("board.widget.sandboxUnavailable");
+      return;
+    }
+    const profileId = gateway.snapshot.selfUser?.id;
+    if (profileId) {
+      if (this.binding && !this.binding.profileId) {
+        this.binding.profileId = profileId;
+      }
+      if (this.viewOwner && !this.viewOwner.profileId) {
+        this.viewOwner.profileId = profileId;
+      }
+    }
+    const generation = getCanvasWidgetFrameConnectionGeneration();
+    if (this.binding?.generation === generation) {
+      return;
+    }
+    this.clearRetry();
+    this.validated = undefined;
     this.error = "";
-    const binding = {
+    const binding: ViewBinding = {
       client,
       docId: this.docId,
       sessionKey: this.sessionKey,
-      generation: this.connectionGeneration,
+      generation,
+      connectionRevision: gateway.connectionRevision,
+      gatewayUrl: gateway.connection.gatewayUrl,
+      // Hello can omit presence until users.self settles; recoveryScope already
+      // binds verified principals. Preserve known attribution until it resolves.
+      profileId: gateway.snapshot.selfUser?.id ?? this.viewOwner?.profileId ?? null,
+      recoveryScope: gateway.snapshot.hello?.auth?.recoveryScope,
     };
     this.binding = binding;
+    this.pending = Boolean(this.view);
+    this.slowTimer = window.setTimeout(() => {
+      if (this.isCurrent(binding)) {
+        this.pending = true;
+      }
+    }, WIDGET_LOAD_NOTICE_MS);
     void loadCanvasView(binding)
       .then((view) => {
-        if (this.isCurrent(binding)) {
-          this.view = view;
+        if (!this.isCurrent(binding)) {
+          return;
         }
+        this.clearRetry();
+        const previous = this.view;
+        if (
+          previous &&
+          (previous.html !== view.html ||
+            previous.sandboxUrl !== view.sandboxUrl ||
+            previous.sandboxPort !== view.sandboxPort ||
+            previous.sandboxOrigin !== view.sandboxOrigin)
+        ) {
+          this.clearSandbox();
+          this.runtimeError = "";
+          this.resourceError = false;
+          this.sandboxGeneration += 1;
+        }
+        this.view = view;
+        this.viewOwner = binding;
+        this.validated = binding;
+        this.pending = false;
+        this.retryDelayMs = 1_000;
+        this.sandboxHost?.setActive(true);
       })
       .catch((error: unknown) => {
-        if (this.isCurrent(binding)) {
-          this.error = formatUiError(error);
+        if (!this.isCurrent(binding)) {
+          return;
         }
+        this.clearRetry();
+        if (
+          isAwaitingGatewayFailure(error, gateway.snapshot) ||
+          error instanceof GatewayProtocolRequestTimeoutError ||
+          (error instanceof GatewayProtocolRequestError &&
+            error.gatewayCode === "UNAVAILABLE" &&
+            error.retryable)
+        ) {
+          this.scheduleRetry(
+            binding,
+            error instanceof GatewayProtocolRequestError ? error.retryAfterMs : undefined,
+          );
+          return;
+        }
+        // A definitive denial or missing document retires cached content and its ports.
+        this.view = undefined;
+        this.clearSandbox();
+        this.pending = false;
+        this.error = formatUiError(error);
       });
   }
 
@@ -180,15 +346,25 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
       return;
     }
     this.releaseTheme = registerWidgetThemeFrame(frame, this.sandboxOrigin);
+    this.scrollNonce = generateUUID();
     this.sandboxHost = new WidgetSandboxHost({
       frame,
       sandboxOrigin: this.sandboxOrigin,
       sandboxUrl: frame.src,
       documentKey: `${binding.docId}\0${binding.generation}`,
       loadDocument: async () => view.html,
-      onLoaded: () => this.postHostState(),
+      onLoaded: () => {
+        this.pending = false;
+        this.postHostState();
+      },
+      onRendered: () => this.postHostState(),
       onError: (error) => this.fail(error),
-      onReadyTimeout: () => this.fail(new Error(t("board.widget.sandboxUnavailable"))),
+      onReadyTimeout: () => {
+        this.pending = true;
+      },
+      onPending: () => {
+        this.pending = true;
+      },
     });
   }
 
@@ -204,14 +380,19 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
     }
     postWidgetTheme(frame, this.sandboxOrigin);
     frame.contentWindow?.postMessage({ type: "openclaw:widget-chat-host" }, this.sandboxOrigin);
+    // Saved widget documents already use this bridge for unconsumed wheel/touch input.
+    frame.contentWindow?.postMessage(
+      { type: "openclaw:widget-board-host", nonce: this.scrollNonce },
+      this.sandboxOrigin,
+    );
   }
 
   private readonly handleMessage = (event: MessageEvent): void => {
     const host = this.sandboxHost;
-    const binding = this.binding;
+    const binding = this.viewOwner;
     if (
       !host ||
-      !this.isCurrent(binding) ||
+      !this.sameOwner(binding) ||
       event.source !== host.frame.contentWindow ||
       event.origin !== this.sandboxOrigin
     ) {
@@ -219,8 +400,33 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
     }
     host.handleMessage(event);
     const data = asOptionalRecord(event.data);
+    if (
+      data?.type === "openclaw:widget-scroll" &&
+      this.scrollNonce &&
+      data.nonce === this.scrollNonce &&
+      typeof data.deltaY === "number" &&
+      Number.isFinite(data.deltaY)
+    ) {
+      forwardChatWheelToTranscript(
+        new WheelEvent("wheel", { deltaY: data.deltaY, cancelable: true }),
+        this.closest<HTMLElement>(".chat-thread"),
+      );
+      return;
+    }
     if (data?.type === "openclaw:widget-runtime-error") {
       if (!this.sessionKey || typeof data.message !== "string") {
+        return;
+      }
+      // Download/rejection failures are not evidence that agent-authored code is
+      // broken. Keep a local recovery action, never wake the agent to rewrite it.
+      if (
+        !this.isCurrent(this.validated) ||
+        !navigator.onLine ||
+        /failed to fetch|load failed|networkerror|network request failed|importing a module script failed|failed to load module script/i.test(
+          data.message,
+        )
+      ) {
+        this.resourceError = true;
         return;
       }
       const report = {
@@ -283,14 +489,15 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
     this.promptPort = port;
     port.addEventListener("message", (message: MessageEvent) => {
       if (
-        this.isCurrent(binding) &&
+        this.isCurrent(this.validated) &&
+        this.sandboxHost === host &&
         this.promptPort === port &&
         message.data?.type === "openclaw:widget-prompt"
       ) {
         dispatchWidgetPrompt(
           host.frame,
           message.data.prompt,
-          `${this.sessionKey}\0${binding.docId}\0${binding.generation}`,
+          `${this.sessionKey}\0${this.docId}\0${this.validated!.generation}`,
         );
       }
     });
@@ -314,6 +521,15 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
       </div>`;
     }
     if (!this.view || !this.context) {
+      if (this.pending) {
+        return html`<div
+          class="board-widget__notice"
+          role="status"
+          style=${`min-height:${this.preferredHeight ?? 420}px`}
+        >
+          ${t("board.widget.waitingForConnection")}
+        </div>`;
+      }
       return html`<div
         class="skeleton"
         role="status"
@@ -339,7 +555,22 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
     const height = this.contentHeight ?? this.preferredHeight;
     return keyed(
       this.sandboxGeneration,
-      html`${this.runtimeError ? html`<div class="board-widget__notice" role="status">${t("board.widget.runtimeError", { message: this.runtimeError })}</div>` : nothing}<iframe
+      html`${this.pending ? html`<div class="board-widget__notice" role="status">${t("board.widget.waitingForConnection")}</div>` : nothing}${
+          this.resourceError
+            ? html`<div class="board-widget__notice" role="status">
+                ${t("board.widget.resourceUnavailable")}
+                <button
+                  class="btn btn--small"
+                  @click=${() => {
+                    this.clearView();
+                    this.requestUpdate();
+                  }}
+                >
+                  ${t("common.retry")}
+                </button>
+              </div>`
+            : nothing
+        }${this.runtimeError ? html`<div class="board-widget__notice" role="status">${t("board.widget.runtimeError", { message: this.runtimeError })}</div>` : nothing}<iframe
           class="chat-tool-card__preview-frame"
           title=${this.title}
           src=${src ?? nothing}

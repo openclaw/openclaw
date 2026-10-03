@@ -571,18 +571,12 @@ extension OpenClawChatViewModel {
         encodedAttachments: [OpenClawChatAttachmentPayload]) -> [OpenClawChatMessageContent]
     {
         var content: [OpenClawChatMessageContent] = [
-            OpenClawChatMessageContent(
-                type: "text",
-                text: messageText,
-                mimeType: nil,
-                fileName: nil,
-                content: nil),
+            OpenClawChatMessageContent(type: "text", text: messageText),
         ]
         for (attachment, payload) in zip(attachments, encodedAttachments) {
             content.append(
                 OpenClawChatMessageContent(
                     type: payload.type,
-                    text: nil,
                     mimeType: payload.mimeType,
                     fileName: payload.fileName,
                     sizeBytes: attachment.data.count,

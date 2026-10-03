@@ -1,13 +1,12 @@
 // Skill tool dispatch tests cover policy-filtered tool surfaces.
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { createOpenClawTools } from "../../agents/openclaw-tools.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { resolveSkillDispatchTools, type SkillToolDispatchDependencies } from "./tool-dispatch.js";
 
 function makeTool(name: string) {
@@ -29,6 +28,7 @@ const createOpenClawToolsMock = vi.fn<SkillToolDispatchDependencies["createOpenC
 const dependencies: SkillToolDispatchDependencies = {
   createOpenClawTools: createOpenClawToolsMock,
 };
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-skill-delegated-policy-");
 
 const dispatchDefaults = {
   message: { surface: "telegram", senderId: "user-1" },
@@ -165,7 +165,7 @@ describe("resolveSkillDispatchTools", () => {
   });
 
   it("uses persisted delegated policy instead of a sender wildcard", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-skill-delegated-policy-"));
+    const tempDir = sessionDirs.make();
     const storePath = path.join(tempDir, "sessions.json");
     const sessionKey = "agent:main:subagent:skill-child";
     await replaceSessionEntry({ storePath, sessionKey }, {
@@ -178,29 +178,25 @@ describe("resolveSkillDispatchTools", () => {
       inheritedToolPolicyVersion: 1,
     } as SessionEntry);
 
-    try {
-      const tools = resolveSkillDispatchTools(
-        {
-          ...dispatchDefaults,
-          message: { surface: "telegram" },
-          cfg: {
-            session: { store: storePath },
-            tools: {
-              toolsBySender: {
-                "*": { deny: ["group:runtime", "group:fs"] },
-                "id:alice": {},
-              },
+    const tools = resolveSkillDispatchTools(
+      {
+        ...dispatchDefaults,
+        message: { surface: "telegram" },
+        cfg: {
+          session: { store: storePath },
+          tools: {
+            toolsBySender: {
+              "*": { deny: ["group:runtime", "group:fs"] },
+              "id:alice": {},
             },
           },
-          sessionKey,
         },
-        dependencies,
-      );
+        sessionKey,
+      },
+      dependencies,
+    );
 
-      expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(["read", "exec"]));
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(["read", "exec"]));
   });
 
   it("removes owner-only core tools for authorized non-owner dispatch", () => {

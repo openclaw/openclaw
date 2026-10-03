@@ -16,12 +16,12 @@ import {
   readUserProfileIdentity,
   retainUserProfileCatalog,
 } from "./user-profile-list.js";
+import { setUserProfileRole } from "./user-profile-writes.worker.js";
 import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
 import {
   adoptTailscaleProfileAvatar,
   ensureProfileForEmail,
   UserProfileNotFoundError,
-  setUserProfileRole,
 } from "./user-profiles.js";
 
 const boundary = vi.hoisted(() => ({

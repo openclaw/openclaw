@@ -80,8 +80,6 @@ function createRouteContext(
     state: () => ({ resolved: { ssrfPolicy } }),
     forProfile: () => profileCtx,
     listProfiles: vi.fn(async () => []),
-    mapTabError: vi.fn(() => null),
-    ...profileCtx,
   };
 }
 

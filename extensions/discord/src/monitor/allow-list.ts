@@ -293,19 +293,13 @@ export function resolveDiscordCommandAuthorized(params: {
   if (!params.isDirectMessage) {
     return true;
   }
-  const allowList = normalizeDiscordAllowList(params.allowFrom, ["discord:", "user:", "pk:"]);
-  if (!allowList) {
-    return true;
-  }
-  return allowListMatches(
-    allowList,
-    {
-      id: params.author.id,
-      name: params.author.username,
-      tag: formatDiscordUserTag(params.author),
-    },
-    { allowNameMatching: params.allowNameMatching },
-  );
+  return resolveDiscordUserAllowed({
+    allowList: params.allowFrom,
+    userId: params.author.id,
+    userName: params.author.username,
+    userTag: formatDiscordUserTag(params.author),
+    allowNameMatching: params.allowNameMatching,
+  });
 }
 
 export function resolveDiscordGuildEntry(params: {
@@ -522,8 +516,7 @@ export function resolveDiscordChannelPolicyCommandAuthorizer(params: {
   guildInfo?: DiscordGuildEntryResolved | null;
   channelConfig?: DiscordChannelConfigResolved | null;
 }) {
-  const channelAllowlistConfigured =
-    Boolean(params.guildInfo?.channels) && Object.keys(params.guildInfo?.channels ?? {}).length > 0;
+  const channelAllowlistConfigured = hasConfiguredDiscordChannels(params.guildInfo?.channels);
   return {
     configured:
       params.groupPolicy === "allowlist" &&

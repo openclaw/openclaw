@@ -755,44 +755,70 @@ describe("cron run receipt store", () => {
     },
   );
 
-  it("recovers an unreadable foreign owner only after the stuck-run horizon", async () => {
-    const { storePath } = await makeStorePath();
-    const startedAtMs = Date.now();
-    const job = makeCronReceiptJob("unreadable-owner");
-    job.state.runningAtMs = startedAtMs;
-    await saveCronStore(storePath, { version: 1, jobs: [job] });
-    const foreign = makeForeignOwner(claimCronRunReceiptForTest(storePath, job, startedAtMs));
-    const state = makeState(storePath);
-    const proposal = await observeCronRecoveryForTest(state, job.id, undefined, startedAtMs);
-    expect(await recoverCronRunForTest(state, proposal)).toMatchObject({ kind: "live" });
+  it.each(["canonical", "unrepaired"])(
+    "recovers an unreadable foreign owner only after the stuck-run horizon with %s delivery",
+    async (delivery) => {
+      const { storePath } = await makeStorePath();
+      const startedAtMs = Date.now();
+      const job = makeCronReceiptJob("unreadable-owner");
+      job.state.runningAtMs = startedAtMs;
+      await saveCronStore(storePath, { version: 1, jobs: [job] });
+      const foreign = makeForeignOwner(claimCronRunReceiptForTest(storePath, job, startedAtMs));
+      const database = openOpenClawStateDatabase().db;
+      if (delivery === "unrepaired") {
+        database
+          .prepare(
+            "UPDATE cron_jobs SET job_json = json_remove(job_json, '$.delivery.mode') WHERE store_key = ? AND job_id = ?",
+          )
+          .run(cronStoreKey(storePath), job.id);
+      }
+      const definition = () =>
+        database
+          .prepare("SELECT job_json FROM cron_jobs WHERE store_key = ? AND job_id = ?")
+          .get(cronStoreKey(storePath), job.id)?.job_json;
+      const originalDefinition = definition();
+      const state = makeState(storePath);
+      const proposal = await observeCronRecoveryForTest(state, job.id, undefined, startedAtMs);
+      expect(await recoverCronRunForTest(state, proposal)).toMatchObject({ kind: "live" });
 
-    foreign.startTimeProbe.mockImplementation((pid) =>
-      pid === foreign.handle.ownerPid ? null : foreign.getStartTime(pid),
-    );
-    vi.setSystemTime(startedAtMs + 2 * 60 * 60_000);
-    expect(await recoverCronRunForTest(state, proposal)).toMatchObject({ kind: "live" });
-    expect(() => claimCronRunReceiptForTest(storePath, job, Date.now())).toThrow(
-      CronRunReceiptConflictError,
-    );
-    vi.setSystemTime(Date.now() + 1);
+      foreign.startTimeProbe.mockImplementation((pid) =>
+        pid === foreign.handle.ownerPid ? null : foreign.getStartTime(pid),
+      );
+      vi.setSystemTime(startedAtMs + 2 * 60 * 60_000);
+      expect(await recoverCronRunForTest(state, proposal)).toMatchObject({ kind: "live" });
+      expect(() => claimCronRunReceiptForTest(storePath, job, Date.now())).toThrow(
+        CronRunReceiptConflictError,
+      );
+      vi.setSystemTime(Date.now() + 1);
 
-    expect(await recoverCronRunForTest(state, proposal)).toMatchObject({ kind: "repaired" });
-    const recovered = (await loadCronStore(storePath)).jobs[0]!;
-    expect(recovered.state).toMatchObject({ lastRunStatus: "error" });
-    expect(recovered.state.runningAtMs).toBeUndefined();
-    expect(receipts(storePath, job.id)).toMatchObject([
-      { receiptId: foreign.handle.receiptId, status: "interrupted" },
-    ]);
-    expect(() =>
-      readCronRunReceiptCurrentJob({ handle: foreign.handle, resolveAgentId: () => job.agentId! }),
-    ).toThrow(CronRunReceiptRevisionError);
-    const successor = claimCronRunReceiptForTest(storePath, recovered, Date.now());
-    await finishCronRunReceiptAsync({
-      handle: successor,
-      status: "ok",
-      finishedAtMs: Date.now() + 1,
-    });
-  });
+      expect(await recoverCronRunForTest(state, proposal)).toMatchObject({ kind: "repaired" });
+      const recovered = (await loadCronStore(storePath)).jobs[0]!;
+      expect(recovered.state).toMatchObject({ lastRunStatus: "error" });
+      expect(recovered.state.runningAtMs).toBeUndefined();
+      expect(receipts(storePath, job.id)).toMatchObject([
+        { receiptId: foreign.handle.receiptId, status: "interrupted" },
+      ]);
+      expect(() =>
+        readCronRunReceiptCurrentJob({
+          handle: foreign.handle,
+          resolveAgentId: () => job.agentId!,
+        }),
+      ).toThrow(CronRunReceiptRevisionError);
+      expect(definition()).toBe(originalDefinition);
+      if (delivery === "unrepaired") {
+        expect(() => claimCronRunReceiptForTest(storePath, recovered, Date.now())).toThrow(
+          "openclaw doctor --fix",
+        );
+      } else {
+        const successor = claimCronRunReceiptForTest(storePath, recovered, Date.now());
+        await finishCronRunReceiptAsync({
+          handle: successor,
+          status: "ok",
+          finishedAtMs: Date.now() + 1,
+        });
+      }
+    },
+  );
 
   it.each(["local", "foreign"] as const)(
     "keeps a verified %s owner fenced beyond the stuck-run horizon",

@@ -13,7 +13,7 @@ import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state
 import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
 import { runWebSearch } from "../../web-search/runtime.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
-import { resolveAuthenticatedProfileId } from "./users-profile-access.js";
+import { prepareAuthenticatedProfile } from "./users-profile-access.js";
 import { assertValidParams } from "./validation.js";
 import { prepareWebSearchStatus } from "./web-search-status.js";
 
@@ -76,14 +76,15 @@ export const webSearchHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const requesterProfileId = resolveAuthenticatedProfileId(options.client);
     try {
-      const prepared = await prepareWebSearchStatus(context, params, requesterProfileId);
+      const requester = await prepareAuthenticatedProfile(options);
+      requester.assertCurrent();
+      const prepared = await prepareWebSearchStatus(context, params, requester.profileId);
+      requester.assertCurrent();
       if (prepared.error) {
         respond(false, undefined, prepared.error);
       } else if (
         !hasSearchAuthority(options, "read") ||
-        resolveAuthenticatedProfileId(options.client) !== requesterProfileId ||
         context.getRuntimeConfig() !== prepared.config
       ) {
         respond(
@@ -130,18 +131,20 @@ export const webSearchHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const requesterProfileId = resolveAuthenticatedProfileId(options.client);
     try {
-      const prepared = await prepareWebSearchStatus(context, params, requesterProfileId);
+      const requester = await prepareAuthenticatedProfile(options);
+      requester.assertCurrent();
+      const prepared = await prepareWebSearchStatus(context, params, requester.profileId);
+      requester.assertCurrent();
       if (prepared.error) {
         respond(false, undefined, prepared.error);
         return;
       }
       const { status, config, agentDir } = prepared;
-      const hasCurrentAuthority = () =>
-        hasSearchAuthority(options, "admin") &&
-        resolveAuthenticatedProfileId(options.client) === requesterProfileId &&
-        context.getRuntimeConfig() === config;
+      const hasCurrentAuthority = () => {
+        requester.assertCurrent();
+        return hasSearchAuthority(options, "admin") && context.getRuntimeConfig() === config;
+      };
       if (!hasCurrentAuthority()) {
         respond(
           false,

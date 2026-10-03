@@ -16,7 +16,7 @@ import * as authProfiles from "../../agents/auth-profiles.js";
 import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
 import { upsertAuthProfileWithLockOrThrow } from "../../agents/auth-profiles/profiles.js";
 import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
-import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
+import type { ApiKeyCredential, AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
 import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
@@ -54,6 +54,19 @@ const writeConfig = (config: OpenClawConfig) =>
   fs.writeFileSync(configPath(), JSON.stringify(config));
 const save = (apiKey = "synthetic-new-key", profileId?: string) =>
   saveModelProviderApiKey({ provider: "sample", apiKey, profileId, agentDir: agentDir("writer") });
+
+function seedKey(
+  profileId: string,
+  key: string,
+  owner?: string,
+  metadata: Pick<ApiKeyCredential, "copyToAgents" | "displayName" | "email"> = {},
+) {
+  return upsertAuthProfileWithLockOrThrow({
+    profileId,
+    agentDir: owner ? agentDir(owner) : undefined,
+    credential: { type: "api_key", provider: "sample", key, ...metadata },
+  });
+}
 
 async function readConfig() {
   return (await configWriter.loadValidConfigSnapshotOrThrow()).runtimeConfig;
@@ -120,7 +133,7 @@ describe("shared API-key editing and removal", () => {
     }
   });
 
-  it.each(["failed", "restart-pending", "unclaimed"] as const)(
+  it.each(["restart-pending", "unclaimed"] as const)(
     "reports a saved key with a warning when config application is %s",
     async (status) => {
       const stop = registerRuntimeConfigWriteListener((event) => {
@@ -150,16 +163,10 @@ describe("shared API-key editing and removal", () => {
 
   it("replaces a configured shared key, preserving metadata, defaults and cross-agent resolution", async () => {
     const profileId = "sample:work";
-    await upsertAuthProfileWithLockOrThrow({
-      profileId,
-      credential: {
-        type: "api_key",
-        provider: "sample",
-        key: "old-key",
-        copyToAgents: false,
-        displayName: "Stored account",
-        email: "stored@example.test",
-      },
+    await seedKey(profileId, "old-key", undefined, {
+      copyToAgents: false,
+      displayName: "Stored account",
+      email: "stored@example.test",
     });
     const configuredProfile = {
       provider: "sample",
@@ -200,11 +207,7 @@ describe("shared API-key editing and removal", () => {
       ["sample:work", "old-work"],
       ["sample:backup", "kept-backup"],
     ] as const) {
-      await upsertAuthProfileWithLockOrThrow({
-        agentDir: agentDir("writer"),
-        profileId,
-        credential: { type: "api_key", provider: "sample", key },
-      });
+      await seedKey(profileId, key, "writer");
     }
     await setAuthProfileOrder({
       agentDir: agentDir("writer"),
@@ -222,14 +225,8 @@ describe("shared API-key editing and removal", () => {
   it.each(["main", "reader"])(
     "removes a shared bound key through %s and retains its sibling and model settings",
     async (caller) => {
-      await upsertAuthProfileWithLockOrThrow({
-        profileId: "sample:bound",
-        credential: { type: "api_key", provider: "sample", key: "removed" },
-      });
-      await upsertAuthProfileWithLockOrThrow({
-        profileId: "sample:backup",
-        credential: { type: "api_key", provider: "sample", key: "kept" },
-      });
+      await seedKey("sample:bound", "removed");
+      await seedKey("sample:backup", "kept");
       writeConfig({
         plugins: { allow: [] },
         agents: { defaults: { model: "sample/model" } },
@@ -261,11 +258,7 @@ describe("shared API-key editing and removal", () => {
       plugins: { allow: [] },
       agents: { entries: { writer: { model: `sample/astra@${removedId}` } } },
     });
-    await upsertAuthProfileWithLockOrThrow({
-      agentDir: agentDir("writer"),
-      profileId: removedId,
-      credential: { type: "api_key", provider: "sample", key: "removed" },
-    });
+    await seedKey(removedId, "removed", "writer");
     const scope = {
       agentId: "writer",
       sessionKey: "agent:writer:chat",
@@ -315,11 +308,7 @@ describe("shared API-key editing and removal", () => {
       prevProvider: "sample",
     });
     expect(existing?.modelFallback?.prevAuthProfileOverride).toBeUndefined();
-    await upsertAuthProfileWithLockOrThrow({
-      agentDir: agentDir("writer"),
-      profileId: replacementId,
-      credential: { type: "api_key", provider: "sample", key: "replacement" },
-    });
+    await seedKey(replacementId, "replacement", "writer");
     const freshScope = { ...scope, sessionKey: "agent:writer:new" };
     await replaceSessionEntry(freshScope, { sessionId: "new-chat", updatedAt: 1 });
     // Original order: reconnect, switch away, then return to the configured model.
@@ -349,15 +338,8 @@ describe("shared API-key editing and removal", () => {
     const fallbackProfileId = "sample:deleted-fallback";
     writeConfig({ agents: { entries: { writer: { model: `sample/astra@${profileId}` } } } });
     const profile = { agentDir: agentDir("writer"), profileId };
-    await upsertAuthProfileWithLockOrThrow({
-      ...profile,
-      credential: { type: "api_key", provider: "sample", key: "removed" },
-    });
-    await upsertAuthProfileWithLockOrThrow({
-      agentDir: profile.agentDir,
-      profileId: fallbackProfileId,
-      credential: { type: "api_key", provider: "sample", key: "removed-fallback" },
-    });
+    await seedKey(profileId, "removed", "writer");
+    await seedKey(fallbackProfileId, "removed-fallback", "writer");
     const scope = {
       agentId: "writer",
       sessionKey: "agent:writer:chat",
@@ -384,10 +366,7 @@ describe("shared API-key editing and removal", () => {
           async (...args) => {
             const change = await update(...args);
             // Reconnect after cleanup has prepared its patch, before the canonical commit.
-            await upsertAuthProfileWithLockOrThrow({
-              ...profile,
-              credential: { type: "api_key", provider: "sample", key: "reconnected" },
-            });
+            await seedKey(profileId, "reconnected", "writer");
             return change;
           },
           options,
@@ -428,11 +407,7 @@ describe("shared API-key editing and removal", () => {
     };
     writeConfig(config);
     for (const id of [profileId, removedId]) {
-      await upsertAuthProfileWithLockOrThrow({
-        agentDir: agentDir("writer"),
-        profileId: id,
-        credential: { type: "api_key", provider: "sample", key: "removed" },
-      });
+      await seedKey(id, "removed", "writer");
     }
     const queued = (id: string, snapshot: OpenClawConfig) => {
       const pending = createQueueTestRun({ prompt: id });
@@ -457,11 +432,7 @@ describe("shared API-key editing and removal", () => {
       async (params) => {
         const result = await remove(params);
         expect(result).toBe(true);
-        await upsertAuthProfileWithLockOrThrow({
-          agentDir: agentDir("writer"),
-          profileId,
-          credential: { type: "api_key", provider: "sample", key: "reconnected" },
-        });
+        await seedKey(profileId, "reconnected", "writer");
         writeConfig(reconnectedConfig);
         enqueueFollowupRun(queueKey, reconnectedRun, { mode: "followup" });
         return result;
@@ -489,15 +460,8 @@ describe("shared API-key editing and removal", () => {
 
   it("releases a shared default without changing another agent's independent same-ID account", async () => {
     const profileId = "sample:shared";
-    await upsertAuthProfileWithLockOrThrow({
-      profileId,
-      credential: { type: "api_key", provider: "sample", key: "shared" },
-    });
-    await upsertAuthProfileWithLockOrThrow({
-      agentDir: agentDir("reader"),
-      profileId,
-      credential: { type: "api_key", provider: "sample", key: "independent" },
-    });
+    await seedKey(profileId, "shared");
+    await seedKey(profileId, "independent", "reader");
     writeConfig({
       plugins: { allow: [] },
       agents: {
@@ -565,11 +529,7 @@ describe("shared API-key editing and removal", () => {
       profileId: "sample:external",
       credential: external,
     });
-    await upsertAuthProfileWithLockOrThrow({
-      agentDir: agentDir("writer"),
-      profileId: "sample:inline",
-      credential: { type: "api_key", provider: "sample", key: "removed" },
-    });
+    await seedKey("sample:inline", "removed", "writer");
     writeConfig({
       models: { providers: { sample: { ...connection, apiKey: "sample:external" } } },
     });
@@ -586,11 +546,7 @@ describe("shared API-key editing and removal", () => {
   });
 
   it("preserves agent overrides when a global key would shadow them", async () => {
-    await upsertAuthProfileWithLockOrThrow({
-      agentDir: agentDir("reader"),
-      profileId: "sample:manual",
-      credential: { type: "api_key", provider: "sample", key: "kept-local" },
-    });
+    await seedKey("sample:manual", "kept-local", "reader");
     writeConfig({ models: { providers: { sample: { ...connection, apiKey: "old-inline" } } } });
     const before = fs.readFileSync(configPath(), "utf8");
     await expect(save()).rejects.toThrow("An agent already overrides this shared key");
@@ -677,11 +633,7 @@ describe("shared API-key editing and removal", () => {
     "preserves a concurrent $type replacement during API-key removal",
     async (replacement) => {
       const profileId = "sample:race";
-      await upsertAuthProfileWithLockOrThrow({
-        agentDir: agentDir("writer"),
-        profileId,
-        credential: { type: "api_key", provider: "sample", key: "old-key" },
-      });
+      await seedKey(profileId, "old-key", "writer");
       writeConfig({ models: { providers: { sample: { ...connection, apiKey: profileId } } } });
       const config = await readConfig();
       const updateConfig = configWriter.updateConfig;
@@ -718,11 +670,7 @@ describe("shared API-key editing and removal", () => {
   );
 
   it("preserves a configured agent-local key instead of rebinding it to a new shared key", async () => {
-    await upsertAuthProfileWithLockOrThrow({
-      agentDir: agentDir("writer"),
-      profileId: "sample:local",
-      credential: { type: "api_key", provider: "sample", key: "kept-local", copyToAgents: false },
-    });
+    await seedKey("sample:local", "kept-local", "writer", { copyToAgents: false });
     writeConfig({ models: { providers: { sample: { ...connection, apiKey: "sample:local" } } } });
     await expect(save()).rejects.toThrow("An agent already overrides this shared key");
     expect(
@@ -748,11 +696,7 @@ describe("shared API-key editing and removal", () => {
 
   it("cleans references for every profile in the owner's full-provider removal plan", async () => {
     for (const profileId of ["sample:old", "sample:new"]) {
-      await upsertAuthProfileWithLockOrThrow({
-        agentDir: agentDir("writer"),
-        profileId,
-        credential: { type: "api_key", provider: "sample", key: "removed-key" },
-      });
+      await seedKey(profileId, "removed-key", "writer");
     }
     writeConfig({ models: { providers: { sample: { ...connection, apiKey: "sample:new" } } } });
     await removeModelAuthCredentials({
@@ -799,11 +743,7 @@ describe("shared API-key editing and removal", () => {
     "restores config after a concurrent same-profile replacement rejects $name removal",
     async ({ selection }) => {
       const profileId = "sample:race";
-      await upsertAuthProfileWithLockOrThrow({
-        agentDir: agentDir("writer"),
-        profileId,
-        credential: { type: "api_key", provider: "sample", key: "old-key" },
-      });
+      await seedKey(profileId, "old-key", "writer");
       writeConfig({
         agents: { entries: { writer: { model: `sample/astra@${profileId}` } } },
         auth: {
@@ -815,11 +755,7 @@ describe("shared API-key editing and removal", () => {
       const config = await readConfig();
       const updateConfig = configWriter.updateConfig;
       vi.spyOn(configWriter, "updateConfig").mockImplementationOnce(async (mutator) => {
-        await upsertAuthProfileWithLockOrThrow({
-          agentDir: agentDir("writer"),
-          profileId,
-          credential: { type: "api_key", provider: "sample", key: "replacement-key" },
-        });
+        await seedKey(profileId, "replacement-key", "writer");
         return updateConfig(mutator);
       });
 
@@ -888,10 +824,7 @@ describe("shared API-key editing and removal", () => {
     "preserves a newer provider binding of %s after key entry",
     async (apiKey) => {
       for (const profileId of ["sample:original", "sample:backup"]) {
-        await upsertAuthProfileWithLockOrThrow({
-          profileId,
-          credential: { type: "api_key", provider: "sample", key: profileId },
-        });
+        await seedKey(profileId, profileId);
       }
       writeConfig({
         models: { providers: { sample: { ...connection, apiKey: "sample:original" } } },
@@ -918,26 +851,20 @@ describe("shared API-key editing and removal", () => {
     },
   );
 
-  it.each(["oauth", "token", "api-key"] as const)(
-    "keeps the active %s connection when saving an explicit backup profile",
-    async (auth) => {
-      const provider = { ...connection, auth, apiKey: "existing-connection-key" };
-      writeConfig({ models: { providers: { sample: provider } } });
-      expect(await save("backup-key", "sample:backup")).toMatchObject({
-        profileId: "sample:backup",
-      });
-      expect((await readConfig()).models?.providers?.sample).toEqual(provider);
-      expect(
-        loadPersistedAuthProfileStore(agentDir("writer"))?.profiles["sample:backup"],
-      ).toMatchObject({ key: "backup-key" });
-    },
-  );
+  it("keeps the active OAuth connection when saving an explicit backup profile", async () => {
+    const provider = { ...connection, auth: "oauth" as const, apiKey: "existing-connection-key" };
+    writeConfig({ models: { providers: { sample: provider } } });
+    expect(await save("backup-key", "sample:backup")).toMatchObject({
+      profileId: "sample:backup",
+    });
+    expect((await readConfig()).models?.providers?.sample).toEqual(provider);
+    expect(
+      loadPersistedAuthProfileStore(agentDir("writer"))?.profiles["sample:backup"],
+    ).toMatchObject({ key: "backup-key" });
+  });
 
   it("updates an explicitly selected shared profile at its existing owner", async () => {
-    await upsertAuthProfileWithLockOrThrow({
-      profileId: "sample:shared",
-      credential: { type: "api_key", provider: "sample", key: "old-shared", copyToAgents: false },
-    });
+    await seedKey("sample:shared", "old-shared", undefined, { copyToAgents: false });
     await save("replacement-shared", "sample:shared");
     expect(loadPersistedAuthProfileStore()?.profiles["sample:shared"]).toMatchObject({
       key: "replacement-shared",

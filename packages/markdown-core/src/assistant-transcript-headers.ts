@@ -146,7 +146,7 @@ export function findAssistantTranscriptRoleHeaderSpans(
     return [];
   }
   const spans: AssistantTranscriptRoleHeaderSpan[] = [];
-  const sortedExcludedRanges = [...excludedRanges].toSorted(
+  const sortedExcludedRanges = excludedRanges.toSorted(
     (left, right) => left.start - right.start || left.end - right.end,
   );
   let excludedRangeIndex = 0;

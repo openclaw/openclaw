@@ -10,7 +10,7 @@ import { defaultRuntime } from "../../../runtime.js";
 import { removeQueuedItemsByRef } from "../../../utils/queue-helpers.js";
 import { clearFollowupDrainCallback } from "./drain.js";
 import { completeFollowupRunLifecycle } from "./lifecycle.js";
-import { clearFollowupQueue, FOLLOWUP_QUEUES, followupQueueSources } from "./state.js";
+import { FOLLOWUP_QUEUES, followupQueueSources } from "./state.js";
 import { consumeQueueSummaryDelivery } from "./summary-consumption.js";
 import type { FollowupRun } from "./types.js";
 
@@ -238,23 +238,4 @@ export function hasSessionLifecycleQueueWork(params: SessionLifecycleQueueTarget
   return keys.some(
     (key) => countQueuedCommandsInLane(resolveEmbeddedSessionLane(key), matchesLaneEntry(key)) > 0,
   );
-}
-
-export function clearSessionQueues(keys: Array<string | undefined>): ClearSessionQueueResult {
-  const seen = new Set<string>();
-  let followupCleared = 0;
-  let laneCleared = 0;
-
-  for (const key of keys) {
-    const cleaned = normalizeOptionalString(key);
-    if (!cleaned || seen.has(cleaned)) {
-      continue;
-    }
-    seen.add(cleaned);
-    followupCleared += clearFollowupQueue(cleaned);
-    clearFollowupDrainCallback(cleaned);
-    laneCleared += clearCommandLane(resolveEmbeddedSessionLane(cleaned));
-  }
-
-  return { followupCleared, laneCleared, keys: [...seen] };
 }

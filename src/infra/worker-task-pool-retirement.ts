@@ -13,20 +13,6 @@ import type { Slot, WorkerTaskPoolOptions } from "./worker-task-pool.types.js";
 
 const WORKER_WARM_WINDOW_MS = 5 * 60_000;
 
-export type WorkerTaskPoolRetirement<Input, Output> = {
-  retire(slot: Slot<Input, Output>, reason?: WorkerRetirementReason): Promise<void>;
-  startRetire(slot: Slot<Input, Output>, reason?: WorkerRetirementReason): RetainedOperation<void>;
-  service(): void;
-  startRotate(): RetainedOperation<void>;
-  readonly dispatchAllowed: boolean;
-  idle(slot: Slot<Input, Output>): void;
-  clearIdle(slot: Slot<Input, Output>): void;
-  retireIdle(resourceClosures: WeakMap<WorkerLifecycle, { pending: number }>): void;
-  retryFailedRetirements(): Promise<void>;
-  joinArtifacts(): Promise<void>;
-  startJoinArtifacts(): RetainedOperation<void>;
-};
-
 export function createWorkerTaskPoolRetirement<Input, Output>({
   slots,
   options,
@@ -39,9 +25,8 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
   runInContext: <T>(operation: () => T) => T;
   dispatch: () => void;
   serviceDeadlines: () => void;
-}): WorkerTaskPoolRetirement<Input, Output> {
-  const artifactCleanups = new Set<Promise<void>>();
-  const artifactSettlements = new WeakMap<Promise<void>, RetainedOperation<void>>();
+}) {
+  const artifactCleanups = new Map<Promise<void>, RetainedOperation<void>>();
   let lastIdleRetirementAt = -Infinity;
   let warmSlot: Slot<Input, Output> | undefined;
   let rotation: RetainedOperation<void> | undefined;
@@ -208,9 +193,8 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
                   process.emitWarning(`Worker task resource release failed: ${String(error)}`),
               });
               // Release execution capacity at exit; terminal close still joins disposable files.
-              artifactCleanups.add(cleanup);
               const settled = createRetainedOperation<void>(() => {});
-              artifactSettlements.set(cleanup, settled.operation);
+              artifactCleanups.set(cleanup, settled.operation);
               void cleanup.then(() => {
                 artifactCleanups.delete(cleanup);
                 settled.resolve();
@@ -250,7 +234,7 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
   }
 
   function startJoinArtifacts(): RetainedOperation<void> {
-    const pending = [...artifactCleanups].map((cleanup) => artifactSettlements.get(cleanup)!);
+    const pending = [...artifactCleanups.values()];
     const joined = createRetainedOperation<void>(() => {
       for (const operation of pending) {
         operation.service();
@@ -278,7 +262,7 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
     const outcomes = await Promise.allSettled(
       [...slots].filter((slot) => slot.retirementFailed).map((slot) => retire(slot)),
     );
-    outcomes.push(...(await Promise.allSettled(artifactCleanups)));
+    outcomes.push(...(await Promise.allSettled(artifactCleanups.keys())));
     const errors = outcomes.flatMap((outcome) =>
       outcome.status === "rejected"
         ? [toErrorObject(outcome.reason, "worker retirement retry failed")]
@@ -307,7 +291,7 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
       rotation?.service();
     },
     clearIdle,
-    idle(slot) {
+    idle(slot: Slot<Input, Output>) {
       const idleMs = options.idleTimeoutMs ?? 60_000;
       if (idleMs <= 0) {
         return;
@@ -324,7 +308,7 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
       );
       slot.idleTimer.unref();
     },
-    retireIdle(resourceClosures) {
+    retireIdle(resourceClosures: WeakMap<WorkerLifecycle, { pending: number }>) {
       for (const slot of slots) {
         if (
           !slot.task &&
@@ -338,7 +322,6 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
       }
     },
     retryFailedRetirements,
-    startJoinArtifacts,
     joinArtifacts: () => startJoinArtifacts().result,
   };
 }

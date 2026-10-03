@@ -4,10 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { getMediaDir } from "../media/store.js";
 import { augmentChatHistoryWithCanvasBlocks } from "./chat-display-projection.canvas.js";
-import {
-  projectChatDisplayMessages,
-  sanitizeChatHistoryMessages,
-} from "./chat-display-projection.js";
+import { projectChatDisplayMessages } from "./chat-display-projection.js";
+import { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";
 import { CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES } from "./server-methods/chat-history-budget.js";
 import { SessionHistorySseState } from "./session-history-state.js";
 
@@ -96,7 +94,7 @@ describe("multimodal display privacy", () => {
     );
   });
 
-  it("keeps sanitized legacy media in projection and incremental SSE", () => {
+  it("keeps sanitized legacy media in projection and incremental SSE", async () => {
     const data = Buffer.from("inline payload").toString("base64");
     const rawMessage = {
       role: "user",
@@ -145,7 +143,8 @@ describe("multimodal display privacy", () => {
     });
     for (const message of [
       projectChatDisplayMessages([rawMessage])[0],
-      state.appendInlineMessage({ message: rawMessage, messageId: "media-message" })?.message,
+      (await state.prepareInlineMessage({ message: rawMessage, messageId: "media-message" }))()
+        ?.message,
     ]) {
       expect(message?.role).toBe("user");
       expect(JSON.stringify(message)).not.toContain(data);

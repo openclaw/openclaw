@@ -12,17 +12,11 @@ import type { GroupKeyResolution } from "./types.js";
 
 const getGroupSurfaces = () => new Set<string>([...listDeliverableMessageChannels(), "webchat"]);
 
-type LegacyGroupSessionSurface = {
-  resolveLegacyGroupSessionKey?: (ctx: MsgContext) => GroupKeyResolution | null;
-};
-
 function resolveLegacyGroupSessionKey(ctx: MsgContext): GroupKeyResolution | null {
   // Legacy plugin resolvers stay first-class because some channels still expose native group ids
   // only through channel-owned context parsing.
   for (const plugin of listChannelPlugins()) {
-    const resolved = (
-      plugin.messaging as LegacyGroupSessionSurface | undefined
-    )?.resolveLegacyGroupSessionKey?.(ctx);
+    const resolved = plugin.messaging?.resolveLegacyGroupSessionKey?.(ctx);
     if (resolved) {
       return resolved;
     }

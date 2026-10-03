@@ -276,7 +276,8 @@ credential scope of discovery.
 
 The private `createUpstreamProviderCatalog` helper keeps this snapshot lifecycle in one prepared
 owner. Supply the trusted seed, provider routes, metadata and model-list
-endpoints, static-entry eligibility, and any model decoration. An optional
+endpoints, discovery and starter-model audit labels, static-entry eligibility,
+and any model decoration. An optional
 `upstreamSeed` controls which seed lifecycle facts survive an upstream refresh.
 The owner exposes `getSnapshot`, `refreshMetadata`, `buildStaticProvider`, and
 `buildLiveProvider`; credentials belong to each build call. Live builds refresh
@@ -286,6 +287,10 @@ and empty results remain strict. `refreshMetadata` returns `undefined` when the
 feed lacks the provider, so explicit model preparation cannot mistake retained
 metadata for a successful refresh. Plugin policy still owns which models may
 resolve directly from the seed or current snapshot.
+
+`resolveStarterModel` checks the preferred provider/model reference against a
+fresh account model-list response. It returns that reference only when its exact
+model ID is advertised, without refreshing or extending the metadata snapshot.
 
 Upstream reasoning metadata preserves omitted controls as unspecified and an
 empty options or effort list as no effort control. A native `null` effort maps

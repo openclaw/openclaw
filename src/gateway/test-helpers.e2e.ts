@@ -31,7 +31,6 @@ import {
 } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { TestPortClaim } from "../test-utils/port-claims.js";
-import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -44,11 +43,6 @@ import { GatewayStartupCleanupError } from "./server-shutdown.js";
 import { startGatewayServer, type GatewayServerOptions } from "./server.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 import { reserveGatewayTestListener } from "./test-helpers.listener.js";
-
-/** Reserve a deterministic free port block for Gateway E2E tests. */
-export async function getGatewayE2ePortBlock(): Promise<number> {
-  return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 3, 4] });
-}
 
 /** Connect a GatewayClient with test defaults and resolve after hello-ok. */
 export async function connectGatewayClient(params: {
@@ -316,8 +310,8 @@ export async function startGatewayWithClient(
     clearConfigCache();
     clearSessionStoreCacheForTest();
 
-    const port =
-      params.port ?? params.portClaim?.port ?? (listener = await reserveGatewayTestListener()).port;
+    listener = await reserveGatewayTestListener(params.portClaim ?? params.port);
+    const port = listener.port;
     const start = () =>
       startGatewayServer(port, {
         bind: "loopback",
@@ -325,7 +319,7 @@ export async function startGatewayWithClient(
         controlUiEnabled: false,
         hotReloadRecovery: params.hotReloadRecovery,
       });
-    const startedServer = await (listener ? listener.start(start) : start());
+    const startedServer = await listener.start(start);
     server = startedServer;
     const client = await connectGatewayClient({
       url: `ws://127.0.0.1:${port}`,

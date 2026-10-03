@@ -77,11 +77,11 @@ describe("ModelRegistry persisted catalog state", () => {
 
   it.each(["disk", "captured", "static"])(
     "limits legacy diagnosis to disk discovery (%s)",
-    (source) => {
+    async (source) => {
       if (process.getuid?.() === 0) {
         return;
       }
-      const modelsPath = writeModelsJsonWithPluginCatalog({
+      const modelsPath = await writeModelsJsonWithPluginCatalog({
         root: {
           providers: {
             custom: {
@@ -148,8 +148,8 @@ describe("ModelRegistry persisted catalog state", () => {
 
   it.each(["generated", "persisted"])(
     "keeps %s catalog state unchanged across registry refresh",
-    (source) => {
-      const modelsPath = writeModelsJsonWithPluginCatalogs({
+    async (source) => {
+      const modelsPath = await writeModelsJsonWithPluginCatalogs({
         root: { providers: {} },
         pluginCatalogs: [
           {

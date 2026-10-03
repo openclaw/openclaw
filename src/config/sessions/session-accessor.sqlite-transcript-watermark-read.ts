@@ -1,13 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
 import { getNodeSqliteKysely, prepareSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
+import type { SessionTranscriptWatermark } from "./session-history-read.types.js";
+
+export type { SessionTranscriptWatermark } from "./session-history-read.types.js";
 
 type WatermarkDatabase = Pick<DB, "transcript_events" | "transcript_rewrite_watermarks">;
-
-export type SessionTranscriptWatermark = {
-  generation: string | null;
-  maxSeq: number | null;
-};
 
 function prepareHotWatermarkQuery(database: DatabaseSync) {
   const db = getNodeSqliteKysely<WatermarkDatabase>(database);

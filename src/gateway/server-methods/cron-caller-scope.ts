@@ -1,4 +1,7 @@
-import { resolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
+import {
+  resolveCronJobEffectiveAgentId,
+  tryResolveCronJobEffectiveAgentId,
+} from "../../cron/agent-id.js";
 import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import {
@@ -287,7 +290,7 @@ function parseAgentIdFromSessionRef(
   return trimmed ? (parseAgentSessionKey(trimmed)?.agentId ?? fallbackAgentId) : undefined;
 }
 
-function resolveCronJobOwnerAgentId(job: Pick<CronJob, "owner">): string | undefined {
+export function resolveCronJobOwnerAgentId(job: Pick<CronJob, "owner">): string | undefined {
   const ownerAgentId =
     job.owner?.agentId?.trim() || parseAgentIdFromSessionRef(job.owner?.sessionKey);
   return ownerAgentId ? normalizeAgentId(ownerAgentId) : undefined;
@@ -320,7 +323,7 @@ export function cronJobMatchesCallerScope(params: {
   if (isOperatorCommandCronJob(params.job)) {
     return false;
   }
-  const effectiveAgentId = resolveCronJobEffectiveAgentId(params.job, params.defaultAgentId);
+  const effectiveAgentId = tryResolveCronJobEffectiveAgentId(params.job, params.defaultAgentId);
   const policy = params.job.scheduledToolPolicy;
   // A signed scheduled-run claim restores only the cron tool's historical
   // current-job surface. Callers must opt in per read/self-remove operation.
@@ -388,7 +391,7 @@ export function cronJobMatchesDeclarationScope(params: {
     inputOwnerAgentId ?? resolveCronJobEffectiveAgentId(params.input, params.defaultAgentId);
   const jobAgentId =
     resolveCronJobOwnerAgentId(params.job) ??
-    resolveCronJobEffectiveAgentId(params.job, params.defaultAgentId);
+    tryResolveCronJobEffectiveAgentId(params.job, params.defaultAgentId);
   return jobAgentId === inputAgentId;
 }
 

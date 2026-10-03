@@ -30,7 +30,6 @@ function calculateAdaptiveColumnWidths(
     return [];
   }
 
-  // Use original total width from Convert API, or fall back to default
   const totalWidth =
     originalWidths && originalWidths.length > 0
       ? originalWidths.reduce((a: number, b: number) => a + b, 0)

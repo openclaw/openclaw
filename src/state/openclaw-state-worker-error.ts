@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  isSqliteLockError,
   isSqliteNativeOpenFailure,
   markSqliteNativeOpenFailure,
 } from "../infra/sqlite-error-diagnostics.js";
@@ -91,6 +92,7 @@ export function encodeOpenClawStateWorkerError(
       canonical ||=
         stateDatabasePath !== undefined ||
         nativeOpen ||
+        isSqliteLockError(current) ||
         current instanceof OpenClawQuarantineReadCleanupError ||
         (identity.type !== "error" && identity.type !== "aggregate");
       const code = "code" in current ? current.code : undefined;
@@ -234,6 +236,7 @@ function decodeErrorGraph(
       canonical ||=
         node.stateDatabasePath !== undefined ||
         node.nativeOpen === true ||
+        isSqliteLockError(node) ||
         (node.type === "aggregate" && node.name === DATABASE_QUARANTINE_READ_CLEANUP_ERROR_NAME) ||
         (node.type !== "error" && node.type !== "aggregate");
       for (const edge of [...(node.cause ? [node.cause] : []), ...(node.errors ?? [])]) {

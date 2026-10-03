@@ -24,6 +24,22 @@ const enModelControls = {
             "Anthropic models can use the API or Claude CLI, depending on their configured runtime and account. The provider name alone does not determine billing.",
         },
       },
+      completionRoutes: {
+        api: {
+          label: "API · OpenClaw",
+          detail:
+            "Uses the provider's API connection with OpenClaw's runtime. API usage is billed to that provider account.",
+        },
+        cli: {
+          label: "{runtime} · native",
+          detail:
+            "Runs through {runtime} using its own login. Billing follows the account it is signed in with; an API-key login is billed as API usage.",
+        },
+        harness: {
+          label: "{runtime}",
+          detail: "Runs through the {runtime} agent runtime and the account it uses.",
+        },
+      },
       decisionLabel: "Decision Model",
       decisionDisabled: "Disabled",
       decisionInherit: "Use global default · {model}",

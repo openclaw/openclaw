@@ -14,7 +14,8 @@ import {
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareOperatorModelPresentation } from "../operator-model-presentation.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
@@ -123,6 +124,19 @@ function createFixture(
     return respond;
   };
   return { cfg, role, person, client, context, readChatMetadata, request };
+}
+
+function response(respond: ReturnType<typeof vi.fn<RespondFn>>) {
+  expect(respond.mock.calls).toHaveLength(1);
+  expect(respond.mock.calls[0]?.[0]).toBe(true);
+  expect(respond.mock.calls[0]?.[2]).toBeUndefined();
+  return expectDefined(asOptionalRecord(respond.mock.calls[0]?.[1]), "response payload");
+}
+
+function onlyRecord(value: unknown) {
+  const rows = expectDefined(Array.isArray(value) ? value : undefined, "record list");
+  expect(rows).toHaveLength(1);
+  return expectDefined(asOptionalRecord(rows[0]), "record");
 }
 
 describe("operator model discovery at registered reads", () => {
@@ -293,6 +307,38 @@ describe("operator model discovery at registered reads", () => {
     });
   });
 
+  it.each([
+    { utilityModel: "example/fallback", routeVisible: true },
+    { utilityModel: "example/restricted-model", routeVisible: false },
+  ])(
+    "discloses the utility route only when $utilityModel is visible to the role",
+    async ({ utilityModel, routeVisible }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const f = createFixture();
+        expectDefined(f.cfg.agents?.defaults, "agent defaults").utilityModel = utilityModel;
+        expectDefined(f.cfg.models?.providers?.example, "example provider").apiKey =
+          "synthetic-key";
+        await state.writeConfig(f.cfg);
+        const respond = await f.request("models.list", { agentId: "main", view: "configured" });
+        expect(respond.mock.calls[0]?.[0]).toBe(true);
+        const { defaultModels } = expectDefined(
+          respond.mock.calls[0]?.[1] as ModelsListResult | undefined,
+          "models.list result",
+        );
+        if (routeVisible) {
+          expect(defaultModels?.utilityRuntime).toEqual({
+            id: "openclaw",
+            kind: "api",
+            label: "OpenClaw Default",
+          });
+        } else {
+          expect(defaultModels).toBeDefined();
+          expect(defaultModels).not.toHaveProperty("utilityRuntime");
+        }
+      });
+    },
+  );
+
   it("does not publish held metadata after a role policy change", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const f = createFixture();
@@ -383,68 +429,35 @@ describe("operator model discovery at registered reads", () => {
       });
       await initializeSessionReadContext(f.context);
 
-      const startup = await f.request("chat.startup", scope);
-      expect(startup).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          defaults: expect.objectContaining({ model: "fallback", modelProvider: "example" }),
-          sessionInfo: expect.objectContaining({ sessionId: "historical-model" }),
-          metadata: expect.objectContaining({
-            models: [expect.objectContaining({ id: "fallback" })],
-            modelSelectionPolicy: { restricted: true, defaultModel: "example/fallback" },
-          }),
+      const startupPayload = response(await f.request("chat.startup", scope));
+      expect(startupPayload).toMatchObject({
+        defaults: { model: "fallback", modelProvider: "example" },
+        sessionInfo: { sessionId: "historical-model" },
+        metadata: expect.objectContaining({
+          models: [expect.objectContaining({ id: "fallback" })],
+          modelSelectionPolicy: { restricted: true, defaultModel: "example/fallback" },
         }),
-      );
-      const startupPayload = expectDefined(
-        asOptionalRecord(startup.mock.calls[0]?.[1]),
-        "startup payload",
-      );
+      });
       expect(startupPayload.sessionInfo).not.toHaveProperty("model");
       expect(startupPayload.sessionInfo).not.toHaveProperty("modelProvider");
       expect(startupPayload.sessionInfo).not.toHaveProperty("contextBudgetStatus");
-      expect(startupPayload.messages).toMatchObject([{ role: "assistant", content }]);
-      const startupMessages = expectDefined(
-        Array.isArray(startupPayload.messages) ? startupPayload.messages : undefined,
-        "startup messages",
-      );
-      expect(startupMessages).toHaveLength(1);
-      expect(startupMessages[0]).not.toHaveProperty("model");
-      expect(startupMessages[0]).not.toHaveProperty("provider");
+      const startupMessage = onlyRecord(startupPayload.messages);
+      expect(startupMessage).toMatchObject({ role: "assistant", content });
+      expect(startupMessage).not.toHaveProperty("model");
+      expect(startupMessage).not.toHaveProperty("provider");
 
       // Roster reads also apply the model ceiling when the caller holds their registered read scope.
       f.role.scopes = [READ_SCOPE];
       tentativeRole.scopes = [READ_SCOPE];
       f.client.connect.scopes = [READ_SCOPE];
-      const agents = await f.request("agents.list", {});
-      expect(agents).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          agents: expect.arrayContaining([
-            expect.objectContaining({
-              id: "main",
-              model: { primary: "example/fallback", fallbacks: ["example/fallback"] },
-            }),
-          ]),
-        }),
-        undefined,
-      );
-      const sessions = await f.request("sessions.list", { agentId: "main" });
-      expect(sessions).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          defaults: expect.objectContaining({ model: "fallback", modelProvider: "example" }),
-          sessions: expect.arrayContaining([expect.objectContaining({ key: scope.sessionKey })]),
-        }),
-      );
-      const roster = expectDefined(asOptionalRecord(sessions.mock.calls[0]?.[1]), "roster");
-      const rosterRows = expectDefined(
-        Array.isArray(roster.sessions) ? roster.sessions : undefined,
-        "roster rows",
-      );
-      expect(rosterRows).toHaveLength(1);
-      expect(rosterRows[0]).not.toHaveProperty("model");
-      expect(rosterRows[0]).not.toHaveProperty("modelProvider");
-      expect(rosterRows[0]).not.toHaveProperty("contextBudgetStatus");
+      expect(response(await f.request("agents.list", {}))).toMatchObject({
+        agents: expect.arrayContaining([
+          expect.objectContaining({
+            id: "main",
+            model: { primary: "example/fallback", fallbacks: ["example/fallback"] },
+          }),
+        ]),
+      });
 
       for (const staff of [false, true]) {
         if (staff) {
@@ -459,31 +472,32 @@ describe("operator model discovery at registered reads", () => {
           "sessions.describe",
           "sessions.list",
         ] as const) {
-          const response = await f.request(method, {
-            agentId: scope.agentId,
-            ...(method.startsWith("chat.")
-              ? { sessionKey: scope.sessionKey }
-              : method === "sessions.list"
-                ? {}
-                : { key: scope.sessionKey }),
-            ...(method === "chat.message.get" ? { messageId: "historical-reply" } : {}),
-          });
-          expect(response.mock.calls).toHaveLength(1);
-          expect(response.mock.calls[0]?.[0]).toBe(true);
-          const payload = expectDefined(asOptionalRecord(response.mock.calls[0]?.[1]), method);
+          const payload = response(
+            await f.request(method, {
+              agentId: scope.agentId,
+              ...(method.startsWith("chat.")
+                ? { sessionKey: scope.sessionKey }
+                : method === "sessions.list"
+                  ? {}
+                  : { key: scope.sessionKey }),
+              ...(method === "chat.message.get" ? { messageId: "historical-reply" } : {}),
+            }),
+          );
           if (
             method === "chat.history" ||
             method === "sessions.describe" ||
             method === "sessions.list"
           ) {
-            if (method === "sessions.list") {
-              expect(payload.sessions).toHaveLength(1);
+            if (method === "sessions.list" && !staff) {
+              expect(payload.defaults).toMatchObject({
+                model: "fallback",
+                modelProvider: "example",
+              });
             }
-            const rows = Array.isArray(payload.sessions) ? payload.sessions : undefined;
-            const row = expectDefined(
-              payload.sessionInfo ?? payload.session ?? rows?.[0],
-              `${method} row`,
-            );
+            const row =
+              method === "sessions.list"
+                ? onlyRecord(payload.sessions)
+                : expectDefined(payload.sessionInfo ?? payload.session, `${method} row`);
             expect(row).toMatchObject({ key: scope.sessionKey });
             if (staff) {
               expect(row).toMatchObject({ modelProvider: "example", model: "restricted-model" });
@@ -499,23 +513,16 @@ describe("operator model discovery at registered reads", () => {
             method === "chat.message.get" ||
             method === "sessions.get"
           ) {
-            const messages = expectDefined(
+            const message =
               method === "chat.message.get"
-                ? [expectDefined(payload.message, "exact message")]
-                : Array.isArray(payload.messages)
-                  ? payload.messages
-                  : undefined,
-              `${method} messages`,
-            );
-            expect(messages).toHaveLength(1);
-            for (const message of messages) {
-              expect(message).toMatchObject({ role: "assistant", content });
-              if (staff) {
-                expect(message).toMatchObject({ provider: "example", model: "restricted-model" });
-              } else {
-                expect(message).not.toHaveProperty("model");
-                expect(message).not.toHaveProperty("provider");
-              }
+                ? expectDefined(payload.message, "exact message")
+                : onlyRecord(payload.messages);
+            expect(message).toMatchObject({ role: "assistant", content });
+            if (staff) {
+              expect(message).toMatchObject({ provider: "example", model: "restricted-model" });
+            } else {
+              expect(message).not.toHaveProperty("model");
+              expect(message).not.toHaveProperty("provider");
             }
           }
         }

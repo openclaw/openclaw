@@ -149,7 +149,7 @@ describe("queued chat input withdrawal", () => {
               ]
             : [],
         );
-        expect(listSessionPendingInputs(fixture.scope)).toMatchObject(
+        expect(await listSessionPendingInputs(fixture.scope)).toMatchObject(
           reason ? { items: [{ state: disposition }], total: 1 } : { items: [], total: 0 },
         );
         if (reason) {
@@ -215,7 +215,7 @@ describe("queued chat input withdrawal", () => {
           await recorder.persistApproved();
         }
         const queued = fixture.context.chatQueuedTurns.get(runId);
-        const pending = listSessionPendingInputs(fixture.scope);
+        const pending = await listSessionPendingInputs(fixture.scope);
         const transcript = loadTranscriptEventsSync(fixture.scope);
         const params = { sessionKey: fixture.scope.sessionKey, runId, discardPendingInput: true };
         const respond = vi.fn<RespondFn>();
@@ -233,7 +233,7 @@ describe("queued chat input withdrawal", () => {
         expect(active.controller.signal.aborted).toBe(false);
         expect(fixture.context.chatAbortControllers.get(runId)).toBe(active);
         expect(fixture.context.chatQueuedTurns.get(runId)).toBe(queued);
-        expect(listSessionPendingInputs(fixture.scope)).toEqual(pending);
+        expect(await listSessionPendingInputs(fixture.scope)).toEqual(pending);
         expect(loadTranscriptEventsSync(fixture.scope)).toEqual(transcript);
       } finally {
         clearFollowupQueue(fixture.scope.sessionKey);
@@ -252,6 +252,7 @@ describe("queued chat input withdrawal", () => {
       const publishChange = vi.spyOn(sessionChangeEvent, "emitSessionsChanged");
       let replacementController: AbortController | undefined;
       let retiredAfterCommit = false;
+      const published: Promise<PromiseSettledResult<boolean>>[] = [];
       try {
         await fixture.send();
         await fixture.dispatchedRecorder;
@@ -288,14 +289,19 @@ describe("queued chat input withdrawal", () => {
             () => "aborted" as const,
           );
         };
-        const published: boolean[] = [];
         let requestCurrent = true;
         unsubscribe = sessionChanges.subscribe((change) => {
           if ("sessionKey" in change && change.sessionKey === fixture.scope.sessionKey) {
-            const input = listSessionPendingInputs(fixture.scope).items[0];
-            const withdrawn = input?.state === "cancelled" && input.message.display === false;
-            published.push(withdrawn);
-            if (withdrawn && afterRefusal === "retired" && !replacementController) {
+            published.push(
+              Promise.allSettled([
+                listSessionPendingInputs(fixture.scope).then(({ items }) => {
+                  const input = items[0];
+                  return input?.state === "cancelled" && input.message.display === false;
+                }),
+              ]).then(([result]) => result),
+            );
+            // Revoke at publication; awaiting the read would miss this synchronous race.
+            if (afterRefusal === "retired" && !replacementController) {
               const replacement = createActiveRun(fixture.scope.sessionKey, {
                 agentId: fixture.scope.agentId,
                 sessionId: fixture.scope.sessionId,
@@ -308,7 +314,7 @@ describe("queued chat input withdrawal", () => {
               );
               fixture.context.chatAbortControllers.set(runId, replacement);
             }
-            if (withdrawn && afterRefusal === "revoked") {
+            if (afterRefusal === "revoked") {
               requestCurrent = false;
             }
           }
@@ -341,7 +347,7 @@ describe("queued chat input withdrawal", () => {
         expect(fixture.context.chatAbortControllers.get(runId)).toBe(active);
         expect(fixture.context.chatQueuedTurns.get(runId)).toBe(queued);
         expect(active.controller.signal.aborted).toBe(false);
-        expect(listSessionPendingInputs(fixture.scope).items[0]?.state).toBe("queued");
+        expect((await listSessionPendingInputs(fixture.scope)).items[0]?.state).toBe("queued");
         expect(published).toEqual([]);
 
         if (afterRefusal === "resume") {
@@ -375,7 +381,9 @@ describe("queued chat input withdrawal", () => {
           );
         }
         expect(published.length).toBeGreaterThan(0);
-        expect(published.every(Boolean)).toBe(true);
+        for (const result of await Promise.all(published)) {
+          expect(result).toEqual({ status: "fulfilled", value: true });
+        }
         expect(publishChange).toHaveBeenCalledWith(
           fixture.context,
           {
@@ -391,6 +399,7 @@ describe("queued chat input withdrawal", () => {
         refusal.mockRestore();
         publishChange.mockRestore();
         unsubscribe?.();
+        await Promise.allSettled(published);
         const replacement = fixture.context.chatAbortControllers.get(fixture.params.idempotencyKey);
         if (replacement && replacement.controller === replacementController) {
           removeChatAbortControllerEntry(

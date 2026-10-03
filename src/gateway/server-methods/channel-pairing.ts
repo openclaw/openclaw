@@ -1,5 +1,8 @@
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -13,7 +16,7 @@ import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import { resolveChannelDmPolicy } from "../../channels/plugins/dm-access.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { notifyPairingApproved } from "../../channels/plugins/pairing.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { hasConfiguredCommandOwners } from "../../commands/doctor-command-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bootstrapCommandOwnerFromPairing } from "../../pairing/command-owner.js";
@@ -37,10 +40,6 @@ type PairingAccount = {
 };
 
 class InvalidPairingTargetError extends Error {}
-
-function normalizeFilter(value: string | undefined): string | undefined {
-  return normalizeOptionalString(value)?.toLowerCase();
-}
 
 function resolvePairingPolicy(params: {
   plugin: ChannelPlugin;
@@ -76,8 +75,8 @@ async function listPairingAccounts(params: {
   channel?: string;
   accountId?: string;
 }): Promise<PairingAccount[]> {
-  const requestedChannel = normalizeFilter(params.channel);
-  const requestedAccount = normalizeFilter(params.accountId);
+  const requestedChannel = normalizeOptionalLowercaseString(params.channel);
+  const requestedAccount = normalizeOptionalLowercaseString(params.accountId);
   const pairingPlugins = listChannelPlugins().filter((plugin) => plugin.pairing);
   if (requestedChannel && !pairingPlugins.some((plugin) => plugin.id === requestedChannel)) {
     throw new InvalidPairingTargetError(`unknown pairing channel: ${params.channel}`);

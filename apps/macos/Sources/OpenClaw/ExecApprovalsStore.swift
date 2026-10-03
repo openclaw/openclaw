@@ -247,22 +247,6 @@ enum ExecApprovalsStore {
             agents: agents.isEmpty ? nil : agents)
     }
 
-    static func ensureFile() -> ExecApprovalsFile {
-        do {
-            return try ExecApprovalsSQLiteStore.withImmediateTransaction(
-                stateDirectoryURL: self.stateDirURL())
-            { record in
-                let ensured = self.ensureFile(record)
-                return ExecApprovalsSQLiteMutation(
-                    value: ensured.file,
-                    documentToWrite: ensured.needsWrite ? ensured.file : nil)
-            }
-        } catch {
-            self.logger.error("exec approvals ensure failed: \(error.localizedDescription, privacy: .public)")
-            return self.failClosedFallbackFile()
-        }
-    }
-
     private static func ensureFile(
         _ record: ExecApprovalsSQLiteRecord?) -> (file: ExecApprovalsFile, needsWrite: Bool)
     {
@@ -445,7 +429,7 @@ extension ExecApprovalsStore {
                         id: grant.match.id,
                         pattern: pattern,
                         source: "allow-always",
-                        argPattern: self.normalizeArgPattern(grant.match.argPattern)),
+                        argPattern: grant.match.argPattern.flatMap { $0.isEmpty ? nil : $0 }),
                     resolvedPath: grant.resolvedPath))
             case let .invalid(reason):
                 return .failure(.invalidPattern(reason))
@@ -615,11 +599,6 @@ extension ExecApprovalsStore {
         !(entry.argPattern?.hasPrefix("sha256:") ?? false)
     }
 
-    private static func normalizeArgPattern(_ value: String?) -> String? {
-        guard let value, !value.isEmpty else { return nil }
-        return value
-    }
-
     static func allowlistEntryMatchKey(_ entry: ExecAllowlistEntry) -> ExecAllowlistEntryMatchKey {
         ExecAllowlistEntryMatchKey(
             pattern: entry.pattern,
@@ -660,50 +639,20 @@ extension ExecApprovalsStore {
         return trimmed.isEmpty ? self.defaultAgentId : trimmed
     }
 
-    private static func migrateLegacyPattern(_ entry: ExecAllowlistEntry) -> ExecAllowlistEntry {
-        var migrated = entry
-        let trimmedPattern = entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedResolved = entry.lastResolvedPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        migrated.lastResolvedPath = trimmedResolved.isEmpty ? nil : trimmedResolved
-
-        if !ExecApprovalHelpers.patternHasPathSelector(trimmedPattern),
-           !trimmedResolved.isEmpty,
-           case let .valid(pattern) = ExecApprovalHelpers.validateAllowlistPattern(trimmedResolved)
-        {
-            migrated.pattern = pattern
-        } else {
-            switch ExecApprovalHelpers.validateAllowlistPattern(trimmedPattern) {
-            case let .valid(pattern):
-                migrated.pattern = pattern
-            case .invalid:
-                switch ExecApprovalHelpers.validateAllowlistPattern(trimmedResolved) {
-                case let .valid(pattern): migrated.pattern = pattern
-                case .invalid: migrated.pattern = trimmedPattern
-                }
-            }
-        }
-        return migrated
-    }
-
     private static func normalizeAllowlistEntries(_ entries: [ExecAllowlistEntry]) -> [ExecAllowlistEntry] {
-        var normalized: [ExecAllowlistEntry] = []
-        normalized.reserveCapacity(entries.count)
-
-        for entry in entries {
-            var migrated = self.migrateLegacyPattern(entry)
+        entries.compactMap { entry in
+            var migrated = entry
+            let pattern = entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+            let resolved = entry.lastResolvedPath?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+            migrated.lastResolvedPath = resolved
+            migrated.pattern = !ExecApprovalHelpers.patternHasPathSelector(pattern) ? resolved ?? pattern : pattern
+            guard !migrated.pattern.isEmpty else { return nil }
             // Command text can contain secrets; it is accepted only for legacy decode.
             migrated.commandText = nil
             // Regex whitespace and Unicode normalization are semantic policy bytes.
-            migrated.argPattern = self.normalizeArgPattern(migrated.argPattern)
-            let trimmedPattern = migrated.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard case let .valid(pattern) = ExecApprovalHelpers.validateAllowlistPattern(trimmedPattern) else {
-                continue
-            }
-            migrated.pattern = pattern
-            normalized.append(migrated)
+            migrated.argPattern = migrated.argPattern.flatMap { $0.isEmpty ? nil : $0 }
+            return migrated
         }
-
-        return normalized
     }
 
     private static func mergeAgents(

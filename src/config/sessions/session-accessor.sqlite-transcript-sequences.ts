@@ -29,6 +29,19 @@ export function readCommittedTranscriptMessageSequence(
   return committedTranscriptMessageSequences.get(message);
 }
 
+/** Installs the executor's final active cursors on the exact acknowledged result objects. */
+export function installCommittedTranscriptMessageSequences(
+  messages: readonly TranscriptMessageAppendResult<unknown>[],
+  sequences: readonly (number | undefined)[],
+): void {
+  for (const [index, message] of messages.entries()) {
+    const sequence = sequences[index];
+    if (sequence !== undefined) {
+      committedTranscriptMessageSequences.set(message, sequence);
+    }
+  }
+}
+
 /** Captures atomic turn cursors from the final projection before SQLite commits. */
 export function rememberCommittedTranscriptMessageSequencesInTransaction(
   database: OpenClawAgentDatabase,

@@ -2,6 +2,7 @@ import type {
   SessionCatalogSession,
   SessionCreatedActor,
 } from "../../../../packages/gateway-protocol/src/index.ts";
+import { pathDisplayName } from "../path-display.ts";
 import { presenceViewerLabel } from "../presence-users.ts";
 
 export type CatalogProjectGrouping = "project" | "person" | "none";
@@ -34,11 +35,6 @@ export function foldWorktreeCheckoutPath(path: string): string | null {
   }
   const match = trimmed.match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/);
   return match ? match[1] || null : trimmed;
-}
-
-/** Basename shown for a checkout path in project sections. */
-export function checkoutDisplayName(path: string): string {
-  return path.split(/[\\/]/).findLast(Boolean) ?? path;
 }
 
 type CatalogProjectGroup = {
@@ -96,7 +92,7 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
         kind: "project",
         key: `project:${projectPath}`,
         legacySectionKey: projectPath,
-        label: checkoutDisplayName(projectPath),
+        label: pathDisplayName(projectPath),
         title: projectPath,
         sessions: [],
       };

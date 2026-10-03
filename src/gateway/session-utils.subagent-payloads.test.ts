@@ -1,11 +1,11 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import * as subagentRegistryState from "../agents/subagents/registry/subagent-registry-state.js";
 import {
   canonicalSubagentRunFixtures,
   type SubagentRunFixture,
 } from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -47,11 +47,11 @@ describe("session list subagent payload reads", () => {
   afterEach(async () => {
     resetAgentEventsForTest({ preserveListeners: true });
     await closeOpenClawStateDatabaseAsync();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
   });
-  beforeEach(() => {
+  beforeEach(async () => {
     resetAgentEventsForTest({ preserveListeners: true });
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
   });
 
   const cfg: OpenClawConfig = {
@@ -198,7 +198,7 @@ describe("session list subagent payload reads", () => {
             });
           }
           saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(runs));
-          addSubagentRunForTests({
+          await addSubagentRunForTests({
             runId: "live-child",
             childSessionKey: childKey,
             controllerSessionKey: parentKey,

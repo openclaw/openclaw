@@ -1,7 +1,13 @@
 import { createHash } from "node:crypto";
+import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withNodeWorkerUploadSnapshot } from "./node-worker-upload-snapshot.js";
 
@@ -81,6 +87,61 @@ describe("node worker upload snapshot scope", () => {
     ).rejects.toBe(cancelled);
     expect(upload).not.toHaveBeenCalled();
     await expect(fs.readFile(path.join(workspaceDir, source.path))).resolves.toEqual(content);
+  });
+
+  it("cancels a staged upload when opening its file outlives its caller", async ({ signal }) => {
+    const workspaceDir = tempDirs.make("worker-upload-open-cancelled-");
+    await fs.writeFile(path.join(workspaceDir, source.path), content);
+    const controller = new AbortController();
+    const cancelled = new Error("upload cancelled while opening its staged file");
+    const readOpened = createDeferred();
+    const releaseOpen = createDeferred();
+    const write = vi.fn(async (_chunk: Buffer) => {});
+    let readClosed = false;
+    const open = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      const [filePath, flags] = args;
+      if (
+        typeof filePath === "string" &&
+        path.basename(path.dirname(filePath)).startsWith("worker-workspace-upload-") &&
+        path.basename(filePath) === "0" &&
+        typeof flags === "number" &&
+        (flags & (constants.O_WRONLY | constants.O_RDWR)) === 0
+      ) {
+        const close = handle.close.bind(handle);
+        vi.spyOn(handle, "close").mockImplementation(async () => {
+          await close();
+          readClosed = true;
+        });
+        readOpened.resolve();
+        await releaseOpen.promise;
+      }
+      return handle;
+    });
+    const operation = withNodeWorkerUploadSnapshot(
+      { workspaceDir, sources: [source] },
+      (snapshot) => snapshot.stream(snapshot.files[0]!, write, controller.signal),
+    );
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          readOpened.promise,
+          operation,
+          "Upload settled before opening its staged file",
+        ),
+        signal,
+      );
+      controller.abort(cancelled);
+      releaseOpen.resolve();
+      await expect(withinTest(operation, signal)).rejects.toBe(cancelled);
+      expect(write).not.toHaveBeenCalled();
+      expect(readClosed).toBe(true);
+    } finally {
+      releaseOpen.resolve();
+      await operation.catch(() => undefined);
+      openSpy.mockRestore();
+    }
   });
 
   it("removes staged bytes after an upload failure", async () => {

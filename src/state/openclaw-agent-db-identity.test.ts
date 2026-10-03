@@ -111,6 +111,7 @@ it.runIf(typeof DatabaseSync.prototype.deserialize === "function")(
     closeOpenClawAgentDatabaseByPath(original.path);
     const { database } = retain(original.path);
     const prepared = readOpenClawAgentDatabaseIdentity(database);
+    const nativeLocation = database.db.location();
     const replacement = new DatabaseSync(":memory:");
     try {
       replacement.exec(
@@ -122,7 +123,7 @@ it.runIf(typeof DatabaseSync.prototype.deserialize === "function")(
       try {
         database.db.prepare("SELECT role FROM schema_meta").get();
         expect(() => database.db.deserialize(bytes)).toThrow();
-        expect(database.db.location()).toBe(prepared.filename);
+        expect(database.db.location()).toBe(nativeLocation);
         expect(isOpenClawAgentDatabasePathCurrent(database)).toBe(true);
       } finally {
         database.db.exec("ROLLBACK");

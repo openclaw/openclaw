@@ -224,13 +224,7 @@ export function recordUpdateRunDiagnostics(
     ) {
       return undefined;
     }
-    return mutateRun(
-      runId,
-      (record) => {
-        applyUpdateRunDiagnostics(record, diagnostics);
-      },
-      options,
-    );
+    return mutateRun(runId, (record) => applyUpdateRunDiagnostics(record, diagnostics), options);
   } catch (error) {
     if (hasCommandProcessCleanupError(error)) {
       throw error;

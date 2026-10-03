@@ -1,6 +1,20 @@
 import { statSync } from "node:fs";
-import { resolve } from "node:path";
+import { isAbsolute, matchesGlob, relative, resolve } from "node:path";
 import { stateStartupCorpusTestFiles } from "../../test/vitest/vitest.startup-corpus-paths.mjs";
+import {
+  controlUiE2eTestGlobs,
+  uiE2eRealGatewayTestFiles,
+} from "../../test/vitest/vitest.ui-paths.mjs";
+import { UI_E2E_SMOKE_TEST_FILES } from "./ci-ui-e2e-owner-inventory.mts";
+import { listTrackedTestFiles } from "./list-test-files.mts";
+
+function isOwnerSelectedUiE2eTest(file: string): boolean {
+  return (
+    controlUiE2eTestGlobs.some((glob) => matchesGlob(file, glob)) &&
+    !uiE2eRealGatewayTestFiles.includes(file) &&
+    !UI_E2E_SMOKE_TEST_FILES.includes(file)
+  );
+}
 
 // Complete process/lifecycle proofs stay outside PR CI. Main retains runtime
 // owners; manual/release validation also retains the tooling owner.
@@ -8,6 +22,8 @@ import { stateStartupCorpusTestFiles } from "../../test/vitest/vitest.startup-co
 export const CI_PROOF_TEST_FILES = [
   "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
   "test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts",
+  "test/e2e/qa-lab/plugins/feishu-crabline.real-gateway.candidate.e2e.test.mts",
+  "test/e2e/qa-lab/plugins/slack-crabline-roundtrip.candidate.e2e.test.mts",
   "test/e2e/qa-lab/runtime/sessions-send-visible-child.product-proof.e2e.test.ts",
   "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
   "test/scripts/frv.release.test.ts",
@@ -43,7 +59,6 @@ export const RELEASE_ONLY_RUNTIME_TEST_FILES = [
   "src/commands/doctor-config-preflight.process.test.ts",
   "src/commands/doctor-config-preflight.test.ts",
   "src/commands/doctor-model-metadata-corruption.persistence.test.ts",
-  "src/commands/doctor-plugin-install-config.process.test.ts",
   "src/commands/doctor-session-sqlite.memory.test.ts",
   "src/commands/doctor-state-migrations.test.ts",
   "src/commands/doctor/shared/missing-configured-plugin-install.integration.test.ts",
@@ -58,11 +73,13 @@ export const RELEASE_ONLY_RUNTIME_TEST_FILES = [
   "src/gateway/server-channels.ownership.test.ts",
   "src/gateway/server-methods/models-dispatch.lifecycle.integration.test.ts",
   "src/gateway/server-methods/models-list.native-lifecycle.integration.test.ts",
+  "src/gateway/server-methods/session-catalog-import.integration.test.ts",
   "src/gateway/server-plugins.lifecycle.test.ts",
   "src/gateway/server.acp-native-model.product.test.ts",
   "src/gateway/server.catalog-startup.test.ts",
   "src/gateway/server.cron.test.ts",
   "src/gateway/server.labs-hot-reload.test.ts",
+  "src/gateway/server.mcp-session-owner.test.ts",
   "src/gateway/server.message-buffer-caption.test.ts",
   "src/gateway/server.sessions.archive-worktree-lifecycle.test.ts",
   "src/gateway/server.sessions.create.projects.test.ts",
@@ -296,9 +313,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/browser/src/browser/routes/agent.snapshot.timeout.test.ts",
   "extensions/browser/src/browser/routes/dispatcher.path-normalization.test.ts",
   "extensions/browser/src/browser/server.agent-contract-core.test.ts",
-  "extensions/browser/src/browser/server.agent-contract-form-layout-act-commands.test.ts",
   "extensions/browser/src/browser/server.historical-target.test.ts",
-  "extensions/browser/src/browser/server.hot-reload-defaults.test.ts",
   "extensions/browser/src/browser/trash.test.ts",
   "extensions/browser/src/cli/browser-cli-actions-observe.test.ts",
   "extensions/browser/src/cli/browser-cli-debug.test.ts",
@@ -313,7 +328,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/buzz/src/setup-surface.test.ts",
   "extensions/clickclack/src/gateway.test.ts",
   "extensions/clickclack/src/inbound.model-loop.test.ts",
-  "extensions/code-mode-quickjs/src/live-vm.test.ts",
   "extensions/code-mode-quickjs/src/worker-lifecycle.test.ts",
   "extensions/codex/doctor-contract-api.test.ts",
   "extensions/codex/index.test.ts",
@@ -454,8 +468,9 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/discord/src/monitor/acp-bind-here.integration.test.ts",
   "extensions/discord/src/monitor/agent-components.live-policy-deadline.test.ts",
   "extensions/discord/src/monitor/agent-components.modal-presentation-failure.test.ts",
+  "extensions/discord/src/monitor/command-deploy-migration.test.ts",
+  "extensions/discord/src/monitor/listeners.test.ts",
   "extensions/discord/src/monitor/listeners.thread-delete.session-store.integration.test.ts",
-  "extensions/discord/src/monitor/listeners.thread-delete.test.ts",
   "extensions/discord/src/monitor/message-handler.context-history.test.ts",
   "extensions/discord/src/monitor/message-handler.context.test.ts",
   "extensions/discord/src/monitor/message-handler.draft-preview.rest.test.ts",
@@ -639,8 +654,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/msteams/src/conversation-store.shared.test.ts",
   "extensions/msteams/src/monitor-handler.adaptive-card.test.ts",
   "extensions/msteams/src/monitor-handler/message-handler.authz.test.ts",
-  "extensions/msteams/src/monitor-handler/message-handler.conversation-authz.test.ts",
-  "extensions/msteams/src/monitor-handler/message-handler.dm-media.test.ts",
   "extensions/msteams/src/monitor-handler/message-handler.history.test.ts",
   "extensions/msteams/src/monitor-handler/message-handler.ingress-lifecycle.test.ts",
   "extensions/msteams/src/monitor-handler/message-handler.media.test.ts",
@@ -739,7 +752,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/slack/src/delivery-trace.test.ts",
   "extensions/slack/src/monitor.failure-notices.test.ts",
   "extensions/slack/src/monitor.history-policy.test.ts",
-  "extensions/slack/src/monitor.mentions.test.ts",
   "extensions/slack/src/monitor.tool-result.test.ts",
   "extensions/slack/src/monitor/events/agent.test.ts",
   "extensions/slack/src/monitor/events/interactions.test.ts",
@@ -775,8 +787,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/team-reports/src/config.test.ts",
   "extensions/team-reports/src/store-read-budget.test.ts",
   "extensions/team-reports/src/summaries.test.ts",
-  "extensions/teams-meetings/src/runtime-node.test.ts",
-  "extensions/teams-meetings/src/transports/chrome.test.ts",
   "extensions/telegram/src/accounts.test.ts",
   "extensions/telegram/src/action-runtime.test.ts",
   "extensions/telegram/src/bot-message-context.body.test.ts",
@@ -804,7 +814,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/telegram/src/probe.response-body-timeout.integration.test.ts",
   "extensions/telegram/src/send.telegram-http.test.ts",
   "extensions/telegram/src/send.transport-close-proof.test.ts",
-  "extensions/telegram/src/state-migrations.test.ts",
   "extensions/telegram/src/targets.test.ts",
   "extensions/telegram/src/telegram-ingress-callback.integration.test.ts",
   "extensions/telegram/src/update-offset-store.test.ts",
@@ -893,9 +902,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/zalouser/src/ingress.test.ts",
   "extensions/zalouser/src/zalo-js.listener.test.ts",
   "extensions/zalouser/src/zalo-quote-metadata.test.ts",
-  "extensions/zoom-meetings/src/runtime-node.test.ts",
   "extensions/zoom-meetings/src/runtime.test.ts",
-  "extensions/zoom-meetings/src/transports/chrome.test.ts",
   "packages/agent-core/src/agent-loop.retention.test.ts",
   "packages/agent-core/src/agent-loop.test.ts",
   "packages/agent-core/src/harness/compaction/compaction-provenance.test.ts",
@@ -1329,7 +1336,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/sessions/session-manager-static-notes.test.ts",
   "src/agents/sessions/session-manager.fork-rebase.test.ts",
   "src/agents/sessions/session-manager.persistence-compat.test.ts",
-  "src/agents/sessions/session-manager.user-idempotency.test.ts",
   "src/agents/sessions/settings-storage.test.ts",
   "src/agents/sessions/tools/bash-termination.test.ts",
   "src/agents/sessions/tools/bash.test.ts",
@@ -1711,7 +1717,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/cli/daemon-cli.coverage.test.ts",
   "src/cli/daemon-cli/install.definition-repair.test.ts",
   "src/cli/daemon-cli/install.integration.test.ts",
-  "src/cli/daemon-cli/install.output.integration.test.ts",
   "src/cli/daemon-cli/install.wrapper.integration.test.ts",
   "src/cli/daemon-cli/lifecycle-action-preflight.test.ts",
   "src/cli/daemon-cli/lifecycle-core.config-guard.test.ts",
@@ -1811,8 +1816,11 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/cli/proxy-cli.runtime.theme.test.ts",
   "src/cli/qr-cli.test.ts",
   "src/cli/resume-cli.test.ts",
+  "src/cli/run-main.bare-root.test.ts",
   "src/cli/run-main.cleanup.test.ts",
+  "src/cli/run-main.command-dispatch.test.ts",
   "src/cli/run-main.exit.test.ts",
+  "src/cli/run-main.gateway-startup.test.ts",
   "src/cli/run-main.profile-env.test.ts",
   "src/cli/run-main.test.ts",
   "src/cli/secrets-cli.test.ts",
@@ -1962,7 +1970,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/commands/doctor-agent-memory-schema.test.ts",
   "src/commands/doctor-auth-canonical-api-key-alias.test.ts",
   "src/commands/doctor-auth-flat-profiles.test.ts",
-  "src/commands/doctor-auth-oauth-sidecar.test.ts",
   "src/commands/doctor-auth-shared-receipt.test.ts",
   "src/commands/doctor-auth-source-owner.test.ts",
   "src/commands/doctor-auth.shared-health.test.ts",
@@ -2028,7 +2035,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/commands/doctor-memory-startup.test.ts",
   "src/commands/doctor-model-metadata-corruption.persistence.test.ts",
   "src/commands/doctor-node-hosting-preconditions.test.ts",
-  "src/commands/doctor-plugin-install-config.process.test.ts",
   "src/commands/doctor-plugin-registry-generation-repair.test.ts",
   "src/commands/doctor-prompter.test.ts",
   "src/commands/doctor-retired-models.ordering.test.ts",
@@ -2788,7 +2794,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/server-methods/sessions-describe-catalog.test.ts",
   "src/gateway/server-methods/sessions-describe-worker.test.ts",
   "src/gateway/server-methods/sessions-files.repository.test.ts",
-  "src/gateway/server-methods/sessions-files.touched-files.test.ts",
   "src/gateway/server-methods/sessions-get.worker.test.ts",
   "src/gateway/server-methods/sessions-github.test.ts",
   "src/gateway/server-methods/sessions-list-archived.test.ts",
@@ -2810,7 +2815,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/server-methods/sessions-reset-subagent-cleanup.test.ts",
   "src/gateway/server-methods/sessions-rewind.storage.test.ts",
   "src/gateway/server-methods/sessions-rewind.test.ts",
-  "src/gateway/server-methods/sessions-row-projection.benchmark.test.ts",
   "src/gateway/server-methods/sessions-row-projection.sqlite.test.ts",
   "src/gateway/server-methods/sessions-search-scope.test.ts",
   "src/gateway/server-methods/sessions-search.test.ts",
@@ -3030,8 +3034,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/server/hooks.agent-trust.test.ts",
   "src/gateway/server/plugin-legacy-listeners.test.ts",
   "src/gateway/server/plugins-http.ownership.test.ts",
-  "src/gateway/server/plugins-http.runtime-scopes.test.ts",
-  "src/gateway/server/plugins-http.suspension-admission.test.ts",
   "src/gateway/server/plugins-http.test.ts",
   "src/gateway/server/skill-library-read.test.ts",
   "src/gateway/server/ws-connection.startup.test.ts",
@@ -3194,6 +3196,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/worker-environments/store-node-enrollment.test.ts",
   "src/gateway/worker-environments/store-recovery.worker.test.ts",
   "src/gateway/worker-environments/transcript-commit.lazy.test.ts",
+  "src/gateway/worker-environments/transcript-commit.lifecycle.test.ts",
   "src/gateway/worker-environments/transcript-commit.test.ts",
   "src/gateway/worker-environments/worker-github-binding.test.ts",
   "src/gateway/worker-environments/worker-session-tool-executor.test.ts",
@@ -3293,7 +3296,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/infra/outbound/message-action-execution.test.ts",
   "src/infra/outbound/message-action-runner.broadcast.test.ts",
   "src/infra/outbound/message-action-runner.context.test.ts",
-  "src/infra/outbound/message-action-runner.send-validation.test.ts",
   "src/infra/outbound/message-action-send.validation.test.ts",
   "src/infra/outbound/message-action-spec.test.ts",
   "src/infra/outbound/outbound-send-service.accepted-outcomes.test.ts",
@@ -3445,6 +3447,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/media/store.test.ts",
   "src/meeting-bot/browser-controller.test.ts",
   "src/meeting-bot/session-runtime.startup.test.ts",
+  "src/meeting-bot/session-runtime.test.ts",
   "src/memory/memory-artifact-provenance.test.ts",
   "src/model-catalog/pricing.test.ts",
   "src/model-catalog/remote-overlay.test.ts",
@@ -3544,6 +3547,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/plugins/native-module-require.test.ts",
   "src/plugins/official-external-install-records.test.ts",
   "src/plugins/official-external-plugin-catalog-snapshot-store.worker.test.ts",
+  "src/plugins/official-external-plugin-catalog.hosted.test.ts",
   "src/plugins/official-external-plugin-catalog.test.ts",
   "src/plugins/openai-compatible-embedding-provider.http-error.test.ts",
   "src/plugins/plugin-instance.test.ts",
@@ -3766,7 +3770,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/tui/commands.test.ts",
   "src/tui/embedded-backend.test.ts",
   "src/tui/embedded-prepared-runtime.test.ts",
-  "src/tui/gateway-chat.scopes.test.ts",
   "src/tui/gateway-chat.test.ts",
   "src/tui/tui-autocomplete.test.ts",
   "src/tui/tui-command-handlers.test.ts",
@@ -3860,12 +3863,14 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "test/scripts/check-cli-bootstrap-imports.test.ts",
   "test/scripts/check-extension-package-tsc-boundary.test.ts",
   "test/scripts/check-max-lines-ratchet.test.ts",
+  "test/scripts/check-openclaw-installed-package-budget.test.ts",
   "test/scripts/check-openclaw-package-tarball-control-ui.test.ts",
   "test/scripts/check-openclaw-package-tarball.bundled-mcp.test.ts",
   "test/scripts/check-openclaw-package-tarball.test.ts",
   "test/scripts/check-session-accessor-boundary.test.ts",
   "test/scripts/check-session-transcript-reader-boundary.test.ts",
   "test/scripts/check-sqlite-transaction-boundary.test.ts",
+  "test/scripts/check-test-timeout-race-ratchet.test.ts",
   "test/scripts/check-workflows.test.ts",
   "test/scripts/ci-changed-node-test-plan.config-fallback.test.ts",
   "test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts",
@@ -4497,6 +4502,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "ui/src/pages/chat/chat-pane-placement.test.ts",
   "ui/src/pages/chat/chat-pane-progress-history.test.ts",
   "ui/src/pages/chat/chat-pane-retained-presentation.test.ts",
+  "ui/src/pages/chat/chat-pane-retention.test.ts",
   "ui/src/pages/chat/chat-pane-run-activity.test.ts",
   "ui/src/pages/chat/chat-pane-session-access.test.ts",
   "ui/src/pages/chat/chat-pane-session-controls.test.ts",
@@ -4523,6 +4529,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "ui/src/pages/chat/chat-submit-handoff.test.ts",
   "ui/src/pages/chat/chat-talk-reconciliation.browser.test.ts",
   "ui/src/pages/chat/chat-thread-live-final.test.ts",
+  "ui/src/pages/chat/chat-thread-retention.test.ts",
   "ui/src/pages/chat/chat-thread.test.ts",
   "ui/src/pages/chat/chat-view.attachment-paste.test.ts",
   "ui/src/pages/chat/chat-view.test.ts",
@@ -4539,8 +4546,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "ui/src/pages/chat/components/chat-session-workspace.test.ts",
   "ui/src/pages/chat/components/chat-sidebar-region.test.ts",
   "ui/src/pages/chat/components/chat-text-attachment.browser.test.ts",
-  "ui/src/pages/chat/components/chat-tool-cards.highlight.test.ts",
-  "ui/src/pages/chat/components/chat-tool-cards.outcome.test.ts",
   "ui/src/pages/chat/components/chat-tool-cards.redaction.test.ts",
   "ui/src/pages/chat/components/chat-transcript-controller.test.ts",
   "ui/src/pages/chat/components/chat-transcript-end-follow.browser.test.ts",
@@ -4603,6 +4608,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "ui/src/pages/sessions/sessions-page.typing.test.ts",
   "ui/src/pages/sessions/view.test.ts",
   "ui/src/pages/usage/metrics.node.test.ts",
+  "ui/src/pages/usage/usage-page-retention.test.ts",
   "ui/src/pages/workboard/workboard.e2e.test.ts",
   "ui/src/plugins/control-ui-runtime.test.ts",
   "ui/src/styles/base-theme-tokens.node.test.ts",
@@ -4610,7 +4616,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "ui/src/styles/cursor-policy.node.test.ts",
   "ui/src/styles/shimmer.browser.test.ts",
   "ui/src/test-helpers/control-ui-e2e-suite.test.ts",
-];
+].filter((file) => !isOwnerSelectedUiE2eTest(file));
 
 // Measured integration proofs and slower owner matrices run hourly on main and
 // in full release validation. PRs opt in for edited tests or resolved source owners.
@@ -4662,7 +4668,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "extensions/codex/src/session-catalog-fallback-request.test.ts",
   "extensions/codex/src/session-catalog-native-performance.test.ts",
   "extensions/codex/src/session-catalog-resident-state.test.ts",
-  "extensions/codex/src/session-catalog-snapshot-recovery.test.ts",
   "extensions/copilot/harness.test.ts",
   "extensions/copilot/src/attempt.test.ts",
   "extensions/crabbox/src/crabbox-gateway-methods.test.ts",
@@ -4675,7 +4680,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "extensions/crabbox/src/crabbox-worker-warm-image-retirement.test.ts",
   "extensions/crabbox/src/crabbox-worker-warm-image-store.test.ts",
   "extensions/crabbox/src/crabbox-worker-warm-image.test.ts",
-  "extensions/device-pair/doctor-contract-api.test.ts",
   "extensions/diffs/src/store.cleanup.test.ts",
   "extensions/diffs/src/tool.test.ts",
   "extensions/discord/src/voice/realtime-output-admission.integration.test.ts",
@@ -4942,7 +4946,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/commands/doctor-skill-workshop-sqlite.relocation-conflicts.test.ts",
   "src/commands/doctor-skill-workshop-sqlite.relocation.test.ts",
   "src/commands/doctor-state-integrity.transcripts.test.ts",
-  "src/commands/doctor/cron/native-tool-advisory.test.ts",
   "src/commands/onboard-agent.persistence.test.ts",
   "src/commands/onboard-config-provenance.integration.test.ts",
   "src/commands/onboard-interactive.test.ts",
@@ -5523,11 +5526,14 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
 const prExemptRuntimeTestFiles = new Set<string>(PR_EXEMPT_RUNTIME_TEST_FILES);
 
 export function listPrExemptRuntimeTestFiles(cwd = process.cwd()): string[] {
-  return PR_EXEMPT_RUNTIME_TEST_FILES.filter((file) =>
+  const uiE2eFiles = listTrackedTestFiles(cwd)
+    .map((file) => (isAbsolute(file) ? relative(cwd, file) : file))
+    .filter(isOwnerSelectedUiE2eTest);
+  return [...new Set([...prExemptRuntimeTestFiles, ...uiE2eFiles])].filter((file) =>
     statSync(resolve(cwd, file), { throwIfNoEntry: false })?.isFile(),
   );
 }
 
 export function isPrExemptRuntimeTestFile(file: string): boolean {
-  return prExemptRuntimeTestFiles.has(file);
+  return prExemptRuntimeTestFiles.has(file) || isOwnerSelectedUiE2eTest(file);
 }

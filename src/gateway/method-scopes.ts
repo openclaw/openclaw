@@ -15,7 +15,6 @@ import { resolveDynamicSessionMutationRequiredScope } from "../shared/session-me
 import { isAgentSessionResetCommand } from "./agent-command-policy.js";
 import {
   isCoreGatewayMethodClassified,
-  isCoreNodeGatewayMethod,
   isDynamicOperatorGatewayMethod,
   resolveCoreOperatorGatewayMethodScope,
 } from "./methods/core-method-policy.js";
@@ -72,11 +71,6 @@ function resolveScopedMethod(method: string): OperatorScope | undefined {
 
 export function isApprovalMethod(method: string): boolean {
   return resolveScopedMethod(method) === APPROVALS_SCOPE;
-}
-
-/** Returns true when a method is reserved for node-role clients instead of operators. */
-export function isNodeRoleMethod(method: string): boolean {
-  return isCoreNodeGatewayMethod(method);
 }
 
 function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] | undefined {
@@ -315,11 +309,5 @@ export function authorizeOperatorScopesForRequiredScope(
 
 /** Returns true when a method has any core, node, dynamic, reserved, or plugin scope policy. */
 export function isGatewayMethodClassified(method: string): boolean {
-  if (isNodeRoleMethod(method)) {
-    return true;
-  }
-  if (isDynamicOperatorGatewayMethod(method)) {
-    return true;
-  }
   return isCoreGatewayMethodClassified(method) || resolveScopedMethod(method) !== undefined;
 }

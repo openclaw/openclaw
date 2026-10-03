@@ -9,9 +9,9 @@ import {
   createQueueSettings,
   createQueueTestRun,
 } from "../../auto-reply/reply/queue.test-helpers.js";
-import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
+import { clearFollowupDrainCallback } from "../../auto-reply/reply/queue/drain.js";
 import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
-import { FOLLOWUP_QUEUES } from "../../auto-reply/reply/queue/state.js";
+import { clearFollowupQueue, FOLLOWUP_QUEUES } from "../../auto-reply/reply/queue/state.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
@@ -32,7 +32,13 @@ import { sessionAbortHandlers } from "./sessions-abort.js";
 useChatAbortRegistryFixture();
 const key = "agent:main:queued-stop";
 const sessionId = "original-stop-session";
-afterEach(() => clearSessionQueues([key, sessionId]));
+afterEach(() => {
+  for (const queueKey of [key, sessionId]) {
+    clearFollowupQueue(queueKey);
+    clearFollowupDrainCallback(queueKey);
+    clearCommandLane(resolveEmbeddedSessionLane(queueKey));
+  }
+});
 
 async function setup() {
   const client = roleClient("view", "queued-stop-owner");
@@ -282,7 +288,10 @@ it.each([true, false])(
       ]);
     } finally {
       release.resolve();
-      clearSessionQueues([sharedKey, canonicalKey, researchSessionId]);
+      for (const queueKey of [sharedKey, canonicalKey, researchSessionId]) {
+        clearFollowupQueue(queueKey);
+        clearFollowupDrainCallback(queueKey);
+      }
       clearCommandLane(lane);
       await Promise.allSettled([blocker, settled]);
     }

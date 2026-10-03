@@ -1,5 +1,5 @@
 // Non-TTY `channels add` advice must name only flags the selected channel registers.
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
 import { configMocks } from "./channels.mock-harness.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -23,10 +23,7 @@ vi.mock("../channels/plugins/index.js", () => ({
   normalizeChannelId: vi.fn((id: string) => id),
 }));
 
-let channelsAddCommand: typeof import("./channels/add.js").channelsAddCommand;
-beforeAll(async () => {
-  ({ channelsAddCommand } = await import("./channels/add.js"));
-});
+import { channelsAddCommand } from "./channels/add.js";
 
 describe("channelsAddCommand non-TTY advice", () => {
   it("points at the channel's help command when its setup contract omits --use-env", async () => {

@@ -138,16 +138,13 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
     signalFatal();
   };
   const attachOutputProcessHandlers = (proc: BridgeProcess) => {
-    proc.on("error", (error) => {
+    const onOutputError = (error: Error) => {
       if (proc === outputProcess) {
         fail("audio output command")(error);
       }
-    });
-    proc.stdin?.on?.("error", (error: Error) => {
-      if (proc === outputProcess) {
-        fail("audio output command")(error);
-      }
-    });
+    };
+    proc.on("error", onOutputError);
+    proc.stdin?.on?.("error", onOutputError);
     proc.on("exit", (code, signal) => {
       if (proc === outputProcess && !stopped) {
         params.logger.warn(

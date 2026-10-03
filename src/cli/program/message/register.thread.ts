@@ -21,7 +21,6 @@ function resolveThreadCreateRequest(opts: Record<string, unknown>) {
   };
 }
 
-/** Register thread create/list/reply commands. */
 export function registerMessageThreadCommands(message: Command, helpers: MessageCliHelpers) {
   const thread = message.command("thread").description("Thread actions");
 

@@ -430,7 +430,6 @@ export async function loadCodexBundleMcpThreadConfig(
 }
 
 export { decodeHeaderEnvPlaceholder } from "../agents/bundle-mcp-adapter.js";
-export { resolveConfiguredMcpTransport } from "../config/mcp-config-normalize.js";
 
 /** Lazily load the strict MCP proxy client with core-owned framing, startup, and shutdown. */
 export const mcpStdioRuntime = Object.freeze({
@@ -464,8 +463,22 @@ export async function prepareHarnessNativeMcpAppPreview(params: {
   }
   const { buildMcpAppCanvasPayload, fetchMcpAppView } =
     await import("../agents/mcp-ui-resource.js");
+  const { prepareMcpAppFormUpload } = await import("../agents/mcp-form-resource-upload.js");
   const view = await fetchMcpAppView({
     runtime: params.runtime,
+    requesterId: params.runtime.appRequester?.profileId,
+    uploadResources:
+      params.agentId && params.runtime.sessionKey
+        ? await prepareMcpAppFormUpload({
+            runtime: params.runtime,
+            serverName: params.serverName,
+            agentId: params.agentId,
+            sessionKey: params.runtime.sessionKey,
+            assertCurrent: () => {
+              params.runtime.assertOwnerCurrent?.();
+            },
+          })
+        : undefined,
     agentId: params.agentId,
     serverName: params.serverName,
     toolName: params.toolName,
@@ -519,10 +532,10 @@ export {
   resolveWritableSandboxBindHostRoots,
 } from "../agents/sandbox/fs-paths.js";
 export {
-  buildBootstrapContextForFiles,
   resolveBootstrapContextForRun,
   resolveBootstrapFilesForRun,
 } from "../agents/bootstrap-files.js";
+export { buildBootstrapContextForFiles } from "../agents/embedded-agent-helpers/bootstrap.js";
 export { prepareAgentWorkspaceContext } from "../agents/harness/workspace-context.js";
 export { buildAgentWorkspaceInstructionSnapshot } from "../agents/harness/workspace-instructions.js";
 export type { EmbeddedContextFile } from "../agents/embedded-agent-helpers/context-file.js";

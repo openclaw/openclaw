@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   ChatAttachment,
   ChatQueueItem,
@@ -17,6 +18,7 @@ import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.t
 import {
   readStoredOutboxStore,
   storageTargetForGateway,
+  storageTargetForComposer,
   storedChatOutboxScopeKey,
   writeStoredOutboxStore,
 } from "../../lib/chat/outbox-store.ts";
@@ -195,6 +197,22 @@ describe("Blob-preserving metadata migration", () => {
     await expectBytes(host, original);
   });
 
+  it("hydrates queued attachment bytes after offline reload before a new hello", async () => {
+    const host = hostFor();
+    const original = await prepare(host, "offline-blob");
+    const reloaded = {
+      ...host,
+      connected: false,
+      client: new GatewayBrowserClient({ url: gatewayUrl, offlineRecoveryScope: "principal-a" }),
+    };
+    await expectBytes(reloaded, original);
+    reloaded.client.retireOfflineRecoveryScope();
+    expect(await prepareOutboxPayload(reloaded, original, "handoff")).toEqual({
+      status: "failed",
+      reason: "unavailable",
+    });
+  });
+
   it.each(["agent:main:topic", "global"])(
     "migrates landed v3 %s without retiring its exact Blob or attempt",
     async (sessionKey) => {
@@ -211,7 +229,7 @@ describe("Blob-preserving metadata migration", () => {
       ];
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({ draftRevision: 42, queue: [item] });
-      if (sessionKey === "global") {
+      {
         expect(listStoredChatOutboxes(host)).toEqual([]);
         const entry = expectDefined(readChatOutboxRecovery(host).entries[0], "owned recovery");
         const destination = expectDefined(
@@ -234,9 +252,10 @@ describe("Blob-preserving metadata migration", () => {
       });
       await expectBytes(host, restored);
       expect(cleanup).not.toHaveBeenCalled();
-      const reopened = readStoredOutboxStore(sessionStorage, target);
+      const ownedTarget = storageTargetForComposer(host);
+      const reopened = readStoredOutboxStore(sessionStorage, ownedTarget);
       reopened.sessions = {};
-      writeStoredOutboxStore(sessionStorage, target, reopened);
+      writeStoredOutboxStore(sessionStorage, ownedTarget, reopened);
       expect(cleanup).toHaveBeenCalledWith([item.attachmentPayload]);
       await Promise.all(
         cleanup.mock.results.flatMap((result) => (result.type === "return" ? [result.value] : [])),
@@ -286,6 +305,140 @@ describe("Blob-preserving metadata migration", () => {
     },
   );
 
+  it.each(["noop-write", "failed-write", "noop-remove", "failed-remove"])(
+    "keeps recovery inert and retains shared bytes across %s of the unscoped source",
+    async (failure) => {
+      const host = hostFor();
+      const foreign = hostFor("principal-b");
+      const item = await prepare(host, "partial-transfer");
+      const unrelated = await prepare(host, "destination-only", host.sessionKey);
+      seed([item], "global", 4);
+      if (failure.endsWith("write")) {
+        // A retained row makes source retirement write instead of remove the bucket.
+        const store = readStoredOutboxStore(sessionStorage, target);
+        store.sessions[storedChatOutboxScopeKey({ sessionKey: "agent:main:other" })] = {
+          draft: "unrelated legacy draft",
+          updatedAt: 10,
+        };
+        writeStoredOutboxStore(sessionStorage, target, store);
+      }
+      const entry = expectDefined(
+        readChatOutboxRecovery(host).entries.find(
+          (candidate) => candidate.session.queue?.[0]?.id === item.id,
+        ),
+        "unscoped source",
+      );
+      const scope = { sessionKey: host.sessionKey, agentId: "main" };
+      const capture = () =>
+        expectDefined(captureChatOutboxRecoveryDestination(host, scope), "destination");
+      const set = sessionStorage.setItem.bind(sessionStorage);
+      const remove = sessionStorage.removeItem.bind(sessionStorage);
+      const fail = () => {
+        if (failure.startsWith("failed")) {
+          throw new Error("source retirement blocked");
+        }
+      };
+      const write = vi.spyOn(sessionStorage, "setItem").mockImplementation((key, value) => {
+        const pending = JSON.parse(value) as { recovery: Record<string, unknown> };
+        if (
+          key === target.key &&
+          failure.endsWith("write") &&
+          !Object.keys(pending.recovery).length
+        ) {
+          fail();
+          return;
+        }
+        set(key, value);
+      });
+      const removal = vi.spyOn(sessionStorage, "removeItem").mockImplementation((key) => {
+        if (key === target.key && failure.endsWith("remove")) {
+          fail();
+          return;
+        }
+        remove(key);
+      });
+      const cleanup = vi.spyOn(payloadStore, "removeOutboxPayloads");
+      const ownedTarget = storageTargetForComposer(host);
+      const destinationKey = storedChatOutboxScopeKey(scope);
+      const clearDestination = () => {
+        const store = readStoredOutboxStore(sessionStorage, ownedTarget);
+        store.sessions = {};
+        writeStoredOutboxStore(sessionStorage, ownedTarget, store);
+      };
+      const settleCleanup = async () => {
+        await Promise.all(
+          cleanup.mock.results.flatMap((result) =>
+            result.type === "return" ? [result.value] : [],
+          ),
+        );
+      };
+
+      expect(restoreChatOutboxRecovery(host, entry, capture())).toBe("storage-failed");
+      expect(
+        readChatOutboxRecovery(host).entries.find((row) => row.session.queue?.[0]?.id === item.id)
+          ?.session,
+      ).toEqual(entry.session);
+      const committed = readStoredOutboxStore(sessionStorage, ownedTarget);
+      expect(committed.sessions[destinationKey]).toBeUndefined();
+      expect(Object.values(committed.recovery).flatMap((row) => row.session.queue ?? [])).toEqual(
+        entry.session.queue,
+      );
+      // Unrelated retirement must not collect bytes owned by either inert staging copy.
+      committed.sessions[destinationKey] = { updatedAt: 10, queue: [unrelated] };
+      writeStoredOutboxStore(sessionStorage, ownedTarget, committed);
+      clearDestination();
+      await settleCleanup();
+      await expectBytes(host, item);
+      expect(cleanup).toHaveBeenCalledExactlyOnceWith([unrelated.attachmentPayload]);
+      expect(await prepareOutboxPayload(host, unrelated, "handoff")).toEqual({
+        status: "failed",
+        reason: "missing",
+      });
+      expect(
+        readChatOutboxRecovery(foreign).entries.every(
+          (candidate) => !candidate.session.queue?.length,
+        ),
+      ).toBe(true);
+      expect(listStoredChatOutboxes(foreign)).toEqual([]);
+      const foreignDestination = expectDefined(
+        captureChatOutboxRecoveryDestination(foreign, scope),
+        "foreign destination",
+      );
+      expect(restoreChatOutboxRecovery(foreign, entry, foreignDestination)).toBe("conflict");
+
+      // Another failed recovery/deletion must preserve the same source bytes too.
+      expect(restoreChatOutboxRecovery(host, entry, capture())).toBe("storage-failed");
+      clearDestination();
+      await settleCleanup();
+      await expectBytes(host, item);
+      expect(cleanup).toHaveBeenCalledTimes(1);
+      expect(
+        readChatOutboxRecovery(host).entries.find((row) => row.session.queue?.[0]?.id === item.id)
+          ?.session,
+      ).toEqual(entry.session);
+      expect(
+        readStoredOutboxStore(sessionStorage, ownedTarget).sessions[destinationKey],
+      ).toBeUndefined();
+      write.mockRestore();
+      removal.mockRestore();
+
+      // Once source retirement succeeds, the destination is the last owner.
+      expect(restoreChatOutboxRecovery(host, entry, capture())).toBe("restored");
+      expect(
+        readChatOutboxRecovery(host).entries.every((candidate) => !candidate.session.queue?.length),
+      ).toBe(true);
+      await expectBytes(host, item);
+      clearDestination();
+      await settleCleanup();
+      expect(cleanup).toHaveBeenLastCalledWith([item.attachmentPayload]);
+      expect(cleanup).toHaveBeenCalledTimes(2);
+      expect(await prepareOutboxPayload(host, item, "handoff")).toEqual({
+        status: "failed",
+        reason: "missing",
+      });
+    },
+  );
+
   it("partitions a mixed-principal v3 bucket while retaining foreign recovery across unrelated retirement", async () => {
     const a = hostFor();
     const b = hostFor("principal-b");
@@ -314,20 +467,17 @@ describe("Blob-preserving metadata migration", () => {
     );
     expect(restoreChatOutboxRecovery(b, ownedA, destination)).toBe("conflict");
     expect(restoreChatOutboxRecovery(a, ownedA, destination)).toBe("restored");
-    const raw = readStoredOutboxStore(sessionStorage, target);
+    const ownedTarget = storageTargetForComposer(a);
+    const raw = readStoredOutboxStore(sessionStorage, ownedTarget);
     raw.sessions = {};
-    writeStoredOutboxStore(sessionStorage, target, raw);
+    writeStoredOutboxStore(sessionStorage, ownedTarget, raw);
     expect(cleanup).toHaveBeenCalledWith([first.attachmentPayload]);
     expect(cleanup).toHaveBeenCalledTimes(1);
     await expectBytes(b, second);
     expect(readChatOutboxRecovery(b).entries).toEqual(entriesB);
     const client = expectDefined(b.client, "B client");
     const ready = vi.spyOn(client, "recoveryScopeReady", "get").mockReturnValue(false);
-    expect(
-      readChatOutboxRecovery(b).entries.flatMap(
-        (entry) => entry.session.queue?.map((item) => item.id) ?? [],
-      ),
-    ).toEqual([plain.id]);
+    expect(() => readChatOutboxRecovery(b)).toThrow("Offline account recovery is unavailable");
     expect(
       captureChatOutboxRecoveryDestination(b, { sessionKey: b.sessionKey, agentId: "main" }),
     ).toBeNull();

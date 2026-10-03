@@ -14,7 +14,7 @@ import type {
   ConfigFileSnapshot,
   OpenClawConfig,
 } from "../../config/types.js";
-import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
+import { readUpdateStateSchemaVersionsInProcess } from "../../infra/update-candidate-state.js";
 import {
   captureUpdateDoctorConfigWrites,
   writeUpdatePostInstallDoctorResult,
@@ -25,10 +25,23 @@ import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js"
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { printResult } from "./progress.js";
 import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
+
+export async function readRollbackFixtureSchemaVersions(
+  input: Pick<
+    Parameters<typeof readUpdateStateSchemaVersionsInProcess>[0],
+    "stateDir" | "config" | "env"
+  >,
+) {
+  // Config and ledger setup can retain SQLite handles. Drain them before the
+  // fixture reader closes source descriptors; candidate checks stay isolated.
+  await closeOpenClawStateDatabaseAsync();
+  return readUpdateStateSchemaVersionsInProcess({ ...input, env: input.env ?? process.env });
+}
 
 export function writeDoctorRollbackConfig(stateDir: string, change: string) {
   const configPath = path.join(stateDir, "openclaw.json");
@@ -199,7 +212,7 @@ export async function expectActiveRollbackIdentity(params: {
     pluginValidation: "skip",
   }).readConfigFileSnapshot();
   const config = configSnapshot.sourceConfigBeforeMigrations ?? configSnapshot.sourceConfig;
-  const schemaVersions = await readUpdateStateSchemaVersions({ stateDir, config, env });
+  const schemaVersions = await readRollbackFixtureSchemaVersions({ stateDir, config, env });
   const result: UpdateRunResult = {
     status: "error",
     mode: "npm",
@@ -324,7 +337,7 @@ export function registerRollbackReportTests(
         pluginValidation: "skip",
       }).readConfigFileSnapshot();
       const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
-      const schemaVersions = await readUpdateStateSchemaVersions({
+      const schemaVersions = await readRollbackFixtureSchemaVersions({
         stateDir,
         config: configSnapshot.sourceConfigBeforeMigrations ?? configSnapshot.sourceConfig,
         env,

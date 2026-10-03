@@ -4,7 +4,7 @@ import type {
   ModelsAuthLoginFlowResult,
 } from "../../commands/models/auth.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { withTelegramNativeOwners } from "./telegram-native-owner.test-support.js";
 
 it("delivers current linked Team-admin ownership through registered Telegram plugin commands", async () => {

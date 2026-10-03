@@ -6,7 +6,6 @@ import type {
 } from "./types.base.js";
 import type {
   ChannelExecApprovalConfig,
-  ChannelExecApprovalTarget,
   ChannelReactionConfig,
   CommonChannelMessagingConfig,
 } from "./types.channel-messaging-common.js";
@@ -49,8 +48,6 @@ export type TelegramNetworkConfig = {
 };
 
 export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";
-export type TelegramStreamingMode = "off" | "partial" | "block" | "progress";
-export type TelegramExecApprovalTarget = ChannelExecApprovalTarget;
 
 export type TelegramPreviewStreamingConfig = ChannelPreviewStreamingConfig;
 
@@ -106,7 +103,7 @@ export type TelegramAccountConfig = CommonChannelMessagingConfig<
     webhookUrl?: string;
     webhookSecret?: string;
     webhookPath?: string;
-    /** Webhook forwarding endpoint (default 127.0.0.1:8787); false uses only the Gateway port. */
+    /** Explicit webhook forwarding endpoint; omitted or false uses only the Gateway port. */
     legacyWebhook?: false | { port: number; host?: string };
     /** @deprecated Legacy input only; Doctor migrates this to legacyWebhook.host. */
     webhookHost?: string;

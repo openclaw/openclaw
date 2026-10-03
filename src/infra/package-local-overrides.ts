@@ -29,6 +29,7 @@ import {
   type LocalPackageOverridesPlan,
   type LocalPackageOverridesResult,
 } from "./package-local-overrides-shared.js";
+import { resolveRuntimeArgs } from "./runtime-worker-url.js";
 import { relocateRuntimePath } from "./update-runtime-relocation.js";
 
 export { captureLocalPackageOverrides } from "./package-local-overrides-capture.js";
@@ -110,6 +111,7 @@ async function runRequiredFsSafeMove(params: {
     execFile(
       process.execPath,
       [
+        ...resolveRuntimeArgs(),
         "--input-type=module",
         "--eval",
         REQUIRED_FS_SAFE_OPERATION_SCRIPT,

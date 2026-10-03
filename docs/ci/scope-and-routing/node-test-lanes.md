@@ -81,22 +81,13 @@ isolation, worker policy, and group timing. The release-only switch controls the
 full plugin sweep, not the availability of its owner metadata; unrelated PRs
 still do not acquire that sweep.
 
-The fixed PR smoke inventory lives in `PR_SMOKE_TEST_FILES` in
-`scripts/lib/ci-changed-node-test-plan.mts`. It selects six complete existing files:
-
-- `test/gateway-rpc-exporters.test.ts`: Gateway boot, readiness, and authenticated WebSocket/RPC/HTTP serving.
-- `src/config/io.load-async.test.ts`: cold configuration loading and metadata admission.
-- `src/config/io.compat.test.ts`: compatible configuration reads and migration guidance.
-- `src/config/utility-model-separation-migration.io.test.ts`: configuration migration through I/O.
-- `src/plugins/loader.runtime-registry.test.ts`: plugin loading and registry lifecycle.
-- `test/qa-channel-message-tool-delivery.test.ts`: message-tool delivery to a channel conversation.
-
-The smoke files keep their canonical configs and assertions. They supplement
-changed-owner tests and do not opt unrelated Windows or browser jobs into a PR.
-Linux Testbox checks passed all 92 cases in these six files with 161.01 seconds
-of summed wrapper time. That is focused smoke evidence against the three-minute
-budget, not a measured GitHub job wall; CI setup, queueing, and runner contention
-remain separate costs.
+The aggressive PR smoke selects two complete existing files:
+`src/config/io.load-async.test.ts` for cold configuration loading and metadata
+admission, and `src/plugins/loader.runtime-registry.test.ts` for plugin loading
+and registry lifecycle. They retain their canonical configs and assertions and
+occupy at most two Node rows. The full-selection kill switch retains the previous
+six-file smoke inventory, including Gateway serving, config compatibility and
+migration, and message-tool delivery. All six still run on hourly main.
 
 The `PR_EXEMPT_RUNTIME_TEST_FILES` inventory in
 `scripts/lib/ci-proof-test-inventory.mts` keeps measured slow integration tests
@@ -134,4 +125,35 @@ and scripts that the import graph cannot discover.
 Explicit policy watches retain their matching tests in PR CI even when the broader
 tooling or runtime suite is deferred. This includes wrapper dependency checks,
 Gateway client callsite scans, and upgrade-survivor package checks. Unrelated
-deferred tests stay excluded.
+deferred tests stay excluded. Changed test files that no Vitest config routes,
+such as skill `node:test` and Python suites, are never direct targets; the watch
+for their Vitest wrapper must cover those test files too, or test-only edits run
+in no PR job.
+
+Aggressive PR selection keeps changed tests and direct runtime import consumers,
+including package and SDK aliases. A changed module with fewer than 20 direct
+importers also selects tests at depth two; hubs stop at direct consumers. Changed
+packages also select direct package-specifier test consumers; that pass does not
+restart traversal through package readers and bypass the module hub cutoff. Erased type
+imports remain owned by typechecking.
+
+Same-directory tests are selected only when the directory contains at most 30
+test files. Larger flat directories use existing explicit owner mappings and
+name-prefix siblings (`foo.ts` selects `foo*.test.ts`), without recursively
+selecting child directories. Existing fixture, generated-input, and non-import
+policy owners remain explicit. Config changes keep their planner/guard owners
+instead of selecting the entire config inventory. Protected/deferred tests follow
+these same rules, rather than opting in entire owner areas.
+
+The preflight job summary lists every selected file and its selection rules.
+Set repository variable `OPENCLAW_CI_NODE_SELECTION=full` to restore the previous
+PR selection immediately. Hourly main and ordinary manual/release plans keep
+their complete inventories regardless of this variable.
+
+Source-module edits also select six explicit non-import guards: PR wrapper source
+closure, wrapper provisioning, eager import closure, updater swap-fixture
+dependencies, type-suppression inventory, and plugin SDK surface reporting. This
+conservative watch covers new, renamed, and deleted modules and new import edges,
+including dependencies missing from the inventory that should have named them.
+The existing required architecture group still checks source diffs for import
+cycles and topology changes.

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   deleteCronJobRowInDatabase,
@@ -11,7 +12,6 @@ import {
   loadCronRuntimeAuthorities,
   repairCronRuntimeAuthorityRows,
 } from "./runtime-authority-store.js";
-import { tryParseJsonObject } from "./scalar-codec.js";
 import type { CronJobReadRow } from "./schema.js";
 import type { LoadedCronStore } from "./types.js";
 
@@ -23,7 +23,7 @@ type CronLoadWriter = {
 function isRetiredCollectionReview(row: CronJobReadRow): boolean {
   return (
     row.payload_kind === "skillCollectionReview" ||
-    asRecord(tryParseJsonObject(row.job_json)?.payload).kind === "skillCollectionReview"
+    asRecord(safeParseJsonRecord(row.job_json)?.payload).kind === "skillCollectionReview"
   );
 }
 

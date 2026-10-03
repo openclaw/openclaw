@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { vi } from "vitest";
 import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
@@ -119,11 +120,12 @@ export const reconcileUnchangedLocalWorkspace: WorkerTurnTunnelHandle["reconcile
     };
   };
 
-export function acknowledgeCompletedWorkerTurn(
+export async function acknowledgeCompletedWorkerTurn(
   claim: WorkerSessionTurnClaim,
-  transcriptLeafId: string,
-): SpawnResult {
-  createWorkerSessionPlacementGate(placements).updateAckCursors({
+  transcriptLeafId: string | undefined,
+): Promise<SpawnResult> {
+  const leafId = expectDefined(transcriptLeafId, "persisted worker transcript leaf");
+  await createWorkerSessionPlacementGate(placements).updateAckCursors({
     claim,
     transcriptSeq: 2,
     liveSeq: 1,
@@ -131,7 +133,7 @@ export function acknowledgeCompletedWorkerTurn(
   return {
     stdout: JSON.stringify({
       status: "completed",
-      transcriptLeafId,
+      transcriptLeafId: leafId,
       transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
     }),
     stderr: "",
@@ -179,7 +181,7 @@ export async function setupWorkerTurnLauncherTest(): Promise<void> {
     fallbackEntry: entry,
     skipMaintenance: true,
   });
-  SessionManager.open(sessionTarget);
+  await SessionManager.openAsync(sessionTarget);
   sessionFile = SESSION_KEY;
 }
 
@@ -209,7 +211,7 @@ export function setWorkerTurnAdmissionCleanup(cleanup: () => void): void {
 }
 
 export function abortWorkerTurnClaimWaitOnSignal(signal: AbortSignal) {
-  const waitForClaim = placements.waitForTurnClaimRelease.bind(placements);
+  const waitForClaim = placements.waitForTurnClaimRelease;
   vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementation((sessionId, options) =>
     waitForClaim(sessionId, {
       ...options,
@@ -282,8 +284,8 @@ export function createWorkerSessionTurnPlacementProvider(
   });
 }
 
-export function openSessionManager(): SessionManager {
-  return SessionManager.open(sessionTarget);
+export async function openSessionManager(): Promise<SessionManager> {
+  return await SessionManager.openAsync(sessionTarget);
 }
 
 export function readWorkerTurnTranscriptStorageRows() {

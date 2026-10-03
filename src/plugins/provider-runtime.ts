@@ -67,8 +67,6 @@ import type {
   ProviderCreateStreamFnContext,
   ProviderFetchUsageSnapshotContext,
   ProviderNormalizeConfigContext,
-  ProviderReasoningOutputMode,
-  ProviderReasoningOutputModeContext,
   ProviderNormalizeResolvedModelContext,
   ProviderNormalizeTransportContext,
   ProviderPreferRuntimeResolvedModelContext,
@@ -465,26 +463,16 @@ export function resolveProviderConfigApiKeyWithPlugin(
   );
 }
 
-export const sanitizeProviderReplayHistoryWithPlugin = asyncRuntimeHook("sanitizeReplayHistory");
-
-export const validateProviderReplayTurnsWithPlugin = asyncRuntimeHook("validateReplayTurns");
+export {
+  resolveProviderReasoningOutputModeWithPlugin,
+  sanitizeProviderReplayHistoryWithPlugin,
+  sanitizeProviderReplayHistoryWithPluginAsync,
+  validateProviderReplayTurnsWithPlugin,
+} from "./provider-replay-runtime.js";
 
 export const normalizeProviderToolSchemasWithPlugin = toolSchemaHook("normalizeToolSchemas");
 
 export const inspectProviderToolSchemasWithPlugin = toolSchemaHook("inspectToolSchemas");
-
-export function resolveProviderReasoningOutputModeWithPlugin(
-  params: ProviderRuntimeLookup & {
-    runtimeHandle?: ProviderRuntimePluginHandle;
-    context: ProviderReasoningOutputModeContext;
-  },
-): ProviderReasoningOutputMode | undefined {
-  const mode = ensureProviderRuntimePluginHandle({
-    ...params,
-    modelId: params.context.modelId,
-  }).plugin?.resolveReasoningOutputMode?.(params.context);
-  return mode === "native" || mode === "tagged" ? mode : undefined;
-}
 
 export function resolveProviderStreamFn(
   params: ProviderRuntimeLookup & {

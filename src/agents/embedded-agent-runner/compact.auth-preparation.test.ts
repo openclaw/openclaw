@@ -1,8 +1,7 @@
-import { realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, expect, it, onTestFinished, vi } from "vitest";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createApiKeyCredential } from "../auth-profiles/credential-fixtures.test-support.js";
 import {
   acquireAgentRunPreparedModelRuntimeMock,
@@ -21,26 +20,19 @@ const { compactEmbeddedAgentSession, compactEmbeddedAgentSessionDirect } =
   await loadCompactHooksHarness();
 const [
   { upsertSessionEntryCore },
-  { closeOpenClawAgentDatabasesForTest },
   { ensureAuthProfileStoreWithoutExternalProfiles },
   { AsyncWorkScope },
   { prepareProviderRuntimeAuth },
 ] = await Promise.all([
   import("../../config/sessions/session-accessor.js"),
-  import("../../state/openclaw-agent-db.js"),
   import("../model-auth.js"),
   import("../../shared/async-work-scope.js"),
   import("../../plugins/provider-runtime.js"),
 ]);
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    cleanup();
-  }),
-);
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-compaction-auth-");
 
 async function prepareCompactionParams() {
-  const workspaceDir = await realpath(tempDirs.make("openclaw-compaction-auth-"));
+  const workspaceDir = tempDirs.make();
   resetCompactHooksHarnessMocks(workspaceDir);
   const sessionTarget = {
     agentId: "main",

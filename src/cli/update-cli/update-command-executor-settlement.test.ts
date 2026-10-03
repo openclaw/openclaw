@@ -28,7 +28,7 @@ import {
   withUpdateCommandExecutorChild,
   type UpdateCommandExecutor,
 } from "./update-command-executor.js";
-import { resolvePackageRuntimePreflight } from "./update-command-service-plan.js";
+import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
 import { createUpdateOperationDeadline } from "./update-operation-deadline.js";
 
 const boundaries = vi.hoisted(() => ({ store: vi.fn(), runtime: vi.fn(), databasePath: "" }));
@@ -464,6 +464,8 @@ it.each(["forced", "uncertain"] as const)(
 it.each(["forced", "uncertain"] as const)(
   "settles a failed runtime probe before preflight handoff release (%s)",
   async (cleanupResult) => {
+    const fallbackNodeRunner = path.join(root, "replacement-node");
+    fs.writeFileSync(fallbackNodeRunner, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
     const admitted = createDeferredCore();
     const cleanup = createDeferredCore<"forced" | "uncertain">();
     let handedOff = false;
@@ -479,6 +481,7 @@ it.each(["forced", "uncertain"] as const)(
       const runtime = await resolvePackageRuntimePreflight({
         root,
         target: { version: "2026.9.17", nodeEngine: ">=24.16.0" },
+        fallbackNodeRunner,
         alreadyCurrent: true,
         shouldRestart: true,
         service: {

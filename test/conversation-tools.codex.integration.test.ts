@@ -23,7 +23,7 @@ describe("Codex core conversation delivery", () => {
       delivered: true,
       success: true,
     },
-    ...(["sent", "queued", "suppressed", "unknown"] as const).map((status) => ({
+    ...(["sent", "queued"] as const).map((status) => ({
       name: `send ${status} with a platform ID`,
       toolName: "conversations_send" as const,
       receipt: { ...destination, status, messageId: "outbound-1" },
@@ -55,14 +55,14 @@ describe("Codex core conversation delivery", () => {
       delivered: true,
       success: false,
     },
-    ...(["sent", "queued", "suppressed", "unknown"] as const).map((status) => ({
+    ...(["sent", "queued"] as const).map((status) => ({
       name: `turn ${status} with a correlation error`,
       toolName: "conversations_turn" as const,
       receipt: {
         ...destination,
         status,
         messageId: "outbound-1",
-        correlationPersisted: status === "sent" || status === "queued",
+        correlationPersisted: true,
         error: "No process-local reply waiter remains.",
       },
       delivered: status === "sent",

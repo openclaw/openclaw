@@ -65,7 +65,7 @@ it("preserves attached app processes through Gateway shutdown and same-epoch rec
   const start = (manager: ReturnType<typeof createManager>, processId: string) =>
     manager.runSessionCommand(binding, {
       argv: [
-        "node",
+        path.basename(process.execPath),
         "-e",
         'const s = require("node:http").createServer((_, r) => r.end("same app")); s.listen(0, "127.0.0.1", () => console.log("http://127.0.0.1:" + s.address().port));',
       ],

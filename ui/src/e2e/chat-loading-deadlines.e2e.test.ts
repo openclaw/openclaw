@@ -11,6 +11,52 @@ const draft = "Keep this draft until I choose to send it.";
 const readyText = "The conversation is ready.";
 
 suite.define(() => {
+  it("presents pending agent database inspection as retryable startup", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
+      async ({ page }) => {
+        await page.clock.install();
+        const diagnostic =
+          "Agent main has not completed startup inspection and preparation. Run Doctor if inspection cannot complete.";
+        const gateway = await installMockGateway(page, {
+          awaitInitialRoster: false,
+          sessionKey: "agent:main:main",
+          methodResponses: {
+            "chat.startup": {
+              __mockError: {
+                code: "UNAVAILABLE",
+                message: diagnostic,
+                details: {
+                  agentId: "main",
+                  paths: ["/private/state/agents/main/openclaw-agent.sqlite"],
+                  code: "agent-database-inspection-pending",
+                  reason: "Agent main has not completed startup inspection and preparation.",
+                  repairHint: "Run Doctor if inspection cannot complete.",
+                },
+                retryable: true,
+                retryAfterMs: 250,
+              },
+            },
+          },
+        });
+        await page.goto(new URL("/chat/main", suite.server.baseUrl).href);
+        await gateway.waitForRequest("chat.startup");
+        await pauseVirtualClock(page);
+        await page.clock.runFor(60_001);
+
+        const notice = page.locator(".chat-history-error");
+        await notice.waitFor();
+        expect(await notice.textContent()).toContain(
+          "This agent is still starting. Retry in a moment.",
+        );
+        expect(await notice.textContent()).not.toContain(diagnostic);
+        expect(await page.getByRole("button", { name: "Retry", exact: true }).isEnabled()).toBe(
+          true,
+        );
+      },
+    );
+  });
+
   it.each(["chat.startup", "models.list"] as const)(
     "settles a silent %s read and preserves the draft through recovery",
     async (method) => {
@@ -86,6 +132,8 @@ suite.define(() => {
             expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
           }
 
+          const attemptsBeforeRetry = method === "chat.startup" ? 2 : 1;
+          expect(await gateway.getRequests(method)).toHaveLength(attemptsBeforeRetry);
           await gateway.resolveDeferred(method);
           await page.clock.runFor(1);
           if (method === "chat.startup") {
@@ -107,7 +155,9 @@ suite.define(() => {
             await page.clock.resume();
             await page.locator('[data-chat-model-select="true"]').click();
           }
-          await expect.poll(async () => (await gateway.getRequests(method)).length).toBe(2);
+          await expect
+            .poll(async () => (await gateway.getRequests(method)).length)
+            .toBe(attemptsBeforeRetry + 1);
           // The native details toggle may send the retry after the click resolves.
           // Advance its mock response timer only after that request is observed.
           await page.clock.runFor(100);
@@ -197,10 +247,15 @@ suite.define(() => {
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           await alert.waitFor();
           await alert
-            .locator(".chat-error__content > strong")
-            .getByText(renderedDiagnostic)
+            .locator("summary strong")
+            .getByText("Couldn't finish this reply. Check the conversation before trying again.")
             .waitFor();
-          expect(await alert.locator("details").count()).toBe(0);
+          expect(await alert.locator("details").getAttribute("open")).toBeNull();
+          await alert.locator("summary").click();
+          await alert.getByLabel("Error details", { exact: true }).waitFor();
+          expect(await alert.getByLabel("Error details", { exact: true }).textContent()).toContain(
+            renderedDiagnostic,
+          );
           await sendButton.click();
         }
         const send = await gateway.waitForRequest("chat.send");

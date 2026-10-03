@@ -34,8 +34,8 @@ type UpdateStepCompletion = UpdateStepInfo & Omit<UpdateStepResult, "cwd">;
 export type UpdateStepProgress = {
   onRollbackOutcome?: (outcome: NonNullable<UpdateRunResult["rollbackOutcome"]>) => void;
   onHeartbeat?: () => void;
-  onStepStart?: (step: UpdateStepInfo) => void;
-  onStepComplete?: (step: UpdateStepCompletion) => void;
+  onStepStart?: (step: UpdateStepInfo) => void | Promise<void>;
+  onStepComplete?: (step: UpdateStepCompletion) => void | Promise<void>;
 };
 
 type GitUpdateTarget = {
@@ -96,6 +96,7 @@ export type RunStepOptions = {
   cwd: string;
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
+  input?: string;
   progress?: UpdateStepProgress;
   stepIndex: number;
   totalSteps: number;

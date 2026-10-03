@@ -3,7 +3,6 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.R
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawTheme
-import android.content.ClipboardManager
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -116,27 +115,9 @@ internal fun AboutBuildIdentityPanel(
   val copyCommitLabel = stringResource(R.string.about_build_copy_commit)
   val copyTimestampLabel = stringResource(R.string.about_build_copy_timestamp)
   val commitClick: (() -> Unit)? =
-    identity.fullCommit?.let { commit ->
-      {
-        context.getSystemService(ClipboardManager::class.java)?.copyTextWithConfirmation(
-          context = context,
-          label = commitClipboardLabel,
-          value = commit,
-          confirmation = commitCopiedConfirmation,
-        )
-      }
-    }
+    identity.fullCommit?.let { commit -> { context.copyTextWithConfirmation(commitClipboardLabel, commit, commitCopiedConfirmation) } }
   val timestampClick: (() -> Unit)? =
-    identity.buildTimestamp?.let { timestamp ->
-      {
-        context.getSystemService(ClipboardManager::class.java)?.copyTextWithConfirmation(
-          context = context,
-          label = timestampClipboardLabel,
-          value = timestamp,
-          confirmation = timestampCopiedConfirmation,
-        )
-      }
-    }
+    identity.buildTimestamp?.let { timestamp -> { context.copyTextWithConfirmation(timestampClipboardLabel, timestamp, timestampCopiedConfirmation) } }
   val builtAccessibilityLabel =
     identity.buildTimestamp?.let { timestamp ->
       stringResource(R.string.about_build_built_accessibility, identity.built, timestamp)

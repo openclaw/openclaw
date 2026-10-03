@@ -63,12 +63,14 @@ export type ConnectPairingRequiredReason =
   (typeof ConnectPairingRequiredReasons)[keyof typeof ConnectPairingRequiredReasons];
 
 /** Suggested client-side recovery action for structured connect errors. */
-type ConnectRecoveryNextStep =
-  | "retry_with_device_token"
-  | "update_auth_configuration"
-  | "update_auth_credentials"
-  | "wait_then_retry"
-  | "review_auth_configuration";
+const CONNECT_RECOVERY_NEXT_STEP_VALUES = [
+  "retry_with_device_token",
+  "update_auth_configuration",
+  "update_auth_credentials",
+  "wait_then_retry",
+  "review_auth_configuration",
+] as const;
+type ConnectRecoveryNextStep = (typeof CONNECT_RECOVERY_NEXT_STEP_VALUES)[number];
 
 /** Optional retry guidance extracted from gateway connect-error details. */
 type ConnectErrorRecoveryAdvice = {
@@ -97,14 +99,6 @@ export type ConnectPairingRequiredDetails = Pick<
   PairingConnectErrorDetails,
   "reason" | "requestId"
 >;
-
-const CONNECT_RECOVERY_NEXT_STEP_VALUES: ReadonlySet<ConnectRecoveryNextStep> = new Set([
-  "retry_with_device_token",
-  "update_auth_configuration",
-  "update_auth_credentials",
-  "wait_then_retry",
-  "review_auth_configuration",
-]);
 
 const CONNECT_PAIRING_REQUIRED_REASON_VALUES: ReadonlySet<ConnectPairingRequiredReason> = new Set(
   Object.values(ConnectPairingRequiredReasons),
@@ -238,9 +232,7 @@ export function readConnectErrorRecoveryAdvice(details: unknown): ConnectErrorRe
 
 function normalizeConnectRecoveryNextStep(value: unknown): ConnectRecoveryNextStep | undefined {
   const normalized = normalizeOptionalProtocolString(value) ?? "";
-  return CONNECT_RECOVERY_NEXT_STEP_VALUES.has(normalized as ConnectRecoveryNextStep)
-    ? (normalized as ConnectRecoveryNextStep)
-    : undefined;
+  return CONNECT_RECOVERY_NEXT_STEP_VALUES.find((candidate) => candidate === normalized);
 }
 
 function normalizePairingConnectReason(value: unknown): ConnectPairingRequiredReason | undefined {

@@ -446,13 +446,17 @@ function stripBundledProviderRuntimeDefaults(params: {
   };
 }
 
-function parseValidateConfigFromRawOrRespond(
-  rawValue: string,
-  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
+async function prepareConfigReplacementOrRespond(
+  params: { raw: string },
   respond: RespondFn,
-  modelIdNormalizationPolicies?: Parameters<typeof normalizeSubmittedConfigModelRefs>[1],
-): { config: OpenClawConfig; writeConfig: OpenClawConfig; schema: ConfigSchemaResponse } | null {
-  const parsedRes = parseConfigJson5(rawValue);
+  revisionProjector: GatewayConfigRevisionProjector,
+) {
+  const writeSnapshot = await readConfigWriteSnapshotOrRespond(params, respond, revisionProjector);
+  if (!writeSnapshot) {
+    return null;
+  }
+  const { snapshot, writeOptions } = writeSnapshot;
+  const parsedRes = parseConfigJson5(params.raw);
   if (!parsedRes.ok) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, parsedRes.error));
     return null;
@@ -476,13 +480,15 @@ function parseValidateConfigFromRawOrRespond(
       candidate: sourceCandidate,
       sourceConfig: snapshot.sourceConfig,
     }),
-    modelIdNormalizationPolicies,
+    modelIdNormalizationPolicies:
+      writeOptions.basePluginMetadataSnapshot?.owners.modelIdNormalizationPolicies,
     respond,
   });
   if (!validatedSubmission) {
     return null;
   }
   return {
+    writeSnapshot,
     config: validatedSubmission.config,
     writeConfig: validatedSubmission.validationCandidate,
     schema,
@@ -875,7 +881,7 @@ export const configHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const path = (params as { path: string }).path;
+    const { path } = params;
     const schema = loadSchemaWithPlugins();
     const result = lookupConfigSchema(schema, path, resolveConfigReloadMetadata);
     if (!result) {
@@ -906,24 +912,15 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateConfigSetParams, "config.set", respond)) {
       return;
     }
-    const writeSnapshot = await readConfigWriteSnapshotOrRespond(
+    const parsed = await prepareConfigReplacementOrRespond(
       params,
       respond,
       context.configRevisionProjector,
     );
-    if (!writeSnapshot) {
-      return;
-    }
-    const { snapshot, writeOptions } = writeSnapshot;
-    const parsed = parseValidateConfigFromRawOrRespond(
-      params.raw,
-      snapshot,
-      respond,
-      writeOptions.basePluginMetadataSnapshot?.owners.modelIdNormalizationPolicies,
-    );
     if (!parsed) {
       return;
     }
+    const { snapshot, writeOptions } = parsed.writeSnapshot;
     if (
       rejectDroppedAgentRosterEntries({
         currentConfig: snapshot.config,
@@ -1139,20 +1136,10 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateConfigApplyParams, "config.apply", respond)) {
       return;
     }
-    const writeSnapshot = await readConfigWriteSnapshotOrRespond(
+    const parsed = await prepareConfigReplacementOrRespond(
       params,
       respond,
       context.configRevisionProjector,
-    );
-    if (!writeSnapshot) {
-      return;
-    }
-    const { snapshot, writeOptions } = writeSnapshot;
-    const parsed = parseValidateConfigFromRawOrRespond(
-      params.raw,
-      snapshot,
-      respond,
-      writeOptions.basePluginMetadataSnapshot?.owners.modelIdNormalizationPolicies,
     );
     if (!parsed) {
       return;
@@ -1168,7 +1155,7 @@ export const configHandlers: GatewayRequestHandlers = {
     await commitConfigRestartWrite({
       requestParams: params,
       mode: "config.apply",
-      writeSnapshot,
+      writeSnapshot: parsed.writeSnapshot,
       writeConfig: parsed.writeConfig,
       nextConfig: parsed.config,
       actor,

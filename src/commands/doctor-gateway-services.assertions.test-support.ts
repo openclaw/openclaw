@@ -25,13 +25,6 @@ export function expectCallField(
   return options;
 }
 
-export function expectGatewayAuthToken(value: unknown, expected: string) {
-  const root = requireRecord(value, "config root");
-  const gateway = requireRecord(root.gateway, "config.gateway");
-  const auth = requireRecord(gateway.auth, "config.gateway.auth");
-  expect(auth.token).toBe(expected);
-}
-
 function readGatewayAuthToken(value: unknown) {
   if (!value || typeof value !== "object") {
     return undefined;

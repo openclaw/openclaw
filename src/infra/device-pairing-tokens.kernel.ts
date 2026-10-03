@@ -11,9 +11,7 @@ import {
 } from "./device-pairing-identity.js";
 import { requestDevicePairingMutationAdmission } from "./device-pairing-mutation.worker.js";
 import {
-  cloneDevicePairingTokens,
   loadDevicePairingStateForMutation,
-  normalizeDevicePairingId,
   normalizeDevicePairingRole,
 } from "./device-pairing-state.kernel.js";
 import {
@@ -225,7 +223,7 @@ function resolveDeviceTokenUpdateContext(params: { device: PairedDevice | null; 
   if (!listApprovedPairedDeviceRoles(device).includes(role)) {
     return null;
   }
-  const tokens = cloneDevicePairingTokens(device);
+  const tokens = { ...device.tokens };
   const existing = tokens[role];
   return { device, role, tokens, existing };
 }
@@ -241,7 +239,7 @@ export function rotateDeviceTokenInWorker(params: {
 }): RotateDeviceTokenResult {
   const state = loadDevicePairingStateForMutation(params.nowMs, params.baseDir);
   const context = resolveDeviceTokenUpdateContext({
-    device: state.pairedByDeviceId[normalizeDevicePairingId(params.deviceId)] ?? null,
+    device: state.pairedByDeviceId[params.deviceId.trim()] ?? null,
     role: params.role,
   });
   if (!context) {
@@ -315,7 +313,7 @@ export function revokeDeviceTokenInWorker(params: {
 }): RevokeDeviceTokenResult {
   const state = loadDevicePairingStateForMutation(params.nowMs, params.baseDir);
   const context = resolveDeviceTokenUpdateContext({
-    device: state.pairedByDeviceId[normalizeDevicePairingId(params.deviceId)] ?? null,
+    device: state.pairedByDeviceId[params.deviceId.trim()] ?? null,
     role: params.role,
   });
   if (!context || !context.existing) {

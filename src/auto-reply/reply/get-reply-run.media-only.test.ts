@@ -21,7 +21,6 @@ import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
-import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import {
   enqueueSystemEvent,
   enqueueSystemEventEntry,
@@ -43,6 +42,7 @@ import {
 } from "./get-reply-run-helpers.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { registerPendingRequesterAuthorityCases } from "./get-reply-run.requester-authority.test-support.js";
+import { registerSystemEventAdmissionCases } from "./get-reply-run.system-event-admission.test-support.js";
 import {
   baseParams,
   createInboundBody,
@@ -579,12 +579,17 @@ describe("runPreparedReply media-only handling", () => {
     ]);
   });
 
-  it("loads configured and canonical workspace skills for managed-worktree sessions", async () => {
+  it.each([
+    { name: "dashboard", spawnedBy: undefined },
+    { name: "visible child", spawnedBy: "agent:default:main" },
+  ])("loads workspace skills and runs in the $name managed worktree", async ({ spawnedBy }) => {
     const params = baseParams({
+      sessionKey: "agent:default:dashboard:worktree-session",
       workspaceDir: "/tmp/agent-workspace",
       sessionEntry: {
         sessionId: "session-1",
         updatedAt: Date.now(),
+        spawnedBy,
         spawnedCwd: "/tmp/session-worktree",
         worktree: {
           id: "worktree-1",
@@ -601,7 +606,7 @@ describe("runPreparedReply media-only handling", () => {
       expect(ensureSkillSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({
           workspaceDir: "/tmp/agent-workspace",
-          executionWorkspaceDir: "/tmp/project/packages/app",
+          executionWorkspaceDir: "/tmp/session-worktree",
         }),
       );
     } finally {
@@ -2878,51 +2883,6 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.run.skillWorkshopProposalRevision).not.toBe(proposalRevision);
   });
 
-  it("admits only system events visible to the prepared agent", async () => {
-    const actualSystemEvents = await vi.importActual<typeof import("./session-system-events.js")>(
-      "./session-system-events.js",
-    );
-    vi.mocked(drainFormattedSystemEvents).mockImplementationOnce(
-      actualSystemEvents.drainFormattedSystemEvents,
-    );
-    enqueueSystemEvent(
-      "Alpha hook finished",
-      withSystemEventOwner({ sessionKey: "global" }, "alpha"),
-    );
-    enqueueSystemEvent(
-      "Beta hook finished",
-      withSystemEventOwner({ sessionKey: "global" }, "beta"),
-    );
-    enqueueSystemEvent("Alpha follow-up", withSystemEventOwner({ sessionKey: "global" }, "alpha"));
-
-    await runPreparedReply(
-      baseParams({
-        agentId: "alpha",
-        sessionKey: "global",
-        opts: withReplySystemEventContext(
-          { isHeartbeat: true },
-          { sessionKey: "global", events: peekSystemEventEntries("agent:alpha:global") },
-        ),
-      }),
-    );
-
-    const call = requireRunReplyAgentCall();
-    const context = call.followupRun.currentInboundContext;
-    expect(call.followupRun.prompt).toBe("[User sent media without caption]");
-    for (const event of ["Alpha hook finished", "Alpha follow-up"]) {
-      expect(context?.text).toContain(event);
-      expect(context?.fragments).toContainEqual({
-        kind: "conversation-data",
-        text: expect.stringContaining(event),
-      });
-      expect(call.followupRun.transcriptPrompt).not.toContain(event);
-    }
-    expect(call.followupRun.prompt).not.toContain("Beta hook finished");
-    expect(context?.text).not.toContain("Beta hook finished");
-    expect(JSON.stringify(context?.fragments)).not.toContain("Beta hook finished");
-    expect(peekSystemEventEntries("agent:beta:global").map((event) => event.text)).toEqual([
-      "Beta hook finished",
-    ]);
-  });
+  registerSystemEventAdmissionCases({ runPrepared, requireRunReplyAgentCall });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

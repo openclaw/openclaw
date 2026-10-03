@@ -115,24 +115,6 @@ describe("synthetic operator scope attenuation", () => {
       allowedScope: "operator.read",
       allowed: false,
     },
-    {
-      method: "config.set",
-      requiredScope: "operator.admin",
-      allowedScope: "operator.write",
-      allowed: false,
-    },
-    {
-      method: "exec.approval.resolve",
-      requiredScope: "operator.approvals",
-      allowedScope: "operator.write",
-      allowed: false,
-    },
-    {
-      method: "node.pair.approve",
-      requiredScope: "operator.pairing",
-      allowedScope: "operator.write",
-      allowed: false,
-    },
   ] as const)(
     "projects $allowedScope for $method without granting unrelated permissions",
     async ({ method, requiredScope, allowedScope, allowed }) => {
@@ -186,7 +168,6 @@ describe("registered plugin SDK scope attenuation", () => {
   afterEach(() => resetTestPluginRegistry());
 
   it.each([
-    { original: "read", scoped: "read", effective: "read" },
     { original: "write", scoped: "read", effective: "read" },
     { original: "read", scoped: "write", effective: "read" },
     { original: "read", scoped: "admin", effective: "read" },

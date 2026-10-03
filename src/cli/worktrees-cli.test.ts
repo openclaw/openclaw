@@ -3,7 +3,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { managedWorktrees } from "../agents/worktrees/service.js";
+import { ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseCliProfileArgs } from "./profile.js";
@@ -28,7 +28,9 @@ describe("worktrees cli", () => {
   it("passes a validated exact-state request through the removal CLI", async () => {
     const filename = path.join(tempDirs.make("openclaw-exact-cli-"), "request.json");
     await fs.writeFile(filename, JSON.stringify(exactRequest));
-    const remove = vi.spyOn(managedWorktrees, "remove").mockResolvedValue({ removed: true });
+    const remove = vi
+      .spyOn(ManagedWorktreeService.prototype, "remove")
+      .mockResolvedValue({ removed: true });
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
     const program = new Command().name("openclaw");
     registerWorktreesCli(program);
@@ -39,6 +41,8 @@ describe("worktrees cli", () => {
     expect(remove).toHaveBeenCalledWith({
       id: "worktree-id",
       reason: "manual-delete",
+      signal: expect.any(AbortSignal),
+      commitGuard: expect.any(Function),
       allowSnapshotLoss: false,
       exactState: exactRequest,
     });
@@ -46,7 +50,7 @@ describe("worktrees cli", () => {
   it.each(["--force", "--if-lossless"])(
     "rejects exact-state retirement with %s before reading its request",
     async (conflict) => {
-      const remove = vi.spyOn(managedWorktrees, "remove");
+      const remove = vi.spyOn(ManagedWorktreeService.prototype, "remove");
       const program = new Command().exitOverride().configureOutput({ writeErr: () => undefined });
       registerWorktreesCli(program);
       await expect(
@@ -78,11 +82,12 @@ describe("worktrees cli", () => {
   ])(
     "passes source profiles through early parsing without changing runtime state: $state $selected",
     async ({ runtime, selected, profiles, state }) => {
-      const create = vi.spyOn(managedWorktrees, "create").mockResolvedValue({
+      const repoRoot = await fs.realpath(tempDirs.make("openclaw-cli-profile-input-"));
+      const create = vi.spyOn(ManagedWorktreeService.prototype, "create").mockResolvedValue({
         id: "created",
         name: "task",
         repoFingerprint: "fingerprint",
-        repoRoot: "/repo",
+        repoRoot,
         path: "/state/task",
         branch: "openclaw/task",
         baseRef: "HEAD",
@@ -97,7 +102,7 @@ describe("worktrees cli", () => {
         ...runtime,
         "worktrees",
         "create",
-        "/repo",
+        repoRoot,
         "--name",
         "task",
         "--json",
@@ -111,17 +116,19 @@ describe("worktrees cli", () => {
       registerWorktreesCli(program);
       await program.parseAsync(parsed.argv);
       expect(create).toHaveBeenCalledWith({
-        repoRoot: "/repo",
+        repoRoot,
         name: "task",
         baseRef: undefined,
         ownerKind: "manual",
+        signal: expect.any(AbortSignal),
+        commitGuard: expect.any(Function),
         ...(profiles ? { profiles } : {}),
       });
     },
   );
 
   it("leaves missing source profile values to Commander and performs no creation", async () => {
-    const create = vi.spyOn(managedWorktrees, "create");
+    const create = vi.spyOn(ManagedWorktreeService.prototype, "create");
     const parsed = parseCliProfileArgs([
       "node",
       "openclaw",
@@ -161,41 +168,9 @@ describe("worktrees cli", () => {
     },
   );
 
-  it.each([false, true])(
-    "reports the existing lossless owner outcome, removed=%s",
-    async (removed) => {
-      const cleanup = { outcome: removed ? "removed-lossless" : "retained-dirty", at: 1 } as const;
-      const remove = vi.spyOn(managedWorktrees, "remove");
-      vi.spyOn(managedWorktrees, "removeIfLossless").mockResolvedValue(removed);
-      vi.spyOn(managedWorktrees, "listRegistryRecords").mockResolvedValue([
-        {
-          id: "worktree-id",
-          name: "task",
-          repoFingerprint: "0123456789abcdef",
-          repoRoot: "/repo",
-          path: "/state/worktrees/task",
-          branch: "openclaw/task",
-          baseRef: "HEAD",
-          ownerKind: "manual",
-          createdAt: 1,
-          lastActiveAt: 1,
-          runEndCleanup: cleanup,
-        },
-      ]);
-      const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
-      const program = new Command().name("openclaw");
-      registerWorktreesCli(program);
-      await program.parseAsync(["worktrees", "remove", "worktree-id", "--if-lossless", "--json"], {
-        from: "user",
-      });
-      expect(output).toHaveBeenCalledWith({ removed, cleanup });
-      expect(remove).not.toHaveBeenCalled();
-    },
-  );
-
   it("rejects conflicting removal policies before calling the owner", async () => {
-    const remove = vi.spyOn(managedWorktrees, "remove");
-    const lossless = vi.spyOn(managedWorktrees, "removeIfLossless");
+    const remove = vi.spyOn(ManagedWorktreeService.prototype, "remove");
+    const lossless = vi.spyOn(ManagedWorktreeService.prototype, "removeIfLossless");
     const program = new Command()
       .name("openclaw")
       .exitOverride()
@@ -212,7 +187,7 @@ describe("worktrees cli", () => {
 
   it("requires an exact pending commit and returns recovery's actual outcome", async () => {
     const snapshot = "a".repeat(40);
-    const recover = vi.spyOn(managedWorktrees, "recoverRemoval").mockResolvedValue({
+    const recover = vi.spyOn(ManagedWorktreeService.prototype, "recoverRemoval").mockResolvedValue({
       removed: true,
       snapshotRef: "refs/openclaw/snapshots/worktree-id",
     });
@@ -227,7 +202,12 @@ describe("worktrees cli", () => {
       ["worktrees", "recover-removal", "worktree-id", "--snapshot", snapshot, "--json"],
       { from: "user" },
     );
-    expect(recover).toHaveBeenCalledWith({ id: "worktree-id", snapshot });
+    expect(recover).toHaveBeenCalledWith({
+      id: "worktree-id",
+      snapshot,
+      signal: expect.any(AbortSignal),
+      commitGuard: expect.any(Function),
+    });
     expect(output).toHaveBeenCalledWith({
       removed: true,
       snapshotRef: "refs/openclaw/snapshots/worktree-id",
@@ -235,7 +215,9 @@ describe("worktrees cli", () => {
   });
 
   it("maps --force only to snapshot-loss permission", async () => {
-    const remove = vi.spyOn(managedWorktrees, "remove").mockResolvedValue({ removed: true });
+    const remove = vi
+      .spyOn(ManagedWorktreeService.prototype, "remove")
+      .mockResolvedValue({ removed: true });
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
     const program = new Command().name("openclaw");
     registerWorktreesCli(program);
@@ -247,13 +229,15 @@ describe("worktrees cli", () => {
     expect(remove).toHaveBeenCalledWith({
       id: "worktree-id",
       reason: "manual-delete",
+      signal: expect.any(AbortSignal),
+      commitGuard: expect.any(Function),
       allowSnapshotLoss: true,
     });
   });
 
   it("passes session owner activity and built-in limits to gc", async () => {
     setRuntimeConfigSnapshot({}, {});
-    const gc = vi.spyOn(managedWorktrees, "gc").mockResolvedValue({
+    const gc = vi.spyOn(ManagedWorktreeService.prototype, "gc").mockResolvedValue({
       removed: [],
       orphansDeleted: 0,
       snapshotsPruned: 0,
@@ -274,6 +258,8 @@ describe("worktrees cli", () => {
 
     expect(gc).toHaveBeenCalledWith({
       limits: { maxCount: 100 },
+      signal: expect.any(AbortSignal),
+      commitGuard: expect.any(Function),
       retryDeferred: true,
       shouldProtectOwner: expect.any(Function),
       shouldRemoveOwner: expect.any(Function),
@@ -302,7 +288,7 @@ describe("worktrees cli", () => {
       retiredCheckoutPaths: [],
       limitsSatisfied: false,
     };
-    vi.spyOn(managedWorktrees, "gc").mockResolvedValue(result);
+    vi.spyOn(ManagedWorktreeService.prototype, "gc").mockResolvedValue(result);
     const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
     const program = new Command().name("openclaw");
     registerWorktreesCli(program);

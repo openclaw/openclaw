@@ -1,9 +1,13 @@
 // Exercises wired plugin hooks after tool-call completion.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 /**
  * Test: after_tool_call hook wiring (embedded-agent-subscribe.handlers.tools.ts)
  */
 import { createBaseToolHandlerState } from "../agents/agent-tool-handler-state.test-helpers.js";
+import {
+  handleToolExecutionEnd,
+  handleToolExecutionStart,
+} from "../agents/embedded-agent-subscribe.handlers.tools.js";
 
 const hookMocks = vi.hoisted(() => ({
   runner: {
@@ -103,15 +107,7 @@ function expectAfterToolCallPayload(params: {
   expect(context).toEqual(params.expectedContext);
 }
 
-let handleToolExecutionStart: typeof import("../agents/embedded-agent-subscribe.handlers.tools.js").handleToolExecutionStart;
-let handleToolExecutionEnd: typeof import("../agents/embedded-agent-subscribe.handlers.tools.js").handleToolExecutionEnd;
-
 describe("after_tool_call hook wiring", () => {
-  beforeAll(async () => {
-    ({ handleToolExecutionStart, handleToolExecutionEnd } =
-      await import("../agents/embedded-agent-subscribe.handlers.tools.js"));
-  });
-
   beforeEach(() => {
     hookMocks.runner.hasHooks.mockClear();
     hookMocks.runner.hasHooks.mockReturnValue(false);

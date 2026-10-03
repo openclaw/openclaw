@@ -45,13 +45,7 @@ export type EnvApiKeyLookupOptions = {
   skipSetupProviderFallback?: boolean;
 };
 
-/** Reports env/local auth presence without returning or resolving credential material. */
-export function resolveProviderEnvAuthEvidence(
-  provider: string,
-  env: NodeJS.ProcessEnv = process.env,
-  options: EnvApiKeyLookupOptions = {},
-): ProviderEnvAuthEvidence | null {
-  const providerId = normalizeProviderIdForAuth(provider);
+function prepareEnvAuthLookupMaps(env: NodeJS.ProcessEnv, options: EnvApiKeyLookupOptions) {
   const lookupMaps =
     !options.aliasMap || !options.candidateMap || !options.authEvidenceMap
       ? resolveProviderEnvAuthLookupMaps({
@@ -60,10 +54,22 @@ export function resolveProviderEnvAuthEvidence(
           env,
         })
       : undefined;
-  const aliasMap = options.aliasMap ?? lookupMaps?.aliasMap ?? {};
+  return {
+    aliasMap: options.aliasMap ?? lookupMaps?.aliasMap ?? {},
+    candidateMap: options.candidateMap ?? lookupMaps?.envCandidateMap ?? {},
+    authEvidenceMap: options.authEvidenceMap ?? lookupMaps?.authEvidenceMap ?? {},
+  };
+}
+
+/** Reports env/local auth presence without returning or resolving credential material. */
+export function resolveProviderEnvAuthEvidence(
+  provider: string,
+  env: NodeJS.ProcessEnv = process.env,
+  options: EnvApiKeyLookupOptions = {},
+): ProviderEnvAuthEvidence | null {
+  const providerId = normalizeProviderIdForAuth(provider);
+  const { aliasMap, candidateMap, authEvidenceMap } = prepareEnvAuthLookupMaps(env, options);
   const normalized = aliasMap[providerId] ?? providerId;
-  const candidateMap = options.candidateMap ?? lookupMaps?.envCandidateMap ?? {};
-  const authEvidenceMap = options.authEvidenceMap ?? lookupMaps?.authEvidenceMap ?? {};
   const applied = new Set(getShellEnvAppliedKeys());
 
   for (const envVar of candidateMap[normalized] ?? []) {
@@ -141,18 +147,8 @@ export function resolveEnvApiKey(
   options: EnvApiKeyLookupOptions = {},
 ): EnvApiKeyResult | null {
   const normalizedProvider = normalizeProviderIdForAuth(provider);
-  const lookupMaps =
-    !options.aliasMap || !options.candidateMap || !options.authEvidenceMap
-      ? resolveProviderEnvAuthLookupMaps({
-          config: options.config,
-          workspaceDir: options.workspaceDir,
-          env,
-        })
-      : undefined;
-  const aliasMap = options.aliasMap ?? lookupMaps?.aliasMap ?? {};
+  const { aliasMap, candidateMap, authEvidenceMap } = prepareEnvAuthLookupMaps(env, options);
   const normalized = aliasMap[normalizedProvider] ?? normalizedProvider;
-  const candidateMap = options.candidateMap ?? lookupMaps?.envCandidateMap ?? {};
-  const authEvidenceMap = options.authEvidenceMap ?? lookupMaps?.authEvidenceMap ?? {};
   const applied = new Set(getShellEnvAppliedKeys());
   const candidates = Object.hasOwn(candidateMap, normalized) ? candidateMap[normalized] : undefined;
   if (Array.isArray(candidates)) {

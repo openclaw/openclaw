@@ -2,7 +2,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -39,7 +38,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { createLegacyAgentDatabaseRegistry } from "./doctor-state-migrations.agent-registry.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -184,17 +182,6 @@ vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
 function writeJson5(filePath: string, value: unknown) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf-8");
-}
-
-function readPrimaryKeyColumns(db: DatabaseSync, tableName: string): string[] {
-  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
-    name?: unknown;
-    pk?: unknown;
-  }>;
-  return rows
-    .filter((row) => Number(row.pk ?? 0) > 0 && typeof row.name === "string")
-    .toSorted((left, right) => Number(left.pk ?? 0) - Number(right.pk ?? 0))
-    .map((row) => row.name as string);
 }
 
 function writeLegacyDebugProxyCaptureSidecar(root: string, overrides: { blobDir?: string } = {}) {
@@ -458,99 +445,6 @@ describe("doctor legacy state migrations", () => {
     expect(detected.preview).not.toContain(
       `- Sessions: repair migrated transcript paths in ${path.join(targetDir, "sessions.json")}`,
     );
-  });
-
-  it("repairs canonical headerless legacy transcript paths", async () => {
-    const root = makeDoctorStateDir();
-    const legacyDir = path.join(root, "sessions");
-    const targetDir = path.join(root, "agents", "main", "sessions");
-    fs.mkdirSync(targetDir, { recursive: true });
-    fs.writeFileSync(path.join(targetDir, "legacy.jsonl"), '{"role":"user"}\n', "utf8");
-    writeJson5(path.join(targetDir, "sessions.json"), {
-      "agent:main:main": {
-        sessionId: "legacy",
-        sessionFile: path.join(legacyDir, "legacy.jsonl"),
-        updatedAt: 10,
-      },
-    });
-
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    expect(detected.sessions.hasLegacy).toBe(true);
-  });
-
-  it("migrates the legacy shared state agent registry primary key", async () => {
-    const root = makeDoctorStateDir();
-    const stateDir = path.join(root, ".openclaw");
-    const stateDatabasePath = await createLegacyAgentDatabaseRegistry(stateDir);
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: {} as NodeJS.ProcessEnv,
-      homedir: () => root,
-    });
-
-    expect(detected.preview).toContain(
-      "- Shared SQLite schema: agent database registry primary key → agent_id,path",
-    );
-
-    const result = await runLegacyStateMigrations({ detected });
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toStrictEqual([
-      "Migrated shared state agent database registry primary key → agent_id,path",
-      "Migrated shared state tables to SQLite STRICT typing (1)",
-    ]);
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const db = new DatabaseSync(stateDatabasePath);
-    try {
-      expect(readPrimaryKeyColumns(db, "agent_databases")).toEqual(["agent_id", "path"]);
-      expect(() =>
-        db.exec(`
-          INSERT INTO agent_databases (
-            agent_id,
-            path,
-            schema_version,
-            last_seen_at,
-            size_bytes
-          ) VALUES (
-            'worker-1',
-            '/relocated/worker-1/openclaw-agent.sqlite',
-            1,
-            20,
-            30
-          )
-          ON CONFLICT(agent_id, path) DO UPDATE SET
-            last_seen_at = excluded.last_seen_at,
-            size_bytes = excluded.size_bytes;
-        `),
-      ).not.toThrow();
-      expect(
-        db
-          .prepare(
-            "SELECT agent_id, path, schema_version, last_seen_at, size_bytes FROM agent_databases ORDER BY path",
-          )
-          .all(),
-      ).toEqual([
-        {
-          agent_id: "worker-1",
-          path: "/legacy/worker-1/openclaw-agent.sqlite",
-          schema_version: 1,
-          last_seen_at: 10,
-          size_bytes: 20,
-        },
-        {
-          agent_id: "worker-1",
-          path: "/relocated/worker-1/openclaw-agent.sqlite",
-          schema_version: 1,
-          last_seen_at: 20,
-          size_bytes: 30,
-        },
-      ]);
-    } finally {
-      db.close();
-    }
   });
 
   it("migrates legacy ACP metadata from retired custom-root agent stores", async () => {
@@ -1243,202 +1137,32 @@ describe("doctor legacy state migrations", () => {
     });
   });
 
-  it.each(["embedded", "record-only"] as const)(
-    "imports a legacy %s plugin install index into shared state",
-    async (shape) => {
-      const root = makeDoctorStateDir();
-      const sourcePath = path.join(root, "plugins", "installs.json");
-      const record = { source: "npm", spec: "demo@1.0.0" };
-      writeJson5(
-        sourcePath,
-        shape === "embedded"
-          ? { plugins: [{ pluginId: "demo", installRecord: record }] }
-          : { installRecords: { demo: record } },
-      );
-      const detected = await detectLegacyStateMigrations({
-        cfg: {},
-        env: { OPENCLAW_STATE_DIR: root },
-      });
-      expect(detected.pluginInstallIndex).toEqual({ sourcePath, hasLegacy: true });
-      expect(detected.preview).toContain(
-        `- Plugin install index: ${sourcePath} → shared SQLite state`,
-      );
-
-      const result = await runLegacyStateMigrations({ detected });
-
-      expect(result.warnings).toStrictEqual([]);
-      expect(result.changes).toContain(
-        "Migrated plugin install index 1 record → shared SQLite state",
-      );
-      expect(result.changes).toContain(
-        `Archived plugin install index legacy source → ${sourcePath}.migrated`,
-      );
-      expect(fs.existsSync(sourcePath)).toBe(false);
-      expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
-      await expect(readPersistedInstalledPluginIndex({ stateDir: root })).resolves.toMatchObject({
-        installRecords: { demo: { source: "npm", spec: "demo@1.0.0" } },
-        plugins: [],
-      });
-    },
-  );
-
-  it("merges missing legacy plugin install records into an existing SQLite index", async () => {
+  it("refuses pre-July plugin JSON without merging or archiving installation records", async () => {
     const root = makeDoctorStateDir();
     await writeExistingPluginInstallIndex(root, {
-      existing: {
-        source: "npm",
-        spec: "existing@1.0.0",
-      },
+      current: { source: "npm", spec: "current@1.0.0" },
     });
     const sourcePath = writeLegacyPluginInstallIndex(root, {
-      legacy: {
-        source: "git",
-        spec: "git:file:///tmp/legacy",
-      },
+      legacy: { source: "npm", spec: "legacy@1.0.0" },
     });
-
+    const source = fs.readFileSync(sourcePath, "utf8");
     const result = await runLegacyStateMigrationsForRoot(root);
 
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toContain("Merged 1 legacy plugin install record → shared SQLite state");
-    expect(fs.existsSync(sourcePath)).toBe(false);
-    await expect(readPersistedInstalledPluginIndex({ stateDir: root })).resolves.toMatchObject({
-      installRecords: {
-        existing: { source: "npm", spec: "existing@1.0.0" },
-        legacy: { source: "git", spec: "git:file:///tmp/legacy" },
-      },
-    });
-  });
-
-  it("archives exact legacy npm install record when SQLite has authoritative resolved metadata", async () => {
-    const root = makeDoctorStateDir();
-    await writeExistingPluginInstallIndex(root, {
-      discord: {
-        source: "npm",
-        spec: "@openclaw/discord@latest",
-        resolvedName: "@openclaw/discord",
-        resolvedVersion: "2026.6.16",
-        integrity: "sha512-current",
-        installedAt: "2026-06-16T12:00:00.000Z",
-      },
-    });
-    const sourcePath = writeLegacyPluginInstallIndex(root, {
-      discord: {
-        source: "npm",
-        spec: "@openclaw/discord@2026.6.16",
-        version: "2026.6.16",
-        installedAt: "2026-06-01T12:00:00.000Z",
-      },
-    });
-
-    const result = await runLegacyStateMigrationsForRoot(root);
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(fs.existsSync(sourcePath)).toBe(false);
-    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
-    await expect(readPersistedInstalledPluginIndex({ stateDir: root })).resolves.toMatchObject({
-      installRecords: {
-        discord: {
-          source: "npm",
-          spec: "@openclaw/discord@latest",
-          resolvedName: "@openclaw/discord",
-          resolvedVersion: "2026.6.16",
-          integrity: "sha512-current",
-        },
-      },
-    });
-  });
-
-  it.each([false, true])(
-    "archives conflicting plugin metadata before config repair (refusal: %s)",
-    async (refuseConfig) => {
-      const root = makeDoctorStateDir();
-      await writeExistingPluginInstallIndex(root, {
-        demo: {
-          source: "npm",
-          spec: "demo@latest",
-          version: "1.0.0",
-        },
-      });
-      const sourcePath = writeLegacyPluginInstallIndex(root, {
-        demo: {
-          source: "npm",
-          spec: "demo@1.0.0",
-          version: "1.0.0",
-        },
-      });
-
-      const result = await autoMigrateLegacyState({
-        cfg: refuseConfig
-          ? Object.defineProperty({}, "meta", {
-              get() {
-                throw new Error("config repair refused");
-              },
-            })
-          : {},
-        env: { ...process.env, OPENCLAW_STATE_DIR: root },
-        doctorOnlyStateMigrations: true,
-      });
-
-      expect(result.warnings).toStrictEqual(refuseConfig ? ["config repair refused"] : []);
-      expect(result.notices).toStrictEqual([
-        "Kept canonical shared SQLite plugin install metadata despite differing legacy records for: demo",
-      ]);
-      expect(fs.existsSync(sourcePath)).toBe(false);
-      expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
-
-      const retry = await runLegacyStateMigrationsForRoot(root);
-      expect(retry.warnings).toStrictEqual([]);
-      expect(retry.notices).toBeUndefined();
-      await expect(readPersistedInstalledPluginIndex({ stateDir: root })).resolves.toMatchObject({
-        installRecords: {
-          demo: { source: "npm", spec: "demo@latest", version: "1.0.0" },
-        },
-      });
-    },
-  );
-
-  it("keeps plugin install archive failures blocking after choosing SQLite metadata", async () => {
-    const root = makeDoctorStateDir();
-    await writeExistingPluginInstallIndex(root, {
-      demo: {
-        source: "npm",
-        spec: "demo@latest",
-        version: "1.0.0",
-      },
-    });
-    const sourcePath = writeLegacyPluginInstallIndex(root, {
-      demo: {
-        source: "npm",
-        spec: "demo@1.0.0",
-        version: "1.0.0",
-      },
-    });
-    const rename = failRenameOnce(sourcePath);
-
-    const result = await autoMigrateLegacyState({
-      cfg: {},
-      env: { ...process.env, OPENCLAW_STATE_DIR: root },
-      doctorOnlyStateMigrations: true,
-    });
-    rename.mockRestore();
-
-    expect(result.warnings).toStrictEqual([
-      `Failed archiving plugin install index ${sourcePath}: Error: forced archive failure`,
+    expect(result.warnings).toEqual([
+      expect.stringContaining("Run openclaw doctor --fix on 2026.9.5 with a pre-update backup"),
     ]);
-    expect(result.notices).toStrictEqual([
-      "Kept canonical shared SQLite plugin install metadata despite differing legacy records for: demo",
-    ]);
-    expect(fs.existsSync(sourcePath)).toBe(true);
+    expect(
+      result.stepReceipts.find((receipt) => receipt.id === "plugin-install-index"),
+    ).toMatchObject({
+      outcome: "refused",
+      target: [],
+      refusal: { code: "unsupported-plugin-install-index" },
+    });
+    expect(fs.readFileSync(sourcePath, "utf8")).toBe(source);
     expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
-
-    const retry = await runLegacyStateMigrationsForRoot(root);
-    expect(retry.warnings).toStrictEqual([]);
-    expect(retry.notices).toStrictEqual([
-      "Kept canonical shared SQLite plugin install metadata despite differing legacy records for: demo",
-    ]);
-    expect(fs.existsSync(sourcePath)).toBe(false);
-    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+    await expect(readPersistedInstalledPluginIndex({ stateDir: root })).resolves.toMatchObject({
+      installRecords: { current: { source: "npm", spec: "current@1.0.0" } },
+    });
   });
 
   it("reports completed transcript migration when a custom agent owns session state", async () => {

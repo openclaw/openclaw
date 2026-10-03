@@ -1,17 +1,14 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
   loadTranscriptEvents,
-  replaceSessionEntry,
+  replaceSessionEntrySync,
 } from "./session-accessor.js";
 import {
   readSqliteSessionGenerationClaim,
@@ -41,25 +38,18 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-generation-cleanup-race-");
 
 describe("SQLite lifecycle generation cleanup races", () => {
   let storePath: string;
 
   beforeEach(() => {
-    storePath = path.join(
-      tempDirs.make("openclaw-session-generation-cleanup-race-"),
-      "agents",
-      "main",
-      "sessions",
-      "sessions.json",
-    );
+    storePath = path.join(sessionDirs.make(), "agents", "main", "sessions", "sessions.json");
   });
 
   afterEach(() => {
     archiveMaterializationHook.afterMaterialize = undefined;
     archiveMaterializationHook.onMaterialize = undefined;
-    closeOpenClawAgentDatabasesForTest();
   });
 
   function captureGenerationClaims(sessionKey: string) {
@@ -99,8 +89,9 @@ describe("SQLite lifecycle generation cleanup races", () => {
           idempotencyKey: "recorded-owner",
         },
       });
+      // Fixture setup must not schedule maintenance against these deliberately old entries.
       for (const [index, sessionId] of sessionIds.entries()) {
-        await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: index + 1 });
+        replaceSessionEntrySync({ sessionKey, storePath }, { sessionId, updatedAt: index + 1 });
         await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [event(sessionId)]);
       }
       const currentEntry = expectDefined(
@@ -164,7 +155,9 @@ describe("SQLite lifecycle generation cleanup races", () => {
           target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
         });
         expect(mutationError).toBeUndefined();
-        expect(mutation).toMatchObject({ rowsChanged: 1 });
+        expect(mutation, JSON.stringify({ plannedId, injected, result })).toMatchObject({
+          rowsChanged: 1,
+        });
         expect(result).toMatchObject({ deleted: false, expectedEntryMismatch: true });
         expect(loadSessionEntry({ sessionKey, storePath })).toEqual(currentEntry);
         const retainedIds = new Set([currentId]);
@@ -212,7 +205,7 @@ describe("SQLite lifecycle generation cleanup races", () => {
       content: `${sessionId} transcript`,
     }));
     for (const [index, sessionId] of sessionIds.entries()) {
-      await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: index + 1 });
+      replaceSessionEntrySync({ sessionKey, storePath }, { sessionId, updatedAt: index + 1 });
       await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [events[index]!]);
     }
     const currentEntry = loadSessionEntry({ sessionKey, storePath });

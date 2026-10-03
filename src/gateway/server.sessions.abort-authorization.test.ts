@@ -22,8 +22,9 @@ import {
 import * as subagentControl from "../agents/subagents/registry/subagent-control.js";
 import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
 import * as queueCleanup from "../auto-reply/reply/queue/cleanup.js";
+import { clearFollowupDrainCallback } from "../auto-reply/reply/queue/drain.js";
 import { enqueueFollowupRun } from "../auto-reply/reply/queue/enqueue.js";
-import { getExistingFollowupQueue } from "../auto-reply/reply/queue/state.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "../auto-reply/reply/queue/state.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import { callGatewayCli } from "./call.js";
@@ -268,7 +269,8 @@ describe("native sessions.abort requester authorization over WebSocket", () => {
       expect(events).toContain("sessions.changed");
     } finally {
       owner.ws.off("message", record);
-      queueCleanup.clearSessionQueues([run.sessionKey]);
+      clearFollowupQueue(run.sessionKey);
+      clearFollowupDrainCallback(run.sessionKey);
       try {
         await run.finish();
       } finally {

@@ -50,7 +50,7 @@ public enum OpenClawNativeStateSQLiteValueType: Equatable, Sendable {
 /// One recursive connection lock serializes transactions and statement access.
 public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     // Keep aligned with OPENCLAW_STATE_SCHEMA_VERSION. Native clients never upgrade this database.
-    private static let maximumSupportedSchemaVersion: Int64 = 19
+    private static let maximumSupportedSchemaVersion: Int64 = 20
     private static let defaultBusyTimeoutMilliseconds: Int32 = 5000
 
     private struct SchemaObject: Hashable {
@@ -241,13 +241,15 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
             if let database { sqlite3_close(database) }
             throw OpenClawNativeStateError("Could not open native state database: \(detail)")
         }
-        var initializationSucceeded = false
+        var databaseOwnedByInstance = false
         defer {
-            if !initializationSucceeded { sqlite3_close(database) }
+            if !databaseOwnedByInstance { sqlite3_close(database) }
         }
         self.database = database
         try OpenClawNativeStateAdmission.assertDatabaseHasNotMoved(database)
         self.databaseIdentity = try OpenClawNativeStateAdmission.databaseIdentity(at: databaseURL)
+        // Once all stored properties exist, a throwing initializer also runs deinit.
+        databaseOwnedByInstance = true
         try self.admission.assertAvailable()
         let timeout = busyTimeoutMilliseconds > 0
             ? busyTimeoutMilliseconds
@@ -262,7 +264,6 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         } else {
             try Self.secureDatabaseFiles(databaseURL)
         }
-        initializationSucceeded = true
     }
 
     deinit {

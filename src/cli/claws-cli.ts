@@ -21,6 +21,12 @@ export type ClawsAddOptions = ClawsDevOptions & {
   yes?: boolean;
   planIntegrity?: string;
 };
+export type ClawsMigrateOptions = {
+  dryRun?: boolean;
+  yes?: boolean;
+  planIntegrity?: string;
+  json?: boolean;
+};
 
 export type ClawsStatusOptions = { json?: boolean };
 export type ClawsUpdateOptions = Omit<ClawsAddOptions, "agentId" | "workspace"> & {
@@ -117,6 +123,19 @@ export function registerClawsCli(program: Command) {
     .action(async (target: string | undefined, opts: ClawsStatusOptions) => {
       const { runClawsStatusCommand } = await import("./claws-cli.runtime.js");
       await runClawsStatusCommand(target, opts);
+    });
+
+  claws
+    .command("migrate")
+    .description("Enroll one existing local agent as a Claw without replacing its workspace")
+    .argument("<agent-id>", "Existing configured agent id")
+    .option("--dry-run", "Preview migration without creating a package or ownership record", false)
+    .option("--yes", "Apply after confirming the exact migration plan", false)
+    .option("--plan-integrity <digest>", "Bind automation consent to an exact dry-run plan")
+    .option("--json", "Print JSON", false)
+    .action(async (agentId: string, opts: ClawsMigrateOptions) => {
+      const { runClawsMigrateCommand } = await import("./claws-migrate-cli.runtime.js");
+      await runClawsMigrateCommand(agentId, opts);
     });
 
   claws

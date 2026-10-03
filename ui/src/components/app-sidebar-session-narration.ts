@@ -679,7 +679,7 @@ export class SidebarSessionNarrationController {
     }
     // The activity text is the full visible buffer: normalizing it to nothing
     // means only suppressed content remains (e.g. a replacement that reduced
-    // to REPLY_SKIP or a heartbeat), so retract any previously shown line.
+    // to a historical control reply or a heartbeat), so retract any previously shown line.
     if (this.lines.delete(key)) {
       this.onLinesChanged(new Map(this.lines));
     }

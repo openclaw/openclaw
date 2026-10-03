@@ -1,6 +1,6 @@
 import { getRuntimeConfig } from "../config/config.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
-import type { WorkerPlacementSessionRuntime } from "./server-worker-placement-reclaim.js";
+import type { WorkerPlacementSessionRuntime } from "./server-worker-placement-session-target.js";
 import {
   WorkerPlacementAdmissionTargetError,
   type WorkerPlacementDispatchAdmission,
@@ -17,6 +17,7 @@ export function createGatewayWorkerDispatchAdmission(
         cfg: getRuntimeConfig(),
         key: request.sessionKey,
         agentId: request.agentId,
+        preserveQualifiedAddress: true,
         clone: false,
         exactRead: true,
       });

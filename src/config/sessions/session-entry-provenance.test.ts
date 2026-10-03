@@ -21,28 +21,27 @@ describe("sessionPersonalProfileId", () => {
     expect(sessionPersonalProfileId({ createdActor: creator })).toBe("profile-creator");
   });
 
-  it.each(["agent", "system"] as const)(
-    "falls back to the authenticated human creator for a %s assignment",
-    (type) => {
-      expect(
-        sessionPersonalProfileId({
-          owner: { actor: { type, id: "profile-not-a-human" } },
-          createdActor: creator,
-        }),
-      ).toBe("profile-creator");
-    },
-  );
+  it("falls back to the authenticated human creator for an agent assignment", () => {
+    expect(
+      sessionPersonalProfileId({
+        owner: { actor: { type: "agent", id: "profile-not-a-human" } },
+        createdActor: creator,
+      }),
+    ).toBe("profile-creator");
+  });
 
-  it.each(["channel", "unknown"] as const)(
-    "does not treat a %s creator ID or label as an authenticated profile",
-    (source) => {
-      expect(
-        sessionPersonalProfileId({
-          createdActor: { type: "human", source, id: "profile-creator", label: "profile-owner" },
-        }),
-      ).toBeUndefined();
-    },
-  );
+  it("does not treat a channel creator ID or label as an authenticated profile", () => {
+    expect(
+      sessionPersonalProfileId({
+        createdActor: {
+          type: "human",
+          source: "channel",
+          id: "profile-creator",
+          label: "profile-owner",
+        },
+      }),
+    ).toBeUndefined();
+  });
 
   it("does not fall back or infer an ID from a label when an assigned human has no ID", () => {
     expect(

@@ -77,7 +77,10 @@ describe("session workspace path actions", () => {
       sidebarContent: null,
       sessions: {
         listFiles: vi.fn().mockResolvedValue(result),
-        getFile: vi.fn().mockResolvedValue({ ...result, file: { ...file, content: "# Readme" } }),
+        getFile: vi.fn().mockResolvedValue({
+          ...result,
+          file: { ...file, previewKind: "text", contentEncoding: "utf8", content: "# Readme" },
+        }),
       },
     } as unknown as SessionWorkspaceHost;
     createSessionWorkspaceProps(state, { expanded: true });

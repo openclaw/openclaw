@@ -186,12 +186,14 @@ describe("login gate failure recovery", () => {
 
     expect(failure?.getAttribute("data-kind")).toBe("profile-unavailable");
     expect(failure?.querySelector(".login-gate__failure-title")?.textContent).toBe(
-      "Profile verification unavailable",
+      "Couldn't verify your account",
     );
-    expect(failure?.querySelector(".login-gate__failure-summary")?.textContent).toBe(error);
+    expect(failure?.querySelector(".login-gate__failure-summary")?.textContent).toBe(
+      "OpenClaw couldn't check your account right now. Please try again shortly.",
+    );
     expect(failure?.querySelector(".login-gate__failure-steps")?.textContent).toContain("Retry");
     expect(failure?.querySelector(".login-gate__failure-steps")?.textContent).toContain(
-      "Gateway administrator",
+      "person who manages OpenClaw",
     );
     expect(failure?.querySelectorAll(".login-gate__failure-steps code")).toHaveLength(0);
     expect(failure?.querySelector(".login-gate__failure-raw")?.textContent).toBe(error);

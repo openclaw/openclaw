@@ -40,11 +40,22 @@ vi.mock("../subagents/registry/subagent-registry-state.js", () => ({
       value: read(new Map(owner.runs.map((entry) => [entry.runId, entry]))),
     }),
   }),
-  onSubagentRegistryPersisted: (listener: () => void) => {
-    owner.listeners.add(listener);
-    return () => owner.listeners.delete(listener);
-  },
 }));
+vi.mock("../subagents/registry/subagent-registry-publication.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../subagents/registry/subagent-registry-publication.js")>();
+  return {
+    ...actual,
+    subscribeSubagentRunChanges: ((phase, listener) => {
+      if (phase === "projection") {
+        return actual.subscribeSubagentRunChanges(phase, listener);
+      }
+      const wake = () => listener({ runIds: undefined, sessionKeys: undefined });
+      owner.listeners.add(wake);
+      return () => owner.listeners.delete(wake);
+    }) satisfies typeof actual.subscribeSubagentRunChanges,
+  };
+});
 vi.mock("../subagents/registry/subagent-list.js", () => ({
   readSubagentListSessionEntries: () => new Map(),
   buildSubagentList: () => ({

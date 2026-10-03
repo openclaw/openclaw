@@ -6,13 +6,14 @@ import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import type {
   OpenClawPluginApi,
   ProviderReplaySessionEntry,
-  ProviderSanitizeReplayHistoryContext,
+  ProviderSanitizeReplayHistoryContextV2,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider-test-contracts";
+import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { buildGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import googleProviderDiscovery from "./provider-discovery.js";
@@ -75,25 +76,30 @@ describe("google provider plugin hooks", () => {
       } as never),
     ).toBe("native");
 
+    const assistantMessage = makeAgentAssistantMessage({
+      api: "google-generative-ai",
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      content: [{ type: "text", text: "hello" }],
+    });
     const sanitized = await Promise.resolve(
-      provider.sanitizeReplayHistory?.({
+      provider.sanitizeReplayHistoryAsync?.({
         provider: "google",
         modelApi: "google-generative-ai",
         modelId: "gemini-3.1-pro-preview",
         sessionId: "session-1",
-        messages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "hello" }],
-          },
-        ],
+        messages: [structuredClone(assistantMessage)],
         sessionState: {
           getCustomEntries: () => customEntries,
-          appendCustomEntry: (customType: string, data: unknown) => {
+          appendCustomEntry: () => {
+            throw new Error("legacy persistence used");
+          },
+          appendCustomEntryAsync: async (customType: string, data: unknown) => {
             customEntries.push({ customType, data });
+            return "bootstrap";
           },
         },
-      } as ProviderSanitizeReplayHistoryContext),
+      } satisfies ProviderSanitizeReplayHistoryContextV2),
     );
 
     const bootstrapMessage = sanitized?.[0] as
@@ -102,10 +108,7 @@ describe("google provider plugin hooks", () => {
     expect(bootstrapMessage?.role).toBe("user");
     expect(bootstrapMessage?.content).toBe("(session bootstrap)");
     expect(typeof bootstrapMessage?.timestamp).toBe("number");
-    expect(sanitized?.[1]).toEqual({
-      role: "assistant",
-      content: [{ type: "text", text: "hello" }],
-    });
+    expect(sanitized?.[1]).toEqual(assistantMessage);
     expect(customEntries).toHaveLength(1);
     expect(customEntries[0]?.customType).toBe("google-turn-ordering-bootstrap");
   });

@@ -5,14 +5,15 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it, type TestFunction } from "vitest";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
-import { isProcessAlive, waitForPidFile } from "../../test/helpers/process-wait.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { isProcessAlive } from "../../test/helpers/process-wait.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
@@ -495,7 +496,6 @@ function buildLocalModeConfig(params: {
       },
       entries: {
         main: {
-          default: true,
           skills: [],
           model: { primary: "tui-pty-mock/gpt-5.5" },
         },
@@ -687,6 +687,7 @@ function buildGatewayModeConfig(params: { tempDir: string; providerBaseUrl: stri
   return {
     ...base,
     agents: {
+      ownership: "explicit",
       defaults: {
         workspace: path.join(params.tempDir, defaultScenario.agentId),
         model: { primary: defaultModelRef },
@@ -695,12 +696,14 @@ function buildGatewayModeConfig(params: { tempDir: string; providerBaseUrl: stri
         ),
         skills: [],
         skipBootstrap: true,
+        heartbeat: { agentId: defaultScenario.agentId },
+        systemAgent: { agentId: defaultScenario.agentId },
+        authInheritance: { agentId: defaultScenario.agentId },
       },
       entries: Object.fromEntries(
-        agentScenarios.map((scenario, index) => [
+        agentScenarios.map((scenario) => [
           scenario.agentId,
           {
-            ...(index === 0 ? { default: true } : {}),
             workspace: path.join(params.tempDir, scenario.agentId),
             skills: [],
             model: { primary: `tui-pty-mock/${scenario.modelId}` },
@@ -709,6 +712,7 @@ function buildGatewayModeConfig(params: { tempDir: string; providerBaseUrl: stri
         ]),
       ),
     },
+    talk: { agentId: defaultScenario.agentId },
     models: {
       mode: "replace",
       providers: {
@@ -1546,7 +1550,9 @@ describe("TUI PTY real backends", () => {
         const descendantCommandOffset = fixture.run.visibleOutput().length;
         await fixture.run.write(`!node ${JSON.stringify(rootPath)}\r`);
         await waitForOutputAfter(fixture.run, "[local] exit 0", descendantCommandOffset);
-        descendantPid = await waitForPidFile(pidPath, LOCAL_OUTPUT_TIMEOUT_MS);
+        // The fixture writes its descendant PID synchronously before the completed command exits.
+        descendantPid = Number.parseInt(await readFile(pidPath, "utf8"), 10);
+        expect(Number.isSafeInteger(descendantPid) && descendantPid > 0).toBe(true);
         expect(isProcessAlive(descendantPid)).toBe(true);
 
         await fixture.run.write("/exit\r", { delay: false });
@@ -1562,7 +1568,7 @@ describe("TUI PTY real backends", () => {
 
   it.skipIf(process.platform === "win32")(
     "reports a flooded local-shell control pipe and reclaims its command group",
-    async ({ onTestFinished }) => {
+    async ({ onTestFinished, signal }) => {
       let rolePidPath = "";
       const trackedPids: number[] = [];
       const fixture = await startLocalModeTui(onTestFinished, {
@@ -1619,10 +1625,17 @@ describe("TUI PTY real backends", () => {
           "[local] error: service child cleanup identity lost: control pipe pending line exceeded cap",
           LOCAL_EXIT_TIMEOUT_MS,
         );
-        await waitFor({
-          timeoutMs: LOCAL_EXIT_TIMEOUT_MS,
-          read: () => (trackedPids.every((pid) => !isProcessAlive(pid)) ? true : null),
-          onTimeout: () => new Error("local shell control-pipe failure left its group alive"),
+        // The TUI owns these processes and reports the pipe failure before reclamation settles.
+        // No descendant handles cross the PTY boundary; only the test signal bounds observation.
+        await withinTest(
+          (async () => {
+            while (trackedPids.some(isProcessAlive)) {
+              await waitForProcessTick(10, undefined, { signal });
+            }
+          })(),
+          signal,
+        ).catch((cause: unknown) => {
+          throw new Error("local shell control-pipe failure left its group alive", { cause });
         });
 
         await fixture.run.write("/exit\r", { delay: false });

@@ -1,8 +1,6 @@
 import type { WAMessageKey, WASocket } from "baileys";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { createSubsystemLogger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
-import type { ReconnectPolicy } from "../reconnect.js";
 import { createWaSocket, waitForWaConnection } from "../session.js";
 import { resolveWhatsAppSocketTiming, type WhatsAppSocketTimingOptions } from "../socket-timing.js";
 import {
@@ -10,19 +8,14 @@ import {
   type WhatsAppBaileysGroupMetadataCache,
   type WhatsAppBaileysMessageCache,
 } from "./baileys-cache.js";
-import type { WhatsAppDurableInboundQueue } from "./durable-receive.js";
 import {
   createWhatsAppGroupMetadataCacheOwner,
   type WhatsAppGroupMetadataCache,
 } from "./group-metadata-cache.js";
 import { closeInboundMonitorSocket } from "./lifecycle.js";
-import {
-  createWhatsAppMessageDeliveryCoordinator,
-  type WhatsAppAppendReplyWindow,
-} from "./message-delivery.js";
+import { createWhatsAppMessageDeliveryCoordinator } from "./message-delivery.js";
 import { createWebSendApi } from "./send-api.js";
 import { createWhatsAppAttachedSocketSession } from "./socket-session.js";
-import type { AdmittedWebInboundCallbackMessage } from "./types.js";
 
 function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
   if (enabled) {
@@ -30,40 +23,19 @@ function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
   }
 }
 
-type MonitorWebInboxOptions = {
-  cfg: OpenClawConfig;
-  loadConfig?: () => OpenClawConfig;
-  socketTiming?: Required<WhatsAppSocketTimingOptions>;
-  verbose: boolean;
-  accountId: string;
-  authDir: string;
-  onMessage: (msg: AdmittedWebInboundCallbackMessage) => Promise<void>;
-  mediaMaxMb?: number;
-  /** Keep the global presence unavailable so self-chat sessions do not mute phone pushes. */
-  selfChatMode?: boolean;
-  /** Send read receipts for incoming messages (default true). */
-  sendReadReceipts?: boolean;
-  /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
-  debounceMs?: number;
-  /** Bounded reconnect window for offline append auto-replies. */
-  appendReplyWindow?: WhatsAppAppendReplyWindow;
-  /** Optional debounce gating predicate. */
-  shouldDebounce?: (msg: AdmittedWebInboundCallbackMessage) => boolean;
-  /** Optional shared socket reference so reply closures can follow reconnects. */
-  socketRef?: { current: WASocket | null };
-  /** Whether send retries should wait for a reconnect. */
-  shouldRetryDisconnect?: () => boolean;
-  /** Reconnect timing for waiting through transient socket replacement gaps. */
-  disconnectRetryPolicy?: ReconnectPolicy;
-  /** Abort in-flight reconnect waits when shutdown becomes terminal. */
-  disconnectRetryAbortSignal?: AbortSignal;
-  /** Shared group metadata cache used only for inbound metadata fallback after fetch failures. */
-  groupMetadataCache?: WhatsAppGroupMetadataCache;
-  recentMessageKeys?: WhatsAppBaileysMessageCache;
-  baileysGroupMetaCache?: WhatsAppBaileysGroupMetadataCache;
-  onPendingWorkChanged?: (pendingWorkCount: number, at?: number) => void;
-  durableInboundQueue?: WhatsAppDurableInboundQueue;
-};
+type MonitorWebInboxOptions = Omit<
+  Parameters<typeof createWhatsAppMessageDeliveryCoordinator>[0],
+  "sock" | "socketSession" | "groupMetadata"
+> &
+  Omit<
+    Parameters<typeof createWhatsAppAttachedSocketSession>[0],
+    "sock" | "socketTiming" | "logVerbose" | "logConnectionError"
+  > & {
+    socketTiming?: Required<WhatsAppSocketTimingOptions>;
+    /** Shared group metadata cache used only for inbound metadata fallback after fetch failures. */
+    groupMetadataCache?: WhatsAppGroupMetadataCache;
+    baileysGroupMetaCache?: WhatsAppBaileysGroupMetadataCache;
+  };
 
 type AttachWebInboxToSocketOptions = MonitorWebInboxOptions & {
   socketTiming: Required<WhatsAppSocketTimingOptions>;
@@ -77,16 +49,7 @@ export async function attachWebInboxToSocket(
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
   const socketSession = await createWhatsAppAttachedSocketSession({
-    sock: options.sock,
-    socketRef: options.socketRef,
-    accountId: options.accountId,
-    authDir: options.authDir,
-    selfChatMode: options.selfChatMode,
-    socketTiming: options.socketTiming,
-    shouldRetryDisconnect: options.shouldRetryDisconnect,
-    disconnectRetryPolicy: options.disconnectRetryPolicy,
-    disconnectRetryAbortSignal: options.disconnectRetryAbortSignal,
-    recentMessageKeys: options.recentMessageKeys,
+    ...options,
     logVerbose: (message) => logWhatsAppVerbose(options.verbose, message),
     logConnectionError: (error) => {
       inboundLogger.error({ error: String(error) }, "connection.update handler error");
@@ -106,21 +69,9 @@ export async function attachWebInboxToSocket(
     },
   });
   const delivery = createWhatsAppMessageDeliveryCoordinator({
-    cfg: options.cfg,
-    loadConfig: options.loadConfig,
-    verbose: options.verbose,
-    accountId: options.accountId,
-    sock: options.sock,
+    ...options,
     socketSession,
     groupMetadata,
-    onMessage: options.onMessage,
-    mediaMaxMb: options.mediaMaxMb,
-    sendReadReceipts: options.sendReadReceipts,
-    debounceMs: options.debounceMs,
-    appendReplyWindow: options.appendReplyWindow,
-    shouldDebounce: options.shouldDebounce,
-    onPendingWorkChanged: options.onPendingWorkChanged,
-    durableInboundQueue: options.durableInboundQueue,
   });
   const sendApi = createWebSendApi({
     sock: socketSession.socketOperations,

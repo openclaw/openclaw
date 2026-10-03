@@ -61,7 +61,7 @@ import type { PluginRuntime } from "./runtime/types.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import type { PluginDependencyStatus } from "./status-dependencies.types.js";
 import type { PluginMcpServerConnectionResolverRegistration } from "./types.mcp-connection.js";
-type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
+type AnyChannelPlugin = import("../channels/plugins/types.plugin.js").AnyChannelPlugin;
 type CliBackendPlugin = import("./types.js").CliBackendPlugin;
 type ImageGenerationProviderPlugin = import("./types.js").ImageGenerationProviderPlugin;
 type MediaUnderstandingProviderPlugin = import("./types.js").MediaUnderstandingProviderPlugin;
@@ -81,6 +81,7 @@ type OpenClawPluginReloadRegistration = import("./types.js").OpenClawPluginReloa
 type OpenClawPluginSecurityAuditCollector =
   import("./types.js").OpenClawPluginSecurityAuditCollector;
 type OpenClawPluginService = import("./types.js").OpenClawPluginService;
+type OpenClawPluginServiceV2 = import("./types.js").OpenClawPluginServiceV2;
 type OpenClawPluginToolFactory = import("./types.js").OpenClawPluginToolFactory;
 type PluginConversationBindingResolvedEvent =
   import("./types.js").PluginConversationBindingResolvedEvent;
@@ -96,6 +97,7 @@ type VideoGenerationProviderPlugin = import("./types.js").VideoGenerationProvide
 type WebFetchProviderPlugin = import("./types.js").WebFetchProviderPlugin;
 type WebSearchProviderPlugin = import("./types.js").WebSearchProviderPlugin;
 type WorkerProvider = import("./types.js").WorkerProvider;
+type StorageProvider = import("../storage/types.js").StorageProvider;
 type UnifiedModelCatalogProviderPlugin = import("./types.js").UnifiedModelCatalogProviderPlugin;
 
 /** Registration provenance; this shape carries no execution or resource authority. */
@@ -159,7 +161,7 @@ type PluginHostedMediaResolverRegistration = PluginRegistrationOwner & {
 };
 
 export type PluginChannelRegistration = PluginRegistrationOwner & {
-  plugin: ChannelPlugin;
+  plugin: AnyChannelPlugin;
   /** Prepared views retain the exact transport donor in addition to their local admission. */
   borrowedRuntimeRecord?: PluginRecord;
   /** Exact record-bound runtime resolver captured when the active plugin registered the channel. */
@@ -171,7 +173,7 @@ export type PluginChannelRegistration = PluginRegistrationOwner & {
 };
 
 type PluginChannelSetupRegistration = PluginRegistrationOwner & {
-  plugin: ChannelPlugin;
+  plugin: AnyChannelPlugin;
   /** Loader-owned provenance. Missing values are conservative legacy registrations. */
   origin?: PluginOrigin;
   enabled: boolean;
@@ -238,7 +240,7 @@ type PluginHookRegistration = {
 
 export type PluginServiceRegistration = PluginRegistrationOwner & {
   readonly id: string;
-  service: OpenClawPluginService;
+  service: OpenClawPluginService | OpenClawPluginServiceV2;
   origin: PluginOrigin;
   trustedOfficialInstall?: boolean;
 };
@@ -431,6 +433,7 @@ export type PluginRegistry = {
   webFetchProviders: PluginOwnedProviderRegistration<WebFetchProviderPlugin>[];
   webSearchProviders: PluginOwnedProviderRegistration<WebSearchProviderPlugin>[];
   workerProviders: Map<string, PluginOwnedProviderRegistration<WorkerProvider>>;
+  storageProviders: Map<string, PluginOwnedProviderRegistration<StorageProvider>>;
   migrationProviders: PluginOwnedProviderRegistration<MigrationProviderPlugin>[];
   codexAppServerExtensionFactories: PluginCodexAppServerExtensionFactoryRegistration[];
   agentToolResultMiddlewareOwners: PluginAgentToolResultMiddlewareOwner[];

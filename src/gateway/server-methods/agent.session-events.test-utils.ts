@@ -23,8 +23,7 @@ export function registerAgentSendEventTests(): void {
       runId: "run-old",
       childSessionKey,
       controllerSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       task: "initial task",
       cleanup: "keep" as const,
@@ -56,6 +55,7 @@ export function registerAgentSendEventTests(): void {
       return await updater(store);
     });
     mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(completedRun);
+    mocks.getLatestLiveSubagentRunByChildSessionKey.mockReturnValue(completedRun);
     mocks.replaceSubagentRunAfterSteer.mockReturnValueOnce(true);
     const sessionRow = {
       key: childSessionKey,
@@ -100,7 +100,6 @@ export function registerAgentSendEventTests(): void {
     expectSubagentFollowupReactivation({
       replaceSubagentRunAfterSteerMock: mocks.replaceSubagentRunAfterSteer,
       broadcastToConnIds,
-      completedRun,
       childSessionKey,
       status: "running",
       task: "follow-up",

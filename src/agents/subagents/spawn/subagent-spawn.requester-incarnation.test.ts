@@ -34,7 +34,7 @@ import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
 } from "../registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRunsByRunIdsFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import { spawnAcpDirect } from "./acp-spawn.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
@@ -303,7 +303,7 @@ it.each([
         throw new Error("Expected an accepted child run");
       }
       await settleSubagentRegistryPersistenceWork();
-      const [restored] = loadSubagentRunsByRunIdsFromSqlite([runId]);
+      const restored = loadSubagentRegistryFromSqlite().get(runId);
       expect(restored).toMatchObject({
         runId,
         requesterSessionKey,

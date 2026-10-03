@@ -25,8 +25,6 @@ import type { ImageGenerationResult } from "./types.js";
 
 const log = createSubsystemLogger("image-generation");
 
-// Runtime dependency seam for tests and plugin-host callers. Production uses
-// the plugin registry and provider-env helpers by default.
 /** Dependency seam used by image-generation runtime tests and plugin host callers. */
 type ImageGenerationRuntimeDeps = {
   getProvider?: typeof getImageGenerationProvider;
@@ -36,19 +34,6 @@ type ImageGenerationRuntimeDeps = {
 };
 
 export type { GenerateImageParams, GenerateImageRuntimeResult } from "./runtime-types.js";
-
-function buildNoImageGenerationModelConfiguredMessage(
-  cfg: OpenClawConfig,
-  deps: ImageGenerationRuntimeDeps,
-): string {
-  const listProviders = deps.listProviders ?? listImageGenerationProviders;
-  return buildNoCapabilityModelConfiguredMessage({
-    capabilityLabel: "image-generation",
-    modelConfigKey: "mediaModels.image",
-    providers: listProviders(cfg),
-    getProviderEnvVars: deps.getProviderEnvVars,
-  });
-}
 
 /** Lists image-generation providers visible for the current config. */
 export function listRuntimeImageGenerationProviders(
@@ -95,7 +80,14 @@ async function runImageGeneration(
     autoProviderFallback: params.autoProviderFallback,
   });
   if (candidates.length === 0) {
-    throw new Error(buildNoImageGenerationModelConfiguredMessage(params.cfg, deps));
+    throw new Error(
+      buildNoCapabilityModelConfiguredMessage({
+        capabilityLabel: "image-generation",
+        modelConfigKey: "mediaModels.image",
+        providers: listProviders(params.cfg),
+        getProviderEnvVars: deps.getProviderEnvVars,
+      }),
+    );
   }
 
   return runMediaGenerationCandidates({

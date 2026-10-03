@@ -393,25 +393,27 @@ export async function runTestProjects(
 
   const { parseCLI } = await import("vitest/node");
   let exactTargetRun = false;
+  const selectedTargets = changedTargetArgs ?? targetArgs;
   if (
-    targetArgs.length &&
+    selectedTargets.length &&
     !runSpecs.some((spec) => spec.watchMode) &&
     !hasNonRunVitestSubcommand(forwardedArgs)
   ) {
-    // Native parsing stays in the execution owner. Original filters distinguish
-    // explicit files from broad selections that also lower to literal include files.
+    // Changed selection already resolved its targets. Broad/config selections
+    // keep their existing policy even when lowered to literal include files.
     const execution = parseVitestExecutionArgs(["run", ...forwardedArgs], parseCLI);
+    const filters = changedTargetArgs ?? execution?.filter ?? [];
     if (
       execution &&
       !execution.options.watch &&
       execution.options.run !== false &&
-      execution.filter.length > 0 &&
-      execution.filter.every(
+      filters.length > 0 &&
+      filters.every(
         (file) => isTestFileTarget(file) && /[/\\]/u.test(file) && !/[*?[\]{}]|[@+!]\(/u.test(file),
       )
     ) {
       exactTargetRun = true;
-      if (!Object.hasOwn(execution.options, "passWithNoTests")) {
+      if (targetArgs.length && !Object.hasOwn(execution.options, "passWithNoTests")) {
         for (const spec of runSpecs) {
           const separator = spec.pnpmArgs.indexOf("--");
           spec.pnpmArgs.splice(

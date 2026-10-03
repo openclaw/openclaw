@@ -21,6 +21,7 @@ import {
   prepareDoctorConfigReferenceSource,
   restoreDoctorConfigEnvRefs,
 } from "./config-flow-steps.js";
+import { HISTORICAL_WEBHOOK_CHANNELS } from "./legacy-webhook-pins.js";
 import { inspectPluginMigrationAvailability } from "./plugin-migration-availability.js";
 
 /** Complete selected config repairs within the package owner's publication and compensation. */
@@ -56,6 +57,9 @@ export async function preparePluginUpdateConfigMigration(params: {
           const selectedPending = pending.filter((entry) => selectedIds.has(entry.pluginId));
           const inspected = new Map<string, boolean>();
           const migrated = applyPluginDoctorCompatibilityMigrations(params.config, {
+            historicalWebhookListeners: HISTORICAL_WEBHOOK_CHANNELS.some((id) =>
+              selectedIds.has(id),
+            ),
             config: params.config,
             pluginIds: [...selectedIds],
             manifestRegistry: metadata.manifestRegistry,

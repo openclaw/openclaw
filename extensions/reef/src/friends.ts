@@ -1,3 +1,4 @@
+import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import { fingerprint } from "../protocol/index.js";
 import { normalizeReefTarget } from "./config-schema.js";
 import type { ReefAutonomy, ReefPeerTrust } from "./friend-types.js";
@@ -37,7 +38,7 @@ function keysChanged(local: ReefPeerTrust, remote: RelayFriend): boolean {
 }
 
 export class ReefFriendManager {
-  #mutations: Promise<void> = Promise.resolve();
+  readonly #withMutationLock = createAsyncLock();
 
   constructor(
     readonly transport: ReefTransportClient,
@@ -356,16 +357,11 @@ export class ReefFriendManager {
       lifecycleSignal && this.authoritySignal
         ? AbortSignal.any([lifecycleSignal, this.authoritySignal])
         : (lifecycleSignal ?? this.authoritySignal);
-    const result = this.#mutations.then(async () => {
+    return this.#withMutationLock(async () => {
       signal?.throwIfAborted();
       const value = await operation(signal);
       signal?.throwIfAborted();
       return value;
     });
-    this.#mutations = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
   }
 }

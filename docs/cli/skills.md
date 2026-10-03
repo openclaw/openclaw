@@ -86,7 +86,10 @@ OpenClaw does not download from skills.sh. These entries are shown as
 **Not scanned by ClawHub**, and that trust state is preserved through updates
 and verification. Claimed or ClawHub-scanned skills use `@owner/<slug>`.
 `install git:owner/repo[@ref]` clones an unmanaged Git skill, and `install
-./path` copies a local skill directory. By default, `install`,
+./path` copies a local skill directory. Both fail before copying when the root
+`SKILL.md` is not loadable under the same content rules: frontmatter with a
+description, within `skills.limits.maxSkillFileBytes`. A hardlinked source file
+is copied as a new file, so that link does not fail the check. By default, `install`,
 `update`, and `verify` target the active workspace `skills/` directory; with
 `--global`, they target the shared managed skills directory. `list`/`info`/`check`
 and bare `openclaw skills` request the selected Gateway's authoritative skill

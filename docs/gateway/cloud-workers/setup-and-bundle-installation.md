@@ -58,6 +58,8 @@ The Gateway reuses its prepared archive for subsequent enrollments with the same
 
 While a prepared worker is provisioning, cache cleanup retains the exact worker bundle recorded at admission, including before readiness produces a bootstrap receipt. After the environment reaches a terminal state, normal bundle cleanup can reclaim those bytes when no other environment or placement needs them.
 
+Worker bundles include their JavaScript dependencies, including the WebSocket transport. They target Node.js even when Bun runs the build; the destination still needs a supported Node.js installation.
+
 ### Reuse a node runtime archive after Gateway restart
 
 Linux and macOS deployment images can retain an already prepared node runtime archive as `node-runtime.tgz` in the running OpenClaw package root, beside `package.json`. During image preparation, copy the producer's archive there before closing the producer:
@@ -67,6 +69,8 @@ cp /path/to/prepared/node-runtime.tgz /path/to/openclaw/node-runtime.tgz
 ```
 
 The first cloud-node preparation in a new Gateway process copies that optional input into private temporary storage and verifies its actual files, contents, sizes, and permissions against the running distribution and selected plugins. It still checks build identity, exact dependency pins, and the built import closure. A version string or neighboring checksum manifest does not authorize reuse. Matching archives skip compression; missing, corrupt, unsafe, or mismatched inputs use the existing builder. Different execution modes can select different plugins and therefore rebuild from the same image input.
+
+Distribution scanning, import validation, archive construction, and hashing run in a worker thread so preparation does not block the Gateway's event loop. Enrollment and prepared-pool maintenance await the same verified artifact; canceling one enrollment does not cancel preparation for other consumers.
 
 The deployment image owns the retained file. Gateway shutdown removes only its temporary copy, after active consumers finish. Replace the image archive when the distribution or plugins change; removing it restores ordinary preparation. Windows Gateways continue to build their archive because the shared Windows archive reader normalizes permissions rather than preserving the tar modes needed for this comparison.
 

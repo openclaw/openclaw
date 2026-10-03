@@ -1,7 +1,56 @@
-import { describe, expect, it } from "vitest";
-import { redactModelVisibleSecrets, redactSecrets } from "./redact.js";
+import { describe, expect, it, vi } from "vitest";
+import { redactLogRecordForTransport, redactModelVisibleSecrets, redactSecrets } from "./redact.js";
+import { registerSecretValueForRedaction } from "./secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "./secret-redaction-registry.test-support.js";
+
+function observePrefilterProbes(text: string) {
+  const probe = vi.spyOn(RegExp.prototype, "test");
+  return {
+    count: () =>
+      probe.mock.contexts.filter(
+        (pattern, index) =>
+          pattern instanceof RegExp &&
+          pattern.source.startsWith("(?:KEY|TOKEN|SECRET|") &&
+          probe.mock.calls[index]?.[0] === text,
+      ).length,
+    restore: () => probe.mockRestore(),
+  };
+}
 
 describe.each([redactSecrets, redactModelVisibleSecrets])("%s structured properties", (redact) => {
+  it("probes repeated text once while preserving field-specific protection", () => {
+    const text = "ordinary repeated fixture 🦞";
+    const probe = observePrefilterProbes(text);
+    try {
+      expect(redact({ detail: text, nested: { detail: text }, token: text })).toEqual({
+        detail: text,
+        nested: { detail: text },
+        token: "ordina…e 🦞",
+      });
+      expect(probe.count()).toBe(1);
+      redact({ detail: text });
+      expect(probe.count()).toBe(2);
+    } finally {
+      probe.restore();
+    }
+  });
+
+  it("uses current registry masking before reusing an exact text probe", () => {
+    const text = "opaque-fixture-value";
+    const input = [{ detail: text }, { detail: text }];
+    Object.defineProperty(input, 1, {
+      get() {
+        registerSecretValueForRedaction(text);
+        return { detail: text };
+      },
+    });
+    try {
+      expect(redact(input)).toEqual([{ detail: text }, { detail: "opaque…alue" }]);
+    } finally {
+      resetSecretRedactionRegistryForTest();
+    }
+  });
+
   it("redacts public share capabilities without treating ordinary ids as secrets", () => {
     const shareId = "a".repeat(48);
     expect(
@@ -53,4 +102,18 @@ describe.each([redactSecrets, redactModelVisibleSecrets])("%s structured propert
     expect(result.first).not.toBe(shared);
     expect(shared.token).toBe("fixture-value");
   });
+});
+
+it("reuses log scalar probes only within the current record", () => {
+  const text = "ordinary repeated log fixture 🦞";
+  const record = { detail: text, nested: { detail: text } };
+  const probe = observePrefilterProbes(text);
+  try {
+    expect(redactLogRecordForTransport(record)).toEqual(record);
+    expect(probe.count()).toBe(1);
+    expect(redactLogRecordForTransport(record)).toEqual(record);
+    expect(probe.count()).toBe(2);
+  } finally {
+    probe.restore();
+  }
 });

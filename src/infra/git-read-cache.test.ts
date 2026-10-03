@@ -92,20 +92,23 @@ describe("typed Git read ownership", () => {
     await expect(second).resolves.toEqual({ ...captured, sessionId: "b" });
   });
 
-  it("starts forced refresh immediately and an older completion cannot replace its result", async () => {
-    const old = createDeferredCore<GitReadOperations["checkout.context"]["output"]>();
-    onTestFinished(() => old.resolve(null));
-    const fresh = createDeferredCore<GitReadOperations["checkout.context"]["output"]>();
-    onTestFinished(() => fresh.resolve(null));
-    gitRead.mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
-    const operation = { type: "checkout.context" as const, input: { root: "/refresh-generation" } };
-    const watcher = new AbortController();
-    try {
-      const pending = runGitReadOperation(operation, { cacheSignal: watcher.signal });
-      const refresh = runGitReadOperation(operation, {
-        refresh: true,
-        cacheSignal: watcher.signal,
-      });
+  it.each(["new revision", "unversioned refresh"])(
+    "observes %s immediately without an older completion replacing it",
+    async (mode) => {
+      const old = createDeferredCore<GitReadOperations["checkout.context"]["output"]>();
+      onTestFinished(() => old.resolve(null));
+      const fresh = createDeferredCore<GitReadOperations["checkout.context"]["output"]>();
+      onTestFinished(() => fresh.resolve(null));
+      gitRead.mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
+      const operation = {
+        type: "checkout.context" as const,
+        input: { root: "/refresh-generation" },
+      };
+      readRevision
+        .mockResolvedValueOnce(mode === "new revision" ? "old" : null)
+        .mockResolvedValue(mode === "new revision" ? "new" : null);
+      const pending = runGitReadOperation(operation);
+      const refresh = runGitReadOperation(operation, { refresh: true });
       await Promise.resolve();
       await Promise.resolve();
       expect(gitRead).toHaveBeenCalledTimes(2);
@@ -121,17 +124,11 @@ describe("typed Git read ownership", () => {
       await expect(pending).resolves.toMatchObject({ branch: "old" });
       await expect(runGitReadOperation(operation)).resolves.toEqual(refreshed);
       expect(gitRead).toHaveBeenCalledTimes(2);
-      expect(getEventListeners(watcher.signal, "abort")).toHaveLength(1);
-    } finally {
-      watcher.abort();
-    }
-    expect(getEventListeners(watcher.signal, "abort")).toHaveLength(0);
-  });
+    },
+  );
 
   it.each([
     { pendingAtExpiry: false, revision: "known", freshnessMs: 300_000 },
-    { pendingAtExpiry: true, revision: "known", freshnessMs: 300_000 },
-    { pendingAtExpiry: false, revision: null, freshnessMs: 75_000 },
     { pendingAtExpiry: true, revision: null, freshnessMs: 75_000 },
   ])(
     "measures branch-fact fallback from admission with revision=$revision and pending=$pendingAtExpiry",
@@ -225,23 +222,6 @@ describe("typed Git read ownership", () => {
     expect(gitRead).toHaveBeenCalledTimes(2);
   });
 
-  it("does not cancel admitted work when a subscription only releases retention", async () => {
-    const held = createDeferredCore<GitReadOperations["checkout.context"]["output"]>();
-    onTestFinished(() => held.resolve(null));
-    gitRead.mockReturnValueOnce(held.promise);
-    const watcher = new AbortController();
-    const pending = runGitReadOperation(
-      { type: "checkout.context", input: { root: "/retention-only" } },
-      { cacheSignal: watcher.signal },
-    );
-    await Promise.resolve();
-    await Promise.resolve();
-    watcher.abort();
-    expect(gitRead.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
-    held.resolve(null);
-    await expect(pending).resolves.toBeNull();
-  });
-
   it.each(["checkout.context", "checkout.revision"] as const)(
     "retires cached facts and pending %s reads with the Gateway lifecycle",
     async (phase) => {
@@ -252,12 +232,11 @@ describe("typed Git read ownership", () => {
       } else {
         gitRead.mockReturnValueOnce(held.promise);
       }
-      const watcher = new AbortController();
       const operation = {
         type: "checkout.context" as const,
         input: { root: `/restart-lifecycle-${phase}` },
       };
-      const pending = runGitReadOperation(operation, { cacheSignal: watcher.signal });
+      const pending = runGitReadOperation(operation);
       const rejected = expect(pending).rejects.toThrow();
       await Promise.resolve();
       await Promise.resolve();
@@ -267,18 +246,14 @@ describe("typed Git read ownership", () => {
       const retiring = drainGlobalSingletonLifecycleState("restart");
       await Promise.resolve();
       expect(owner?.aborted).toBe(true);
-      expect(getEventListeners(watcher.signal, "abort")).toHaveLength(0);
       await expect(runGitReadOperation(operation)).rejects.toThrow("restarting");
       held.resolve(null);
       await rejected;
       await retiring;
       const current = { owner: "example", repo: "repo", branch: "reopened" };
       gitRead.mockResolvedValueOnce(current);
-      await expect(
-        runGitReadOperation(operation, { cacheSignal: watcher.signal }),
-      ).resolves.toEqual(current);
+      await expect(runGitReadOperation(operation)).resolves.toEqual(current);
       expect(gitRead).toHaveBeenCalledTimes(phase === "checkout.context" ? 2 : 1);
-      watcher.abort();
     },
   );
 

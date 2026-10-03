@@ -20,9 +20,14 @@ import {
 } from "../../infra/update-doctor-result.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import {
+  renderUpdateRunReport,
+  updateRunReportInputFromResult,
+} from "../../infra/update-run-report.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import * as gitRunner from "../../infra/update-runner-git.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
@@ -35,12 +40,14 @@ import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { quoteCliArg } from "../quote-cli-arg.js";
 import * as shared from "./shared.js";
+import * as doctorChild from "./update-command-doctor-child.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { updateGitInstall } from "./update-command-git.js";
 import { createPackageUpdateActivationOptions } from "./update-command-package-activation.js";
 import * as packageUpdate from "./update-command-package.js";
 import { runPackageInstallUpdate, stagePackageInstallUpdate } from "./update-command-package.js";
 import { UpdateCommandFailure, UnreportedUpdateAdmissionOutcome } from "./update-command-result.js";
+import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
 import { reportPreMutationUpdateResult } from "./update-command-terminal.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
@@ -162,7 +169,12 @@ it.each(["guidance", "staging"])(
           "npm error syscall rename",
           "npm error path [redacted-path]",
           "npm error EACCES: permission denied, rename [redacted-path]",
-        ].map((message) => ({ check: "npm", code: "EACCES", message })),
+        ].map((message, index) =>
+          Object.assign(
+            { check: "npm", code: "EACCES", message },
+            index === 0 ? { npmErrorCode: "EACCES" as const } : {},
+          ),
+        ),
       ];
       if (consumer === "staging") {
         const error = await stagePackageInstallUpdate(params).then(
@@ -396,7 +408,7 @@ it.skipIf(process.platform === "win32" || process.platform === "freebsd").each([
         expectOriginalInstallation,
       } = await createPackageInstallFixture(base, "2.0.0");
       const runtimeDir = path.join(base, "runtime");
-      const runtimePath = path.join(runtimeDir, "openclaw-test-node");
+      const runtimePath = path.join(runtimeDir, process.versions.bun ? "bun" : "node");
       await fs.mkdir(runtimeDir);
       await fs.writeFile(runtimePath, `#!/bin/sh\nexec ${quoteCliArg(process.execPath)} "$@"\n`, {
         mode: 0o755,
@@ -431,12 +443,18 @@ it.skipIf(process.platform === "win32" || process.platform === "freebsd").each([
           try {
             const result = await withEnvAsync(
               { PATH: `${runtimeDir}${path.delimiter}${process.env.PATH ?? ""}` },
-              () =>
-                staged.run({
+              async () => {
+                const preflight = await resolvePackageRuntimePreflight({
+                  target: { version: "2.0.0", nodeEngine: null },
+                  nodeRunner: runtime === "PATH" ? path.basename(runtimePath) : process.execPath,
+                });
+                assert(preflight.ok);
+                assert(preflight.value.activationRuntime);
+                return staged.run({
                   ...params,
                   ...createPackageUpdateActivationOptions({
                     run: { runId, env, executorFence: fence },
-                    nodeRunner: runtime === "PATH" ? "openclaw-test-node" : process.execPath,
+                    runtime: preflight.value.activationRuntime,
                     assertCurrent: fence.assertCurrent,
                   }),
                   assertCurrent: fence.assertCurrent,
@@ -445,7 +463,8 @@ it.skipIf(process.platform === "win32" || process.platform === "freebsd").each([
                   onTransaction: (retained) => {
                     transaction = retained;
                   },
-                }),
+                });
+              },
             );
             expect(result, JSON.stringify(result)).toMatchObject({
               status: "ok",
@@ -697,6 +716,86 @@ it.each([
     });
   },
 );
+
+it("retains Doctor settlement warnings through the package activation result", async () => {
+  await withTestDir({ prefix: "update-package-doctor-settlement-" }, async (base) => {
+    const { params, root, expectOriginalInstallation } = await createPackageInstallFixture(
+      base,
+      "2.0.0",
+    );
+    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(base);
+    const env = {
+      OPENCLAW_STATE_DIR: path.join(base, "state"),
+      OPENCLAW_CONFIG_PATH: path.join(base, "openclaw.json"),
+    };
+    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}\n");
+    const warning =
+      "Doctor timed out, but every tracked process group stopped. Run `openclaw update repair`.";
+    const settlement: UpdateStepResult = {
+      name: "doctor process settlement",
+      command: "settle doctor process groups",
+      cwd: root,
+      durationMs: 1,
+      exitCode: 0,
+      advisory: { kind: "recoverable-maintenance", message: warning },
+    };
+    // Native settlement has process-boundary coverage; this test owns the package
+    // verifier's auxiliary-step transport and its public warning consumer.
+    vi.spyOn(doctorChild, "withUpdateDoctorChild").mockImplementation(
+      async ({ context }, operation) => {
+        const value = await operation(async () => ({
+          stdout: "Doctor busy",
+          stderr: "",
+          code: null,
+          signal: "SIGKILL",
+          killed: true,
+          cleanup: "forced",
+          termination: "timeout",
+        }));
+        context.onProcessSettlement?.(settlement);
+        return value;
+      },
+    );
+    let transaction: PackageUpdateTransaction | undefined;
+    try {
+      const result = await runPackageInstallUpdate({
+        ...params,
+        installEnv: env,
+        managedServiceEnv: env,
+        validateCandidate: async () => [],
+        beforeActivate: async () => {},
+        getDoctorContext: () => ({
+          runId: "doctor-settlement-transport",
+          executorFence: { assertCurrent: () => {} },
+          inputHash: "fixture-input",
+          changes: [],
+          assertCurrent: () => {},
+          assertBoundChildCurrent: () => {},
+        }),
+        onTransaction: (retained) => {
+          transaction = retained;
+        },
+      });
+      expect(result).toMatchObject({
+        status: "error",
+        root,
+        failedStep: { termination: "timeout" },
+      });
+      expect(result.steps.filter((step) => step.name === "doctor process settlement")).toEqual([
+        settlement,
+      ]);
+      expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
+        warning,
+      );
+    } finally {
+      if (transaction) {
+        expect((await transaction.rollback(() => {})).exitCode).toBe(0);
+        await transaction.complete({ activationVerified: false }, () => {});
+      }
+    }
+    await expectOriginalInstallation();
+  });
+});
 
 it.each([
   { method: "package", reason: "requester-revoked" },

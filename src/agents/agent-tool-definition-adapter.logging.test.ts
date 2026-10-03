@@ -6,6 +6,7 @@
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 
 const mocks = vi.hoisted(() => ({
   logDebug: vi.fn(),
@@ -17,7 +18,6 @@ vi.mock("../logger.js", () => ({
   logError: mocks.logError,
 }));
 
-let toToolDefinitions: typeof import("./agent-tool-definition-adapter.js").toToolDefinitions;
 let wrapToolParamValidation: typeof import("./agent-tools.params.js").wrapToolParamValidation;
 let REQUIRED_PARAM_GROUPS: typeof import("./agent-tools.params.js").REQUIRED_PARAM_GROUPS;
 let logError: typeof import("../logger.js").logError;
@@ -54,7 +54,6 @@ function firstLogErrorMessage(): unknown {
 
 describe("agent tool definition adapter logging", () => {
   beforeAll(async () => {
-    ({ toToolDefinitions } = await import("./agent-tool-definition-adapter.js"));
     ({ wrapToolParamValidation, REQUIRED_PARAM_GROUPS } = await import("./agent-tools.params.js"));
     ({ logError } = await import("../logger.js"));
     ({ withToolOperatorHint } = await import("./tool-operator-hint.js"));

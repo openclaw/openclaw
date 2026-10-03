@@ -113,7 +113,7 @@ describe("executeAgentTurn: conversation failures", () => {
     }
   });
 
-  it("keeps actionable provider errors on internal control surfaces", async () => {
+  it("shows recovery guidance without provider diagnostics on internal control surfaces", async () => {
     state.isInternalMessageChannelMock.mockReturnValue(true);
     const providerError = "provider failed with actionable details";
     state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error(providerError));
@@ -134,9 +134,38 @@ describe("executeAgentTurn: conversation failures", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toContain(providerError);
+      expect(result.payload.text).toContain("OpenClaw couldn't finish this reply.");
+      expect(result.payload.text).not.toContain(providerError);
       expect(result.payload.text).toContain("openclaw logs --follow");
       expect(result.payload.text).toMatch(/terminal/i);
+    }
+  });
+
+  it("preserves curated execution-node recovery on internal control surfaces", async () => {
+    state.isInternalMessageChannelMock.mockReturnValue(true);
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new Error(
+        "Codex execution node disconnected; start a fresh attempt. (execution node failed: node disconnected (codex.exec-server.stdio.v1))",
+      ),
+    );
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "chat",
+        Surface: "chat",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      ...createAgentTurnExecutionDefaults(),
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toMatch(/Codex execution node disconnected.*fresh attempt/iu);
     }
   });
 });

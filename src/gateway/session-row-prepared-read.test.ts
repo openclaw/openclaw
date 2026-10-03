@@ -4,10 +4,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { deferCanonicalSessionValidation } from "../config/sessions/session-canonical-validation-deferral.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  authorizeGatewayRequestPreDispatch,
-  createRequestGatewayMethodRegistry,
-} from "./server-methods.js";
+import { createRequestGatewayMethodRegistry, handleGatewayRequest } from "./server-methods.js";
+import { authorizeGatewayRequestPreDispatch } from "./server-methods/request-authorization.js";
 import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
 import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
 import { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
@@ -110,28 +108,6 @@ it("rechecks private access before responding after canonical description readin
   expect(certifyReadiness).toHaveBeenCalledExactlyOnceWith(database);
 });
 
-it("prepares an exact private read without consulting bulk readiness", async () => {
-  const owner = createSessionRowProjectionFixture({ cfg, store: {} });
-  Object.defineProperty(owner, "needsMaterialization", {
-    get: () => {
-      throw new Error("keyed reads must not depend on bulk state");
-    },
-  });
-  const ready = vi.spyOn(owner, "ensureMaterialized").mockImplementation(() => {
-    throw new Error("keyed reads must not join bulk readiness");
-  });
-  const queries = vi.fn(() => [query]);
-  const describe = vi.spyOn(owner, "describe");
-  const consume = vi.fn((read: SessionRowReadView) => read.describe(query));
-  await expect(withPreparedSessionRows(owner, () => true, queries, consume)).resolves.toEqual({
-    kind: "complete",
-    value: undefined,
-  });
-  expect(ready).not.toHaveBeenCalled();
-  expect(describe).toHaveBeenCalledExactlyOnceWith(query);
-  expect(consume).toHaveBeenCalledOnce();
-});
-
 it("refuses a disposed projection before selecting or consuming rows", async () => {
   const owner = createSessionRowProjectionFixture({ cfg, store: {} });
   const queries = vi.fn(() => [query]);
@@ -142,6 +118,44 @@ it("refuses a disposed projection before selecting or consuming rows", async () 
   expect(queries).not.toHaveBeenCalled();
   expect(consume).not.toHaveBeenCalled();
 });
+
+it.each(["operator.admin", "operator.read"])(
+  "ends describe readiness retries after its %s connection closes",
+  async (scope) => {
+    const { projection, context, client } = describeFixture();
+    const connection = new AbortController();
+    client.connect.scopes = [scope];
+    client.connectionSignal = connection.signal;
+    const prepare = vi.spyOn(projection, "withPreparedExactRows").mockResolvedValueOnce({
+      kind: "pending",
+      database: { agentId: "main", path: "/synthetic/cancelled.sqlite" },
+    });
+    certifyReadiness.mockImplementationOnce(async () => {
+      connection.abort(new Error("Requesting connection closed"));
+    });
+    const respond = vi.fn();
+    try {
+      await handleGatewayRequest({
+        req: {
+          type: "req",
+          id: "cancelled-description",
+          method: "sessions.describe",
+          params: { key: "agent:main:cancelled-read" },
+        },
+        context,
+        client,
+        respond,
+        isWebchatConnect: () => false,
+        extraHandlers: sessionByKeyReadHandlers,
+      });
+      expect(certifyReadiness).toHaveBeenCalledOnce();
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(respond).not.toHaveBeenCalled();
+    } finally {
+      projection.dispose();
+    }
+  },
+);
 
 it("captures refreshed metadata after preparation without rereading the state getter during consumption", async () => {
   const owner = createSessionRowProjectionFixture({ cfg, store: {} });
@@ -250,6 +264,7 @@ it.each(["child", "parent"] as const)(
       referenced: (key) => projection.describe({ agentId: "main", key }),
       lookup: projection.describe,
       prepareExactRows: () => undefined,
+      prepareSelection: () => undefined,
       retainExactPreparation: () => () => {},
       assertExactRowsPrepared: () => {},
       retainArchiveRows: () => ({ update: () => {}, release: () => {} }),

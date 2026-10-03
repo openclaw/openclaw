@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
+import type { OpenClawPluginServiceV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import type { SessionCatalogTranscriptItem } from "openclaw/plugin-sdk/session-catalog";
@@ -80,10 +81,8 @@ export function parseBeamMirrorConfig(
     return `${MIRROR_CONFIG_PATH} must be a closed object with endpoint/token/catalogs/pollSeconds/activeWindowMinutes`;
   }
   const endpoint = typeof mirror.endpoint === "string" ? mirror.endpoint.trim() : "";
-  let parsedEndpoint: URL;
-  try {
-    parsedEndpoint = new URL(endpoint);
-  } catch {
+  const parsedEndpoint = URL.parse(endpoint);
+  if (!parsedEndpoint) {
     return `${MIRROR_CONFIG_PATH}.endpoint must be an absolute URL`;
   }
   // Bearer credentials and transcripts must never cross the network in the
@@ -221,7 +220,6 @@ type TrackedMirrorSession = {
 
 type BeamMirrorRunner = {
   tick: () => Promise<void>;
-  stop: () => Promise<void>;
 };
 
 export function createBeamMirrorRunner(params: {
@@ -231,19 +229,17 @@ export function createBeamMirrorRunner(params: {
   fetchFn?: typeof fetch;
   now?: () => number;
   listCatalogs?: () => ActiveSessionCatalog[];
+  signal: AbortSignal;
 }): BeamMirrorRunner {
   const env = params.env ?? process.env;
   const now = params.now ?? Date.now;
   const listCatalogs = params.listCatalogs ?? listActiveSessionCatalogs;
   const tracked = new Map<string, TrackedMirrorSession>();
-  const controller = new AbortController();
-  const { signal } = controller;
+  const { signal } = params;
   let lastWarnAt = 0;
   let warnedProcessHomeIsolation = false;
   let endpoint = "";
   let redirectBlocked = false;
-  let activeTick: Promise<void> | undefined;
-  let stopPromise: Promise<void> | undefined;
   const stopError = new Error("Beam mirror stopped");
 
   // Catalog work cannot be cancelled, so detach its late result after stop.
@@ -389,6 +385,7 @@ export function createBeamMirrorRunner(params: {
 
   const scan = async (): Promise<void> => {
     try {
+      signal.throwIfAborted();
       const config = params.runtime.config.current();
       const mirror = parseBeamMirrorConfig(config);
       if (mirror === undefined) {
@@ -557,36 +554,15 @@ export function createBeamMirrorRunner(params: {
     }
   };
 
-  return {
-    tick: () => {
-      if (signal.aborted) {
-        return stopPromise ?? Promise.resolve();
-      }
-      activeTick ??= scan().finally(() => {
-        activeTick = undefined;
-      });
-      return activeTick;
-    },
-    stop: () => {
-      if (!stopPromise) {
-        // Publish ownership before abort listeners run so reentrant shutdown joins this scan.
-        stopPromise = activeTick ?? Promise.resolve();
-        controller.abort();
-      }
-      return stopPromise;
-    },
-  };
+  return { tick: scan };
 }
 
-export function createBeamMirrorService(params: { runtime: PluginRuntime }): {
-  id: string;
-  start: (ctx: { logger: { warn: (m: string) => void; info: (m: string) => void } }) => void;
-  stop: () => Promise<void>;
-} {
-  let interval: ReturnType<typeof setInterval> | undefined;
-  let runner: BeamMirrorRunner | undefined;
+export function createBeamMirrorService(params: {
+  runtime: PluginRuntime;
+}): OpenClawPluginServiceV2 {
   return {
     id: "beam-mirror",
+    apiVersion: 2,
     start(ctx) {
       const mirror = parseBeamMirrorConfig(params.runtime.config.current());
       if (mirror === undefined) {
@@ -596,25 +572,20 @@ export function createBeamMirrorService(params: { runtime: PluginRuntime }): {
         ctx.logger.warn(`beam mirror disabled: ${mirror}`);
         return;
       }
-      runner = createBeamMirrorRunner({ runtime: params.runtime, logger: ctx.logger });
-      // The catalog poll is this service's lifecycle-owned freshness exception:
-      // local coding sessions change outside gateway events, so a bounded
-      // unref'd interval is the only way to observe them.
-      interval = setInterval(() => {
-        void runner?.tick();
-      }, mirror.pollSeconds * 1_000);
-      interval.unref?.();
+      const active = createBeamMirrorRunner({
+        runtime: params.runtime,
+        logger: ctx.logger,
+        signal: ctx.scheduler.signal,
+      });
+      ctx.scheduler.schedule({
+        id: "mirror",
+        delayMs: 0,
+        everyMs: mirror.pollSeconds * 1_000,
+        run: () => active.tick(),
+      });
       ctx.logger.info(
         `beam mirror active: ${mirror.catalogs.join(", ")} -> ${new URL(mirror.endpoint).origin}`,
       );
-      void runner.tick();
-    },
-    stop() {
-      if (interval) {
-        clearInterval(interval);
-        interval = undefined;
-      }
-      return runner?.stop() ?? Promise.resolve();
     },
   };
 }

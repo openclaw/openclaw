@@ -22,17 +22,6 @@ const cases: Array<{
   preparedMediaCount?: number;
 }> = [
   {
-    name: "ordinary text",
-    payload: { text: "Ready café 世界." },
-    expectedPayload: { text: "Ready café 世界." },
-  },
-  {
-    name: "preserved details",
-    payload: { text: "Ready." },
-    expectedPayload: { text: "Ready." },
-    adapter: { preserveMarkdownDetails: () => true },
-  },
-  {
     name: "flattened details",
     payload: { text: "<details><summary>More</summary>Body</details>" },
     expectedPayload: { text: "**More**\n\nBody" },
@@ -45,8 +34,8 @@ const cases: Array<{
   },
   {
     name: "unchanged sanitized text",
-    payload: { text: "Ready." },
-    expectedPayload: { text: "Ready." },
+    payload: { text: "Ready café 世界." },
+    expectedPayload: { text: "Ready café 世界." },
     adapter: { preserveMarkdownDetails: () => true, sanitizeText: ({ text }) => text },
   },
   {

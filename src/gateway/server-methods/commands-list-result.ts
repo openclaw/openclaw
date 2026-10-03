@@ -16,7 +16,10 @@ import {
   COMMAND_LIST_MAX_ITEMS,
   COMMAND_NAME_MAX_LENGTH,
 } from "../../../packages/gateway-protocol/src/schema/commands.js";
-import { listChatCommandsForConfig } from "../../auto-reply/commands-registry.js";
+import {
+  listChatCommandsForConfig,
+  supportsNativeProvider,
+} from "../../auto-reply/commands-registry.js";
 import type {
   ChatCommandDefinition,
   CommandArgChoice,
@@ -57,15 +60,6 @@ function resolveNativeName(cmd: ChatCommandDefinition, provider?: string): strin
       commandKey: cmd.key,
       defaultName: cmd.nativeName,
     }) ?? baseName
-  );
-}
-
-function supportsNativeProvider(cmd: ChatCommandDefinition, provider?: string): boolean {
-  if (!cmd.nativeProviders?.length || !provider) {
-    return true;
-  }
-  return cmd.nativeProviders.some(
-    (candidate) => normalizeOptionalLowercaseString(candidate) === provider,
   );
 }
 
@@ -211,6 +205,7 @@ export async function buildCommandsListResult(params: {
     if (
       nameSurface === "native" &&
       cmd.scope !== "text" &&
+      provider &&
       !supportsNativeProvider(cmd, provider)
     ) {
       continue;

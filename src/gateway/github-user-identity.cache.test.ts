@@ -7,12 +7,8 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
-import {
-  getUserProfileDisplay,
-  getUserProfileListItem,
-  setDisplayName,
-  setUserProfileRole,
-} from "../state/user-profiles.js";
+import { setDisplayName, setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { getUserProfileDisplay, getUserProfileListItem } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createAuthenticatedGitHubIdentitySync } from "./github-user-identity.js";
 import { resolveAuthenticatedHttpUserProfile } from "./http-auth-user-profile.js";

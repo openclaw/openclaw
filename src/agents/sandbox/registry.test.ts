@@ -33,6 +33,7 @@ import {
   readRegistryEntry,
   removeBrowserRegistryEntry,
   removeRegistryEntry,
+  removeSandboxRegistryGeneration,
   updateBrowserRegistry,
   updateRegistry,
 } from "./registry.js";
@@ -94,6 +95,29 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 describe("registry race safety", () => {
+  it("settles browser reservation and activity in workers with captured immutable fields", async () => {
+    // Admit the schema before observing the runtime write boundary.
+    await updateRegistry(containerEntry());
+    const hostSql = vi.spyOn(sqliteQueries, "executeSqliteQuerySync").mockImplementation(() => {
+      throw new Error("Browser registry writes must not execute SQL on the host");
+    });
+    try {
+      const entry = browserEntry({ workspaceDir: "/original/workspace", cdpPort: 0 });
+      const reservation = updateBrowserRegistry(entry);
+      entry.image = "changed-after-dispatch";
+      entry.workspaceDir = "/changed-after-dispatch";
+      await reservation;
+      await updateBrowserRegistry(
+        browserEntry({ createdAtMs: 99, lastUsedAtMs: 2, image: "ignored" }),
+      );
+      await expect(readBrowserRegistry()).resolves.toEqual({
+        entries: [browserEntry({ workspaceDir: "/original/workspace", lastUsedAtMs: 2 })],
+      });
+    } finally {
+      hostSql.mockRestore();
+    }
+  });
+
   it("retains exact browser workspace custody and rejects a rebound owner", async () => {
     await updateBrowserRegistry(browserEntry({ workspaceDir: "/private/workspace" }));
     await updateBrowserRegistry(browserEntry({ lastUsedAtMs: 2 }));
@@ -341,16 +365,25 @@ describe("registry race safety", () => {
     ).toEqual(["browser-a", "browser-b"]);
   });
 
-  it("prevents concurrent browser remove/update from resurrecting deleted entries", async () => {
-    await updateBrowserRegistry(browserEntry({ containerName: "browser-x" }));
+  it.each(["name", "generation"] as const)(
+    "prevents a queued browser update from overtaking %s removal",
+    async (removal) => {
+      const entry = browserEntry({ containerName: "browser-x" });
+      await updateBrowserRegistry(entry);
+      await updateRegistry(containerEntry({ containerName: "browser-x" }));
+      // Neither call is awaited: removal must follow the already accepted activity write.
+      const updatePromise = updateBrowserRegistry({ ...entry, lastUsedAtMs: 2 });
+      const removePromise =
+        removal === "name"
+          ? removeBrowserRegistryEntry("browser-x")
+          : removeSandboxRegistryGeneration("browser", entry, () => {});
+      await Promise.all([updatePromise, removePromise]);
 
-    const updatePromise = updateBrowserRegistry(
-      browserEntry({ containerName: "browser-x", configHash: "updated" }),
-    );
-    const removePromise = removeBrowserRegistryEntry("browser-x");
-    await Promise.all([updatePromise, removePromise]);
-
-    const registry = await readBrowserRegistry();
-    expect(registry.entries).toHaveLength(0);
-  });
+      const registry = await readBrowserRegistry();
+      expect(registry.entries).toHaveLength(0);
+      await expect(readRegistryEntry("browser-x")).resolves.toMatchObject({
+        containerName: "browser-x",
+      });
+    },
+  );
 });

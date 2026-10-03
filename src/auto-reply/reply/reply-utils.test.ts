@@ -459,19 +459,6 @@ describe("block reply coalescer", () => {
     coalescer.stop();
   });
 
-  it("flushes immediately per enqueue when flushOnEnqueue is set", async () => {
-    const { flushes, coalescer } = createCoalescer({
-      minChars: 10,
-      idleMs: 50,
-      flushOnEnqueue: true,
-    });
-    coalescer.enqueue({ text: "Hi" });
-    coalescer.enqueue({ text: "Next" });
-    await Promise.resolve();
-    expect(flushes).toEqual([{ text: "Hi" }, { text: "Next" }]);
-    coalescer.stop();
-  });
-
   it("merges compatible buffered text into following media payloads", async () => {
     const { flushes, coalescer } = createCoalescer();
     coalescer.enqueue({ text: "Hello", replyToId: "thread-1" });

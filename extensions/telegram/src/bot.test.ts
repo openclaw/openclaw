@@ -1,7 +1,13 @@
+import {
+  createEmptyPluginRegistry,
+  withPluginRuntimeRegistryScope,
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
+  registerPluginCommand,
 } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -1228,6 +1234,7 @@ describe("createTelegramBot", () => {
       20,
       expect.stringContaining(`${INFO_EMOJI} Commands (2/`),
       {
+        parse_mode: "HTML",
         reply_markup: {
           inline_keyboard: [
             [
@@ -1786,6 +1793,44 @@ describe("createTelegramBot", () => {
     expect(replySpy).not.toHaveBeenCalled();
     expect(sendMessageSpy).not.toHaveBeenCalled();
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-expired-approval");
+  });
+
+  it("keeps hyphenated plugin names as code when command pagination is edited", async () => {
+    await withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), async () => {
+      expect(
+        registerPluginCommand("memory-fixture", {
+          name: "active-memory",
+          description: "Inspect memory <scope>",
+          handler: async () => ({ text: "memory" }),
+        }),
+      ).toEqual({ ok: true });
+      const config = makeTelegramConfig(
+        { dmPolicy: "open", allowFrom: ["*"] },
+        { agents: { defaults: { userTimezone: "UTC" } } },
+      );
+      loadConfig.mockReturnValue(config);
+      const callbackHandler = await createCallbackHandler({ config });
+      const page = buildCommandsMessagePaginated(config, [], {
+        surface: "telegram",
+        forcePaginatedList: true,
+        page: Number.MAX_SAFE_INTEGER,
+      });
+      expect(page.text).toContain("active-memory");
+      await callbackHandler(
+        createTelegramCallbackContext({
+          id: "cbq-command-code",
+          data: `commands_page_${page.currentPage}:main`,
+          message: { message_id: 17 },
+        }),
+      );
+      expect(editMessageTextSpy).toHaveBeenCalledWith(
+        1234,
+        17,
+        expect.stringContaining("<code>/active-memory</code>"),
+        expect.objectContaining({ parse_mode: "HTML" }),
+      );
+      expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain("Inspect memory &lt;scope&gt;");
+    });
   });
 
   it("ignores unsafe command pagination pages", async () => {

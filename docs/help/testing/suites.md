@@ -61,6 +61,11 @@ Think of the suites as "increasing realism" (and increasing flakiness/cost).
     `runtime-api.js` fallback behavior with generated tiny plugin fixtures,
     not real bundled plugin source APIs. Real plugin API loads belong in
     plugin-owned contract/integration suites.
+  - Native plugin resolver suites run in `plugins-native-loader` on Node and Bun,
+    without shared source-loader overrides. A global Bun `--tsconfig-override`
+    can resolve denied fixture aliases into checkout source and bypass the
+    ownership boundary the suite is testing. Bun's native workers also disable
+    automatic package installation so missing fixture dependencies stay missing.
 
 Native dependency policy:
 
@@ -356,6 +361,7 @@ Use the ordinary local config, not the CI-only prebuilt config. The adapter uses
 - Config: `test/vitest/vitest.live.config.ts`
 - Files: `src/**/*.live.test.ts`, `test/**/*.live.test.ts`, and bundled-plugin live tests under `extensions/`
 - Default: **enabled** by `pnpm test:live` (sets `OPENCLAW_LIVE_TEST=1`)
+- Runtime: Node by default; `OPENCLAW_VITEST_RUNTIME=bun pnpm test:live` selects the Bun executable on `PATH` for Vitest and its workers, using the same runtime selector as the CI test lanes. The live wrapper still runs on Node.
 - Scope:
   - "Does this provider/model actually work _today_ with real creds?"
   - Catch provider format changes, tool-calling quirks, auth issues, and rate limit behavior

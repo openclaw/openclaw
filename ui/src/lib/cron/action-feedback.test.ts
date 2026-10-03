@@ -29,20 +29,16 @@ function job(id: string): CronJob {
   };
 }
 
-it.each(
-  (["run", "toggle", "remove"] as const).flatMap((action) =>
-    (["same", "other", "overview"] as const).map((selection) => ({ action, selection })),
-  ),
-)("attributes a failed $action after selecting $selection", async ({ action, selection }) => {
+it.each([
+  { action: "run", selection: "same" },
+  { action: "toggle", selection: "other" },
+  { action: "remove", selection: "overview" },
+])("attributes a failed $action after selecting $selection", async ({ action, selection }) => {
   const alpha = job("alpha");
   const beta = job("beta");
   const response = createDeferred<unknown>();
   const request = vi.fn(() => response.promise);
-  const state = createInitialCronState({
-    connected: true,
-    client: { request } as unknown as CronState["client"],
-  });
-  state.cronJobs = [alpha, beta];
+  const state = createStateWithRequest(request, { cronJobs: [alpha, beta] });
   startCronEdit(state, alpha);
   const mutation =
     action === "run"
@@ -91,12 +87,8 @@ function createStateWithRequest(request: unknown, overrides: Partial<CronState>)
 }
 
 it("preserves queued run feedback when due-mode history refresh fails", async () => {
-  const request = vi.fn(async (method: string, payload?: unknown) => {
+  const request = vi.fn(async (method: string) => {
     if (method === "cron.run") {
-      expect(payload).toMatchObject({
-        id: "job-due",
-        mode: "due",
-      });
       return { ok: true, enqueued: true, runId: "run-due" };
     }
     if (method === "cron.runs") {

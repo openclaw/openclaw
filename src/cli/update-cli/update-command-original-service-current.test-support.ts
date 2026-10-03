@@ -40,6 +40,7 @@ type Fixture = {
   state: OpenClawTestState;
   rootA: string;
   rootB: string;
+  serviceNodeRunner: string;
   before: PreManagedServiceStop;
   serviceState: GatewayServiceState;
   mocks: {
@@ -160,7 +161,7 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
     "revoked",
     "schema-newer",
   ] as const)("retained own-rebind compensation: %s", async (scenario) => {
-    const { state, rootA, rootB, before, serviceState, mocks } = fixture();
+    const { state, rootA, rootB, serviceNodeRunner, before, serviceState, mocks } = fixture();
     const managedDefinition = structuredClone(serviceState.command!);
     serviceState.command = {
       ...managedDefinition,
@@ -179,7 +180,7 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
         pinScope,
         {
           expected: readDaemonRuntimePinForInstall(pinScope, serviceState.command, true),
-          pin: { runtime: "node", path: process.execPath },
+          pin: { runtime: "node", path: serviceNodeRunner },
         },
         serviceState.command,
       );
@@ -207,7 +208,7 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
                   serviceState.command = {
                     ...originalCommand,
                     programArguments: [
-                      process.execPath,
+                      serviceNodeRunner,
                       path.join(rootB, "dist/index.js"),
                       "gateway",
                     ],

@@ -19,7 +19,6 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
-  readSessionTranscriptActivePathEntryRelation,
   readSessionTranscriptWatermark,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -435,7 +434,6 @@ export function createSessionActivitySummaries(deps: {
         totalMessages: snapshot.totalMessages,
         omittedContent: omitted,
       };
-      let accepted = false;
       const committed = await patchSessionEntryCore(
         scope(state),
         (fresh) => {
@@ -444,29 +442,18 @@ export function createSessionActivitySummaries(deps: {
         },
         {
           preserveActivity: true,
-          shouldCommit: () => {
-            // The accessor revalidates the prepared row in this transaction.
-            // A separate read-only entry probe would rescan the store on a fresh connection.
-            assertCurrentOwner(state, ref);
-            const latest = readSessionTranscriptWatermark(transcriptScope);
-            if (
-              latest.generation !== summary.generation ||
-              (summary.leafEntryId &&
-                !["exact", "ancestor"].includes(
-                  readSessionTranscriptActivePathEntryRelation(
-                    transcriptScope,
-                    summary.leafEntryId,
-                  ),
-                ))
-            ) {
-              return false;
-            }
-            accepted = true;
-            return true;
+          workerGuard: {
+            assertCurrent: () => assertCurrentOwner(state, ref),
+            shouldCommitIf: {
+              kind: "transcript",
+              sessionId: state.sessionId,
+              generation: summary.generation,
+              leafEntryId: summary.leafEntryId,
+            },
           },
         },
       );
-      if (!committed || !accepted || !current(state)) {
+      if (!committed || !current(state)) {
         state.dirty = true;
         return;
       }

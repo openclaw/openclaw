@@ -6,6 +6,8 @@ import {
   classifyAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
+import { normalizeAgentRunTerminalReceipt } from "../../agents/agent-run-terminal-receipt.js";
+import { normalizeAgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.js";
 import type { PreparedAgentCommandRuntimeContext } from "../../agents/command/prepare.js";
 import {
   createCronCreatorAuthorityCapability,
@@ -34,7 +36,6 @@ import { setGatewayDedupeEntries } from "./agent-dedupe.js";
 import { captureAgentJobSession } from "./agent-job.js";
 import { createAgentRunDiagnostics } from "./agent-run-diagnostics.js";
 import { readAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
-import { readFollowupTerminalReply } from "./agent-run-dispatch-followup.js";
 import {
   isGatewayAgentAbortRejection,
   projectRejectedGatewayStatus,
@@ -44,10 +45,6 @@ import {
 } from "./agent-run-dispatch-outcome.js";
 import { bindGatewayAgentTerminalProducer } from "./agent-run-terminal-producer.js";
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
-
-export function resolveAbortedAgentStopReason(entry?: ChatAbortControllerEntry): string {
-  return entry?.abortStopReason?.trim() || "rpc";
-}
 
 export function dispatchAgentRunFromGateway(params: {
   assertCurrent?: () => void;
@@ -275,12 +272,20 @@ export function dispatchAgentRunFromGateway(params: {
         RESOLVED_GATEWAY_STATUS_BY_TERMINAL_CLASSIFICATION[
           classifyAgentRunTerminalOutcome(terminalOutcome)
         ];
+      const terminalReply = normalizeAgentRunTerminalReplySnapshot(result?.meta?.terminalReply);
+      const receipt = normalizeAgentRunTerminalReceipt(result?.meta?.agentMeta?.terminalReceipt);
       await settleFollowup({
         ...terminalOutcome,
         endedAt: terminalOutcome.endedAt ?? Date.now(),
         yielded: result?.meta?.yielded === true,
-        ...readFollowupTerminalReply(params.runId, result?.meta),
+        terminalReply,
+        ...(terminalReply?.disposition === "visible" ? { replyText: terminalReply.text } : {}),
+        ...(receipt?.runId === params.runId && receipt.sourceReplyDelivered
+          ? { sourceReplyDelivered: true as const }
+          : {}),
       });
+      const inputProcessingCompleted =
+        recordedInputCompletion?.reason === "completed" && responseStatus === "ok";
       const payload = {
         runId: params.runId,
         status: responseStatus,
@@ -300,17 +305,13 @@ export function dispatchAgentRunFromGateway(params: {
           ? { providerStarted: terminalOutcome.providerStarted }
           : {}),
         result,
+        ...(inputProcessingCompleted ? { inputProcessingCompleted: true } : {}),
       };
-      const inputProcessingCompleted =
-        recordedInputCompletion?.reason === "completed" && responseStatus === "ok";
       const persistTerminalDedupe = () => {
         publishReplay({
           ts: Date.now(),
           ok: true,
-          payload: {
-            ...payload,
-            ...(inputProcessingCompleted ? { inputProcessingCompleted: true } : {}),
-          },
+          payload: { ...payload },
         });
       };
       const settled = await settle({ terminalOutcome, onRecovered: persistTerminalDedupe });
@@ -337,14 +338,7 @@ export function dispatchAgentRunFromGateway(params: {
       cleanupRunOwner();
       // Send a second res frame (same id) so TS clients with expectFinal can wait.
       // Swift clients will typically treat the first res as the result and ignore this.
-      params.io.emitFinal(
-        [
-          true,
-          { ...payload, ...(inputProcessingCompleted ? { inputProcessingCompleted: true } : {}) },
-          undefined,
-        ],
-        { runId: params.runId },
-      );
+      params.io.emitFinal([true, { ...payload }, undefined], { runId: params.runId });
       return { terminalOutcome, settled };
     })
     .catch(async (cause: unknown) => {

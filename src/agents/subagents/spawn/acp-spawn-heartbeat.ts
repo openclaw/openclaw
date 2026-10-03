@@ -1,14 +1,16 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { DEFAULT_HEARTBEAT_EVERY } from "../../../auto-reply/heartbeat.js";
-import { parseDurationMs } from "../../../cli/parse-duration.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import {
+  resolveHeartbeatConfig,
+  resolveHeartbeatIntervalMs,
+} from "../../../infra/heartbeat-config.js";
 import { isHeartbeatEnabledForAgent } from "../../../infra/heartbeat-summary.js";
 import { areHeartbeatsEnabled } from "../../../infra/heartbeat-wake.js";
 import { deliveryContextFromSession } from "../../../utils/delivery-context.read.js";
 import { hasDeliveryTargetFields } from "../../../utils/delivery-context.shared.js";
-import { resolveAgentConfig, resolveSessionAgentIds } from "../../agent-scope.js";
+import { resolveSessionAgentIds } from "../../agent-scope.js";
 
 export function isHeartbeatEnabledForSessionAgent(params: {
   cfg: OpenClawConfig;
@@ -31,19 +33,13 @@ export function isHeartbeatEnabledForSessionAgent(params: {
     return false;
   }
 
-  const heartbeatEvery =
-    resolveAgentConfig(params.cfg, requesterAgentId)?.heartbeat?.every ??
-    params.cfg.agents?.defaults?.heartbeat?.every ??
-    DEFAULT_HEARTBEAT_EVERY;
-  const trimmedEvery = normalizeOptionalString(heartbeatEvery) ?? "";
-  if (!trimmedEvery) {
-    return false;
-  }
-  try {
-    return parseDurationMs(trimmedEvery, { defaultUnit: "m" }) > 0;
-  } catch {
-    return false;
-  }
+  return (
+    resolveHeartbeatIntervalMs(
+      params.cfg,
+      undefined,
+      resolveHeartbeatConfig(params.cfg, requesterAgentId),
+    ) !== null
+  );
 }
 
 export function hasSessionLocalHeartbeatRelayRoute(params: {
@@ -56,11 +52,8 @@ export function hasSessionLocalHeartbeatRelayRoute(params: {
     return false;
   }
 
-  const heartbeat = {
-    ...params.cfg.agents?.defaults?.heartbeat,
-    ...resolveAgentConfig(params.cfg, params.requesterAgentId)?.heartbeat,
-  };
-  if (heartbeat.target !== "last") {
+  const heartbeat = resolveHeartbeatConfig(params.cfg, params.requesterAgentId);
+  if (heartbeat?.target !== "last") {
     return false;
   }
 

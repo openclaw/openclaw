@@ -61,8 +61,9 @@ describe("dispatch Stop before provider allocation", () => {
     runtimeFactoryMocks.createDiskSpace.mockReturnValue({ read: vi.fn(), version: () => 0 });
     const entry = {
       sessionId: REQUEST.sessionId,
+      updatedAt: 1,
       lifecycleRevision: "original",
-      worktree: { id: "workspace" },
+      worktree: { id: "workspace", branch: "fixture", repoRoot: support.testState.root },
     };
     const target = {
       agentId: REQUEST.agentId,
@@ -99,7 +100,7 @@ describe("dispatch Stop before provider allocation", () => {
     const interrupted = createDeferredCore();
     const targetedAdmission = createDeferredCore();
     const cleanup = new AbortController();
-    const waitForClaim = placements.waitForTurnClaimRelease.bind(placements);
+    const waitForClaim = placements.waitForTurnClaimRelease;
     vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementation((sessionId, options) => {
       const waiting = waitForClaim(sessionId, {
         ...options,
@@ -368,7 +369,7 @@ describe("dispatch Stop before provider allocation", () => {
         expect(harness.environments.createWithRequest).toHaveBeenCalledTimes(
           outcome === "published" ? 1 : 0,
         );
-        expect(placements.listPendingWorkspaceResults()).toEqual([]);
+        expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       } finally {
         release.resolve();
         await Promise.allSettled([moving, stopping]);

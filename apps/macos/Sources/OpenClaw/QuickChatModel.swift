@@ -172,7 +172,6 @@ final class QuickChatModel {
     private(set) var sendAgentID: String?
     private(set) var targetSessionOverride: QuickChatSessionTargetOverride?
     private(set) var agents: [QuickChatAgentDisplay] = []
-    private(set) var defaultAgentID: String?
     private(set) var selectedAgentID: String?
     private(set) var agentDisplay = QuickChatAgentDisplay.placeholder
     private(set) var missingPermissions: [Capability] = []
@@ -772,7 +771,6 @@ final class QuickChatModel {
         let selectedID = resolution.selectedID
 
         self.agents = displays
-        self.defaultAgentID = result.defaultid
         self.selectedAgentID = selectedID
         self.agentsScope = result.scope.value as? String
         self.agentsMainKey = result.mainkey
@@ -801,7 +799,6 @@ final class QuickChatModel {
         self.applyRoutingTarget()
         let modelControlsTask = self.modelControlsTask
         self.agents = []
-        self.defaultAgentID = nil
         self.selectedAgentID = nil
         self.agentsScope = nil
         self.agentsMainKey = nil
@@ -812,7 +809,6 @@ final class QuickChatModel {
             guard self.isCurrentPresentation(id), !Task.isCancelled else { return }
             self.agentDisplay = display
             self.agents = [display]
-            self.defaultAgentID = display.id
             self.selectedAgentID = display.id
         } catch {
             // The fallback session remains sendable even when its optional identity cannot load.

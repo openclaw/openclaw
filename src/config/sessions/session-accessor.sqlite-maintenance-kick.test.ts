@@ -1,14 +1,15 @@
-import { renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as logging from "../../logging/logger.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
 import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -34,7 +35,8 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionKey = "agent:main:age-kick";
 
-afterEach(() => {
+afterEach(async () => {
+  await agentDatabase.closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   resetGatewayWorkAdmission();
   vi.useRealTimers();
@@ -81,7 +83,9 @@ it.each(["before kick", "before immediate", "before periodic", "before another k
       kickSessionEntryMaintenanceAfterWrite(request);
       if (when !== "before immediate") {
         await yieldToEventLoop();
-        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect(
+          dispatch.mock.calls.filter(([{ plan }]) => plan.kind === "maintenance-plan"),
+        ).toHaveLength(1);
         dispatch.mockClear();
       }
     }
@@ -93,6 +97,45 @@ it.each(["before kick", "before immediate", "before periodic", "before another k
     expect(dispatch).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(ageFacts.SESSION_ENTRY_MAINTENANCE_INTERVAL_MS + 1);
     expect(dispatch).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["immediate", "periodic"] as const)(
+  "retires automatic maintenance when database admission is refused before its %s pass",
+  async (when) => {
+    const { request } = createStore();
+    const warn = vi.spyOn(logging.getChildLogger({ subsystem: "session-sqlite" }), "warn");
+    const dispatch = vi.mocked(reclamationRun.runSqliteSessionReclamation);
+    kickSessionEntryMaintenanceAfterWrite(request);
+    if (when === "periodic") {
+      await yieldToEventLoop();
+      expect(
+        dispatch.mock.calls.filter(([{ plan }]) => plan.kind === "maintenance-plan"),
+      ).toHaveLength(1);
+      dispatch.mockClear();
+    }
+    recordAgentDatabaseAdmissions(
+      [
+        {
+          agentId: "main",
+          paths: [request.storePath],
+          code: "agent-database-inspection-pending",
+          reason: "maintenance admission revoked",
+          repairHint: "finish fixture inspection",
+        },
+      ],
+      { source: "startup" },
+    );
+    try {
+      await yieldToEventLoop();
+      await vi.advanceTimersByTimeAsync(ageFacts.SESSION_ENTRY_MAINTENANCE_INTERVAL_MS + 1);
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally {
+      recordAgentDatabaseAdmissions([], { source: "startup" });
+    }
+    await vi.advanceTimersByTimeAsync(ageFacts.SESSION_ENTRY_MAINTENANCE_INTERVAL_MS + 1);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
   },
 );
 
@@ -116,7 +159,9 @@ it("stops input-change retries without automatic maintenance warnings during Gat
   kickSessionEntryMaintenanceAfterWrite(request);
   await yieldToEventLoop();
   await vi.advanceTimersByTimeAsync(ageFacts.SESSION_ENTRY_MAINTENANCE_INTERVAL_MS + 1);
-  expect(dispatch).toHaveBeenCalledTimes(1);
+  expect(dispatch.mock.calls.filter(([{ plan }]) => plan.kind === "maintenance-plan")).toHaveLength(
+    1,
+  );
   expect(warn).not.toHaveBeenCalledWith(
     "SQLite automatic session maintenance failed",
     expect.anything(),
@@ -165,24 +210,23 @@ it("resumes automatic maintenance after Gateway work admission resets", async ()
   dispatch.mockClear();
   kickSessionEntryMaintenanceAfterWrite(request);
   await yieldToEventLoop();
-  expect(dispatch).toHaveBeenCalledTimes(1);
+  expect(dispatch.mock.calls.filter(([{ plan }]) => plan.kind === "maintenance-plan")).toHaveLength(
+    1,
+  );
   await vi.advanceTimersByTimeAsync(1_001);
   expect(loadSessionEntry({ sessionKey, storePath })?.archiveReason).toBe("age-retention");
 });
 
-it("captures warn-mode age facts without constructing or dispatching reclamation", async () => {
+it("does not construct or dispatch maintenance in warn mode", async () => {
   const { request, storePath } = createStore();
   request.maintenanceConfig.mode = "warn";
-  const capture = vi.spyOn(ageFacts, "captureSessionEntryMaintenanceAgeFact");
   const plans = vi.spyOn(reclamation, "createSessionMaintenancePlanningOperation");
   kickSessionEntryMaintenanceAfterWrite(request);
   await yieldToEventLoop();
-  expect(capture).toHaveBeenCalledTimes(1);
   expect(plans).not.toHaveBeenCalled();
   expect(reclamationRun.runSqliteSessionReclamation).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(30 * 60 * 1_000);
   expect(loadSessionEntry({ sessionKey, storePath })?.archivedAt).toBeUndefined();
-  expect(capture).toHaveBeenCalledTimes(1);
 });
 
 it("commits an automatic plan while unrelated writes arrive every 100 ms", async () => {
@@ -377,8 +421,20 @@ it.each(["restore", "import", "insert"] as const)(
   },
 );
 
-it("rechecks foreign backdates at 30 minutes even when ordinary writes keep kicking", async () => {
+it("rechecks foreign backdates at 30 minutes even when ordinary writes keep kicking", async ({
+  signal,
+}) => {
   const { database, request, scope, storePath, updatedAt } = createStore(60 * 60 * 1_000);
+  const archived = createDeferred();
+  const dispatch = vi.mocked(reclamationRun.runSqliteSessionReclamation);
+  const run = dispatch.getMockImplementation()!;
+  dispatch.mockImplementation(async (params) => {
+    const result = await run(params);
+    if (result.kind === "maintenance-plan" && result.value.archived > 0) {
+      archived.resolve();
+    }
+    return result;
+  });
   kickSessionEntryMaintenanceAfterWrite(request);
   await yieldToEventLoop();
   const writer = new DatabaseSync(database.path);
@@ -403,7 +459,7 @@ it("rechecks foreign backdates at 30 minutes even when ordinary writes keep kick
   await vi.advanceTimersByTimeAsync(15 * 60 * 1_000 - 1);
   expect(loadSessionEntry({ sessionKey, storePath })?.archivedAt).toBeUndefined();
   await vi.advanceTimersByTimeAsync(1);
-  await yieldToEventLoop();
+  await withinTest(archived.promise, signal);
   expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
     archiveReason: "age-retention",
   });
@@ -561,97 +617,3 @@ it.each(
     expect(loadSessionEntry({ sessionKey: insertedKey, storePath })?.archivedAt).toBeUndefined();
   }
 });
-
-it("enforces a newly crossed cap while the parent age fact is still warm", async () => {
-  const { database, request, scope, storePath, updatedAt } = createStore();
-  request.maintenanceConfig.maxEntries = 2;
-  kickSessionEntryMaintenanceAfterWrite(request);
-  await yieldToEventLoop();
-  const initial = ageFacts.readSessionEntryMaintenanceAgeFact(
-    database.db,
-    request.maintenanceConfig,
-  );
-  expect(initial).toBeDefined();
-  const olderKey = "agent:main:cap-older";
-  runOpenClawAgentWriteTransaction((owner) => {
-    writeSessionEntry(owner, olderKey, { sessionId: "older", updatedAt: updatedAt - 1 });
-    writeSessionEntry(owner, "agent:main:cap-newer", { sessionId: "newer", updatedAt });
-  }, scope);
-  expect(readSessionEntryCount(database, { includeArchived: false })).toBe(3);
-  expect(
-    ageFacts.readSessionEntryMaintenanceAgeFact(database.db, request.maintenanceConfig)?.next.at,
-  ).toBeGreaterThan(Date.now());
-
-  kickSessionEntryMaintenanceAfterWrite(request);
-  await yieldToEventLoop();
-  expect(readSessionEntryCount(database, { includeArchived: false })).toBe(2);
-  expect(loadSessionEntry({ sessionKey: olderKey, storePath })).toMatchObject({
-    archiveReason: "active-session-cap",
-  });
-  expect(loadSessionEntry({ sessionKey, storePath })?.archivedAt).toBeUndefined();
-});
-
-it.runIf(process.platform !== "win32").each(["before preparation", "after preparation"] as const)(
-  "does not accept a warm no-op after the database path is replaced %s",
-  async (when) => {
-    const { database, request, storePath } = createStore();
-    kickSessionEntryMaintenanceAfterWrite(request);
-    await yieldToEventLoop();
-    expect(
-      ageFacts.readSessionEntryMaintenanceAgeFact(database.db, request.maintenanceConfig),
-    ).toBeDefined();
-    const heldPath = `${database.path}.held`;
-    const replacementPath = `${database.path}.replacement`;
-    writeFileSync(replacementPath, "synthetic replacement; never opened as SQLite");
-    let replaced = false;
-    const replacePath = () => {
-      renameSync(database.path, heldPath);
-      renameSync(replacementPath, database.path);
-      replaced = true;
-    };
-    const restorePath = () => {
-      if (replaced) {
-        renameSync(database.path, replacementPath);
-        renameSync(heldPath, database.path);
-        replaced = false;
-      }
-    };
-    const dispatch = vi.mocked(reclamationRun.runSqliteSessionReclamation);
-    const run = dispatch.getMockImplementation();
-    if (!run) {
-      throw new Error("Expected the fixture's in-process reclamation adapter");
-    }
-    dispatch.mockClear();
-    dispatch.mockImplementation((params) => {
-      // A stale path must reach ordinary reclamation validation, not settle as a
-      // successful no-op. Restore it before exercising the real fixture operation.
-      restorePath();
-      return run(params);
-    });
-    if (when === "before preparation") {
-      replacePath();
-    } else {
-      const capture = ageFacts.captureSessionEntryMaintenanceAgeFact;
-      vi.spyOn(ageFacts, "captureSessionEntryMaintenanceAgeFact").mockImplementationOnce(
-        (...args) => {
-          const result = capture(...args);
-          queueMicrotask(replacePath);
-          return result;
-        },
-      );
-    }
-    try {
-      kickSessionEntryMaintenanceAfterWrite(request);
-      await yieldToEventLoop();
-      if (when === "after preparation") {
-        await vi.advanceTimersByTimeAsync(1_000);
-        await yieldToEventLoop();
-      }
-      expect(dispatch).toHaveBeenCalledTimes(1);
-      expect(replaced).toBe(false);
-      expect(loadSessionEntry({ sessionKey, storePath })?.archivedAt).toBeUndefined();
-    } finally {
-      restorePath();
-    }
-  },
-);

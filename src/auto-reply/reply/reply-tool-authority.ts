@@ -342,7 +342,8 @@ function assertCurrentOperatorAuthority(authority: AdmittedRunOperatorAuthority 
   }
 }
 
-function resolveReplyToolAuthorityInputFingerprint(
+/** Fingerprints the complete model-facing tool authority owned by one queued turn. */
+export function resolveFollowupRunToolAuthorityFingerprint(
   snapshot: ReplyToolAuthorityInput,
   route?: ReplyToolAuthorityRoute,
 ): string {
@@ -407,14 +408,6 @@ function resolveReplyToolAuthorityInputFingerprint(
     .digest("hex");
 }
 
-/** Fingerprints the complete model-facing tool authority owned by one queued turn. */
-export function resolveFollowupRunToolAuthorityFingerprint(
-  run: ReplyToolAuthorityInput,
-  route?: ReplyToolAuthorityRoute,
-): string {
-  return resolveReplyToolAuthorityInputFingerprint(snapshotFollowupRunToolAuthority(run), route);
-}
-
 /** Capture execution policy once; incoming overlays replace only caller-owned facts. */
 export function prepareReplyToolAuthority(
   run: ReplyToolAuthorityInput,
@@ -429,12 +422,15 @@ export function prepareReplyToolAuthority(
       gatewayUiCommandTarget: snapshot.run.gatewayUiCommandTarget,
     },
     requestedRoute: Object.freeze({ provider: snapshot.run.provider, model: snapshot.run.model }),
-    fingerprint: (route) => resolveReplyToolAuthorityInputFingerprint(snapshot, route),
+    fingerprint: (route) => resolveFollowupRunToolAuthorityFingerprint(snapshot, route),
     project: (overlay, route) => {
       // Steering retains the running turn's authority and browser bindings across reconnects.
       assertCurrentOperatorAuthority(snapshot.operatorAuthority);
       const incoming = applyReplyToolAuthorityOverlay(snapshot, overlay);
-      return resolveReplyToolAuthorityInputFingerprint(narrow ? narrow(incoming) : incoming, route);
+      return resolveFollowupRunToolAuthorityFingerprint(
+        narrow ? narrow(incoming) : incoming,
+        route,
+      );
     },
   };
 }

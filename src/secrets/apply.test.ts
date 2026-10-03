@@ -1003,7 +1003,7 @@ describe("secrets apply", () => {
         },
         "anthropic:claude-cli": {
           provider: "claude-cli",
-          mode: "oauth",
+          type: "oauth",
         },
       },
       order: {

@@ -63,7 +63,7 @@ const sessionSuspensionMocks = vi.hoisted(() => ({
 vi.mock("./session-suspension.js", () => sessionSuspensionMocks);
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => {
   const { createEmptyPluginMetadataSnapshot } =
-    await import("./test-helpers/embedded-agent-runner-e2e-mocks.js");
+    await import("../plugins/plugin-metadata-empty.test-support.js");
   const snapshot = {
     ...createEmptyPluginMetadataSnapshot(),
     policyHash: "model-fallback-probe-test-empty-plugin-policy",

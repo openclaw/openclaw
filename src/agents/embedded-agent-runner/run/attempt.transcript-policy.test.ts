@@ -40,6 +40,7 @@ describe("resolveAttemptTranscriptPolicy", () => {
     const runtimePlanModelContext = {
       workspaceDir: "/tmp/openclaw-transcript-policy",
       modelApi: "anthropic-messages",
+      directApiKey: true,
     };
 
     expect(

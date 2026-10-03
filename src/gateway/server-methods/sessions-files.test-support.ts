@@ -3,11 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, vi } from "vitest";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 
 type SessionFilesMethod =
   | "sessions.files.list"
   | "sessions.files.get"
+  | "sessions.files.assets"
   | "sessions.files.set"
   | "sessions.files.reveal";
 
@@ -15,55 +16,12 @@ type ResponderCall = { ok: boolean; payload?: unknown; error?: unknown };
 type ReturnValueMock = { mockReturnValue: (value: unknown) => unknown };
 
 export const IMAGE_PREVIEW_FIXTURES = [
-  {
-    format: "AVIF",
-    mimeType: "image/avif",
-    bytes: Buffer.from([
-      0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66, 0x00, 0x00, 0x00,
-      0x00, 0x61, 0x76, 0x69, 0x66,
-    ]),
-  },
   { format: "GIF", mimeType: "image/gif", bytes: Buffer.from("GIF89a", "ascii") },
-  {
-    format: "JPEG",
-    mimeType: "image/jpeg",
-    bytes: Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]),
-  },
-  {
-    format: "PNG",
-    mimeType: "image/png",
-    bytes: Buffer.from(
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
-      "base64",
-    ),
-  },
-  {
-    format: "WebP",
-    mimeType: "image/webp",
-    bytes: Buffer.concat([Buffer.from("RIFF", "ascii"), Buffer.alloc(4), Buffer.from("WEBP")]),
-  },
 ] as const;
 
 export const TEXT_PREVIEW_FIXTURES = [
   { format: "RTF", mimeType: "application/rtf", content: "{\\rtf1\\ansi hello}" },
   { format: "XML", mimeType: "text/xml", content: '<?xml version="1.0"?><root/>' },
-  { format: "WebVTT", mimeType: "text/vtt", content: "WEBVTT\n\n00:00.000 --> 00:01.000\nHi" },
-  { format: "vCard", mimeType: "text/vcard", content: "BEGIN:VCARD\nVERSION:4.0\nEND:VCARD\n" },
-  {
-    format: "iCalendar",
-    mimeType: "text/calendar",
-    content: "BEGIN:VCALENDAR\nVERSION:2.0\nEND:VCALENDAR\n",
-  },
-  {
-    format: "registry",
-    mimeType: "application/x-ms-regedit",
-    content: "REGEDIT4\r\n\r\n[HKEY_CURRENT_USER\\Software]",
-  },
-  {
-    format: "ASCII STL",
-    mimeType: "model/stl",
-    content: "solid test\nfacet normal 0 0 0\nendfacet\nendsolid test\n",
-  },
 ] as const;
 
 function createResponder() {
@@ -79,6 +37,12 @@ export function createSessionFilesHandlerInvoker(handlers: GatewayRequestHandler
     method: SessionFilesMethod,
     params: Record<string, unknown>,
     context: Record<string, unknown> = {},
+    options: Partial<
+      Pick<
+        GatewayRequestHandlerOptions,
+        "client" | "withSessionTurnAuthority" | "sessionMutationAuthorization"
+      >
+    > = {},
   ) => {
     const responder = createResponder();
     await handlers[method]?.({
@@ -91,6 +55,7 @@ export function createSessionFilesHandlerInvoker(handlers: GatewayRequestHandler
         getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
         ...context,
       } as never,
+      ...options,
     });
     return responder.calls;
   };

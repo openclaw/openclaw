@@ -1,17 +1,4 @@
-// Legacy-source readers and importer for the one-time doctor migration of
-// pre-claimable-dedupe inbound replay markers. Losing those markers would
-// re-dispatch already-handled events on the first stale /sync or decrypt
-// replay after upgrade. Two shipped sources exist:
-// - >=2026.6 tags persisted rows in each account storage root's SQLite DB
-//   (namespace `inbound-dedupe`, key `<accountId>:<sha256>`, value
-//   `{roomId, eventId, ts}`), plus `inbound-dedupe-migrations` import markers.
-// - <=2026.5 tags wrote `inbound-dedupe.json` beside the account sync store;
-//   the retired runtime importer read it lazily, so upgrades that skip the
-//   SQLite era can still carry the raw file.
-// The PluginDoctorStateMigration itself lives in doctor-contract-api.ts, which
-// also owns the legacy-file archival write.
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 // Doctor enumeration cold-loads this closure; persistent-dedupe pulls the
@@ -19,19 +6,17 @@ import type { DatabaseSync } from "node:sqlite";
 import type { PersistentDedupeEntry } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeMatrixStorageMetadata } from "../client/storage-metadata.js";
+import { describeRetiredMatrixState } from "../retired-state.js";
 import { walkMatrixStateFiles } from "../state-layout-walk.js";
 
 const LEGACY_SQLITE_NAMESPACE = "inbound-dedupe";
 const LEGACY_MARKERS_NAMESPACE = "inbound-dedupe-migrations";
-const LEGACY_JSON_VERSION = 1;
 const MATRIX_PLUGIN_ID = "matrix";
 const MIGRATION_COMPLETION_NAMESPACE = "inbound-dedupe-migration-state";
 const MIGRATION_COMPLETION_KEY = "sqlite-json-to-claimable-v1";
 const STATE_DATABASE_RELATIVE_PATH = path.join("state", "openclaw.sqlite");
-const STORAGE_META_FILENAME = "storage-meta.json";
 
-export const MATRIX_LEGACY_INBOUND_DEDUPE_FILENAME = "inbound-dedupe.json";
+const MATRIX_LEGACY_INBOUND_DEDUPE_FILENAME = "inbound-dedupe.json";
 
 export type MatrixInboundDedupeMigrationIo = {
   context: PluginDoctorStateMigrationContext;
@@ -47,7 +32,6 @@ export type LegacyInboundDedupeMarker = {
 
 type MatrixInboundDedupeSourceRoots = {
   sqliteRoots: string[];
-  jsonRoots: string[];
 };
 
 type MatrixInboundDedupeSourceCensus =
@@ -124,7 +108,6 @@ export async function collectMatrixInboundDedupeSources(
 ): Promise<MatrixInboundDedupeSourceCensus> {
   const matrixRoot = path.resolve(stateDir, "matrix");
   const sqliteRoots = new Set<string>();
-  const jsonRoots = new Set<string>();
   const { entries, failedDirs } = await walkMatrixStateFiles(
     stateDir,
     (name, depth) =>
@@ -135,7 +118,7 @@ export async function collectMatrixInboundDedupeSources(
   );
   for (const entry of entries) {
     if (entry.name === MATRIX_LEGACY_INBOUND_DEDUPE_FILENAME) {
-      jsonRoots.add(path.dirname(entry.path));
+      throw new Error(describeRetiredMatrixState(entry.path));
     } else {
       sqliteRoots.add(path.dirname(path.dirname(entry.path)));
     }
@@ -147,7 +130,6 @@ export async function collectMatrixInboundDedupeSources(
   const isAccountRoot = (root: string) => root !== matrixRoot;
   const roots = {
     sqliteRoots: [...sqliteRoots].filter(isAccountRoot).toSorted(),
-    jsonRoots: [...jsonRoots].filter(isAccountRoot).toSorted(),
   };
   return warnings.length === 0
     ? { status: "complete", ...roots }
@@ -303,75 +285,7 @@ export async function verifyMatrixInboundDedupeSourcesRetired(stateDir: string):
       );
     }
   }
-  for (const storageRootDir of remaining.jsonRoots) {
-    warnings.push(`Matrix inbound dedupe JSON remains after retirement for ${storageRootDir}`);
-  }
   return warnings;
-}
-
-async function resolveJsonRootAccountId(storageRootDir: string): Promise<string> {
-  // The JSON era predates the per-root SQLite stores, so account identity comes
-  // from storage-meta.json (or its doctor-archived copy when the metadata
-  // migration already ran). Pre-metadata roots belong to the legacy single
-  // account, which used the literal "default" account id.
-  for (const filename of [STORAGE_META_FILENAME, `${STORAGE_META_FILENAME}.migrated`]) {
-    try {
-      const metadata = normalizeMatrixStorageMetadata(
-        JSON.parse(await fs.readFile(path.join(storageRootDir, filename), "utf8")) as unknown,
-      );
-      if (metadata?.accountId) {
-        return metadata.accountId;
-      }
-    } catch {
-      // Try the next metadata source.
-    }
-  }
-  return "default";
-}
-
-/**
- * Reads one storage root's legacy inbound-dedupe.json markers. Throws on file
- * read errors so a transiently unreadable file is never retired unread, and
- * returns null for malformed content so the caller can archive it explicitly.
- */
-export async function readLegacyInboundDedupeJsonSource(
-  storageRootDir: string,
-): Promise<LegacyInboundDedupeMarker[] | null> {
-  const jsonPath = path.join(storageRootDir, MATRIX_LEGACY_INBOUND_DEDUPE_FILENAME);
-  const raw = await fs.readFile(jsonPath, "utf8");
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw) as unknown;
-  } catch {
-    return null;
-  }
-  if (
-    !isRecord(parsed) ||
-    parsed.version !== LEGACY_JSON_VERSION ||
-    !Array.isArray(parsed.entries)
-  ) {
-    return null;
-  }
-  const accountId = await resolveJsonRootAccountId(storageRootDir);
-  const markers: LegacyInboundDedupeMarker[] = [];
-  for (const entry of parsed.entries) {
-    if (!isRecord(entry) || typeof entry.key !== "string") {
-      continue;
-    }
-    // Legacy JSON keys are `roomId|eventId`; event ids never contain "|".
-    const separator = entry.key.indexOf("|");
-    if (separator <= 0) {
-      continue;
-    }
-    const roomId = entry.key.slice(0, separator).trim();
-    const eventId = entry.key.slice(separator + 1).trim();
-    const ts = normalizeLegacyTimestamp(entry.ts);
-    if (!roomId || !eventId || ts === null) {
-      continue;
-    }
-    markers.push({ accountId, roomId, eventId, ts });
-  }
-  return markers;
 }
 
 /**

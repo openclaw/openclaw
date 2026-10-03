@@ -10,7 +10,8 @@ import {
 } from "../../../sessions/input-provenance.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { resolveTranscriptPolicy, type TranscriptPolicy } from "../../transcript-policy.js";
+import { resolveTranscriptPolicy } from "../../transcript-policy.js";
+import type { TranscriptPolicy } from "../../transcript-policy.types.js";
 import { isRunnerToolCallBlock } from "./attempt-tool-call-block-type.js";
 
 export type UserTranscriptContext = {
@@ -96,7 +97,7 @@ export function resolveUserTranscriptMessages(
   // Reserve object-identity matches before structural fallback so duplicate
   // timestamp/text turns cannot consume a later message's exact pairing.
   for (const [index, message] of messages.entries()) {
-    if (message.role !== "user") {
+    if (message.role !== "user" || message.operatorMessage) {
       continue;
     }
     const context = byRuntimeMessage.get(message)?.shift();
@@ -124,7 +125,7 @@ export function resolveUserTranscriptMessages(
   }
   const activeUserMessageIndex = findActiveUserMessageIndex(messages);
   for (const [index, message] of messages.entries()) {
-    if (message.role !== "user" || resolved[index]) {
+    if (message.role !== "user" || message.operatorMessage || resolved[index]) {
       continue;
     }
     const timestamp = message.timestamp;
@@ -286,7 +287,7 @@ export function projectPersistedSenderContext(
 ): AgentMessage[] {
   let changed = false;
   const nextMessages = messages.map((message, index) => {
-    if (message.role !== "user") {
+    if (message.role !== "user" || message.operatorMessage) {
       return message;
     }
     const transcriptMessage = transcriptMessages?.[index] ?? message;
@@ -323,7 +324,7 @@ export function findActiveUserMessageIndex(messages: AgentMessage[]): number {
     if (!message) {
       continue;
     }
-    if (message.role === "user") {
+    if (message.role === "user" && !message.operatorMessage) {
       return index;
     }
     if (
@@ -357,6 +358,7 @@ export function resolveAttemptTranscriptPolicy(params: {
     params.runtimePlan?.transcript.resolvePolicy(params.runtimePlanModelContext) ??
     resolveTranscriptPolicy({
       modelApi: params.runtimePlanModelContext.modelApi,
+      directApiKey: params.runtimePlanModelContext.directApiKey,
       provider: params.provider,
       modelId: params.modelId,
       config: params.config,

@@ -9,11 +9,13 @@ import {
 } from "../../../state/openclaw-state-db.js";
 import { isDeliverySuspended } from "../registry/subagent-delivery-state.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { bindSubagentRunRuntimeKey } from "../registry/subagent-run-generation.js";
 import {
   blockSubagentCompletionDelivery,
   settleRequesterCompletionBatch,
 } from "./subagent-completion-admission.store.js";
 import {
+  currentCompletionRun,
   armRequesterWake,
   reopenCompletionFixtureOwners,
   records,
@@ -73,6 +75,7 @@ describe("requester receipts after completion expiry", () => {
         databaseOptions: { database },
       }),
     ).toBe(true);
+    input.subagent = currentCompletionRun(input);
     expect(isDeliverySuspended(input.subagent)).toBe(true);
     return input;
   }
@@ -95,11 +98,11 @@ describe("requester receipts after completion expiry", () => {
 
     await settle(input, true);
 
-    expect(subagentRuns.get(input.subagent.runId)).toBe(input.subagent);
-    expect(input.subagent.cleanupHandled).toBe(true);
-    expect(input.subagent.cleanupCompletedAt).toBeUndefined();
-    expect(input.subagent.requesterSettleWake).toBeUndefined();
-    expect(input.subagent.delivery?.status).toBe("delivered");
+    expect(subagentRuns.get(input.subagent.runId)).not.toBe(input.subagent);
+    expect(currentCompletionRun(input).cleanupHandled).toBe(true);
+    expect(currentCompletionRun(input).cleanupCompletedAt).toBeUndefined();
+    expect(currentCompletionRun(input).requesterSettleWake).toBeUndefined();
+    expect(currentCompletionRun(input).delivery?.status).toBe("delivered");
     database = await reopenCompletionFixtureOwners();
     // Process-local custody cannot survive a restart without durable completion.
     expect(subagentRuns.get(input.subagent.runId)?.cleanupHandled).toBe(false);
@@ -119,7 +122,7 @@ describe("requester receipts after completion expiry", () => {
         await driver.run();
         expect(driver.warn).not.toHaveBeenCalled();
         expect(driver.wake).toHaveBeenCalledOnce();
-        expect(isDeliverySuspended(input.subagent)).toBe(false);
+        expect(isDeliverySuspended(currentCompletionRun(input))).toBe(false);
         database = await reopenCompletionFixtureOwners();
         const stored = subagentRuns.get(input.subagent.runId);
         expect(stored?.delivery?.status).toBe("delivered");
@@ -164,7 +167,7 @@ describe("requester receipts after completion expiry", () => {
 
       databaseOptions: { database },
     });
-    await expect(settle(input, true)).rejects.toThrow("owner changed before settlement");
+    await expect(settle(input, true)).rejects.toThrow(/(owner|cohort) changed before mutation/);
     database = await reopenCompletionFixtureOwners();
     expect(subagentRuns.get(input.subagent.runId)?.delivery).toMatchObject({
       status: "suspended",
@@ -173,22 +176,24 @@ describe("requester receipts after completion expiry", () => {
     expect(subagentRuns.get(input.subagent.runId)?.requesterSettleWake).toBeDefined();
   });
 
-  it.each(["run", "execution"] as const)(
-    "rejects a changed native %s owner",
+  it.each(["run", "execution", "host incarnation"] as const)(
+    "rejects a changed completion %s owner",
     async (changedOwner) => {
       const input = await suspend();
       const changed = structuredClone(input.subagent);
       if (changedOwner === "run") {
         changed.taskRunId = "replacement-source-run";
+      } else if (changedOwner === "host incarnation") {
+        bindSubagentRunRuntimeKey(changed, {});
+        subagentRuns.set(changed.runId, changed);
       } else {
         changed.endedReason = "subagent-killed";
         changed.execution.outcome = { status: "error", error: "cancelled by the requester" };
       }
-      seedSubagentCompletionDelivery({
-        subagent: changed,
-        databaseOptions: { database },
-      });
-      await expect(settle(input, true)).rejects.toThrow("owner changed before settlement");
+      if (changedOwner !== "host incarnation") {
+        seedSubagentCompletionDelivery({ subagent: changed, databaseOptions: { database } });
+      }
+      await expect(settle(input, true)).rejects.toThrow(/(owner|cohort) changed before mutation/);
       database = await reopenCompletionFixtureOwners();
       expect(isDeliverySuspended(subagentRuns.get(input.subagent.runId)!)).toBe(true);
       expect(subagentRuns.get(input.subagent.runId)?.requesterSettleWake).toBeDefined();
@@ -203,7 +208,7 @@ describe("requester receipts after completion expiry", () => {
     try {
       await expect(settle(input, true)).rejects.toThrow("ack write cut");
       expect(isDeliverySuspended(input.subagent)).toBe(true);
-      expect(input.subagent.requesterSettleWake).toBeDefined();
+      expect(currentCompletionRun(input).requesterSettleWake).toBeDefined();
     } finally {
       database.db.exec("DROP TRIGGER reject_ack");
     }

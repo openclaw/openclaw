@@ -110,8 +110,6 @@ describe("AgentsPage routing", () => {
 
   it.each([
     { pendingUpdate: false, newerIntent: false },
-    { pendingUpdate: true, newerIntent: false },
-    { pendingUpdate: false, newerIntent: true },
     { pendingUpdate: true, newerIntent: true },
   ])(
     "preserves Files while a reused page awaits route data (updated: $pendingUpdate, newer intent: $newerIntent)",

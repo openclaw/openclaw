@@ -7,7 +7,7 @@ import {
   uniqueStrings,
 } from "../../packages/normalization-core/src/string-normalization.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./public-surface-runtime.js";
+import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./package-entrypoints.js";
 
 export type BundledPluginPathPair = {
   source: string;
@@ -123,23 +123,12 @@ export function resolveBundledPluginScanDir(params: {
   const runtimeDir = path.join(params.packageRoot, "dist-runtime", "extensions");
   const builtDir = path.join(params.packageRoot, "dist", "extensions");
   if (params.runningFromBuiltArtifact) {
-    if (fs.existsSync(builtDir)) {
-      return builtDir;
-    }
-    if (fs.existsSync(runtimeDir)) {
-      return runtimeDir;
-    }
+    return [builtDir, runtimeDir, sourceDir].find((candidate) => fs.existsSync(candidate));
   }
   if (fs.existsSync(sourceDir)) {
     return sourceDir;
   }
-  if (fs.existsSync(runtimeDir) && fs.existsSync(builtDir)) {
-    return runtimeDir;
-  }
-  if (fs.existsSync(builtDir)) {
-    return builtDir;
-  }
-  return undefined;
+  return fs.existsSync(builtDir) ? (fs.existsSync(runtimeDir) ? runtimeDir : builtDir) : undefined;
 }
 
 function listBundledPluginEntryBaseDirs(params: {

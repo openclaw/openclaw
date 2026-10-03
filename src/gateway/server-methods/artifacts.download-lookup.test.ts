@@ -18,13 +18,17 @@ const hoisted = vi.hoisted(() => ({
   visitSessionMessagesAsync: vi.fn(),
   resolveManagedArtifactDownload: vi.fn(),
 }));
-vi.mock("../session-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../session-utils.js")>()),
-  loadGatewaySessionEntryReadOnly: () => ({
-    storePath: "/tmp/sessions.json",
-    entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
-  }),
-}));
+vi.mock("../session-sharing-preparation.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../session-sharing-preparation.js")>();
+  const { artifactFixtureSessionFacts } = await import("./artifacts.test-support.js");
+  return {
+    ...actual,
+    prepareSessionMutationFacts: async (
+      params: Parameters<typeof actual.prepareSessionMutationFacts>[0],
+    ) => artifactFixtureSessionFacts(params),
+  };
+});
+
 vi.mock("../session-transcript-readers.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../session-transcript-readers.js")>();
   const { withArtifactFixtureReader } = await import("./artifacts.test-support.js");

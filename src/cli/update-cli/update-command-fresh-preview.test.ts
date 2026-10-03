@@ -11,6 +11,7 @@ import * as packageRoot from "../../infra/openclaw-root.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as packageMetadata from "../../infra/update-check-package-target.js";
 import * as updateCheck from "../../infra/update-check.js";
+import * as devUpdateTarget from "../../infra/update-dev-target.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import * as history from "../../infra/update-run-reader.js";
@@ -42,7 +43,7 @@ import { installFreshUpdateFixture, targetMetadata } from "./update-command-fres
 import * as initialization from "./update-command-initialization.js";
 import * as packageUpdate from "./update-command-package.js";
 import * as commandRun from "./update-command-run.js";
-import * as servicePlan from "./update-command-service-plan.js";
+import * as runtimePlan from "./update-command-runtime-preflight.js";
 import {
   deferUpdateCommandTerminalResult,
   publishUpdateCommandTerminalResult,
@@ -124,7 +125,7 @@ describe("update command admission with fresh state", () => {
         openOpenClawStateDatabase();
         await closeOpenClawStateDatabaseAsync();
       }
-      vi.spyOn(commandRun, "readDevUpdateTarget").mockImplementation(() => {
+      vi.spyOn(devUpdateTarget, "readDevUpdateTarget").mockImplementation(() => {
         throw new Error("fixture invalid dev target");
       });
       const triage = vi.spyOn(commandTriage, "prepareUpdateCommandFailureTriage");
@@ -232,7 +233,6 @@ describe("update command admission with fresh state", () => {
           denyRelease();
         }
         return {
-          target: "2026.9.2",
           version: null,
           nodeEngine: null,
           error: "fixture registry unavailable",
@@ -565,7 +565,7 @@ describe("update command admission with fresh state", () => {
       OPENCLAW_CONFIG_PATH: serviceConfigPath,
     };
     vi.spyOn(commandRun, "resolveUpdateCommandAdmissionEnv").mockResolvedValue(serviceEnv);
-    vi.spyOn(servicePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
+    vi.spyOn(runtimePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
       ok: false,
       error: "fixture-stop",
     });
@@ -602,7 +602,7 @@ describe("update command admission with fresh state", () => {
         writeStoredChannel("beta");
         return targetMetadata;
       });
-      const runtime = vi.spyOn(servicePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
+      const runtime = vi.spyOn(runtimePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
         ok: false,
         error: "fixture-stop",
       });
@@ -732,7 +732,7 @@ it.each([
       return staged;
     });
     const runtime = vi
-      .spyOn(servicePlan, "resolvePackageRuntimePreflight")
+      .spyOn(runtimePlan, "resolvePackageRuntimePreflight")
       .mockResolvedValue({ ok: true, value: {} });
     const doctor = vi
       .spyOn(initialization, "initializeUpdateStateFromTarget")
@@ -827,7 +827,7 @@ it.each(["node", "concurrent-state"] as const)(
       }
       return stage;
     });
-    vi.spyOn(servicePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
+    vi.spyOn(runtimePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
       ok: false,
       error: "selected artifact requires a newer Node",
     });
@@ -911,7 +911,6 @@ it("Doctor sees an already-current update's completed history after original-sta
     });
     vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
       ...targetMetadata,
-      target: VERSION,
       version: VERSION,
       schemaVersions: {
         state: OPENCLAW_STATE_SCHEMA_VERSION,

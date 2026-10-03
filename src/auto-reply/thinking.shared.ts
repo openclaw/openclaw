@@ -10,7 +10,7 @@ export { normalizeFastMode };
 export type { FastMode };
 
 /** Canonical thinking level values accepted by chat commands and session state. */
-const ALL_THINKING_LEVELS = [
+export const ALL_THINKING_LEVELS = [
   "off",
   "minimal",
   "low",
@@ -148,19 +148,6 @@ type ResponseUsageDefaultConfig =
   | ResponseUsageInput
   | { default?: ResponseUsageInput; [channel: string]: ResponseUsageInput | undefined };
 
-function resolveMessagesResponseUsageDefault(
-  configured: ResponseUsageDefaultConfig | undefined,
-  channel?: string,
-): ResponseUsageInput | undefined {
-  if (typeof configured === "string") {
-    return configured;
-  }
-  if (configured && typeof configured === "object") {
-    return (channel ? configured[channel] : undefined) ?? configured.default;
-  }
-  return undefined;
-}
-
 export function resolveEffectiveResponseUsage(
   sessionRaw: string | undefined | null,
   configured: ResponseUsageDefaultConfig | undefined,
@@ -170,7 +157,10 @@ export function resolveEffectiveResponseUsage(
   if (sessionNormalized !== undefined) {
     return sessionNormalized;
   }
-  const configDefault = resolveMessagesResponseUsageDefault(configured, channel);
+  const configDefault =
+    typeof configured === "string"
+      ? configured
+      : ((channel ? configured?.[channel] : undefined) ?? configured?.default);
   return resolveResponseUsageMode(configDefault);
 }
 

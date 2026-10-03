@@ -56,7 +56,6 @@ final class CuaDriverHostCoordinator {
             await MacNodeModeCoordinator.shared.prepareForCuaDaemonStop()
         })
 
-    private static let maximumRestartAttempts = 5
     private static let restartDelays: [Duration] = [
         .seconds(1),
         .seconds(2),
@@ -331,7 +330,7 @@ final class CuaDriverHostCoordinator {
     private func scheduleRestartIfNeeded() {
         guard self.desiredEnabled,
               self.restartTask == nil,
-              self.restartAttempt < Self.maximumRestartAttempts
+              self.restartAttempt < Self.restartDelays.count
         else { return }
         let delay = Self.restartDelays[self.restartAttempt]
         self.restartAttempt += 1

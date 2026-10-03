@@ -21,7 +21,7 @@ import type {
   AnyAgentTool,
   ProviderNormalizeToolSchemasContext,
   ProviderPlugin,
-  ProviderSanitizeReplayHistoryContext,
+  ProviderSanitizeReplayHistoryContextV2,
   ProviderValidateReplayTurnsContext,
 } from "./types.js";
 
@@ -91,7 +91,7 @@ let resolveProviderSystemPromptContribution: typeof import("./provider-runtime.j
 let resolveExternalAuthProfilesWithPlugins: typeof import("./provider-runtime.js").resolveExternalAuthProfilesWithPlugins;
 let resolveProviderSyntheticAuthWithPlugin: typeof import("./provider-runtime.js").resolveProviderSyntheticAuthWithPlugin;
 let shouldDeferProviderSyntheticProfileAuthWithPlugin: typeof import("./provider-runtime.js").shouldDeferProviderSyntheticProfileAuthWithPlugin;
-let sanitizeProviderReplayHistoryWithPlugin: typeof import("./provider-runtime.js").sanitizeProviderReplayHistoryWithPlugin;
+let sanitizeProviderReplayHistoryWithPluginAsync: typeof import("./provider-runtime.js").sanitizeProviderReplayHistoryWithPluginAsync;
 let resolveProviderUsageSnapshotWithPlugin: typeof import("./provider-runtime.js").resolveProviderUsageSnapshotWithPlugin;
 let resolveProviderUsageAuthWithPlugin: typeof import("./provider-runtime.js").resolveProviderUsageAuthWithPlugin;
 let normalizeProviderToolSchemasWithPlugin: typeof import("./provider-runtime.js").normalizeProviderToolSchemasWithPlugin;
@@ -376,7 +376,7 @@ describe("provider-runtime", () => {
       resolveExternalAuthProfilesWithPlugins,
       resolveProviderSyntheticAuthWithPlugin,
       shouldDeferProviderSyntheticProfileAuthWithPlugin,
-      sanitizeProviderReplayHistoryWithPlugin,
+      sanitizeProviderReplayHistoryWithPluginAsync,
       resolveProviderUsageSnapshotWithPlugin,
       resolveProviderUsageAuthWithPlugin,
       normalizeProviderToolSchemasWithPlugin,
@@ -2238,10 +2238,10 @@ describe("provider-runtime", () => {
     resolveExternalAuthProfileProviderPluginIdsMock.mockReturnValue(["demo"]);
     const prepareDynamicModel = vi.fn(async () => MODEL);
     const createStreamFn = vi.fn(() => vi.fn());
-    const sanitizeReplayHistory = vi.fn(
+    const sanitizeReplayHistoryAsync = vi.fn(
       async ({
         messages,
-      }: Pick<ProviderSanitizeReplayHistoryContext, "messages">): Promise<AgentMessage[]> => [
+      }: Pick<ProviderSanitizeReplayHistoryContextV2, "messages">): Promise<AgentMessage[]> => [
         ...messages,
         DEMO_SANITIZED_MESSAGE,
       ],
@@ -2298,7 +2298,7 @@ describe("provider-runtime", () => {
           }),
           resolveDynamicModel: () => MODEL,
           prepareDynamicModel,
-          sanitizeReplayHistory,
+          sanitizeReplayHistoryAsync,
           validateReplayTurns,
           normalizeToolSchemas,
           inspectToolSchemas,
@@ -2514,7 +2514,7 @@ describe("provider-runtime", () => {
       },
       {
         actual: () =>
-          sanitizeProviderReplayHistoryWithPlugin({
+          sanitizeProviderReplayHistoryWithPluginAsync({
             provider: DEMO_PROVIDER_ID,
             context: createDemoResolvedModelContext({
               modelApi: MODEL.api,
@@ -2699,7 +2699,7 @@ describe("provider-runtime", () => {
 
     expectCalledOnce(
       prepareDynamicModel,
-      sanitizeReplayHistory,
+      sanitizeReplayHistoryAsync,
       validateReplayTurns,
       normalizeToolSchemas,
       inspectToolSchemas,

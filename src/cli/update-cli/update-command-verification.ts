@@ -123,7 +123,9 @@ export async function verifyPreviousManagedGatewayForUpdate(
   const verdict = params.service.serviceUpdateVerdict;
   const installationDrift = verdict?.kind === "owned" && verdict.requiresInstallRootRefresh;
   const identity = installationDrift
-    ? await (await import("./update-command-package.js")).readPackageUpdateIdentity(params.root)
+    ? await (
+        await import("./update-command-package-identity.js")
+      ).readPackageUpdateIdentity(params.root)
     : undefined;
   params.assertCurrent?.();
   let verified = false;

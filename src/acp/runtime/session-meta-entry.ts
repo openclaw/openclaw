@@ -14,8 +14,8 @@ import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
-import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
-import type { AcpSessionControlBinding } from "./session-control-owner.js";
+import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
+import type { AcpSessionControlBinding } from "./session-meta-control.types.js";
 import {
   captureAcpSessionEntryBinding,
   type AcpSessionEntryExpectation,
@@ -98,6 +98,7 @@ export async function updateAcpSessionStoreEntry(params: {
               identity.physicalIdentity,
               published.previous,
               published.current,
+              published.prepared,
             );
           }
           if (unknown) {
@@ -129,7 +130,11 @@ export async function updateAcpSessionStoreEntry(params: {
         const receipt = facts.publication as NonNullable<
           AcpSessionEntryMutationResult["publication"]
         >;
-        publication?.begin(receipt.changedKeys, receipt.membershipInvalidatedKeys);
+        publication?.begin(
+          receipt.changedKeys,
+          receipt.membershipInvalidatedKeys,
+          receipt.sharingUnchangedKeys,
+        );
       }
     },
     execution,

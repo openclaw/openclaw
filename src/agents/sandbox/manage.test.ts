@@ -1,10 +1,12 @@
 // Sandbox management tests cover browser runtime listing/removal metadata and
 // backend manager wiring.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  listSandboxBrowsers,
+  removeSandboxContainer,
+  removeSandboxBrowserContainer,
+} from "./manage.js";
 
-let listSandboxBrowsers: typeof import("./manage.js").listSandboxBrowsers;
-let removeSandboxContainer: typeof import("./manage.js").removeSandboxContainer;
-let removeSandboxBrowserContainer: typeof import("./manage.js").removeSandboxBrowserContainer;
 let BROWSER_BRIDGES: typeof import("./browser-bridges.js").BROWSER_BRIDGES;
 
 const configMocks = vi.hoisted(() => ({
@@ -57,8 +59,6 @@ vi.mock("./docker-backend.js", () => ({
 
 beforeAll(async () => {
   ({ BROWSER_BRIDGES } = await import("./browser-bridges.js"));
-  ({ listSandboxBrowsers, removeSandboxContainer, removeSandboxBrowserContainer } =
-    await import("./manage.js"));
 });
 
 function firstDescribeRuntimeInput(): { agentId?: string; entry?: { configLabelKind?: string } } {

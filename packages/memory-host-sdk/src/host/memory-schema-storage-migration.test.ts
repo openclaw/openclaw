@@ -1,11 +1,16 @@
+import { spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { decodeMemoryEmbedding, encodeMemoryEmbedding } from "./embedding-vector.js";
 import {
   buildMemoryEmbeddingCacheSchema,
   MEMORY_INDEX_CHUNKS_SCHEMA_SQL,
 } from "./memory-schema-base.js";
 import { migrateMemoryIndexStorage } from "./memory-schema-storage-migration.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function legacyDatabase(): DatabaseSync {
   const db = new DatabaseSync(":memory:");
@@ -64,6 +69,75 @@ function snapshot(db: DatabaseSync) {
 }
 
 describe("memory storage migration", () => {
+  it("converts legacy vectors larger than the child heap while preserving 64-bit storage identities", () => {
+    const stateDir = tempDirs.make("memory-storage-heap-");
+    const args = [
+      "--max-old-space-size=96",
+      "--import",
+      fileURLToPath(new URL("../../../../scripts/tsx.mjs", import.meta.url)),
+      "--input-type=module",
+      "--eval",
+      `
+        import { DatabaseSync } from 'node:sqlite';
+        import { migrateMemoryIndexStorage } from ${JSON.stringify(new URL("./memory-schema-storage-migration.ts", import.meta.url).href)};
+        const embedding = JSON.stringify(Array.from({ length: 3072 }, (_, index) => (index + 0.1234567890123456) / 9000));
+        const results = [];
+        for (const kind of ['cache', 'chunks']) {
+          const db = new DatabaseSync(':memory:');
+          const table = kind === 'cache' ? 'memory_embedding_cache' : 'memory_index_chunks';
+          db.exec(kind === 'cache' ?
+            \`CREATE TABLE memory_embedding_cache (
+              provider TEXT NOT NULL, model TEXT NOT NULL, provider_key TEXT NOT NULL,
+              hash TEXT NOT NULL, embedding TEXT NOT NULL, dims INTEGER, updated_at INTEGER NOT NULL,
+              PRIMARY KEY (provider, model, provider_key, hash)
+            ) STRICT;\` :
+            \`CREATE TABLE memory_index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+            CREATE TABLE memory_index_sources (
+              path TEXT NOT NULL, source TEXT NOT NULL, hash TEXT NOT NULL, UNIQUE (path, source)
+            ) STRICT;
+            CREATE TABLE memory_index_chunks (
+              id TEXT PRIMARY KEY, path TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'memory',
+              start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, hash TEXT NOT NULL,
+              model TEXT NOT NULL, text TEXT NOT NULL, embedding TEXT NOT NULL, updated_at INTEGER NOT NULL
+            ) STRICT;\`);
+          const insert = db.prepare(kind === 'cache' ?
+            "INSERT INTO memory_embedding_cache(rowid, provider, model, provider_key, hash, embedding, dims, updated_at) VALUES (?, 'provider', 'model', 'key', ?, ?, 3072, 123)" :
+            "INSERT INTO memory_index_chunks(rowid, id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, 'memory/a.md', 'memory', 1, 2, 'h', 'model', CAST(X'80' AS TEXT), ?, 123)");
+          insert.setReadBigInts(true);
+          for (let index = 0; index < 3000; index++) {
+            insert.run(9007199254740993n + BigInt(index), String(index), embedding);
+          }
+          migrateMemoryIndexStorage(db);
+          results.push(db.prepare(\`SELECT count(*) AS rows, sum(length(embedding)) AS bytes,
+            CAST(min(rowid) AS TEXT) AS first, CAST(max(rowid) AS TEXT) AS last
+            FROM \${table}\`).get());
+          if (kind === 'chunks') {
+            results.push(db.prepare('SELECT DISTINCT hex(text) AS textBytes FROM memory_index_chunks').get());
+          }
+          db.close();
+        }
+        console.log(JSON.stringify(results));
+      `,
+    ];
+    const command = process.platform === "win32" ? process.execPath : "/bin/sh";
+    const childArgs =
+      process.platform === "win32"
+        ? args
+        : ["-c", 'ulimit -c 0; exec "$@"', "memory-migration", process.execPath, ...args];
+    const result = spawnSync(command, childArgs, {
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      encoding: "utf8",
+    });
+    expect(result.status, result.error?.message ?? result.stderr).toBe(0);
+    const expected = {
+      rows: 3000,
+      bytes: 73_728_000,
+      first: "9007199254740993",
+      last: "9007199254743992",
+    };
+    expect(JSON.parse(result.stdout)).toEqual([expected, expected, { textBytes: "80" }]);
+  });
+
   it("converts vectors without providers and preserves identity, provenance, cache age, and FTS maintenance", () => {
     const db = legacyDatabase();
     migrateMemoryIndexStorage(db);

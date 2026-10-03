@@ -1,4 +1,3 @@
-// Defines Google Chat channel configuration types from the canonical schema.
 import type { z } from "zod";
 import type { CommonChannelMessagingConfig } from "./types.channel-messaging-common.js";
 import type { GoogleChatConfigSchema } from "./zod-schema.providers-googlechat.js";
@@ -19,5 +18,3 @@ export type GoogleChatConfig = Omit<GoogleChatSchemaInput, "accounts" | "groups"
   GoogleChatAccountConfig & {
     accounts?: Record<string, GoogleChatAccountConfig>;
   };
-
-export type GoogleChatDmConfig = NonNullable<GoogleChatAccountConfig["dm"]>;

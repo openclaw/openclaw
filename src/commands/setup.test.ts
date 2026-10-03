@@ -149,7 +149,7 @@ describe("setupCommand", () => {
         const rootRaw = JSON.stringify({
           agents: {
             defaults: { workspace, skipBootstrap: { $include: "./skip-bootstrap.json" } },
-            entries: { ops: { default: true } },
+            entries: { ops: {} },
           },
           gateway: { mode: "local" },
         });
@@ -207,14 +207,14 @@ describe("setupCommand", () => {
     });
   });
 
-  it("keeps the default entry workspace on bare setup", async () => {
+  it("keeps the sole entry workspace on bare setup", async () => {
     await withSetupHome(async (home) => {
       const runtime = createTestRuntime();
       const configDir = path.join(home, ".openclaw");
       const configPath = path.join(configDir, "openclaw.json");
       const workspace = path.join(home, "ops-workspace");
       const raw = JSON.stringify({
-        agents: { entries: { ops: { default: true, workspace } } },
+        agents: { entries: { ops: { workspace } } },
         gateway: { mode: "local" },
       });
       await fs.mkdir(configDir, { recursive: true });
@@ -248,7 +248,7 @@ describe("setupCommand", () => {
       await fs.writeFile(
         configPath,
         JSON.stringify({
-          agents: { entries: { ops: { default: true, workspace } } },
+          agents: { entries: { ops: { workspace } } },
         }),
       );
 
@@ -309,7 +309,7 @@ describe("setupCommand", () => {
         JSON.stringify({
           agents: {
             defaults: { workspace },
-            entries: { ops: { default: true } },
+            entries: { ops: {} },
           },
           gateway: { mode: "local" },
         }),
@@ -334,7 +334,7 @@ describe("setupCommand", () => {
       const included = {
         agents: {
           defaults: { workspace: oldWorkspace },
-          entries: { ops: { default: true, workspace: "   " } },
+          entries: { ops: { workspace: "   " } },
         },
         gateway: { mode: "local" },
       };
@@ -379,7 +379,7 @@ describe("setupCommand", () => {
           skipBootstrap: skip,
           heartbeat: { every: "30m" },
         };
-        const agents = { defaults, entries: { ops: { default: true } } };
+        const agents = { defaults, entries: { ops: {} } };
         const gateway = missingGateway ? {} : { mode: "local" };
         const include = { $include: "./agents.json" };
         const included =
@@ -450,8 +450,11 @@ describe("setupCommand", () => {
         const oldWorkspace = path.join(home, "old-workspace");
         const workspace = path.join(home, "new-workspace");
         const include = { $include: "./workspace.json" };
-        const defaults = { skipBootstrap: false };
-        const selected = { default: true, workspace: oldWorkspace };
+        const defaults = {
+          skipBootstrap: false,
+          ...(scope === "local-entry" ? { systemAgent: { agentId: "ops" } } : {}),
+        };
+        const selected = { workspace: oldWorkspace };
         const included =
           scope === "defaults"
             ? oldWorkspace
@@ -460,7 +463,7 @@ describe("setupCommand", () => {
               : {
                   defaults,
                   ...(scope === "legacy-entry"
-                    ? { list: [{ id: "ops", ...selected }] }
+                    ? { list: [{ id: "ops", default: true, ...selected }] }
                     : { entries: { ops: selected } }),
                 };
         const rootRaw = JSON.stringify({
@@ -468,10 +471,10 @@ describe("setupCommand", () => {
             scope === "defaults"
               ? {
                   defaults: { ...defaults, workspace: include },
-                  entries: { ops: { default: true } },
+                  entries: { ops: {} },
                 }
               : scope === "local-entry"
-                ? { defaults, entries: { ops: selected, worker: include } }
+                ? { ownership: "explicit", defaults, entries: { ops: selected, worker: include } }
                 : include,
           gateway: { mode: "local" },
         });
@@ -480,7 +483,8 @@ describe("setupCommand", () => {
         await fs.writeFile(configPath, rootRaw);
         await fs.writeFile(includePath, includeRaw);
 
-        const setup = setupCommand({ workspace, skipBootstrap: true }, createTestRuntime());
+        const runtime = createTestRuntime();
+        const setup = setupCommand({ workspace, skipBootstrap: true }, runtime);
         if (scope === "local-entry") {
           await setup;
           const config = JSON.parse(await fs.readFile(configPath, "utf8"));
@@ -488,7 +492,15 @@ describe("setupCommand", () => {
           expect(config.agents.defaults.skipBootstrap).toBe(true);
           expect((await fs.readdir(workspace)).filter((name) => name.endsWith(".md"))).toEqual([]);
         } else {
-          await expect(setup).rejects.toMatchObject({ code: "CONFIG_INCLUDE_OWNERSHIP" });
+          if (scope === "legacy-entry") {
+            await setup;
+            expect(runtime.exit).toHaveBeenCalledWith(1);
+            expect(runtime.error).toHaveBeenCalledWith(
+              expect.stringContaining("openclaw doctor --fix"),
+            );
+          } else {
+            await expect(setup).rejects.toMatchObject({ code: "CONFIG_INCLUDE_OWNERSHIP" });
+          }
           expect(await fs.readFile(configPath, "utf8")).toBe(rootRaw);
           await expect(fs.stat(workspace)).rejects.toMatchObject({ code: "ENOENT" });
         }
@@ -507,7 +519,7 @@ describe("setupCommand", () => {
       const nextWorkspace = path.join(home, "next-workspace");
       const includedAgents = {
         defaults: { workspace: oldWorkspace },
-        entries: { ops: { default: true } },
+        entries: { ops: {} },
       };
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(

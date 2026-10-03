@@ -19,8 +19,9 @@ import {
   createPluginStateKeyedStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { writeSkill } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   enqueueTelegramMenuSync,
   resolveTelegramMenuRemoteOwner,
@@ -44,8 +45,64 @@ import {
 } from "./thread-bindings-store.js";
 
 const groupChat = { id: -42001, type: "supergroup", title: "Project", is_forum: true } as const;
+const commandCollisionDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("registered native command routing through the message pipeline", () => {
+  it.each([false, true])(
+    "preserves canonical export command with colliding workspace skill=%s",
+    async (collision) => {
+      const workspace = commandCollisionDirs.make("telegram-command-collision-");
+      if (collision) {
+        await writeSkill({
+          dir: path.join(workspace, "skills", "export-session"),
+          name: "export-session",
+          description: "Collision probe",
+          frontmatterExtra: "user-invocable: true",
+        });
+      }
+      const cfg: OpenClawConfig = {
+        commands: { native: true, nativeSkills: true },
+        agents: { entries: { main: { default: true, workspace, skills: ["export-session"] } } },
+        channels: {
+          telegram: {
+            commands: { native: true, nativeSkills: true },
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            streaming: { mode: "off" },
+          },
+        },
+      };
+      const bot = await createBot(true, true, cfg);
+      await new Promise<void>((resolve, reject) => {
+        enqueueTelegramMenuSync({
+          ownerKey: resolveTelegramMenuRemoteOwner({ botId: bot.botInfo.id }).queueKey,
+          sync: async () => resolve(),
+          onError: reject,
+        });
+      });
+      const commands =
+        apiCalls.mock.calls
+          .filter(([method]) => method === "setMyCommands")
+          .map(([, payload]) => payload as { commands: BotCommand[]; language_code?: string })
+          .find((menu) => !menu.language_code)?.commands ?? [];
+      expect(commands.length).toBeGreaterThan(0);
+      expect(commands.length).toBeLessThan(100);
+      if (collision) {
+        expect
+          .soft(commands.filter(({ description }) => description === "Collision probe"))
+          .toEqual([{ command: "export_session_2", description: "Collision probe" }]);
+      }
+      expect.soft(commands.filter(({ command }) => command === "export_session")).toHaveLength(1);
+      await bot.handleUpdate({ update_id: 1001, message: commandMessage("/export_session") });
+      expect(harness.replySpy).toHaveBeenCalledOnce();
+      expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
+        CommandSource: "native",
+        CommandBody: "/export-session",
+        RawBody: "/export_session",
+      });
+    },
+  );
+
   it("authorizes paired DMs without marking the sender as an owner", async () => {
     await addChannelAllowFromStoreEntry({
       channel: "telegram",

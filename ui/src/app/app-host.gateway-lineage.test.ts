@@ -12,7 +12,7 @@ import type { AgentsListResult } from "../api/types.ts";
 // These direct-render fixtures exercise Gateway lineage without the app lifecycle.
 // Browser tests cover deferred login loading and recovery.
 import "../components/login-gate.ts";
-import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
+import { captureChatOutboxAdmission, storageTargetForComposer } from "../lib/chat/outbox-store.ts";
 import {
   createTestSessionCapability,
   sessionsResult,
@@ -285,6 +285,10 @@ describe("Control UI Gateway target lineage", () => {
         const captured = state.chatQueuedEdit!;
         const initialClient = state.client;
         const outboxes = listStoredChatOutboxes(state);
+        const originalScope = { settings: state.settings, client: initialClient };
+        const originalTarget = storageTargetForComposer(state);
+        const originalBytes = sessionStorage.getItem(originalTarget.key);
+        expect(originalBytes).not.toBeNull();
         // Socket loss invalidates readiness but retains this client's authenticated owner.
         clients[0]!.recoveryScopeReady = false;
         clients[0]!.opts.onClose?.({ code: 1006, reason: "offline", willRetry: true });
@@ -326,9 +330,15 @@ describe("Control UI Gateway target lineage", () => {
             resumeQueuedMessageEditId: captured.id,
             attachmentsOverride: captured.attachments,
           });
-          expect(clients[1]!.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+          expect(clients[1]!.request.mock.calls.some(([method]) => method === "chat.send")).toBe(
+            false,
+          );
         }
-        expect(listStoredChatOutboxes(state)).toEqual(outboxes);
+        // The new account cannot project the old input, but its owner retains
+        // the exact unsent bytes, including Incognito queued submissions.
+        expect(listStoredChatOutboxes(state)).toEqual(sameOwner ? outboxes : []);
+        expect(sessionStorage.getItem(originalTarget.key)).toBe(originalBytes);
+        expect(listStoredChatOutboxes(originalScope)).toEqual(outboxes);
         expect(shellContainer.querySelector("openclaw-app-shell")).toBe(originalShell);
         expect(pane.state).toBe(state);
         expect(state.client).not.toBe(initialClient);

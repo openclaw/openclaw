@@ -1,14 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 
-const { prepare, prepareSync, createToken, SourceChangedError } = vi.hoisted(() => ({
+const { prepare, prepareCopy, createToken, SourceChangedError } = vi.hoisted(() => ({
   prepare: vi.fn(),
-  prepareSync: vi.fn(),
+  prepareCopy: vi.fn(),
   createToken: vi.fn(),
   SourceChangedError: class extends Error {},
 }));
 vi.mock("./sqlite-readonly-location.js", () => ({
   prepareSqliteReadOnlyLocationInProcess: prepare,
-  prepareSqliteReadOnlyLocationSyncInProcess: prepareSync,
+  prepareSqliteReadOnlyCopyInProcess: prepareCopy,
   SqliteSourceChangedError: SourceChangedError,
 }));
 
@@ -24,7 +25,7 @@ afterEach(() => {
   process.exitCode = originalExitCode;
   vi.restoreAllMocks();
   prepare.mockReset();
-  prepareSync.mockReset();
+  prepareCopy.mockReset();
   createToken.mockReset();
   vi.resetModules();
 });
@@ -52,7 +53,7 @@ async function expectWorkerFailure(
       throw error;
     });
   } else if (mode === "sync") {
-    prepareSync.mockImplementationOnce(() => {
+    prepareCopy.mockImplementationOnce(() => {
       throw error;
     });
   } else {

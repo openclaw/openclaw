@@ -343,7 +343,6 @@ describe("resolvePluginVersionDriftTargets", () => {
 
   it("uses the exact published correction-version cohort for a pinned repair", async () => {
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
-      target: "2026.7.1",
       version: "2026.7.1",
       nodeEngine: null,
     });
@@ -363,7 +362,6 @@ describe("resolvePluginVersionDriftTargets", () => {
     "withholds pinned commands when the requested version is unconfirmed: $version $error",
     async (result) => {
       vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
-        target: "2026.7.1",
         nodeEngine: null,
         ...result,
       });

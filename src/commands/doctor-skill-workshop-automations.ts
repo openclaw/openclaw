@@ -10,10 +10,10 @@ import { isMissingPathError } from "../infra/errors.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import type { SkillProposalEvent } from "../skills/workshop/types.js";
+import type { LegacyWorkshopProposal } from "./doctor-skill-workshop-read.kernel.js";
 import {
   inferOwnerAgentId,
   resolveLegacyWorkshopWorkspaceDir,
-  type LegacyWorkshopProposal,
 } from "./doctor-skill-workshop-relocation.js";
 
 export type WorkshopAutomationReference = {

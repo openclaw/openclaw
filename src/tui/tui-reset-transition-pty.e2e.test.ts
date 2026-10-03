@@ -8,6 +8,7 @@ import {
   objectFieldEquals,
   readFixtureLog,
   startTuiFixture,
+  tuiFixtureReceipts,
   waitForFixtureLogEntry,
   waitForSynchronizedFrameRows,
   writeTuiPtyFixtureScript,
@@ -22,7 +23,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it(
   "keeps multiline exit paste in chat and preserves shared stop behavior",
-  async () => {
+  async ({ signal }) => {
     const stateDir = tempDirs.make("openclaw-tui-input-pty-");
     const fixture = await startTuiFixture({
       env: {
@@ -46,7 +47,7 @@ it(
         OUTPUT_TIMEOUT_MS,
       );
       await fixture.run.write("\u001b[200~/stop\n\u001b[201~\r", { delay: false });
-      await fixture.waitForLogEntry((entry) => entry.method === "abortChat");
+      await fixture.waitForLogEntry((entry) => entry.method === "abortChat", signal);
       const sends = (await readFixtureLog(fixture.logPath)).filter(
         (entry) => entry.method === "sendChat",
       );
@@ -72,7 +73,7 @@ describe.each([
 ])("TUI reset transition PTY ($input)", ({ nativePaste }) => {
   it.skipIf(nativePaste && process.platform !== "darwin")(
     "preserves overlapping input while /reset owns the terminal session transition",
-    async () => {
+    async ({ signal }) => {
       const tempDir = tempDirs.make("openclaw-tui-reset-pty-");
       const scriptPath = await writeTuiPtyFixtureScript(tempDir);
       const logPath = path.join(tempDir, "fixture-log.jsonl");
@@ -105,7 +106,11 @@ describe.each([
 
       try {
         const waitForLogEntry = async (predicate: Parameters<typeof waitForFixtureLogEntry>[1]) =>
-          await waitForFixtureLogEntry(logPath, predicate, OUTPUT_TIMEOUT_MS, run.output);
+          await waitForFixtureLogEntry(logPath, predicate, {
+            receipts: tuiFixtureReceipts,
+            run,
+            signal,
+          });
 
         await run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
         await run.write("/reset\r", { delay: false });

@@ -115,6 +115,11 @@ export class TranscriptEndAnchor {
     if (previousMax !== max || correction.before !== correction.after) {
       publishTranscriptScroll(element, {
         type: "resize",
+        viewport: {
+          clientHeight: element.clientHeight,
+          scrollHeight: element.scrollHeight,
+          scrollTop: correction.after,
+        },
         ...(correction.before !== correction.after
           ? { scrollCorrection: { before: correction.before, after: correction.after } }
           : {}),

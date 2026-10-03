@@ -260,7 +260,6 @@ export async function validateScriptFileForShellBleed(params: {
           })
         : (
             await workspaceRoot.read(relativePath, {
-              nonBlockingRead: true,
               symlinks: "follow-within-root",
               maxBytes: SCRIPT_PREFLIGHT_MAX_BYTES,
             })

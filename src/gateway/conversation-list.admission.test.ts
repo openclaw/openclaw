@@ -101,7 +101,7 @@ describe("conversation directory write admission", () => {
         await fixture.routed.promise;
         await setImmediate();
         expect(settled).toBe(false);
-        expect(listConversations(fixture.scope)).toEqual([]);
+        expect(await listConversations(fixture.scope)).toEqual([]);
         if (eligibility === "denied") {
           currentConfig = {
             ...fixture.config,
@@ -129,7 +129,9 @@ describe("conversation directory write admission", () => {
             },
           });
         }
-        expect(listConversations(fixture.scope)).toHaveLength(eligibility === "eligible" ? 1 : 0);
+        expect(await listConversations(fixture.scope)).toHaveLength(
+          eligibility === "eligible" ? 1 : 0,
+        );
         expect(listSessionEntriesCore(fixture.scope)).toEqual([]);
       } finally {
         release.resolve();
@@ -173,7 +175,7 @@ describe("conversation directory write admission", () => {
         await expect(result).resolves.toMatchObject({
           conversations: [expect.objectContaining({ target: "reef:peer" })],
         });
-        expect(listConversations(fixture.scope)).toHaveLength(1);
+        expect(await listConversations(fixture.scope)).toHaveLength(1);
         expect(listSessionEntriesCore(fixture.scope)).toEqual([]);
       } finally {
         releaseRoute.resolve();

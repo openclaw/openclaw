@@ -1,15 +1,31 @@
-import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
+import {
+  storedChatOutboxScopeKey,
+  type StoredChatOutboxScope,
+} from "../../lib/chat/outbox-store-scope.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import type { QueuedChatSendResult } from "./chat-outbox-drain.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { readQueuedMessageById } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
+import { chatAttachmentDraftSignature } from "./durable-composer-persistence.ts";
 import { hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 
 const submissionActionIds = new WeakMap<Event, string>();
+type AttachmentAdmission = {
+  signatures: ReadonlySet<string>;
+  isCurrent(): boolean;
+};
+const pendingAttachmentAdmissions = new WeakMap<ChatHost, Set<AttachmentAdmission>>();
+
+export type ChatSubmitGuard = {
+  releaseAttachments(): void;
+  canRetireAttachment(attachment: ChatAttachment): boolean;
+};
 
 function yieldChatSubmitToInput(): Promise<void> {
   return new Promise<void>((resolve) => {
@@ -96,10 +112,16 @@ export async function withChatSubmitHandoff(
 export async function withChatSubmitGuard<T>(
   host: ChatHost,
   key: string,
-  run: () => Promise<T>,
-  action?: Event,
+  options: {
+    action?: Event;
+    attachments?: readonly ChatAttachment[];
+    scope: StoredChatOutboxScope;
+    isCurrent(): boolean;
+  },
+  run: (guard: ChatSubmitGuard) => Promise<T>,
 ): Promise<T | undefined> {
   let guardKey = key;
+  const { action, scope } = options;
   if (action) {
     const actionId = submissionActionIds.get(action) ?? generateUUID();
     submissionActionIds.set(action, actionId);
@@ -110,9 +132,45 @@ export async function withChatSubmitGuard<T>(
     return undefined;
   }
   guards.add(guardKey);
+  const scopeKey = storedChatOutboxScopeKey(scope);
+  const attachments: AttachmentAdmission = {
+    signatures: new Set(
+      options.attachments?.map((attachment) => chatAttachmentDraftSignature("", [attachment])),
+    ),
+    isCurrent: () =>
+      options.isCurrent() &&
+      storedChatOutboxScopeKey(resolveUiConversationIdentity(host, host.sessionKey)) === scopeKey,
+  };
+  let pending = pendingAttachmentAdmissions.get(host);
+  if (attachments.signatures.size) {
+    pending ??= new Set();
+    pending.add(attachments);
+    pendingAttachmentAdmissions.set(host, pending);
+  }
+  const releaseAttachments = () => {
+    if (!pending?.delete(attachments)) {
+      return;
+    }
+    if (!pending.size) {
+      pendingAttachmentAdmissions.delete(host);
+    }
+  };
   try {
-    return await run();
+    return await run({
+      releaseAttachments,
+      canRetireAttachment: (attachment) => {
+        const signature = chatAttachmentDraftSignature("", [attachment]);
+        return (
+          attachments.isCurrent() &&
+          attachments.signatures.has(signature) &&
+          ![...(pendingAttachmentAdmissions.get(host) ?? [])].some(
+            (claim) => claim.isCurrent() && claim.signatures.has(signature),
+          )
+        );
+      },
+    });
   } finally {
+    releaseAttachments();
     guards.delete(guardKey);
   }
 }

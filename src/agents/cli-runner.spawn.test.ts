@@ -1376,9 +1376,7 @@ describe("runCliAgent spawn path", () => {
       });
     });
     supervisorSpawnMock.mockResolvedValueOnce({
-      pid: 1234,
-      startedAtMs: Date.now(),
-      stdin: undefined,
+      ...createManagedRun(createSuccessfulProcessExit()),
       wait: vi.fn(() => exit.promise),
       cancel,
     });

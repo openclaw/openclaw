@@ -121,11 +121,7 @@ function installDeployRestLogging(params: {
     }) as RequestClient[typeof method];
   }
   return () => {
-    params.rest.get = original.get;
-    params.rest.post = original.post;
-    params.rest.put = original.put;
-    params.rest.patch = original.patch;
-    params.rest.delete = original.delete;
+    Object.assign(params.rest, original);
   };
 }
 

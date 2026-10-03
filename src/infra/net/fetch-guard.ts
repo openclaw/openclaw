@@ -286,8 +286,6 @@ function isAmbientGlobalFetch(params: {
   );
 }
 
-export { retainSafeHeadersForCrossOriginRedirect as retainSafeHeadersForCrossOriginRedirectHeaders } from "./redirect-headers.js";
-
 async function prepareGuardedFetchCapture(params: GuardedFetchOptions, fetchImpl: FetchLike) {
   if (params.capture === false || !isTruthyEnvValue(process.env[OPENCLAW_DEBUG_PROXY_ENABLED])) {
     return { fetchImpl };
@@ -391,8 +389,6 @@ function rewriteRedirectInit(params: {
     headers: dropBodyHeaders(init.headers),
   };
 }
-
-export { fetchWithRuntimeDispatcher } from "./runtime-fetch.js";
 
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
   const { managedProxyBypass: _ignoredManagedProxyBypass, ...publicParams } =

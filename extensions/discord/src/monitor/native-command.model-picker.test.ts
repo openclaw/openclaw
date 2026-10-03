@@ -1,6 +1,4 @@
 // Discord tests cover native command.model picker plugin behavior.
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { ChannelType } from "discord-api-types/v10";
 import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth-native";
@@ -12,8 +10,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelsRuntimeChoice } from "openclaw/plugin-sdk/models-provider-runtime";
 import * as runtimeConfigSnapshotModule from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import * as commandTextModule from "openclaw/plugin-sdk/text-utility-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseCustomId, serializePayload, type MessagePayload } from "../internal/discord.js";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { resolveDiscordChannelContext } from "./agent-components-context.js";
@@ -74,6 +74,13 @@ type MockInteraction = {
 };
 
 let tempDir: string;
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterAll(async () => {
+    await closeOpenClawAgentDatabasesAsync(sessionRoot);
+    cleanup();
+  });
+});
+const sessionRoot = tempDirs.make("openclaw-discord-model-picker-");
 
 function createModelsProviderData(entries: Record<string, string[]>) {
   return createBaseModelsProviderData(entries, { defaultProviderOrder: "sorted" });
@@ -419,7 +426,7 @@ describe("Discord model picker interactions", () => {
 
   beforeEach(async () => {
     hostSdk.runtimeChoicesAvailable = true;
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-discord-model-picker-"));
+    tempDir = tempDirs.make("case-", sessionRoot);
     vi.useRealTimers();
     vi.restoreAllMocks();
     mockRuntimeConfig(null);
@@ -428,7 +435,6 @@ describe("Discord model picker interactions", () => {
   afterEach(async () => {
     hostSdk.runtimeChoicesAvailable = true;
     vi.useRealTimers();
-    await rm(tempDir, { recursive: true, force: true });
   });
 
   it("dispatches declared minimum host recents through the built-in runtime", async () => {

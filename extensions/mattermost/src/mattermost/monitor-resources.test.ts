@@ -1,5 +1,10 @@
 // Mattermost tests cover monitor resources plugin behavior.
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createMattermostMonitorResources,
+  formatMattermostInboundMediaText,
+  formatMattermostPendingMediaText,
+} from "./monitor-resources.js";
 
 const fetchMattermostChannel = vi.hoisted(() => vi.fn());
 const fetchMattermostUser = vi.hoisted(() => vi.fn());
@@ -23,18 +28,6 @@ vi.mock("./interactions.js", () => ({
 }));
 
 describe("mattermost monitor resources", () => {
-  let createMattermostMonitorResources: typeof import("./monitor-resources.js").createMattermostMonitorResources;
-  let formatMattermostInboundMediaText: typeof import("./monitor-resources.js").formatMattermostInboundMediaText;
-  let formatMattermostPendingMediaText: typeof import("./monitor-resources.js").formatMattermostPendingMediaText;
-
-  beforeAll(async () => {
-    ({
-      createMattermostMonitorResources,
-      formatMattermostInboundMediaText,
-      formatMattermostPendingMediaText,
-    } = await import("./monitor-resources.js"));
-  });
-
   it("keeps media-only download failures visible to the agent", () => {
     expect(
       formatMattermostInboundMediaText({

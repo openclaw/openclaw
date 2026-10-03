@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { spawnSync } from "node:child_process";
 import { Command } from "commander";
 import { beforeAll, describe, expect, it, vi } from "vitest";

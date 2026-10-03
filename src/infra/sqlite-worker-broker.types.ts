@@ -5,6 +5,7 @@ import type {
   SqliteWorkerRequest,
   SqliteWorkerReply,
   SqliteWorkerCloseReceipt,
+  SqliteWorkerEphemeralTarget,
 } from "./sqlite-worker-contract.js";
 import type {
   SqliteWorkerAdmissionFactory,
@@ -48,6 +49,7 @@ export type Job = {
   detach(): void;
 };
 export type Slot = {
+  ephemeral?: true;
   runtimeGeneration?: RuntimeWorkerGeneration;
   borrowedGenerationSlot?: true;
   worker: Worker;
@@ -62,6 +64,8 @@ export type Slot = {
   pendingOpens: number;
 };
 export type Actor = {
+  target?: SqliteWorkerEphemeralTarget;
+  nativeLostObservers?: Set<(reason: Error) => void>;
   runtimeGeneration?: RuntimeWorkerGeneration;
   nativeStopped: Promise<void>;
   markNativeStopped(): void;
@@ -117,6 +121,7 @@ export type StoreClient = {
 };
 
 export type SqliteWorkerStoreOptions = {
+  target?: SqliteWorkerEphemeralTarget;
   runtimeGeneration?: RuntimeWorkerGeneration;
   moduleUrl: URL;
   databasePath: string;
@@ -126,6 +131,8 @@ export type SqliteWorkerStoreOptions = {
 };
 
 export type PreparedSqliteWorkerOpen = {
+  target?: SqliteWorkerEphemeralTarget;
+  onNativeLost?: (reason: Error) => void;
   signal?: AbortSignal;
   preparation?: Buffer;
   runtimeGeneration?: RuntimeWorkerGeneration;
@@ -161,6 +168,7 @@ export type SqliteWorkerOpenCustody = Pick<
   | "createAdmission"
   | "stateDatabasePath"
   | "onNativeStopped"
+  | "onNativeLost"
   | "signal"
 > & { preparation?: unknown };
 export type SqliteWorkerInputRetention = "snapshot" | "stream";

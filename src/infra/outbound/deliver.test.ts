@@ -1088,22 +1088,8 @@ describe("deliverOutboundPayloads", () => {
     setTestOutbound({ sendText: sendMatrix });
 
     const results = await deliverMatrix({
-      cfg: {
-        agents: {
-          defaults: {
-            silentReply: {
-              group: "allow",
-              internal: "allow",
-            },
-          },
-        },
-      },
       payloads: [{ text: "---" }],
       deps: { matrix: sendMatrix },
-      session: {
-        key: "agent:main:matrix:slash:!room",
-        policyKey: "agent:main:matrix:direct:!room",
-      },
       deliveryCompletion: {
         kind: "conversation",
         agentId: "main",

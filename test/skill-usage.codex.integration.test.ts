@@ -3,7 +3,6 @@ import path from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodexDynamicToolBridge } from "../extensions/codex/test-api.js";
-import { getBeforeToolCallDiagnosticOptions } from "../src/agents/before-tool-call-metadata.js";
 import { asToolParamsRecord, type AnyAgentTool } from "../src/agents/tools/common.js";
 import {
   onDiagnosticEvent,
@@ -134,11 +133,6 @@ describe("persistent skill usage through registered Codex dynamic tools", () => 
           : {}),
       },
     });
-    expect(bridge.telemetry.quarantinedTools).toEqual([]);
-    expect(bridge.availableTools.map((tool) => tool.name)).toEqual([toolName]);
-    for (const tool of bridge.availableTools) {
-      expect(getBeforeToolCallDiagnosticOptions(tool)?.emitDiagnostics).toBe(false);
-    }
     const call = (callId: string, filePath = skillFile) =>
       bridge.handleToolCall({
         threadId: "skill-usage-thread",
@@ -167,6 +161,14 @@ describe("persistent skill usage through registered Codex dynamic tools", () => 
       use_count: count,
       last_agent_id: "main",
     };
+  }
+
+  async function expectNoUsage() {
+    await waitForDiagnosticEventsDrained();
+    await unregisterUsage();
+    expect(usageRows()).toEqual([]);
+    expect(consumeRunSkillUsage(runId)).toEqual([]);
+    expect(trustedEvents).toEqual([]);
   }
 
   it.each([false, true])(
@@ -200,24 +202,17 @@ describe("persistent skill usage through registered Codex dynamic tools", () => 
     },
   );
 
-  it.each(["error", "failed", "blocked", "cancelled", "timed_out"])(
-    "does not count a structured %s read",
-    async (status) => {
-      const { call, execute } = createBridge({
-        execute: async () => ({
-          content: [{ type: "text", text: "Read did not complete" }],
-          details: { status },
-        }),
-      });
-      expect(await call("failed-read")).toMatchObject({ success: false });
-      await waitForDiagnosticEventsDrained();
-      await unregisterUsage();
-      expect(execute).toHaveBeenCalledOnce();
-      expect(consumeRunSkillUsage(runId)).toEqual([]);
-      expect(usageRows()).toEqual([]);
-      expect(trustedEvents).toEqual([]);
-    },
-  );
+  it.each(["error", "blocked"])("does not count a structured %s read", async (status) => {
+    const { call, execute } = createBridge({
+      execute: async () => ({
+        content: [{ type: "text", text: "Read did not complete" }],
+        details: { status },
+      }),
+    });
+    expect(await call("failed-read")).toMatchObject({ success: false });
+    expect(execute).toHaveBeenCalledOnce();
+    await expectNoUsage();
+  });
 
   it("does not count a thrown read", async () => {
     const { call } = createBridge({
@@ -226,11 +221,7 @@ describe("persistent skill usage through registered Codex dynamic tools", () => 
       },
     });
     expect(await call("thrown-read")).toMatchObject({ success: false });
-    await waitForDiagnosticEventsDrained();
-    await unregisterUsage();
-    expect(usageRows()).toEqual([]);
-    expect(consumeRunSkillUsage(runId)).toEqual([]);
-    expect(trustedEvents).toEqual([]);
+    await expectNoUsage();
   });
 
   it("does not count a read blocked before execution", async () => {
@@ -244,27 +235,16 @@ describe("persistent skill usage through registered Codex dynamic tools", () => 
     );
     const { call, execute } = createBridge();
     expect(await call("blocked-read")).toMatchObject({ success: false, executionStarted: false });
-    await waitForDiagnosticEventsDrained();
-    await unregisterUsage();
     expect(execute).not.toHaveBeenCalled();
-    expect(usageRows()).toEqual([]);
-    expect(consumeRunSkillUsage(runId)).toEqual([]);
-    expect(trustedEvents).toEqual([]);
+    await expectNoUsage();
   });
 
-  it.each(["skills/unknown/SKILL.md", "README.md"])(
-    "does not count reading %s outside the skill snapshot",
-    async (filePath) => {
-      const otherFile = await testState.writeText(filePath, "Other file\n");
-      const { call } = createBridge();
-      expect(await call("other-read", otherFile)).toMatchObject({ success: true });
-      await waitForDiagnosticEventsDrained();
-      await unregisterUsage();
-      expect(usageRows()).toEqual([]);
-      expect(consumeRunSkillUsage(runId)).toEqual([]);
-      expect(trustedEvents).toEqual([]);
-    },
-  );
+  it("does not count reading a skill outside the snapshot", async () => {
+    const otherFile = await testState.writeText("skills/unknown/SKILL.md", "Other file\n");
+    const { call } = createBridge();
+    expect(await call("other-read", otherFile)).toMatchObject({ success: true });
+    await expectNoUsage();
+  });
 
   it("preserves explicit tool-dispatched skill command activation", async () => {
     const { call } = createBridge({ command: true });

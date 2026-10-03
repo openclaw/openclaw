@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { resolveLiveQaApprovalDecision } from "../shared/live-approval-request.js";
-import { writeSlackApprovalCheckpoint } from "./slack-live.approval-checkpoint.js";
-import { waitForSlackApprovalMessage } from "./slack-live.approvals.js";
+import {
+  completeSlackApprovalScenario,
+  waitForSlackApprovalMessage,
+} from "./slack-live.approvals.js";
 import {
   assertCodexApprovalOperationSucceeded,
   assertPendingCodexPluginApproval,
@@ -13,18 +14,17 @@ import {
   quiesceCodexApprovalAgentRun,
   resolveCodexFileApprovalTargetPath,
 } from "./slack-live.codex-approval.js";
-import {
-  SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS,
-  type SlackQaCodexApprovalScenarioRun,
-  type SlackQaScenarioContext,
-  type SlackQaScenarioMetadata,
-  type SlackObservedMessage,
-  type SlackApprovalArtifact,
+import type {
+  SlackQaCodexApprovalScenarioRun,
+  SlackQaApprovalContext,
+  SlackQaScenarioMetadata,
+  SlackObservedMessage,
+  SlackApprovalArtifact,
 } from "./slack-live.contracts.js";
 
 export async function runSlackCodexApprovalScenario(params: {
   channelId: string;
-  context: Omit<SlackQaScenarioContext, "sentTs">;
+  context: SlackQaApprovalContext;
   observedMessages: SlackObservedMessage[];
   primaryModel: string;
   run: SlackQaCodexApprovalScenarioRun;
@@ -90,7 +90,7 @@ export async function runSlackCodexApprovalScenario(params: {
 async function runSlackCodexApprovalScenarioInner(params: {
   channelId: string;
   codexRun: { runId: string; sessionKey: string };
-  context: Omit<SlackQaScenarioContext, "sentTs">;
+  context: SlackQaApprovalContext;
   observedMessages: SlackObservedMessage[];
   primaryModel: string;
   run: SlackQaCodexApprovalScenarioRun;
@@ -144,77 +144,38 @@ async function runSlackCodexApprovalScenarioInner(params: {
     sessionKey: params.codexRun.sessionKey,
     sutAccountId: params.sutAccountId,
   });
-  const checkpoint = {
-    approvalId,
-    approvalKind: params.run.approvalKind,
-    channelId: params.channelId,
-    scenarioId: params.scenario.id,
-  };
-  const pendingCheckpoint = await writeSlackApprovalCheckpoint({
-    ...checkpoint,
-    message: pending.message,
-    observedAt: pending.observedAt,
-    state: "pending",
-  });
-  await resolveLiveQaApprovalDecision({
+  const completed = await completeSlackApprovalScenario({
     approvalId,
     gateway: params.context.gateway,
-    decision: params.run.decision,
-    kind: params.run.approvalKind,
-    timeoutMs: SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
-  });
-  const finalCodexTurnStatus = await waitForCodexApprovalAgentRun({
-    context: params.context,
-    runId: params.codexRun.runId,
-    timeoutMs: params.scenario.timeoutMs,
-  });
-  if (finalCodexTurnStatus !== "ok") {
-    throw new Error(
-      `Codex approval run ${params.codexRun.runId} finished with status ${finalCodexTurnStatus}`,
-    );
-  }
-  await assertCodexApprovalOperationSucceeded({
-    context: params.context,
-    run: params.run,
-    sessionKey: params.codexRun.sessionKey,
-  });
-  const resolved = await waitForSlackApprovalMessage({
-    ...observation,
-    state: "resolved",
-    messageTs: pending.message.ts,
-  });
-  const resolvedCheckpoint = await writeSlackApprovalCheckpoint({
-    ...checkpoint,
-    decision: params.run.decision,
-    message: resolved.message,
-    observedAt: resolved.observedAt,
-    state: "resolved",
-  });
-  const responseObservedAt = new Date(resolved.observedAt);
-  return {
-    artifact: {
-      approvalId,
-      approvalKind: params.run.approvalKind,
-      appServerMethod: params.run.appServerMethod,
-      channelId: params.channelId,
-      codexModelKey: params.primaryModel,
-      decision: params.run.decision,
-      finalCodexTurnStatus,
-      operationVerified: true,
-      pendingActionValues: pending.actionValues,
-      pendingCheckpointPath: pendingCheckpoint?.checkpointPath,
-      pendingMessageTs: pending.message.ts,
-      pendingScreenshotPath: pendingCheckpoint?.screenshotPath,
-      pendingText: pending.message.text,
-      resolvedActionValues: resolved.actionValues,
-      resolvedCheckpointPath: resolvedCheckpoint?.checkpointPath,
-      resolvedMessageTs: resolved.message.ts,
-      resolvedScreenshotPath: resolvedCheckpoint?.screenshotPath,
-      resolvedText: resolved.message.text,
-      threadTs: pending.message.thread_ts,
-    } satisfies SlackApprovalArtifact,
+    observation,
+    pending,
     requestStartedAt,
-    responseObservedAt,
-    rttMs: responseObservedAt.getTime() - requestStartedAt.getTime(),
+    verifyDecision: async () => {
+      const finalCodexTurnStatus = await waitForCodexApprovalAgentRun({
+        context: params.context,
+        runId: params.codexRun.runId,
+        timeoutMs: params.scenario.timeoutMs,
+      });
+      if (finalCodexTurnStatus !== "ok") {
+        throw new Error(
+          `Codex approval run ${params.codexRun.runId} finished with status ${finalCodexTurnStatus}`,
+        );
+      }
+      await assertCodexApprovalOperationSucceeded({
+        context: params.context,
+        run: params.run,
+        sessionKey: params.codexRun.sessionKey,
+      });
+    },
+  });
+  return {
+    ...completed,
+    artifact: {
+      ...completed.artifact,
+      appServerMethod: params.run.appServerMethod,
+      codexModelKey: params.primaryModel,
+      finalCodexTurnStatus: "ok",
+      operationVerified: true,
+    } satisfies SlackApprovalArtifact,
   };
 }

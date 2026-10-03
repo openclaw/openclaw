@@ -5,9 +5,11 @@ import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { prepareInternalSessionEffectsSession } from "../../agents/internal-session-effects.js";
-import { ensureSessionGroupCatalog } from "../../gateway/session-group-catalog.js";
-import { ensureSessionGroupRegistered, listSessionGroups } from "../../gateway/session-groups.js";
+import {
+  ensureSessionGroupCatalog,
+  readSessionGroupCatalog,
+} from "../../gateway/session-group-catalog.js";
+import { ensureSessionGroupRegistered } from "../../gateway/session-groups.js";
 import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
 import { acquireStateDatabaseSchemaLease } from "../../infra/gateway-state-owner.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -31,6 +33,7 @@ import {
   createSessionEntryWithTranscript,
   prepareSessionEntryMutationDatabases,
 } from "./session-accessor.entry-mutation.js";
+import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
   assertSessionEntryCreationPublication,
   projectSessionSharingEntry,
@@ -42,7 +45,6 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { readTranscriptStorageRows } from "./session-accessor.sqlite-read.js";
-import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
@@ -87,6 +89,12 @@ it("creates with prepared label facts, header and atomic owner without host data
     const env = { ...process.env };
     const originalStateDir = env.OPENCLAW_STATE_DIR;
     const order: string[] = [];
+    const publications: Array<ReturnType<typeof readPreparedSessionEntryChange>> = [];
+    const stopFacts = sessionChanges.subscribeFacts((change) => {
+      if ("sessionKey" in change && change.sessionKey === key) {
+        publications.push(readPreparedSessionEntryChange(change, key));
+      }
+    });
     const stop = sessionChanges.subscribe((change) => {
       if ("sessionKey" in change && change.sessionKey === key) {
         order.push(order.includes("committed") ? "published" : "header");
@@ -168,6 +176,20 @@ it("creates with prepared label facts, header and atomic owner without host data
       });
       expect(writes).toEqual(["session.entries.replace"]);
       expect(assertCreation).toThrow("Session creation publication owner is no longer current");
+      expect(publications).toEqual([
+        expect.objectContaining({
+          entry: expect.objectContaining({
+            sessionId: "created",
+            category: "Created",
+            label: "available",
+            owner,
+          }),
+          source: expect.objectContaining({
+            identity: expect.any(String),
+            revision: expect.any(Number),
+          }),
+        }),
+      ]);
       const firstUse = await createSessionEntryWithTranscript(
         {
           agentId: "main",
@@ -181,6 +203,7 @@ it("creates with prepared label facts, header and atomic owner without host data
     } finally {
       prepared.release();
       sql.restore();
+      stopFacts();
       stop();
     }
     expect(order).toEqual(["committed", "published", "registered"]);
@@ -190,7 +213,7 @@ it("creates with prepared label facts, header and atomic owner without host data
     });
     expect(readTranscriptStorageRows(database, "created")).toHaveLength(1);
     await ensureSessionGroupCatalog();
-    expect(listSessionGroups().map(({ name }) => name)).toContain("Created");
+    expect(readSessionGroupCatalog().groups.map(({ name }) => name)).toContain("Created");
   });
 });
 
@@ -325,31 +348,45 @@ it.each(["incognito", "maintenance"] as const)(
   },
 );
 
-it("creates hidden internal-effects sessions without admitting their keys to canonical replacement", async () => {
+it("retires the old transcript when native alias creation selects a new session", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const target = await prepareInternalSessionEffectsSession({
-      agentId: "main",
-      storePath: database.path,
-      runId: "worker-create",
-    });
-    expect(readExactSessionEntryRow(database, target.sessionKey)?.entry.sessionId).toBe(
-      target.sessionId,
+    const sessionKey = "agent:main:signal:group:NativeReplacement";
+    const alias = sessionKey.toLowerCase();
+    const oldSessionId = "native-replaced-session";
+    writeSessionEntry(database, alias, { sessionId: oldSessionId, updatedAt: 1 });
+    ensureTranscriptHeader(
+      database,
+      { agentId: "main", sessionKey: alias, sessionId: oldSessionId },
+      "/old",
     );
-    expect(readTranscriptStorageRows(database, target.sessionId)).toHaveLength(1);
-    await expect(
-      applySessionEntryCanonicalReplacements({
-        agentId: "main",
-        storePath: database.path,
-        sessionKeys: [target.sessionKey],
-        update: ([row]) => ({
-          result: undefined,
-          replacements: [
-            { sessionKey: target.sessionKey, previousSessionKeys: [], entry: row!.entry },
-          ],
-        }),
-      }),
-    ).rejects.toThrow("cannot target internal effects rows");
+    const lease = acquireStateDatabaseSchemaLease(database.path);
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent: () => lease.assertCurrent(),
+      assertDatabaseAccess: lease.assertDatabaseAccess,
+    });
+    try {
+      const created = await maintenance.run(() =>
+        createSessionEntryWithTranscript(
+          { agentId: "main", storePath: database.path, sessionKey },
+          () => ({ ok: true, entry: { sessionId: "native-new-session", updatedAt: 2 } }),
+        ),
+      );
+      expect(created).toMatchObject({ ok: true, sessionFile: sessionKey });
+      expect(readExactSessionEntryRow(database, alias)).toBeUndefined();
+      expect(readExactSessionEntryRow(database, sessionKey)?.entry.sessionId).toBe(
+        "native-new-session",
+      );
+      expect(readTranscriptStorageRows(database, oldSessionId)).toEqual([]);
+      expect(readTranscriptStorageRows(database, "native-new-session")).toHaveLength(1);
+    } finally {
+      try {
+        await maintenance.close();
+      } finally {
+        lease.release();
+      }
+    }
   });
 });
 

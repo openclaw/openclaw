@@ -14,6 +14,7 @@ import {
 } from "./openclaw-state-db-contract.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
 import {
+  ensureColumn,
   tableExists,
   tableHasColumn,
   tablePrimaryKeyColumns,
@@ -54,10 +55,7 @@ export function migrateWorkerPlacementExecutionModeSchema(
     "terminal_reason TEXT",
     "terminal_at_ms INTEGER",
   ]) {
-    const column = definition.split(" ", 1)[0]!;
-    if (!tableHasColumn(db, "worker_session_placements", column)) {
-      db.exec(`ALTER TABLE worker_session_placements ADD COLUMN ${definition};`);
-    }
+    ensureColumn(db, "worker_session_placements", definition);
   }
   const placementSchema = extractSqliteTableSchema(
     OPENCLAW_STATE_SCHEMA_SQL,
@@ -243,57 +241,16 @@ export function migrateAgentDatabaseRelativePaths(
   };
 }
 
-function hasCanonicalAgentDatabasesPrimaryKey(db: DatabaseSync): boolean {
+export function assertCanonicalAgentDatabasesPrimaryKey(db: DatabaseSync, pathname: string): void {
   if (!tableExists(db, "agent_databases")) {
-    return true;
+    return;
   }
   const primaryKey = tablePrimaryKeyColumns(db, "agent_databases");
-  return primaryKey.length === 2 && primaryKey[0] === "agent_id" && primaryKey[1] === "path";
-}
-
-function canRepairAgentDatabasesPrimaryKey(db: DatabaseSync): boolean {
-  if (!tableExists(db, "agent_databases")) {
-    return false;
-  }
-  const requiredColumns = ["agent_id", "path", "schema_version", "last_seen_at", "size_bytes"];
-  return requiredColumns.every((column) => tableHasColumn(db, "agent_databases", column));
-}
-
-export function repairAgentDatabasesCompositePrimaryKey(db: DatabaseSync): boolean {
-  if (hasCanonicalAgentDatabasesPrimaryKey(db) || !canRepairAgentDatabasesPrimaryKey(db)) {
-    return false;
-  }
-  // Released DBs may have PRIMARY KEY(agent_id); current registration upserts by
-  // (agent_id,path) so explicit relocated agent DBs do not overwrite each other.
-  db.exec(`
-    DROP TABLE IF EXISTS agent_databases_migration_new;
-    CREATE TABLE agent_databases_migration_new (
-      agent_id TEXT NOT NULL,
-      path TEXT NOT NULL,
-      schema_version INTEGER NOT NULL,
-      last_seen_at INTEGER NOT NULL,
-      size_bytes INTEGER,
-      PRIMARY KEY (agent_id, path)
+  if (primaryKey.length !== 2 || primaryKey[0] !== "agent_id" || primaryKey[1] !== "path") {
+    throw new SqliteSchemaMismatchError(
+      `OpenClaw state database ${pathname} has an unsupported agent database registry schema. Upgrades from pre-July-2026 state are no longer migrated; restore a backup produced by a July 2026 or newer release before retrying.`,
     );
-    INSERT OR REPLACE INTO agent_databases_migration_new (
-      agent_id,
-      path,
-      schema_version,
-      last_seen_at,
-      size_bytes
-    )
-    SELECT
-      agent_id,
-      path,
-      schema_version,
-      last_seen_at,
-      size_bytes
-    FROM agent_databases
-    WHERE agent_id IS NOT NULL AND path IS NOT NULL;
-    DROP TABLE agent_databases;
-    ALTER TABLE agent_databases_migration_new RENAME TO agent_databases;
-  `);
-  return true;
+  }
 }
 
 export function repairLegacyGatewayRestartHandoffsForStrictMigration(db: DatabaseSync): void {
@@ -323,17 +280,7 @@ export function repairLegacyGatewayRestartHandoffsForStrictMigration(db: Databas
 
 export function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: string): void {
   operatorApprovalMigration.assertCanonicalOperatorApprovalKinds(db, pathname);
-  if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
-    if (canRepairAgentDatabasesPrimaryKey(db)) {
-      throw new OpenClawStateDatabaseSchemaMigrationRequiredError(
-        "agent-databases-composite-primary-key",
-        pathname,
-      );
-    }
-    throw new SqliteSchemaMismatchError(
-      `OpenClaw state database ${pathname} has a noncanonical agent database registry schema that cannot be repaired automatically; restore the canonical agent_databases shape before retrying.`,
-    );
-  }
+  assertCanonicalAgentDatabasesPrimaryKey(db, pathname);
   if (!hasCanonicalAuditEventsSchema(db)) {
     if (canRepairLegacyAuditEventsSchema(db)) {
       throw new OpenClawStateDatabaseSchemaMigrationRequiredError("audit-events-v2", pathname);
@@ -354,6 +301,7 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   db: DatabaseSync,
   pathname: string,
 ): OpenClawStateDatabaseSchemaMigration[] {
+  assertCanonicalAgentDatabasesPrimaryKey(db, pathname);
   const migrations: OpenClawStateDatabaseSchemaMigration[] = [];
   const userVersion = readStateSchemaMigrationVersion(db);
   if (
@@ -429,9 +377,6 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
     )
   ) {
     migrations.push({ kind: "github-publication-requester-authority-v18", path: pathname });
-  }
-  if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
-    migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });
   }
   if (!hasCanonicalAuditEventsSchema(db)) {
     migrations.push({ kind: "audit-events-v2", path: pathname });

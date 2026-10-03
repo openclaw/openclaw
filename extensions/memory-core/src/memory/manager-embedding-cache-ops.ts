@@ -1,6 +1,10 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
+  hasNonTextEmbeddingParts,
+  type EmbeddingInput,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import {
   buildFileEntry,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -9,8 +13,8 @@ import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import {
   collectMemoryCachedEmbeddings,
   isValidMemoryEmbedding,
-  loadMemoryEmbeddingCache,
 } from "./manager-embedding-cache.js";
+import { buildMemoryEmbeddingBatches } from "./manager-embedding-policy.js";
 import type {
   MemoryEmbeddingCacheEntry,
   MemoryEmbeddingCacheMutation,
@@ -30,6 +34,12 @@ export type MemoryEmbeddingCacheCandidate = {
 };
 
 export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOps {
+  protected abstract embedBatchWithRetry(
+    inputs: Array<string | EmbeddingInput>,
+    generation?: MemorySemanticProviderGeneration,
+    cacheCandidates?: MemoryEmbeddingCacheCandidate[],
+  ): Promise<number[][]>;
+
   protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {
     const max = this.cache.maxEntries;
     if (!this.cache.enabled || !max || max <= 0) {
@@ -46,17 +56,39 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     }
   }
 
-  protected collectCachedEmbeddings(
+  protected assertEmbeddingCacheGenerationCurrent(
+    generation: MemorySemanticProviderGeneration,
+  ): void {
+    if (
+      this.closed ||
+      this.syncProviderGeneration !== generation ||
+      generation.database.closed ||
+      !generation.database.db.isOpen ||
+      this.publishedDatabase !== generation.database
+    ) {
+      throw new Error("Memory embedding generation changed during cache lookup");
+    }
+  }
+
+  protected async collectCachedEmbeddings(
     candidates: MemoryEmbeddingCacheCandidate[],
     generation: MemorySemanticProviderGeneration,
   ) {
     const chunks = candidates.map((candidate) => candidate.chunk);
-    const cached = loadMemoryEmbeddingCache({
-      db: generation.database.db,
-      enabled: this.cache.enabled,
-      providerIdentities: generation.identities,
-      hashes: chunks.map((chunk) => chunk.hash),
-    });
+    const cached = this.cache.enabled
+      ? await generation.database.read(
+          {
+            type: "cache.read",
+            input: {
+              enabled: true,
+              providerIdentities: generation.identities,
+              hashes: chunks.map((chunk) => chunk.hash),
+            },
+          },
+          () => this.assertEmbeddingCacheGenerationCurrent(generation),
+        )
+      : new Map<string, number[]>();
+    this.assertEmbeddingCacheGenerationCurrent(generation);
     // Cache hits and new batches must inhabit the same vector space during a sync.
     for (const [hash, embedding] of cached) {
       if (!isValidMemoryEmbedding(embedding, generation.embeddingDimensions)) {
@@ -72,6 +104,47 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
         expectDefined(candidates[item.index], "missing memory embedding candidate"),
       ),
     };
+  }
+
+  protected async embedChunksInBatches(
+    candidates: MemoryEmbeddingCacheCandidate[],
+    generation: MemorySemanticProviderGeneration,
+    maxTokens: number,
+  ): Promise<number[][]> {
+    const { embeddings, missing, missingCandidates } = await this.collectCachedEmbeddings(
+      candidates,
+      generation,
+    );
+    this.assertEmbeddingCacheGenerationCurrent(generation);
+
+    if (missing.length === 0) {
+      return embeddings;
+    }
+
+    const batches = buildMemoryEmbeddingBatches(
+      missingCandidates.map((candidate) => candidate.chunk),
+      maxTokens,
+    );
+    let cursor = 0;
+    for (const batchChunks of batches) {
+      const batchCandidates = missingCandidates.slice(cursor, cursor + batchChunks.length);
+      const inputs = batchChunks.map((chunk) => chunk.embeddingInput ?? { text: chunk.text });
+      const hasStructuredInputs = inputs.some((input) => hasNonTextEmbeddingParts(input));
+      const batchEmbeddings = await this.embedBatchWithRetry(
+        hasStructuredInputs ? inputs : batchChunks.map((chunk) => chunk.text),
+        generation,
+        batchCandidates,
+      );
+      for (let i = 0; i < batchChunks.length; i += 1) {
+        const item = missing[cursor + i];
+        const embedding = batchEmbeddings[i] ?? [];
+        if (item) {
+          embeddings[item.index] = embedding;
+        }
+      }
+      cursor += batchChunks.length;
+    }
+    return embeddings;
   }
 
   private async withGeneratedEmbeddingCacheWrite(

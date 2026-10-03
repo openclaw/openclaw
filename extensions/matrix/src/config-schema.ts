@@ -1,6 +1,9 @@
 import {
   AllowFromListSchema,
-  BlockStreamingCoalesceSchema,
+  ChannelBotLoopProtectionSchema,
+  ChannelDeliveryStreamingConfigSchema,
+  ChannelStreamingPreviewSchema,
+  ChannelStreamingProgressSchema,
   buildChannelConfigSchema,
   buildGroupEntrySchema,
   buildNestedDmConfigSchema,
@@ -45,21 +48,11 @@ const matrixExecApprovalsSchema = z
   })
   .optional();
 
-const botLoopProtectionSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    maxEventsPerWindow: z.number().int().positive().optional(),
-    windowSeconds: z.number().int().positive().optional(),
-    cooldownSeconds: z.number().int().positive().optional(),
-  })
-  .strict()
-  .optional();
-
 export const matrixRoomSchema = buildGroupEntrySchema({
   requireMentionInBotThreads: z.boolean().optional(),
   account: z.string().optional(),
   allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
-  botLoopProtection: botLoopProtectionSchema,
+  botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
   autoReply: z.boolean().optional(),
   users: AllowFromListSchema,
 })
@@ -77,31 +70,9 @@ const matrixNetworkSchema = z
 export const matrixStreamingSchema = z
   .object({
     mode: z.enum(["partial", "quiet", "progress", "off"]).optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
-    block: z
-      .object({
-        enabled: z.boolean().optional(),
-        coalesce: BlockStreamingCoalesceSchema.optional(),
-      })
-      .strict()
-      .optional(),
-    progress: z
-      .object({
-        label: z.union([z.string(), z.literal(false)]).optional(),
-        labels: z.array(z.string()).optional(),
-        maxLines: z.number().int().positive().optional(),
-        maxLineChars: z.number().int().positive().optional(),
-        toolProgress: z.boolean().optional(),
-        commandText: z.enum(["raw", "status"]).optional(),
-      })
-      .strict()
-      .optional(),
-    preview: z
-      .object({
-        toolProgress: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
+    ...ChannelDeliveryStreamingConfigSchema.shape,
+    progress: ChannelStreamingProgressSchema.omit({ commentary: true, narration: true }).optional(),
+    preview: ChannelStreamingPreviewSchema.pick({ toolProgress: true }).optional(),
   })
   .strict();
 
@@ -167,7 +138,7 @@ export const MatrixConfigSchema = z.object({
   allowlistOnly: z.boolean().optional(),
   dangerouslyAllowNameMatching: z.boolean().optional(),
   allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
-  botLoopProtection: botLoopProtectionSchema,
+  botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
   groupPolicy: GroupPolicySchema.optional(),
   requireMentionInBotThreads: z.boolean().optional(),
   mentionPatterns: MentionPatternsPolicySchema.optional(),

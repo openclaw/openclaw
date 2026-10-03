@@ -17,9 +17,10 @@ import { tryFastAbortFromMessage } from "./abort.js";
 import { handleStopCommand } from "./commands-session-abort.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
-import { clearSessionQueues, enqueueFollowupRun, getFollowupQueueDepth } from "./queue.js";
+import { enqueueFollowupRun, getFollowupQueueDepth } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
-import { getExistingFollowupQueue } from "./queue/state.js";
+import { clearFollowupDrainCallback } from "./queue/drain.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -30,7 +31,8 @@ const sessionKey = "agent:main:slack:group:g12345678";
 beforeAll(() => dirs.setup());
 afterAll(() => dirs.cleanup());
 afterEach(() => {
-  clearSessionQueues([sessionKey]);
+  clearFollowupQueue(sessionKey);
+  clearFollowupDrainCallback(sessionKey);
   testing.resetReplyRunRegistry();
 });
 
@@ -229,7 +231,8 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
         expect(loadSessionEntry(otherScope)?.abortedLastRun).not.toBe(true);
       } finally {
         operation.complete();
-        clearSessionQueues([globalKey]);
+        clearFollowupQueue(globalKey);
+        clearFollowupDrainCallback(globalKey);
       }
     },
   );

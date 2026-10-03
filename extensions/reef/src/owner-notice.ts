@@ -1,6 +1,7 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import type { InboxEntry, ReefDeliveryRejection, ReefRejectionNoticeState } from "./types.js";
 
 type ResolveAgentRouteParams = Parameters<
@@ -30,9 +31,8 @@ const REJECTION_NOTICE_RETRY_MAX_MS = 60_000;
 
 interface ReefReceiptNotifierOptions {
   now?: () => number;
-  schedule?: (task: () => Promise<void>, delayMs: number) => void;
+  scheduler: PluginServiceSchedulerV1;
   onError?: (error: unknown, receiptId: string) => void;
-  signal?: AbortSignal;
 }
 
 interface ReefRejectionNoticeStore {
@@ -55,10 +55,6 @@ interface ReefNoticePlan {
   state: ReefRejectionNoticeState;
 }
 
-function scheduleNoticeRetry(task: () => Promise<void>, delayMs: number): void {
-  setTimeout(() => void task(), delayMs).unref();
-}
-
 function rejectionNoticeRetryDelay(retryAttempt: number): number {
   return Math.min(
     REJECTION_NOTICE_RETRY_BASE_MS * 2 ** Math.min(retryAttempt, 6),
@@ -75,7 +71,7 @@ export class ReefReceiptNotifier {
   constructor(
     private readonly notify: (notice: ReefRejectionNotice) => Promise<void>,
     private readonly store: ReefRejectionNoticeStore,
-    private readonly options: ReefReceiptNotifierOptions = {},
+    private readonly options: ReefReceiptNotifierOptions,
   ) {}
 
   async notifyRejections(rejections: readonly ReefDeliveryRejection[]): Promise<void> {
@@ -265,23 +261,23 @@ export class ReefReceiptNotifier {
     retryAttempt: number,
     task: () => Promise<void> | void,
   ): void {
-    if (this.options.signal?.aborted) {
+    if (this.options.scheduler.signal.aborted) {
       this.inFlight.delete(this.rejectionKey(rejection));
       return;
     }
-    const schedule = this.options.schedule ?? scheduleNoticeRetry;
     try {
-      schedule(
-        () =>
+      this.options.scheduler.schedule({
+        id: `receipt:${this.rejectionKey(rejection)}`,
+        run: () =>
           this.peerQueues.enqueue(rejection.peer, async () => {
-            if (this.options.signal?.aborted) {
+            if (this.options.scheduler.signal.aborted) {
               this.inFlight.delete(this.rejectionKey(rejection));
               return;
             }
             await task();
           }),
-        rejectionNoticeRetryDelay(retryAttempt),
-      );
+        delayMs: rejectionNoticeRetryDelay(retryAttempt),
+      });
     } catch (error) {
       this.inFlight.delete(this.rejectionKey(rejection));
       this.reportError(error, rejection.id);

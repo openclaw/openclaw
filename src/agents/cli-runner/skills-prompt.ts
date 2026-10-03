@@ -1,4 +1,5 @@
 import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
+import { resolveSessionSkillExecutionWorkspace } from "../../skills/loading/workspace-skill-roots.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
 import type { SkillUsagePath } from "../../skills/types.js";
@@ -15,19 +16,23 @@ export async function resolveCliSkillsPrompt(params: {
   agentId: string;
   config: RunCliAgentParams["config"];
   sessionKey: string;
-  skillsSnapshot: RunCliAgentParams["skillsSnapshot"];
+  run: Pick<RunCliAgentParams, "skillsSnapshot" | "sessionEntry">;
   workspaceDir: string;
   executionWorkspaceDir: string;
 }): Promise<{ prompt: string; usagePaths?: SkillUsagePath[] }> {
   params.assertCurrent();
   const agentWorkspaceDir = resolveAgentWorkspaceDir(params.config ?? {}, params.agentId);
+  const executionWorkspace = resolveSessionSkillExecutionWorkspace(
+    params.run.sessionEntry?.worktree?.canonicalWorkspaceDir,
+    params.executionWorkspaceDir,
+  );
   const skillsSnapshot =
-    params.skillsSnapshot ??
+    params.run.skillsSnapshot ??
     (
       await resolveReusableWorkspaceSkillSnapshot({
         assertCurrent: params.assertCurrent,
         workspaceDir: agentWorkspaceDir,
-        executionWorkspaceDir: params.executionWorkspaceDir,
+        ...executionWorkspace,
         config: params.config ?? {},
         agentId: params.agentId,
         watch: false,
@@ -58,7 +63,7 @@ export async function resolveCliSkillsPrompt(params: {
     await resolveEmbeddedRunSkillEntries({
       assertCurrent: params.assertCurrent,
       workspaceDir: skillsWorkspaceDir,
-      ...(sandboxWorkspace ? {} : { executionWorkspaceDir: params.executionWorkspaceDir }),
+      ...(sandboxWorkspace ? {} : executionWorkspace),
       config: params.config,
       agentId: params.agentId,
       eligibility: skillsEligibility,

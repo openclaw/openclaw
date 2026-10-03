@@ -32,7 +32,7 @@ type OriginCheckResult =
     }
   | { ok: false; reason: string };
 
-type BrowserOriginPolicy = {
+export type BrowserOriginPolicy = {
   requestHost?: string;
   origin?: string;
   fetchSite?: string;

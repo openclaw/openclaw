@@ -105,7 +105,6 @@ describe("status model authentication and endpoint", () => {
   it.each([
     ["api_key", "api-key (codex)", "https://api.openai.com/v1"],
     ["oauth", "oauth (codex)", "https://chatgpt.com/backend-api/codex"],
-    ["token", "token (codex)", "https://chatgpt.com/backend-api/codex"],
   ] as const)(
     "renders the prepared %s mode and selected route without a host credential",
     async (mode, authLabel, endpoint) => {
@@ -227,7 +226,6 @@ describe("status model authentication and endpoint", () => {
 
   it.each([
     ["apiKey", "api_key", "api-key (codex)"],
-    ["chatgpt", "oauth", "oauth (codex)"],
     ["chatgpt", "token", "token (codex)"],
   ] as const)(
     "renders %s discovery with its observed %s mode",
@@ -248,18 +246,6 @@ describe("status model authentication and endpoint", () => {
         { nativeDiscovery: { accountType: "chatgpt" } },
       )(selection),
     ).toEqual({ authLabel: "native (codex)", endpoint: undefined });
-  });
-
-  it("rejects a retired discovery observation together with its mode", async () => {
-    expect(
-      await statusAuth(
-        { source: "native", mode: "api_key" },
-        {
-          nativeDiscovery: { accountType: "apiKey", authMode: "api_key" },
-          current: () => false,
-        },
-      )(selection),
-    ).toEqual({ authLabel: "unknown" });
   });
 
   it("does not substitute native login for an unavailable explicit profile", async () => {

@@ -294,6 +294,18 @@ const directories = useAutoCleanupTempDirTracker((cleanup) => {
   });
 });
 
+function createProbe(root: string, name = "source", value = "preserved") {
+  const filename = path.join(root, `${name}.sqlite`);
+  const database = new (requireNodeSqlite().DatabaseSync)(filename);
+  try {
+    database.exec("CREATE TABLE probe(value TEXT)");
+    database.prepare("INSERT INTO probe VALUES(?)").run(value);
+  } finally {
+    database.close();
+  }
+  return filename;
+}
+
 it.each(["queued", "accepted"] as const)(
   "settles %s allocation cancellation without retiring a sibling token",
   async (phase) => {
@@ -485,17 +497,7 @@ it("services a queued snapshot while the earlier caller's Promise reactions are 
   fs.mkdirSync(cache);
   vi.stubEnv("XDG_CACHE_HOME", cache);
   const sqlite = requireNodeSqlite();
-  const sources = ["first", "second"].map((value) => {
-    const filename = path.join(root, `${value}.sqlite`);
-    const database = new sqlite.DatabaseSync(filename);
-    try {
-      database.exec("CREATE TABLE probe(value TEXT)");
-      database.prepare("INSERT INTO probe VALUES (?)").run(value);
-    } finally {
-      database.close();
-    }
-    return filename;
-  });
+  const sources = ["first", "second"].map((value) => createProbe(root, value, value));
   const original = sources.map((filename) => fs.readFileSync(filename));
   const replyGate: ReplyGate = {
     kind: "prepared",
@@ -594,14 +596,7 @@ it("services a queued snapshot while the earlier caller's Promise reactions are 
 
 it("retains an early preparation close until its original accepted result joins", async () => {
   const root = directories.make("staging-request-early-close-");
-  const source = path.join(root, "source.sqlite");
-  const sqlite = requireNodeSqlite();
-  const writer = new sqlite.DatabaseSync(source);
-  try {
-    writer.exec("CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('early');");
-  } finally {
-    writer.close();
-  }
+  const source = createProbe(root, "source", "early");
   const { env, cwd } = captureSqliteReadOnlyWorkerLaunch();
   const gate: ReplyGate = { kind: "prepared", entered: createDeferredCore(), open: false };
   observation.replyGate = gate;
@@ -637,17 +632,7 @@ it("retains an early preparation close until its original accepted result joins"
 it("keeps failed preparation custody retryable without requesting a sibling snapshot's cleanup", async () => {
   const root = directories.make("staging-request-failed-close-");
   const sqlite = requireNodeSqlite();
-  const sources = ["first", "sibling"].map((value) => {
-    const filename = path.join(root, `${value}.sqlite`);
-    const writer = new sqlite.DatabaseSync(filename);
-    try {
-      writer.exec("CREATE TABLE probe(value TEXT)");
-      writer.prepare("INSERT INTO probe VALUES(?)").run(value);
-    } finally {
-      writer.close();
-    }
-    return filename;
-  });
+  const sources = ["first", "sibling"].map((value) => createProbe(root, value, value));
   const original = sources.map((filename) => fs.readFileSync(filename));
   const owner = captureSqliteSnapshotStagingOwner();
   const { env, cwd } = captureSqliteReadOnlyWorkerLaunch();
@@ -758,16 +743,10 @@ it("keeps failed preparation custody retryable without requesting a sibling snap
 it("keeps an owned snapshot and its creator lock after abrupt worker exit until requested cleanup joins", async () => {
   const root = directories.make("staging-lost-worker-custody-");
   const cache = path.join(root, "cache");
-  const source = path.join(root, "source.sqlite");
   fs.mkdirSync(cache);
   vi.stubEnv("XDG_CACHE_HOME", cache);
   const sqlite = requireNodeSqlite();
-  const writer = new sqlite.DatabaseSync(source);
-  try {
-    writer.exec("CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('preserved');");
-  } finally {
-    writer.close();
-  }
+  const source = createProbe(root);
   const prepared = await startSqliteReadOnlyLocationAsync(source, {
     preserveSourceArtifacts: true,
   }).result;
@@ -824,17 +803,7 @@ it("joins both generation snapshots after their shared staging Worker exits abru
   fs.mkdirSync(cache);
   vi.stubEnv("XDG_CACHE_HOME", cache);
   const sqlite = requireNodeSqlite();
-  const sources = ["first", "second"].map((value) => {
-    const filename = path.join(root, `${value}.sqlite`);
-    const writer = new sqlite.DatabaseSync(filename);
-    try {
-      writer.exec("CREATE TABLE probe(value TEXT)");
-      writer.prepare("INSERT INTO probe VALUES(?)").run(value);
-    } finally {
-      writer.close();
-    }
-    return filename;
-  });
+  const sources = ["first", "second"].map((value) => createProbe(root, value, value));
   const original = sources.map((filename) => fs.readFileSync(filename));
   const stagingUrl = resolveRuntimeProcessEntrypointUrl("sqliteSnapshotStaging");
   const prepared: RetainedPreparedSqliteReadOnlyLocation[] = [];
@@ -912,15 +881,9 @@ it("joins both generation snapshots after their shared staging Worker exits abru
 it("keeps an unbound snapshot reader alive across retained generation close and subsequent admission", async () => {
   const root = directories.make("staging-generation-reader-");
   const cache = path.join(root, "cache");
-  const source = path.join(root, "source.sqlite");
   fs.mkdirSync(cache);
   vi.stubEnv("XDG_CACHE_HOME", cache);
-  const database = new (requireNodeSqlite().DatabaseSync)(source);
-  try {
-    database.exec("CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('preserved');");
-  } finally {
-    database.close();
-  }
+  const source = createProbe(root);
   const original = fs.readFileSync(source);
   const stagingUrl = resolveRuntimeProcessEntrypointUrl("sqliteSnapshotStaging");
   const resolveGeneration = (name: string) => (url: URL) => {

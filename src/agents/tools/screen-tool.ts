@@ -3,6 +3,7 @@ import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/clie
 import type { UiCommand, UiCommandParams } from "../../../packages/gateway-protocol/src/index.js";
 // The tool returns the Gateway result unchanged, so the wire schema remains the single owner.
 import { UiCommandResultSchema } from "../../../packages/gateway-protocol/src/schema/ui-command.js";
+import { requesterProfileSchema } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readToolStringParam, ToolInputError } from "./common.js";
 import { withGatewayPersonalToolUser } from "./gateway-caller-context.js";
@@ -29,12 +30,7 @@ const ACTIONS = [
 const ScreenToolSchema = Type.Object(
   {
     action: Type.String({ enum: [...ACTIONS], description: "Action" }),
-    user: Type.Optional(
-      Type.String({
-        description:
-          "The person's requester_profile.id, required when several people have steered this turn.",
-      }),
-    ),
+    user: requesterProfileSchema(),
     sessionKey: Type.Optional(Type.String({ description: "Session. Default: current" })),
     environmentId: Type.Optional(
       Type.String({ description: "Desktop source, or a pending portal's environment ID" }),

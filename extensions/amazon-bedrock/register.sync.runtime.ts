@@ -290,14 +290,12 @@ function injectBedrockCachePoints(
   // Inject into the last user message if missing.
   // Bedrock Converse uses lowercase roles ("user" / "assistant").
   const messages = payload.messages as BedrockMessage[] | undefined;
-  if (Array.isArray(messages) && messages.length > 0) {
-    for (const msg of messages.toReversed()) {
-      if (msg.role === "user" && Array.isArray(msg.content)) {
-        if (!hasCachePoint(msg.content)) {
-          msg.content.push(point);
-        }
-        break;
-      }
+  if (Array.isArray(messages)) {
+    const userContent = messages
+      .toReversed()
+      .find((msg) => msg.role === "user" && Array.isArray(msg.content))?.content;
+    if (userContent && !hasCachePoint(userContent)) {
+      userContent.push(point);
     }
   }
 }

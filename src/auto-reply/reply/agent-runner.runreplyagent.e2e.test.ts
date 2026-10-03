@@ -5,7 +5,7 @@ import { setImmediate } from "node:timers/promises";
 // E2E tests for run-reply-agent execution and generated session artifacts.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
   emptySqliteCounts,
   observeParentSqlite,
@@ -62,13 +62,13 @@ import { registerWaitingStatusCases } from "./agent-runner.runreplyagent.waiting
 import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
-  clearSessionQueues,
   enqueueFollowupRun,
   refreshQueuedFollowupSession,
   scheduleFollowupDrain,
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
+import { clearFollowupQueueForTest } from "./queue.test-helpers.js";
 import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
 import {
   REPLY_OPERATION_RUN_STATE,
@@ -327,7 +327,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  clearSessionQueues(["main"]);
+  clearFollowupQueueForTest("main");
   replyRunTesting.resetReplyRunRegistry();
   state.compactEmbeddedAgentSessionMock.mockReset();
   state.compactEmbeddedAgentSessionMock.mockResolvedValue({
@@ -665,7 +665,7 @@ describe("runReplyAgent active steering", () => {
     active.complete();
   });
 
-  it("keeps the replacement source when retired admission completes", async () => {
+  it("keeps the replacement source when retired admission completes", async ({ signal }) => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     const sourceContext = {
       Provider: "discord",
@@ -738,7 +738,7 @@ describe("runReplyAgent active steering", () => {
     );
     let replacement: ReplyOperation | undefined;
     try {
-      await withTestTimeout(committed.promise, 5_000, "first source admission did not persist");
+      await withinTest(committed.promise, signal);
       expect(requireStoredSessionEntry(storePath).restartRecoveryDeliverySourceRunId).toBe(
         "source-first",
       );
@@ -4119,7 +4119,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expect(payloads.map((payload) => payload?.text)).toHaveLength(1);
-    expect(payloads[0]?.text).toContain("provider internal error");
+    expect(payloads[0]?.text).toContain("The AI service is having trouble");
   });
 
   it("announces model fallback transitions across verbose levels", async () => {
@@ -4479,7 +4479,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(onBlockReply).toHaveBeenCalledOnce();
       expect(onBlockReply).toHaveBeenCalledWith(
         expect.objectContaining({
-          text: "LLM request failed: provider rejected the request schema or tool payload.",
+          text: "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
           isError: true,
         }),
       );
@@ -5902,9 +5902,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const res = await run();
     const payloads = Array.isArray(res) ? res : res ? [res] : [];
     expect(payloads.length).toBe(1);
-    expect(payloads[0]?.text).toContain("LLM connection failed");
-    expect(payloads[0]?.text).toContain("socket connection was closed unexpectedly");
-    expect(payloads[0]?.text).toContain("```");
+    expect(payloads[0]?.text).toContain("Lost the connection to the AI service");
+    expect(payloads[0]?.text).toContain("openclaw logs --follow");
+    expect(payloads[0]?.text).not.toContain("socket connection was closed unexpectedly");
   });
 });
 

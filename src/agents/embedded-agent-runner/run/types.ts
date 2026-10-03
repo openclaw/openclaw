@@ -197,6 +197,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   degradedReason?: string | null;
   /** Final prepared harness for this attempt; not evidence of native session/model ownership. */
   agentHarnessId?: string;
+  /** Actual embedded harness declaration, supplied by its invocation owner. */
+  supportsTurnScopedToolRestrictions?: boolean;
   /** Non-authorizing expectation; the harness must verify its current private binding. */
   expectedSessionRuntimeOwnership?: {
     model: "native";
@@ -434,6 +436,8 @@ export type EmbeddedRunAttemptResult = {
   yieldDetected?: boolean;
   /** Explicit user-facing waiting status supplied to sessions_yield. */
   yieldAcknowledgment?: string;
+  /** The registry accepted this attempt's explicit incoming-message wait. */
+  yieldMessageWaitRegistered?: boolean;
   /**
    * True when code mode owned this attempt's model tool surface. Absent means
    * the harness did not report engagement (treated as not engaged), which is

@@ -9,6 +9,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { stateWorkerRegistry } from "../../state/openclaw-state-worker-registry.js";
 import { captureDeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
 import type { SqliteWorkerRequest } from "../sqlite-worker-contract.js";
 import { ackDelivery } from "./delivery-queue-ack.js";
@@ -25,7 +26,6 @@ import {
   markDeliveryPlatformSendDispatched,
   loadPendingDelivery,
 } from "./delivery-queue-storage.js";
-import { executeOutboundDeliveryStorageCommand } from "./delivery-queue-storage.worker.js";
 import { installDeliveryQueueTmpDirHooks } from "./delivery-queue.test-helpers.js";
 
 function observeRenewalDispatch(id: string) {
@@ -72,19 +72,21 @@ describe("outbound producer claim worker", () => {
       fixtures.tmpDir(),
     );
 
+    await stateWorkerRegistry.prepare("deliveryQueue.mutateOutbound");
     vi.useFakeTimers();
     try {
       vi.setSystemTime(1_000);
       const env = { ...process.env, OPENCLAW_STATE_DIR: fixtures.tmpDir() };
-      const options = { database: openOpenClawStateDatabase({ env }), env };
-      executeOutboundDeliveryStorageCommand(
+      const database = openOpenClawStateDatabase({ env });
+      const context = { open: () => database, stateOptions: () => ({ path: database.path, env }) };
+      stateWorkerRegistry.execute(
         { type: "deliveryQueue.mutateOutbound", input: { kind: "start", id } },
-        options,
+        context,
       );
       vi.setSystemTime(9_000);
-      executeOutboundDeliveryStorageCommand(
+      stateWorkerRegistry.execute(
         { type: "deliveryQueue.mutateOutbound", input: { kind: "dispatch", id } },
-        options,
+        context,
       );
     } finally {
       vi.useRealTimers();

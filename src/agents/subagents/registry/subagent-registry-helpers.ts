@@ -1,3 +1,4 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES } from "../../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../../config/config.js";
@@ -22,7 +23,7 @@ import {
 } from "../../../sessions/session-run-error.js";
 import { truncateUtf8Prefix } from "../../../utils/utf8-truncate.js";
 import { cleanupMaterializedSubagentAttachments } from "../subagent-attachment-cleanup.js";
-import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delivery-state.js";
+import { getDeliveryLastError } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
@@ -48,7 +49,6 @@ const ANNOUNCE_RETRY_BACKOFF = {
 
 const FROZEN_RESULT_TEXT_MAX_BYTES = 100 * 1024;
 
-/** Caps frozen completion text stored for later announce/recovery delivery. */
 export function capFrozenResultText(resultText: string): string {
   const trimmed = resultText.trim();
   const totalBytes = Buffer.byteLength(trimmed, "utf8");
@@ -64,7 +64,6 @@ export function capFrozenResultText(resultText: string): string {
   return `${payload}${notice}`;
 }
 
-/** Computes bounded exponential backoff for subagent announce retries. */
 export function resolveAnnounceRetryDelayMs(retryCount: number) {
   return computeBackoff(ANNOUNCE_RETRY_BACKOFF, Math.max(1, retryCount));
 }
@@ -76,12 +75,11 @@ function formatAnnounceGiveUpLogField(value: string): string {
   );
 }
 
-/** Logs a sanitized final give-up line for failed subagent announce delivery. */
 export function logAnnounceGiveUp(
   entry: SubagentRunRecord,
   reason: "expiry" | "permanent_failure",
 ) {
-  const retryCount = getDeliveryAttemptCount(entry);
+  const retryCount = entry.delivery?.attemptCount ?? 0;
   const endedAt = entry.execution.endedAt;
   const endedAgoMs = typeof endedAt === "number" ? Math.max(0, Date.now() - endedAt) : undefined;
   const endedAgoLabel = endedAgoMs != null ? `${Math.round(endedAgoMs / 1000)}s` : "n/a";
@@ -94,7 +92,6 @@ export function logAnnounceGiveUp(
   );
 }
 
-/** Persists child session timing/status derived from the subagent registry row. */
 export async function persistSubagentSessionTiming(
   entry: SubagentRunRecord,
   options?: {
@@ -107,6 +104,11 @@ export async function persistSubagentSessionTiming(
     assertCommitAllowed?: () => void;
     assertCurrentEntry?: (entry: SessionEntryCurrentFacts | undefined) => void;
     sessionEntryCurrent?: SessionEntryCurrentCheck;
+    settledQueuedCancellation?: {
+      storePath: string;
+      sessionId: string;
+      lifecycleRevision?: string;
+    };
   },
 ) {
   const childSessionKey = entry.childSessionKey?.trim();
@@ -119,6 +121,7 @@ export async function persistSubagentSessionTiming(
   const storePath =
     options?.sessionEntryCurrent?.source.path ??
     options?.session?.storePath ??
+    options?.settledQueuedCancellation?.storePath ??
     resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const refused = new Error("Subagent timing owner changed before commit");
   const assertGenerationCurrent = () => {
@@ -128,10 +131,7 @@ export async function persistSubagentSessionTiming(
     options?.assertCommitAllowed?.();
   };
   const startedAt = getSubagentSessionStartedAt(entry);
-  const endedAt =
-    typeof entry.execution.endedAt === "number" && Number.isFinite(entry.execution.endedAt)
-      ? entry.execution.endedAt
-      : undefined;
+  const endedAt = asFiniteNumber(entry.execution.endedAt);
   const runtimeMs = getSubagentSessionRuntimeMs(entry, endedAt);
   const status = resolveSubagentSessionStatus(entry);
 
@@ -139,6 +139,25 @@ export async function persistSubagentSessionTiming(
     ? resolveSessionRunError(entry.execution.outcome ?? {}, status)
     : undefined;
   const update = (sessionEntry: InternalSessionEntry) => {
+    const settled = options?.settledQueuedCancellation;
+    if (
+      settled &&
+      (entry.collect !== true ||
+        entry.execution.status !== "terminal" ||
+        entry.execution.startedAt !== undefined ||
+        sessionEntry.startedAt !== undefined ||
+        entry.endedReason !== SUBAGENT_ENDED_REASON_KILLED ||
+        !entry.killReconciliation ||
+        storePath !== settled.storePath ||
+        sessionEntry.sessionId !== settled.sessionId ||
+        sessionEntry.lifecycleRevision !== settled.lifecycleRevision ||
+        sessionEntry.activeWriterRunId !== undefined ||
+        sessionEntry.lifecycleRunId !== undefined ||
+        (sessionEntry.lastRunId !== undefined &&
+          sessionEntry.lastRunId !== (entry.swarmRunId ?? entry.runId)))
+    ) {
+      return null;
+    }
     if (status === "killed") {
       const existingCompletion = resolveCompletionFromSessionEntry(sessionEntry, Date.now(), {
         notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
@@ -156,6 +175,11 @@ export async function persistSubagentSessionTiming(
       }
     }
     const next = { ...sessionEntry };
+    if (settled) {
+      // Exact queued withdrawal and successful resource cleanup qualify identity,
+      // without fabricating an agent start or execution.
+      next.lastRunId = entry.swarmRunId ?? entry.runId;
+    }
 
     for (const [key, value] of [
       ["startedAt", startedAt],
@@ -283,7 +307,14 @@ export async function persistSubagentSessionTiming(
   }
 }
 
-/** Best-effort async removal for a subagent attachment directory. */
+/** Kept sessions may retain their attachments; every other cleanup removes them with the run. */
+export function shouldRemoveSubagentAttachments(
+  entry: SubagentRunRecord,
+  cleanup: SubagentRunRecord["cleanup"] = entry.cleanup,
+): boolean {
+  return cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+}
+
 export async function safeRemoveAttachmentsDir(
   entry: SubagentRunRecord,
   isCurrent?: () => boolean,
@@ -305,7 +336,6 @@ export async function safeRemoveAttachmentsDir(
   }
 }
 
-/** Resolves the completed subagent archive delay from config. */
 function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
   const config = cfg ?? getRuntimeConfig();
   const minutes =
@@ -319,10 +349,7 @@ function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
 
 /** Arms retention only after the run or its waitable collector result has completed. */
 export function updateSubagentArchiveAtMs(entry: SubagentRunRecord, cfg?: OpenClawConfig): boolean {
-  const endedAt =
-    typeof entry.execution.endedAt === "number" && Number.isFinite(entry.execution.endedAt)
-      ? entry.execution.endedAt
-      : undefined;
+  const endedAt = asFiniteNumber(entry.execution.endedAt);
   const completedAt = entry.collect
     ? endedAt === undefined && !entry.collectorCompletion
       ? undefined

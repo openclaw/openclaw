@@ -554,10 +554,7 @@ export async function prepareReplyAgentPayloads(state: {
   // turn) already covers the commitment — avoids false positives (#32228).
   const coveredByExistingCron =
     hasReminderCommitment && successfulCronAdds === 0
-      ? await hasSessionRelatedCronJobs({
-          cronStorePath: undefined,
-          sessionKey,
-        })
+      ? await hasSessionRelatedCronJobs(sessionKey)
       : false;
   const guardedReplyPayloads =
     hasReminderCommitment && successfulCronAdds === 0 && !coveredByExistingCron

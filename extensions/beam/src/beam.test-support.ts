@@ -1,13 +1,16 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type {
   SessionCatalogHost,
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
 import type { ActiveSessionCatalog } from "openclaw/plugin-sdk/session-catalog-runtime";
+import { vi } from "vitest";
 import { createBeamMirrorRunner } from "./mirror.js";
 
 export const beamTestNow = Date.parse("2026-07-27T12:00:00.000Z");
-export const beamTestLogger = { warn: () => {}, info: () => {} };
+export const beamTestLogger = { warn: () => {}, info: () => {}, error: () => {} };
 export type BeamTestSession = {
   threadId: string;
   name?: string;
@@ -106,6 +109,30 @@ export function createBeamTestRunner({
     runtime: createBeamTestRuntime(beamTestMirrorConfig(endpoint ? { endpoint } : {})),
     logger: beamTestLogger,
     now: () => beamTestNow,
+    signal: new AbortController().signal,
     ...options,
   });
+}
+
+export function createScheduledBeamTestRunner(options: Parameters<typeof createBeamTestRunner>[0]) {
+  const scheduler = createTestPluginServiceScheduler();
+  const runner = createBeamTestRunner({ ...options, signal: scheduler.signal });
+  const settled = createDeferred<void>();
+  scheduler.schedule({
+    id: "mirror",
+    delayMs: 0,
+    everyMs: 30_000,
+    run: async () => {
+      try {
+        await runner.tick();
+      } finally {
+        settled.resolve();
+      }
+    },
+  });
+  return {
+    tick: () => vi.advanceTimersByTimeAsync(0),
+    stop: scheduler.stop,
+    settled: settled.promise,
+  };
 }

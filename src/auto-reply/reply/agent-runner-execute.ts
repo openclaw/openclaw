@@ -68,10 +68,9 @@ export function continueStalledReplyTurn({
     );
     return true;
   }
-  // Source-bound reply owners (Web UI chat.send, group threads) deliver only the
-  // follow-ups they queued themselves and would drop a recovery run's answer.
-  // Leave the notice with the stalled turn's still-live dispatch.
-  if (followupRun.queuedFollowupReplyDisposition) {
+  // Group-thread participants declare no queued reply owner, so a recovery's
+  // answer would be dropped; leave the notice with the stalled turn's dispatch.
+  if (followupRun.queuedFollowupReplyDisposition?.kind === "drop") {
     return false;
   }
   const enqueued = enqueueFollowupRun(

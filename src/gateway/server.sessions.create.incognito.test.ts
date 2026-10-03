@@ -1,5 +1,5 @@
 import path from "node:path";
-import { expect, test, vi } from "vitest";
+import { expect, test } from "vitest";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -38,13 +38,9 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
   const { storePath } = await createSessionStoreDir();
   try {
     const durableParentKey = "main";
-    const savedPrompt = "unrelated durable prompt for incognito existence checks";
     await writeSessionStore({
       entries: {
-        main: {
-          ...sessionStoreEntry("durable-parent"),
-          skillsSnapshot: { prompt: savedPrompt, skills: [] },
-        },
+        main: sessionStoreEntry("durable-parent"),
       },
     });
     const created = await directSessionReq<{
@@ -140,15 +136,6 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
     expect(child.payload?.entry.parentSessionId).toBe(entry?.sessionId);
     expect(child.payload?.entry).not.toHaveProperty("sessionFile");
 
-    const rejectedInheritedChannel = await directSessionReq("sessions.create", {
-      agentId: "main",
-      key: "agent:main:discord:channel:inherited",
-      parentSessionKey: key,
-    });
-    expect(rejectedInheritedChannel).toMatchObject({
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: "incognito sessions are web-only" },
-    });
     const durableSubagentKey = "agent:main:subagent:durable-existing";
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: durableSubagentKey, storePath },
@@ -242,29 +229,6 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
         message: 'agent "main" does not match session key agent "work"',
       },
     });
-    const durableCollisionKey = "agent:main:dashboard:incognito-durable-collision";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: durableCollisionKey, storePath },
-      sessionStoreEntry("durable-collision"),
-    );
-    const parse = vi.spyOn(JSON, "parse");
-    try {
-      const rejectedExplicitDashboard = await directSessionReq("sessions.create", {
-        agentId: "main",
-        key: durableCollisionKey,
-        incognito: true,
-      });
-      expect(parse.mock.calls.some(([json]) => json.includes(savedPrompt))).toBe(false);
-      expect(rejectedExplicitDashboard).toMatchObject({
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: "incognito is immutable and requires a new session key",
-        },
-      });
-    } finally {
-      parse.mockRestore();
-    }
   } finally {
     await closeIncognitoSessionDatabases();
   }

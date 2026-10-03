@@ -8,6 +8,7 @@ import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { parseCronPacingBounds } from "../pacing.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { assertSafeCronSessionTargetId } from "../session-target.js";
+import { assertCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
 import { isSystemOwnedCronPayloadKind, type CronJob, type CronJobPatch } from "../types.js";
 import { normalizeHttpWebhookUrl } from "../webhook-url.js";
 import { computeJobNextRunAtMs } from "./jobs-scheduling.js";
@@ -238,6 +239,7 @@ export function assertMainSessionAgentId(
 }
 
 export function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
+  assertCanonicalCronDeliveryMode(job.delivery);
   if (!job.delivery) {
     return;
   }

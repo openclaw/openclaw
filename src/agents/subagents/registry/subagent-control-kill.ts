@@ -1,13 +1,12 @@
-/** Authorized tree and admin subagent kill orchestration. */
 import { resolveSubagentLabel } from "../../../auto-reply/reply/subagents-utils.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { isCurrentChatAbortExecution } from "../../../gateway/chat-abort-lifecycle-internal.js";
+import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
+import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
-import {
-  killSubagentRun,
-  resolveSubagentKillTargetState,
-} from "./subagent-control-kill-runtime.js";
+import { mutateSubagentRunForKill } from "./subagent-control-kill-runtime.js";
 import {
   withSubagentKillScope,
   type KillTree,
@@ -26,11 +25,121 @@ import {
 } from "./subagent-control-session.js";
 import type { SubagentAdminKillParams, SubagentAdminKillResult } from "./subagent-control.types.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./subagent-control.types.js";
+import { resolveSubagentKillTargetState } from "./subagent-registry-completion.js";
+import {
+  captureSubagentExecution,
+  getSubagentExecutionCleanup,
+} from "./subagent-registry-execution-cleanup.js";
+import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import {
   listSubagentRunsForController,
   listSubagentRunsForRequester,
 } from "./subagent-registry-read.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+async function killSubagentRun(
+  params: Parameters<typeof mutateSubagentRunForKill>[0],
+): ReturnType<typeof mutateSubagentRunForKill> {
+  let captured = captureSubagentExecution(params);
+  let retiredCleanup = captured
+    ? undefined
+    : getSubagentExecutionCleanup(params.entry, params.session.entry);
+  const stopAcceptance = { accepted: false };
+  let result: Awaited<ReturnType<typeof mutateSubagentRunForKill>> = {
+    killed: false,
+    targetState: resolveSubagentKillTargetState(params.entry),
+  };
+  let settlementFailure:
+    | { error: unknown; settlement: NonNullable<ChatAbortControllerEntry["executionSettlement"]> }
+    | undefined;
+  try {
+    result = await mutateSubagentRunForKill(
+      params,
+      () => {
+        captured ??= captureSubagentExecution(params);
+        return captured;
+      },
+      stopAcceptance,
+    );
+  } finally {
+    // Disposal may mutate the session. Join outside the exclusive mutation while
+    // the caller still owns this execution's retirement and scheduler holds.
+    const execution = captured?.execution;
+    retiredCleanup ??= captured
+      ? undefined
+      : getSubagentExecutionCleanup(params.entry, params.session.entry);
+    const settlement = execution?.executionSettlement ?? retiredCleanup?.settlement;
+    if (
+      settlement &&
+      !(execution ? isCurrentChatAbortExecution(execution) : retiredCleanup?.isSelf()) &&
+      (result.killed ||
+        result.targetState ||
+        stopAcceptance.accepted ||
+        settlement.status === "rejected" ||
+        (!result.declined &&
+          (retiredCleanup ||
+            execution?.controller.signal.aborted ||
+            execution?.registrationCleanupRequested)))
+    ) {
+      try {
+        await settlement.completion;
+      } catch (error) {
+        settlementFailure = { error, settlement };
+      }
+    }
+  }
+  if (!stopAcceptance.accepted) {
+    params.cancellationControl.assertCurrent();
+  }
+  if (captured) {
+    const entry = getCurrentSubagentRunOwner(subagentRuns, params.entry) ?? captured.entry;
+    const resolver = getGatewayContextResolver(entry);
+    const cleanup =
+      resolver === undefined ? getSubagentExecutionCleanup(entry, params.session.entry) : undefined;
+    const releasedToSelfCleanup =
+      cleanup !== undefined &&
+      cleanup.settlement === captured.execution.executionSettlement &&
+      cleanup.isCurrent() &&
+      cleanup.isSelf();
+    if (releasedToSelfCleanup) {
+      params.session.assertCurrent();
+    }
+    const releasedBinding =
+      resolver === undefined &&
+      (captured.execution.executionSettlement?.cleanupSettled === true || releasedToSelfCleanup);
+    if (
+      entry.runId !== captured.runId ||
+      (resolver !== captured.resolver && !releasedBinding) ||
+      captured.resolver?.() !== captured.context ||
+      (captured.context.chatAbortControllers.has(captured.runId) &&
+        captured.context.chatAbortControllers.get(captured.runId) !== captured.execution)
+    ) {
+      throw new Error("Subagent execution owner changed during cancellation");
+    }
+  } else if (retiredCleanup) {
+    params.session.assertCurrent();
+    if (
+      !retiredCleanup.isCurrent() ||
+      (!retiredCleanup.isSelf() && !retiredCleanup.settlement.cleanupSettled)
+    ) {
+      throw new Error("Subagent execution owner changed during cancellation");
+    }
+  }
+  if (settlementFailure) {
+    const message = `Subagent execution settlement failed: ${formatErrorMessage(settlementFailure.error)}`;
+    const { settlement } = settlementFailure;
+    if (
+      (captured?.execution.executionSettlement ?? retiredCleanup?.settlement) === settlement &&
+      settlement.status === "rejected" &&
+      settlement.cleanupSettled
+    ) {
+      result = { ...result, completedCleanupError: message };
+    } else {
+      result = { ...result, error: [result.error, message].filter(Boolean).join(" ") };
+    }
+  }
+  return result;
+}
 
 async function killLatestSubagentRun(params: {
   cfg: OpenClawConfig;
@@ -46,17 +155,27 @@ async function killLatestSubagentRun(params: {
   result: Awaited<ReturnType<typeof killSubagentRun>>;
 }> {
   const { tree, scope } = params;
+  const cancellationControl = {
+    assertCurrent: scope.cancellationControl.assertCurrent,
+    prepareRead: () => {
+      const pending = [scope.cancellationControl.prepareRead?.(), tree.prepareRead()].filter(
+        (publication) => publication !== undefined,
+      );
+      return pending.length > 0 ? Promise.all(pending).then(() => {}) : undefined;
+    },
+  };
   for (
-    let pending = scope.cancellationControl?.prepareRead?.();
+    let pending = cancellationControl.prepareRead();
     pending;
-    pending = scope.cancellationControl?.prepareRead?.()
+    pending = cancellationControl.prepareRead()
   ) {
     await pending;
+    cancellationControl.assertCurrent();
   }
   const matchesExpected = (entry: SubagentRunRecord) =>
     (params.expectedGeneration === undefined || entry.generation === params.expectedGeneration) &&
     (!params.expectedOwnerKey || entry.requesterSessionKey === params.expectedOwnerKey);
-  scope.cancellationControl?.assertCurrent();
+  scope.cancellationControl.assertCurrent();
   const entry = tree.entry;
   const session = tree.session;
   if (!session) {
@@ -71,32 +190,44 @@ async function killLatestSubagentRun(params: {
         entry,
         session,
         stateContext: scope.stateContext,
-        cancellationControl: scope.cancellationControl,
+        cancellationControl,
         isCurrent: (candidate, requirePreparedSession) =>
           tree.isCurrent(candidate, requirePreparedSession) && matchesExpected(candidate),
         withdrawQueuedReservation: () => tree.dispatchHold?.withdraw(),
         refreshDescendants: scope.refresh,
       })
     : { killed: false, superseded: true };
+  tree.completedCleanupError = result.completedCleanupError;
   // A committed retirement ends mutation/discovery of this ancestor, but not
   // cancellation of its captured descendants. Refusals on a live row stay fenced.
   if (result.superseded && !tree.isCurrent(entry) && tree.canTraverse() && matchesExpected(entry)) {
     return {
-      entry,
+      entry: tree.entry,
       session,
-      result: { killed: false, targetState: resolveSubagentKillTargetState(entry) },
+      result: {
+        killed: false,
+        targetState: resolveSubagentKillTargetState(tree.entry),
+        ...(result.error !== undefined ? { error: result.error } : {}),
+        ...(result.completedCleanupError !== undefined
+          ? { completedCleanupError: result.completedCleanupError }
+          : {}),
+      },
     };
   }
-  return { entry, session, result };
+  return { entry: tree.entry, session, result };
 }
 
 function collectKillErrors(trees: KillTree[], unlabeledRoot?: KillTree) {
   let failed = 0;
   const errors: string[] = [];
   const collect = (tree: KillTree) => {
-    if (tree.errors.size > 0) {
+    const diagnostics = [...tree.errors];
+    if (tree.completedCleanupError) {
+      diagnostics.push(tree.completedCleanupError);
+    }
+    if (diagnostics.length > 0) {
       failed += 1;
-      for (const error of tree.errors) {
+      for (const error of diagnostics) {
         errors.push(
           tree === unlabeledRoot ? error : `${resolveSubagentLabel(tree.entry)}: ${error}`,
         );
@@ -140,6 +271,10 @@ async function killSubagentRunTree(
         visits.set(tree, result);
         if (
           !tree.entry.execution.endedAt ||
+          (tree.session &&
+            (captureSubagentExecution({ entry: tree.entry, session: tree.session })?.execution
+              .executionSettlement ||
+              getSubagentExecutionCleanup(tree.entry, tree.session.entry))) ||
           tree.entry.pauseReason === "sessions_yield" ||
           (params.suppressTaskDelivery && suppressCompletedWakes && tree.entry.requesterSettleWake)
         ) {
@@ -147,7 +282,11 @@ async function killSubagentRunTree(
           if (stopped.result.error) {
             tree.errors.add(stopped.result.error);
           }
-          if (stopped.result.error || stopped.result.declined) {
+          if (
+            stopped.result.error ||
+            stopped.result.completedCleanupError ||
+            stopped.result.declined
+          ) {
             // A parent's failed Stop cannot retire the completion it still owns.
             // Keep trying live descendants under the existing best-effort policy.
             result.suppressCompletedWakes = false;
@@ -160,6 +299,9 @@ async function killSubagentRunTree(
           }
         }
         result.descendants = true;
+      }
+      for (let pending = tree.prepareRead(); pending; pending = tree.prepareRead()) {
+        await pending;
       }
       if (result.descendants && tree.canTraverse()) {
         const suppressDescendantWakes = result.suppressCompletedWakes;
@@ -206,12 +348,15 @@ async function killSubagentRoot(params: Parameters<typeof killLatestSubagentRun>
     if (stopped.result.error) {
       params.tree.errors.add(stopped.result.error);
     }
+    for (let pending = params.tree.prepareRead(); pending; pending = params.tree.prepareRead()) {
+      await pending;
+    }
     if (!stopped.result.superseded && !stopped.result.declined && params.tree.canTraverse()) {
       // Exact admin constraints belong only to its selected root, not each descendant.
       cascade = await killSubagentRunTree({
         cfg: params.cfg,
         suppressTaskDelivery: params.suppressTaskDelivery,
-        suppressCompletedWakes: !stopped.result.error,
+        suppressCompletedWakes: !stopped.result.error && !stopped.result.completedCleanupError,
         scope: params.scope,
         trees: params.tree.children,
       });
@@ -312,7 +457,7 @@ export async function killSubagentRunAdmin(
     assertCurrent: () => void;
     prepareRead?: () => Promise<void> | undefined;
     beforeSessionKill?: () => boolean;
-    preparePublication?: KillPublicationPreparation;
+    preparePublication?: KillPublicationPreparation<SubagentAdminKillResult>;
   },
 ): Promise<SubagentAdminKillResult> {
   const publish = (result: SubagentAdminKillResult): SubagentAdminKillResult => {
@@ -369,7 +514,7 @@ export async function killSubagentRunAdmin(
       rootStopSuperseded = stopResult.superseded === true;
       // Descendant cleanup can yield long enough for the target run to finish.
       // Return the freshest registry state so task cancellation cannot make a stale kill sticky.
-      const targetState = resolveSubagentKillTargetState(stopped.entry) ?? stopResult.targetState;
+      const targetState = resolveSubagentKillTargetState(tree.entry) ?? stopResult.targetState;
       const killedTarget =
         targetState?.state === "terminal" &&
         targetState.task.status === "cancelled" &&
@@ -405,7 +550,7 @@ export async function killSubagentRunAdmin(
     },
     (result, [tree]) => {
       if (!result.found || !tree) {
-        return publish(result);
+        return result;
       }
       // Completion can commit during the awaited handoff. Fence both the retained
       // run and its session incarnation before any synchronous result publication.
@@ -415,12 +560,13 @@ export async function killSubagentRunAdmin(
       }
       const targetState = ownsOutcome ? resolveSubagentKillTargetState(tree.entry) : undefined;
       const { errors } = collectKillErrors([tree], tree);
-      return publish({
+      return {
         ...result,
         ...(targetState ? { targetState } : {}),
         ...(errors.length > 0 ? { error: errors.join("; ") } : {}),
-      });
+      };
     },
     control?.preparePublication,
+    publish,
   );
 }

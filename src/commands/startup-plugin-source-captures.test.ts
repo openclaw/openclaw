@@ -66,7 +66,10 @@ beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   await fs.mkdir(path.join(stateDir, "tmp", "plugin-captures"), { recursive: true });
   mocks.read.mockResolvedValue({
-    snapshot: createSnapshot({ hash: "fixture", sourceConfig: {} }),
+    snapshot: createSnapshot({
+      hash: "fixture",
+      sourceConfig: { meta: { migrations: { webhookListeners: true } } },
+    }),
   });
   mocks.verify.mockResolvedValue({ quarantinedPlugins: [] });
   mocks.prune.mockResolvedValue({ removed: [], warnings: [] });

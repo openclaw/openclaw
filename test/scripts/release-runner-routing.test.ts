@@ -93,14 +93,20 @@ describe("release runner reservation", () => {
         if (!job["runs-on"]) {
           continue;
         }
-        if (name === "ci" && jobName === "pr-fail-fast") {
+        if (
+          name === "ci" &&
+          ["pr-fail-fast", "check-extension-package-boundary"].includes(jobName)
+        ) {
           expect(
-            evaluateWorkflowExpression(job.if!, {
+            evaluateWorkflowExpression(job.if!.startsWith("${{") ? job.if! : `\${{ ${job.if} }}`, {
               ...context,
               eventName: "workflow_dispatch",
               repository: "openclaw/openclaw",
               runAttempt: 1,
-              preflightOutputs: { run_checks_node_core_nondist: "true" },
+              preflightOutputs: {
+                run_checks_node_core_nondist: "true",
+                shared_sdk_declarations: "false",
+              },
             }),
           ).toBe(false);
           continue;
@@ -136,13 +142,20 @@ describe("release runner reservation", () => {
       }
       for (const eventName of ["pull_request", "push", "schedule", "workflow_dispatch"] as const) {
         const ordinary = { ...context, eventName, releaseGate: true };
-        if (name === "ci" && jobName === "pr-fail-fast" && eventName !== "pull_request") {
+        if (
+          name === "ci" &&
+          ((jobName === "pr-fail-fast" && eventName !== "pull_request") ||
+            jobName === "check-extension-package-boundary")
+        ) {
           expect(
-            evaluateWorkflowExpression(job.if!, {
+            evaluateWorkflowExpression(job.if!.startsWith("${{") ? job.if! : `\${{ ${job.if} }}`, {
               ...ordinary,
               repository: "openclaw/openclaw",
               runAttempt: 1,
-              preflightOutputs: { run_checks_node_core_nondist: "true" },
+              preflightOutputs: {
+                run_checks_node_core_nondist: "true",
+                shared_sdk_declarations: "false",
+              },
             }),
           ).toBe(false);
           continue;

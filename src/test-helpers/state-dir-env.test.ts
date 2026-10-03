@@ -1,4 +1,5 @@
 // State dir environment tests cover isolated state directory env helpers.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

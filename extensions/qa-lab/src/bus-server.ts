@@ -1,6 +1,10 @@
 import { once } from "node:events";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type {
+  QaBusPollInput,
+  QaBusSearchMessagesInput,
+} from "openclaw/plugin-sdk/qa-channel-protocol";
 import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
@@ -10,7 +14,6 @@ import { sendHttpRequestRejection } from "openclaw/plugin-sdk/webhook-request-gu
 import { z } from "zod";
 import { normalizeAccountId, resolveQaBusPollStartCursor } from "./bus-queries.js";
 import type { QaBusState } from "./bus-state.js";
-import type { QaBusPollInput, QaBusSearchMessagesInput } from "./runtime-api.js";
 
 const QA_HTTP_JSON_MAX_BODY_BYTES = 1024 * 1024;
 const QA_HTTP_MEDIA_JSON_MAX_BODY_BYTES = 16 * 1024 * 1024;

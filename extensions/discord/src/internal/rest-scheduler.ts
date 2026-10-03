@@ -247,35 +247,6 @@ export class RestScheduler<TData> {
     return bucket.remaining === 0 && bucket.resetAt > now;
   }
 
-  private pruneRouteMapping(routeKey: string): void {
-    const bucketKey = this.routeBuckets.get(routeKey);
-    if (!bucketKey) {
-      return;
-    }
-    this.routeBuckets.delete(routeKey);
-    this.buckets.get(bucketKey)?.routeKeys.delete(routeKey);
-  }
-
-  private pruneIdleRouteMappings(
-    bucketKey: string,
-    bucket: BucketState<TData>,
-    now = Date.now(),
-  ): void {
-    if (bucket.active > 0 || countPending(bucket) > 0 || this.isBucketRateLimited(bucket, now)) {
-      return;
-    }
-    for (const routeKey of Array.from(bucket.routeKeys)) {
-      if (this.routeBuckets.get(routeKey) === bucketKey) {
-        this.pruneRouteMapping(routeKey);
-      }
-    }
-  }
-
-  private shouldPruneIdleBucket(key: string): boolean {
-    const mappedBucketKey = this.routeBuckets.get(key);
-    return mappedBucketKey !== key && !this.hasBucketReference(key);
-  }
-
   private bindRouteToBucket(routeKey: string, bucketKey: string): BucketState<TData> {
     const target = this.getBucket(bucketKey);
     target.routeKeys.add(routeKey);
@@ -486,8 +457,13 @@ export class RestScheduler<TData> {
       if (this.isBucketRateLimited(bucket, now)) {
         continue;
       }
-      this.pruneIdleRouteMappings(key, bucket, now);
-      if (this.shouldPruneIdleBucket(key)) {
+      for (const routeKey of bucket.routeKeys) {
+        if (this.routeBuckets.get(routeKey) === key) {
+          this.routeBuckets.delete(routeKey);
+          bucket.routeKeys.delete(routeKey);
+        }
+      }
+      if (this.routeBuckets.get(key) !== key && !this.hasBucketReference(key)) {
         this.buckets.delete(key);
       }
     }

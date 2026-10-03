@@ -139,6 +139,7 @@ struct GatewayProtocolGeneratedModelsTests {
     }
 
     @Test(arguments: [
+        (#"{"kind":"panel","panel":"plugin","open":true,"pluginId":"collab","panelId":"document","dock":"right"}"#, "plugin"),
         (#"{"kind":"panel","panel":"terminal","open":true,"terminalSessionId":"terminal-1"}"#, "terminal"),
         (#"{"kind":"panel","panel":"browser","open":false}"#, "browser"),
         (#"{"kind":"panel","panel":"desktop","open":true,"environmentId":"worker:preview","dock":"right"}"#, "desktop"),
@@ -154,6 +155,7 @@ struct GatewayProtocolGeneratedModelsTests {
             return
         }
         switch panel {
+        case .plugin: #expect(expectedVariant == "plugin")
         case .terminal: #expect(expectedVariant == "terminal")
         case .browser: #expect(expectedVariant == "browser")
         case .desktop: #expect(expectedVariant == "desktop")
@@ -166,6 +168,9 @@ struct GatewayProtocolGeneratedModelsTests {
     }
 
     @Test(arguments: [
+        #"{"kind":"panel","panel":"plugin","open":true,"panelId":"document"}"#,
+        #"{"kind":"panel","panel":"plugin","open":true,"pluginId":"collab"}"#,
+        #"{"kind":"panel","panel":"plugin","open":true,"pluginId":"collab","panelId":"document","portalId":"portal-1"}"#,
         #"{"kind":"panel","panel":"portal","open":true,"portalId":"portal-1","environmentId":"worker:preview"}"#,
         #"{"kind":"panel","panel":"desktop","open":true,"portalId":"portal-1"}"#,
         #"{"kind":"panel","panel":"portal","open":true,"environmentId":null}"#,

@@ -2,10 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { isMainSessionRecoveryReconciliationCandidate } from "../../agents/main-session-recovery/main-session-recovery-state.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
-import {
-  lookupSessionGoalOperation,
-  SessionGoalOperationError,
-} from "../../config/sessions/goals-operations.js";
+import { SessionGoalOperationError } from "../../config/sessions/goals-operations.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
 import {
@@ -18,6 +15,7 @@ import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
+import { errorShapeFromError } from "../error-shape.js";
 import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
@@ -43,6 +41,7 @@ import {
   ACTIVE_LEAF_CHANGED_ERROR_REASON,
   assertExpectedLeafActive,
 } from "./chat-send-active-leaf.js";
+import { prepareGoalChatSendRetry } from "./chat-send-goal-retry.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import {
   captureAdmittedChatSendSessionSettings,
@@ -65,7 +64,8 @@ export function respondChatSendAdmissionError(
   error: unknown,
   respond: GatewayRequestHandlerOptions["respond"],
 ): void {
-  if (error instanceof Error && error.message === "goal-session-busy") {
+  const reason = error instanceof Error ? error.message : undefined;
+  if (reason === "goal-session-busy") {
     respond(
       false,
       undefined,
@@ -77,27 +77,24 @@ export function respondChatSendAdmissionError(
     );
     return;
   }
-  if (error instanceof Error && error.message === SESSION_ROUTING_CHANGED_ERROR_REASON) {
+  if (reason === SESSION_ROUTING_CHANGED_ERROR_REASON) {
     respondChatSessionRoutingChanged(respond);
     return;
   }
-  if (error instanceof Error && error.message === ACTIVE_LEAF_CHANGED_ERROR_REASON) {
+  if (
+    reason === ACTIVE_LEAF_CHANGED_ERROR_REASON ||
+    reason === SESSION_SETTINGS_CHANGED_ERROR_REASON
+  ) {
     respond(
       false,
       undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "active branch changed; review and retry", {
-        details: { reason: ACTIVE_LEAF_CHANGED_ERROR_REASON },
-      }),
-    );
-    return;
-  }
-  if (error instanceof Error && error.message === SESSION_SETTINGS_CHANGED_ERROR_REASON) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "Session settings changed before send. Retry.", {
-        details: { reason: SESSION_SETTINGS_CHANGED_ERROR_REASON },
-      }),
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        reason === ACTIVE_LEAF_CHANGED_ERROR_REASON
+          ? "active branch changed; review and retry"
+          : "Session settings changed before send. Retry.",
+        { details: { reason } },
+      ),
     );
     return;
   }
@@ -113,7 +110,11 @@ export function respondChatSendAdmissionError(
     );
     return;
   }
-  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(error)));
+  respond(
+    false,
+    undefined,
+    errorShapeFromError(ErrorCodes.INVALID_REQUEST, error, { message: formatForLog(error) }),
+  );
 }
 
 export type ChatSendPreAdmissionParams = {
@@ -302,7 +303,7 @@ export function respondChatSendRetry(params: ChatSendRetryParams): boolean {
   return false;
 }
 
-/** Recheck synchronously at reservation: recovery lookups can yield to a competing request. */
+/** Consume prepared receipts and current RAM ownership without yielding before reservation. */
 export function inspectGoalChatSendRetry({
   request,
   session,
@@ -310,20 +311,21 @@ export function inspectGoalChatSendRetry({
   context,
   durableClaimAccepted,
   assertCurrent,
-}: ChatSendPreAdmissionParams & { durableClaimAccepted?: boolean }) {
+  prepared,
+}: ChatSendPreAdmissionParams & {
+  durableClaimAccepted?: boolean;
+  prepared: Awaited<ReturnType<typeof prepareGoalChatSendRetry>>;
+}) {
   assertCurrent?.();
-  const { sessionKey, storePath, entry, clientRunId, pendingChatSendKey } = session;
+  const { clientRunId, pendingChatSendKey } = session;
   if (!request.goalOperation) {
     return { kind: "new" } as const;
   }
   try {
-    const receipt = lookupSessionGoalOperation({
-      sessionKey,
-      storePath,
-      agentId: session.agentId,
-      expectedSessionId: entry?.sessionId ?? session.backingSessionId ?? clientRunId,
-      operation: request.goalOperation,
-    });
+    const receipt = prepared?.receipt;
+    if (receipt instanceof SessionGoalOperationError) {
+      throw receipt;
+    }
     if (receipt) {
       return { kind: "replay", receipt } as const;
     }
@@ -332,9 +334,21 @@ export function inspectGoalChatSendRetry({
       entry: context.dedupe.get(pendingChatSendKey),
       keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
     });
+    const retainedIdentity = context.dedupe.get(`chat:${clientRunId}`)?.requestIdentity;
+    const identityConflict =
+      retainedIdentity !== undefined &&
+      retainedIdentity !== request.goalOperation.requestFingerprint;
+    const cachedResponse = readChatSendDedupeResponse(context.dedupe, clientRunId);
+    // A completed admission may publish after the worker's receipt snapshot.
+    const newlyPublishedResponse =
+      retainedIdentity === request.goalOperation.requestFingerprint &&
+      cachedResponse !== undefined &&
+      cachedResponse !== prepared?.dedupe;
     if (
-      pending?.payload.goalFingerprint === request.goalOperation.requestFingerprint ||
-      (!pending && !durableClaimAccepted && context.chatAbortControllers.has(clientRunId))
+      !identityConflict &&
+      (pending?.payload.goalFingerprint === request.goalOperation.requestFingerprint ||
+        newlyPublishedResponse ||
+        (!pending && !durableClaimAccepted && context.chatAbortControllers.has(clientRunId)))
     ) {
       respond(
         false,
@@ -346,9 +360,10 @@ export function inspectGoalChatSendRetry({
       return { kind: "settled" } as const;
     }
     if (
+      identityConflict ||
       pending ||
       durableClaimAccepted ||
-      context.dedupe.has(`chat:${clientRunId}`) ||
+      cachedResponse ||
       context.chatRunState.hasAbortMarker(clientRunId) ||
       context.chatAbortControllers.has(clientRunId) ||
       context.chatQueuedTurns?.has(clientRunId)
@@ -412,7 +427,10 @@ export async function runChatSendPreAdmission(
   }
 
   if (request.goalOperation) {
-    const retry = inspectGoalChatSendRetry(params);
+    const retry = inspectGoalChatSendRetry({
+      ...params,
+      prepared: await prepareGoalChatSendRetry(params),
+    });
     if (retry.kind === "settled") {
       return false;
     }
@@ -661,7 +679,11 @@ export async function runChatSendPreAdmission(
   }
   if (durableClaim.kind === "accepted") {
     if (request.goalOperation) {
-      const retry = inspectGoalChatSendRetry({ ...params, durableClaimAccepted: true });
+      const retry = inspectGoalChatSendRetry({
+        ...params,
+        durableClaimAccepted: true,
+        prepared: await prepareGoalChatSendRetry(params),
+      });
       if (retry.kind === "replay") {
         respond(true, { ...retry.receipt, replayed: true }, undefined, {
           cached: true,

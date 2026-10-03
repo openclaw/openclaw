@@ -4,7 +4,7 @@ import { inspectChannelAccount } from "../account-inspection.js";
 import { resolveChannelAccount } from "../account-resolution.js";
 import {
   projectSafeChannelAccountSnapshotFields,
-  redactChannelAccountSnapshotBaseUrl,
+  redactChannelStatusSummaryBaseUrl,
 } from "../account-snapshot-fields.js";
 import { buildChannelAccountSnapshotFromInspection } from "../account-summary.js";
 import {
@@ -17,7 +17,7 @@ import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelAccountSnapshot } from "./types.public.js";
 
 export async function buildChannelAccountSnapshotFromAccount<ResolvedAccount>(params: {
-  plugin: ChannelPlugin<ResolvedAccount>;
+  plugin: ChannelPlugin<ResolvedAccount, unknown, unknown, 1 | 2>;
   cfg: OpenClawConfig;
   accountId: string;
   account: ResolvedAccount;
@@ -68,7 +68,7 @@ export async function buildChannelAccountSnapshotFromAccount<ResolvedAccount>(pa
   });
   const projectedSnapshot = { ...snapshot };
   applyChannelAccountState(projectedSnapshot, state);
-  return redactChannelAccountSnapshotBaseUrl({
+  return redactChannelStatusSummaryBaseUrl({
     ...projectedSnapshot,
     enabled,
     accountId: normalizeOptionalString(snapshot.accountId) ? snapshot.accountId : params.accountId,
@@ -77,7 +77,7 @@ export async function buildChannelAccountSnapshotFromAccount<ResolvedAccount>(pa
 }
 
 export async function buildReadOnlySourceChannelAccountSnapshot<ResolvedAccount>(params: {
-  plugin: ChannelPlugin<ResolvedAccount>;
+  plugin: ChannelPlugin<ResolvedAccount, unknown, unknown, 1 | 2>;
   cfg: OpenClawConfig;
   accountId: string;
   runtime?: ChannelAccountSnapshot;
@@ -95,7 +95,7 @@ export async function buildReadOnlySourceChannelAccountSnapshot<ResolvedAccount>
 }
 
 export async function resolveChannelAccountSnapshot<ResolvedAccount>(params: {
-  plugin: ChannelPlugin<ResolvedAccount>;
+  plugin: ChannelPlugin<ResolvedAccount, unknown, unknown, 1 | 2>;
   cfg: OpenClawConfig;
   accountId: string;
   runtime?: ChannelAccountSnapshot;

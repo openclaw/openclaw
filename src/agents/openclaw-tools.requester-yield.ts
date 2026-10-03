@@ -59,11 +59,13 @@ export function createRequesterYieldCallback(params: {
       if (canWaitForMessage && intent?.waitFor === "message" && params.requesterTurnRunId) {
         const { markSubagentMessageWait } =
           await import("./subagents/registry/subagent-registry.js");
-        await markSubagentMessageWait({
-          runId: params.requesterTurnRunId,
-          sessionKey: requesterSessionKey!,
-          acknowledgment: intent.acknowledgment,
-        });
+        return {
+          messageWaitRegistered: await markSubagentMessageWait({
+            runId: params.requesterTurnRunId,
+            sessionKey: requesterSessionKey!,
+            acknowledgment: intent.acknowledgment,
+          }),
+        };
       }
       return true;
     };

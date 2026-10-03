@@ -70,11 +70,8 @@ function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl">): boolea
   if (endpointClass === "openai-public" || endpointClass === "azure-openai") {
     return true;
   }
-  try {
-    return isAzureOpenAICompatibleHost(new URL(model.baseUrl).hostname.toLowerCase());
-  } catch {
-    return false;
-  }
+  const endpoint = URL.parse(model.baseUrl);
+  return endpoint !== null && isAzureOpenAICompatibleHost(endpoint.hostname.toLowerCase());
 }
 
 function resolveOpenAICompletionsMaxTokens(

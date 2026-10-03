@@ -9,10 +9,7 @@ import type {
   WorkerPlacementMoveTarget,
 } from "./placement-move-intent.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
-import {
-  matchesWorkerPlacementTarget,
-  type WorkerReclaimPlacement,
-} from "./placement-reclaim-contract.js";
+import type { WorkerReclaimPlacement } from "./placement-reclaim-contract.js";
 import {
   isCurrentPlacementTurnClaim,
   isForceAbandonedWorkerPlacement,
@@ -20,6 +17,10 @@ import {
   reportPlacementTransition,
   type WorkerSessionPlacementIdentity,
 } from "./placement-record.js";
+import {
+  isFailedWorkerPlacementEnvironmentGone,
+  matchesWorkerPlacementTarget,
+} from "./placement-target.js";
 import type {
   WorkerPlacementDispatchRequest,
   WorkerPlacementAuthorization,
@@ -27,7 +28,6 @@ import type {
   WorkerPlacementMoveRequest,
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
-import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 import { isTerminalWorkerEnvironmentState } from "./state.js";
 
 type WorkerMoveBeginResult = {

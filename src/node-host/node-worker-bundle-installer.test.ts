@@ -1,10 +1,17 @@
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import type { NodeWorkerSupervisorTransport } from "../gateway/node-registry-private.js";
 import { createNodeWorkerBundleTestNode } from "../gateway/worker-environments/node-worker-bundle.test-support.js";
 import { createNodeWorkspaceRetainCoordinator } from "../gateway/worker-environments/node-workspace-retain-coordinator.js";
@@ -40,8 +47,10 @@ describe("node worker bundle installer", () => {
   let server: http.Server | undefined;
   let cleanupPrewarming: (() => Promise<void>) | undefined;
   let defaultFixture: BundleFixture;
+  let receipts: FixtureReceiptChannel;
 
   beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
     const fixtureRoot = await fs.mkdtemp(
       path.join(await fs.realpath(os.tmpdir()), "openclaw-node-bundle-fixture-"),
     );
@@ -50,6 +59,10 @@ describe("node worker bundle installer", () => {
     } finally {
       await fs.rm(fixtureRoot, { recursive: true, force: true });
     }
+  });
+
+  afterAll(async () => {
+    await receipts.close();
   });
 
   beforeEach(async () => {
@@ -778,7 +791,16 @@ describe("node worker bundle installer", () => {
       const coordinator = createNodeWorkspaceRetainCoordinator({
         gatewayNamespace: fixture.input.gatewayNamespace,
         environments: { list: () => [environment] },
-        placements: { list: () => [], listPendingWorkspaceResults: () => [] },
+        placements: {
+          list: () => [],
+          prepareRuntimeRefresh: async () => ({
+            placement: undefined,
+            move: undefined,
+            pendingResult: undefined,
+            assertCurrent: () => {},
+            release: () => {},
+          }),
+        },
         bundleRetention: {
           isEnvironmentOwnedNode: () => true,
           currentBuild: async () => fixture.input.build,
@@ -886,9 +908,9 @@ describe("node worker bundle installer", () => {
     const slow = await bundleFixture({
       fixtureName: "slow",
       bundlePrewarm: 1,
-      workerSource: `import fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(
+      workerSource: `${fixtureReceiptClientSource(receipts.endpoint)}\nimport fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(
         slowMarker,
-      )}, String(process.pid));\nprocess.stdin.resume();\n`,
+      )}, String(process.pid));\nsendReceipt(${JSON.stringify(slowMarker)}, "ready");\nprocess.stdin.resume();\n`,
     });
     const fastMarker = path.join(root, "fast-prewarm-finished");
     const fast = await bundleFixture({
@@ -944,19 +966,23 @@ describe("node worker bundle installer", () => {
     };
     // Startup time is not the cancellation contract: hold the real child until
     // abort, and retain its PID so cleanup can terminate it after assertion failure.
-    await Promise.race([
-      vi.waitFor(
-        async () => {
-          const value = await fs.readFile(slowMarker, "utf8");
-          expect(value).toMatch(/^\d+$/u);
-          slowPid = Number(value);
-        },
-        { timeout: 10_000 },
-      ),
-      first.then(() => {
-        throw new Error("prewarm finished before cancellation");
-      }),
-    ]);
+    // The PID record precedes the receipt; child exit can overtake socket delivery.
+    const settled = first.then(
+      () => {
+        if (!existsSync(slowMarker)) {
+          throw new Error("prewarm finished before cancellation");
+        }
+      },
+      (error: unknown) => {
+        if (!existsSync(slowMarker)) {
+          throw error;
+        }
+      },
+    );
+    await withinTest(Promise.race([receipts.waitFor(slowMarker, "ready"), settled]), signal);
+    const value = await fs.readFile(slowMarker, "utf8");
+    expect(value).toMatch(/^\d+$/u);
+    slowPid = Number(value);
     testSignal.throwIfAborted();
     const second = installer.ensure({ input: fast.input, gatewayUrl, signal: testSignal });
     installs.push(second);

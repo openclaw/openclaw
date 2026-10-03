@@ -7,7 +7,10 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../../../src/config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../../../src/plugin-sdk/sqlite-runtime-testing.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
 import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
@@ -111,7 +114,7 @@ describe("memory session directory ownership", () => {
   it("preserves canonical SQLite session identity on Windows", async () => {
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const tempDirs = createTempDirTracker();
-    const tmpDir = tempDirs.make("session-windows-ownership-");
+    const tmpDir = fsSync.realpathSync.native(tempDirs.make("session-windows-ownership-"));
     const originalStateDir = process.env.OPENCLAW_STATE_DIR;
     const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
     try {
@@ -141,6 +144,7 @@ describe("memory session directory ownership", () => {
       platform.mockRestore();
       // Agent close releases leases through shared state; close agent handles first while the
       // fixture env is active, then close shared state before removing the Windows-owned directory.
+      await closeOpenClawAgentDatabasesAsync(tmpDir);
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       if (originalStateDir === undefined) {

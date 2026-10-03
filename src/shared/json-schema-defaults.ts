@@ -1,4 +1,6 @@
 import {
+  decodeJsonPointerSegment,
+  decodeLocalSchemaRefFragment,
   normalizeJsonSchemaForTypeBox,
   type JsonSchemaValue,
 } from "@openclaw/normalization-core/json-schema";
@@ -120,10 +122,6 @@ function validateTypeKeyword(type: unknown, path: string): string | undefined {
   return `${path}.type: expected string or non-empty string array`;
 }
 
-function decodePointerSegment(segment: string): string {
-  return segment.replace(/~1/g, "/").replace(/~0/g, "~");
-}
-
 function parseJsonPointerArrayIndex(segment: string): number | undefined {
   if (!JSON_POINTER_ARRAY_INDEX_SEGMENT.test(segment)) {
     return undefined;
@@ -162,15 +160,8 @@ function resolveLocalRef(
       return resolveLocalRef(resourceRoot, ref.slice(resourceRoot.$id.length), resourceBaseId);
     }
   }
-  if (!ref.startsWith("#")) {
-    return { found: false };
-  }
-  // Decode the URI fragment before recognizing or splitting its JSON Pointer;
-  // encoded slashes are separators, while ~1 belongs to a single token.
-  let fragment: string;
-  try {
-    fragment = decodeURIComponent(ref.slice(1));
-  } catch {
+  const fragment = decodeLocalSchemaRefFragment(ref);
+  if (fragment === undefined) {
     return { found: false };
   }
   if (fragment === "") {
@@ -180,7 +171,7 @@ function resolveLocalRef(
     let current: unknown = resourceRoot;
     let currentResourceRoot = resourceRoot;
     let currentResourceBaseId = resourceBaseId;
-    for (const segment of fragment.slice(1).split("/").map(decodePointerSegment)) {
+    for (const segment of fragment.slice(1).split("/").map(decodeJsonPointerSegment)) {
       if (Array.isArray(current)) {
         const index = parseJsonPointerArrayIndex(segment);
         if (index === undefined) {
@@ -674,148 +665,6 @@ function schemaMatches(
   }
 }
 
-function applyObjectPropertyDefaults(
-  schema: Record<string, unknown>,
-  value: Record<string, unknown>,
-  root: JsonSchemaValue,
-  resolvingRefs: Set<string>,
-  currentResourceRoot: JsonSchemaValue,
-  currentResourceBaseId: string | undefined,
-): Record<string, unknown> {
-  const properties = isRecord(schema.properties) ? schema.properties : {};
-  for (const [key, propertySchema] of Object.entries(properties)) {
-    if (isBlockedObjectKey(key)) {
-      continue;
-    }
-    const currentValue = value[key];
-    const defaultedValue = applySchemaDefaults(
-      propertySchema as JsonSchemaValue,
-      currentValue,
-      root,
-      resolvingRefs,
-      currentResourceRoot,
-      currentResourceBaseId,
-    );
-    if (defaultedValue !== currentValue || currentValue === undefined) {
-      if (defaultedValue !== undefined) {
-        value[key] = defaultedValue;
-      }
-    }
-  }
-  const patternMatchedKeys = new Set<string>();
-  if (isRecord(schema.patternProperties)) {
-    for (const [pattern, propertySchema] of Object.entries(schema.patternProperties)) {
-      let regex: RegExp;
-      try {
-        regex = new RegExp(pattern);
-      } catch {
-        continue;
-      }
-      for (const key of Object.keys(value)) {
-        if (isBlockedObjectKey(key) || !regex.test(key)) {
-          continue;
-        }
-        patternMatchedKeys.add(key);
-        value[key] = applySchemaDefaults(
-          propertySchema as JsonSchemaValue,
-          value[key],
-          root,
-          resolvingRefs,
-          currentResourceRoot,
-          currentResourceBaseId,
-        );
-      }
-    }
-  }
-  if (isRecord(schema.additionalProperties)) {
-    const additionalSchema = schema.additionalProperties as JsonSchemaValue;
-    for (const key of Object.keys(value)) {
-      if (
-        isBlockedObjectKey(key) ||
-        Object.hasOwn(properties, key) ||
-        patternMatchedKeys.has(key)
-      ) {
-        continue;
-      }
-      value[key] = applySchemaDefaults(
-        additionalSchema,
-        value[key],
-        root,
-        resolvingRefs,
-        currentResourceRoot,
-        currentResourceBaseId,
-      );
-    }
-  }
-  return value;
-}
-
-function applyObjectDependencyDefaults(
-  schema: Record<string, unknown>,
-  value: Record<string, unknown>,
-  root: JsonSchemaValue,
-  resolvingRefs: Set<string>,
-  currentResourceRoot: JsonSchemaValue,
-  currentResourceBaseId: string | undefined,
-): Record<string, unknown> {
-  let nextValue = value;
-  for (const keyword of ["dependencies", "dependentSchemas"] as const) {
-    if (!isRecord(schema[keyword])) {
-      continue;
-    }
-    for (const [key, dependencySchema] of Object.entries(schema[keyword])) {
-      if (
-        !Object.hasOwn(nextValue, key) ||
-        (keyword === "dependencies" && isStringArray(dependencySchema))
-      ) {
-        continue;
-      }
-      nextValue = applySchemaDefaults(
-        dependencySchema as JsonSchemaValue,
-        nextValue,
-        root,
-        resolvingRefs,
-        currentResourceRoot,
-        currentResourceBaseId,
-      ) as Record<string, unknown>;
-    }
-  }
-  return nextValue;
-}
-
-function applyObjectConditionalDefaults(
-  schema: Record<string, unknown>,
-  value: Record<string, unknown>,
-  root: JsonSchemaValue,
-  resolvingRefs: Set<string>,
-  currentResourceRoot: JsonSchemaValue,
-  currentResourceBaseId: string | undefined,
-): Record<string, unknown> {
-  if (!(typeof schema.if === "boolean" || isRecord(schema.if))) {
-    return value;
-  }
-  const branch = schemaMatches(
-    schema.if as JsonSchemaValue,
-    value,
-    root,
-    currentResourceRoot,
-    currentResourceBaseId,
-  )
-    ? schema.then
-    : schema.else;
-  if (!(typeof branch === "boolean" || isRecord(branch))) {
-    return value;
-  }
-  return applySchemaDefaults(
-    branch as JsonSchemaValue,
-    value,
-    root,
-    resolvingRefs,
-    currentResourceRoot,
-    currentResourceBaseId,
-  ) as Record<string, unknown>;
-}
-
 function countSchemaNodes(schema: JsonSchemaValue, seen = new Set<object>()): number {
   if (typeof schema === "boolean" || !isRecord(schema) || seen.has(schema)) {
     return 1;
@@ -831,71 +680,102 @@ function countSchemaNodes(schema: JsonSchemaValue, seen = new Set<object>()): nu
 
 function applyObjectApplicatorDefaults(
   schema: Record<string, unknown>,
-  value: Record<string, unknown>,
+  valueInput: Record<string, unknown>,
   root: JsonSchemaValue,
   resolvingRefs: Set<string>,
   currentResourceRoot: JsonSchemaValue,
   currentResourceBaseId: string | undefined,
 ): Record<string, unknown> {
-  let nextValue = applyObjectPropertyAndDependencyDefaults(
-    schema,
-    value,
-    root,
-    resolvingRefs,
-    currentResourceRoot,
-    currentResourceBaseId,
-  );
-  nextValue = applyObjectConditionalDefaults(
-    schema,
-    nextValue,
-    root,
-    resolvingRefs,
-    currentResourceRoot,
-    currentResourceBaseId,
-  );
-  return applyObjectPropertyAndDependencyDefaults(
-    schema,
-    nextValue,
-    root,
-    resolvingRefs,
-    currentResourceRoot,
-    currentResourceBaseId,
-  );
-}
+  let value = valueInput;
+  const applyChild = (child: unknown, current: unknown) =>
+    applySchemaDefaults(
+      child as JsonSchemaValue,
+      current,
+      root,
+      resolvingRefs,
+      currentResourceRoot,
+      currentResourceBaseId,
+    );
+  const settlePropertiesAndDependencies = () => {
+    const maxIterations = countSchemaNodes(schema);
+    for (let index = 0; index < maxIterations; index++) {
+      const before = JSON.stringify(value);
+      const properties = isRecord(schema.properties) ? schema.properties : {};
+      for (const [key, propertySchema] of Object.entries(properties)) {
+        if (isBlockedObjectKey(key)) {
+          continue;
+        }
+        const current = value[key];
+        const defaulted = applyChild(propertySchema, current);
+        if (defaulted !== undefined && defaulted !== current) {
+          value[key] = defaulted;
+        }
+      }
+      const patternMatchedKeys = new Set<string>();
+      if (isRecord(schema.patternProperties)) {
+        for (const [pattern, propertySchema] of Object.entries(schema.patternProperties)) {
+          let regex: RegExp;
+          try {
+            regex = new RegExp(pattern);
+          } catch {
+            continue;
+          }
+          for (const key of Object.keys(value)) {
+            if (isBlockedObjectKey(key) || !regex.test(key)) {
+              continue;
+            }
+            patternMatchedKeys.add(key);
+            value[key] = applyChild(propertySchema, value[key]);
+          }
+        }
+      }
+      if (isRecord(schema.additionalProperties)) {
+        for (const key of Object.keys(value)) {
+          if (
+            !isBlockedObjectKey(key) &&
+            !Object.hasOwn(properties, key) &&
+            !patternMatchedKeys.has(key)
+          ) {
+            value[key] = applyChild(schema.additionalProperties, value[key]);
+          }
+        }
+      }
+      for (const keyword of ["dependencies", "dependentSchemas"] as const) {
+        if (!isRecord(schema[keyword])) {
+          continue;
+        }
+        for (const [key, dependencySchema] of Object.entries(schema[keyword])) {
+          if (
+            Object.hasOwn(value, key) &&
+            !(keyword === "dependencies" && isStringArray(dependencySchema))
+          ) {
+            value = applyChild(dependencySchema, value) as Record<string, unknown>;
+          }
+        }
+      }
+      if (JSON.stringify(value) === before) {
+        break;
+      }
+    }
+  };
 
-function applyObjectPropertyAndDependencyDefaults(
-  schema: Record<string, unknown>,
-  value: Record<string, unknown>,
-  root: JsonSchemaValue,
-  resolvingRefs: Set<string>,
-  currentResourceRoot: JsonSchemaValue,
-  currentResourceBaseId: string | undefined,
-): Record<string, unknown> {
-  let nextValue = value;
-  const maxIterations = countSchemaNodes(schema);
-  for (let index = 0; index < maxIterations; index++) {
-    const before = JSON.stringify(nextValue);
-    nextValue = applyObjectPropertyDefaults(
-      schema,
-      nextValue,
+  settlePropertiesAndDependencies();
+  if (typeof schema.if === "boolean" || isRecord(schema.if)) {
+    const branch = schemaMatches(
+      schema.if as JsonSchemaValue,
+      value,
       root,
-      resolvingRefs,
       currentResourceRoot,
       currentResourceBaseId,
-    );
-    nextValue = applyObjectDependencyDefaults(
-      schema,
-      nextValue,
-      root,
-      resolvingRefs,
-      currentResourceRoot,
-      currentResourceBaseId,
-    );
-    if (JSON.stringify(nextValue) === before) {
-      break;
+    )
+      ? schema.then
+      : schema.else;
+    if (typeof branch === "boolean" || isRecord(branch)) {
+      value = applyChild(branch, value) as Record<string, unknown>;
     }
   }
-  return nextValue;
+  settlePropertiesAndDependencies();
+  return value;
 }
 
 function applySchemaDefaults(

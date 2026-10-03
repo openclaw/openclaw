@@ -26,7 +26,7 @@ import {
   createGatewayActiveWorkSnapshot,
   type GatewayActiveWorkInspectors,
 } from "../infra/gateway-active-work.js";
-import type { GatewayScheduledJob, GatewayScheduler } from "../infra/gateway-scheduler.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
 import { generateSecureInt } from "../infra/secure-random.js";
@@ -39,6 +39,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { registerSkillUsageTracking } from "../skills/workshop/curator.js";
+import { pruneExpiredArtifactDownloads } from "./artifact-download-grants.js";
 import {
   abortChatRunById,
   type ChatAbortControllerEntry,
@@ -52,9 +53,11 @@ import {
   createHostThawRecovery,
   type HostThawChannelRestartOutcome,
 } from "./host-thaw-recovery.js";
-import { chatAbortMarkerTimestampMs } from "./server-chat-state.js";
-import type { ChatRunState } from "./server-chat-state.js";
-import type { ChatRunEntry } from "./server-chat.js";
+import {
+  chatAbortMarkerTimestampMs,
+  type ChatRunEntry,
+  type ChatRunState,
+} from "./server-chat-state.js";
 import {
   DEDUPE_MAX,
   DEDUPE_TTL_MS,
@@ -69,6 +72,7 @@ import {
   waitForMediaCleanupDrainsToSettle,
 } from "./server-media-cleanup-lifecycle.js";
 import { hasRegisteredChatRunForSessionKey } from "./server-methods/session-active-runs.js";
+import type { GatewayClient } from "./server-methods/types.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "./server-shared.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
 import { startSessionColdStorageMaintenance } from "./session-cold-storage-maintenance.js";
@@ -82,6 +86,7 @@ const TELEMETRY_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
 
 export function startGatewayMaintenanceTimers(params: {
   scheduler: GatewayScheduler;
+  clients: ReadonlySet<GatewayClient>;
   broadcast: (
     event: string,
     payload: unknown,
@@ -129,22 +134,19 @@ export function startGatewayMaintenanceTimers(params: {
   skillUsageCleanup: () => Promise<void>;
 } {
   const restartDrainSignal = getGatewayRestartDrainSignal();
-  const { scheduler } = params;
-  const periodicJobs: GatewayScheduledJob[] = [];
+  const scheduler = params.scheduler.scope();
   const schedulePeriodic = (
     id: string,
     everyMs: number,
     run: () => void | Promise<unknown>,
     immediate = false,
   ) => {
-    periodicJobs.push(
-      scheduler.schedule({
-        id: `maintenance:${id}`,
-        atMs: scheduler.now() + (immediate ? 0 : everyMs),
-        everyMs,
-        run,
-      }),
-    );
+    scheduler.schedule({
+      id: `maintenance:${id}`,
+      atMs: scheduler.now() + (immediate ? 0 : everyMs),
+      everyMs,
+      run,
+    });
   };
   let periodicTasksStopPromise: Promise<void> | undefined;
   setBroadcastHealthUpdate((snap: HealthSummary) => {
@@ -181,7 +183,7 @@ export function startGatewayMaintenanceTimers(params: {
     try {
       const restarted = await params.restartRunningChannels(
         mode,
-        () => !invalidated && !periodicTasksStopPromise,
+        () => !invalidated && !scheduler.signal.aborted,
       );
       return restarted
         ? { status: "completed" }
@@ -199,13 +201,12 @@ export function startGatewayMaintenanceTimers(params: {
     },
     refreshPresence: params.refreshPresence,
     resetEventLoopHealth: params.resetEventLoopHealth,
-    isAdmissionClosed: () => Boolean(periodicTasksStopPromise) || isGatewayWorkAdmissionClosed(),
+    isAdmissionClosed: () => scheduler.signal.aborted || isGatewayWorkAdmissionClosed(),
     logger: params.logHealth,
   });
 
-  let telemetryJob: GatewayScheduledJob | undefined;
   const scheduleTelemetry = (delayMs: number) => {
-    telemetryJob = scheduler.schedule({
+    scheduler.schedule({
       id: "maintenance:telemetry",
       delayMs,
       run: async () => {
@@ -214,7 +215,7 @@ export function startGatewayMaintenanceTimers(params: {
         } catch {
           // Telemetry retries on its next jittered maintenance deadline.
         } finally {
-          if (!periodicTasksStopPromise) {
+          if (!scheduler.signal.aborted) {
             scheduleTelemetry(
               TELEMETRY_MAINTENANCE_INTERVAL_MS +
                 generateSecureInt(TELEMETRY_MAINTENANCE_INTERVAL_MS),
@@ -287,7 +288,7 @@ export function startGatewayMaintenanceTimers(params: {
 
   // Queue tombstone expiry and reference-aware media GC share one maintenance
   // cycle even when the general media TTL sweep is disabled.
-  let mediaCleanupStopped = false;
+  const mediaScheduler = params.scheduler.scope();
   const runDeliveryQueueMediaGc =
     params.runDeliveryQueueMediaGc ??
     (async () => {
@@ -298,19 +299,16 @@ export function startGatewayMaintenanceTimers(params: {
         await pruneOrphanedDeliveryQueueMedia(undefined, context);
       }
     });
-  const mediaJobs: GatewayScheduledJob[] = [];
   const scheduleMedia = (id: string, run: () => Promise<unknown>) => {
-    mediaJobs.push(
-      scheduler.schedule({
-        id: `maintenance:${id}`,
-        atMs: scheduler.now(),
-        everyMs: DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS,
-        run,
-      }),
-    );
+    mediaScheduler.schedule({
+      id: `maintenance:${id}`,
+      atMs: mediaScheduler.now(),
+      everyMs: DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS,
+      run,
+    });
   };
   void waitForMediaCleanupDrainsToSettle().then(() => {
-    if (!mediaCleanupStopped) {
+    if (!mediaScheduler.signal.aborted) {
       scheduleMedia("delivery-queue-media", () =>
         runDeliveryQueueMediaGc().catch((error: unknown) => {
           params.logHealth.error(`delivery queue maintenance failed: ${formatError(error)}`);
@@ -353,6 +351,7 @@ export function startGatewayMaintenanceTimers(params: {
   schedulePeriodic("dedupe", 60_000, () => {
     const AGENT_RUN_SEQ_MAX = 10_000;
     const now = scheduler.now();
+    pruneExpiredArtifactDownloads(params.clients, now);
     params.chatRunState.toolEventRecipients.pruneExpired(now);
     const resolveDedupeRunId = (key: string, entry: DedupeEntry) => {
       if (!key.startsWith("agent:") && !key.startsWith("chat:")) {
@@ -489,15 +488,17 @@ export function startGatewayMaintenanceTimers(params: {
         continue;
       }
       if (record.abortMarker !== undefined) {
-        if (now - chatAbortMarkerTimestampMs(record.abortMarker) > ABORTED_RUN_TTL_MS) {
-          params.chatRunState.deleteAbortMarker(runId);
-          params.chatRunState.clearRun(runId);
+        if (now - chatAbortMarkerTimestampMs(record.abortMarker) <= ABORTED_RUN_TTL_MS) {
+          continue;
         }
+        params.chatRunState.deleteAbortMarker(runId);
+      } else if (now - record.lastActivityAt <= ABORTED_RUN_TTL_MS) {
         continue;
       }
-      if (now - record.lastActivityAt > ABORTED_RUN_TTL_MS) {
-        params.chatRunState.clearRun(runId);
+      while (params.chatRunState.registry.shift(runId)) {
+        // No execution or delivery owner remains to consume these registrations.
       }
+      params.chatRunState.clearRun(runId);
     }
     // Sweep stale agent run contexts (orphaned when lifecycle end/error is missed).
     sweepStaleRunContexts();
@@ -521,13 +522,13 @@ export function startGatewayMaintenanceTimers(params: {
     });
   let mediaCleanupStarted = false;
   const startMediaCleanup = () => {
-    if (mediaCleanupStopped || mediaCleanupStarted) {
+    if (mediaScheduler.signal.aborted || mediaCleanupStarted) {
       return;
     }
     mediaCleanupStarted = true;
     // A stuck prior generation defers only media cleanup, never Gateway readiness.
     void waitForMediaCleanupDrainsToSettle().then(() => {
-      if (mediaCleanupStopped) {
+      if (mediaScheduler.signal.aborted) {
         return;
       }
       scheduleMedia("playback-cache", () =>
@@ -555,12 +556,7 @@ export function startGatewayMaintenanceTimers(params: {
   let stopMediaCleanupPromise: Promise<MediaCleanupStopResult> | undefined;
   const stopMediaCleanup = () => {
     stopMediaCleanupPromise ??= (async () => {
-      mediaCleanupStopped = true;
-      if (mediaJobs.length > 0) {
-        registerMediaCleanupDrain(
-          Promise.allSettled(mediaJobs.map((job) => job.stop())).then(() => undefined),
-        );
-      }
+      registerMediaCleanupDrain(mediaScheduler.stop());
       return await waitForMediaCleanupDrains({
         timeoutMs: MEDIA_CLEANUP_STOP_TIMEOUT_MS,
         onTimeout: () => {
@@ -583,8 +579,7 @@ export function startGatewayMaintenanceTimers(params: {
     if (!periodicTasksStopPromise) {
       restartDrainSignal.removeEventListener("abort", onRestartDrain);
       periodicTasksStopPromise = Promise.allSettled([
-        ...periodicJobs.map((job) => job.stop()),
-        telemetryJob?.stop(),
+        scheduler.stop(),
         sessionColdStorageMaintenance.stop(),
         stopMediaCleanup(),
       ]).then((results) => {

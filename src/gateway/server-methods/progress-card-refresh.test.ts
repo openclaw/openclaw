@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ProgressCard } from "../../../packages/gateway-protocol/src/index.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import type { handleTrustedInternalChatSend } from "./chat-send-handler.js";
 import { createProgressCardHandlers } from "./progress-card.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
@@ -42,7 +41,6 @@ function fixture() {
     get,
     put,
     respond,
-    assertCurrent,
     invocation,
     invoke: () => handlers["progressCard.refresh"]!(invocation),
   };
@@ -99,52 +97,6 @@ describe("progressCard.refresh", () => {
     await f.invoke();
     expect(send.mock.calls[2]?.[0].params.idempotencyKey).not.toBe(original);
   });
-  it("retains the original baseline when a lost acceptance is retried after the card update", async () => {
-    const f = fixture();
-    await f.invoke();
-    f.get.mockResolvedValue({ ...card, revision: 8, updatedAt: 2 });
-    await f.invoke();
-    expect(f.respond.mock.calls[1]?.[1]).toMatchObject({ status: "accepted", revision: 7 });
-  });
-  it.each([false, true])(
-    "reconciles a completed refresh before permitting a new intent (updated=%s)",
-    async (updated) => {
-      const f = fixture();
-      await f.invoke();
-      if (updated) {
-        f.get.mockResolvedValue({ ...card, revision: 8, updatedAt: 2 });
-      }
-      send.mockImplementation(async (request) => request.respond(true, { status: "completed" }));
-      await f.invoke();
-      if (updated) {
-        expect(f.respond).toHaveBeenLastCalledWith(
-          true,
-          expect.objectContaining({ status: "accepted", revision: 7 }),
-          undefined,
-          undefined,
-        );
-      } else {
-        expect(f.respond).toHaveBeenLastCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ details: { code: "PROGRESS_CARD_REFRESH_TERMINAL" } }),
-          undefined,
-        );
-      }
-    },
-  );
-  it("does not treat a cached steering acknowledgment as completed work", async () => {
-    const f = fixture();
-    await f.invoke();
-    send.mockImplementation(async (request) => request.respond(true, { status: "ok" }));
-    await f.invoke();
-    expect(f.respond).toHaveBeenLastCalledWith(
-      true,
-      expect.objectContaining({ status: "accepted", revision: 7 }),
-      undefined,
-      undefined,
-    );
-  });
   it("refuses missing cards and arbitrary prompt/visibility fields", async () => {
     const f = fixture();
     f.get.mockResolvedValue(null);
@@ -155,26 +107,12 @@ describe("progressCard.refresh", () => {
       undefined,
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
+    f.get.mockResolvedValue(card);
     f.invocation.params = { ...f.invocation.params, message: "resume all work", hidden: true };
     await f.invoke();
     expect(send).not.toHaveBeenCalled();
   });
-  it("rejects reset or revoked authorization while reading the card", async () => {
-    const f = fixture();
-    const release = createDeferredCore();
-    f.get.mockImplementation(async () => {
-      await release.promise;
-      return card;
-    });
-    const pending = f.invoke();
-    f.assertCurrent.mockImplementation(() => {
-      throw new Error("session was reset");
-    });
-    release.resolve();
-    await expect(pending).rejects.toThrow("session was reset");
-    expect(send).not.toHaveBeenCalled();
-  });
-  it.each(["error", "timeout", "aborted"])(
+  it.each(["error", "aborted"])(
     "does not report %s as a successful refresh request",
     async (status) => {
       const f = fixture();

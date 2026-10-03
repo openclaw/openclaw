@@ -25,6 +25,7 @@ import {
   readEnvironmentValueSource,
 } from "./service-managed-env.js";
 import { isNonMinimalServicePathEntry, normalizeServicePathEntry } from "./service-path-policy.js";
+import { resolveManagedGatewayServiceCommand } from "./service-types.js";
 
 export type {
   GatewayServiceCommand,
@@ -190,7 +191,11 @@ function auditManagedServiceEnvironment(
   issues: ServiceConfigIssue[],
   expectedManagedServiceEnvKeys?: Iterable<string>,
 ) {
-  const inlineKeys = collectInlineManagedServiceEnvKeys(command, expectedManagedServiceEnvKeys);
+  // Reinstall can migrate the managed base, but never rewrites operator drop-ins.
+  const inlineKeys = collectInlineManagedServiceEnvKeys(
+    resolveManagedGatewayServiceCommand(command),
+    expectedManagedServiceEnvKeys,
+  );
   if (inlineKeys.length === 0) {
     return;
   }

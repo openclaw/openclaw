@@ -1,6 +1,5 @@
 /** Public queue API for deferred auto-reply follow-up runs. */
 
-export { clearSessionQueues } from "./queue/cleanup.js";
 export { scheduleFollowupDrain } from "./queue/drain.js";
 export {
   claimNextQueuedFollowupRequestFrom,

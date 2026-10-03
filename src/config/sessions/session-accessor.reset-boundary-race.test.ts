@@ -46,8 +46,9 @@ describe("reset boundary concurrency", () => {
     storePath = path.join(tempDir, "sessions.json");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     transactionInjection.run = null;
+    await agentDatabase.closeOpenClawAgentDatabasesAsync();
     agentDatabase.closeOpenClawAgentDatabasesForTest();
     cleanupTempDirs(tempDirs);
   });

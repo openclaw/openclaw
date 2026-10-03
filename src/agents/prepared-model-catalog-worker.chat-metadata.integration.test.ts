@@ -31,7 +31,7 @@ describe("chat metadata with published model owners", () => {
   ] as const)(
     "bounds unchanged refresh work for $count $shape agents and observes roster replacement",
     async ({ shape, count }) => {
-      const fixture = createCatalogFixture(makeTempDir, 0);
+      const fixture = await createCatalogFixture(makeTempDir, 0);
       const pluginCatalogWrites = Object.fromEntries(
         loadPersistedPluginModelCatalogsReadOnly(fixture.agentDir).map(({ pluginId, contents }) => [
           encodePluginModelCatalogRelativePath(pluginId),
@@ -80,7 +80,7 @@ describe("chat metadata with published model owners", () => {
               }),
         },
       };
-      const add = (id: string) => {
+      const add = async (id: string) => {
         const entry = {
           id,
           agentDir: path.join(fixture.root, "agents", id),
@@ -93,17 +93,17 @@ describe("chat metadata with published model owners", () => {
         retireAfterTest(() => {
           unregisterResolvedAgentDir({ agentId: id, agentDir: entry.agentDir, env: fixture.env });
         });
-        replacePersistedPluginModelCatalogs({
+        await replacePersistedPluginModelCatalogs({
           agentDir: resolveAgentDir(config, id, fixture.env),
           pluginCatalogWrites,
         });
         return entry;
       };
-      const configured = Array.from({ length: count }, (_, index) =>
-        add(index === 0 ? "main" : `agent-${index}`),
+      const configured = await Promise.all(
+        Array.from({ length: count }, (_, index) => add(index === 0 ? "main" : `agent-${index}`)),
       );
       const published = new Map<string, PreparedModelRuntimeSnapshot>();
-      const publish = async (entry: ReturnType<typeof add>, force = false) => {
+      const publish = async (entry: Awaited<ReturnType<typeof add>>, force = false) => {
         const snapshot = await publishPreparedModelRuntimeSnapshot(
           {
             agentId: entry.id,
@@ -124,9 +124,7 @@ describe("chat metadata with published model owners", () => {
         );
         return snapshot;
       };
-      for (const entry of configured) {
-        await publish(entry);
-      }
+      await Promise.all(configured.map((entry) => publish(entry)));
       let builds = 0;
       // Projection leaves are supplied below; the real roster and published-owner chain is retained.
       const context = {} as GatewayRequestContext;
@@ -180,7 +178,7 @@ describe("chat metadata with published model owners", () => {
         );
         expect((await runtime.read({ agentId: "main" })).models).toContainEqual(expectedModel);
         expect(builds).toBe(count + 1);
-        const added = add("added");
+        const added = await add("added");
         await expect(runtime.refresh()).rejects.toBeInstanceOf(
           ChatMetadataSnapshotUnavailableError,
         );

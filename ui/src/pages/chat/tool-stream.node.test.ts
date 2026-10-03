@@ -439,6 +439,41 @@ describe("app-tool-stream throttled projections", () => {
   });
 });
 
+describe("app-tool-stream analysis activity", () => {
+  it("does not render Codex reasoning items as tool calls", () => {
+    const host = createHost({ chatRunId: "run-1" });
+    const reasoning = {
+      itemId: "rs_1",
+      toolCallId: "rs_1",
+      kind: "analysis",
+      title: "Reasoning",
+      phase: "start",
+      status: "running",
+      hideFromChannelProgress: true,
+    };
+    handleAgentEvent(host, agentEvent("run-1", 1, "item", reasoning));
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "item", { ...reasoning, phase: "end", status: "completed" }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 3, "item", {
+        itemId: "tool:call",
+        toolCallId: "call",
+        kind: "tool",
+        name: "read",
+        title: "Read",
+        phase: "end",
+        status: "completed",
+      }),
+    );
+
+    expect(host.toolStreamOrder).toEqual([buildToolStreamIdentity("run-1", "call")]);
+    expect(host.chatToolMessages.flatMap(extractToolCardsCached)).toMatchObject([{ name: "read" }]);
+  });
+});
+
 describe("app-tool-stream result blocks", () => {
   it("retains out-of-order review identities and lets a result fence every older review", () => {
     const host = createHost();

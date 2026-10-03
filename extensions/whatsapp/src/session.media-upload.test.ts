@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockBaileys } from "../../../test/mocks/baileys.js";
+import { createWaSocket } from "./session.js";
 import * as baileys from "./session.runtime.js";
 
 vi.mock("./session.runtime.js", () => createMockBaileys().mod);
@@ -68,7 +69,6 @@ describe("WhatsApp session media upload", () => {
   const received: Array<{ host: string | undefined; body: Buffer }> = [];
   const proxyRequests: string[] = [];
   const agents = new Set<NonNullable<SocketOptions["agent"]>>();
-  let createWaSocket: typeof import("./session.js").createWaSocket;
   let originalCas: string[];
   let originPort: number;
   let plainOriginPort: number;
@@ -162,7 +162,6 @@ describe("WhatsApp session media upload", () => {
   }
 
   beforeAll(async () => {
-    ({ createWaSocket } = await import("./session.js"));
     originalCas = tls.getCACertificates("default");
     tls.setDefaultCACertificates([...originalCas, PROXY_FIXTURE_CERTIFICATE]);
     const fixtureDir = suiteTempDirs.make("openclaw-whatsapp-upload-ca-");

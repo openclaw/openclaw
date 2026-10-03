@@ -990,41 +990,6 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
   return await runPolicy();
 }
 
-export async function scanFileInstallSourceRuntime(
-  params: InstallSafetyOverrides & {
-    config?: OpenClawConfig;
-    filePath: string;
-    logger: InstallScanLogger;
-    mode?: "install" | "update";
-    pluginId: string;
-    requestedSpecifier?: string;
-    source?: InstallPolicySource;
-  },
-): Promise<InstallSecurityScanResult | undefined> {
-  const plugin = {
-    contentType: "file" as const,
-    pluginId: params.pluginId,
-    extensions: [path.basename(params.filePath)],
-  };
-  return await runInstallPolicyAndHook({
-    config: params.config,
-    logger: params.logger,
-    onInstallPolicyWarning: params.onInstallPolicyWarning,
-    policyOrigin: { type: "plugin-file" },
-    hookOrigin: "plugin-file",
-    installLabel: `Plugin file "${params.pluginId}" installation`,
-    source: params.source ?? resolvePolicySource({ requestKind: "plugin-file" }),
-    sourcePath: params.filePath,
-    sourcePathKind: "file",
-    targetName: params.pluginId,
-    targetType: "plugin",
-    requestKind: "plugin-file",
-    requestMode: params.mode ?? "install",
-    requestedSpecifier: params.requestedSpecifier,
-    plugin,
-  });
-}
-
 export async function preflightPluginNpmInstallPolicyRuntime(params: {
   config?: OpenClawConfig;
   logger: InstallScanLogger;

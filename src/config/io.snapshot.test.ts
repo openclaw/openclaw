@@ -153,24 +153,33 @@ describe("config snapshot plugin metadata", () => {
     },
   );
 
-  it("keeps legacy roster channel discovery owned by full validation", async () => {
-    const root = tempDirs.make("openclaw-config-roster-metadata-");
-    const context = createContext(root);
-    context.options.pluginValidation = "full";
-    fs.writeFileSync(
-      context.configPath,
-      JSON.stringify({
-        agents: { list: [{ id: "primary", default: true }, { id: "secondary" }] },
-        channels: { discord: { enabled: false } },
-      }),
-    );
-    const discovery = vi.spyOn(channelPresence, "listChannelIdsForOwnershipMigration");
-    const snapshot = await readConfigFileSnapshotFromContext(context);
-    expect(snapshot.valid).toBe(true);
-    expect(snapshot.config.agents?.entries).toEqual({ primary: {}, secondary: {} });
-    expect(snapshot.config.agents?.defaults?.systemAgent?.agentId).toBe("primary");
-    expect(discovery).toHaveBeenCalled();
-  });
+  it.each(["full", "core-only"] as const)(
+    "leaves legacy roster repair to Doctor during %s validation",
+    async (pluginValidation) => {
+      const root = tempDirs.make("openclaw-config-roster-metadata-");
+      const context = createContext(root);
+      context.options.pluginValidation = pluginValidation;
+      const agents = { list: [{ id: "primary", default: true }, { id: "secondary" }] };
+      fs.writeFileSync(
+        context.configPath,
+        JSON.stringify({
+          agents,
+          channels: { discord: { enabled: false } },
+        }),
+      );
+      const discovery = vi.spyOn(channelPresence, "listChannelIdsForOwnershipMigration");
+      const snapshot = await readConfigFileSnapshotFromContext(context);
+      expect(snapshot.valid).toBe(false);
+      expect(snapshot.sourceConfig.agents).toEqual(agents);
+      expect(snapshot.issues).toContainEqual(
+        expect.objectContaining({
+          path: "agents.list",
+          message: expect.stringContaining("doctor --fix"),
+        }),
+      );
+      expect(discovery).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["full", "core-only"] as const)(
     "keeps invalid snapshot Doctor contracts owned by %s validation",

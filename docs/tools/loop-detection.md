@@ -50,7 +50,6 @@ Per-agent override (optional, at `agents.entries.*.tools.loopDetection`):
   agents: {
     entries: {
       "safe-runner": {
-        default: true,
         tools: {
           loopDetection: {
             enabled: true,
@@ -99,6 +98,10 @@ not their write revision or receipt wording. Saved revisions and delivered recei
 are unchanged, so a requested refresh still receives a newer saved revision even
 when the card content is unchanged. Errors and results without the tool’s private
 semantic outcome keep full outcome comparison.
+
+Calls rejected by argument validation (for example `exec` without `command`) never
+run, but they are recorded as failed calls, so repeating one is detected like any
+other loop. They do not extend or end an `exec` failure streak.
 
 Window observations from `computer` `get_window_state` are compared without fresh
 observation and element references. Pixels, element labels, values, bounds, and

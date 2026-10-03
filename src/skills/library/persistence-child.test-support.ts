@@ -28,8 +28,8 @@ async function phase(label: string) {
 }
 
 async function beginOperation() {
-  // Readiness means imports are complete. The parent starts the operation clock
-  // before releasing this gate, so startup cannot spend the publication budget.
+  // Readiness means imports are complete. The parent observes this phase before
+  // releasing the operation gate, independently of the publication reply.
   const start = new Promise<void>((resolve) => {
     process.once("message", () => resolve());
   });

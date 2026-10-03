@@ -64,6 +64,34 @@ const MCP_FILE_HASHES = new Map<string, ReadonlyMap<string, string>>([
       ],
     ]),
   ],
+  [
+    "1.10.1",
+    new Map([
+      [PATCHED_MCP_CLI, "9f380d06e1ac05b257e27e708c0cc4b4ba190e285ed6eb6c8aa50978d98a12c5"],
+      [
+        "build/src/bin/chrome-devtools-mcp-main.js",
+        "10603ea8c2ac9f69a42791100701795018ebfaa522a7c93d783ed583cce5cce4",
+      ],
+      ["LICENSE", "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd"],
+      [
+        "build/src/third_party/THIRD_PARTY_NOTICES",
+        "6ae0ce181dbc9ba4217b6aad679d7503ed3ab56c45e6f3647e9ab753aa97b67b",
+      ],
+      [
+        "build/src/TextSnapshot.js",
+        "299833ad0e4cfc171a417afaec41df594e4862fe53a7ada6ba160409f979788b",
+      ],
+      ["build/src/McpPage.js", "47aa13c6b28cc11e1b0883532edea97cfde7563d78d143035850852d09809975"],
+      [
+        "build/src/third_party/index.js",
+        "c988e0684584b75e87ae04b768c4f8ae7064401afe5187ec0d4878b2c6833f12",
+      ],
+      [
+        "build/src/OPENCLAW_PATCH_NOTICE.md",
+        "4bf44b52a80b5860b2160bc83407a5f0dd09f1801c85d0a2b6e4fec26bd7045d",
+      ],
+    ]),
+  ],
 ]);
 const REQUIRED_MCP_FILES = [
   "build/src/third_party/devtools-formatter-worker.js",
@@ -80,7 +108,7 @@ export function isSupportedPatchedMcpVersion(version: unknown): version is strin
 export function collectPatchedMcpArtifactErrors({
   // The node-bootstrap producer checks the current runtime; frozen package
   // consumers pass their independently checked exact dependency pin.
-  declaredVersion = "1.9.0",
+  declaredVersion = "1.10.1",
   manifest,
   files,
   sha256,

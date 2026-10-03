@@ -1,8 +1,11 @@
 import { copyFileSync, existsSync, linkSync, readFileSync, unlinkSync } from "node:fs";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
+import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
+import { createUpdateRun } from "../infra/update-run-ledger.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -67,6 +70,61 @@ it("retires an existing-only idle actor without opening its missing database", a
     await backend.close();
   }
 });
+
+it.each(["subset-only", "native-closed"] as const)(
+  "inspects a retained update writer with a %s backend",
+  async (kind) => {
+    const run = createUpdateRun({ trigger: "cli" });
+    await closeOpenClawStateDatabaseAsync();
+    const context = captureOpenClawStateWorkerContext();
+    const databasePath = context.admission.databasePath;
+    const backend = runWithSqliteWorkerStateContext(context, () =>
+      kind === "native-closed"
+        ? createSqliteWorkerBackend(undefined, { databasePath })
+        : openExistingSqliteWorkerBackend(undefined, {
+            databasePath,
+            existingIdentity: context.admission.identity.key,
+          }),
+    );
+    const native = kind === "native-closed" ? openOpenClawStateDatabase() : undefined;
+    const admission = vi
+      .spyOn(operationAdmission, "requestSqliteWorkerOperationAdmission")
+      .mockImplementation(() => {});
+    try {
+      await backend[SQLITE_WORKER_PREPARE_COMMAND]?.("updateRuns.recordStep");
+      const recorded = runWithSqliteWorkerStateContext(context, () =>
+        backend.execute({
+          type: "updateRuns.recordStep",
+          input: {
+            runId: run.runId,
+            step: { step: "candidate-state-snapshot", status: "in_progress" },
+            redactionFacts: { effectiveHome: state.home },
+          },
+        }),
+      );
+      expect(recorded).toMatchObject({
+        kind: "recorded",
+        record: {
+          steps: expect.arrayContaining([
+            expect.objectContaining({ step: "candidate-state-snapshot", status: "in_progress" }),
+          ]),
+        },
+      });
+      native?.db.close();
+      expect(
+        runWithSqliteWorkerStateContext(context, () =>
+          backend.execute({
+            type: "database.inspectIdle",
+            input: undefined,
+          }),
+        ),
+      ).toBe(kind === "native-closed" ? "retire" : "healthy");
+    } finally {
+      admission.mockRestore();
+      await backend.close();
+    }
+  },
+);
 
 it.each(["removed", "replaced"] as const)(
   "refuses a lazy actor's %s original locator even while a hardlink survives",

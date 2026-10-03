@@ -11,7 +11,8 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   prepareOperatorModelPresentation,
@@ -390,10 +391,11 @@ describe("historical model disclosure", () => {
         });
         restores.push(() => spy.mockRestore());
       } else {
-        const prepare = rows.ensureMaterialized.bind(rows);
-        const spy = vi.spyOn(rows, "ensureMaterialized").mockImplementationOnce(async () => {
-          await prepare();
+        const prepare = rows.prepareSelection.bind(rows);
+        const spy = vi.spyOn(rows, "prepareSelection").mockImplementationOnce(async (...args) => {
+          const result = await prepare(...args);
           await hold();
+          return result;
         });
         restores.push(() => spy.mockRestore());
       }

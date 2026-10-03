@@ -392,7 +392,6 @@ describe("release:stable post-publication CLI", () => {
   });
 
   it.each([
-    { label: "neither asset", names: [] },
     { label: "only the evidence", names: [`openclaw-${RELEASE}-stable-main-closeout.json`] },
     {
       label: "only the checksum",

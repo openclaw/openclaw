@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 // Doctor health contributions preserve the ordered interactive doctor flow while
 // exposing the same checks to structured lint and repair commands.
 import fs from "node:fs";
+import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import {
@@ -282,7 +283,6 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
         detected: legacyState,
         config: ctx.cfg,
         ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
-        recoverCorruptTargetStore: ctx.options.repair === true || ctx.options.yes === true,
         legacySessionSurfaces,
       });
       recordDoctorHealthWarnings(
@@ -528,7 +528,7 @@ async function runDoctorHealthContributionList(
   if (deferred.length > 0) {
     const { note } = await loadNoteModule();
     note(
-      `Omitted during update: ${deferred.map((contribution) => contribution.option.label).join(", ")}.\nRun \`openclaw doctor\` after the update to inspect these diagnostics.`,
+      `Omitted during update: ${deferred.map((contribution) => contribution.label).join(", ")}.\nRun \`openclaw doctor\` after the update to inspect these diagnostics.`,
       "Update Doctor scope",
     );
   }
@@ -562,7 +562,7 @@ async function runDoctorHealthContributionList(
           (contribution.healthCheckIds.length
             ? contribution.healthCheckIds
             : [`core/doctor/${contribution.id.replace(/^doctor:/, "")}`]
-          ).map((id) => ({ id, label: contribution.option.label })),
+          ).map((id) => ({ id, label: contribution.label })),
         )
       ) {
         continue;
@@ -580,12 +580,14 @@ async function runDoctorHealthContributionList(
             await reportDeferredLegacyState(ctx);
           }
         };
-        if (!runWithPluginMetadataSnapshot) {
-          await run();
-        } else {
-          const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
-          await runWithPluginMetadataSnapshot({ config: ctx.cfg, workspaceDir }, run);
-        }
+        await measureGatewayBootstrapStep(`doctor.contribution.${contribution.id}`, async () => {
+          if (!runWithPluginMetadataSnapshot) {
+            await run();
+          } else {
+            const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
+            await runWithPluginMetadataSnapshot({ config: ctx.cfg, workspaceDir }, run);
+          }
+        });
         if (ctx.configWriteRefusal) {
           // Later repairs consume the candidate. Stop before they persist state
           // derived from config that the writer deliberately left non-durable.

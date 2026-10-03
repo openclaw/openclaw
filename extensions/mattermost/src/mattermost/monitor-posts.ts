@@ -3,6 +3,7 @@ import {
   formatInboundFromLabel,
   implicitMentionKindWhen,
   resolveInboundSessionEnvelopeContext,
+  toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveBotThreadMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
 import {
@@ -35,7 +36,6 @@ import {
 import type { MattermostIngressLifecycle, MattermostIngressPost } from "./monitor-ingress.js";
 import { resolveOncharPrefixes, stripOncharPrefix } from "./monitor-onchar.js";
 import {
-  buildMattermostInboundMediaPayload,
   formatMattermostInboundMediaText,
   formatMattermostPendingMediaText,
 } from "./monitor-resources.js";
@@ -495,7 +495,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       // exception in source-reply-delivery-mode.ts surfaces their acknowledgements under
       // message_tool_only delivery modes (e.g. Codex harness DMs). Mirrors iMessage #82642.
       CommandSource: commandAuthorized && isControlCommand ? ("text" as const) : undefined,
-      ...(await buildMattermostInboundMediaPayload(mediaList)),
+      media: await toInboundMediaFactsWithMetadata(mediaList),
     });
     const pinnedMainDmOwner =
       kind === "direct"

@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { AgentSandboxConfig } from "../config/types.agents-shared.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { registerSandboxBackend, type SandboxBackendHandle } from "./sandbox/backend.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
 import { isSandboxProvisioningError } from "./sandbox/provisioning-error.js";
@@ -114,10 +115,14 @@ async function createSandboxFixtureDir(prefix: string): Promise<string> {
 }
 
 beforeAll(async () => {
-  sandboxFixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-context-"));
+  // openclaw-temp-dir: allow canonical suite root is drained before removal
+  sandboxFixtureRoot = await fs.mkdtemp(
+    path.join(await fs.realpath(os.tmpdir()), "openclaw-sandbox-context-"),
+  );
 });
 
 afterAll(async () => {
+  await closeOpenClawAgentDatabasesAsync(sandboxFixtureRoot);
   await fs.rm(sandboxFixtureRoot, { recursive: true, force: true });
 });
 

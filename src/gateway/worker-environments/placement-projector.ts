@@ -14,9 +14,16 @@ import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.
 import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 
 export type WorkerSessionPlacementReader = {
+  prepareRuntimeRefresh?: import("./placement-store.js").WorkerSessionPlacementStore["prepareRuntimeRefresh"];
   getMany(sessionIds: readonly string[]): ReadonlyMap<string, WorkerSessionPlacementRecord>;
+  /** @deprecated Await getWorkspaceResultReconcilingSessionIdsAsync. */
   getWorkspaceResultReconcilingSessionIds?(sessionIds: readonly string[]): ReadonlySet<string>;
+  getWorkspaceResultReconcilingSessionIdsAsync?(
+    sessionIds: readonly string[],
+  ): Promise<ReadonlySet<string>>;
+  /** @deprecated Await listPendingWorkspaceResultsAsync. */
   listPendingWorkspaceResults?(sessionId?: string): WorkerWorkspacePendingResult[];
+  listPendingWorkspaceResultsAsync?(sessionId?: string): Promise<WorkerWorkspacePendingResult[]>;
   /** Runtime consumers may cancel work when the exact captured turn claim closes. */
   registerTurnClaimClosedHandler?: (
     handler: (claim: import("./placement-record.js").WorkerSessionTurnClaim) => void,

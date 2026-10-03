@@ -116,9 +116,6 @@ function parsePositiveIntegerArg(raw: string | undefined, label: string): number
   return value;
 }
 
-/**
- * Parses docs MDX check arguments.
- */
 export function parseArgs(argv: string[]) {
   const roots: string[] = [];
   let jsonOut = "";

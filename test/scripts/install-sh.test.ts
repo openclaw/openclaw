@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
+import { readStandaloneInstaller } from "../../scripts/lib/standalone-installers.mjs";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -68,7 +69,7 @@ function linkNodeExecutable(bin: string) {
 }
 
 describe("install.sh", () => {
-  const script = readFileSync(SCRIPT_PATH, "utf8");
+  const script = readStandaloneInstaller(process.cwd(), SCRIPT_PATH.slice("scripts/".length));
   const installerContract = {
     scriptPath: SCRIPT_PATH,
     runShell: runInstallShell,
@@ -3484,7 +3485,7 @@ EOF
 });
 
 describe("install.sh macOS Homebrew Node behavior", () => {
-  const script = readFileSync(SCRIPT_PATH, "utf8");
+  const script = readStandaloneInstaller(process.cwd(), SCRIPT_PATH.slice("scripts/".length));
 
   it("aborts before brew link when Homebrew node installation fails at runtime", () => {
     const result = runInstallShell(`
@@ -3769,7 +3770,7 @@ describe("install.sh duplicate OpenClaw install detection", () => {
 });
 
 describe("install.sh doctor cancellation and dashboard guard", () => {
-  const script = readFileSync(SCRIPT_PATH, "utf8");
+  const script = readStandaloneInstaller(process.cwd(), SCRIPT_PATH.slice("scripts/".length));
 
   it("preserves dashboard stdin for direct interactive installs", () => {
     expect(script).toContain('run_with_safe_stdin "$claw" dashboard || true');

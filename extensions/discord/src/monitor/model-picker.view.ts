@@ -408,6 +408,14 @@ function buildModelRows(
     currentRuntime,
     pendingRuntime: params.pendingRuntime,
   });
+  const modelViewState = {
+    command: params.command,
+    userId: params.userId,
+    view: "models" as const,
+    provider: params.modelPage.provider,
+    page: params.modelPage.page,
+    providerPage: providerPage.page,
+  };
 
   if (
     runtimeChoices &&
@@ -419,18 +427,13 @@ function buildModelRows(
       new Row([
         createModelSelect({
           customId: buildDiscordModelPickerCustomId({
-            command: params.command,
+            ...modelViewState,
             action: "runtime",
-            view: "models",
-            provider: params.modelPage.provider,
-            page: params.modelPage.page,
-            providerPage: providerPage.page,
             modelIndex: params.pendingModelIndex,
             modelToken: pendingModelToken,
             ...(params.pendingModelIndex === undefined && activeModelBucket
               ? { modelBucket: activeModelBucket }
               : {}),
-            userId: params.userId,
           }),
           options: runtimeChoices.map((choice) => {
             const option: APISelectMenuOption = {
@@ -463,14 +466,9 @@ function buildModelRows(
     new Row([
       createModelSelect({
         customId: buildDiscordModelPickerCustomId({
-          command: params.command,
-          action: "model",
-          view: "models",
-          provider: params.modelPage.provider,
+          ...modelViewState,
           ...compactRuntime,
-          page: params.modelPage.page,
-          providerPage: providerPage.page,
-          userId: params.userId,
+          action: "model",
         }),
         options: modelOptions,
         placeholder: `Select ${params.modelPage.provider} model`,
@@ -479,16 +477,11 @@ function buildModelRows(
   );
 
   const modelNavRow = buildPaginationRow({
-    command: params.command,
-    userId: params.userId,
-    view: "models",
-    page: params.modelPage.page,
+    ...modelViewState,
     totalPages: params.modelPage.totalPages,
     hasPrev: params.modelPage.hasPrev,
     hasNext: params.modelPage.hasNext,
-    provider: params.modelPage.provider,
     ...compactRuntime,
-    providerPage: providerPage.page,
     modelIndex: params.pendingModelIndex,
     modelToken: pendingModelToken,
     // Model navigation derives providerBucket from provider on interaction;
@@ -511,14 +504,7 @@ function buildModelRows(
     typeof params.pendingModelIndex === "number" &&
     params.pendingModelIndex > 0;
 
-  const modelActionState = {
-    command: params.command,
-    provider: params.modelPage.provider,
-    ...compactRuntime,
-    page: params.modelPage.page,
-    providerPage: providerPage.page,
-    userId: params.userId,
-  };
+  const modelActionState = { ...modelViewState, ...compactRuntime };
   const buttonRowItems: Button[] = [
     createModelPickerButton({
       label: "Providers",
@@ -536,7 +522,6 @@ function buildModelRows(
       customId: buildDiscordModelPickerCustomId({
         ...modelActionState,
         action: "cancel",
-        view: "models",
       }),
     }),
     createModelPickerButton({
@@ -545,7 +530,6 @@ function buildModelRows(
       customId: buildDiscordModelPickerCustomId({
         ...modelActionState,
         action: "reset",
-        view: "models",
       }),
     }),
   ];
@@ -574,7 +558,6 @@ function buildModelRows(
       customId: buildDiscordModelPickerCustomId({
         ...modelActionState,
         action: "submit",
-        view: "models",
         modelIndex: params.pendingModelIndex,
         modelToken: pendingModelToken,
       }),

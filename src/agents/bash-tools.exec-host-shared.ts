@@ -22,6 +22,7 @@ import {
   type ExecApprovalsResolved,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
+import { LruCache } from "../infra/lru-cache.js";
 import { logWarn } from "../logger.js";
 import { registerExecApprovalFollowupRuntimeHandoff } from "./bash-tools.exec-approval-followup-state.js";
 import type { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
@@ -40,20 +41,15 @@ import type { AgentToolResult } from "./runtime/index.js";
 
 /** Cap for deduplicating repeated follow-up dispatch failure log keys. */
 const MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS = 256;
-const loggedExecApprovalFollowupFailures = new Set<string>();
+const loggedExecApprovalFollowupFailures = new LruCache<boolean>(
+  MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS,
+);
 
 function rememberExecApprovalFollowupFailureKey(key: string): boolean {
-  if (loggedExecApprovalFollowupFailures.has(key)) {
+  if (loggedExecApprovalFollowupFailures.peek(key)) {
     return false;
   }
-  loggedExecApprovalFollowupFailures.add(key);
-  // Bound memory growth for long-lived processes that see many unique approval failures.
-  if (loggedExecApprovalFollowupFailures.size > MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS) {
-    const oldestKey = loggedExecApprovalFollowupFailures.values().next().value;
-    if (typeof oldestKey === "string") {
-      loggedExecApprovalFollowupFailures.delete(oldestKey);
-    }
-  }
+  loggedExecApprovalFollowupFailures.set(key, true);
   return true;
 }
 
@@ -228,25 +224,6 @@ async function createAndRegisterDefaultExecApprovalRequest(
     initiatingSurface,
     sentApproverDms,
     unavailableReason,
-  };
-}
-
-/** Builds the immutable follow-up target passed to async approval continuations. */
-export function buildExecApprovalFollowupTarget(
-  params: ExecApprovalFollowupTarget,
-): ExecApprovalFollowupTarget {
-  return {
-    approvalId: params.approvalId,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    sessionKey: params.sessionKey,
-    expectedSessionId: params.expectedSessionId,
-    sessionStore: params.sessionStore,
-    turnSourceChannel: params.turnSourceChannel,
-    turnSourceTo: params.turnSourceTo,
-    turnSourceAccountId: params.turnSourceAccountId,
-    turnSourceThreadId: params.turnSourceThreadId,
-    direct: params.direct,
-    bashElevated: params.bashElevated,
   };
 }
 

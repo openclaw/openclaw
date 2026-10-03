@@ -1,6 +1,8 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  createTestPluginServiceScheduler,
+  createTestPluginApi,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
@@ -15,7 +17,7 @@ vi.mock("openclaw/plugin-sdk/device-bootstrap", () => ({
   }),
 }));
 
-import { createPairingNotifierService } from "./notify.js";
+import { startPairingNotifier } from "./notify.js";
 
 describe("device-pair notify CAS", () => {
   beforeEach(() => {
@@ -27,8 +29,6 @@ describe("device-pair notify CAS", () => {
   });
 
   function createHarness(delivered: NotifySubscription) {
-    const settled = createDeferred<void>();
-    let pollStarted = false;
     let current: NotifySubscription | undefined = delivered;
     let revision = 0;
     const snapshot = () => ({ value: current, comparison: String(revision) });
@@ -37,6 +37,7 @@ describe("device-pair notify CAS", () => {
       revision++;
     };
     const sendText = vi.fn(async () => ({ channel: "telegram", to: delivered.to }));
+    const loadAdapter = vi.fn(async () => ({ sendText }));
     const observe = vi.fn(async () => snapshot());
     const compareAndApply = vi.fn<
       NonNullable<PluginStateKeyedStore<NotifySubscription>["compareAndApply"]>
@@ -64,20 +65,19 @@ describe("device-pair notify CAS", () => {
       ]),
       clear: vi.fn(async () => {}),
     };
-    const recordSeen = vi.fn(async () => settled.resolve());
-    const warn = vi.fn(() => settled.resolve());
+    const recordSeen = vi.fn(async () => {});
+    const warn = vi.fn();
     const api = createTestPluginApi({
       logger: { info() {}, warn, error() {} },
       runtime: {
         state: {
           openKeyedStore: ({ namespace }: { namespace: string }) => {
-            pollStarted = true;
             return namespace === DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE
               ? subscriberStore
               : { entries: async () => [], register: recordSeen };
           },
         },
-        channel: { outbound: { loadAdapter: async () => ({ sendText }) } },
+        channel: { outbound: { loadAdapter } },
       } as never,
     });
     return {
@@ -85,22 +85,18 @@ describe("device-pair notify CAS", () => {
       observe,
       compareAndApply,
       sendText,
+      loadAdapter,
       recordSeen,
       warn,
       snapshot,
       replace,
       async poll() {
-        const service = createPairingNotifierService(api);
+        const scheduler = createTestPluginServiceScheduler();
         try {
-          await service.start({} as never);
+          startPairingNotifier(api, scheduler);
           await vi.advanceTimersByTimeAsync(10_000);
-          await settled.promise;
         } finally {
-          await service.stop?.({} as never);
-          if (pollStarted) {
-            await settled.promise;
-            await vi.advanceTimersByTimeAsync(0);
-          }
+          await scheduler.stop();
         }
       },
     };
@@ -128,52 +124,77 @@ describe("device-pair notify CAS", () => {
   );
 
   it.each([
-    { label: "same arm", current: delivered, action: "delete" },
-    { label: "new arm", current: { ...delivered, armId: "arm-2" }, action: "keep" },
-    { label: "removed arm", current: undefined, action: "keep" },
-  ])("reconsiders a conflict for $label without sending again", async ({ current, action }) => {
+    { label: "changed storage metadata", current: delivered },
+    { label: "new arm", current: { ...delivered, armId: "arm-2" } },
+    { label: "removed arm", current: undefined },
+  ])("preserves $label after a delivery conflict without recapturing it", async ({ current }) => {
     const harness = createHarness(delivered);
     delete harness.subscriberStore.deleteIf;
-    harness.observe.mockImplementationOnce(async () => {
-      const original = harness.snapshot();
+    harness.sendText.mockImplementationOnce(async () => {
       harness.replace(current);
-      return original;
+      return { channel: "telegram", to: delivered.to };
     });
 
     await harness.poll();
 
     expect(harness.sendText).toHaveBeenCalledTimes(1);
     expect(harness.observe).toHaveBeenCalledTimes(1);
-    expect(harness.observe.mock.invocationCallOrder[0]).toBeGreaterThan(
+    expect(harness.observe.mock.invocationCallOrder[0]).toBeLessThan(
       harness.sendText.mock.invocationCallOrder[0]!,
     );
-    expect(harness.compareAndApply).toHaveBeenCalledTimes(2);
-    expect(harness.snapshot().value).toEqual(action === "delete" ? undefined : current);
+    expect(harness.compareAndApply).toHaveBeenCalledTimes(1);
+    expect(harness.snapshot().value).toEqual(current);
     expect(harness.recordSeen).toHaveBeenCalledTimes(1);
   });
 
   it.each([
-    { label: "normalized thread", change: { messageThreadId: "0271" }, action: "delete" },
-    { label: "new arm", change: { armId: "new-arm" }, action: "keep" },
-    { label: "new mode", change: { mode: "persistent" as const }, action: "keep" },
-    { label: "new time", change: { addedAtMs: 1_001 }, action: "keep" },
-    { label: "new target", change: { to: "other-chat" }, action: "keep" },
-  ])("preserves legacy generation matching for $label", async ({ change, action }) => {
-    const legacy: NotifySubscription = {
-      to: "chat-123",
-      accountId: "telegram-default",
-      messageThreadId: 271,
-      mode: "once",
-      addedAtMs: 1_000,
-    };
-    const harness = createHarness(legacy);
-    const current = { ...legacy, ...change };
-    harness.replace(current);
+    { label: "disabled", current: undefined, sends: false },
+    {
+      label: "rearmed after the request",
+      current: { ...delivered, addedAtMs: 3_000 },
+      sends: false,
+    },
+    {
+      label: "persistent with a current thread",
+      current: {
+        ...delivered,
+        mode: "persistent" as const,
+        addedAtMs: 3_000,
+        messageThreadId: "0271",
+      },
+      sends: true,
+    },
+  ])("uses the $label row after adapter preparation", async ({ current, sends }) => {
+    const harness = createHarness({ ...delivered, messageThreadId: 271 });
+    harness.loadAdapter.mockImplementationOnce(async () => {
+      harness.replace(current);
+      return { sendText: harness.sendText };
+    });
 
     await harness.poll();
 
-    expect(harness.snapshot().value).toEqual(action === "delete" ? undefined : current);
+    expect(harness.sendText).toHaveBeenCalledTimes(sends ? 1 : 0);
+    if (sends) {
+      expect(harness.sendText).toHaveBeenCalledWith(
+        expect.objectContaining({ to: current?.to, threadId: "0271" }),
+      );
+    }
+    expect(harness.compareAndApply).not.toHaveBeenCalled();
+    expect(harness.recordSeen).toHaveBeenCalledTimes(sends ? 1 : 0);
+    expect(harness.snapshot().value).toEqual(current);
+  });
+
+  it("retains a one-shot after failed delivery without recording success", async () => {
+    const harness = createHarness(delivered);
+    harness.sendText.mockRejectedValueOnce(new Error("delivery failed"));
+
+    await harness.poll();
+
     expect(harness.sendText).toHaveBeenCalledTimes(1);
+    expect(harness.compareAndApply).not.toHaveBeenCalled();
+    expect(harness.recordSeen).not.toHaveBeenCalled();
+    expect(harness.snapshot().value).toEqual(delivered);
+    expect(harness.warn).toHaveBeenCalledWith(expect.stringContaining("delivery failed"));
   });
 
   it.each(["observe", "compareAndApply"] as const)(
@@ -184,7 +205,7 @@ describe("device-pair notify CAS", () => {
 
       await harness.poll();
 
-      expect(harness.sendText).toHaveBeenCalledTimes(1);
+      expect(harness.sendText).toHaveBeenCalledTimes(operation === "observe" ? 0 : 1);
       expect(harness.observe).toHaveBeenCalledTimes(1);
       expect(harness.compareAndApply).toHaveBeenCalledTimes(operation === "observe" ? 0 : 1);
       expect(harness.warn).toHaveBeenCalledWith(expect.stringContaining("outcome unavailable"));

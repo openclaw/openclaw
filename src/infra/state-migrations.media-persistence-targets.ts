@@ -30,6 +30,7 @@ export type AgentDatabaseMigrationTarget = {
 type CandidateTarget = Omit<AgentDatabaseMigrationTarget, "realPath">;
 
 export type PreparedAgentDatabaseMigrationDiscovery = {
+  preparedTranscriptArchives?: Set<string>;
   stateDir: string;
   configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
   registeredAgentDatabases: readonly { agentId: string; path: string }[];
@@ -70,6 +71,9 @@ export function prepareAgentDatabaseMigrationDiscovery(params: {
       registeredAgentDatabases,
       deletionJournal,
     }),
+    ...(params.preparedDiscovery?.stateDir === stateDir
+      ? { preparedTranscriptArchives: params.preparedDiscovery.preparedTranscriptArchives }
+      : {}),
   };
 }
 

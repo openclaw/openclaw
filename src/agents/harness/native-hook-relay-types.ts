@@ -35,10 +35,8 @@ export const NATIVE_HOOK_RELAY_EVENTS = [
   "before_agent_finalize",
 ] as const;
 
-const NATIVE_HOOK_RELAY_PROVIDERS = ["codex"] as const;
-
 export type NativeHookRelayEvent = (typeof NATIVE_HOOK_RELAY_EVENTS)[number];
-export type NativeHookRelayProvider = (typeof NATIVE_HOOK_RELAY_PROVIDERS)[number];
+export type NativeHookRelayProvider = "codex";
 
 export type NativeHookRelayInvocation = {
   provider: NativeHookRelayProvider;
@@ -181,22 +179,6 @@ export type NativeHookRelayInvocationMetadata = Partial<
 >;
 
 type NativeHookRelayPermissionDecision = "allow" | "deny";
-
-export type NativeHookRelayProviderAdapter = {
-  readToolInput: (rawPayload: JsonValue) => Record<string, JsonValue>;
-  readToolResponse: (rawPayload: JsonValue) => unknown;
-  renderNoopResponse: (event: NativeHookRelayEvent) => NativeHookRelayProcessResponse;
-  renderPreToolUseBlockResponse: (
-    reason: string,
-    failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">,
-  ) => NativeHookRelayProcessResponse;
-  renderBeforeAgentFinalizeReviseResponse: (reason: string) => NativeHookRelayProcessResponse;
-  renderBeforeAgentFinalizeStopResponse: (reason?: string) => NativeHookRelayProcessResponse;
-  renderPermissionDecisionResponse: (
-    decision: NativeHookRelayPermissionDecision,
-    message?: string,
-  ) => NativeHookRelayProcessResponse;
-};
 
 export type NativeHookRelayPermissionApprovalResult =
   | NativeHookRelayPermissionDecision

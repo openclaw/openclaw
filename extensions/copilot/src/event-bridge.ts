@@ -7,6 +7,7 @@ import type {
   AgentHarnessAttemptResult,
   AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -155,13 +156,9 @@ export function attachEventBridge(
   let deltaChain = Promise.resolve();
   let agentEventChain = Promise.resolve();
   let compactionChain = Promise.resolve();
-  let compactionIdle = Promise.resolve();
-  let resolveCompactionIdle: (() => void) | undefined;
+  let compactionIdle: ReturnType<typeof createDeferred<void>> | undefined;
   let observedSessionIdle = false;
-  let resolveSessionIdle: (() => void) | undefined;
-  const sessionIdle = new Promise<void>((resolve) => {
-    resolveSessionIdle = resolve;
-  });
+  const sessionIdle = createDeferred();
   let firstDeltaError: unknown;
   let detached = false;
   let unconsumedDurableReasoning = false;
@@ -468,9 +465,7 @@ export function attachEventBridge(
     }
     observedCompaction = true;
     if (activeCompactionCount === 0) {
-      compactionIdle = new Promise<void>((resolve) => {
-        resolveCompactionIdle = resolve;
-      });
+      compactionIdle = createDeferred();
     }
     activeCompactionCount += 1;
     enqueueCompactionCallback(options.onCompactionStart);
@@ -499,8 +494,8 @@ export function attachEventBridge(
       }),
     );
     if (activeCompactionCount === 0) {
-      resolveCompactionIdle?.();
-      resolveCompactionIdle = undefined;
+      compactionIdle?.resolve();
+      compactionIdle = undefined;
     }
   });
 
@@ -511,8 +506,7 @@ export function attachEventBridge(
     markUnconsumedReasoningIncomplete();
     flushPendingAssistantProjection();
     observedSessionIdle = true;
-    resolveSessionIdle?.();
-    resolveSessionIdle = undefined;
+    sessionIdle.resolve();
   });
 
   registerListener(session, unsubscribeFns, "session.error", (event) => {
@@ -553,12 +547,12 @@ export function attachEventBridge(
     },
     awaitCompactionCompletion: awaitStableCompaction,
     awaitSessionIdle() {
-      return observedSessionIdle ? Promise.resolve() : sessionIdle;
+      return observedSessionIdle ? Promise.resolve() : sessionIdle.promise;
     },
     settleCompactionWait() {
       activeCompactionCount = 0;
-      resolveCompactionIdle?.();
-      resolveCompactionIdle = undefined;
+      compactionIdle?.resolve();
+      compactionIdle = undefined;
     },
     awaitDeltaChain() {
       return deltaChain;
@@ -790,7 +784,7 @@ export function attachEventBridge(
   }
 
   async function awaitStableCompaction(): Promise<void> {
-    const idle = activeCompactionCount > 0 ? compactionIdle : undefined;
+    const idle = activeCompactionCount > 0 ? compactionIdle?.promise : undefined;
     if (idle) {
       await idle;
     }

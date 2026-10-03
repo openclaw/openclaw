@@ -26,41 +26,50 @@ import {
 
 const validatedSchemas = new WeakMap<DatabaseSync, { cookie: number; unregister: () => void }>();
 
+/** Recheck mutable metadata within the caller's admission transaction. */
+export function assertExistingOpenClawStateRuntimeMetadata(
+  database: DatabaseSync,
+  pathname: string,
+): number {
+  const version = assertSupportedStateSchemaVersion(database, pathname);
+  if (readStateSchemaMigrationVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
+    throw new Error(
+      `Existing shared-state database ${pathname} requires schema migration by its owning installation before this node can use it.`,
+    );
+  }
+  let metadata;
+  try {
+    metadata = executeSqliteQueryTakeFirstSync(
+      database,
+      getNodeSqliteKysely<Pick<DB, "schema_meta">>(database)
+        .selectFrom("schema_meta")
+        .select(["role", "schema_version"])
+        .where("meta_key", "=", "primary")
+        .limit(1),
+    );
+  } catch (error) {
+    throw classifySqliteTableReadError(
+      database,
+      "schema_meta",
+      ["meta_key", "role", "schema_version"],
+      error,
+    );
+  }
+  if (metadata?.role !== "global" || metadata.schema_version !== version) {
+    throw new Error(
+      `Existing shared-state database ${pathname} has inconsistent ownership or schema metadata.`,
+    );
+  }
+  return version;
+}
+
 /** Prove the existing runtime contract without certifying this release's repairs. */
 export function assertExistingOpenClawStateRuntimeSchema(
   database: DatabaseSync,
   pathname: string,
 ): void {
   const schemaCookie = runSqliteDeferredTransactionSync(database, () => {
-    const version = assertSupportedStateSchemaVersion(database, pathname);
-    if (readStateSchemaMigrationVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
-      throw new Error(
-        `Existing shared-state database ${pathname} requires schema migration by its owning installation before this node can use it.`,
-      );
-    }
-    let metadata;
-    try {
-      metadata = executeSqliteQueryTakeFirstSync(
-        database,
-        getNodeSqliteKysely<Pick<DB, "schema_meta">>(database)
-          .selectFrom("schema_meta")
-          .select(["role", "schema_version"])
-          .where("meta_key", "=", "primary")
-          .limit(1),
-      );
-    } catch (error) {
-      throw classifySqliteTableReadError(
-        database,
-        "schema_meta",
-        ["meta_key", "role", "schema_version"],
-        error,
-      );
-    }
-    if (metadata?.role !== "global" || metadata.schema_version !== version) {
-      throw new Error(
-        `Existing shared-state database ${pathname} has inconsistent ownership or schema metadata.`,
-      );
-    }
+    assertExistingOpenClawStateRuntimeMetadata(database, pathname);
     const currentCookie = readSqliteSchemaCookie(database);
     if (typeof currentCookie !== "number") {
       throw new Error(`Existing shared-state database ${pathname} schema version is unavailable.`);

@@ -203,7 +203,6 @@ it("omits unchanged PR-exempt files from PR plans except the fixed smoke", () =>
     createChangedNodeTestShards(["src/infra/retry.test.ts"], {
       ...prExemptPlanOptions,
       includePrExemptRuntimeTests: false,
-      includeReleaseOnlyToolingShards: false,
     }),
     "unrelated PR owner plan",
   );
@@ -297,7 +296,6 @@ it("opts every directly edited PR-exempt file into its canonical PR owner", () =
     createChangedNodeTestShards(prExemptFiles, {
       ...prExemptPlanOptions,
       includePrExemptRuntimeTests: false,
-      includeReleaseOnlyToolingShards: false,
       dedicatedUiTests: true,
       dedicatedUiE2e: true,
     }),

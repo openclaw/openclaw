@@ -45,10 +45,6 @@ export function usesFastLoopbackCdpProbeClass(params: {
   return params.profileIsLoopback && params.attachOnly !== true;
 }
 
-function maxTimerTimeoutMs(...values: number[]): number {
-  return values.reduce((max, value) => Math.max(max, resolveTimerTimeoutMs(value, 1)), 1);
-}
-
 /** Resolve HTTP and WebSocket reachability timeouts for a CDP profile. */
 export function resolveCdpReachabilityTimeouts(params: {
   profileIsLoopback: boolean;
@@ -87,8 +83,8 @@ export function resolveCdpReachabilityTimeouts(params: {
     // HTTP reachability and WS handshake are separate network operations.
     const requestedWsTimeoutMs = addTimerTimeoutGraceMs(normalized, normalized) ?? normalized;
     return {
-      httpTimeoutMs: maxTimerTimeoutMs(normalized, remoteHttpTimeoutMs),
-      wsTimeoutMs: maxTimerTimeoutMs(requestedWsTimeoutMs, remoteHandshakeTimeoutMs),
+      httpTimeoutMs: Math.max(normalized, remoteHttpTimeoutMs),
+      wsTimeoutMs: Math.max(requestedWsTimeoutMs, remoteHandshakeTimeoutMs),
     };
   }
   return {

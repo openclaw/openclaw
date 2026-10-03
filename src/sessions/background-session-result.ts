@@ -6,7 +6,6 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
-  readActiveTranscriptEntryAnchor,
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -54,6 +53,8 @@ export async function commitBackgroundResultToSession(params: {
   provenance: BackgroundSessionResultProvenance;
   config: OpenClawConfig;
   signal?: AbortSignal;
+  /** Revalidate the producer after preparation and inside the transcript commit. */
+  assertCurrent?: () => void;
 }): Promise<BackgroundSessionResultCommit> {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   const text = normalizeOptionalString(params.text);
@@ -74,6 +75,7 @@ export async function commitBackgroundResultToSession(params: {
   );
   const identities = [sessionKey, expectedSessionId];
 
+  params.assertCurrent?.();
   return await runExclusiveSessionLifecycleMutation({
     scope: storePath,
     identities,
@@ -85,6 +87,7 @@ export async function commitBackgroundResultToSession(params: {
       }
     },
     run: async () => {
+      params.assertCurrent?.();
       const current = loadSessionEntryReadOnly({
         agentId: params.agentId,
         sessionKey,
@@ -137,24 +140,31 @@ export async function commitBackgroundResultToSession(params: {
         idempotencyKey: string;
         openclawAutomation: BackgroundSessionResultProvenance;
       };
+      params.assertCurrent?.();
       const committed = await persistSessionTranscriptTurn(scope, {
         cwd: current.spawnedCwd,
         expectedSessionId,
         expectedLifecycleRevision: expectedLifecycleRevision ?? null,
+        assertCurrent: () => {
+          params.assertCurrent?.();
+          params.signal?.throwIfAborted();
+        },
         messages: [
           {
             message: priorMessage
               ? { ...priorMessage, content: message.content, openclawAutomation: params.provenance }
               : message,
             idempotencyLookup: "scan",
-            ...(priorId ? { eventId: priorId } : {}),
-            shouldAppendInTransaction: () => {
-              params.signal?.throwIfAborted();
-              if (priorId && !readActiveTranscriptEntryAnchor({ ...scope, entryId: priorId })) {
-                throw new Error("background result no longer owns the active transcript");
-              }
-              return true;
-            },
+            ...(priorId
+              ? {
+                  eventId: priorId,
+                  predicate: {
+                    kind: "active-entry" as const,
+                    entryId: priorId,
+                    errorMessage: "background result no longer owns the active transcript",
+                  },
+                }
+              : {}),
           },
         ],
         touchSessionEntry: true,

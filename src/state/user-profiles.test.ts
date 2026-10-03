@@ -12,9 +12,16 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
-import { getUserPreferences, setUserPreferences } from "./user-preferences.js";
+import { getUserPreferences, setUserPreferences } from "./user-preferences.test-support.js";
 import { onUserProfilesChanged, readUserProfileVersion } from "./user-profile-events.js";
 import { listUserProfilesSync } from "./user-profile-identity.read.js";
+import {
+  linkEmail,
+  setAvatar,
+  setDisplayName,
+  setUserProfileRole,
+  syncGitHubIdentity,
+} from "./user-profile-writes.worker.js";
 import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
 import { migrateLegacyTailscaleProfileIdentities } from "./user-profiles-tailscale-migration.js";
 import {
@@ -24,11 +31,6 @@ import {
   getUserProfileDisplay,
   getUserProfileListItem,
   getUserProfileRole,
-  linkEmail,
-  setAvatar,
-  setDisplayName,
-  setUserProfileRole,
-  syncGitHubIdentity,
 } from "./user-profiles.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -246,7 +248,9 @@ describe("user profiles", () => {
     const email = "shared@example.test";
     const accountA = github(10, "account-a", { email, initialName: "Account A" });
     setDisplayName(accountA.id, "Account A Custom", options);
-    expect(setUserPreferences(accountA.id, { theme: "claw" }, options)).toMatchObject({ ok: true });
+    expect(setUserPreferences(accountA.id, { theme: "claw" }, options)).toMatchObject({
+      ok: true,
+    });
     const accountB = github(20, "account-b", { email, initialName: "Account B" });
     expect(accountB).toMatchObject({
       displayName: "Account B",

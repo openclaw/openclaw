@@ -1,11 +1,14 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { constants } from "node:os";
 import path from "node:path";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isPidAlive } from "../shared/pid-alive.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
 import * as bunAdapter from "./terminal-pty-bun.js";
 import * as nodeAdapter from "./terminal-pty-node.js";
@@ -57,13 +60,51 @@ async function start(args: string[], overrides: Partial<TerminalPtySpawnParams> 
   });
   handles.push(handle);
   const observed: { output: string; exit?: { exitCode: number; signal?: number } } = { output: "" };
+  const exited = createDeferredCore<{ exitCode: number; signal?: number }>();
+  const outputWaiters = new Set<() => void>();
   handle.onData((chunk) => {
     observed.output += chunk;
+    for (const check of outputWaiters) {
+      check();
+    }
   });
   handle.onExit((event) => {
     observed.exit = event;
+    exited.resolve(event);
   });
-  return { handle, observed };
+  const waitForOutput = async (text: string | RegExp, signal: AbortSignal) => {
+    const ready = createDeferredCore();
+    const check = () => {
+      if (typeof text === "string" ? observed.output.includes(text) : text.test(observed.output)) {
+        ready.resolve();
+      }
+    };
+    outputWaiters.add(check);
+    check();
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(ready.promise, exited.promise, `PTY exited before ${text}`),
+        signal,
+      );
+    } finally {
+      outputWaiters.delete(check);
+    }
+  };
+  return { handle, observed, exited: exited.promise, waitForOutput };
+}
+
+// Session signaling has no completion promise for an adopted slave-holding child.
+async function waitForPidToExit(pid: number, signal: AbortSignal): Promise<void> {
+  try {
+    while (isPidAlive(pid)) {
+      await waitForProcessTick(10, undefined, { signal });
+    }
+  } catch (error) {
+    if (signal.aborted) {
+      throw new Error(`Timed out waiting for PTY descendant ${pid} to exit`, { cause: error });
+    }
+    throw error;
+  }
 }
 
 // Stock Bun and the current CI pin lack the capability required by the native route.
@@ -99,34 +140,37 @@ describe.runIf(Boolean(process.versions.bun) && process.platform !== "win32" && 
       expect(observed.output).toBe(`|screen-256color|${process.cwd()}`);
     });
 
-    it("Ctrl-C interrupts the foreground job while the interactive shell survives", async () => {
-      const { handle, observed } = await start(["--noprofile", "--norc", "-i"], {
-        file: "/bin/bash",
-        env: { PATH: "/usr/bin:/bin", PS1: "PTY_READY> " },
-      });
-      await vi.waitFor(() => expect(observed.output).toContain("PTY_READY> "), deadline);
-      handle.write("stty -echo; sleep 30\r");
-      let childPid = 0;
-      await vi.waitFor(() => {
-        const rows = spawnSync("ps", ["-axo", "pid=,ppid=,comm="], { encoding: "utf8" }).stdout;
-        const child = rows
-          .split("\n")
-          .map((line) => line.trim().split(/\s+/u))
-          .find(
-            ([, parent, command]) => Number(parent) === handle.pid && command?.endsWith("sleep"),
-          );
-        expect(child).toBeDefined();
-        childPid = Number(child?.[0]);
-      }, deadline);
+    it("Ctrl-C interrupts the foreground job while the interactive shell survives", async ({
+      signal,
+    }) => {
+      const { handle, observed, exited, waitForOutput } = await start(
+        ["--noprofile", "--norc", "-i"],
+        {
+          file: "/bin/bash",
+          env: { PATH: "/usr/bin:/bin", PS1: "PTY_READY> " },
+        },
+      );
+      await waitForOutput("PTY_READY> ", signal);
+      const cwd = tempDirs.make("openclaw-bun-pty-foreground-");
+      const foreground = path.join(cwd, "foreground.mjs");
+      fs.writeFileSync(
+        foreground,
+        "setInterval(() => {}, 1000); process.stdout.write(`FOREGROUND:${process.pid}\\n`);",
+      );
+      const command = [resolveTestNodeExecPath(), foreground].map(quoteCliArg).join(" ");
+      handle.write(`stty -echo; ${command}\r`);
+      await waitForOutput(/FOREGROUND:\d+\r?\n/u, signal);
+      const childPid = Number(observed.output.match(/FOREGROUND:(\d+)\r?\n/u)?.[1]);
+      expect(childPid).toBeGreaterThan(0);
       descendants.push(childPid);
       handle.write("\x03");
       handle.write('printf "INTERRUPTED:%s\\n" "$?"\r');
-      await vi.waitFor(() => expect(observed.output).toContain("INTERRUPTED:130\r\n"), deadline);
+      await waitForOutput("INTERRUPTED:130\r\n", signal);
       expect(isPidAlive(handle.pid)).toBe(true);
       expect(observed.exit).toBeUndefined();
-      await vi.waitFor(() => expect(isPidAlive(childPid)).toBe(false), deadline);
+      expect(isPidAlive(childPid)).toBe(false);
       handle.write("exit 0\r");
-      await vi.waitFor(() => expect(observed.exit?.exitCode).toBe(0), deadline);
+      expect((await withinTest(exited, signal)).exitCode).toBe(0);
     });
 
     it("maps signal termination to node-pty's exit code and signal number", async () => {
@@ -139,7 +183,9 @@ describe.runIf(Boolean(process.versions.bun) && process.platform !== "win32" && 
       );
     });
 
-    it("reports shell exit promptly with a slave-holding descendant and still kills that descendant", async () => {
+    it("reports shell exit promptly with a slave-holding descendant and still kills that descendant", async ({
+      signal,
+    }) => {
       const { handle, observed } = await start([
         "-c",
         'trap \'\' HUP; sleep 30 & printf "CHILD:%s\\n" "$!"; exit 3',
@@ -154,7 +200,8 @@ describe.runIf(Boolean(process.versions.bun) && process.platform !== "win32" && 
       descendants.push(childPid);
       expect(isPidAlive(childPid)).toBe(true);
       handle.kill();
-      await vi.waitFor(() => expect(isPidAlive(childPid)).toBe(false), deadline);
+      await waitForPidToExit(childPid, signal);
+      expect(isPidAlive(childPid)).toBe(false);
     });
 
     describe("flow control", () => {
@@ -214,33 +261,30 @@ describe.runIf(Boolean(process.versions.bun) && process.platform !== "win32" && 
         expect(observed.output).toBe("READY\r\ntail 🦞\r\n");
       });
 
-      it("reports exit after kill while the consumer keeps re-pausing output", async () => {
+      it("reports exit after kill while the consumer keeps re-pausing output", async ({
+        signal,
+      }) => {
         const cwd = tempDirs.make("openclaw-bun-pty-kill-");
-        fs.writeFileSync(path.join(cwd, "payload"), "x".repeat(4 * 1024 * 1024));
-        const { handle, observed } = await start(
-          [
-            "-c",
-            'stty -echo; printf "READY\\n"; read input; printf started > progress; cat payload',
-          ],
-          { cwd },
-        );
-        await vi.waitFor(() => expect(observed.output).toBe("READY\r\n"), deadline);
-        handle.pause();
-        handle.write("go\r");
-        await vi.waitFor(
-          () => expect(fs.readFileSync(path.join(cwd, "progress"), "utf8")).toBe("started"),
-          deadline,
-        );
+        const payload = path.join(cwd, "payload");
+        fs.writeFileSync(payload, "x".repeat(4 * 1024 * 1024));
+        // A shell can exit with its killed child's status before the tree kill reaches it.
+        const { handle, observed, exited, waitForOutput } = await start([payload], {
+          file: "/bin/cat",
+          cwd,
+        });
         // A viewer whose backlog stays full pauses again on every chunk it receives.
         handle.onData(() => handle.pause());
+        await waitForOutput("x", signal);
+        expect(observed.exit).toBeUndefined();
+        const beforeKill = observed.output.length;
         handle.kill();
-        await vi.waitFor(
-          () => expect(observed.exit).toEqual({ exitCode: 0, signal: constants.signals.SIGKILL }),
-          deadline,
-        );
+        expect(await withinTest(exited, signal)).toEqual({
+          exitCode: 0,
+          signal: constants.signals.SIGKILL,
+        });
         // Teardown delivered the dying tree's output before exit; nothing trails it.
         const atExit = observed.output.length;
-        expect(atExit).toBeGreaterThan("READY\r\n".length);
+        expect(atExit).toBeGreaterThan(beforeKill);
         handle.resume();
         expect(observed.output.length).toBe(atExit);
       });

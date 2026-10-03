@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createTestAdmittedRunContext } from "../agents/admitted-run-context.test-support.js";
 import { prepareAgentCommandExecutionIdentity } from "../agents/agent-command-execution-identity.js";
@@ -12,6 +16,8 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../agents/cron-creator-authority-context.js";
+import * as completionDelivery from "../agents/subagents/announce/subagent-announce-completion-delivery.js";
+import { SessionFollowupCompletion } from "../agents/subagents/completion/session-followup-completion.js";
 import { revokeRequesterCronAuthority } from "../agents/subagents/requester-cron-authority.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -80,7 +86,7 @@ afterAll(async () => {
 });
 
 it.for(["success", "child error", "owner revoked", "owner reassigned", "new user turn"] as const)(
-  "enforces owner authority at the plugin's final write after %s",
+  "enforces owner authority at the final plugin write after an inline wait expires (%s)",
   async (outcome, { signal }) => {
     const root = tempDirs.make("openclaw-followup-owner-");
     const parent = "agent:main:main";
@@ -114,6 +120,42 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
     const pluginEntered = createDeferred();
     const effectMayFinish = createDeferred();
     const parentFinished = createDeferred();
+    const inlineWaitStarted = createDeferred();
+    const requesterAccepted = createDeferred();
+    const completionClosed = createDeferred();
+    let closeCompletion: (() => void) | undefined;
+    let requesterReceipt: unknown;
+    const onCompletionClosed = () => completionClosed.resolve();
+    const observeInlineWait = vi
+      .spyOn(SessionFollowupCompletion.prototype, "take")
+      .mockImplementationOnce(function (this: SessionFollowupCompletion, timeoutMs) {
+        observeInlineWait.mockRestore();
+        const pending = this.take(timeoutMs);
+        if (timeoutMs !== undefined) {
+          this.signal.addEventListener("abort", onCompletionClosed, { once: true });
+          closeCompletion = () => {
+            this.close();
+            this.signal.removeEventListener("abort", onCompletionClosed);
+          };
+          inlineWaitStarted.resolve();
+        }
+        return pending;
+      });
+    const dispatch = completionDelivery.runAnnounceAgentCall;
+    const observeRequesterAdmission = vi
+      .spyOn(completionDelivery, "runAnnounceAgentCall")
+      .mockImplementation((params) =>
+        dispatch({
+          ...params,
+          onAccepted: (receipt) => {
+            params.onAccepted?.(receipt);
+            requesterAccepted.resolve();
+          },
+        }).then((receipt) => {
+          requesterReceipt = receipt;
+          return receipt;
+        }),
+      );
     const unblock = () => {
       childMayFinish.resolve();
       effectMayFinish.resolve();
@@ -280,53 +322,81 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
       sessionId: parentId,
     });
     try {
-      const capability = expectDefined(
-        createCronCreatorAuthorityCapability(
-          originalRun,
-          { kind: "unknown" },
-          { source: "channel-owner", isCurrent: owner.isCurrent },
-          () => true,
-          undefined,
-          owner,
+      try {
+        const capability = expectDefined(
+          createCronCreatorAuthorityCapability(
+            originalRun,
+            { kind: "unknown" },
+            { source: "channel-owner", isCurrent: owner.isCurrent },
+            () => true,
+            undefined,
+            owner,
+          ),
+          "original owner capability",
+        );
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const sent = withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: parent,
+            operationalRunInstance,
+            approvalAuthority: authority,
+            receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+            gatewayContextResolver: () => kernel.gatewayRequestContext,
+          },
+          () =>
+            runWithCronCreatorAuthorityCapability(capability, async () => {
+              const send = expectDefined(
+                createOpenClawTools({
+                  runId: originalRun,
+                  agentSessionKey: parent,
+                  sessionId: parentId,
+                  config: { ...config, tools: { sessions: { visibility: "all" } } },
+                }).find((tool) => tool.name === "sessions_send"),
+                "sessions_send tool",
+              );
+              const result = await send.execute("send-followup", {
+                sessionKey: child,
+                message: "finish authorized work",
+                timeoutSeconds: 1,
+              });
+              expect(result.details).toMatchObject({ status: "accepted" });
+            }),
+        );
+        await withinTest(
+          awaitGateBeforeSettlement(
+            inlineWaitStarted.promise,
+            sent,
+            "Send ended before entering its inline completion wait",
+          ),
+          signal,
+        );
+        await vi.advanceTimersByTimeAsync(1_000);
+        await withinTest(sent, signal);
+      } finally {
+        releaseAgentRunDelegatedAuthority(authority);
+        clearAgentRunContext(originalRun);
+        originalClosed = true;
+        childMayFinish.resolve();
+      }
+      await withinTest(
+        awaitGateBeforeSettlement(
+          requesterAccepted.promise,
+          completionClosed.promise,
+          "Completion ended before private requester admission",
         ),
-        "original owner capability",
+        signal,
       );
-      await withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: parent,
-          operationalRunInstance,
-          approvalAuthority: authority,
-          receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
-          gatewayContextResolver: () => kernel.gatewayRequestContext,
-        },
-        () =>
-          runWithCronCreatorAuthorityCapability(capability, async () => {
-            const send = expectDefined(
-              createOpenClawTools({
-                runId: originalRun,
-                agentSessionKey: parent,
-                sessionId: parentId,
-                config: { ...config, tools: { sessions: { visibility: "all" } } },
-              }).find((tool) => tool.name === "sessions_send"),
-              "sessions_send tool",
-            );
-            const result = await send.execute("send-followup", {
-              sessionKey: child,
-              message: "finish authorized work",
-              timeoutSeconds: 0,
-            });
-            expect(result.details).toMatchObject({ status: "accepted" });
-          }),
+      // Cross the native accepted-ack yield without advancing run deadlines.
+      await vi.advanceTimersByTimeAsync(10);
+      await withinTest(
+        awaitGateBeforeSettlement(
+          pluginEntered.promise,
+          parentFinished.promise,
+          "Requester ended before its plugin could check owner authority",
+        ),
+        signal,
       );
-    } finally {
-      releaseAgentRunDelegatedAuthority(authority);
-      clearAgentRunContext(originalRun);
-      originalClosed = true;
-      childMayFinish.resolve();
-    }
-    try {
-      await Promise.race([pluginEntered.promise, parentFinished.promise]);
       expect(parentError).toBeUndefined();
       expect(pluginError).toBeUndefined();
       if (outcome === "owner revoked" || outcome === "owner reassigned") {
@@ -338,8 +408,13 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
         revokeRequesterCronAuthority(parent);
       }
       effectMayFinish.resolve();
-      await parentFinished.promise;
+      await withinTest(parentFinished.promise, signal);
+      await withinTest(completionClosed.promise, signal);
       expect(parentError).toBeUndefined();
+      expect(requesterReceipt).toMatchObject({
+        status: "ok",
+        inputProcessingCompleted: true,
+      });
       if (outcome === "success" || outcome === "child error") {
         expect(pluginError).toBeUndefined();
         expect(fs.readFileSync(effectPath, "utf8")).toBe("authorized effect");
@@ -350,6 +425,13 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
       }
     } finally {
       unblock();
+      closeCompletion?.();
+      observeInlineWait.mockRestore();
+      observeRequesterAdmission.mockRestore();
+      if (vi.isFakeTimers()) {
+        await vi.advanceTimersByTimeAsync(10);
+      }
+      vi.useRealTimers();
       revokeRequesterCronAuthority(parent);
       await waitForGatewayActiveWork(10_000);
       signal.removeEventListener("abort", unblock);

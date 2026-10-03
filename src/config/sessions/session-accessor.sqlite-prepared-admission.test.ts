@@ -309,76 +309,62 @@ it.each(cases)(
   },
 );
 
-it.each(["empty-replacements", "missing-replacement"] as const)(
-  "does not reopen a disposed handle for a $0 result-only commit",
-  async (mode) => {
-    const f = fixture();
-    const probe = observeAdmission(f.databasePath);
-    let callbacks = 0;
-    const close = async () => {
-      callbacks += 1;
-      expect(await closeOpenClawAgentDatabaseByPathAsync(f.databasePath)).toBe(true);
+it("does not reopen a disposed handle for a missing replacement's result-only commit", async () => {
+  const f = fixture();
+  const probe = observeAdmission(f.databasePath);
+  const update = vi.fn(async () => {
+    expect(await closeOpenClawAgentDatabaseByPathAsync(f.databasePath)).toBe(true);
+    return {
+      result: "no-op",
+      replacements: [
+        { sessionKey: "agent:main:missing", entry: { sessionId: "missing", updatedAt: 1 } },
+      ],
     };
-    const operation = applySessionEntryReplacements({
-      storePath: f.databasePath,
-      sessionKeys: [mode === "missing-replacement" ? "agent:main:missing" : f.input.sessionKey],
-      skipMaintenance: true,
-      update: async () => {
-        await close();
-        return {
-          result: "no-op",
-          ...(mode === "missing-replacement"
-            ? {
-                replacements: [
-                  {
-                    sessionKey: "agent:main:missing",
-                    entry: { sessionId: "missing", updatedAt: 1 },
-                  },
-                ],
-              }
-            : {}),
-        };
-      },
-    });
-    await expect(own(operation)).resolves.toBe("no-op");
-    expect(callbacks).toBe(1);
-    expect(getOpenClawAgentDatabaseIfOpen(f.options)).toBeUndefined();
-    probe.expectHealthy(0);
-    expect(loadSessionEntryReadOnly(f.input)?.sessionId).toBe("original");
-  },
-);
+  });
+  await expect(
+    own(
+      applySessionEntryReplacements({
+        storePath: f.databasePath,
+        sessionKeys: ["agent:main:missing"],
+        skipMaintenance: true,
+        update,
+      }),
+    ),
+  ).resolves.toBe("no-op");
+  expect(update).toHaveBeenCalledOnce();
+  expect(getOpenClawAgentDatabaseIfOpen(f.options)).toBeUndefined();
+  probe.expectHealthy(0);
+  expect(loadSessionEntryReadOnly(f.input)?.sessionId).toBe("original");
+});
 
-it.each(["selection", "stale", "denied"] as const)(
-  "refuses replacement $0 before an unauthorized worker commit",
-  async (mode) => {
-    const f = fixture();
-    const probe = observeAdmission(f.databasePath);
-    const denied = new Error("synthetic replacement denied");
-    const guard = vi.fn(() => {
-      throw denied;
-    });
-    const update = vi.fn(
-      async (
-        entries: Parameters<Parameters<typeof applySessionEntryReplacements>[0]["update"]>[0],
-      ) => {
-        if (mode === "stale") {
-          replaceSessionEntrySync(f.input, {
-            sessionId: "original",
-            label: "newer",
-            updatedAt: Date.now(),
-          });
-        }
-        await closeWorkerForIntegrityAdmission(f);
-        return {
-          result: undefined,
-          replacements: entries.map(({ entry, sessionKey }) => ({
-            sessionKey: mode === "selection" ? "agent:main:outside-selection" : sessionKey,
-            entry: { ...entry, label: "uncommitted" },
-          })),
-        };
-      },
-    );
-    const work = own(
+it("checks replacement commit authority before stale rows or worker admission", async () => {
+  const f = fixture();
+  const probe = observeAdmission(f.databasePath);
+  const denied = new Error("synthetic replacement denied");
+  const guard = vi.fn(() => {
+    throw denied;
+  });
+  const update = vi.fn(
+    async (
+      entries: Parameters<Parameters<typeof applySessionEntryReplacements>[0]["update"]>[0],
+    ) => {
+      replaceSessionEntrySync(f.input, {
+        sessionId: "original",
+        label: "newer",
+        updatedAt: Date.now(),
+      });
+      await closeWorkerForIntegrityAdmission(f);
+      return {
+        result: undefined,
+        replacements: entries.map(({ entry, sessionKey }) => ({
+          sessionKey,
+          entry: { ...entry, label: "uncommitted" },
+        })),
+      };
+    },
+  );
+  await expect(
+    own(
       applySessionEntryReplacements({
         storePath: f.databasePath,
         sessionKeys: [f.input.sessionKey],
@@ -386,18 +372,13 @@ it.each(["selection", "stale", "denied"] as const)(
         assertCommitAllowed: guard,
         update,
       }),
-    );
-    if (mode === "selection") {
-      await expect(work).rejects.toThrow("outside the selected key set");
-    } else {
-      await expect(work).rejects.toBe(denied);
-    }
-    expect(update).toHaveBeenCalledOnce();
-    expect(guard).toHaveBeenCalledTimes(mode === "selection" ? 0 : 1);
-    probe.expectHealthy(0);
-    expect(loadSessionEntryReadOnly(f.input)?.label).toBe(mode === "stale" ? "newer" : undefined);
-  },
-);
+    ),
+  ).rejects.toBe(denied);
+  expect(update).toHaveBeenCalledOnce();
+  expect(guard).toHaveBeenCalledOnce();
+  probe.expectHealthy(0);
+  expect(loadSessionEntryReadOnly(f.input)?.label).toBe("newer");
+});
 
 it("keeps lifecycle commit denial before its stale-row check after admission", async () => {
   const f = fixture();
