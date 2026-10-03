@@ -125,10 +125,26 @@ export async function stageCodexCandidate(
       }
     }
     throwIfSetupInferenceCancelled(ctx.params);
-    const credential = (ctx.deps.readCodexCliActiveApiKey ?? readCodexCliActiveApiKey)({
+    const nativeKey = (ctx.deps.readCodexCliActiveApiKey ?? readCodexCliActiveApiKey)({
       allowKeychainPrompt: true,
     });
-    if (!credential) {
+    if (nativeKey.status === "unreadable") {
+      // A login that could not be read may still be valid; replacing it is the user's call.
+      const problem = `OpenClaw could not read your existing Codex login: ${nativeKey.reason}.`;
+      const signInInstead = ctx.params.prompter
+        ? await ctx.params.prompter.confirm({
+            message: `${problem} Sign in to OpenAI instead?`,
+            initialValue: false,
+          })
+        : false;
+      throwIfSetupInferenceCancelled(ctx.params);
+      if (!signInInstead) {
+        return {
+          error: `${problem} Run \`codex login status\` to check it, then retry Codex setup.`,
+        };
+      }
+    }
+    if (nativeKey.status !== "active") {
       const choices = (
         ctx.deps.resolveManifestProviderAuthChoices ?? resolveManifestProviderAuthChoices
       )({
@@ -159,6 +175,7 @@ export async function stageCodexCandidate(
         ctx.credentialsSaved = authContext.credentialsSaved;
       }
     }
+    const { credential } = nativeKey;
     registerSecretValueForRedaction(credential.key);
     const saved = await saveSetupCredential({
       profile: { profileId: "openai:codex-cli-api-key", credential },

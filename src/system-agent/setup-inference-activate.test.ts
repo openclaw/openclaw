@@ -129,7 +129,7 @@ describe("setup activation credentials and configuration", () => {
       mode: "api-key" as const,
     };
     setup.deps.resolveApiKeyForProvider = async () => nativeAuth;
-    const readNativeKey = vi.fn(() => credential);
+    const readNativeKey = vi.fn(() => ({ status: "active" as const, credential }));
     setup.deps.readCodexCliActiveApiKey = readNativeKey;
     setup.run.mockImplementation(async (params) => {
       expect(params.authProfileId).toBeUndefined();
@@ -209,13 +209,42 @@ describe("setup activation credentials and configuration", () => {
 
   it("retains the detected Codex API-key setup path without guided login", async () => {
     const setup = await fixture({ codex: true });
-    setup.deps.readCodexCliActiveApiKey = () => credential;
+    setup.deps.readCodexCliActiveApiKey = () => ({ status: "active", credential });
     const result = await setup.activate("codex-cli");
     expect(result).toMatchObject({ ok: true });
     expect(setup.login).not.toHaveBeenCalled();
     expect(setup.run).toHaveBeenCalledOnce();
     expect(setup.readProfile()?.[1]).toMatchObject(credential);
   });
+
+  it.each([false, true])(
+    "asks before replacing an unreadable Codex login with sign-in (sign in instead: %s)",
+    async (signInInstead) => {
+      const setup = await fixture({ codex: true });
+      setup.deps.readCodexCliActiveApiKey = () => ({
+        status: "unreadable",
+        reason: "Codex could not check its login status",
+      });
+      vi.mocked(setup.prompter.confirm).mockResolvedValueOnce(signInInstead);
+      const result = await setup.activate("codex-cli");
+      expect(vi.mocked(setup.prompter.confirm).mock.calls[0]?.[0]).toMatchObject({
+        message: expect.stringContaining("Codex could not check its login status"),
+        initialValue: false,
+      });
+      if (signInInstead) {
+        expect(result).toMatchObject({ ok: true });
+        expect(setup.login).toHaveBeenCalledOnce();
+        return;
+      }
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("Run `codex login status` to check it"),
+      });
+      expect(setup.login).not.toHaveBeenCalled();
+      expect(setup.run).not.toHaveBeenCalled();
+      expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
+    },
+  );
 
   it.each(["abort", "replacement"] as const)(
     "does not promote a SecretRef when %s revokes final activation revalidation",

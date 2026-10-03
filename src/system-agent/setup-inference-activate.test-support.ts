@@ -267,7 +267,7 @@ export async function fixture(
     runEmbeddedAgent: run,
   };
   if (options.codex) {
-    deps.readCodexCliActiveApiKey = () => null;
+    deps.readCodexCliActiveApiKey = () => ({ status: "none" });
     deps.ensureCodexRuntimePlugin = async ({ cfg: candidateConfig }) => ({
       ok: true,
       cfg: candidateConfig,

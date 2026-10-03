@@ -99,7 +99,7 @@ async function observeScenario(scenario: Scenario, json: boolean) {
           const deps: ActivateSetupInferenceDeps = {
             ...fixture.deps,
             resolvePluginMetadataSnapshot: metadata.bind,
-            readCodexCliActiveApiKey: () => null,
+            readCodexCliActiveApiKey: () => ({ status: "none" }),
             createTempDir: async () => {
               const dir = await fs.mkdtemp(path.join(root, "operation-"));
               tempDirs.push(dir);

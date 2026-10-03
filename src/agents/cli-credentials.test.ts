@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const execSyncMock = vi.fn();
 const CLI_CREDENTIALS_CACHE_TTL_MS = 15 * 60 * 1000;
@@ -32,6 +33,8 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 }
 
 describe("cli credentials", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   beforeAll(async () => {
     ({
       readCodexCliActiveApiKey,
@@ -306,7 +309,10 @@ describe("cli credentials", () => {
         platform: "darwin",
         execSync: execSyncMock,
       }),
-    ).toEqual({ type: "api_key", provider: "openai", key: "keychain-api-key" });
+    ).toEqual({
+      status: "active",
+      credential: { type: "api_key", provider: "openai", key: "keychain-api-key" },
+    });
   });
 
   it("prefers active Codex OAuth over a stale file API key", () => {
@@ -324,7 +330,7 @@ describe("cli credentials", () => {
         platform: "darwin",
         execSync: execSyncMock,
       }),
-    ).toBeNull();
+    ).toEqual({ status: "none" });
     expect(execSyncMock).toHaveBeenCalledTimes(1);
   });
 
@@ -347,7 +353,10 @@ describe("cli credentials", () => {
         platform: "darwin",
         execSync: execSyncMock,
       }),
-    ).toEqual({ type: "api_key", provider: "openai", key: "active-file-api-key" });
+    ).toEqual({
+      status: "active",
+      credential: { type: "api_key", provider: "openai", key: "active-file-api-key" },
+    });
     expect(execSyncMock).toHaveBeenCalledTimes(2);
   });
 
@@ -366,7 +375,265 @@ describe("cli credentials", () => {
         platform: "linux",
         execSync: execSyncMock,
       }),
-    ).toEqual({ type: "api_key", provider: "openai", key: "legacy-file-api-key" });
+    ).toEqual({
+      status: "active",
+      credential: { type: "api_key", provider: "openai", key: "legacy-file-api-key" },
+    });
+  });
+
+  it.each([
+    {
+      name: "a confirmed logout",
+      installed: true,
+      failure: { status: 1, stdout: "WARNING: fixture notice\nNot logged in\n" },
+      expected: { status: "none" },
+    },
+    {
+      // cmd.exe exits 1 with a localized message, so only the PATH lookup identifies this.
+      name: "a missing codex command",
+      installed: false,
+      failure: { status: 1, stdout: "fixture shell: codex is not a command\n" },
+      expected: { status: "none" },
+    },
+    {
+      name: "a failed Codex login check",
+      installed: true,
+      failure: {
+        status: 1,
+        stdout: 'Error checking login status: invalid value "sk-leaked-secret"\n',
+      },
+      expected: { status: "unreadable", reason: "Codex could not check its login status" },
+    },
+    {
+      name: "a timed-out login check",
+      installed: true,
+      failure: { code: "ETIMEDOUT", status: null, stdout: "" },
+      expected: { status: "unreadable", reason: "`codex login status` timed out" },
+    },
+    {
+      name: "a failed login check after the working directory is removed",
+      installed: true,
+      cwdRemoved: true,
+      failure: { status: 1, stdout: "Error checking login status: fixture failure\n" },
+      expected: { status: "unreadable", reason: "Codex could not check its login status" },
+    },
+  ])(
+    "separates $name from an unreadable Codex login",
+    ({ installed, cwdRemoved, failure, expected }) => {
+      const tempHome = tempDirs.make("openclaw-codex-status-failure-");
+      const binDir = tempDirs.make("openclaw-codex-bin-");
+      if (installed) {
+        for (const name of ["codex", "codex.cmd"]) {
+          fs.writeFileSync(path.join(binDir, name), "", { mode: 0o755 });
+        }
+      }
+      vi.stubEnv("PATH", binDir);
+      execSyncMock.mockImplementation(() => {
+        throw Object.assign(new Error("Command failed: codex login status"), failure);
+      });
+      // Node's process.cwd() throws once a long-running Gateway's launch directory is deleted.
+      const cwdSpy = cwdRemoved
+        ? vi.spyOn(process, "cwd").mockImplementation(() => {
+            throw Object.assign(new Error("ENOENT: process.cwd failed"), { code: "ENOENT" });
+          })
+        : undefined;
+
+      try {
+        expect(
+          readCodexCliActiveApiKey({
+            codexHome: tempHome,
+            platform: "linux",
+            execSync: execSyncMock,
+          }),
+        ).toEqual(expected);
+      } finally {
+        cwdSpy?.mockRestore();
+      }
+    },
+  );
+
+  // Only Codex's `auto` store falls back to an empty auth.json after a failed Keychain read,
+  // so "Not logged in" alone cannot prove a logout there. In the default `file` store the
+  // Keychain is irrelevant and its failures must not override a real logout. The effective
+  // store comes from `codex doctor` (it sees managed policy); config.toml is the fallback
+  // for Codex builds without it.
+  const DENIED = {
+    status: "unreadable",
+    reason: "the macOS Keychain did not return the Codex login (`security` exited with code 51)",
+  };
+  const AUTO_CONFIG = 'cli_auth_credentials_store = "auto"\n';
+  it.each([
+    {
+      name: "doctor reports auto (managed, no config.toml) + denied Keychain read is unreadable",
+      doctor: "Auto",
+      securityFailure: { status: 51 },
+      expected: DENIED,
+      doctorCalls: 1,
+    },
+    {
+      name: "doctor reports auto, exiting 1 with its report on stdout, is honored",
+      doctor: "Auto",
+      doctorExits: true,
+      securityFailure: { status: 51 },
+      expected: DENIED,
+      doctorCalls: 1,
+    },
+    {
+      name: "doctor reports file, overriding an auto config.toml, ignores a denied Keychain read",
+      doctor: "File",
+      config: AUTO_CONFIG,
+      securityFailure: { status: 51 },
+      expected: { status: "none" },
+      doctorCalls: 1,
+    },
+    {
+      name: "doctor unavailable falls back to an auto config.toml",
+      config: AUTO_CONFIG,
+      securityFailure: { status: 51 },
+      expected: DENIED,
+      doctorCalls: 1,
+    },
+    {
+      name: "doctor unavailable falls back to a top-level auto after other keys and comments",
+      config: '# my codex\nmodel = "gpt"\ncli_auth_credentials_store = "auto"  # keychain\n',
+      securityFailure: { status: 51 },
+      expected: DENIED,
+      doctorCalls: 1,
+    },
+    {
+      name: "doctor unavailable + explicit file config.toml ignores a denied Keychain read",
+      config: 'cli_auth_credentials_store = "file"\n',
+      securityFailure: { status: 51 },
+      expected: { status: "none" },
+      doctorCalls: 1,
+    },
+    {
+      name: "doctor unavailable + no Codex config (default file) ignores a denied Keychain read",
+      securityFailure: { status: 51 },
+      expected: { status: "none" },
+      doctorCalls: 1,
+    },
+    {
+      name: "doctor unavailable + an auto setting scoped to a config table does not apply",
+      config: 'model = "gpt"\n\n[profiles.work]\ncli_auth_credentials_store = "auto"\n',
+      securityFailure: { status: 51 },
+      expected: { status: "none" },
+      doctorCalls: 1,
+    },
+    {
+      name: "a missing Keychain item is a real logout without asking doctor",
+      doctor: "Auto",
+      securityFailure: { status: 44 },
+      expected: { status: "none" },
+      doctorCalls: 0,
+    },
+    {
+      name: "prompts disabled never probes the Keychain or asks doctor",
+      doctor: "Auto",
+      allowKeychainPrompt: false,
+      securityFailure: { status: 51 },
+      expected: { status: "none" },
+      doctorCalls: 0,
+    },
+    {
+      name: "a non-macOS platform never probes the Keychain or asks doctor",
+      doctor: "Auto",
+      platform: "linux" as const,
+      securityFailure: { status: 51 },
+      expected: { status: "none" },
+      doctorCalls: 0,
+    },
+  ])("after Codex reports Not logged in, $name", (testCase) => {
+    const tempHome = tempDirs.make("openclaw-codex-not-logged-in-");
+    const binDir = tempDirs.make("openclaw-codex-bin-");
+    if (testCase.config !== undefined) {
+      fs.writeFileSync(path.join(tempHome, "config.toml"), testCase.config, "utf8");
+    }
+    for (const name of ["codex", "codex.cmd"]) {
+      fs.writeFileSync(path.join(binDir, name), "", { mode: 0o755 });
+    }
+    vi.stubEnv("PATH", binDir);
+    const doctorReport = JSON.stringify({
+      schemaVersion: 1,
+      checks: { "auth.credentials": { details: { "auth storage mode": testCase.doctor } } },
+    });
+    execSyncMock.mockImplementation((command: unknown) => {
+      if (String(command).includes("codex login status")) {
+        throw Object.assign(new Error("Command failed: codex login status"), {
+          status: 1,
+          stdout: "Not logged in\n",
+        });
+      }
+      if (String(command).includes("codex doctor")) {
+        if (testCase.doctor === undefined) {
+          throw Object.assign(new Error("Command failed: codex doctor"), {
+            status: 2,
+            stdout: "",
+          });
+        }
+        if (testCase.doctorExits) {
+          throw Object.assign(new Error("Command failed: codex doctor"), {
+            status: 1,
+            stdout: doctorReport,
+          });
+        }
+        return doctorReport;
+      }
+      throw Object.assign(new Error("Command failed: security"), testCase.securityFailure);
+    });
+
+    expect(
+      readCodexCliActiveApiKey({
+        codexHome: tempHome,
+        platform: testCase.platform ?? "darwin",
+        execSync: execSyncMock,
+        ...(testCase.allowKeychainPrompt === undefined
+          ? {}
+          : { allowKeychainPrompt: testCase.allowKeychainPrompt }),
+      }),
+    ).toEqual(testCase.expected);
+    expect(
+      execSyncMock.mock.calls.filter(([command]) => String(command).includes("codex doctor")),
+    ).toHaveLength(testCase.doctorCalls);
+  });
+
+  it.each([
+    {
+      name: "falls back to auth.json",
+      fileKey: "active-file-api-key",
+      expected: {
+        status: "active",
+        credential: { type: "api_key", provider: "openai", key: "active-file-api-key" },
+      },
+    },
+    {
+      name: "reports the Keychain failure without auth.json",
+      fileKey: undefined,
+      expected: {
+        status: "unreadable",
+        reason:
+          "the macOS Keychain did not return the Codex login (`security` exited with code 51)",
+      },
+    },
+  ])("when the Codex Keychain read is denied, $name", ({ fileKey, expected }) => {
+    const tempHome = tempDirs.make("openclaw-codex-keychain-denied-");
+    if (fileKey) {
+      fs.writeFileSync(
+        path.join(tempHome, "auth.json"),
+        JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: fileKey }),
+        "utf8",
+      );
+    }
+    execSyncMock.mockImplementation((command: unknown) => {
+      if (String(command).includes("codex login status")) {
+        return "Logged in using an API key - active-f***i-key";
+      }
+      throw Object.assign(new Error("Command failed: security"), { status: 51 });
+    });
+
+    expect(
+      readCodexCliActiveApiKey({ codexHome: tempHome, platform: "darwin", execSync: execSyncMock }),
+    ).toEqual(expected);
   });
 
   it("treats an empty Codex auth.json API-key field as API-key mode", () => {
