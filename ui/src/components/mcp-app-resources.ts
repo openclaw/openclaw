@@ -59,11 +59,7 @@ export class McpAppResources extends OpenClawLightDomElement {
     }
     const generation = ++this.generation;
     const scope = this.scope;
-    const target = {
-      sessionKey: this.sessionKey,
-      agentId: this.agentId,
-      serverName: this.serverName,
-    };
+    const { sessionKey, agentId, serverName } = this;
     const current = () =>
       this.isConnected &&
       this.generation === generation &&
@@ -74,7 +70,9 @@ export class McpAppResources extends OpenClawLightDomElement {
     this.resources = [];
     try {
       const result = await client.request<McpAppMentionResult>("mcp.app.mention", {
-        ...target,
+        sessionKey,
+        agentId,
+        serverName,
         query: this.query,
       });
       if (current()) {
