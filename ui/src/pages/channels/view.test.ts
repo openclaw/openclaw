@@ -11,7 +11,7 @@ import {
 } from "./view.shared.ts";
 import { createChannelsViewProps } from "./view.test-support.ts";
 import { renderChannels } from "./view.ts";
-import type { ChannelsChannelData, ChannelsProps } from "./view.types.ts";
+import type { ChannelsProps } from "./view.types.ts";
 import { renderWhatsAppCard } from "./view.whatsapp.ts";
 
 function createProps(snapshot: ChannelsProps["channels"]["channelsSnapshot"]): ChannelsProps {
@@ -452,7 +452,9 @@ function renderWhatsAppButtons(params: {
 
 function renderChannelDetailFixture(
   channelId: string,
-  data: ChannelsChannelData,
+  data: ChannelsStatusSnapshot["channels"] & {
+    channelAccounts?: ChannelsStatusSnapshot["channelAccounts"];
+  },
   options: {
     label?: string;
     loading?: boolean;
@@ -460,7 +462,7 @@ function renderChannelDetailFixture(
     onRefresh?: ChannelsProps["onRefresh"];
   } = {},
 ) {
-  const status = Object.entries(data).find(([key]) => key === channelId)?.[1] ?? {};
+  const status = Object.entries(data).find(([key]) => key === channelId)?.[1];
   const channelAccounts = data.channelAccounts ?? {};
   const accounts = Object.hasOwn(channelAccounts, channelId) ? channelAccounts[channelId] : [];
   const props = createProps({
@@ -482,7 +484,6 @@ function renderChannelDetailFixture(
       channelId,
       label: options.label ?? channelId,
       props,
-      data: { ...data, channelAccounts },
       onClose: () => {},
       onSetup: () => {},
     }),
@@ -608,7 +609,7 @@ describe("channel detail", () => {
   it.each(["telegram", "whatsapp", "nostr"] as const)(
     "shows an escaped configuration save error inside the %s editor",
     (channelId) => {
-      const data: ChannelsChannelData =
+      const data =
         channelId === "whatsapp"
           ? { whatsapp: createWhatsAppStatus() }
           : channelId === "nostr"
@@ -639,7 +640,6 @@ describe("channel detail", () => {
         channelId: "telegram",
         label: "Telegram",
         props,
-        data: {},
         onClose: () => {},
         onSetup: () => {},
       }),
@@ -676,7 +676,7 @@ describe("channel detail", () => {
         audience: "https://chat.example",
         mode: "polling",
       };
-      const data: ChannelsChannelData = { channelAccounts: {}, [channelId]: status };
+      const data = { channelAccounts: {}, [channelId]: status };
       const container = renderChannelDetailFixture(channelId, data, { onRefresh });
       const facts = Array.from(container.querySelectorAll("dt"), (node) => [
         node.textContent?.trim(),

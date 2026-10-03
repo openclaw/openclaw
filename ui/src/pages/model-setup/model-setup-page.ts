@@ -48,8 +48,6 @@ import {
 import { renderModelSetup, revealModelSetupFeedback } from "./view.ts";
 import { ModelSetupWizardRunner, type ModelSetupWizardCompletion } from "./wizard-runner.ts";
 
-export type { ModelSetupRouteData } from "./first-run-setup.ts";
-
 export class ModelSetupPage extends OpenClawLightDomElement {
   private readonly actionsDisabled = (): boolean =>
     this.login.busy ||

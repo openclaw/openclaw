@@ -57,10 +57,10 @@ export function renderPluginPublisher(
   }
   return html`<div class="plugin-catalog-detail__publisher">
     <span class="plugin-catalog-detail__publisher-name">
-      ${name ? html`<strong>${name}</strong>` : renderPluginAuthor(handle, { linked: true })}
+      ${name ? html`<strong>${name}</strong>` : renderPluginAuthor(handle)}
       ${author?.official === true ? renderPluginOfficialBadge() : nothing}
     </span>
-    ${name ? renderPluginAuthor(handle, { linked: true }) : nothing}
+    ${name ? renderPluginAuthor(handle) : nothing}
   </div>`;
 }
 

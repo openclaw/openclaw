@@ -2,7 +2,14 @@
 // channel, reusing the per-channel settings-language renderers.
 import { asNullableRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
-import type { NostrProfile } from "../../api/types.ts";
+import type {
+  GoogleChatStatus,
+  NostrProfile,
+  NostrStatus,
+  SignalStatus,
+  TelegramStatus,
+  WhatsAppStatus,
+} from "../../api/types.ts";
 import { renderChannelIcon } from "../../components/channel-icon.ts";
 import { icons } from "../../components/icons.ts";
 import { renderSettingsSection } from "../../components/settings-ui.ts";
@@ -26,7 +33,7 @@ import {
   resolveChannelAccountCount,
   resolveChannelDisplayState,
 } from "./view.shared.ts";
-import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./view.types.ts";
+import type { ChannelKey, ChannelsProps } from "./view.types.ts";
 import { renderWhatsAppCard } from "./view.whatsapp.ts";
 
 const STANDARD_CHANNEL_LOCALE_KEYS = {
@@ -47,15 +54,20 @@ function isStandardChannel(key: ChannelKey): key is StandardChannelKey {
 function renderChannelStatusBody(
   key: ChannelKey,
   props: ChannelsProps,
-  data: ChannelsChannelData,
   accountCount: number | undefined,
 ) {
   const standardKey = isStandardChannel(key) ? key : null;
   const localeKey = standardKey ? STANDARD_CHANNEL_LOCALE_KEYS[standardKey] : null;
-  const status = standardKey ? data[standardKey] : undefined;
+  const snapshot = props.channels.channelsSnapshot;
+  const googleChat = snapshot?.channels.googlechat as GoogleChatStatus | undefined;
+  const status = standardKey
+    ? (snapshot?.channels[standardKey] as
+        | Pick<GoogleChatStatus, "running" | "lastStartAt" | "lastProbeAt" | "lastError" | "probe">
+        | undefined)
+    : undefined;
   const displayState = resolveChannelDisplayState(key, props);
   const configured = displayState.configured;
-  const accounts = resolveChannelAccounts(data.channelAccounts, key);
+  const accounts = resolveChannelAccounts(snapshot?.channelAccounts, key);
   const showAccounts =
     standardKey === "telegram" ? accounts.length > 1 : !standardKey && accounts.length > 0;
   const extraRows =
@@ -63,19 +75,32 @@ function renderChannelStatusBody(
       ? [
           {
             label: t("common.credential"),
-            value: data.googlechat?.credentialSource ?? t("common.na"),
+            value: googleChat?.credentialSource ?? t("common.na"),
           },
           {
             label: t("common.audience"),
-            value: data.googlechat?.audienceType
-              ? `${data.googlechat.audienceType}${data.googlechat.audience ? ` · ${data.googlechat.audience}` : ""}`
+            value: googleChat?.audienceType
+              ? `${googleChat.audienceType}${googleChat.audience ? ` · ${googleChat.audience}` : ""}`
               : t("common.na"),
           },
         ]
       : standardKey === "signal"
-        ? [{ label: t("common.baseUrl"), value: data.signal?.baseUrl ?? t("common.na") }]
+        ? [
+            {
+              label: t("common.baseUrl"),
+              value:
+                (snapshot?.channels.signal as SignalStatus | undefined)?.baseUrl ?? t("common.na"),
+            },
+          ]
         : standardKey === "telegram"
-          ? [{ label: t("common.mode"), value: data.telegram?.mode ?? t("common.na") }]
+          ? [
+              {
+                label: t("common.mode"),
+                value:
+                  (snapshot?.channels.telegram as TelegramStatus | undefined)?.mode ??
+                  t("common.na"),
+              },
+            ]
           : [];
   const statusRows = [
     {
@@ -181,17 +206,18 @@ function renderChannelStatusBody(
   );
 }
 
-function renderChannelBody(key: ChannelKey, props: ChannelsProps, data: ChannelsChannelData) {
-  const accountCount = resolveChannelAccountCount(key, data.channelAccounts);
+function renderChannelBody(key: ChannelKey, props: ChannelsProps) {
+  const snapshot = props.channels.channelsSnapshot;
+  const accountCount = resolveChannelAccountCount(key, snapshot?.channelAccounts);
   switch (key) {
     case "whatsapp":
       return renderWhatsAppCard({
         props,
-        whatsapp: data.whatsapp,
+        whatsapp: snapshot?.channels.whatsapp as WhatsAppStatus | undefined,
         accountCount,
       });
     case "nostr": {
-      const nostrAccounts = resolveChannelAccounts(data.channelAccounts, "nostr");
+      const nostrAccounts = resolveChannelAccounts(snapshot?.channelAccounts, "nostr");
       const primaryAccount = nostrAccounts[0];
       const accountId = primaryAccount?.accountId ?? "default";
       const profile =
@@ -209,7 +235,7 @@ function renderChannelBody(key: ChannelKey, props: ChannelsProps, data: Channels
         : null;
       return renderNostrCard({
         props,
-        nostr: data.nostr,
+        nostr: snapshot?.channels.nostr as NostrStatus | undefined,
         nostrAccounts,
         accountCount,
         profileFormState: showForm,
@@ -218,7 +244,7 @@ function renderChannelBody(key: ChannelKey, props: ChannelsProps, data: Channels
       });
     }
     default:
-      return renderChannelStatusBody(key, props, data, accountCount);
+      return renderChannelStatusBody(key, props, accountCount);
   }
 }
 
@@ -227,11 +253,10 @@ export function renderChannelDetail(params: {
   label: string;
   pluginIconUrl?: string;
   props: ChannelsProps;
-  data: ChannelsChannelData;
   onClose: () => void;
   onSetup: () => void;
 }): TemplateResult {
-  const body = renderChannelBody(params.channelId, params.props, params.data);
+  const body = renderChannelBody(params.channelId, params.props);
   const statusIssues = params.props.channels.channelsSnapshot?.statusIssues?.filter(
     (issue) => issue.channel === params.channelId,
   );

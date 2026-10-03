@@ -667,12 +667,12 @@ class PluginsPage extends OpenClawLightDomElement {
           this.query = query;
         },
         refreshCatalog: () => void this.refreshCatalog(),
-        openPluginSettings: (pluginId, fromDiscovery) => {
+        openPluginSettings: (pluginId) => {
           this.context.navigate("plugin-settings", {
             pathname: pluginId
               ? pathForPluginSettings(pluginId, this.context.basePath)
               : pathForRoute("plugin-settings", this.context.basePath),
-            search: fromDiscovery && pluginId ? "?from=plugins" : "",
+            search: "",
           });
         },
         handlePluginIconError: (pluginId) => this.icons.installed.handleError(pluginId),
