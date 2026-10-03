@@ -23,7 +23,7 @@ import {
   normalizeNativeHookToolName,
   readCodexToolInput,
 } from "./native-hook-relay-codec.js";
-import { codexNativeHookRelayResponseCodec } from "./native-hook-relay-response-codec.js";
+import { codexNativeHookRelayResponseCodec as codexResponses } from "./native-hook-relay-response-codec.js";
 import {
   MAX_NATIVE_HOOK_RELAY_INVOCATIONS,
   nativeHookRelayState,
@@ -202,7 +202,7 @@ export async function runNativeHookRelayPermissionRequest(params: {
   // Native MCP names can be hashed or trimmed. Only Codex knows the exact server;
   // defer so full posture cannot bypass plugin-app policy before elicitation.
   if (mcpToolName && params.registration.deferMcpToolApprovals) {
-    return codexNativeHookRelayResponseCodec.renderNoopResponse();
+    return codexResponses.renderNoopResponse();
   }
   const request: NativeHookRelayPermissionApprovalRequest = {
     provider: params.registration.provider,
@@ -222,10 +222,7 @@ export async function runNativeHookRelayPermissionRequest(params: {
   // File preparation yields; a disconnected callback must not create a new approval.
   params.registration.assertActive?.();
   if (!mutableFileBinding.ok) {
-    return codexNativeHookRelayResponseCodec.renderPermissionDecisionResponse(
-      "deny",
-      mutableFileBinding.message,
-    );
+    return codexResponses.renderPermissionDecisionResponse("deny", mutableFileBinding.message);
   }
   const approvalKey = nativeHookRelayPermissionApprovalKey({
     registration: params.registration,
@@ -246,13 +243,10 @@ export async function runNativeHookRelayPermissionRequest(params: {
       });
       params.registration.assertActive?.();
       if (!current.ok) {
-        return codexNativeHookRelayResponseCodec.renderPermissionDecisionResponse(
-          "deny",
-          current.message,
-        );
+        return codexResponses.renderPermissionDecisionResponse("deny", current.message);
       }
     }
-    return codexNativeHookRelayResponseCodec.renderPermissionDecisionResponse("allow");
+    return codexResponses.renderPermissionDecisionResponse("allow");
   }
   try {
     const decision = await waitForNativeHookRelayPermissionApproval({
@@ -270,14 +264,11 @@ export async function runNativeHookRelayPermissionRequest(params: {
       });
       params.registration.assertActive?.();
       if (!current.ok) {
-        return codexNativeHookRelayResponseCodec.renderPermissionDecisionResponse(
-          "deny",
-          current.message,
-        );
+        return codexResponses.renderPermissionDecisionResponse("deny", current.message);
       }
     }
     if (decision === "allow") {
-      return codexNativeHookRelayResponseCodec.renderPermissionDecisionResponse("allow");
+      return codexResponses.renderPermissionDecisionResponse("allow");
     }
     if (decision === "allow-always") {
       rememberNativeHookRelayPermissionAllowAlways({
@@ -285,11 +276,11 @@ export async function runNativeHookRelayPermissionRequest(params: {
         relayId: params.registration.relayId,
         mcpTool: mcpToolName !== undefined,
       });
-      return codexNativeHookRelayResponseCodec.renderPermissionDecisionResponse("allow");
+      return codexResponses.renderPermissionDecisionResponse("allow");
     }
     if (decision === "deny" || (decision === "timed-out" && mcpToolName)) {
       const reason = decision === "deny" ? "Denied by user" : "MCP tool approval timed out";
-      return codexNativeHookRelayResponseCodec.renderPermissionDecisionResponse(
+      return codexResponses.renderPermissionDecisionResponse(
         "deny",
         mcpToolName ? `${reason}. ${formatMcpCodexApprovalRemedy(mcpServerName)}` : reason,
       );
@@ -302,7 +293,7 @@ export async function runNativeHookRelayPermissionRequest(params: {
   }
   // A PermissionRequest no-op is not an allow decision. Codex interprets it as
   // "no hook decision" and falls through to its normal guardian/user approval path.
-  return codexNativeHookRelayResponseCodec.renderNoopResponse();
+  return codexResponses.renderNoopResponse();
 }
 
 async function waitForNativeHookRelayPermissionApproval(params: {
