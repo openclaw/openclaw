@@ -23,10 +23,7 @@ import {
 import { SessionTranscriptStorageUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import type { TranscriptAnchorPageOptions } from "../sessions/transcript-anchor-page.js";
-import type {
-  TranscriptReadWindow,
-  TranscriptReadWindowOptions,
-} from "../sessions/transcript-read-window.js";
+import type { TranscriptReadWindowOptions } from "../sessions/transcript-read-window.js";
 import type { SubagentCoordinationDisplayResolver } from "./chat-display-projection.history.js";
 import { ArchivedTranscriptReader } from "./session-transcript-archive-reader.js";
 import { sqliteMessageEventWithSeq } from "./session-transcript-entry-message.js";
