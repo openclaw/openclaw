@@ -84,11 +84,11 @@ it.each([
     }
     const sandboxSpy = vi.spyOn(sandboxWorkspace, "ensureSandboxWorkspaceForSession");
     let prepared: Awaited<ReturnType<typeof prepareChatSendAttachments>> | undefined;
-    const admission = setup.admitted.value;
+    const admission = setup.admission;
     try {
       prepared = await prepareChatSendAttachments({
-        request: setup.normalizedRequest.value,
-        session: setup.preparedSession.value,
+        request: setup.request,
+        session: setup.session,
         admission,
         respond,
         context,
@@ -249,7 +249,7 @@ it.each([
     if (!setup) {
       throw new Error("chat admission failed before attachment preparation");
     }
-    const admission = setup.admitted.value;
+    const admission = setup.admission;
     const signal = admission.activeRunAbort.controller.signal;
     const ordinaryFailure = new Error("synthetic staging filesystem failure");
     const stageRelease = createDeferred();
@@ -298,8 +298,8 @@ it.each([
     });
     let prepared: Awaited<ReturnType<typeof prepareChatSendAttachments>> | undefined;
     const preparing = prepareChatSendAttachments({
-      request: setup.normalizedRequest.value,
-      session: setup.preparedSession.value,
+      request: setup.request,
+      session: setup.session,
       admission,
       respond,
       context,
@@ -328,7 +328,7 @@ it.each([
         expect(
           abortChatRunById(createChatAbortOps(context), {
             runId,
-            sessionKey: setup.preparedSession.value.sessionKey,
+            sessionKey: setup.session.sessionKey,
             stopReason: "rpc",
           }),
         ).toEqual({ aborted: true });
@@ -371,7 +371,7 @@ it.each([
           .soft(
             abortChatRunById(createChatAbortOps(context), {
               runId,
-              sessionKey: setup.preparedSession.value.sessionKey,
+              sessionKey: setup.session.sessionKey,
               stopReason: "rpc",
             }),
           )

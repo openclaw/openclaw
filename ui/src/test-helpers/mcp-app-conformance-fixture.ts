@@ -341,7 +341,7 @@ window.mcpConformanceUnmount = async () => {
       setTheme("dark");
       Reflect.set(view, "context", {
         gateway: {
-          snapshot: { client },
+          snapshot: { client, phase: "connected" },
           connection: { gatewayUrl: params.gatewayUrl },
         },
         theme: {

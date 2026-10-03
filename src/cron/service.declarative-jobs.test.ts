@@ -243,12 +243,11 @@ describe("CronService declarative jobs", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { model: "openai/gpt-blocked" },
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             models: { "openai/gpt-blocked": { agentRuntime: { id: "unsupported-harness" } } },
           },
-        ],
+        },
       },
       skills: { workshop: { autonomous: { mode: "auto" } } },
     };

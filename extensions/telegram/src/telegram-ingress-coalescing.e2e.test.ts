@@ -17,7 +17,6 @@ import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runt
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   holdTelegramMediaTimeouts,
   resolveFlushTimerForDelay,
@@ -27,6 +26,9 @@ import { runTelegramChannelInboundEventWithHarness } from "./bot.test-helpers.js
 import type { TelegramTransport } from "./fetch.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 import {
+  createBotApiTransport,
+  createTelegramDeps,
+  holdForwardWindow,
   photoUpdate,
   forwardedPhotoUpdate,
   forwardedTextUpdate,
@@ -121,66 +123,6 @@ const cfg = {
   messages: { inbound: { debounceMs: 0 } },
   channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
 } as OpenClawConfig;
-
-function createBotApiTransport() {
-  let getFileCall = 0;
-  const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
-    const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input;
-    if (url.includes("/getFile")) {
-      getFileCall += 1;
-      return Response.json({
-        ok: true,
-        result: {
-          file_id: `photo-${getFileCall}`,
-          file_unique_id: `unique-${getFileCall}`,
-          file_size: 4,
-          file_path: `photos/photo-${getFileCall}.jpg`,
-        },
-      });
-    }
-    return Response.json({ ok: true, result: true });
-  }) as unknown as typeof fetch;
-  return { fetch: fetchImpl, sourceFetch: fetchImpl, close: async () => {} };
-}
-
-function createTelegramDeps(stateDir: string): TelegramBotDeps {
-  return {
-    getRuntimeConfig: () => cfg,
-    resolveStorePath: (storePath?: string) => storePath ?? path.join(stateDir, "sessions.json"),
-    readChannelAllowFromStore: async () => [],
-    upsertChannelPairingRequest: async () => ({ code: "PAIRCODE", created: true }),
-    enqueueRoutedSystemEvent: () => false,
-    dispatchReplyWithBufferedBlockDispatcher: async () => ({
-      queuedFinal: false,
-      counts: { block: 0, final: 0, tool: 0 },
-    }),
-    buildModelsProviderData: async () => ({
-      byProvider: new Map<string, Set<string>>(),
-      providers: [],
-      resolvedDefault: { provider: "openai", model: "gpt-test" },
-      modelNames: new Map<string, string>(),
-      modelCatalog: [],
-    }),
-    listSkillCommandsForAgents: () => [],
-    wasSentByBot: () => false,
-  } as TelegramBotDeps;
-}
-
-/** Holds the production forward quiet window; a frozen clock keeps its 1 s delay. */
-function holdForwardWindow() {
-  vi.useFakeTimers({ toFake: ["performance"] });
-  const timers = holdTelegramMediaTimeouts(1_000);
-  return {
-    flush: () => {
-      const flush = resolveFlushTimerForDelay(timers, 1_000);
-      if (!flush) {
-        throw new Error("Expected the forwarded burst's flush timer");
-      }
-      flush();
-    },
-    restore: () => timers.mockRestore(),
-  };
-}
 
 /** Both members must land in one turn; a second turn is the split this file guards. */
 async function awaitSingleDownstreamTurn(): Promise<MsgContext & Record<string, unknown>> {
@@ -289,7 +231,7 @@ describe("Telegram durable ingress coalescing", () => {
       token: "tok",
       botInfo: telegramBotInfoForTest,
       config: cfg,
-      telegramDeps: createTelegramDeps(stateDir),
+      telegramDeps: createTelegramDeps(stateDir, cfg),
       telegramTransport,
       fetchAbortSignal: abortController.signal,
       mediaAbortSignal: abortController.signal,
@@ -448,6 +390,75 @@ describe("Telegram durable ingress coalescing", () => {
     } finally {
       releaseHead.resolve();
       await headFinished.promise;
+      await monitor.stop();
+    }
+  });
+
+  it("keeps a later same-sender forward batch alive behind a deferred batch", async () => {
+    const releaseHead = createDeferred<void>();
+    const turnsDeferred = [createDeferred<void>(), createDeferred<void>()];
+    const turnsFinished: Promise<void>[] = [];
+    // Session-lane stand-in: every turn defers, heartbeats, and adopts after the turn ahead.
+    let laneTail: Promise<void> = releaseHead.promise;
+    const { monitor } = await createMonitor({ adoptionStallTimeoutMs: 3_000 });
+    downstreamTurns.mockImplementation(async (_ctx, abortSignal, lifecycle) => {
+      if (!lifecycle?.deferredHeartbeatIntervalMs) {
+        throw new Error("Expected the deferred turn's heartbeat cadence");
+      }
+      const ahead = laneTail;
+      const finished = createDeferred<void>();
+      laneTail = finished.promise;
+      const turnIndex = turnsFinished.push(finished.promise) - 1;
+      lifecycle.onDeferred?.();
+      const heartbeat = setInterval(
+        () => lifecycle.onDeferredHeartbeat?.(),
+        lifecycle.deferredHeartbeatIntervalMs,
+      );
+      turnsDeferred[turnIndex]?.resolve();
+      try {
+        await ahead;
+        if (!abortSignal?.aborted) {
+          await lifecycle.onAdopted();
+        }
+      } finally {
+        clearInterval(heartbeat);
+        finished.resolve();
+      }
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+    });
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"],
+    });
+    monitor.start();
+    try {
+      await monitor.admit(forwardedTextUpdate({ updateId: 1_401, messageId: 1, text: "Batch A" }));
+      await monitor.waitForIdle();
+      await vi.advanceTimersByTimeAsync(1_000);
+      // Freeze the claim clock while each flushed turn finishes its real worker I/O.
+      await turnsDeferred[0]?.promise;
+      await monitor.admit(forwardedTextUpdate({ updateId: 1_402, messageId: 2, text: "Batch B" }));
+      await monitor.waitForIdle();
+      await vi.advanceTimersByTimeAsync(1_000);
+      // A deferred head releases the sender key; B queues behind it in the session lane.
+      await turnsDeferred[1]?.promise;
+      await vi.advanceTimersByTimeAsync(9_000);
+      const queue = openTelegramIngressQueue({ stateDir });
+      expect(await queue.listPending({ limit: "all" }), "Batch B stalled behind A").toEqual([]);
+      expect((await queue.listClaims()).map(({ id, attempts }) => ({ id, attempts }))).toEqual([
+        { id: telegramQueueEventId(1_401), attempts: 0 },
+        { id: telegramQueueEventId(1_402), attempts: 0 },
+      ]);
+      releaseHead.resolve();
+      await monitor.waitForDeferredClaims();
+      expect(downstreamTurns.mock.calls.map(([turn]) => turn.RawBody)).toEqual([
+        "Batch A",
+        "Batch B",
+      ]);
+      await assertSpoolTombstoned({ stateDir, updateIds: [1_401, 1_402] });
+      expect(runtimeErrors).toEqual([]);
+    } finally {
+      releaseHead.resolve();
+      await Promise.all(turnsFinished);
       await monitor.stop();
     }
   });

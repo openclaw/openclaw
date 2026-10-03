@@ -567,7 +567,7 @@ describe("resolvePluginRuntimeArtifact", () => {
         const config: OpenClawConfig = {
           agents: {
             defaults: { workspace: workspaceDir },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           plugins: {
             allow: ["fixture"],

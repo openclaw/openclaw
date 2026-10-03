@@ -29,7 +29,7 @@ type CreateOpenClawToolsOptions = NonNullable<Parameters<typeof createOpenClawTo
 function withDefaultRoster(config: OpenClawConfig | undefined): OpenClawConfig {
   return {
     ...config,
-    agents: config?.agents ?? { entries: { main: { default: true } } },
+    agents: config?.agents ?? { entries: { main: {} } },
   };
 }
 
@@ -84,7 +84,7 @@ describe("openclaw-tools progress_card gating", () => {
         cwd: "/project/worktree",
         workspaceDir: "/project/worktree",
         config: {
-          agents: { entries: { main: { default: true, workspace: "/agent/workspace" } } },
+          agents: { entries: { main: { workspace: "/agent/workspace" } } },
           tools: { allow: ["personal_instructions"], fs: { workspaceOnly: true } },
         },
         disableMessageTool: true,

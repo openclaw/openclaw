@@ -85,7 +85,7 @@ async function runSetupWizardOnce(
     : {};
   let setupConfigMergeBase = structuredClone(baseConfig);
   baseConfig = await requireRiskAcknowledgement({ opts, prompter, config: baseConfig });
-  // Ordinary onboard reruns must preserve existing agents.list / bindings. Only
+  // Ordinary onboard reruns must preserve existing agents.entries / bindings. Only
   // explicit reset or import flows are allowed to shrink the config — see issue
   // openclaw#84692.
   const commitSetupConfigFile = async (

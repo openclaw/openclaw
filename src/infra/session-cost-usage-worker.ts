@@ -312,7 +312,6 @@ export async function executeUsageCostWorker(
                 ...source,
                 ...operation,
                 files: reportFiles.filter((file) => file !== undefined),
-                refreshing: false,
               }),
             }
           : {
@@ -321,7 +320,6 @@ export async function executeUsageCostWorker(
                 ...source,
                 ...operation,
                 files: reportFiles,
-                refreshing: false,
               })),
             };
       control.throwIfCancelled();

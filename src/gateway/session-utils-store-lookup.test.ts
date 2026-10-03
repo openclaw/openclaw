@@ -643,7 +643,7 @@ it.each([
         session: { scope: "global", ...(storePath ? { store: storePath } : {}) },
         agents: {
           ...(shared ? { ownership: "explicit" } : {}),
-          entries: { main: { default: true }, work: {}, ...(shared ? { ops: {} } : {}) },
+          entries: { main: {}, work: {}, ...(shared ? { ops: {} } : {}) },
           defaults: {
             model: { primary: "ollama/llama3.1:8b" },
             ...(shared ? { sessionStore: { agentId: "ops" } } : {}),

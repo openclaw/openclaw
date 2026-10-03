@@ -724,7 +724,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
       upgradeSurvivorScenarios: "legacy-operator-state",
     });
     expect(plan.lanes.map((lane) => lane.name)).toEqual([
-      "published-upgrade-survivor-2026.6.34-legacy-operator-state",
       "published-upgrade-survivor-2026.9.1-legacy-operator-state",
       "published-upgrade-survivor-2026.9.4-legacy-operator-state",
       "published-upgrade-survivor-2026.9.6-legacy-operator-state",
@@ -744,10 +743,10 @@ describe("scripts/lib/docker-e2e-plan", () => {
       expect(
         planFor({
           selectedLaneNames: ["published-upgrade-survivor"],
-          upgradeSurvivorBaselines: "2026.6.34",
+          upgradeSurvivorBaselines: "2026.9.1",
           upgradeSurvivorScenarios: alias,
         }).lanes.map((lane) => lane.name),
-      ).toContain("published-upgrade-survivor-2026.6.34-legacy-operator-state");
+      ).toContain("published-upgrade-survivor-2026.9.1-legacy-operator-state");
     }
   });
 
@@ -759,7 +758,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     });
     const plan = planFor({
       selectedLaneNames: ["published-upgrade-survivor"],
-      upgradeSurvivorBaselines: "2026.7.35 2026.6.34",
+      upgradeSurvivorBaselines: "2026.9.1",
       upgradeSurvivorScenarios: "legacy-operator-state",
       frozenTarget: {
         mode: "inert",

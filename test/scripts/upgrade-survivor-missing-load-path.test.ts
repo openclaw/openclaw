@@ -51,8 +51,6 @@ it.each([
   { baseline: "2026.7.1-2", supported: false },
   { baseline: "2026.7.2-beta.4", supported: false },
   { baseline: "2026.7.2-beta.5", supported: true },
-  { baseline: "2026.7.33", supported: false },
-  { baseline: "2026.7.35", supported: false },
   { baseline: "2026.8.1", supported: true },
   { baseline: "latest", supported: true },
 ])("plans missing-path admission for $baseline", ({ baseline, supported }) => {

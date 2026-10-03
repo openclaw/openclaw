@@ -21,7 +21,7 @@ vi.mock("../config/config.js", async (importOriginal) => ({
       valid: true,
       config: {
         agents: {
-          entries: { main: { default: true } },
+          entries: { main: {} },
           defaults: { workspace: "/fixture/workspace" },
         },
       },

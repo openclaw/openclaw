@@ -3,6 +3,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
+import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
@@ -28,7 +29,6 @@ type WorkerRuntimeRefreshOptions = Pick<
   WorkerProviderLifecycleOptions,
   | "store"
   | "callBootstrap"
-  | "serviceError"
   | "isStopping"
   | "placementStore"
   | "ensureNodeWorkerBundle"
@@ -49,14 +49,7 @@ type WorkerRuntimeRefreshOptions = Pick<
 };
 
 export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOptions) {
-  const {
-    store,
-    callBootstrap,
-    serviceError,
-    requireCurrentOwner,
-    stopOwner,
-    identityResolverFor,
-  } = options;
+  const { store, callBootstrap, requireCurrentOwner, stopOwner, identityResolverFor } = options;
   const { ensurePendingCredential } = options.credentialBroker;
   const inFlight = new Map<string, WorkerRuntimeRefreshInFlight>();
   const refresh = async (

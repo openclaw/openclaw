@@ -49,7 +49,7 @@ function createCurrentSourceMessageTool(
   params: NonNullable<Parameters<typeof createMessageTool>[0]> = {},
 ) {
   return createMessageTool({
-    config: { agents: { entries: { main: { default: true } } } },
+    config: { agents: { entries: { main: {} } } },
     preparedMessageToolCatalog: INTERNAL_SOURCE_CATALOG,
     currentChannelProvider: "webchat",
     sourceReplyDeliveryMode: "automatic",
@@ -272,7 +272,7 @@ describe("WebChat message tool internal source reply", () => {
           { sessionId, chatType: "direct", updatedAt: 1 },
         );
         const config = {
-          agents: { entries: { main: { default: true, workspace: workspaceDir } } },
+          agents: { entries: { main: { workspace: workspaceDir } } },
         };
         const tool = createCurrentSourceMessageTool({
           config,
@@ -483,7 +483,7 @@ describe("WebChat message tool internal source reply", () => {
             const persist = () =>
               persistInternalSourceReply({
                 cfg: {
-                  agents: { entries: { main: { default: true, workspace: state.workspaceDir } } },
+                  agents: { entries: { main: { workspace: state.workspaceDir } } },
                 },
                 sessionKey,
                 expectedSessionId: sessionId,

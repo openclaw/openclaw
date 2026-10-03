@@ -309,7 +309,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
 
   it("supports base64 encoding and agent-scoped auth/config resolution", async () => {
     try {
-      testState.agentsConfig = { list: [{ id: "main" }, { id: "beta" }] };
+      testState.agentsConfig = { entries: { main: {}, beta: {} } };
       resetConfigRuntimeState();
 
       const res = await postEmbeddings(

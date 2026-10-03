@@ -110,9 +110,8 @@ export class ZaloApiError extends Error {
   }
 }
 
-function resolveZaloApiUrl(apiUrl?: string): string {
-  const value =
-    apiUrl === undefined ? (process.env[ZALO_API_URL_ENV]?.trim() ?? ZALO_API_BASE) : apiUrl.trim();
+function resolveZaloApiUrl(): string {
+  const value = process.env[ZALO_API_URL_ENV]?.trim() ?? ZALO_API_BASE;
   if (!value) {
     throw new Error(`${ZALO_API_URL_ENV} must not be empty.`);
   }
@@ -136,13 +135,12 @@ export async function callZaloApi<T = unknown>(
   token: string,
   body?: Record<string, unknown>,
   options?: {
-    apiUrl?: string;
     timeoutMs?: number;
     fetch?: ZaloFetch;
     assertDirectAdapterHandoff?: () => void;
   },
 ): Promise<ZaloApiResponse<T>> {
-  const url = `${resolveZaloApiUrl(options?.apiUrl)}/bot${token}/${method}`;
+  const url = `${resolveZaloApiUrl()}/bot${token}/${method}`;
   const controller = new AbortController();
   const requestTimeoutMs = resolveTimerTimeoutMs(
     options?.timeoutMs,

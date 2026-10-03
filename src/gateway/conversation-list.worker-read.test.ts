@@ -28,7 +28,11 @@ let storePath: string;
 const sessionKey = "agent:main:reef:channel:room";
 const sessionId = "conversation-read-session";
 const config = (): OpenClawConfig => ({
-  agents: { entries: { main: { default: true }, other: {} } },
+  agents: {
+    defaults: { sessionStore: { agentId: "main" } },
+    entries: { main: {}, other: {} },
+  },
+  bindings: [{ type: "route", agentId: "main", match: { channel: "reef" } }],
   session: { store: storePath },
 });
 const scope = () => ({ agentId: "main", storePath, sessionKey, sessionId });

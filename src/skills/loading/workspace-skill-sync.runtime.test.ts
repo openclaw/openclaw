@@ -666,7 +666,7 @@ describe("syncWorkspaceSkills", () => {
           defaults: {
             skills: ["foo_bar", "foo.dot"],
           },
-          list: [{ id: "alpha", skills: ["foo_bar"] }],
+          entries: { alpha: { skills: ["foo_bar"] } },
         },
       },
       bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
@@ -837,7 +837,7 @@ describe("syncWorkspaceSkills", () => {
           defaults: {
             skills: ["remote-only"],
           },
-          list: [{ id: "alpha" }],
+          entries: { alpha: {} },
         },
       },
       eligibility: {

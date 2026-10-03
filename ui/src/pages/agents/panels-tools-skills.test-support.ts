@@ -25,7 +25,7 @@ export function createBaseParams(overrides: Partial<Parameters<typeof renderAgen
     canUpdateConfig: true,
     configForm: {
       agents: {
-        entries: { main: { default: true, tools: { profile: "full" } } },
+        entries: { main: { tools: { profile: "full" } } },
       },
     } as Record<string, unknown>,
     configLoading: false,

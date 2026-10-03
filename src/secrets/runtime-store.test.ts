@@ -37,7 +37,7 @@ describe("store SecretRef runtime degradation", () => {
     const ref = { source: "store", provider: "default", id: "MISSING_SKILL_API_KEY" } as const;
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
         skills: { entries: { unavailable: { apiKey: ref } } },
       }),
       env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
@@ -64,7 +64,7 @@ describe("store SecretRef runtime degradation", () => {
       roots.push(root);
       const ref = { source: "store", provider: "default", id: "SERVICE_API_KEY" } as const;
       const config = asConfig({
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
         skills: { entries: { service: { apiKey: ref } } },
       });
       const runtimeOptions = {

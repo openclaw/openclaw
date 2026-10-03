@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
@@ -205,12 +207,22 @@ function renderPluginBody(active: ExecApprovalRequest, variant: ExecApprovalCard
   }`;
 }
 
-function approvalDecisionLabel(decision: ExecApprovalDecision, kind: ExecApprovalRequest["kind"]) {
+function approvalDecisionLabel(decision: ExecApprovalDecision, approval: ExecApprovalRequest) {
+  if (approval.kind === "plugin" && Array.isArray(approval.pluginActions)) {
+    for (const action of approval.pluginActions) {
+      if (isRecord(action) && action.kind === "decision" && action.decision === decision) {
+        const label = normalizeOptionalString(action.label);
+        if (label) {
+          return label;
+        }
+      }
+    }
+  }
   return t(
     decision === "allow-once"
       ? "execApproval.allowOnce"
       : decision === "allow-always"
-        ? kind === "exec"
+        ? approval.kind === "exec"
           ? "execApproval.alwaysAllowHere"
           : "execApproval.alwaysAllow"
         : "execApproval.deny",
@@ -297,7 +309,7 @@ export function renderSidebarApprovalRow(props: SidebarApprovalRowProps) {
         aria-label=${t("approvalPage.actionsLabel")}
       >
         ${resolveApprovalDecisions(approval).map((decision) => {
-          const label = approvalDecisionLabel(decision, approval.kind);
+          const label = approvalDecisionLabel(decision, approval);
           return html`<button
             type="button"
             class="btn btn--xs ${
@@ -423,7 +435,7 @@ export function renderExecApprovalCard(props: ExecApprovalCardProps) {
     }
     <div class="exec-approval-actions">
       ${decisions.map((decision) => {
-        const label = approvalDecisionLabel(decision, props.approval.kind);
+        const label = approvalDecisionLabel(decision, active);
         return html`<button
           class=${decisionClass(decision)}
           type="button"

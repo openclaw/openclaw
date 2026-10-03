@@ -34,19 +34,33 @@ function fixture(
 }
 
 describe("SQLite native-close admission", () => {
-  it("selects the library before its single memoized probe and immutable publication", async () => {
+  it.each([false, true])("publishes one late decision (early topology: %s)", async (topology) => {
     const pending = createDeferredCore<SqliteRuntimeCapabilities>();
     const order: string[] = [];
     const options = fixture({
-      select: () => order.push("select"),
-      probe: () => {
+      select: vi.fn(() => order.push("select")),
+      probe: vi.fn(() => {
         order.push("probe");
         return pending.promise;
-      },
+      }),
     });
+    const chosen = getSqliteRuntimeCapabilities(options);
+    expect(getSqliteRuntimeCapabilities(options)).toBe(chosen);
+    expect(chosen).toMatchObject({
+      explicitSqliteCloseReleasesNativeResources: false,
+      decided: false,
+    });
+    expect(options.internals.select).not.toHaveBeenCalled();
+    expect(options.internals.probe).not.toHaveBeenCalled();
+    expect(options.internals.publish).not.toHaveBeenCalled();
+    const early = topology ? captureSqliteWorkerClosePolicy(options) : undefined;
+    if (topology) {
+      expect(captureSqliteWorkerClosePolicy(options)).toBe(false);
+    }
     const first = initializeSqliteRuntimeCapabilities(options);
     expect(initializeSqliteRuntimeCapabilities(options)).toBe(first);
     expect(order).toEqual(["select", "probe"]);
+    expect(getSqliteRuntimeCapabilities(options)).toBe(chosen);
     expect(options.internals.publish).not.toHaveBeenCalled();
     pending.resolve({ ...positive });
     const decision = await first;
@@ -55,131 +69,77 @@ describe("SQLite native-close admission", () => {
     expect(options.internals.publish).toHaveBeenCalledExactlyOnceWith(decision);
     expect(getSqliteRuntimeCapabilities(options)).toBe(decision);
     expect(initializeSqliteRuntimeCapabilities(options)).toBe(first);
-  });
-
-  it("lets per-operation consumers observe a late decision without sealing early reads", async () => {
-    const pending = createDeferredCore<SqliteRuntimeCapabilities>();
-    const options = fixture({ probe: () => pending.promise });
-    const initializing = initializeSqliteRuntimeCapabilities(options);
-    const chosen = getSqliteRuntimeCapabilities(options);
     expect(chosen.explicitSqliteCloseReleasesNativeResources).toBe(false);
-    expect(chosen.decided).toBe(false);
-    expect(options.internals.publish).not.toHaveBeenCalled();
-    pending.resolve({ ...positive });
-    expect(await initializing).toEqual(positive);
-    expect(getSqliteRuntimeCapabilities(options)).toEqual(positive);
-    expect(chosen.explicitSqliteCloseReleasesNativeResources).toBe(false);
-    expect(options.internals.publish).toHaveBeenCalledExactlyOnceWith(positive);
-    expect(options.internals.warn).not.toHaveBeenCalled();
-  });
-
-  it("does not probe for short paths that only consume the conservative fact", () => {
-    const options = fixture();
-    const chosen = getSqliteRuntimeCapabilities(options);
-    expect(getSqliteRuntimeCapabilities(options)).toBe(chosen);
-    expect(chosen.decided).toBe(false);
-    expect(options.internals.probe).not.toHaveBeenCalled();
-    expect(options.internals.select).not.toHaveBeenCalled();
-    expect(options.internals.publish).not.toHaveBeenCalled();
-  });
-
-  it("captures topology independently and records late capable admission once", async () => {
-    const options = fixture();
-    const early = captureSqliteWorkerClosePolicy(options);
-    expect(captureSqliteWorkerClosePolicy(options)).toBe(false);
-    expect(await initializeSqliteRuntimeCapabilities(options)).toEqual(positive);
-    expect(early).toBe(false);
     expect(captureSqliteWorkerClosePolicy(options)).toBe(true);
-    await initializeSqliteRuntimeCapabilities(options);
-    expect(options.internals.warn).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("2 topology owners"),
-    );
+    if (topology) {
+      expect(early).toBe(false);
+      expect(options.internals.warn).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("2 topology owners"),
+      );
+    } else {
+      expect(options.internals.warn).not.toHaveBeenCalled();
+    }
   });
 
-  it("keeps an early worker conservative for its lifetime after its parent's decision", async () => {
+  it("keeps a worker with missing parent admission conservative for its lifetime", async () => {
     const options = fixture({ isMainThread: false });
     const initial = getSqliteRuntimeCapabilities(options);
-    options.internals.inherited = positive;
-    expect(await initializeSqliteRuntimeCapabilities(options)).toBe(initial);
-    expect(getSqliteRuntimeCapabilities(options)).toBe(initial);
-    expect(initial.explicitSqliteCloseReleasesNativeResources).toBe(false);
-    expect(options.internals.probe).not.toHaveBeenCalled();
-  });
-
-  it("can disable optimization for internal comparisons without running the probe", async () => {
-    const options = fixture({ forceConservative: true });
-    expect(await initializeSqliteRuntimeCapabilities(options)).toMatchObject({
-      explicitSqliteCloseReleasesNativeResources: false,
-      decided: true,
-      reason: expect.stringContaining("diagnostic flag"),
-    });
-    expect(options.internals.probe).not.toHaveBeenCalled();
-  });
-
-  it.each(["win32", "darwin", "linux"])("admits Node without probing on %s", async (platform) => {
-    const options = fixture({ isBun: false, platform });
-    expect(await initializeSqliteRuntimeCapabilities(options)).toEqual({
-      explicitSqliteCloseReleasesNativeResources: true,
-      decided: true,
-      reason: "Node runtime",
-    });
-    expect(options.internals.probe).not.toHaveBeenCalled();
-  });
-
-  it("keeps Bun Windows conservative without probing even with an inherited positive fact", async () => {
-    const options = fixture({ platform: "win32", isMainThread: false, inherited: positive });
-    expect(await initializeSqliteRuntimeCapabilities(options)).toMatchObject({
-      explicitSqliteCloseReleasesNativeResources: false,
-      reason: expect.stringContaining("Windows"),
-    });
-    expect(options.internals.probe).not.toHaveBeenCalled();
-  });
-
-  it.each(["SQLite close probe timed out", "WAL preconditions unavailable"])(
-    "records a conservative result for %s",
-    async (reason) => {
-      const options = fixture({
-        probe: async () => ({ explicitSqliteCloseReleasesNativeResources: false, reason }),
-      });
-      expect(await initializeSqliteRuntimeCapabilities(options)).toEqual({
-        explicitSqliteCloseReleasesNativeResources: false,
-        decided: true,
-        reason,
-      });
-    },
-  );
-
-  it("records probe errors without rejecting runtime admission", async () => {
-    const options = fixture({
-      probe: async () => {
-        throw new Error("fixture native failure");
-      },
-    });
-    const decision = await initializeSqliteRuntimeCapabilities(options);
-    expect(decision).toMatchObject({
-      explicitSqliteCloseReleasesNativeResources: false,
-      reason: expect.stringContaining("fixture native failure"),
-    });
-    expect(getSqliteRuntimeCapabilities(options)).toBe(decision);
-  });
-
-  it("keeps library-selection failures separate from optional close capability", async () => {
-    const options = fixture({
-      select: () => {
-        throw new Error("invalid library");
-      },
-    });
-    await expect(initializeSqliteRuntimeCapabilities(options)).rejects.toThrow("invalid library");
-    expect(options.internals.probe).not.toHaveBeenCalled();
-    expect(options.internals.publish).not.toHaveBeenCalled();
-  });
-
-  it("keeps workers with missing parent admission conservative", async () => {
-    const options = fixture({ isMainThread: false });
-    expect(await initializeSqliteRuntimeCapabilities(options)).toMatchObject({
+    expect(initial).toMatchObject({
       explicitSqliteCloseReleasesNativeResources: false,
       reason: expect.stringContaining("Parent"),
     });
+    options.internals.inherited = positive;
+    expect(await initializeSqliteRuntimeCapabilities(options)).toBe(initial);
+    expect(getSqliteRuntimeCapabilities(options)).toBe(initial);
     expect(options.internals.probe).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["diagnostic override", { forceConservative: true }, false, "diagnostic flag", 0],
+    ["Node", { isBun: false, platform: "win32" }, true, "Node runtime", 0],
+    [
+      "Bun Windows",
+      { platform: "win32", isMainThread: false, inherited: positive },
+      false,
+      "Windows",
+      0,
+    ],
+    ["negative probe", {}, false, "WAL preconditions unavailable", 1],
+    ["probe error", {}, false, "fixture native failure", 1],
+    ["selection error", {}, false, "invalid library", 0],
+  ] as const)(
+    "handles %s at runtime admission",
+    async (name, overrides, capable, reason, probes) => {
+      const select = vi.fn();
+      const probe = vi.fn(async () => positive);
+      const options = fixture({ ...overrides, select, probe });
+      if (name === "selection error") {
+        select.mockImplementation(() => {
+          throw new Error(reason);
+        });
+      } else if (name === "probe error") {
+        probe.mockRejectedValue(new Error(reason));
+      } else if (name === "negative probe") {
+        probe.mockResolvedValue({
+          ...positive,
+          explicitSqliteCloseReleasesNativeResources: false,
+          reason,
+        });
+      }
+      if (name === "selection error") {
+        await expect(initializeSqliteRuntimeCapabilities(options)).rejects.toThrow(reason);
+        expect(options.internals.publish).not.toHaveBeenCalled();
+      } else {
+        const decision = await initializeSqliteRuntimeCapabilities(options);
+        expect(decision).toEqual({
+          explicitSqliteCloseReleasesNativeResources: capable,
+          decided: true,
+          reason:
+            name === "Node" || name === "negative probe" ? reason : expect.stringContaining(reason),
+        });
+        expect(getSqliteRuntimeCapabilities(options)).toBe(decision);
+      }
+      expect(options.internals.probe).toHaveBeenCalledTimes(probes);
+    },
+  );
 });

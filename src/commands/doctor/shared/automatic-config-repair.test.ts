@@ -12,7 +12,7 @@ import {
   setConfigResolutionFacts,
 } from "../../../config/resolution-facts.js";
 import { writeOpenClawConfig } from "../../../config/test-helpers.js";
-import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
+import type { ConfigFileSnapshot } from "../../../config/types.js";
 import { isPathInside } from "../../../infra/path-guards.js";
 import * as pluginModuleLoader from "../../../plugins/plugin-module-loader-cache.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
@@ -25,7 +25,7 @@ import {
 } from "./automatic-config-repair.js";
 
 function invalidSnapshot(params: {
-  config: OpenClawConfig;
+  config: Record<string, unknown>;
   issuePaths: string[];
   includedPaths?: string[];
 }): ConfigFileSnapshot {
@@ -281,7 +281,7 @@ describe("automatic config repair", () => {
     const snapshot = invalidSnapshot({
       config: {
         plugins: { entries: { "active-memory": { config: { qmd: { enabled: true } } } } },
-      } as OpenClawConfig,
+      },
       issuePaths: ["plugins.entries.active-memory.config.qmd"],
     });
 
@@ -303,7 +303,7 @@ describe("automatic config repair", () => {
             session: { idleMinutes: 45 },
             meta: { lastTouchedAt: "2026-02-15T00:00:00.000Z" },
             agents: { list: [{ id: "work", name: "Operator" }] },
-          } as OpenClawConfig,
+          },
           issuePaths: ["session.idleMinutes"],
         });
         const resolved = resolveLegacyConfigSnapshotForBackup(snapshot);
@@ -322,7 +322,7 @@ describe("automatic config repair", () => {
   it("retires a reference fact whose path the repair moved", () => {
     // The repair relocates session.idleMinutes, so a fact recorded at the authored path would
     // otherwise keep answering lookups for a value that no longer lives there.
-    const config = { session: { idleMinutes: 45 } } as OpenClawConfig;
+    const config = { session: { idleMinutes: 45 } };
     setConfigResolutionFacts(
       config,
       createConfigResolutionFacts(
@@ -381,7 +381,7 @@ describe("automatic config repair", () => {
     },
   ])("refuses $name", ({ config, includedPaths }) => {
     const snapshot = invalidSnapshot({
-      config: config as OpenClawConfig,
+      config,
       issuePaths: [],
       includedPaths,
     });

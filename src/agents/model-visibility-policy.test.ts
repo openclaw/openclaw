@@ -48,14 +48,13 @@ describe("explicit model visibility policy", () => {
           pdfModel: { primary: "demo/pdf", fallbacks: ["demo/pdf-fallback"] },
           modelPolicy: { allow: [] },
         },
-        list: [
-          {
-            id: "research",
+        entries: {
+          research: {
             model: { primary: "demo/primary", fallbacks: ["demo/fallback"] },
             models: { "demo/agent-alias": { alias: "agent" } },
             utilityModel: "demo/agent-utility",
           },
-        ],
+        },
       },
     } as OpenClawConfig;
     const policy = createModelVisibilityPolicy({
@@ -358,18 +357,16 @@ describe("explicit model visibility policy", () => {
   it("resolves conflicting policy aliases in each agent's model map", () => {
     const cfg: OpenClawConfig = {
       agents: {
-        list: [
-          {
-            id: "research",
+        entries: {
+          research: {
             models: { "anthropic/claude-sonnet-4-6": { alias: "sonnet" } },
             modelPolicy: { allow: ["sonnet"] },
           },
-          {
-            id: "writer",
+          writer: {
             models: { "openai/gpt-5.6-sol": { alias: "sonnet" } },
             modelPolicy: { allow: ["sonnet"] },
           },
-        ],
+        },
       },
     };
 
@@ -391,12 +388,7 @@ describe("explicit model visibility policy", () => {
             models: { "anthropic/claude-sonnet-4-6": { alias: "approved" } },
             modelPolicy: { allow: ["approved"] },
           },
-          list: [
-            {
-              id: "research",
-              models: { "openai/gpt-5.6-sol": { alias: "approved" } },
-            },
-          ],
+          entries: { research: { models: { "openai/gpt-5.6-sol": { alias: "approved" } } } },
         },
       },
       "research",
@@ -415,13 +407,12 @@ describe("explicit model visibility policy", () => {
             models: { "anthropic/claude-sonnet-4-6": { alias: "approved" } },
             modelPolicy: { allow: ["approved"] },
           },
-          list: [
-            {
-              id: "research",
+          entries: {
+            research: {
               models: { "openai/gpt-5.6-sol": { alias: "approved" } },
               modelPolicy: { allow: ["approved"] },
             },
-          ],
+          },
         },
       },
       "research",
@@ -437,14 +428,13 @@ describe("explicit model visibility policy", () => {
         defaults: {
           modelPolicy: { allow: ["openai/*"] },
         },
-        list: [
-          {
-            id: "research",
+        entries: {
+          research: {
             models: { "anthropic/claude-sonnet-4-6": { alias: "sonnet" } },
             modelPolicy: { allow: ["anthropic/*"] },
           },
-          { id: "open", modelPolicy: { allow: [] } },
-        ],
+          open: { modelPolicy: { allow: [] } },
+        },
       },
     };
 
@@ -463,12 +453,7 @@ describe("explicit model visibility policy", () => {
       {
         agents: {
           defaults: { modelPolicy: { allow: ["openai/*"] } },
-          list: [
-            {
-              id: "research",
-              models: { "external/sensitive": { alias: "sensitive" } },
-            },
-          ],
+          entries: { research: { models: { "external/sensitive": { alias: "sensitive" } } } },
         },
       },
       "research",
@@ -501,12 +486,7 @@ describe("explicit model visibility policy", () => {
       {
         agents: {
           defaults: { models: { "openai/*": {} } },
-          list: [
-            {
-              id: "research",
-              models: { "anthropic/claude-sonnet-4-6": { alias: "sonnet" } },
-            },
-          ],
+          entries: { research: { models: { "anthropic/claude-sonnet-4-6": { alias: "sonnet" } } } },
         },
       },
       "research",

@@ -1,3 +1,4 @@
+import { raceWithTimeout } from "@openclaw/retry";
 import type {
   WizardStartResult,
   WizardStatusResult,
@@ -423,7 +424,6 @@ export class ModelSetupWizardRunner {
     request: Promise<ModelSetupWizardResult>,
   ): Promise<ModelSetupWizardResult> {
     let timedOut = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     // Gateway request abort/deadline retirement discards the late session needed for cleanup.
     const retainedRequest = request.then(async (result) => {
       if (timedOut) {
@@ -435,19 +435,10 @@ export class ModelSetupWizardRunner {
       }
       return result;
     });
-    try {
-      return await Promise.race([
-        retainedRequest,
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => {
-            timedOut = true;
-            reject(new Error(this.options.gatewayNotRespondingMessage()));
-          }, MODEL_SETUP_AUTH_START_TIMEOUT_MS);
-        }),
-      ]);
-    } finally {
-      clearTimeout(timer);
-    }
+    return await raceWithTimeout(retainedRequest, MODEL_SETUP_AUTH_START_TIMEOUT_MS, () => {
+      timedOut = true;
+      throw new Error(this.options.gatewayNotRespondingMessage());
+    });
   }
 
   private async requestNext(

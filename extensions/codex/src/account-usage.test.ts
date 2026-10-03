@@ -37,7 +37,7 @@ describe("codex.accountUsage", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    config = { agents: { list: [{ id: "main" }, { id: "work" }] } };
+    config = { agents: { entries: { main: {}, work: {} } } };
     currentAuthority = true;
     store = {
       version: 1,

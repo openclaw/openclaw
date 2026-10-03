@@ -31,7 +31,7 @@ describe("createTerminalLaunchPolicy", () => {
 
     const configured = createTerminalLaunchPolicy({
       gateway: { terminal: { enabled: true } },
-      agents: { list: [{ id: "locked", sandbox: { mode: "all" } }] },
+      agents: { entries: { locked: { sandbox: { mode: "all" } } } },
     });
     expect(configured.resolve("ghost")).toEqual({
       ok: false,
@@ -93,7 +93,7 @@ describe("createTerminalLaunchPolicy", () => {
     const workspace = tempDirs.make("term-policy-agent-");
     const baseConfig: OpenClawConfig = {
       gateway: { terminal: { enabled: true } },
-      agents: { defaults: { workspace }, list: [{ id: "ops" }] },
+      agents: { defaults: { workspace }, entries: { ops: {} } },
     };
     const policy = createTerminalLaunchPolicy(baseConfig);
     policy.prepareConfig(
@@ -101,7 +101,7 @@ describe("createTerminalLaunchPolicy", () => {
         ...baseConfig,
         agents: {
           defaults: { workspace },
-          list: [{ id: "ops", sandbox: { mode: "all" } }],
+          entries: { ops: { sandbox: { mode: "all" } } },
         },
       },
       { restartPending: true },
@@ -117,7 +117,7 @@ describe("createTerminalLaunchPolicy", () => {
 
   it("keeps restart and commit restrictions isolated across agents", () => {
     const baseConfig: OpenClawConfig = {
-      agents: { ownership: "explicit", list: [{ id: "alpha" }, { id: "beta" }] },
+      agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
     };
     const policy = createTerminalLaunchPolicy(baseConfig);
 
@@ -125,7 +125,7 @@ describe("createTerminalLaunchPolicy", () => {
       {
         agents: {
           ownership: "explicit",
-          list: [{ id: "alpha", sandbox: { mode: "all" } }, { id: "beta" }],
+          entries: { alpha: { sandbox: { mode: "all" } }, beta: {} },
         },
       },
       { restartPending: true },
@@ -134,7 +134,7 @@ describe("createTerminalLaunchPolicy", () => {
       {
         agents: {
           ownership: "explicit",
-          list: [{ id: "alpha" }, { id: "beta", sandbox: { mode: "all" } }],
+          entries: { alpha: {}, beta: { sandbox: { mode: "all" } } },
         },
       },
       { restartPending: false },

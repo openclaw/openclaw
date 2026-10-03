@@ -58,6 +58,7 @@ import type { DeferredEmbeddedRunLifecycleManager } from "../embedded-agent-runn
 import type { RunEmbeddedAgentInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
+import { buildAgentInternalEventContext as buildEventContext } from "../internal-events.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
@@ -606,11 +607,11 @@ export function runAgentAttempt(
             params.sessionAgentId,
           );
         await prepareCliSessionBinding();
+        const { internalEvents, runtimeContextFragments: supplementalContext } = params.opts;
         // Retain the cleared binding as the preparation candidate so missing-transcript
         // recovery can reseed history without resuming the stale CLI session.
         let result: EmbeddedAgentRunResult;
         try {
-          const forkCliSessionOnResume = cliSessionBinding?.forkNextResume === true;
           const forkStoreParams =
             cliSessionBinding?.sessionId && mutableCliSessionStore
               ? {
@@ -631,6 +632,7 @@ export function runAgentAttempt(
             persistAssistantTranscript:
               params.storePath !== undefined && params.sessionStore !== undefined,
             prompt: cliPrompt,
+            runtimeContextFragments: buildEventContext(internalEvents, supplementalContext),
             transcriptPrompt: cliTranscriptPrompt,
             modelProvider: params.providerOverride,
             requesterModel: { provider: params.providerOverride, model: params.modelOverride },
@@ -646,7 +648,7 @@ export function runAgentAttempt(
             cliSessionBindingFacts: params.opts.cliSessionBindingFacts,
             cliSessionId: cliSessionBinding?.sessionId,
             cliSessionBinding,
-            forkCliSessionOnResume,
+            forkCliSessionOnResume: cliSessionBinding?.forkNextResume === true,
             ...(forkStoreParams
               ? buildCliSessionForkRunParams(
                   {
@@ -687,7 +689,7 @@ export function runAgentAttempt(
               }),
             ),
             cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
-            ...(forkStoreParams && !forkCliSessionOnResume
+            ...(forkStoreParams && cliSessionBinding?.forkNextResume !== true
               ? {
                   onBeforeForkedCliSessionRetry: async (retry) => {
                     if (hasNewMediaTask() || retry.sessionId !== cliSessionBinding?.sessionId) {
@@ -699,9 +701,7 @@ export function runAgentAttempt(
                     );
 
                     const armed = await restoreCliSessionForkInStore(forkStoreParams);
-                    if (armed) {
-                      params.sessionEntry = armed;
-                    }
+                    params.sessionEntry = armed ?? params.sessionEntry;
                     return Boolean(armed);
                   },
                 }

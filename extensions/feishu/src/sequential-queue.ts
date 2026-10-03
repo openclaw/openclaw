@@ -1,4 +1,5 @@
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 const DEFAULT_TASK_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -39,22 +40,11 @@ async function boundedRun(
     return task();
   }
   const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TASK_TIMEOUT_MS);
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<void>((resolve) => {
-    timeoutHandle = setTimeout(() => {
-      try {
-        onTaskTimeout?.(key, resolvedTimeoutMs);
-      } catch {
-        // Swallow logging errors so they cannot poison the queue chain.
-      }
-      resolve();
-    }, resolvedTimeoutMs);
-  });
-  try {
-    await Promise.race([task(), timeoutPromise]);
-  } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
+  await raceWithTimeout(task, resolvedTimeoutMs, () => {
+    try {
+      onTaskTimeout?.(key, resolvedTimeoutMs);
+    } catch {
+      // Swallow logging errors so they cannot poison the queue chain.
     }
-  }
+  });
 }

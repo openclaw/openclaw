@@ -142,9 +142,8 @@ describe("config io compatibility", () => {
         },
       },
       agents: {
-        list: [
-          {
-            id: "ops",
+        entries: {
+          ops: {
             tools: {
               exec: {
                 safeBinTrustedDirs: [" /ops/bin ", "/ops/bin"],
@@ -156,7 +155,7 @@ describe("config io compatibility", () => {
               },
             },
           },
-        ],
+        },
       },
     };
     normalizeExecSafeBinProfilesInConfig(cfg);
@@ -166,11 +165,11 @@ describe("config io compatibility", () => {
       },
     });
     expect(cfg.tools?.exec?.safeBinTrustedDirs).toEqual(["/custom/bin", "/agent/bin"]);
-    expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinProfiles).toEqual({
+    expect(cfg.agents?.entries?.ops?.tools?.exec?.safeBinProfiles).toEqual({
       custom: {
         deniedFlags: ["-f"],
       },
     });
-    expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinTrustedDirs).toEqual(["/ops/bin"]);
+    expect(cfg.agents?.entries?.ops?.tools?.exec?.safeBinTrustedDirs).toEqual(["/ops/bin"]);
   });
 });

@@ -837,6 +837,37 @@ describe("Discord model picker rendering", () => {
     );
   });
 
+  it.each(["llama3.2:latest", "a".repeat(100), "a".repeat(101), "😀".repeat(80), "😀".repeat(101)])(
+    "bounds select labels by code point and tokenizes model %s",
+    (model) => {
+      const data = createModelsProviderData({ ollama: [model] });
+      const select = requireValue(
+        renderModelsViewRows({
+          command: "model",
+          userId: "owner",
+          data,
+          provider: "ollama",
+          currentModel: `ollama/${model}`,
+        })
+          .flatMap((row) => row.components ?? [])
+          .find((component) =>
+            component.options?.some(
+              (option) => option.label === Array.from(model).slice(0, 100).join(""),
+            ),
+          ),
+        "model select should be rendered",
+      );
+      expect(select.options).toEqual([
+        {
+          label: Array.from(model).slice(0, 100).join(""),
+          value: createDiscordModelPickerModelToken("ollama", model),
+          default: true,
+        },
+      ]);
+      expect(parseDiscordModelPickerCustomId(select.custom_id ?? "")?.action).toBe("pick");
+    },
+  );
+
   it("renders model view with select menu and explicit submit button", () => {
     const data = createModelsProviderData({
       openai: ["gpt-4.1", "gpt-4o", "o3"],
@@ -883,11 +914,13 @@ describe("Discord model picker rendering", () => {
       throw new Error("models view did not render a model select");
     }
     expect(modelSelect.options?.length).toBe(3);
-    const o3ModelOption = modelSelect.options?.find((option) => option.value === "o3");
+    const o3ModelOption = modelSelect.options?.find(
+      (option) => option.value === createDiscordModelPickerModelToken("openai", "o3"),
+    );
     expect(o3ModelOption?.default).toBe(true);
 
     const parsedModelSelectState = parseDiscordModelPickerCustomId(modelSelect.custom_id ?? "");
-    expect(parsedModelSelectState?.action).toBe("model");
+    expect(parsedModelSelectState?.action).toBe("pick");
     expect(parsedModelSelectState?.provider).toBe("openai");
 
     const navButtons = rows[2]?.components ?? [];

@@ -3,12 +3,14 @@ import {
   buildActiveNodeContextText,
   prepareActiveNodeContext,
 } from "../../infra/active-node-context.js";
+import { labelRuntimeContextText } from "../../llm/types.js";
 import type { CliBackendConfig, CliBackendPromptContext } from "../../plugins/cli-backend.types.js";
 import { buildCliSessionDriftNote } from "../cli-session.js";
 import type { ResolvedPromptBuildHookResult } from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
 import { composeSystemPromptWithHookContext } from "../embedded-agent-runner/run/attempt-thread-helpers.js";
 import { buildRuntimeContextCustomMessage } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { resolveSessionGitCoauthorPrompt } from "../git-coauthor-prompt.js";
+import { projectRuntimeContextFragments } from "../internal-runtime-context.js";
 import { buildMediaTaskRuntimeContext } from "../media-generation-task-status.js";
 import { buildProactiveSubagentOrchestrationSection } from "../ultra-orchestration.js";
 import { cliBackendLog } from "./log.js";
@@ -21,6 +23,7 @@ async function buildCliTurnAppendContext(
     isNewSession: boolean;
     systemPrompt: string;
     context: readonly (string | undefined)[];
+    runtimeContextFragments?: RunCliAgentParams["runtimeContextFragments"];
     thinkLevel?: ThinkLevel;
     requesterProfileId?: string;
   },
@@ -30,15 +33,20 @@ async function buildCliTurnAppendContext(
     capabilityToolNames: params.capabilityToolNames,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
+    includeEmptySnapshots: true,
   });
+  const mediaTaskMessage = buildRuntimeContextCustomMessage(mediaTaskContext);
   await prepareActiveNodeContext(params.requesterProfileId);
   return [
     ...params.context,
+    params.runtimeContextFragments?.length
+      ? labelRuntimeContextText(projectRuntimeContextFragments(params.runtimeContextFragments))
+      : undefined,
     buildProactiveSubagentOrchestrationSection({
       enabled: params.thinkLevel === "ultra",
       hasSessionsSpawn: params.capabilityToolNames.has("sessions_spawn"),
     }).join("\n"),
-    buildRuntimeContextCustomMessage(mediaTaskContext)?.content,
+    mediaTaskMessage ? labelRuntimeContextText(mediaTaskMessage.content) : undefined,
     // Native-prompt owners and first-only resumes do not receive the current runtime line.
     resolveSystemPromptUsage(params)
       ? undefined

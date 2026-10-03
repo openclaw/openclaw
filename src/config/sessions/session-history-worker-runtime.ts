@@ -14,6 +14,7 @@ import {
 } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { getRuntimeConfig } from "../config.js";
+import { getCliSessionBinding } from "./cli-session-binding.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.js";
 import {
   prepareSqliteTranscriptReadScope,
@@ -119,11 +120,17 @@ function readQueuedHistory(
   const operation =
     input.kind === "cold-metadata"
       ? owner.readColdMetadata({ sessionId: input.sessionId, env: input.env })
-      : owner.run(() => {
-          // Page callers cannot join a SQLite snapshot that has already started.
-          forget();
-          return input;
-        }, key.length * 2);
+      : owner.run(
+          () => {
+            // Page callers cannot join a SQLite snapshot that has already started.
+            forget();
+            return input;
+          },
+          key.length * 2 +
+            (input.kind === "history-page" && input.request.kind === "rpc"
+              ? (input.request.params.cliHistoryRedaction?.retainedBytes ?? 0)
+              : 0),
+        );
   // Initial metadata probes share only in-flight work; queued restores bypass this map.
   void operation.then(
     (result) => {
@@ -237,11 +244,15 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
         };
   }
   const entry = request.kind === "rpc" ? request.params.entry : request.params.target.sessionEntry;
+  const cliBinding = getCliSessionBinding(entry, "claude-cli");
   const capturedEntry = entry
     ? {
         sessionId: entry.sessionId,
         updatedAt: entry.updatedAt,
         sessionStartedAt: entry.sessionStartedAt,
+        ...(cliBinding
+          ? { cliSessionBindings: { "claude-cli": structuredClone(cliBinding) } }
+          : {}),
       }
     : undefined;
   if (request.kind === "rpc") {
@@ -263,6 +274,10 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
         offset: params.offset,
         messageId: params.messageId,
         ignoreCliSessionImports: params.ignoreCliSessionImports,
+        cliHistoryHomeDir: params.cliHistoryHomeDir,
+        ...(params.cliHistoryRedaction
+          ? { cliHistoryRedaction: structuredClone(params.cliHistoryRedaction) }
+          : {}),
       },
     };
   }
@@ -344,7 +359,20 @@ export async function readSessionHistoryPageInWorker(
     sessionId: scope.sessionId,
   });
   const admission = receipt ? { ...receipt } : undefined;
-  let inputBytes = JSON.stringify(capturedRequest).length * 2;
+  const redaction =
+    capturedRequest.kind === "rpc" ? capturedRequest.params.cliHistoryRedaction : undefined;
+  const keyedRequest =
+    capturedRequest.kind === "rpc" && redaction
+      ? {
+          ...capturedRequest,
+          params: {
+            ...capturedRequest.params,
+            cliHistoryRedaction: { policyToken: redaction.policyToken },
+          },
+        }
+      : capturedRequest;
+  const redactionBytes = redaction?.retainedBytes ?? 0;
+  let inputBytes = JSON.stringify(keyedRequest).length * 2 + redactionBytes;
   // Retain caller admission across asynchronous target discovery as well as the page read.
   if (
     pendingHistoryReaders >= DEFAULT_WORKER_PENDING_TASKS ||
@@ -424,7 +452,7 @@ export async function readSessionHistoryPageInWorker(
         target,
         ...(admission ? { admission } : {}),
       };
-      const key = JSON.stringify(input);
+      const key = JSON.stringify({ ...input, request: keyedRequest });
       const metadataInput: SessionColdMetadataWorkerInput = {
         kind: "cold-metadata",
         database: currentSource,
@@ -432,7 +460,7 @@ export async function readSessionHistoryPageInWorker(
         env,
       };
       const metadataKey = JSON.stringify(metadataInput);
-      const additionalBytes = (key.length + metadataKey.length) * 2 - inputBytes;
+      const additionalBytes = (key.length + metadataKey.length) * 2 + redactionBytes - inputBytes;
       if (pendingHistoryBytes + additionalBytes > DEFAULT_WORKER_PENDING_BYTES) {
         throw new WorkerTaskError("worker task capacity reached", "overloaded");
       }

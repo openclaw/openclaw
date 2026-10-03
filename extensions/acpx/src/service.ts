@@ -10,6 +10,7 @@ import type {
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type {
   OpenClawPluginService,
   OpenClawPluginServiceContext,
@@ -158,33 +159,6 @@ async function measureAcpxStartup<T>(
 
 function shouldProbeRuntimeAtStartup(env: NodeJS.ProcessEnv = process.env): boolean {
   return env[ENABLE_STARTUP_PROBE_ENV] !== "0" && env[SKIP_RUNTIME_PROBE_ENV] !== "1";
-}
-
-async function withStartupProbeTimeout<T>(params: {
-  promise: Promise<T>;
-  timeoutSeconds: number;
-}): Promise<T> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const timeoutMs = resolveAcpxTimerTimeoutMs(params.timeoutSeconds) ?? 1;
-  try {
-    return await Promise.race([
-      params.promise,
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => {
-          reject(
-            new Error(
-              `embedded acpx runtime backend startup probe timed out after ${params.timeoutSeconds}s`,
-            ),
-          );
-        }, timeoutMs);
-        (timeout as { unref?: () => void }).unref?.();
-      }),
-    ]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
 }
 
 async function resolveGatewayInstanceId(
@@ -419,11 +393,18 @@ export function createAcpxRuntimeService(
       lifecycleRevision += 1;
       const currentRevision = lifecycleRevision;
       try {
+        const timeoutSeconds = pluginConfig.timeoutSeconds ?? DEFAULT_ACPX_TIMEOUT_SECONDS;
         const doctorReport = await measureAcpxStartup(ctx, "probe.availability", () =>
-          withStartupProbeTimeout({
-            promise: startedRuntime.doctor(),
-            timeoutSeconds: pluginConfig.timeoutSeconds ?? DEFAULT_ACPX_TIMEOUT_SECONDS,
-          }),
+          raceWithTimeout(
+            startedRuntime.doctor(),
+            resolveAcpxTimerTimeoutMs(timeoutSeconds) ?? 1,
+            () => {
+              throw new Error(
+                `embedded acpx runtime backend startup probe timed out after ${timeoutSeconds}s`,
+              );
+            },
+            { ref: false },
+          ),
         );
         if (currentRevision !== lifecycleRevision) {
           return;

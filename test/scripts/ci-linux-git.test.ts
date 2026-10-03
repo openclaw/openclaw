@@ -392,6 +392,8 @@ posixIt(
       "scripts/generate-npm-package-lock.mts",
       "scripts/changed-lanes.mts",
       "scripts/lib/merge-head-diff-base.mjs",
+      "scripts/stage-openclaw-bun.sh",
+      "scripts/lib/openclaw-bun.json",
     ]) {
       expect(sparseCheckout.args).toContain(`/${file}`);
     }

@@ -10,7 +10,7 @@ import type { ChatItem, ChatReplyTarget, MessageGroup } from "../../../lib/chat/
 import { describeToolGroup, readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
-import { formatDurationCompact } from "../../../lib/format-duration.ts";
+import { formatDurationLong } from "../../../lib/format-duration.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { prepareChatMessageRender, resolveMessageActionDetails } from "./chat-message-markdown.ts";
@@ -205,7 +205,7 @@ export function renderWorkGroupSummary(
     browserTabPreviews?: unknown;
   },
 ) {
-  const duration = formatDurationCompact(item.durationMs);
+  const duration = formatDurationLong(item.durationMs);
   const entries = item.groups.flatMap((group) =>
     group.messages.map(({ message }) => ({
       cards: extractToolCardsCached(message),
@@ -267,7 +267,7 @@ export function renderWorkGroupSummary(
           <span class="chat-activity-group__label">${label}</span>
         </span>
         ${
-          total > 0
+          opts.expanded && total > 0
             ? html`<span class="chat-work-group__total"
                 >·
                 ${t(`chat.workRun.toolCalls${total === 1 ? "One" : "Many"}`, { count: String(total) })}</span

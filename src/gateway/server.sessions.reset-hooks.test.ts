@@ -115,7 +115,9 @@ async function configureGlobalAgentSessionStore(dir: string) {
     `${JSON.stringify(
       {
         agents: {
-          list: [{ id: "main", default: true }, { id: "work" }],
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, work: {} },
         },
         session: { scope: "global", store: storeTemplate },
       },

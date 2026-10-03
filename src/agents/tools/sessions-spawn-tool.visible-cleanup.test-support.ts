@@ -26,7 +26,7 @@ export function registerSessionsSpawnVisibleCleanupTests({
       });
       const tool = createTool({
         agentSessionKey: "agent:main:main",
-        config: { agents: { list: [{ id: "main" }] } },
+        config: { agents: { entries: { main: {} } } },
         callGateway,
         registerRun,
         countActiveRuns: () => 0,
@@ -85,7 +85,7 @@ export function registerSessionsSpawnVisibleCleanupTests({
       .mockRejectedValueOnce(new Error("lifecycle drain unavailable"));
     const tool = createTool({
       agentSessionKey: "agent:main:main",
-      config: { agents: { list: [{ id: "main" }] } },
+      config: { agents: { entries: { main: {} } } },
       callGateway,
       ...(scenario.registrationError
         ? {
@@ -123,7 +123,7 @@ export function registerSessionsSpawnVisibleCleanupTests({
       });
       const tool = createTool({
         agentSessionKey: "agent:main:main",
-        config: { agents: { list: [{ id: "main" }] } },
+        config: { agents: { entries: { main: {} } } },
         callGateway,
         countActiveRuns: () => 0,
       });

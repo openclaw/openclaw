@@ -42,7 +42,7 @@ beforeEach(async () => {
   await fs.mkdir(outputRoot, { recursive: true });
   await fs.writeFile(path.join(outputRoot, "report.txt"), "stale Gateway copy");
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "gateway-state"));
-  cfg = { agents: { list: [{ id: "writer", workspace: workspaceDir }] } };
+  cfg = { agents: { entries: { writer: { workspace: workspaceDir } } } };
   remoteRead = vi.fn(async (_filePath, maxBytes) => {
     const bytes = Buffer.from("Harness output");
     if (bytes.length > maxBytes) {

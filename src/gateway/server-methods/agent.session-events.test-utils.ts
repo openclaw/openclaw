@@ -219,7 +219,7 @@ export function registerAgentGlobalGoalEventTest(): void {
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
     mocks.resolveExplicitAgentSessionKey.mockReturnValue("global");
     mocks.loadSessionEntry.mockReturnValue({
-      cfg: { agents: { list: [{ id: "main" }, { id: "work" }] }, session: { scope: "global" } },
+      cfg: { agents: { entries: { main: {}, work: {} } }, session: { scope: "global" } },
       storePath: "/tmp/sessions.json",
       entry: {
         sessionId: "global-session-id",

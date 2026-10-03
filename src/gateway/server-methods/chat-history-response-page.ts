@@ -11,7 +11,6 @@ import {
   createChatHistoryActivityProjection,
   createChatHistoryByteCounter,
   replaceOversizedChatHistoryMessages,
-  trimChatHistoryActivity,
 } from "./chat-history-budget.js";
 import {
   capChatHistoryAroundMessage,
@@ -24,7 +23,7 @@ export function prepareChatHistoryResponsePage(
   {
     entry: historyEntry,
     compactionMetrics,
-    maxHistoryBytes,
+    maxHistoryBytes: responseHistoryBytes,
     messageId,
   }: Pick<ChatHistoryPageParams, "entry" | "compactionMetrics" | "maxHistoryBytes" | "messageId">,
 ): ChatHistoryResponsePage {
@@ -33,11 +32,6 @@ export function prepareChatHistoryResponsePage(
     historyEntry,
     compactionMetrics,
   );
-  // Imported snapshots have no back-scroll cursor. Preserve their complete
-  // snapshot budget until the external history owner supports pagination.
-  const responseHistoryBytes = historyPage.completeCliImport
-    ? getMaxChatHistoryMessagesBytes()
-    : maxHistoryBytes;
   // A smaller page budget must not replace otherwise readable messages. The
   // tail cap keeps one whole message; the server's single-message cap still applies.
   const activity = createChatHistoryActivityProjection(normalized, historyPage.activity);
@@ -50,33 +44,19 @@ export function prepareChatHistoryResponsePage(
       getMaxChatHistoryMessagesBytes(),
     ),
   });
-  // Terminal imports have no older-page cursor. Anchored reads retain their
-  // existing neighborhood selector instead of changing which groups surround the anchor.
-  const prioritized =
-    historyPage.completeCliImport && !messageId
-      ? trimChatHistoryActivity({
-          messages: replaced.messages,
-          maxBytes: responseHistoryBytes,
-          byteCounter,
-        })
-      : replaced.messages;
   const capped = messageId
     ? capChatHistoryAroundMessage({
-        messages: prioritized,
+        messages: replaced.messages,
         messageId,
         // A nonempty JSON array costs one framing byte plus each message and its separator.
-        maxCost: responseHistoryBytes - 1 - byteCounter.framingBytes(prioritized),
+        maxCost: responseHistoryBytes - 1 - byteCounter.framingBytes(replaced.messages),
         messageCost: (message) => byteCounter.messageBytes(message) + 1,
       })
     : capArrayByJsonBytes(
-        prioritized,
-        responseHistoryBytes - byteCounter.framingBytes(prioritized),
+        replaced.messages,
+        responseHistoryBytes - byteCounter.framingBytes(replaced.messages),
         byteCounter.messageBytes,
       ).items;
-  const historyBudgetPreserved =
-    replaced.replacedCount === 0 &&
-    capped.length === normalized.length &&
-    capped.every((message, index) => message === normalized[index]);
   const pagination = historyPage.pagination;
   const candidateNextOffset =
     pagination === undefined
@@ -87,10 +67,11 @@ export function prepareChatHistoryResponsePage(
           offset: pagination.offset,
           rawPageMessages: pagination.rawPageMessages,
           projected: normalized,
+          messageSequences: pagination.messageSequences,
         });
   const hasMore =
     pagination !== undefined && candidateNextOffset !== undefined
-      ? pagination.exhausted !== true && candidateNextOffset < pagination.totalMessages
+      ? candidateNextOffset < pagination.totalMessages
       : undefined;
   const survivors = new Set(capped);
   const omittedCount = normalized.reduce<number>(
@@ -110,9 +91,6 @@ export function prepareChatHistoryResponsePage(
     ...(hasMore ? { nextOffset: candidateNextOffset } : {}),
     ...(hasMore !== undefined ? { hasMore } : {}),
     ...(pagination !== undefined ? { totalMessages: pagination.totalMessages } : {}),
-    ...(historyPage.completeCliImport && !hasMore && historyBudgetPreserved
-      ? { completeSnapshot: true }
-      : {}),
   };
 }
 
