@@ -2529,7 +2529,7 @@ src/plugin-sdk/provider-auth-runtime.ts	1
 src/plugin-sdk/provider-catalog-shared.ts	1
 src/plugin-sdk/provider-entry.ts	3
 src/plugin-sdk/provider-onboard.ts	3
-src/plugin-sdk/provider-stream-shared.ts	14
+src/plugin-sdk/provider-stream-shared.ts	10
 src/plugin-sdk/provider-stream.ts	1
 src/plugin-sdk/provider-tools.ts	4
 src/plugin-sdk/qa-runtime.ts	5
@@ -2541,7 +2541,6 @@ src/plugin-sdk/session-transcript-runtime.ts	6
 src/plugin-sdk/setup-credential.ts	1
 src/plugin-sdk/ssrf-policy.ts	1
 src/plugin-sdk/status-helpers.ts	7
-src/plugin-sdk/tool-payload.ts	2
 src/plugin-sdk/tool-plugin.ts	10
 src/plugin-sdk/windows-spawn.ts	1
 src/plugin-state/plugin-state-store.ts	5
