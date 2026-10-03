@@ -266,4 +266,38 @@ describe("exec approvals protocol validators", () => {
       ).toBe(false);
     }
   });
+
+  it("accepts requestedCwd on the system run plan so approval registration survives the closed schema", () => {
+    // The node-host planner always includes requestedCwd (null when the caller
+    // used no symlinked path). Before the schema carried the field, the closed
+    // systemRunPlan rejected it as an extra property and exec.approval.request
+    // failed before an approval record was created.
+    const basePlan = {
+      argv: ["/usr/bin/echo", "hi"],
+      cwd: "/real/cwd",
+      commandText: "/usr/bin/echo hi",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+    };
+    expect(
+      validateExecApprovalRequestParams({
+        command: "/usr/bin/echo hi",
+        systemRunPlan: { ...basePlan, requestedCwd: "/requested/link/cwd" },
+      }),
+    ).toBe(true);
+    // null (no symlinked path requested) is valid too.
+    expect(
+      validateExecApprovalRequestParams({
+        command: "/usr/bin/echo hi",
+        systemRunPlan: { ...basePlan, requestedCwd: null },
+      }),
+    ).toBe(true);
+    // The field is optional; an older caller that omits it still validates.
+    expect(
+      validateExecApprovalRequestParams({
+        command: "/usr/bin/echo hi",
+        systemRunPlan: basePlan,
+      }),
+    ).toBe(true);
+  });
 });

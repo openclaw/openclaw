@@ -2014,6 +2014,33 @@ describe("exec approval handlers", () => {
     );
   });
 
+  it("carries requestedCwd through the normalized approval plan", async (testContext) => {
+    const { request } = await requestExecApprovalForTest(testContext, {
+      timeoutMs: 10,
+      command: "echo ok",
+      commandArgv: ["echo", "ok"],
+      cwd: "/tmp/link/sub",
+      systemRunPlan: {
+        argv: ["/usr/bin/echo", "ok"],
+        cwd: "/real/cwd",
+        requestedCwd: "/tmp/link/sub",
+        commandText: "/usr/bin/echo ok",
+        commandPreview: "echo ok",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        policySnapshot: {
+          security: "allowlist",
+          ask: "on-miss",
+          askFallback: "deny",
+          autoAllowSkills: false,
+          allowlistRules: [{ pattern: "/usr/bin/echo" }],
+        },
+      },
+    });
+    const plan = request["systemRunPlan"] as { requestedCwd?: string | null };
+    expect(plan.requestedCwd).toBe("/tmp/link/sub");
+  });
+
   it("sanitizes invisible Unicode format chars in approval display text without changing node bindings", async (testContext) => {
     const { request } = await requestExecApprovalForTest(testContext, {
       timeoutMs: 10,

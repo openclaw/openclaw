@@ -54,6 +54,7 @@ export function normalizeSystemRunApprovalPlan(candidate: unknown): SystemRunApp
   return {
     argv,
     cwd: normalizeNonEmptyString(candidate.cwd),
+    requestedCwd: normalizeNonEmptyString(candidate.requestedCwd),
     commandText,
     commandPreview: normalizeNonEmptyString(candidate.commandPreview),
     agentId: normalizeNonEmptyString(candidate.agentId),

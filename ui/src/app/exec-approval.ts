@@ -11,6 +11,7 @@ export type ExecApprovalRequestPayload = {
   command: string;
   scope?: ApprovalScope | null;
   cwd?: string | null;
+  requestedCwd?: string | null;
   host?: string | null;
   security?: string | null;
   ask?: string | null;
@@ -175,6 +176,7 @@ function parseApprovalRequested(
             ...source,
             command,
             cwd: readStringValue(request.cwd) ?? null,
+            requestedCwd: readStringValue(request.requestedCwd) ?? null,
             host: readStringValue(request.host) ?? null,
             security: readStringValue(request.security) ?? null,
             ask: readStringValue(request.ask) ?? null,
