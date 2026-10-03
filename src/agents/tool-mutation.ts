@@ -296,6 +296,40 @@ function isReadOnlyGhCommand(tokens: readonly string[]): boolean {
   return false;
 }
 
+const FIND_BARE_PRIMARIES = new Set([
+  "!",
+  "-a",
+  "-and",
+  "-empty",
+  "-not",
+  "-o",
+  "-or",
+  "-print",
+  "-print0",
+  "-prune",
+]);
+// Tests that take one operand and only read metadata.
+const FIND_VALUE_TESTS = new Set([
+  "-amin",
+  "-atime",
+  "-cmin",
+  "-ctime",
+  "-group",
+  "-iname",
+  "-ipath",
+  "-iregex",
+  "-links",
+  "-mmin",
+  "-mtime",
+  "-name",
+  "-newer",
+  "-path",
+  "-perm",
+  "-regex",
+  "-size",
+  "-user",
+]);
+
 function isReadOnlyFindCommand(tokens: readonly string[]): boolean {
   // Only known inspection predicates. Never admit -exec, -delete, -fprint,
   // platform extensions, or an unknown action by assuming it is harmless.
@@ -305,7 +339,7 @@ function isReadOnlyFindCommand(tokens: readonly string[]): boolean {
   }
   for (; index < tokens.length; index++) {
     const token = tokens[index];
-    if (token === "-print" || token === "-print0" || token === "!" || token === "-not") {
+    if (FIND_BARE_PRIMARIES.has(token!)) {
       continue;
     }
     const value = tokens[++index];
@@ -318,7 +352,7 @@ function isReadOnlyFindCommand(tokens: readonly string[]): boolean {
     if ((token === "-maxdepth" || token === "-mindepth") && /^\d+$/.test(value)) {
       continue;
     }
-    if (token === "-name" || token === "-iname" || token === "-path" || token === "-ipath") {
+    if (FIND_VALUE_TESTS.has(token!)) {
       continue;
     }
     return false;
