@@ -24,7 +24,7 @@ export function mountPage(
   Object.assign(fixture.host.agents, { rows: [], defaultId: null });
   let agents: AgentsListResult["agents"] = [{ id: "main" }, { id: "writer" }];
   let cards = [createWorkboardCard({ title: "Initial card" })];
-  const request = vi.fn(async (method: string, params?: unknown): Promise<unknown> => {
+  const request = vi.fn(async (method: string, requestParams?: unknown): Promise<unknown> => {
     if (method === "agents.list") {
       return {
         defaultId: "main",
@@ -37,7 +37,9 @@ export function mountPage(
       return { cards };
     }
     if (method === "workboard.boards.upsert") {
-      return { board: { ...(params as Record<string, unknown>), createdAt: 1, updatedAt: 1 } };
+      return {
+        board: { ...(requestParams as Record<string, unknown>), createdAt: 1, updatedAt: 1 },
+      };
     }
     return {};
   });

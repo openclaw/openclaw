@@ -106,7 +106,7 @@ it("keeps card and sessions navigation nested in catalog order and reconciles me
     [...registrations.entries()]
       .filter(([key]) => key.startsWith("navigation/board-"))
       .map(([, item]) => item as ControlUiNavigationItem)
-      .sort((left, right) => (left.order ?? 0) - (right.order ?? 0));
+      .toSorted((left, right) => (left.order ?? 0) - (right.order ?? 0));
   try {
     await vi.advanceTimersByTimeAsync(0);
     expect(boardNavigation()).toMatchObject([
