@@ -182,13 +182,13 @@ describe("configureGatewayForSetup", () => {
   );
 
   it("refuses to rewrite a trusted-proxy gateway to password for tailscale funnel", async () => {
-    // Funnel requires password auth, but a trusted-proxy gateway is
-    // identity-bearing: rewriting it would drop trustedProxy and leave password
-    // mode without a secret, which stops the Gateway from starting.
+    // A local-only password must not become a remote shared secret merely
+    // because Funnel was selected.
     const baseConfig = {
       gateway: {
         auth: {
           mode: "trusted-proxy" as const,
+          password: "synthetic-local-password",
           trustedProxy: {
             userHeader: "x-forwarded-user",
             requiredHeaders: ["x-forwarded-user"],
@@ -220,9 +220,11 @@ describe("configureGatewayForSetup", () => {
         baseConfig,
         nextConfig: baseConfig,
         quickstartGateway: resolveQuickstartGatewayDefaults(baseConfig, { tailscale: "funnel" }),
+        prompter: createPrompter({ selectQueue: [], textQueue: ["synthetic-funnel-password"] }),
       }),
     );
     expect(result.nextConfig.gateway?.auth?.mode).toBe("password");
+    expect(result.nextConfig.gateway?.auth?.password).toBe("synthetic-funnel-password");
     expect(result.nextConfig.gateway?.tailscale?.mode).toBe("funnel");
   });
 

@@ -323,19 +323,16 @@ export function resolveQuickstartGatewayDefaults(
       ? bindRaw
       : "loopback";
 
-  // Onboarding must not rewrite an auth mode it cannot offer. `none` stays the
-  // one exception: it has no secret to collect, and setup intentionally lands
-  // it on token so a rerun that also changes how the Gateway is exposed still
-  // writes a config the Gateway will start with. Every other configured mode is
-  // carried through verbatim, leaving the operator's gateway.auth block and its
-  // identity-bearing fields intact. An explicit CLI choice still wins below.
+  // Preserve proxy-owned auth instead of inferring a shared-secret mode from
+  // its local password. `none` retains the existing credential inference;
+  // explicit CLI choices still win below.
   let authMode: GatewayAuthMode = "token";
   const storedAuthMode = baseConfig.gateway?.auth?.mode;
   if (storedAuthMode !== undefined && storedAuthMode !== "none") {
     authMode = storedAuthMode;
-  } else if (storedAuthMode === undefined && baseConfig.gateway?.auth?.token) {
+  } else if (baseConfig.gateway?.auth?.token) {
     authMode = "token";
-  } else if (storedAuthMode === undefined && baseConfig.gateway?.auth?.password) {
+  } else if (baseConfig.gateway?.auth?.password) {
     authMode = "password";
   }
 

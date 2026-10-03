@@ -1,5 +1,3 @@
-// Trusted-proxy finalization tests cover credential resolution, probing, and
-// terminal handoff for a preserved trusted-proxy gateway.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type * as AuthChoiceModelCheck from "../commands/auth-choice.model-check.js";
@@ -60,7 +58,7 @@ const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const resolveDefaultModelAuthStatus = vi.hoisted(() =>
   vi.fn<() => DefaultModelAuthStatus>(() => ({
     provider: "anthropic",
-    model: "claude-opus-4-8",
+    model: "test-model",
     status: "ready",
     hasAuth: true,
   })),
@@ -424,7 +422,7 @@ describe("finalizeSetupWizard", () => {
     resolveDefaultModelAuthStatus.mockReset();
     resolveDefaultModelAuthStatus.mockReturnValue({
       provider: "anthropic",
-      model: "claude-opus-4-8",
+      model: "test-model",
       status: "ready",
       hasAuth: true,
     });

@@ -489,7 +489,6 @@ export async function finalizeSetupWizard(
     }
   }
 
-  // The same credential is what the readiness probes and the health check send.
   const probePassword = usesLocalPassword ? resolvedGatewayPassword : undefined;
 
   if (containerWithoutUserSystemd && !opts.skipUi) {
@@ -767,9 +766,8 @@ export async function finalizeSetupWizard(
       }
 
       if (gatewayProbe.ok) {
-        // A preserved trusted-proxy gateway authenticates proxies, not a shared
-        // token; a shared token also conflicts with that mode, so the token
-        // guidance only belongs to token auth.
+        // Shared tokens conflict with trusted-proxy auth; do not suggest
+        // generating one when a different mode is configured.
         const usesSharedToken = settings.authMode === "token";
         const notes = [
           ...(usesSharedToken
@@ -959,10 +957,8 @@ export async function finalizeSetupWizard(
             ? {
                 config: nextConfig,
                 boundGateway: {
-                  // An ambient or configured local password is accepted only for a
-                  // direct-local request, so this same-host handoff must use the
-                  // loopback endpoint the readiness probe just verified rather
-                  // than the advertised (possibly LAN) address.
+                  // Proxy mode accepts the local password only over loopback,
+                  // so terminal handoff must not use an advertised interface.
                   url: usesLocalPassword
                     ? resolveLocalControlUiProbeLinks({
                         bind: nextConfig.gateway?.bind ?? "loopback",

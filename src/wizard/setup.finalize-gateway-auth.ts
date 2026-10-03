@@ -1,23 +1,16 @@
-// Gateway auth helpers for onboarding finalization: which modes authenticate
-// same-host clients with a local password, how that credential is resolved,
-// and what auth the setup helper's own session gateway should carry.
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import type { GatewayWizardSettings } from "./setup.types.js";
 
-// Password mode collects its secret during setup. A trusted-proxy gateway
-// authenticates its own same-host clients with the configured local password
-// or the ambient `OPENCLAW_GATEWAY_PASSWORD` (docs/gateway/trusted-proxy-auth.md)
-// and has no token fallback, so finalization has to resolve that credential to
-// be able to probe that Gateway.
+// Trusted-proxy gateways use a local password for direct-loopback clients;
+// a shared token cannot authenticate those clients in proxy mode.
 export function gatewayAuthUsesLocalPassword(authMode: GatewayWizardSettings["authMode"]): boolean {
   return authMode === "password" || authMode === "trusted-proxy";
 }
 
-// This mirrors the Gateway credential owner's precedence in
-// `createGatewayCredentialPlan`: the configured value wins, and the
-// environment supplies it when the config carries none.
+// Configured refs stay authoritative: resolution errors must not fall back
+// to an ambient password.
 export async function resolveGatewayLocalPassword(params: {
   nextConfig: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -46,18 +39,10 @@ export function buildSessionGatewayAuthOverride(params: {
       token: params.settings.gatewayToken,
     };
   }
-  if (params.settings.authMode === "password" && params.resolvedGatewayPassword) {
+  if (gatewayAuthUsesLocalPassword(params.settings.authMode) && params.resolvedGatewayPassword) {
     return {
       ...params.nextConfig.gateway?.auth,
-      mode: "password",
-      password: params.resolvedGatewayPassword,
-    };
-  }
-  // A trusted-proxy gateway keeps its identity mode; the saved local password is
-  // what authenticates the setup helper's own same-host connection.
-  if (params.settings.authMode === "trusted-proxy" && params.resolvedGatewayPassword) {
-    return {
-      ...params.nextConfig.gateway?.auth,
+      mode: params.settings.authMode,
       password: params.resolvedGatewayPassword,
     };
   }
