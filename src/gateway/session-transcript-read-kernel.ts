@@ -111,8 +111,7 @@ function capAnchorEventsByBytes(
 
 function readRecentSqliteMessageRecords(
   projection: CurrentTranscriptProjection,
-  opts?: Partial<ReadRecentSessionMessagesOptions> &
-    TranscriptReadWindowOptions & { readOnly?: boolean },
+  opts?: Partial<ReadRecentSessionMessagesOptions> & TranscriptReadWindowOptions,
 ): ReadRecentSessionMessagesResult {
   const maxMessages = Math.max(0, Math.floor(opts?.maxMessages ?? 0));
   const page = readRecentSessionTranscriptHistoryEventsFromProjection(projection, {
@@ -121,7 +120,6 @@ function readRecentSqliteMessageRecords(
     maxLines: resolveIntegerOption(opts?.maxLines, maxMessages * 20 + 20, { min: maxMessages }),
     captureReadWindow: opts?.captureReadWindow,
     expectedReadWindow: opts?.expectedReadWindow,
-    readOnly: opts?.readOnly,
   });
   return {
     ...(page.activeLeafEntryId !== undefined ? { activeLeafEntryId: page.activeLeafEntryId } : {}),

@@ -152,11 +152,11 @@ export function updateChatRunProgressSnapshot(
     (phase !== "review" || (mode === "full" && Boolean(reviewId)));
   const isPreamble = event.stream === "item" && data.kind === "preamble";
   const isItem = event.stream === "item" && (Boolean(preambleItemId) || isPreamble);
-  if (
-    isItem &&
-    !isPreamble &&
-    !Value.Check({ ...AgentActivityItemSchema, additionalProperties: true }, data)
-  ) {
+  const validItem: boolean =
+    !isItem ||
+    isPreamble ||
+    Value.Check({ ...AgentActivityItemSchema, additionalProperties: true }, data);
+  if (isItem && !isPreamble && !validItem) {
     return snapshot;
   }
   const isUsage = event.stream === "usage";

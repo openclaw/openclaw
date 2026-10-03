@@ -175,19 +175,20 @@ function appendCronFailureAlertDetails(
   runAtMs: number | undefined,
   config: OpenClawConfig,
 ): string {
+  let text = message;
   if (typeof runAtMs === "number" && Number.isFinite(runAtMs)) {
     const timestamp = formatZonedTimestamp(new Date(runAtMs), {
       timeZone: resolveUserTimezone(config.agents?.defaults?.userTimezone),
     });
     if (timestamp) {
-      message += `\nRun started: ${timestamp}`;
+      text += `\nRun started: ${timestamp}`;
     }
   }
   const inspectUrl = resolveControlUiAutomationRunUrl(config, {
     jobId,
     runId: runAtMs ? createCronExecutionId(jobId, runAtMs) : undefined,
   });
-  return inspectUrl ? `${message}\nInspect: ${inspectUrl}` : message;
+  return inspectUrl ? `${text}\nInspect: ${inspectUrl}` : text;
 }
 
 function buildCronFinishedWebhookPayload(evt: CronEvent) {
