@@ -103,7 +103,9 @@ still independently rereads complete source identity after the immutable fetch.
 Publication revalidates immediately before each Git/GraphQL write, after transport
 preparation, and compares the successful publication observation before acquisition.
 
-Ordinary immediate squash prefers REST. Admission reads switch transports only
+Ordinary immediate squash prefers REST. Explicit recovery of a validated retained
+intent starts with GraphQL; normal fallback and immediate-only recovery gates
+still apply. Admission reads switch transports only
 for confirmed primary quota exhaustion or unsupported REST policy or mergeability
 projections, including UNKNOWN; secondary throttles and access failures never authorize a switch. REST requires proven absence
 of classic protection and merge queues, supported effective rules, exact-head publisher-bound
