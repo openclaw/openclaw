@@ -34,10 +34,12 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   // Keep rejection ownership in the snapshot so a handler attached after wait
   // can clear it; an unawaited failure must not become a successful cell.
   const unhandledRejections = new Set();
-  const bridgeErrors = new WeakSet();
+  // Maps each host-rejected bridge error to its terminal failure code. Guest
+  // writes to error.code never reach the cell result; only this record does.
+  const bridgeErrors = new WeakMap();
   // Guest prototype changes must not replace the operations that own error provenance.
-  const rememberBridgeError = bridgeErrors.add.bind(bridgeErrors);
-  const isBridgeError = bridgeErrors.has.bind(bridgeErrors);
+  const rememberBridgeError = bridgeErrors.set.bind(bridgeErrors);
+  const bridgeFailureCode = bridgeErrors.get.bind(bridgeErrors);
   let nextTimerId = 0;
   const GuestPromise = Promise;
   const GuestError = Error;
@@ -214,11 +216,15 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
       const error = new GuestError(typeof parsed === "string" ? parsed : parsed?.message ?? "nested tool failed");
       if (entry.stack) Object.defineProperty(error, "stack", { value: entry.stack, writable: true, configurable: true });
       if (entry.location) error.location = entry.location;
+      const code = parsed && typeof parsed === "object" ? parsed.code : undefined;
       if (parsed && typeof parsed === "object") {
-        error.code = parsed.code;
+        error.code = code;
         error.effectStatus = "unknown";
       }
-      rememberBridgeError(error);
+      rememberBridgeError(
+        error,
+        code === "invalid_input" || code === "input_contract" ? "invalid_input" : "internal_error",
+      );
       entry.reject(error);
     }
     return true;
@@ -508,7 +514,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     json: { value: (value) => emitOutput({ type: "json", value: safe(value, true) }), enumerable: true },
     yield_control: { value: (reason) => request("yield", [reason]), enumerable: true },
     __openclawSettleBridge: { value: settle },
-    __openclawIsBridgeError: { value: isBridgeError },
+    __openclawBridgeFailureCode: { value: bridgeFailureCode },
     __openclawDrainQueuedRequests: { value: drainQueuedRequests },
     __openclawAdmissionError: { value: () => admissionError },
     // Final getters must run before the worker drains output and settles host work.

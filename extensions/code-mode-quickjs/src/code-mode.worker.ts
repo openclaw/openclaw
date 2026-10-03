@@ -373,16 +373,19 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
       // format it like the synchronous path so async rejections keep their cause
       // and location instead of collapsing to the bare message.
       const dumped = vm.dump(error);
-      const bridgeError = vm.global
-        .getProp("__openclawIsBridgeError")
-        .consume((check) =>
-          vm.callFunction(check, vm.undefined, error).consume((value) => vm.dump(value) === true),
-        );
+      const bridgeCode = vm.global.getProp("__openclawBridgeFailureCode").consume((read) =>
+        vm
+          .callFunction(read, vm.undefined, error)
+          .consume((value): "invalid_input" | "internal_error" | undefined => {
+            const code: unknown = vm.dump(value);
+            return code === "invalid_input" || code === "internal_error" ? code : undefined;
+          }),
+      );
       // Node module globals are deliberately absent from the WASI guest. Keep
       // aliases fail-closed at that runtime boundary rather than guessing source
       // provenance or installing a host-backed loader.
       if (
-        !bridgeError &&
+        bridgeCode === undefined &&
         dumped instanceof Error &&
         dumped.name === "ReferenceError" &&
         /^(?:require|module|process) is not defined$/u.test(dumped.message)
@@ -393,7 +396,11 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
         dumped instanceof Error
           ? formatQuickJsError(dumped.name, dumped.message, dumped.stack, readSourceLocation(vm))
           : errorMessage(dumped);
-      throw new CodeModeWorkerFailure("internal_error", text, bridgeError ? "bridge" : undefined);
+      throw new CodeModeWorkerFailure(
+        bridgeCode ?? "internal_error",
+        text,
+        bridgeCode === undefined ? undefined : "bridge",
+      );
     });
   }
   return settled.value.consume((value) => JSON.parse(value.toString()));
