@@ -108,6 +108,8 @@ export function createGatewayChatUserTurnController(params: {
     : Promise.resolve(baseInput);
   let contextFreeCommand = false;
   let mentionCommit: Promise<void> | undefined;
+  const onPersistenceError = (error: unknown) =>
+    params.warn(`gateway user transcript persistence failed: ${formatForLog(error)}`);
   const recorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
     ...(sender?.id && !request.goalOperation
       ? {
@@ -182,8 +184,7 @@ export function createGatewayChatUserTurnController(params: {
       }
       return next;
     },
-    onPersistenceError: (error) =>
-      params.warn(`gateway user transcript persistence failed: ${formatForLog(error)}`),
+    onPersistenceError,
     ...(selectedMentions && senderProfileId && mentionInbox
       ? {
           onOriginalInputCommitted: ({ message, anchor }: UserTurnOriginalInputCommit) => {
@@ -228,7 +229,7 @@ export function createGatewayChatUserTurnController(params: {
               recipientProfileIds: retained.map((mention) => mention.profileId),
               excerpt: redactSensitiveText(text),
             });
-            return mentionCommit;
+            void mentionCommit.catch(onPersistenceError);
           },
         }
       : {}),

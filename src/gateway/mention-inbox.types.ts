@@ -9,8 +9,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import type { MentionCommittedInput } from "./mention-inbox-input.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
-export type { MentionCommittedInput } from "./mention-inbox-input.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
+
+export type { MentionCommittedInput } from "./mention-inbox-input.js";
 
 type MentionNotification = {
   id: string;

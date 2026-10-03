@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { ok, type Result } from "@openclaw/normalization-core/result";
-import {
-  type ErrorShape,
-  type MentionInboxItem,
-  type MentionsListResult,
+import type {
+  ErrorShape,
+  MentionInboxItem,
+  MentionsListResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
