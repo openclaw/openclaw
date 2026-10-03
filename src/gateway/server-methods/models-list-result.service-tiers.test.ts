@@ -5,6 +5,7 @@ import {
   routeResolverFactory,
   subscriptionRoute,
 } from "../../agents/model-auth-availability.test-support.js";
+import { resolveSelectedModelCredential } from "../../agents/model-auth-selected-credential.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { createPreparedAccountCatalogAccess } from "../../agents/prepared-model-runtime.catalog-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -23,64 +24,96 @@ import {
 } from "./models-list-result.openai-routes.test-support.js";
 
 describe("models.list account service tiers", () => {
-  it("publishes API-key embedded tiers without discovery and withdraws a downgraded tier", async () => {
-    const model = {
-      id: "synthetic-api-model",
-      name: "Synthetic API model",
-      provider: "openai",
-      ...platformRoute,
-    };
-    const profileId = "openai:api-fixture";
-    const credential = { type: "api_key" as const, provider: "openai", key: "synthetic-api-key" };
-    const context = createModelsListTestContext({
-      cfg: {
-        agents: {
-          defaults: {
-            model: "openai/synthetic-api-model",
-            models: { "openai/synthetic-api-model": { agentRuntime: { id: "openclaw" } } },
+  it.each(["profile", "direct"] as const)(
+    "publishes %s API-key embedded tiers without discovery and withdraws a downgraded tier",
+    async (source) => {
+      const model = {
+        id: "synthetic-api-model",
+        name: "Synthetic API model",
+        provider: "openai",
+        ...platformRoute,
+      };
+      const profileId = source === "profile" ? "openai:api-fixture" : undefined;
+      const credential = { type: "api_key" as const, provider: "openai", key: "synthetic-api-key" };
+      const context = createModelsListTestContext({
+        cfg: {
+          ...(source === "direct"
+            ? {
+                models: {
+                  providers: {
+                    openai: {
+                      ...platformRoute,
+                      auth: "api-key" as const,
+                      apiKey: "synthetic-api-key",
+                      models: [],
+                    },
+                  },
+                },
+              }
+            : {}),
+          agents: {
+            defaults: {
+              model: "openai/synthetic-api-model",
+              models: { "openai/synthetic-api-model": { agentRuntime: { id: "openclaw" } } },
+            },
           },
         },
-      },
-      catalog: [model],
-      preparedAuthStore: { version: 1, profiles: { [profileId]: credential } },
-    });
-    const initial = await readPreparedCatalog(context, "main");
-    if (!initial) {
-      throw new Error("Missing prepared fixture");
-    }
-    const accountCatalog = createPreparedAccountCatalogAccess(() => true);
-    const owner = { ...initial, accountCatalog };
-    registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
-      readPrepared: async () => owner,
-      loadDeferred: async () => owner,
-    });
-    const prepare = () =>
-      prepareModelsListResult({
-        source: { kind: "gateway", context },
-        agentId: "main",
-        params: { view: "all", preparedOnly: true, includeDefaultModels: false },
-        routeResolverFactory: routeResolverFactory(dualRoutes),
+        catalog: [model],
+        preparedAuthStore: { version: 1, profiles: profileId ? { [profileId]: credential } : {} },
       });
-    const first = await prepare();
-    expect(first.read().models.find((row) => row.id === model.id)).toMatchObject({
-      available: true,
-      serviceTiers: ["priority", "ultrafast"],
-    });
-    accountCatalog.prepareServiceTierObserver({ profileId, credential })({
-      modelId: model.id,
-      runtimeId: "openclaw",
-      api: platformRoute.api,
-      baseUrl: platformRoute.baseUrl,
-      serviceTiers: ["priority"],
-    });
-    const next = await prepare();
-    expect(next.read().models.find((row) => row.id === model.id)?.serviceTiers).toEqual([
-      "priority",
-    ]);
-    expect(first.read().models.find((row) => row.id === model.id)?.serviceTiers).toEqual([
-      "priority",
-    ]);
-  });
+      const initial = await readPreparedCatalog(context, "main");
+      if (!initial) {
+        throw new Error("Missing prepared fixture");
+      }
+      const accountCatalog = createPreparedAccountCatalogAccess(
+        () => true,
+        undefined,
+        initial.config,
+      );
+      const owner = { ...initial, accountCatalog };
+      registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
+        readPrepared: async () => owner,
+        loadDeferred: async () => owner,
+      });
+      const prepare = () =>
+        prepareModelsListResult({
+          source: { kind: "gateway", context },
+          agentId: "main",
+          params: { view: "all", preparedOnly: true, includeDefaultModels: false },
+          routeResolverFactory: routeResolverFactory(dualRoutes),
+        });
+      const first = await prepare();
+      expect(first.read().models.find((row) => row.id === model.id)).toMatchObject({
+        available: true,
+        serviceTiers: ["priority", "ultrafast"],
+      });
+      const selectedCredential = resolveSelectedModelCredential({
+        provider: "openai",
+        profileId,
+        mode: "api-key",
+      });
+      if (!selectedCredential) {
+        throw new Error("Missing selected fixture credential");
+      }
+      accountCatalog.prepareServiceTierObserver({
+        selectedCredential,
+        credential,
+      })({
+        modelId: model.id,
+        runtimeId: "openclaw",
+        api: platformRoute.api,
+        baseUrl: platformRoute.baseUrl,
+        serviceTiers: ["priority"],
+      });
+      const next = await prepare();
+      expect(next.read().models.find((row) => row.id === model.id)?.serviceTiers).toEqual([
+        "priority",
+      ]);
+      expect(first.read().models.find((row) => row.id === model.id)?.serviceTiers).toEqual([
+        "priority",
+      ]);
+    },
+  );
   it("acquires the selected profile and publishes only its selected-runtime tiers", async () => {
     await withOpenClawTestState(
       {
