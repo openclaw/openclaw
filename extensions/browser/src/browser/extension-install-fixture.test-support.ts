@@ -4,6 +4,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { inspectPathPermissions } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveConfigPath, resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { vi } from "vitest";
+import { chromeStoreInstallRequests as readChromeStoreInstallRequests } from "./extension-install-external.js";
 import * as layout from "./extension-install-layout.js";
 import * as registration from "./extension-install-registration.js";
 import type { NativeWindowsContext } from "./extension-windows-contract.js";
@@ -264,6 +265,9 @@ export function uninstallChromeExtensionNativeHosts(
 }
 export function removeChromeStoreInstallRequests(fixture?: InstallFixture) {
   return inFixture(fixture, () => installer.removeChromeStoreInstallRequests());
+}
+export function chromeStoreInstallRequests(fixture?: InstallFixture) {
+  return inFixture(fixture, () => readChromeStoreInstallRequests());
 }
 export function installWindowsNativeHost(
   params: Parameters<typeof windows.installWindowsNativeHost>[0] & { deps?: InstallFixture },
