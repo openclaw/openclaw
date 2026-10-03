@@ -98,19 +98,45 @@ describe("agent roster resolution", () => {
   });
 
   it.each([
-    ["absent", "{}", "main"],
-    ["empty entries", '{"agents":{"entries":{}}}', undefined],
-    ["empty list", '{"agents":{"list":[]}}', undefined],
-    ["malformed entries", '{"agents":{"entries":null,"list":[{"id":"ops"}]}}', undefined],
-    ["malformed list", '{"agents":{"list":42}}', undefined],
-    ["entries precedence", '{"agents":{"entries":{" OPS ":{}},"list":[{"id":"other"}]}}', "ops"],
-    ["invalid keyed entries", '{"agents":{"entries":{"skip":[],"invalid":null,"ops":{}}}}', "ops"],
-    ["invalid list entries", '{"agents":{"list":[null,42,false,{"id":" OPS "}]}}', "ops"],
-    ["duplicate list ids", '{"agents":{"list":[{"id":"ops"},{"id":"ops"}]}}', undefined],
-    ["duplicate normalized keys", '{"agents":{"entries":{" OPS ":{},"ops":{}}}}', undefined],
-  ])("preserves sole-agent selection for %s", (_name, raw, expected) => {
-    expect(tryResolveSoleAgentId(JSON.parse(raw))).toBe(expected);
-  });
+    ["absent", "{}", "main", ["main"]],
+    ["empty entries", '{"agents":{"entries":{}}}', undefined, []],
+    ["empty list", '{"agents":{"list":[]}}', undefined, []],
+    ["malformed entries", '{"agents":{"entries":null,"list":[{"id":"ops"}]}}', undefined, []],
+    ["malformed list", '{"agents":{"list":42}}', undefined, []],
+    [
+      "entries precedence",
+      '{"agents":{"entries":{" OPS ":{}},"list":[{"id":"other"}]}}',
+      "ops",
+      ["ops"],
+    ],
+    [
+      "invalid keyed entries",
+      '{"agents":{"entries":{"skip":[],"invalid":null,"ops":{}}}}',
+      "ops",
+      ["ops"],
+    ],
+    ["invalid list entries", '{"agents":{"list":[null,42,false,{"id":" OPS "}]}}', "ops", ["ops"]],
+    ["duplicate list ids", '{"agents":{"list":[{"id":"ops"},{"id":"ops"}]}}', undefined, ["ops"]],
+    [
+      "duplicate normalized keys",
+      '{"agents":{"entries":{" OPS ":{},"ops":{}}}}',
+      undefined,
+      ["ops"],
+    ],
+    [
+      "legacy id normalization and order",
+      '{"agents":{"list":[{}, {"id":null}, {"id":" OPS "}, {"id":"research"}, {"id":"ops"}]}}',
+      undefined,
+      ["main", "ops", "research"],
+    ],
+  ] as const)(
+    "preserves roster ids and sole-agent selection for %s",
+    (_name, raw, expected, ids) => {
+      const cfg = JSON.parse(raw);
+      expect(tryResolveSoleAgentId(cfg)).toBe(expected);
+      expect(listAgentIds(cfg)).toEqual(ids);
+    },
+  );
 
   it("reads only enough own enumerable entries to distinguish a sole mutable agent", () => {
     const entries: Record<string, unknown> = Object.create({ inherited: {} });
@@ -128,6 +154,8 @@ describe("agent roster resolution", () => {
       { entry: { id: "tail", name: "Tail" }, source: { kind: "entries", key: "tail" } },
     ]);
     expect(tail).toHaveBeenCalledTimes(1);
+    expect(listAgentIds(cfg)).toEqual(["ops", "other", "tail"]);
+    expect(tail).toHaveBeenCalledTimes(2);
     delete entries.other;
     delete entries.tail;
     expect(tryResolveSoleAgentId(cfg)).toBe("ops");
@@ -158,11 +186,64 @@ describe("agent roster resolution", () => {
       { entry: { id: "tail" }, source: { kind: "list", index: 7 } },
     ]);
     expect(tail).toHaveBeenCalledTimes(1);
+    expect(listAgentIds(cfg)).toEqual(["inherited", "ops", "array", "tail"]);
+    expect(tail).toHaveBeenCalledTimes(2);
     expect(listAgentEntries(cfg)[1]).toBe(first);
     expect(listAgentEntries(cfg)[2]).toBe(arrayEntry);
     list.length = 4;
     delete prototype[2];
     expect(tryResolveSoleAgentId(cfg)).toBe("ops");
+  });
+
+  it("lists keyed ids without reading unrelated entry fields", () => {
+    const entry = {
+      id: "ignored",
+      get name() {
+        throw new Error("name must only be read for a full entry");
+      },
+    };
+    const cfg = { agents: { entries: { " OPS ": entry } } };
+
+    expect(listAgentIds(cfg)).toEqual(["ops"]);
+    expect(() => listAgentEntries(cfg)).toThrow("name must only be read for a full entry");
+  });
+
+  it("collects legacy entry references before reading and normalizing their ids", () => {
+    const list: Array<{ id: string }> = [
+      {
+        get id() {
+          list[1] = { id: "replacement" };
+          return " OPS ";
+        },
+      },
+      { id: "research" },
+    ];
+
+    expect(listAgentIds({ agents: { list } })).toEqual(["ops", "research"]);
+    expect(list[1]).toEqual({ id: "replacement" });
+  });
+
+  it("propagates legacy collection errors before reading an earlier entry id", () => {
+    const readId = vi.fn(() => "ops");
+    const list = [
+      {
+        get id() {
+          return readId();
+        },
+      },
+    ];
+    Object.defineProperty(list, 1, {
+      get() {
+        throw new Error("unreadable roster entry");
+      },
+    });
+
+    expect(() => listAgentIds({ agents: { list } })).toThrow("unreadable roster entry");
+    expect(readId).not.toHaveBeenCalled();
+  });
+
+  it("preserves errors from malformed legacy ids", () => {
+    expect(() => listAgentIds({ agents: { list: [{ id: 42 }] } })).toThrow(TypeError);
   });
 
   it("keeps the generic selection hint free of surface-specific assumptions", () => {
@@ -516,6 +597,7 @@ describe("agent roster resolution", () => {
     expect(plainEntry).toBeDefined();
 
     for (const listedEntry of [listed!.entry, plainEntry!]) {
+      expect(listedEntry).not.toBe(entry);
       expect(Object.getPrototypeOf(listedEntry)).toBe(Object.prototype);
       expect(Object.hasOwn(listedEntry, "__proto__")).toBe(true);
       expect(Object.getOwnPropertyDescriptor(listedEntry, "__proto__")?.value).toEqual({
