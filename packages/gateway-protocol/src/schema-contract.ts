@@ -12,9 +12,9 @@ export type SchemaContract<T> = T extends (...args: never[]) => unknown
                 ? T[K]
                 : symbol extends K
                   ? T[K]
-                  : {} extends Pick<T, K>
-                    ? Exclude<T[K], undefined>
-                    : T[K]
+                  : Pick<T, K> extends Required<Pick<T, K>>
+                    ? T[K]
+                    : Exclude<T[K], undefined>
           >;
         }
       : T;
