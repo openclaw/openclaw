@@ -23,9 +23,10 @@ export type ReadSessionMessagesAsyncOptions =
   | { mode: "full"; reason: string; includeOffPathMessages?: boolean }
   | ({ mode: "recent" } & ReadRecentSessionMessagesOptions);
 
-export type SessionTranscriptMessageByIdOptions =
+export type SessionTranscriptMessageByIdOptions = (
   | { currentOnly?: false; maxBytes?: never }
-  | { currentOnly: true; maxBytes: number };
+  | { currentOnly: true; maxBytes: number }
+) & { historyVisibility?: { sessionStartedAt?: number } };
 
 export type ReadRecentSessionMessagesResult = {
   olderOffset?: number;
@@ -48,6 +49,9 @@ export type ReadSessionMessagesResult = {
 };
 
 export type ReadSessionMessageByIdResult = {
+  /** A canonical visibility rejection must not fall through to imported history. */
+  historyHidden?: true;
+  historyContext?: { precedingMessage?: unknown; transcriptPath?: string; displaySource?: string };
   message?: unknown;
   seq?: number;
   oversized: boolean;

@@ -265,8 +265,22 @@ export function createIncognitoSessionHistoryReader(params: {
       read(scope, { type: "session.history.page", input: { ...target, options } }),
     readSessionMessagesAroundIdWithStatsAsync: (scope, options) =>
       read(scope, { type: "session.history.around-id", input: { ...target, options } }),
-    readSessionMessageByIdAsync: (scope, messageId, options) =>
-      read(scope, { type: "session.history.by-id", input: { ...target, messageId, options } }),
+    readSessionMessageByIdAsync: async (scope, messageId, options) => {
+      const { filterSessionMessageHistoryVisibility } =
+        await import("./session-transcript-read-kernel.js");
+      return disclose(
+        await filterSessionMessageHistoryVisibility(
+          await read(scope, {
+            type: "session.history.by-id",
+            input: { ...target, messageId, options },
+          }),
+          scope,
+          messageId,
+          options?.historyVisibility,
+          readers,
+        ),
+      );
+    },
     async readSessionMessagesWithSourceAsync(scope, options) {
       const { messages, offPathMessages, transcriptPath } = await read(scope, {
         type: "session.history.source",

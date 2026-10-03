@@ -528,6 +528,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     lastInteractionAt: entry?.lastInteractionAt,
     lastActivityAt: entry?.lastActivityAt,
     sessionId: entry?.sessionId,
+    lifecycleRevision: entry?.lifecycleRevision,
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
     restartRecoveryStatus: entry?.mainRestartRecovery?.tombstone ? "tombstoned" : undefined,

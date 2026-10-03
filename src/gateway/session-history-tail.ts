@@ -136,15 +136,18 @@ export async function readChatHistoryRecoveryContext(params: {
   expectedReadWindow?: TranscriptReadWindow;
   maxBytes: number;
   readOnly?: boolean;
+  sessionStartedAt?: number;
 }): Promise<unknown[]> {
   const context: unknown[] = [];
+  const filterAnnounces = createPreSessionStartAnnouncePairFilter(params.sessionStartedAt);
   let recovery: ReturnType<typeof params.createRecovery> | undefined;
   let anchorId = readChatHistoryMessageId(params.messages.at(-1));
   let scannedBytes = 0;
-  while (anchorId && context.length < SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_MESSAGES) {
+  let scannedMessages = 0;
+  while (anchorId && scannedMessages < SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_MESSAGES) {
     const chunkSize = Math.min(
       SILENT_CHAT_HISTORY_TAIL_SCAN_CHUNK_MESSAGES,
-      SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_MESSAGES - context.length,
+      SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_MESSAGES - scannedMessages,
     );
     const newer = await readNewerChatHistoryMessages({
       anchorId,
@@ -161,9 +164,15 @@ export async function readChatHistoryRecoveryContext(params: {
     const previousContextLength = context.length;
     let boundaryReached = false;
     for (const message of newer) {
+      scannedMessages++;
       scannedBytes += Buffer.byteLength(JSON.stringify(message), "utf8");
       if (scannedBytes > params.maxBytes) {
         return context;
+      }
+      // Hidden rows still consume the scan budget and advance the next indexed anchor.
+      anchorId = readChatHistoryMessageId(message);
+      if (filterAnnounces([message]).length === 0) {
+        continue;
       }
       context.push(message);
       if (asOptionalRecord(message)?.role === "user") {
@@ -179,7 +188,6 @@ export async function readChatHistoryRecoveryContext(params: {
     if (!recovery.pending) {
       break;
     }
-    anchorId = readChatHistoryMessageId(context.at(-1));
   }
   return context;
 }
@@ -332,29 +340,8 @@ async function readIncrementalChatHistoryTailAttempt(params: {
           subagentCoordination: params.readers.subagentCoordination,
           maxChars: params.effectiveMaxChars,
         });
-        if (sessionStartedAt === undefined) {
-          recovery.append(messages);
-          return recovery;
-        }
-        const filter = createPreSessionStartAnnouncePairFilter(sessionStartedAt);
-        let contextRemoved = overreadContextMessage === undefined;
-        const append = (chunk: unknown[]) => {
-          const filtered = filter(chunk);
-          const prepared = contextRemoved
-            ? filtered
-            : dropChatHistoryOverreadContextMessage(filtered, overreadContextMessage);
-          contextRemoved ||= prepared.length !== filtered.length;
-          recovery.append(prepared);
-        };
-        append(
-          overreadContextMessage === undefined ? messages : [overreadContextMessage, ...messages],
-        );
-        return {
-          append,
-          get pending() {
-            return recovery.pending;
-          },
-        };
+        recovery.append(messages);
+        return recovery;
       },
       readScope: params.readScope,
       readers: params.readers,
@@ -362,6 +349,7 @@ async function readIncrementalChatHistoryTailAttempt(params: {
       expectedReadWindow: readWindow,
       maxBytes: params.maxBytes,
       readOnly: params.readOnly,
+      sessionStartedAt,
     });
     return project();
   };

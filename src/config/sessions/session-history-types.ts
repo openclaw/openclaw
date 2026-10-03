@@ -149,6 +149,17 @@ export type SessionConversationBinding = Pick<
   "channel" | "accountId" | "target" | "threadId" | "nativeChannelId"
 >;
 
+export type ChatHistoryMessageParams = ChatHistoryPageParams & {
+  sessionId: string;
+  messageId: string;
+};
+export type ChatHistoryDisplayRequest =
+  | { kind: "rpc"; params: ChatHistoryPageParams }
+  | { kind: "rpc-message"; params: ChatHistoryMessageParams };
+export type ChatHistoryDisplayResult =
+  | { kind: "rpc"; page: ChatHistoryPage }
+  | { kind: "rpc-message"; result: ReadSessionMessageByIdResult };
+
 export type SessionHistoryWorkerRequest =
   | {
       kind: "active-accounting";
@@ -214,6 +225,7 @@ export type SessionHistoryWorkerRequest =
       params: { target: SessionTranscriptReadScope };
     }
   | { kind: "rpc"; params: ChatHistoryPageParams & { sessionId: string; storePath: string } }
+  | { kind: "rpc-message"; params: ChatHistoryMessageParams & { storePath: string } }
   | { kind: "message-lookup"; params: { target: SessionTranscriptReadScope; messageId: string } }
   | {
       kind: "message-by-id";
@@ -251,7 +263,7 @@ export type SessionHistoryWorkerResult =
   | { kind: "around-id"; result: ReadSessionMessagesAroundIdResult }
   | { kind: "source-messages"; result: ReadSessionMessagesResult }
   | { kind: "transcript-binding"; binding: SessionHistoryTranscriptBinding | undefined }
-  | { kind: "rpc"; page: ChatHistoryPage }
+  | ChatHistoryDisplayResult
   | { kind: "message-lookup"; messages: unknown[] }
   | { kind: "message-by-id"; result: ReadSessionMessageByIdResult }
   | { kind: "message-count"; count: number }

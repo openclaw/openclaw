@@ -7,6 +7,7 @@ import {
   projectChatDisplayMessagesWithState,
 } from "./chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
+import { readChatHistoryReplyMessageId } from "./server-methods/chat-history-reply-messages.js";
 import {
   attachOpenClawTranscriptMeta,
   readTranscriptMessageIdempotencyKey,
@@ -106,6 +107,10 @@ export function projectSessionMessagePayload(params: {
   const message = projected.messages[0];
   if (!message) {
     return { projectionState };
+  }
+  if (readChatHistoryReplyMessageId(message)) {
+    // The page owner resolves quoted originals once, with visibility and payload bounds.
+    return { projectionState, requiresHistoryReset: true };
   }
   const projectCurrentUserProfile =
     params.projectCurrentUserProfile ??

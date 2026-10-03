@@ -28,6 +28,7 @@ import type {
   SessionTranscriptPageReader,
   ReadRecentSessionMessagesResult,
 } from "../session-transcript-read-kernel.js";
+import { attachChatHistoryReplyMessages } from "./chat-history-reply-messages.js";
 
 export type ChatHistoryPageKernelOptions = {
   readers: SessionTranscriptPageReader;
@@ -287,6 +288,7 @@ export async function readChatHistoryPageKernel(
         displaySource: readPage.displaySource,
         maxBytes: maxHistoryBytes,
         readOnly: options.readOnly,
+        sessionStartedAt: entry?.sessionStartedAt,
       });
       if (recoveryContext.length > 0) {
         projected = project([...localMessages, ...recoveryContext]).messages.filter(
@@ -296,8 +298,12 @@ export async function readChatHistoryPageKernel(
     }
     // Numeric offsets do not encode the selected historical transcript source.
     return {
-      messages: augmentChatHistoryWithCanvasBlocks(
-        capChatHistoryAroundMessage({ messages: projected, messageId, maxCost: max }),
+      messages: await attachChatHistoryReplyMessages(
+        augmentChatHistoryWithCanvasBlocks(
+          capChatHistoryAroundMessage({ messages: projected, messageId, maxCost: max }),
+        ),
+        params,
+        options,
       ),
       ...(projection.activity.length ? { activity: projection.activity } : {}),
     };
@@ -328,7 +334,11 @@ export async function readChatHistoryPageKernel(
     !incrementalTail.projection.assistantErrorPending
       ? { deltaCursor: readPage.deltaCursor }
       : {}),
-    messages: augmentChatHistoryWithCanvasBlocks(incrementalTail.projected),
+    messages: await attachChatHistoryReplyMessages(
+      augmentChatHistoryWithCanvasBlocks(incrementalTail.projected),
+      params,
+      options,
+    ),
     ...(incrementalTail.projection.activity.length
       ? { activity: incrementalTail.projection.activity }
       : {}),

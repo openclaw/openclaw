@@ -496,6 +496,12 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           snapshot.entryKeys,
           announce && !this.offsetState.pendingScrollOffset,
         );
+        if (
+          (rowModelChanged || this.messageRowKeysById !== messageRows) &&
+          this.offsetState.scrollCommand?.target === "message"
+        ) {
+          queueMicrotask(() => this.completeMessageReveal());
+        }
         this.messageRowKeysById = messageRows;
         this.prependAnchor.committedMessageRows = renderKeyRows;
         this.renderPreviousRows = () => this.renderCommittedRows(snapshot, false);
@@ -577,7 +583,8 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   }
 
   private canAutoFollow(): boolean {
-    return this.callbacks.canFollowEnd?.() ?? true;
+    const command = this.offsetState.scrollCommand;
+    return (!command || command.target === "end") && (this.callbacks.canFollowEnd?.() ?? true);
   }
 
   scrollToEnd({ source = "manual", behavior = "auto" }: ChatScrollToEndOptions = {}): boolean {
@@ -647,18 +654,22 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   }
 
   revealMessage(messageId: string): boolean {
-    const rowKey = this.messageRowKeysById.get(messageId);
-    const rowIndex = rowKey ? this.rowIndexesByKey.get(rowKey) : undefined;
-    if (rowIndex === undefined) {
+    const rowKey =
+      this.messageRowKeysById.get(messageId) ?? this.candidateMessageRowKeysById.get(messageId);
+    if (!rowKey) {
       return false;
     }
     this.cancelScroll();
+    // History can be projected while scrolling or MCP teardown still holds the old rows.
     this.offsetState.scrollCommand = {
       behavior: resolveScrollBehavior(),
       target: "message",
       messageId,
     };
-    this.virtualizer.scrollToIndex(rowIndex, { align: "center" });
+    const rowIndex = this.rowIndexesByKey.get(rowKey);
+    if (rowIndex !== undefined) {
+      this.virtualizer.scrollToIndex(rowIndex, { align: "center" });
+    }
     this.host.requestUpdate();
     void this.host.updateComplete.then(() => this.completeMessageReveal());
     return true;

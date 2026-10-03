@@ -127,6 +127,11 @@ export function createReadonlySessionHistoryReader(
     }
     return result.value;
   };
+  const subagentCoordination = createBoundSessionHistorySubagentProjection(
+    readSnapshot,
+    target.stateDatabase,
+    () => (sourceDatabases ??= resolveSourceDatabases?.()),
+  );
   return {
     readHistoryRevision: () =>
       readSnapshot((projection) => ({
@@ -170,13 +175,10 @@ export function createReadonlySessionHistoryReader(
     readTranscriptDisplayDelta: (limits: SessionTranscriptRawDeltaLimits) =>
       readSnapshot((projection) => readTranscriptDisplayDeltaFromProjection(projection, limits)),
     ...createSessionTranscriptReader({
+      subagentCoordination,
       resolveTarget: async () => target.transcript,
       readSnapshot: async (_transcript, read) => readSnapshot(read),
     }),
-    subagentCoordination: createBoundSessionHistorySubagentProjection(
-      readSnapshot,
-      target.stateDatabase,
-      () => (sourceDatabases ??= resolveSourceDatabases?.()),
-    ),
+    subagentCoordination,
   };
 }

@@ -198,7 +198,7 @@ export async function readSessionMessageByIdAsync(
   if (usesProcessHeldTranscript(target)) {
     return sessionTranscriptReader.readSessionMessageByIdAsync(target, messageId, options);
   }
-  const capturedOptions = options ? { ...options } : undefined;
+  const capturedOptions = options ? structuredClone(options) : undefined;
   const { readSessionHistoryPageInWorker } =
     await import("../config/sessions/session-history-worker-runtime.js");
   return readSessionHistoryPageInWorker({
