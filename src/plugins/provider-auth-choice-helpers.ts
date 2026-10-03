@@ -77,34 +77,22 @@ function sanitizeConfigPatchValue(value: unknown): unknown {
 }
 
 function mergeConfigPatch<T>(base: T, patch: unknown): T {
-  if (!isPlainRecord(base) || !isPlainRecord(patch)) {
+  if (!isPlainRecord(patch)) {
     return sanitizeConfigPatchValue(patch) as T;
   }
 
-  const next: Record<string, unknown> = { ...base };
+  const next: Record<string, unknown> = isPlainRecord(base) ? { ...base } : {};
   for (const [key, value] of Object.entries(patch)) {
     if (isBlockedObjectKey(key)) {
+      continue;
+    }
+    if (value === undefined) {
+      delete next[key];
       continue;
     }
     next[key] = mergeConfigPatch(next[key], value);
   }
   return next as T;
-}
-
-function deleteUndefinedPatchLeaves<T>(target: T, patch: unknown): T {
-  if (!isPlainRecord(target) || !isPlainRecord(patch)) {
-    return target;
-  }
-
-  const targetRecord = target as Record<string, unknown>;
-  for (const [key, value] of Object.entries(patch)) {
-    if (value === undefined) {
-      delete targetRecord[key];
-      continue;
-    }
-    deleteUndefinedPatchLeaves(targetRecord[key], value);
-  }
-  return target;
 }
 
 function normalizeAgentModelConfigForWrite(value: unknown): unknown {
@@ -305,7 +293,7 @@ export function applyProviderAuthConfigPatch(
   const providerConfigNormalizer =
     options?.providerConfigNormalizer ?? normalizeProviderConfigForConfigDefaults;
   const merged = normalizeConfigModelRefsForWrite(
-    deleteUndefinedPatchLeaves(mergeConfigPatch(cfg, patch), patch),
+    mergeConfigPatch(cfg, patch),
     providerConfigNormalizer,
   );
   if (!options?.replaceDefaultModels || !isPlainRecord(patch)) {

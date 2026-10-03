@@ -6,11 +6,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
-import {
-  switchChatContextWindow,
-  switchChatFastMode,
-  switchChatThinkingLevel,
-} from "./chat-session.ts";
+import { switchChatFastMode, switchChatThinkingLevel } from "./chat-session.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   installTranscriptDomMocks,
@@ -225,7 +221,7 @@ it("does not roll an old thinking patch back onto a replacement physical session
   }
 });
 
-it.each(["thinking", "speed", "context"] as const)(
+it.each(["thinking", "speed"] as const)(
   "preserves a newer same-session %s event when the held local patch fails",
   async (setting) => {
     const initial: GatewaySessionRow = {
@@ -244,16 +240,12 @@ it.each(["thinking", "speed", "context"] as const)(
       updatedAt: 3,
       ...(setting === "thinking"
         ? { thinkingLevel: "medium" }
-        : setting === "speed"
-          ? { fastMode: "auto" as const, effectiveFastMode: true }
-          : { contextWindow: "256k" }),
+        : { fastMode: "auto" as const, effectiveFastMode: true }),
     };
     const pendingFields: Partial<GatewaySessionRow> =
       setting === "thinking"
         ? { thinkingLevel: "off" }
-        : setting === "speed"
-          ? { fastMode: true, effectiveFastMode: true }
-          : { contextWindow: "128k" };
+        : { fastMode: true, effectiveFastMode: true };
     const rows = [initial];
     const acknowledgement = createDeferred<unknown>();
     const patch = vi.fn<GatewayRequestHandler>(() => acknowledgement.promise);
@@ -272,9 +264,7 @@ it.each(["thinking", "speed", "context"] as const)(
       operation =
         setting === "thinking"
           ? switchChatThinkingLevel(state, "off")
-          : setting === "speed"
-            ? switchChatFastMode(state, "on")
-            : switchChatContextWindow(state, "128k");
+          : switchChatFastMode(state, "on");
       expect(patch).toHaveBeenCalledOnce();
       rows[0] = newer;
       emitGatewayEvent("sessions.changed", {
@@ -303,13 +293,9 @@ it.each(["thinking", "speed", "context"] as const)(
   },
 );
 
-it.each(
-  (["thinking", "speed", "context"] as const).flatMap((setting) =>
-    (["delayed", "failed"] as const).map((read) => ({ setting, read })),
-  ),
-)(
-  "retains a standalone $setting ACK when the canonical read is $read",
-  async ({ setting, read }) => {
+it.each(["delayed", "failed"] as const)(
+  "retains a standalone thinking ACK when the canonical read is %s",
+  async (read) => {
     const initial: GatewaySessionRow = {
       key: "agent:main:settings-ack",
       agentId: "main",
@@ -321,12 +307,7 @@ it.each(
       effectiveFastMode: false,
       contextWindow: "64k",
     };
-    const fields =
-      setting === "thinking"
-        ? { thinkingLevel: "off" }
-        : setting === "speed"
-          ? { fastMode: true }
-          : { contextWindow: "128k" };
+    const fields = { thinkingLevel: "off" };
     const acknowledgement = {
       ok: true,
       key: initial.key,

@@ -96,4 +96,34 @@ describe("node worker bundle transfer service", () => {
       service.authorize({ token: prepared.token, artifactKey: prepared.input.build.bundleHash }),
     ).toBeUndefined();
   });
+
+  it("permits 256 serial resume serves and revokes the exhausted grant", () => {
+    const service = createNodeWorkerBundleTransferService({ now: () => 1_000 });
+    try {
+      const prepared = service.prepare({
+        node,
+        gatewayNamespace: "gateway-test",
+        artifact: {
+          install: "bundle",
+          bundleHash: "a".repeat(64),
+          openclawVersion: "2026.8.1",
+          protocolFeatures: [],
+          tarballBytes: 6,
+          tarballSha256: "b".repeat(64),
+          tarballPath: path.join(root, "bundle.tgz"),
+        },
+        isAuthorized: () => true,
+      });
+      const request = { token: prepared.token, artifactKey: prepared.input.build.bundleHash };
+      for (let serve = 0; serve < 256; serve++) {
+        const admission = service.authorize(request);
+        expect(admission).toBeDefined();
+        service.finish(admission!);
+        expect(service.authorizationSignal(admission!).aborted).toBe(true);
+      }
+      expect(service.authorize(request)).toBeUndefined();
+    } finally {
+      service.closeAll();
+    }
+  });
 });

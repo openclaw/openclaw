@@ -17,7 +17,6 @@ import {
 import type { CodexCatalogHome } from "./session-catalog-homes.js";
 import {
   createCodexSessionCatalogListOperation,
-  listCodexSessionCatalog,
   runCatalogListInline,
 } from "./session-catalog-list-operation.js";
 import { readCodexSessionTranscript } from "./session-catalog-listing.js";
@@ -250,7 +249,7 @@ function mapCatalogListOperation(
   };
 }
 
-function registerCodexSessionCatalog(params: {
+export function registerCodexSessionCatalog(params: {
   api: OpenClawPluginApi;
   bindingStore: CodexAppServerBindingStore;
   control: CodexSessionCatalogControlFactory;
@@ -370,6 +369,7 @@ function registerCodexSessionCatalog(params: {
       }
       if (request.hostId.startsWith("node:")) {
         const agentId = resolveRequestAgentId(request.agentId);
+        const { continueNodeCodexSession } = await import("./session-catalog-node-continue.js");
         return await continueNodeCodexSession({
           agentId,
           api: params.api,
@@ -386,6 +386,7 @@ function registerCodexSessionCatalog(params: {
       const { agentId, source, control } = await bindLocalRequest(request);
       source.assertCurrent();
       let upstreamBaseline: (CodexUpstreamBaseline & { connectionFingerprint: string }) | undefined;
+      const { continueLocalCodexSession } = await import("./session-catalog-adoption.js");
       const continued = await continueLocalCodexSession({
         agentId,
         api: params.api,
@@ -431,6 +432,7 @@ function registerCodexSessionCatalog(params: {
       }
       const { agentId, source, control } = await bindLocalRequest(request);
       source.assertCurrent();
+      const { archiveLocalCodexSession } = await import("./session-catalog-archive.js");
       await archiveLocalCodexSession({
         agentId,
         bindingStore: params.bindingStore,
@@ -482,34 +484,4 @@ function registerCodexSessionCatalog(params: {
     },
   };
   params.api.registerSessionCatalog(provider);
-}
-
-export const codexSessionCatalogRuntime = {
-  register: registerCodexSessionCatalog,
-  list: listCodexSessionCatalog,
-  readTranscript: readCodexSessionTranscript,
-  continueLocal: continueLocalCodexSession,
-  continueNode: continueNodeCodexSession,
-  archiveLocal: archiveLocalCodexSession,
-};
-
-async function continueLocalCodexSession(
-  ...args: Parameters<typeof import("./session-catalog-adoption.js").continueLocalCodexSession>
-) {
-  const { continueLocalCodexSession: run } = await import("./session-catalog-adoption.js");
-  return run(...args);
-}
-
-async function archiveLocalCodexSession(
-  ...args: Parameters<typeof import("./session-catalog-archive.js").archiveLocalCodexSession>
-) {
-  const { archiveLocalCodexSession: run } = await import("./session-catalog-archive.js");
-  return run(...args);
-}
-
-async function continueNodeCodexSession(
-  ...args: Parameters<typeof import("./session-catalog-node-continue.js").continueNodeCodexSession>
-) {
-  const { continueNodeCodexSession: run } = await import("./session-catalog-node-continue.js");
-  return run(...args);
 }

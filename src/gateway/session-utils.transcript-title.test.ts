@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -20,8 +21,9 @@ import { buildGatewaySessionRow } from "./session-utils-row.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 const NOW = Date.UTC(2026, 8, 15);
-const NAMED_PAYLOAD_MARKER = "named transcript payload ";
-const NAMED_PAYLOAD = NAMED_PAYLOAD_MARKER.repeat(3_000);
+// Keep the persisted marker distinct from copies of this test in source maps.
+const NAMED_PAYLOAD_MARKER = `named transcript payload ${randomUUID()}`;
+const NAMED_PAYLOAD = NAMED_PAYLOAD_MARKER + "named transcript payload ".repeat(3_000);
 type RowDefinition = {
   entry?: Partial<SessionEntry>;
   key?: string;

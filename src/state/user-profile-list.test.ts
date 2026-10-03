@@ -6,7 +6,8 @@ import {
   hasMultipleSessionSharingIdentities,
   retainUserProfileCatalog,
 } from "./user-profile-list.js";
-import { ensureGatewayOwnerProfile, ensureProfileForEmail, linkEmail } from "./user-profiles.js";
+import { linkEmail } from "./user-profile-writes.worker.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "./user-profiles.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {

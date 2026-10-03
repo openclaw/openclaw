@@ -1,8 +1,9 @@
 // Exercise Google Chat requests through a real guarded HTTP transport.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { deleteGoogleChatMessage, sendGoogleChatMessage } from "./api.js";
 
 const proofToken = "googlechat-transport-test-token";
 
@@ -67,9 +68,6 @@ vi.mock("./auth.js", async (importOriginal) => ({
   getGoogleChatAccessToken: vi.fn(async () => proofToken),
 }));
 
-let deleteGoogleChatMessage: typeof import("./api.js").deleteGoogleChatMessage;
-let sendGoogleChatMessage: typeof import("./api.js").sendGoogleChatMessage;
-
 const account = {
   accountId: "default",
   enabled: true,
@@ -121,10 +119,6 @@ async function withinDeadline<T>(promise: Promise<T>, timeoutMs = 2_000): Promis
 }
 
 describe("Google Chat real guarded transport", () => {
-  beforeAll(async () => {
-    ({ deleteGoogleChatMessage, sendGoogleChatMessage } = await import("./api.js"));
-  });
-
   beforeEach(() => {
     fetchWithSsrFGuardMock.mockClear();
     loopback.baseUrl = "";

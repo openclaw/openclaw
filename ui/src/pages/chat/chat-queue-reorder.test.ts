@@ -30,6 +30,7 @@ function queueHost(items: readonly Partial<ChatQueueItem>[], sessionKey = SESSIO
   const host = makeChatHost({
     sessionKey,
     connected: false,
+    requestHandlers: {},
     agentsList: {
       defaultId: "main",
       mainKey: "main",
@@ -159,7 +160,11 @@ describe("queued message reorder", () => {
     moveQueuedChatMessage(host as never, "queued-3", "queued-1");
     unsubscribe();
 
-    const reloaded = makeChatHost({ sessionKey: SESSION_KEY, connected: false });
+    const reloaded = makeChatHost({
+      sessionKey: SESSION_KEY,
+      connected: false,
+      requestHandlers: {},
+    });
 
     expect(storedOrder(reloaded)).toEqual(["queued-3", "queued-1", "queued-2"]);
   });

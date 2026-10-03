@@ -4,7 +4,7 @@ import Testing
 import WebKit
 @testable import OpenClaw
 
-@Suite(.serialized, .timeLimit(.minutes(1)))
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardSandboxNavigationTests {
     @Test(arguments: [
@@ -166,7 +166,7 @@ struct DashboardSandboxNavigationTests {
     {
         try await DashboardTestWait.document(controller, "document at \(url.path)") { controller.webView.url == url }
         // Callers pass page-script facts that can settle after the load completes.
-        try await DashboardTestWait.state("\(ready) at \(url.path)") {
+        try await TestWait.state("\(ready) at \(url.path)") {
             try await controller.webView.evaluateJavaScript(ready) as? Bool == true
         }
     }
@@ -354,9 +354,9 @@ struct DashboardSandboxNavigationTests {
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
-        controller.loadInBackground(url: dashboardURL, auth: controller.auth)
+        controller.update(url: dashboardURL, auth: controller.auth)
         var rendered = false
-        try await DashboardTestWait.state("sandbox inner document handshake") {
+        try await TestWait.state("sandbox inner document handshake") {
             rendered = await (try? controller.webView.evaluateJavaScript(
                 "document.body.dataset.appReady")) as? String == "true"
             return rendered

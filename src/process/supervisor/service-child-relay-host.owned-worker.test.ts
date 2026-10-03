@@ -4,7 +4,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { NodeWorkerJournalWorker } from "../../node-host/node-worker-journal-worker.js";
 import { NodeWorkerLaunchStore } from "../../node-host/node-worker-launch-store.js";
@@ -27,7 +27,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 it
   .runIf(process.platform === "linux" || process.platform === "darwin")
-  .each([
+  .for([
     "open",
     "close-before-open",
     "stdin-closed",
@@ -35,7 +35,8 @@ it
     "journal-write-failed",
   ] as const)(
   "runs a real owned worker through its IPC start gate and output drain (%s)",
-  async (action) => {
+  { timeout: 20_000 },
+  async (action, { signal }) => {
     const home = tempDirs.make("openclaw-owned-worker-gate-");
     const env = {
       HOME: home,
@@ -155,11 +156,7 @@ it
         }
         await Promise.all([adapter.openStartGate!(), adapter.openStartGate!()]);
         if (action === "delayed-output") {
-          await withTestTimeout(
-            rootExited.promise,
-            5_000,
-            "worker did not exit with buffered output",
-          );
+          await withinTest(rootExited.promise, signal);
           // Leave the host pipe backpressured while the anchor processes root exit.
           await delay(100);
           adapter.onStdout(collectOutput);
@@ -211,5 +208,4 @@ it
       adapter?.dispose();
     }
   },
-  20_000,
 );

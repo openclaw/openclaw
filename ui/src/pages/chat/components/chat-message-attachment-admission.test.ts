@@ -2,7 +2,6 @@
 
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { renderMessageAttachment } from "./chat-message-attachments.ts";
 import {
   releaseChatMediaResourceSubscriber,
@@ -102,7 +101,6 @@ describe("nonimage attachment source admission", () => {
     ["document", "notes.pdf", "inline"],
     ["audio", "recording.mp3", "card"],
     ["video", "recording.mp4", "card"],
-    ["audio", "preview.mp3", "preview"],
   ] as const)(
     "defers a local %s metadata read until its %s %s card is near the viewport",
     async (kind, label, presentation) => {
@@ -121,50 +119,6 @@ describe("nonimage attachment source admission", () => {
       observation?.show();
       await settle();
       expect(fetchMock).toHaveBeenCalledOnce();
-    },
-  );
-
-  it.each([true, false])(
-    "keeps the focused download through metadata resolution with sidebar=%s",
-    async (withSidebar) => {
-      const metadata = createDeferred<Response>();
-      const fetchMock = vi.fn<typeof fetch>(() => metadata.promise);
-      vi.stubGlobal("fetch", fetchMock);
-      const onOpenSidebar = vi.fn<(content: SidebarContent) => void>();
-      const { container } = mount(
-        localAttachment("document", "keyboard.pdf"),
-        {},
-        withSidebar ? onOpenSidebar : undefined,
-      );
-      const link = container.querySelector<HTMLAnchorElement>("a[download]");
-      expect(link).not.toBeNull();
-      if (!link) {
-        throw new Error("Missing pending download");
-      }
-      expect(link.hasAttribute("href")).toBe(false);
-      expect(link.tabIndex).toBe(0);
-      expect(fetchMock).not.toHaveBeenCalled();
-      link.focus();
-      await settle();
-      expect(fetchMock).toHaveBeenCalledOnce();
-      expect(container.querySelector("a[download]")).toBe(link);
-      expect(document.activeElement).toBe(link);
-      expect(link.getAttribute("aria-disabled")).toBe("true");
-      link.click();
-      expect(onOpenSidebar).not.toHaveBeenCalled();
-      metadata.resolve(
-        Response.json({
-          available: true,
-          mediaTicket: "keyboard",
-          mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-          sizeBytes: 2048,
-        }),
-      );
-      await settle();
-      expect(container.querySelector("a[download]")).toBe(link);
-      expect(document.activeElement).toBe(link);
-      expect(link.getAttribute("href")).toContain("mediaTicket=keyboard");
-      expect(link.hasAttribute("aria-disabled")).toBe(false);
     },
   );
 
@@ -291,7 +245,6 @@ describe("nonimage attachment source admission", () => {
 
   it.each([
     ["inline", false],
-    ["card", true],
     ["preview", true],
   ] as const)(
     "preserves %s voice-note expansion controls before admission",

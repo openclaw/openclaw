@@ -6,26 +6,6 @@ export const MAX_OTEL_CONTENT_ARRAY_ITEMS = 200;
 const MAX_OTEL_ERROR_MESSAGE_CHARS = 4 * 1024;
 const PRELOADED_OTEL_SDK_ENV = "OPENCLAW_OTEL_PRELOADED";
 
-export type OtelContentCapturePolicy = {
-  inputMessages: boolean;
-  outputMessages: boolean;
-  toolInputs: boolean;
-  toolOutputs: boolean;
-  systemPrompt: boolean;
-  toolDefinitions: boolean;
-  logBodies: boolean;
-};
-
-const NO_CONTENT_CAPTURE: OtelContentCapturePolicy = {
-  inputMessages: false,
-  outputMessages: false,
-  toolInputs: false,
-  toolOutputs: false,
-  systemPrompt: false,
-  toolDefinitions: false,
-  logBodies: false,
-};
-
 export function normalizeOtelLogString(value: string, maxChars: number): string {
   const redacted = redactSensitiveText(value);
   return redacted.length > maxChars
@@ -39,20 +19,6 @@ export function normalizeOtelErrorMessage(value: string | undefined): string | u
   }
   const normalized = normalizeOtelLogString(value.trim(), MAX_OTEL_ERROR_MESSAGE_CHARS);
   return normalized || undefined;
-}
-
-export function resolveContentCapturePolicy(value: unknown): OtelContentCapturePolicy {
-  return value === true
-    ? {
-        inputMessages: true,
-        outputMessages: true,
-        toolInputs: true,
-        toolOutputs: true,
-        systemPrompt: false,
-        toolDefinitions: true,
-        logBodies: true,
-      }
-    : NO_CONTENT_CAPTURE;
 }
 
 export function hasPreloadedOtelSdk(): boolean {

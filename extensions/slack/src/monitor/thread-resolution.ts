@@ -101,19 +101,16 @@ export function createSlackThreadTsResolver(params: {
     if (!entry) {
       return undefined;
     }
-    if (entry.expiresAt === 0) {
-      cache.delete(key);
-      cache.set(key, entry);
-      return entry.threadTs;
-    }
-    const normalizedNow = asDateTimestampMs(now);
-    if (
-      normalizedNow === undefined ||
-      asDateTimestampMs(entry.expiresAt) === undefined ||
-      entry.expiresAt <= normalizedNow
-    ) {
-      cache.delete(key);
-      return undefined;
+    if (entry.expiresAt !== 0) {
+      const normalizedNow = asDateTimestampMs(now);
+      if (
+        normalizedNow === undefined ||
+        asDateTimestampMs(entry.expiresAt) === undefined ||
+        entry.expiresAt <= normalizedNow
+      ) {
+        cache.delete(key);
+        return undefined;
+      }
     }
     cache.delete(key);
     cache.set(key, entry);

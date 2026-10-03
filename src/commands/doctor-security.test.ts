@@ -7,13 +7,15 @@ import type { OpenClawConfig } from "../config/config.js";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
-import { saveExecApprovals } from "../infra/exec-approvals-store.js";
-import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
+import {
+  saveExecApprovals,
+  testing as execApprovalsStoreTesting,
+} from "../infra/exec-approvals-store.test-support.js";
 import * as auditStore from "../secrets/audit-store.js";
 import { runSecretsAudit } from "../secrets/audit.js";
 import { readSecretStoreValue, writeSecretStoreEntry } from "../secrets/store/secret-store.js";
 import {
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
@@ -72,7 +74,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
         `${JSON.stringify({ version: 1 })}\n`,
         "utf8",
       );
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawStateDatabaseAsync();
       execApprovalsStoreTesting.reset();
 
       const findings = await collectSecurityWarnings({ approvals: { exec: { enabled: false } } });
@@ -92,13 +94,13 @@ describe("noteSecurityWarnings gateway exposure", () => {
     await withTestDir({ prefix: "openclaw-doctor-security-" }, async (home) => {
       vi.stubEnv("HOME", home);
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, ".openclaw"));
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawStateDatabaseAsync();
       execApprovalsStoreTesting.reset();
       saveExecApprovals(file as ExecApprovalsFile);
       try {
         await run();
       } finally {
-        closeOpenClawStateDatabaseForTest();
+        await closeOpenClawStateDatabaseAsync();
         execApprovalsStoreTesting.reset();
       }
     });
@@ -466,7 +468,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
   it("names non-generatable redacted store credentials and leaves them unavailable until replaced", async () => {
     await withExecApprovalsFile({ version: 1 }, async () => {
       const entry = { scope: { kind: "team" as const }, name: "SYNTHETIC_PROVIDER_KEY" };
-      writeSecretStoreEntry({
+      await writeSecretStoreEntry({
         ...entry,
         value: "synthetic-initial-key",
         kind: "secret",
@@ -486,7 +488,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
         }),
       );
       expect(lastMessage()).toContain("unavailable until replaced");
-      expect(readSecretStoreValue(entry)).toEqual({ ok: true, value: REDACTED_SENTINEL });
+      expect(await readSecretStoreValue(entry)).toEqual({ ok: true, value: REDACTED_SENTINEL });
     });
   });
 

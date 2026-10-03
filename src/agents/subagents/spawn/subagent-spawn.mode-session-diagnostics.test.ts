@@ -19,7 +19,7 @@ describe('spawnSubagentDirect mode="session" diagnostics (#67400)', () => {
       getRuntimeConfig: () => createSubagentSpawnTestConfig(os.tmpdir()),
       workspaceDir: os.tmpdir(),
     }));
-    resetSubagentRegistryForTests();
+    await resetSubagentRegistryForTests();
   });
 
   it("names usable alternatives before a thread retry", async () => {

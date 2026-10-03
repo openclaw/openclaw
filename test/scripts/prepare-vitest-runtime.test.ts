@@ -289,3 +289,17 @@ it("joins a canceled compiler before releasing checkout ownership", async () => 
   const next = await acquireDistArtifactOwnership(root);
   await next.release();
 });
+
+it("keeps UI preparation current-head even after another runtime group was prepared", async () => {
+  commands.prepare.mockResolvedValueOnce(7);
+  expect(
+    await prepareVitestRuntime([{ configs: ["test/vitest/vitest.ui-e2e.config.ts"] }], env, {
+      runtimePrepared: true,
+    }),
+  ).toBe(7);
+  expect(commands.prepare).toHaveBeenCalledWith(
+    expect.objectContaining({
+      args: ["scripts/prepare-vitest-runtime.mjs", "--require-current-head"],
+    }),
+  );
+});

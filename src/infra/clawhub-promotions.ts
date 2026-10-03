@@ -2,6 +2,7 @@ import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-co
 import {
   fetchClawHubJson,
   readClawHubBooleanField,
+  readClawHubNonEmptyStringFields,
   readClawHubStringArrayField,
   readClawHubStringField,
   readRequiredClawHubBooleanField,
@@ -54,11 +55,8 @@ function parseClawHubPromotionModel(value: unknown, context: string): ClawHubPro
   }
   const model: ClawHubPromotionModel = {
     modelRef,
+    ...readClawHubNonEmptyStringFields(value, ["alias"], context),
   };
-  const alias = readClawHubStringField(value, "alias", context);
-  if (alias) {
-    model.alias = alias;
-  }
   const suggestedDefault = readClawHubBooleanField(value, "suggestedDefault", context);
   if (suggestedDefault !== undefined) {
     model.suggestedDefault = suggestedDefault;
@@ -97,14 +95,12 @@ function parseClawHubPromotion(value: unknown): ClawHubPromotion {
     startsAt,
     endsAt,
     models: modelsRaw.map((entry) => parseClawHubPromotionModel(entry, context)),
+    ...readClawHubNonEmptyStringFields(
+      value,
+      ["sponsor", "signupUrl", "docsUrl", "launchPageUrl"],
+      context,
+    ),
   };
-  const optionalStrings = ["sponsor", "signupUrl", "docsUrl", "launchPageUrl"] as const;
-  for (const field of optionalStrings) {
-    const parsed = readClawHubStringField(value, field, context);
-    if (parsed) {
-      promotion[field] = parsed;
-    }
-  }
   // Identifier fields are echoed into error messages and config; hold them to
   // a safe identifier grammar so remote payloads cannot smuggle terminal
   // controls or whitespace through failure paths.

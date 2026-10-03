@@ -13,6 +13,7 @@ import { assertLegacyGatewayStoppedForMaintenance } from "../infra/gateway-lock-
 import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
+import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 import { DoctorMaintenanceRefusalError, UpdateDoctorError } from "../infra/update-doctor-result.js";
@@ -249,12 +250,13 @@ export async function beginDoctorMaintenance(
             : {}),
         }),
       );
-      if (health.waitOutcome === "still-starting") {
-        const warning = renderRestartDiagnostics(health).join(" ");
-        warn(warning);
+      if (health.outcome === "starting") {
+        warn(
+          `Warning: Doctor repair complete; Gateway is still starting — check \`${formatCliCommand("openclaw gateway status", state.env)}\` in a minute.`,
+        );
         return;
       }
-      if (!health.healthy) {
+      if (health.outcome !== "ready") {
         throw doctorGatewayMaintenanceError({
           env,
           phase: "gateway-restoration",
@@ -382,7 +384,10 @@ export async function beginDoctorMaintenance(
     throw refusal;
   };
   // Admission can stop the service before returning a maintenance handle.
-  const exit = holdDoctorMaintenanceExit();
+  const exit = holdDoctorMaintenanceExit((message) => {
+    warnings.push(message);
+    params.runtime.error(message);
+  });
   const state = createDoctorMaintenanceState({
     params,
     env,
@@ -590,7 +595,7 @@ export async function beginDoctorMaintenance(
     get databaseWrites() {
       return state.receipt;
     },
-    run: <T>(operation: () => T) => state.resources!.run(operation),
+    run: <T>(operation: () => T) => state.run(operation),
     releaseState: () => settle(releaseState),
     async repairSqliteNoCow(paths: readonly string[]) {
       if (this !== maintenance || custody !== "held") {
@@ -603,6 +608,21 @@ export async function beginDoctorMaintenance(
       for (const message of result.warnings) {
         warn(message);
       }
+    },
+    async enableSqliteReclamation(agents: readonly AgentDatabaseMigrationTarget[]) {
+      if (this !== maintenance || custody !== "held") {
+        throw new Error("SQLite reclamation requires its original live maintenance owner.");
+      }
+      const result = await settle(() => state.enableSqliteReclamation(agents));
+      for (const message of result.warnings) {
+        warn(message);
+      }
+    },
+    async cleanupRetainedRuntimes() {
+      if (this !== maintenance || custody !== "held") {
+        throw new Error("Updater runtime cleanup requires its original live maintenance owner.");
+      }
+      await settle(() => state.cleanupRetainedRuntimes(serviceUpdateVerdict !== undefined));
     },
     async release() {
       if (this !== maintenance) {

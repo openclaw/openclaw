@@ -67,6 +67,8 @@ import {
   notifyLlmRequestActivity,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
+  buildAssistantMessage,
+  coerceTransportToolCallArguments,
   describeToolResultMediaPlaceholder,
   createEmptyTransportUsage,
   failTransportStream,
@@ -142,16 +144,12 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
   const stream = new AssistantMessageEventStream();
 
   void (async () => {
-    const output: AssistantMessage = {
-      role: "assistant",
+    const output = buildAssistantMessage({
+      model: { api: "bedrock-converse-stream", provider: model.provider, id: model.id },
       content: [],
-      api: "bedrock-converse-stream",
-      provider: model.provider,
-      model: model.id,
       usage: createEmptyTransportUsage(),
       stopReason: "stop",
-      timestamp: Date.now(),
-    };
+    });
 
     const blocks = output.content as Block[];
     const pendingToolCallEnds: PendingBedrockToolCall[] = [];
@@ -428,83 +426,54 @@ function resolveSimpleBedrockOptions(
   model: Model<"bedrock-converse-stream">,
   options?: SimpleStreamOptions,
 ): BedrockOptions {
-  const bedrockOptions = options as BedrockOptions | undefined;
-  const base = {
-    ...bedrockOptions,
+  const base: BedrockOptions = {
+    ...options,
     ...buildBaseOptions(model, options, undefined),
   };
   if (requiresMandatoryAdaptiveThinking(model)) {
-    return {
-      ...base,
-      maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens),
-      reasoning: options?.reasoning,
-      thinkingBudgets: options?.thinkingBudgets,
-    } satisfies BedrockOptions;
+    base.maxTokens = resolveAdaptiveBedrockMaxTokens(model, base.maxTokens);
+    base.reasoning = options?.reasoning;
+    base.thinkingBudgets = options?.thinkingBudgets;
+    return base;
   }
-  if (!options?.reasoning) {
-    const reasoning = resolveClaudeOpus5ModelIdentity(model) !== undefined ? "high" : undefined;
-    return {
-      ...base,
-      ...(reasoning !== undefined || supportsAdaptiveThinking(model)
-        ? { maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens) }
-        : {}),
-      reasoning,
-    } satisfies BedrockOptions;
-  }
-
-  if (options.reasoning === "off") {
-    return {
-      ...base,
-      ...(supportsAdaptiveThinking(model)
-        ? { maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens) }
-        : {}),
-      reasoning: "off",
-    } satisfies BedrockOptions;
+  if (!options?.reasoning || options.reasoning === "off") {
+    base.reasoning =
+      options?.reasoning === "off"
+        ? "off"
+        : resolveClaudeOpus5ModelIdentity(model) !== undefined
+          ? "high"
+          : undefined;
+    if (base.reasoning === "high" || supportsAdaptiveThinking(model)) {
+      base.maxTokens = resolveAdaptiveBedrockMaxTokens(model, base.maxTokens);
+    }
+    return base;
   }
 
+  base.reasoning = options.reasoning;
+  base.thinkingBudgets = options.thinkingBudgets;
   if (isAnthropicClaudeModel(model)) {
     if (supportsAdaptiveThinking(model)) {
-      return {
-        ...base,
-        maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens),
-        reasoning: options.reasoning,
-        thinkingBudgets: options.thinkingBudgets,
-      } satisfies BedrockOptions;
+      base.maxTokens = resolveAdaptiveBedrockMaxTokens(model, base.maxTokens);
+    } else {
+      // An absent caller cap lets the helper fit thinking within the model cap.
+      const adjusted = adjustMaxTokensForThinking(
+        base.maxTokens,
+        model.maxTokens,
+        options.reasoning,
+        options.thinkingBudgets,
+      );
+      base.maxTokens = adjusted.maxTokens;
+      if (adjusted.thinkingBudget < 1024) {
+        base.reasoning = "off";
+      } else {
+        base.thinkingBudgets = {
+          ...options.thinkingBudgets,
+          [clampReasoning(options.reasoning)!]: adjusted.thinkingBudget,
+        };
+      }
     }
-
-    // Undefined means the caller did not request an output cap; let the helper use the model cap.
-    // Do not coerce to 0 here, or the thinking budget would become the entire maxTokens value.
-    const adjusted = adjustMaxTokensForThinking(
-      base.maxTokens,
-      model.maxTokens,
-      options.reasoning,
-      options.thinkingBudgets,
-    );
-
-    if (adjusted.thinkingBudget < 1024) {
-      return {
-        ...base,
-        maxTokens: adjusted.maxTokens,
-        reasoning: "off",
-      } satisfies BedrockOptions;
-    }
-
-    return {
-      ...base,
-      maxTokens: adjusted.maxTokens,
-      reasoning: options.reasoning,
-      thinkingBudgets: {
-        ...options.thinkingBudgets,
-        [clampReasoning(options.reasoning)!]: adjusted.thinkingBudget,
-      },
-    } satisfies BedrockOptions;
   }
-
-  return {
-    ...base,
-    reasoning: options.reasoning,
-    thinkingBudgets: options.thinkingBudgets,
-  } satisfies BedrockOptions;
+  return base;
 }
 
 function handleContentBlockStart(
@@ -988,7 +957,11 @@ function convertMessages(
               break;
             case "toolCall":
               contentBlocks.push({
-                toolUse: { toolUseId: c.id, name: c.name, input: c.arguments as DocumentType },
+                toolUse: {
+                  toolUseId: c.id,
+                  name: c.name,
+                  input: coerceTransportToolCallArguments(c.arguments) as DocumentType,
+                },
               });
               break;
             case "thinking": {
@@ -1168,11 +1141,6 @@ function mapStopReason(reason: string | undefined): {
       return { stopReason: "length" };
     case BedrockStopReason.TOOL_USE:
       return { stopReason: "toolUse" };
-    case BedrockStopReason.CONTENT_FILTERED:
-    case BedrockStopReason.GUARDRAIL_INTERVENED:
-    case BedrockStopReason.MALFORMED_MODEL_OUTPUT:
-    case BedrockStopReason.MALFORMED_TOOL_USE:
-      return { stopReason: "error", errorMessage: reason };
     default:
       return reason ? { stopReason: "error", errorMessage: reason } : { stopReason: "error" };
   }
@@ -1206,19 +1174,10 @@ function hasConfiguredBedrockProfile(options: BedrockOptions): boolean {
 }
 
 function getStandardBedrockEndpointRegion(baseUrl: string | undefined): string | undefined {
-  if (!baseUrl) {
-    return undefined;
-  }
-
-  try {
-    const { hostname } = new URL(baseUrl);
-    const match = hostname
-      .toLowerCase()
-      .match(/^bedrock-runtime(?:-fips)?\.([a-z0-9-]+)\.amazonaws\.com(?:\.cn)?$/);
-    return match?.[1];
-  } catch {
-    return undefined;
-  }
+  const hostname = baseUrl ? URL.parse(baseUrl)?.hostname : undefined;
+  return hostname
+    ?.toLowerCase()
+    .match(/^bedrock-runtime(?:-fips)?\.([a-z0-9-]+)\.amazonaws\.com(?:\.cn)?$/)?.[1];
 }
 
 function isGovCloudBedrockTarget(

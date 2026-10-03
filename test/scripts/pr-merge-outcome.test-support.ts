@@ -311,6 +311,14 @@ if(route==="watch") {
 if(route==="sleep") {s.settlementSleeps.push(Number(args[0]));save();process.exit(0);}
 s.nodeArgs=process.execArgv;
 s.calls.push([route,...args]);save();
+let inputPayload;
+if(args[0]==="api"&&args.includes("--input")) {
+  const inputPath=args[args.indexOf("--input")+1];
+  if(inputPath==="-"||!require("node:path").isAbsolute(inputPath)) fail("API payload must use an absolute file, not stdin");
+  if(!fs.statSync(inputPath).isFile()) fail("API payload file is unavailable");
+  if(fs.readFileSync(0).length) fail("API payload leaked to child stdin");
+  inputPayload=fs.readFileSync(inputPath,"utf8");
+}
 if(args.some(arg=>arg.includes("{owner}")||arg.includes("{repo}"))) fail("protected unresolved repository placeholder");
 const main=()=>git(["--git-dir="+process.env.FIXTURE_REMOTE,"rev-parse","refs/heads/main"]);
 const quota=()=>{
@@ -404,7 +412,7 @@ else if(args[0]==="api"&&args.some(arg=>new RegExp("^repos/[^/]+/[^/]+$").test(a
   if(!args.includes("Cache-Control: max-age=0")) fail("missing live repository header");
   if(!args.includes("--hostname")) fail("missing repository hostname");
   if(s.repoAuthorityUnavailable) fail("repository metadata unavailable");
-  if(s.restDispatchChange) {
+  if(s.restDispatchChange&&s.restDispatchChange!=="projection") {
     const retained=spawnSync("git",["show","refs/openclaw/pr-merge-outcomes/123:outcome.json"],{cwd:process.env.FIXTURE_REPO,env:process.env,encoding:"utf8"});
     if(retained.status===0) {
       const intent=JSON.parse(retained.stdout);
@@ -444,14 +452,15 @@ else if(args[0]==="api"&&args.includes("repos/fixture/repo/pulls/123")) {
     (s.quotaTriggered||(s.graphqlMergeProjection&&s.observationReads>0))) {
     applyRestObservation();
   }
+  const pendingDispatchProjection=s.restDispatchChange==="projection"&&process.env.OCTOPOOL_DIAGNOSTICS==="1";
   const record={node_id:s.pr.id,number:s.pr.number,html_url:s.pr.url,title:"Fixture repair",body:s.previewBody,
     state:s.pr.state==="OPEN"?"open":"closed",merged:s.pr.state==="MERGED",merged_at:s.pr.state==="MERGED"?"2026-09-20T00:00:00Z":null,
     merge_commit_sha:s.pr.mergeCommit?.oid??null,draft:s.pr.isDraft,
     auto_merge:s.pr.autoMergeRequest?{merge_method:s.pr.autoMergeRequest.mergeMethod.toLowerCase()}:null,
     head:{sha:s.pr.headRefOid,ref:s.pr.headRefName,repo:s.priorCi.enabled?{...s.repoAuthority,...s.priorCi.sourceRepository}:s.repoAuthority},base:{ref:s.pr.baseRefName,sha:main(),repo:s.repoAuthority},
     user:{id:1001,login:s.pr.author.login,type:s.pr.author.__typename},created_at:"2026-09-20T00:00:00Z",
-    mergeable:s.pr.mergeable==="UNKNOWN"?null:s.pr.mergeable==="MERGEABLE",
-    mergeable_state:s.pooledMergeBlocked&&!args.includes("--include")?"blocked":s.pr.mergeStateStatus.toLowerCase()};
+    mergeable:pendingDispatchProjection?null:s.pr.mergeable==="UNKNOWN"?null:s.pr.mergeable==="MERGEABLE",
+    mergeable_state:pendingDispatchProjection?"unknown":s.pooledMergeBlocked&&!args.includes("--include")?"blocked":s.pr.mergeStateStatus.toLowerCase()};
   out(args.includes("--include")?"HTTP/2.0 200 OK\\n\\n"+JSON.stringify(record):record);
 }
 else if(args[0]==="api"&&args.includes("repos/fixture/repo/git/ref/heads/main")) {
@@ -555,14 +564,14 @@ else if(args[0]==="pr"&&args[1]==="view") {
   s.mutations++;
   if(s.quotaAt==="mutation") {s.quotaAt="observe";quota();}
   if(restMerge) {
-    if(!args.includes("PUT")||args[args.indexOf("--input")+1]!=="-") fail("invalid REST merge request");
-    s.restMergePayload=JSON.parse(fs.readFileSync(0,"utf8"));
+    if(!args.includes("PUT")) fail("invalid REST merge request");
+    s.restMergePayload=JSON.parse(inputPayload);
     if(s.restMergePayload.sha!==s.pr.headRefOid||s.restMergePayload.merge_method!=="squash") fail("unpinned REST merge request");
     s.mergeBody=s.restMergePayload.commit_message;
     if(s.restMergeRefusal) {save();process.stdout.write(s.restMergeRefusal);process.exit(1);}
   }
   if(graphqlMerge) {
-    const payload=JSON.parse(fs.readFileSync(0,"utf8"));
+    const payload=JSON.parse(inputPayload);
     if(payload.query!=="mutation PullRequestMerge($input:MergePullRequestInput!){mergePullRequest(input:$input){clientMutationId}}") fail("invalid direct merge mutation");
     const input=payload.variables.input;
     if(JSON.stringify(Object.keys(input).sort())!==JSON.stringify(["commitBody","expectedHeadOid","mergeMethod","pullRequestId"])||
@@ -706,7 +715,8 @@ pr_gh() {
 pr_gh_plain() {
   if [ "$1" = repo-authority ] || [ "$1" = issue-comments ] || [ "$1" = writer-login ]; then
     pr_gh_run plain "$@"
-  elif { [ "$1" = pr ] && [ "$2" = view ]; } ||
+  elif { [ "$1" = api ] && [[ " $* " == *" --input "* ]]; } ||
+    { [ "$1" = pr ] && [ "$2" = view ]; } ||
     { [ "$FIXTURE_REAL_GH" = true ] && { [ "$1" = pr ] && { [ "$2" = checks ] || [ "$2" = merge ]; } || [[ " $* " == *" graphql "* ]]; }; }; then
     pr_gh_run "\${pr_gh_quota_route:-plain}" "$@"
   else

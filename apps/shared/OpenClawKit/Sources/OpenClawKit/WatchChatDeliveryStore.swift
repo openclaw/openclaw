@@ -192,11 +192,7 @@ public actor OpenClawWatchChatDeliveryStore {
     }
 
     private static func json(_ value: some Encodable) throws -> String {
-        let data = try OpenClawWatchChatDeliveryCodec.canonicalData(value)
-        guard let json = String(bytes: data, encoding: .utf8) else {
-            throw OpenClawNativeStateError("Could not encode the Watch delivery record")
-        }
-        return json
+        try String(bytes: OpenClawWatchChatDeliveryCodec.canonicalData(value), encoding: .utf8)!
     }
 
     private func entry(

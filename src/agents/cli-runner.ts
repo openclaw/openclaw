@@ -1,6 +1,4 @@
-/**
- * Top-level CLI-backed agent runner orchestration.
- */
+import { isSilentReplyPayloadText } from "../auto-reply/tokens.js";
 import { runWithCliHistoryWriter } from "../config/sessions/cli-history-boundary.js";
 import { prepareCronRootSessionGeneration } from "../config/sessions/session-delivery-generation.js";
 import { buildGenericCliContextEngineHostSupport } from "../context-engine/host-compat.js";
@@ -17,8 +15,11 @@ import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
 } from "../plugins/hook-agent-context.js";
-import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import {
+  hasAcceptedSessionSpawn,
+  hasCompletionMessageSessionSpawn,
+} from "./accepted-session-spawn.js";
 import { bindOperatorModelExecution, readRunOperatorAuthority } from "./admitted-run-context.js";
 import { runCliBeforeAgentReply } from "./cli-runner/before-agent-reply.js";
 import { runCliCleanup } from "./cli-runner/cleanup.js";
@@ -67,6 +68,9 @@ import {
 } from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
+import { resolveSourceReplyDelivery } from "./embedded-agent-runner/delivery-evidence.js";
+import { recordModelFallbackStop } from "./failover-error.js";
+import { runBeforeAgentRunGate } from "./harness/before-agent-run.js";
 import { bootstrapHarnessContextEngine } from "./harness/context-engine-lifecycle.js";
 import { buildAgentHookContext } from "./harness/hook-context.js";
 import { buildAgentHookConversationMessages } from "./harness/hook-history.js";
@@ -79,12 +83,10 @@ import { resolveReplyExpectation } from "./reply-completion.js";
 const log = createSubsystemLogger("agents/cli-runner");
 const defaultCliRunnerDeps = { ...cliRunnerDeps };
 
-/** Overrides top-level CLI runner dependencies for tests. */
 export function setCliRunnerTestDeps(overrides: Partial<typeof cliRunnerDeps>): void {
   Object.assign(cliRunnerDeps, overrides);
 }
 
-/** Restores default top-level CLI runner dependencies after tests. */
 export function restoreCliRunnerTestDeps(): void {
   Object.assign(cliRunnerDeps, defaultCliRunnerDeps);
 }
@@ -118,7 +120,6 @@ export async function isCliBindingFlushed(
   return false;
 }
 
-/** Prepares and runs one CLI-backed agent turn. */
 export function runCliAgent(paramsInput: RunCliAgentParams): Promise<EmbeddedAgentRunResult> {
   const lifecycleGeneration =
     paramsInput.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(paramsInput.runId);
@@ -219,7 +220,6 @@ async function runCliAgentInternal(
   }
 }
 
-/** Runs an already-prepared CLI agent context through hooks and execution. */
 export async function runPreparedCliAgent(
   context: PreparedCliRunContext,
   diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
@@ -386,8 +386,12 @@ async function runPreparedCliAgentOwned(
       ? (sourceReplyMirror.visibleText ?? "")
       : output.text.trim();
     if (
-      !assistantText &&
-      !output.didSendViaMessagingTool &&
+      (!output.text.trim() || isSilentReplyPayloadText(output.text)) &&
+      resolveSourceReplyDelivery(output) === "missing" &&
+      !output.toolMediaUrls?.length &&
+      !output.yielded &&
+      !hasCompletionMessageSessionSpawn(output.acceptedSessionSpawns) &&
+      !output.terminalInterruption &&
       resolveReplyExpectation(params) === "required" &&
       // Strict isolated completion owns valid-empty output after reasoning is removed.
       !(isolatedCompletion && params.outputTextPolicy === "strict-visible")
@@ -408,14 +412,19 @@ async function runPreparedCliAgentOwned(
         ].join(" ");
         cliBackendLog.warn(`cli empty response diagnostics: ${diagnostics}`);
       }
-      throw attachCliMessagingDeliveryEvidence(
-        createCliFailoverError(
-          "CLI backend returned an empty response.",
-          "empty_response",
-          cliFailoverContext,
-        ),
-        output,
+      const error = createCliFailoverError(
+        "CLI backend returned an empty response.",
+        "empty_response",
+        cliFailoverContext,
       );
+      if (
+        (output.toolSummary?.calls ?? 0) > 0 ||
+        hasAcceptedSessionSpawn(output.acceptedSessionSpawns)
+      ) {
+        // Missing a final answer cannot authorize replaying completed tool effects.
+        recordModelFallbackStop(error);
+      }
+      throw attachCliMessagingDeliveryEvidence(error, output);
     }
     const assistantTexts = assistantText ? [assistantText] : [];
     const lastAssistant =
@@ -597,41 +606,21 @@ async function runPreparedCliAgentOwned(
       });
     };
 
-    if (hasBeforeAgentRunHooks && hookRunner) {
-      let beforeRunResult:
-        | Awaited<ReturnType<NonNullable<typeof hookRunner>["runBeforeAgentRun"]>>
-        | undefined;
-      try {
-        beforeRunResult = await hookRunner.runBeforeAgentRun(
-          {
-            prompt: promptForHooks,
-            systemPrompt: context.systemPrompt,
-            messages: buildAgentHookConversationMessages({
-              historyMessages,
-              currentTurnMessages: [],
-            }),
-            channelId: hookContext.channelId,
-            accountId: params.agentAccountId,
-            senderId: params.senderId ?? undefined,
-            senderIsOwner: params.senderIsOwner ?? undefined,
-          },
-          buildAgentHookContext(hookContext),
-        );
-      } catch {
-        const blockMessage = resolveBlockMessage(
-          { outcome: "block", reason: "before_agent_run hook failed" },
-          { blockedBy: "before_agent_run" },
-        );
-        return finishBlockedRun(blockMessage, "before_agent_run");
-      }
-
-      const beforeRunDecision = beforeRunResult?.decision;
-      if (beforeRunDecision?.outcome === "block") {
-        const blockMessage = resolveBlockMessage(beforeRunDecision, {
-          blockedBy: beforeRunResult?.pluginId ?? "unknown",
-        });
-        return finishBlockedRun(blockMessage, beforeRunResult?.pluginId ?? "unknown");
-      }
+    const block = await runBeforeAgentRunGate(
+      hookRunner,
+      {
+        prompt: promptForHooks,
+        systemPrompt: context.systemPrompt,
+        messages: buildAgentHookConversationMessages({ historyMessages, currentTurnMessages: [] }),
+        channelId: hookContext.channelId,
+        accountId: params.agentAccountId,
+        senderId: params.senderId ?? undefined,
+        senderIsOwner: params.senderIsOwner,
+      },
+      buildAgentHookContext(hookContext),
+    );
+    if (block) {
+      return finishBlockedRun(block.message, block.blockedBy);
     }
 
     userTurnHandled = await persistApprovedCliUserTurnTranscript(params);

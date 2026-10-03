@@ -9,13 +9,17 @@ import { useTempSessionsFixture } from "./test-helpers.js";
 
 const fixture = useTempSessionsFixture("openclaw-history-window-");
 
-it("rebases a retained anchor into the current reset window", async () => {
-  const scope = {
+function createScope(sessionId: string) {
+  return {
     agentId: "main",
-    sessionId: "kept-window",
-    sessionKey: "agent:main:kept-window",
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
     storePath: fixture.storePath(),
   };
+}
+
+it("rebases a retained anchor into the current reset window", async () => {
+  const scope = createScope("kept-window");
   await replaceTranscriptEvents(
     scope,
     [1, 2, 3].map((seq) => ({
@@ -51,12 +55,7 @@ it("rebases a retained anchor into the current reset window", async () => {
 });
 
 it("continues an ID-less history window across harmless appends", async () => {
-  const scope = {
-    agentId: "main",
-    sessionId: "history-events-test",
-    sessionKey: "agent:main:history-events-test",
-    storePath: fixture.storePath(),
-  };
+  const scope = createScope("history-events-test");
   const originalEvents = [
     { message: { role: "user", content: "older legacy row" } },
     { message: { role: "assistant", content: "newer legacy row" } },
@@ -103,12 +102,7 @@ it("continues an ID-less history window across harmless appends", async () => {
 });
 
 it.each(["reset", "replacement"])("recovers a stale history window after %s", async (change) => {
-  const scope = {
-    agentId: "main",
-    sessionId: "stale-window",
-    sessionKey: "agent:main:stale-window",
-    storePath: fixture.storePath(),
-  };
+  const scope = createScope("stale-window");
   await replaceTranscriptEvents(scope, [
     { type: "message", id: "old", parentId: null, message: { role: "user", content: "old" } },
   ]);

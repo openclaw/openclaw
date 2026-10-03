@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-/** Implements ACP subagent/session spawning, binding, limits, and parent-stream setup. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AcpTurnAttachment } from "../../../acp/control-plane/manager.types.js";
 import { cleanupFailedAcpSpawn } from "../../../acp/control-plane/spawn.js";
@@ -84,6 +83,7 @@ import {
   resolveTargetAcpAgentId,
 } from "./acp-spawn-target.js";
 import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
+import { captureSpawnParentLineage } from "./spawn-parent-lineage.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -117,6 +117,9 @@ type SpawnAcpContext = {
   onSpawnEffectsStart?: () => void;
   assertActive?: () => void;
   agentSessionKey?: string;
+  /** Trusted parent tool construction facts; never read from model arguments. */
+  senderIsOwner?: boolean;
+  expectedParentSessionId?: string;
   requesterTurnRunId?: string;
   completionOwnerKey?: string;
   requesterAgentIdOverride?: string;
@@ -454,26 +457,36 @@ export async function spawnAcpDirect(
         storePath: parentStorePath,
       });
       ctx.assertActive?.();
-      const inheritedGitContributorProfileIds = isIncognitoSessionKey(requesterInternalKey)
+      const readParentEntry = () =>
+        withSessionEntryReadOnlyInWorker(
+          {
+            agentId: requesterAgentId,
+            sessionKey: parentTarget.canonicalKey,
+            storePath: parentStorePath,
+          },
+          () => ctx.assertActive?.(),
+          async (read) => {
+            if (!read.ok) {
+              throw read.error;
+            }
+            return read.value;
+          },
+        );
+      const parentEntry = isIncognitoSessionKey(requesterInternalKey)
         ? undefined
-        : await withSessionEntryReadOnlyInWorker(
-            {
-              agentId: requesterAgentId,
-              sessionKey: parentTarget.canonicalKey,
-              storePath: parentStorePath,
-            },
-            () => ctx.assertActive?.(),
-            async (read) => {
-              if (!read.ok) {
-                throw read.error;
-              }
-              return inheritSessionGitContributorProfileIds(read.value);
-            },
-          );
+        : await readParentEntry();
+      // Incognito parents are never read here, so like rowless parents they record no incarnation.
+      const parentLineage = captureSpawnParentLineage({
+        parentEntry,
+        expectedParentSessionId: ctx.expectedParentSessionId,
+        senderIsOwner: ctx.senderIsOwner,
+        readParentEntry,
+      });
       const creationStamp = buildSessionCreationStamp({
         via: "spawn",
         actor: { type: "agent", id: requesterAgentId },
-        inheritedGitContributorProfileIds,
+        inheritedGitContributorProfileIds: inheritSessionGitContributorProfileIds(parentEntry),
+        conversationLink: parentEntry?.conversationLink,
       });
       const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId });
       const childSessionPatch = admission.childSessionPatch
@@ -485,6 +498,8 @@ export async function spawnAcpDirect(
             subagentControlScope: admission.childSessionPatch.subagentControlScope,
           }
         : {};
+      await parentLineage.assertParentUnchanged();
+      ctx.assertActive?.();
       childCreationEntry =
         (await upsertSessionEntryCore(
           { storePath, sessionKey, agentId: targetAgentId },
@@ -500,6 +515,8 @@ export async function spawnAcpDirect(
             ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
             ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
             ...(params.label ? { label: params.label } : {}),
+            // Same trust rules as native spawn: stamped last, from trusted host facts only.
+            ...parentLineage.receipt,
           },
           { assertCommitAllowed: ctx.assertActive },
         )) ?? undefined;
@@ -541,20 +558,20 @@ export async function spawnAcpDirect(
       });
       // ACP bypasses the native adapter, so seed the same child lineage before dispatch.
       if (childCreationEntry) {
-        recordSessionCreated(cfg, {
+        await recordSessionCreated(cfg, {
           sessionKey,
           agentId: targetAgentId,
           entry: childCreationEntry,
         });
       }
-      recordSubagentSpawned({
+      await recordSubagentSpawned({
         childSessionKey: sessionKey,
         childRunId: childIdem,
         requesterSessionKey: requesterInternalKey,
         agentId: targetAgentId,
       });
       const startParentRelay = (runId: string) =>
-        effectiveStreamToParent && parentSessionKey
+        effectiveStreamToParent && parentSessionKey && parentEventRouting
           ? startAcpSpawnParentStreamRelay({
               runId,
               parentSessionKey,
@@ -563,11 +580,8 @@ export async function spawnAcpDirect(
               childSessionId: state.initializedSession.sessionId,
               agentId: targetAgentId,
               env: parentRelayStateEnv,
-              mainKey: cfg.session?.mainKey,
-              sessionScope: cfg.session?.scope,
               eventRouting: parentEventRouting,
               deliveryContext: parentDeliveryCtx,
-              emitStartNotice: false,
               cfg,
             })
           : undefined;

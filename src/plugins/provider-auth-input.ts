@@ -105,32 +105,6 @@ export function normalizeSecretInputModeInput(
   return undefined;
 }
 
-/** Applies a CLI-provided API key when its provider selector matches this auth method. */
-async function maybeApplyApiKeyFromOption(params: {
-  token: string | undefined;
-  tokenProvider: string | undefined;
-  secretInputMode?: SecretInputMode;
-  expectedProviders: string[];
-  normalize: (value: string) => string;
-  validate?: (value: string) => string | undefined;
-  setCredential: (apiKey: SecretInput, mode?: SecretInputMode) => Promise<void>;
-}): Promise<string | undefined> {
-  const tokenProvider = normalizeTokenProviderInput(params.tokenProvider);
-  const expectedProviders = params.expectedProviders
-    .map((provider) => normalizeTokenProviderInput(provider))
-    .filter((provider): provider is string => Boolean(provider));
-  if (!params.token || !tokenProvider || !expectedProviders.includes(tokenProvider)) {
-    return undefined;
-  }
-  const apiKey = params.normalize(params.token);
-  const validationError = params.validate?.(apiKey);
-  if (validationError) {
-    throw new Error(validationError);
-  }
-  await params.setCredential(apiKey, params.secretInputMode);
-  return apiKey;
-}
-
 /** Resolves an API key from CLI options first, then environment or prompt fallback. */
 export async function ensureApiKeyFromOptionEnvOrPrompt(
   params: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0] & {
@@ -141,9 +115,23 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(
     noteTitle?: string;
   },
 ): Promise<string> {
-  const optionApiKey = await maybeApplyApiKeyFromOption(params);
-  if (optionApiKey) {
-    return optionApiKey;
+  const tokenProvider = normalizeTokenProviderInput(params.tokenProvider);
+  if (
+    params.token &&
+    tokenProvider &&
+    params.expectedProviders.some(
+      (provider) => normalizeTokenProviderInput(provider) === tokenProvider,
+    )
+  ) {
+    const apiKey = params.normalize(params.token);
+    const validationError = params.validate(apiKey);
+    if (validationError) {
+      throw new Error(validationError);
+    }
+    await params.setCredential(apiKey, params.secretInputMode);
+    if (apiKey) {
+      return apiKey;
+    }
   }
 
   if (params.noteMessage) {

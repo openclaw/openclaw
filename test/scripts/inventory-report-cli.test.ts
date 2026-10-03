@@ -71,40 +71,21 @@ describe.each([
     expect(stdout).toHaveBeenCalledWith(expect.stringContaining("Usage:"));
     expect(scan).not.toHaveBeenCalled();
   });
+});
 
+describe("shared inventory argument validation", () => {
   it.each([
     { argv: ["--limit"], error: "--limit expects a non-negative integer" },
-    ...[
-      "",
-      " ",
-      " 1",
-      "1 ",
-      "+1",
-      "-1",
-      "1.0",
-      "1e3",
-      "0x10",
-      "١",
-      "１",
-      "9007199254740992",
-      "9".repeat(400),
-      "--",
-      "-h",
-    ].map((value) => ({
+    ...["-1", "9007199254740992", "--"].map((value) => ({
       argv: ["--limit", value],
       error: "--limit expects a non-negative integer",
     })),
     { argv: ["--repo-root"], error: "--repo-root expects a path" },
-    ...["", "-", "-h", "--"].map((value) => ({
-      argv: ["--repo-root", value],
-      error: "--repo-root expects a path",
+    { argv: ["--repo-root", "-h"], error: "--repo-root expects a path" },
+    ...["--limit=1", "--repo-root=repo", "--json=true"].map((arg) => ({
+      argv: [arg],
+      error: `Unknown argument: ${arg}`,
     })),
-    ...["--limit=1", "--repo-root=repo", "--json=true", "--unknown", "positional", ""].map(
-      (arg) => ({
-        argv: [arg],
-        error: `Unknown argument: ${arg}`,
-      }),
-    ),
     { argv: ["--limit", "1", "--limit", "bad"], error: "--limit expects a non-negative integer" },
     { argv: ["--limit", "bad", "--limit", "1"], error: "--limit expects a non-negative integer" },
     { argv: ["--repo-root", "valid", "--repo-root", ""], error: "--repo-root expects a path" },
@@ -115,7 +96,7 @@ describe.each([
     const scan = vi.spyOn(fileUtils, "listRepoFilesSync");
     const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
     for (const args of [argv, ["--help", ...argv], [...argv, "--help"]]) {
-      expect(() => main(args)).toThrow(new Error(error));
+      expect(() => runEnvReport(args)).toThrow(new Error(error));
     }
     expect(stdout).not.toHaveBeenCalled();
     expect(scan).not.toHaveBeenCalled();

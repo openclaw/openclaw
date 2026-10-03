@@ -112,6 +112,10 @@ class I18nManager {
     return this.locale;
   }
 
+  public getRequestedLocale(): Locale {
+    return this.pendingLocale ?? this.locale;
+  }
+
   public getSystemLocale(): Locale {
     const language =
       typeof globalThis.navigator?.language === "string" ? globalThis.navigator.language : null;

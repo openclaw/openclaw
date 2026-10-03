@@ -39,7 +39,7 @@ import {
   type TestMessage,
   type TestMessageEntry,
 } from "./chat-message.test-support.ts";
-import "./chat-sidebar.ts";
+import "./chat-detail-panel.ts";
 
 let view: HTMLDivElement;
 const localStorageValues = new Map<string, string>();
@@ -1866,7 +1866,7 @@ describe("grouped chat rendering", () => {
     expect(markdownRenderMock).not.toHaveBeenCalled();
   });
 
-  it("omits normalized duplicate names from standalone tool results", () => {
+  it("keeps one readable label for standalone tool results with duplicate names", () => {
     const message = createToolResultMessage("call-heartbeat", "heartbeat_respond", [
       {
         type: "tool_result",
@@ -1880,7 +1880,7 @@ describe("grouped chat rendering", () => {
     });
 
     const summary = expectElement(view, ".chat-tool-msg-summary", HTMLButtonElement);
-    expect(summary.querySelector(".chat-tool-msg-summary__label")).toBeNull();
+    expect(summary.textContent?.trim()).toBe("Heartbeat Respond");
     expect(summary.querySelector("[role=img]")?.ariaLabel).toBe("heartbeat_respond");
     expect(summary.querySelector(".chat-tool-msg-summary__names")).toBeNull();
   });

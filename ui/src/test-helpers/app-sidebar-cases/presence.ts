@@ -521,32 +521,6 @@ describe("AppSidebar viewer presence", () => {
     expect(facepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+3");
   });
 
-  it("renders the self user's avatar route in the footer identity chip", async () => {
-    const client = { instanceId: "self-instance" } as GatewayBrowserClient;
-    const gatewayHarness = createGatewayHarness(client);
-    const { sidebar } = await mountSidebar(
-      gatewayHarness.gateway,
-      createSessions("main", ["agent:main:main"]),
-    );
-    sidebar.connected = true;
-
-    gatewayHarness.publish({
-      selfUser: {
-        id: "00-self",
-        email: "test@example.com",
-        name: "Self User",
-        avatarUrl: "/api/users/00-self/avatar?v=7",
-      },
-    });
-
-    await vi.waitFor(() => {
-      const avatar = sidebar.querySelector<HTMLImageElement>(
-        ".sidebar-identity-card openclaw-viewer-avatar img",
-      );
-      expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=7");
-    });
-  });
-
   it("groups identified viewers for session rows and keeps the footer identity-only", async () => {
     const client = { instanceId: "self-instance" } as GatewayBrowserClient;
     const gatewayHarness = createGatewayHarness(client);

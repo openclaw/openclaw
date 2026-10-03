@@ -12,9 +12,7 @@ struct Semver: Comparable, CustomStringConvertible {
     }
 
     static func < (lhs: Semver, rhs: Semver) -> Bool {
-        if lhs.major != rhs.major { return lhs.major < rhs.major }
-        if lhs.minor != rhs.minor { return lhs.minor < rhs.minor }
-        return lhs.patch < rhs.patch
+        (lhs.major, lhs.minor, lhs.patch) < (rhs.major, rhs.minor, rhs.patch)
     }
 
     static func parse(_ raw: String?) -> Semver? {
@@ -139,14 +137,8 @@ enum GatewayEnvironment {
         return (1...65535).contains(storedPort) ? storedPort : profile.defaultGatewayPort
     }
 
-    static func expectedGatewayVersion() -> Semver? {
-        Semver.parse(self.expectedGatewayVersionString())
-    }
-
     static func appVersionString() -> String? {
-        let bundleVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
-        let trimmed = bundleVersion?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (trimmed?.isEmpty == false) ? trimmed : nil
+        (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)?.nonEmpty
     }
 
     static func expectedGatewayVersionString() -> String? {
@@ -156,6 +148,24 @@ enum GatewayEnvironment {
     }
 
     static func check() async -> GatewayEnvironmentStatus {
+        if BundledRuntime.isBundledApp {
+            do {
+                _ = try BundledRuntime.resolve(bundle: .main)
+                return GatewayEnvironmentStatus(
+                    kind: .ok,
+                    nodeVersion: nil,
+                    gatewayVersion: self.appVersionString(),
+                    requiredGateway: self.appVersionString(),
+                    message: "Bundled Bun runtime; Gateway \(self.appVersionString() ?? "unknown")")
+            } catch {
+                return GatewayEnvironmentStatus(
+                    kind: .error(error.localizedDescription),
+                    nodeVersion: nil,
+                    gatewayVersion: nil,
+                    requiredGateway: self.appVersionString(),
+                    message: error.localizedDescription)
+            }
+        }
         let searchPaths = await CommandResolver.preferredPathsAsync()
         return await self.resolveEnvironment(searchPaths: searchPaths)
     }
@@ -170,8 +180,8 @@ enum GatewayEnvironment {
                 self.logger.debug("gateway env check ok (\(elapsedMs, privacy: .public)ms)")
             }
         }
-        let expected = self.expectedGatewayVersion()
         let expectedString = self.expectedGatewayVersionString()
+        let expected = Semver.parse(expectedString)
 
         let projectRoot = CommandResolver.projectRoot()
         let projectEntrypoint = CommandResolver.gatewayEntrypoint(in: projectRoot)
@@ -242,11 +252,8 @@ enum GatewayEnvironment {
 
     // MARK: - Internals
 
-    /// Exposed for tests so CLI version output normalization stays local to gateway checks.
     static func normalizeGatewayVersionOutput(_ raw: String?) -> String? {
-        guard var normalized = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !normalized.isEmpty else {
-            return nil
-        }
+        guard var normalized = raw?.nonEmpty else { return nil }
         if normalized.lowercased().hasPrefix("openclaw ") {
             normalized = String(normalized.dropFirst("openclaw ".count))
         }

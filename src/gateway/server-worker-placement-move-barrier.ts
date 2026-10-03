@@ -1,4 +1,4 @@
-import { clearSessionQueues } from "../auto-reply/reply/queue/cleanup.js";
+import { clearSessionLifecycleQueues } from "../auto-reply/reply/queue/cleanup.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import {
@@ -7,8 +7,10 @@ import {
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
   startSessionWorkAdmissionInterruption,
 } from "../sessions/session-lifecycle-admission.js";
-import type { WorkerPlacementSessionRuntime } from "./server-worker-placement-reclaim.js";
-import { resolveWorkerPlacementSessionTarget } from "./server-worker-placement-session-target.js";
+import {
+  resolveWorkerPlacementSessionTarget,
+  type WorkerPlacementSessionRuntime,
+} from "./server-worker-placement-session-target.js";
 import type { WorkerPlacementMoveBarrier } from "./worker-environments/placement-move-service.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
@@ -38,12 +40,13 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
       cfg: getRuntimeConfig(),
       key: sessionKey,
       agentId,
+      preserveQualifiedAddress: true,
       clone: false,
       exactRead: true,
     });
     const lifecycleIdentities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
     let begun: Awaited<ReturnType<typeof begin>> | undefined;
-    await runExclusiveSessionLifecycleMutation({
+    return await runExclusiveSessionLifecycleMutation("placement-move", {
       scope: target.storePath,
       identities: lifecycleIdentities,
       signal,
@@ -67,7 +70,14 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
             authorize?.();
           }
         });
-        clearSessionQueues(lifecycleIdentities);
+        clearSessionLifecycleQueues({
+          keys: lifecycleIdentities,
+          agentId: resolved.target.agentId,
+          sessionKey: resolved.target.canonicalKey,
+          sessionId,
+          // The move committed; settling its source queues must survive authority changes.
+          assertCurrent: () => {},
+        });
         params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });
         if (sourceDisposition === "abandon") {
           // Explicit abandonment revokes the old owner locally; its unreachable
@@ -100,11 +110,8 @@ export function createGatewayWorkerPlacementMoveBarrier(params: {
         if (!begun) {
           throw new Error(`Session ${sessionKey} placement move barrier did not start`);
         }
+        return begun;
       },
     });
-    if (!begun) {
-      throw new Error(`Session ${sessionKey} placement move barrier did not complete`);
-    }
-    return begun;
   };
 }

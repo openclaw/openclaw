@@ -183,25 +183,15 @@ export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNo
     ...(describedImageIndices.has(entry.index) ? { hydrationSuppressed: true } : {}),
   }));
   const mediaIndexes = visibleEntries.map((entry) => entry.index);
-  const firstVisibleEntry = visibleEntries[0];
-  if (visibleEntries.length === 1 && firstVisibleEntry) {
-    return {
-      text: formatMediaAttachedLine({ fact: firstVisibleEntry.fact }),
-      media,
-      mediaIndexes,
-    };
-  }
-
   const count = visibleEntries.length;
-  const lines: string[] = [`[media attached: ${count} files]`];
-  for (const [idx, entry] of visibleEntries.entries()) {
-    lines.push(
-      formatMediaAttachedLine({
-        fact: entry.fact,
-        index: idx + 1,
-        total: count,
-      }),
-    );
+  const lines = visibleEntries.map((entry, index) =>
+    formatMediaAttachedLine({
+      fact: entry.fact,
+      ...(count > 1 ? { index: index + 1, total: count } : {}),
+    }),
+  );
+  if (count > 1) {
+    lines.unshift(`[media attached: ${count} files]`);
   }
   return { text: lines.join("\n"), media, mediaIndexes };
 }

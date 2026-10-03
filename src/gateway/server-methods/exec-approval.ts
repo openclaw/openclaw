@@ -36,10 +36,9 @@ import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import { InvalidApprovalIdError } from "../exec-approval-registration.js";
 import {
   buildCronExecOperationBinding,
-  listCronStandingGrants,
   parseCronExecOperationBinding,
-  revokeCronStandingGrant,
 } from "../operator-approval-standing-grants.js";
+import { listCronStandingGrants, revokeCronStandingGrant } from "../operator-approval-store.js";
 import { resolveGrantExpiryDaysConfig } from "../standing-grant-expiry-config.js";
 import { createApprovalRequestAuthority } from "./approval-request-authority.js";
 import { handlePendingApprovalRequestWithDelivery } from "./approval-request-delivery.js";
@@ -134,8 +133,7 @@ export function createExecApprovalHandlers(
       }
       const p = params;
       const twoPhase = p.twoPhase === true;
-      const timeoutMs =
-        typeof p.timeoutMs === "number" ? p.timeoutMs : DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
+      const timeoutMs = p.timeoutMs ?? DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
       // IDs are opaque cross-surface handles. Preserve every supplied byte so
       // the manager can reject unsafe values instead of silently normalizing them.
       const explicitId = p.id ?? null;
@@ -216,8 +214,7 @@ export function createExecApprovalHandlers(
       }
       const envBinding = buildSystemRunApprovalEnvBinding(p.env);
       const warningText = normalizeOptionalString(p.warningText);
-      const runtimeConfig =
-        typeof context.getRuntimeConfig === "function" ? context.getRuntimeConfig() : {};
+      const runtimeConfig = context.getRuntimeConfig();
       const commandHighlighting = resolveExecCommandHighlighting({
         config: runtimeConfig,
         agentId: effectiveAgentId,
@@ -449,7 +446,9 @@ export function createExecApprovalHandlers(
         },
       });
     },
-    "exec.approval.grants.list": async ({ params, respond }) => {
+    "exec.approval.grants.list": async (options) => {
+      using authority = createApprovalRequestAuthority(options);
+      const { params, respond } = options;
       if (
         !assertValidParams(
           params,
@@ -460,8 +459,9 @@ export function createExecApprovalHandlers(
       ) {
         return;
       }
-      const { limit } = params;
-      const grants = listCronStandingGrants(limit ? { limit } : {}).map((grant) => {
+      const records = await listCronStandingGrants({ limit: params.limit, guard: authority.guard });
+      authority.assertCurrent();
+      const grants = records.map((grant) => {
         const operation = parseCronExecOperationBinding(grant.operationBinding);
         return {
           grantId: grant.grantId,
@@ -484,7 +484,9 @@ export function createExecApprovalHandlers(
       });
       respond(true, { grants }, undefined);
     },
-    "exec.approval.grants.revoke": async ({ params, respond, client }) => {
+    "exec.approval.grants.revoke": async (options) => {
+      using authority = createApprovalRequestAuthority(options);
+      const { params, respond, client } = options;
       if (
         !assertValidParams(
           params,
@@ -495,10 +497,14 @@ export function createExecApprovalHandlers(
       ) {
         return;
       }
-      // Same actor attribution as approval resolution; recorded for the ledger.
       const revokedBy =
         client?.connect?.client?.displayName ?? client?.connect?.client?.id ?? "operator";
-      const result = revokeCronStandingGrant({ grantId: params.grantId, revokedBy });
+      const result = await revokeCronStandingGrant({
+        grantId: params.grantId,
+        revokedBy,
+        guard: authority.guard,
+      });
+      authority.assertCurrent();
       respond(true, { outcome: result.outcome }, undefined);
     },
     "exec.approval.resolve": async (options) => {

@@ -6,7 +6,7 @@ import {
   type AgentHarnessAttemptParamsV2,
   type AgentHarnessV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { captureNativeSessionGenerationAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { prepareNativeSessionGenerationAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { runAgentsApiAttempt, type AgentsApiPromptHistories } from "./agentsapi-attempt.js";
 import { createAgentsApiBindings } from "./agentsapi-bindings.js";
@@ -102,7 +102,7 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
         throw new Error("Agents API harness is closing");
       }
       const target = validateAgentsApiInput(params);
-      const authority = captureNativeSessionGenerationAuthority({
+      const captured = await prepareNativeSessionGenerationAuthority({
         target,
         config: params.config,
         storePath: target.storePath,
@@ -115,12 +115,13 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
             `Agents API session generation is no longer current: ${sessionId}`,
           ),
       });
-      authority.assertCurrent();
+      const authority = captured.authority;
+      authority.assertLegacyCurrent();
       runningSessions.set(params.sessionId, (runningSessions.get(params.sessionId) ?? 0) + 1);
       try {
         return await getBindings().withSession(
           params.sessionId,
-          () => authority.assertCurrent(),
+          () => authority.assertLegacyCurrent(),
           (binding, bind, assertLeaseCurrent) => {
             if (closing) {
               throw new Error("Agents API harness is closing");
@@ -130,7 +131,7 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
               binding,
               bind,
               () => {
-                authority.assertCurrent();
+                authority.assertLegacyCurrent();
                 assertLeaseCurrent();
               },
               () => {
@@ -202,17 +203,23 @@ function validateAgentsApiInput(params: AgentHarnessAttemptParamsV2) {
   ) {
     throw new AgentHarnessPreflightError(
       "Agents API cannot enforce this run's restrictions on native shell, file, or web-search tools.",
-      { scope: "harness" },
+      {
+        scope: "harness",
+        userMessage:
+          "Agents API cannot run with this chat's tool restrictions because it cannot enforce them on native tools. Choose a harness that supports these restrictions or update the tool settings.",
+      },
     );
   }
   const target = requireAgentsApiSessionTarget(params);
   if (!params.resolvedApiKey) {
     throw new Error("Agents API MVP requires an OpenAI API key");
   }
-  if (params.images?.length || params.sandbox) {
-    throw new Error(
-      "Agents API MVP supports text in its selected execution environment only; images and Gateway sandbox placement are unsupported",
-    );
+  if (params.sandbox) {
+    throw new AgentHarnessPreflightError("Agents API does not support Gateway sandbox placement.", {
+      scope: "harness",
+      userMessage:
+        "Agents API cannot run in the configured Gateway sandbox. Choose a harness that supports Gateway sandbox placement before retrying.",
+    });
   }
   if (params.contextEngine && params.contextEngine.info.id !== "legacy") {
     throw new Error("Agents API MVP currently supports only the default legacy context engine");

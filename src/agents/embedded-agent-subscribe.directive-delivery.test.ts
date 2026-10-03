@@ -6,12 +6,9 @@ import { createAssistantOutput } from "../../packages/ai/src/transports/assistan
 import { processResponsesStream } from "../../packages/ai/src/transports/openai-responses-stream-internal.js";
 import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { isAudioPayload } from "../auto-reply/reply/agent-runner-helpers.js";
-import {
-  createAudioAsVoiceBuffer,
-  createBlockReplyPipeline,
-} from "../auto-reply/reply/block-reply-pipeline.js";
+import { createBlockReplyPipeline } from "../auto-reply/reply/block-reply-pipeline.js";
 import { createBlockReplyDeliveryHandler } from "../auto-reply/reply/reply-delivery.js";
 import { createReplyToModeFilterForChannel } from "../auto-reply/reply/reply-threading.js";
 import { createTypingSignaler } from "../auto-reply/reply/typing-mode.js";
@@ -68,7 +65,7 @@ function createDeliveryHarness(
   const pipeline = createBlockReplyPipeline({
     onBlockReply: record,
     timeoutMs: 5000,
-    buffer: createAudioAsVoiceBuffer({ isAudioPayload }),
+    isAudioPayload,
   });
   const typing = createTypingController({});
   const handler = createBlockReplyDeliveryHandler({
@@ -87,7 +84,7 @@ function createDeliveryHarness(
   const { emit, subscription } = createSubscribedSessionHarness({
     runId: "run-directive-delivery",
     onBlockReply: (payload) => {
-      blocks.push(structuredClone(payload));
+      blocks.push(copyReplyPayloadMetadata(payload, structuredClone(payload)));
       return handler(payload);
     },
     blockReplyBreak: options.blockReplyBreak ?? "text_end",
@@ -558,59 +555,42 @@ it.each([
     .toEqual(scenario.expectedMedia);
 });
 
-it("preserves a native-part voice literal through terminal delivery", async () => {
-  const { delivered, blocks, emit, flush } = createDeliveryHarness({
-    blockReplyBreak: "message_end",
-  });
-  const marker = "[[audio_as_voice]]";
-  const parts = ["Use `" + "x".repeat(60), ` ${marker}\` literally.`];
-  emit({ type: "message_start", message: createAssistantOutput(googleModel) });
-  emit({
-    type: "message_end",
-    message: textMessage(parts),
-  });
-  await flush();
-  const text = delivered.map((payload) => payload.text ?? "").join("");
-  expect.soft(text).toContain(marker);
-  expect.soft(text.split(marker)).toHaveLength(2);
-  for (const payload of [...blocks, ...delivered]) {
-    expect.soft(Boolean(payload.audioAsVoice)).toBe(false);
-    expect.soft(payload.replyToId).toBeUndefined();
-    expect.soft(Boolean(payload.replyToCurrent || payload.replyToTag)).toBe(false);
-  }
-});
-
-it.each([false, true])("carries terminal voice intent with silent=%s", async (silent) => {
-  const blocks: ReplyPayload[] = [];
-  const { emit, subscription } = createSubscribedSessionHarness({
-    runId: "run-terminal-silence",
-    onBlockReply: (payload) => {
-      blocks.push(payload);
-    },
-    blockReplyBreak: "message_end",
-  });
-  onTestFinished(() => subscription.unsubscribe());
-  emit({ type: "message_start", message: createAssistantOutput(googleModel) });
-  emit({
-    type: "message_end",
-    message: textMessage("[[audio_as_voice]]" + (silent ? "NO_REPLY" : "")),
-  });
-  await subscription.waitForPendingEvents();
-
-  expect(
-    blocks.map((payload) => ({
-      text: payload.text,
-      audioAsVoice: payload.audioAsVoice === true,
-      silentReply: getReplyPayloadMetadata(payload)?.silentReply,
-    })),
-  ).toEqual([
-    {
-      text: "",
-      audioAsVoice: true,
-      silentReply: silent ? true : undefined,
-    },
-  ]);
-});
+it.each(["literal", "voice", "silent"] as const)(
+  "preserves terminal voice semantics for %s",
+  async (kind) => {
+    const { delivered, blocks, emit, flush } = createDeliveryHarness({
+      blockReplyBreak: "message_end",
+    });
+    const marker = "[[audio_as_voice]]";
+    const parts =
+      kind === "literal"
+        ? ["Use `" + "x".repeat(60), ` ${marker}\` literally.`]
+        : [marker + (kind === "silent" ? "NO_REPLY" : "")];
+    emit({ type: "message_start", message: createAssistantOutput(googleModel) });
+    emit({ type: "message_end", message: textMessage(parts) });
+    await flush();
+    if (kind === "literal") {
+      const text = delivered.map((payload) => payload.text ?? "").join("");
+      expect.soft(text).toContain(marker);
+      expect.soft(text.split(marker)).toHaveLength(2);
+      for (const payload of [...blocks, ...delivered]) {
+        expect.soft(Boolean(payload.audioAsVoice)).toBe(false);
+        expect.soft(payload.replyToId).toBeUndefined();
+        expect.soft(Boolean(payload.replyToCurrent || payload.replyToTag)).toBe(false);
+      }
+    } else {
+      expect(
+        blocks.map((payload) => ({
+          text: payload.text,
+          audioAsVoice: payload.audioAsVoice === true,
+          silentReply: getReplyPayloadMetadata(payload)?.silentReply,
+        })),
+      ).toEqual([
+        { text: "", audioAsVoice: true, silentReply: kind === "silent" ? true : undefined },
+      ]);
+    }
+  },
+);
 
 it("applies a directive-only text_end to already-buffered audio", async () => {
   const { delivered, pipeline, handler, emit, subscription } = createDeliveryHarness();

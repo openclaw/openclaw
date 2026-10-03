@@ -1,11 +1,24 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import vm from "node:vm";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 const owner = resolve("scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh");
 function fixture() {
   const home = tempDirs.make("survivor-stop-policy-");
@@ -31,29 +44,6 @@ function fixture() {
       encoding: "utf8",
     });
   return { home, env, unit, systemctl, manager };
-}
-
-function waitForFixtureState(directory: string, settled: () => boolean) {
-  return new Promise<void>((complete, reject) => {
-    const inspect = () => {
-      try {
-        if (!settled()) {
-          return;
-        }
-      } catch {
-        return;
-      }
-      watcher.close();
-      clearTimeout(deadline);
-      complete();
-    };
-    const watcher = watch(directory, inspect);
-    const deadline = setTimeout(() => {
-      watcher.close();
-      reject(new Error("fixture state did not settle"));
-    }, 5_000);
-    inspect();
-  });
 }
 
 describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () => {
@@ -540,9 +530,9 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
     },
   );
 
-  it.each([false, true])(
+  it.for([false, true])(
     "joins the installed outer stop after removed-unit reload=%s",
-    async (removed) => {
+    async (removed, { signal }) => {
       const f = fixture();
       const bin = join(f.home, "bin");
       const ready = join(f.home, "ready");
@@ -551,11 +541,14 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
       const runtime = () => JSON.parse(readFileSync(runtimeFile, "utf8"));
       writeFileSync(
         program,
-        'import fs from "node:fs"; process.on("SIGTERM", () => ' +
+        fixtureReceiptClientSource(receipts.endpoint) +
+          '\nimport fs from "node:fs"; process.on("SIGTERM", () => ' +
           (removed ? "{}" : "process.exit(0)") +
           "); fs.writeFileSync(" +
           JSON.stringify(ready) +
-          ", String(process.pid)); setInterval(() => {}, 1000);",
+          ", String(process.pid)); sendReceipt(" +
+          JSON.stringify(ready) +
+          ', "ready"); setInterval(() => {}, 1000);',
       );
       writeFileSync(
         f.unit,
@@ -569,10 +562,7 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
       try {
         const started = f.systemctl("start", "openclaw-gateway.service");
         expect(started.status, started.stderr).toBe(0);
-        await waitForFixtureState(
-          f.home,
-          () => existsSync(ready) && readFileSync(ready, "utf8").length > 0,
-        );
+        await withinTest(receipts.waitFor(ready, "ready"), signal);
         const pid = Number(readFileSync(ready, "utf8"));
         if (removed) {
           rmSync(f.unit);
@@ -605,10 +595,15 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
               process.kill(-owned.groupPid, "SIGKILL");
             } catch {}
           }
-          await waitForFixtureState(bin, () => {
-            const observed = runtime();
-            return observed.pid === 0 && observed.supervisorPid === 0 && observed.groupPid === 0;
-          });
+          if (owned.supervisorPid || owned.groupPid) {
+            // The installed stop joins supervisor retirement; finish() commits zero IDs
+            // before exiting. A failed policy still joins its forced cleanup owner.
+            f.systemctl("stop", "openclaw-gateway.service");
+          }
+          expect(runtime()).toMatchObject({ pid: 0, supervisorPid: 0, groupPid: 0 });
+        } else {
+          // Startup may have published only the supervisor PID when the test aborts.
+          f.systemctl("stop", "openclaw-gateway.service");
         }
       }
     },

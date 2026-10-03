@@ -146,7 +146,7 @@ async function captureDesktopSockets(page: Page) {
   // No connection, RFB authentication, RPC, or bridge is replaced.
   await page.addInitScript(() => {
     localStorage.setItem(
-      "openclaw:control-ui:community-invite",
+      "openclaw:control-ui:community-invite:v2",
       JSON.stringify({ dismissedAtMs: 1770000000000 }),
     );
     const NativeSocket = window.WebSocket;
@@ -394,7 +394,9 @@ suite.define(() => {
           const assets = new Map<string, string>();
           const assetReads: Promise<unknown>[] = [];
           page.on("response", (response) => {
-            if (/\/assets\/(?:index|desktop)[^/]*\.js$/u.test(new URL(response.url()).pathname)) {
+            if (
+              /\/assets\/(?:index|desktop|novnc-)[^/]*\.js$/u.test(new URL(response.url()).pathname)
+            ) {
               assetReads.push(
                 response.body().then(
                   (bytes) =>

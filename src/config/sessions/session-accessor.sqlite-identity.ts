@@ -1,8 +1,15 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
-import { emitSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
+import {
+  emitSessionIdentityMutation,
+  type SessionIdentityMutation,
+} from "../../sessions/session-lifecycle-events.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import {
+  bindPreparedSessionEntryPublication,
+  type PreparedSessionEntryChanges,
+} from "./session-accessor.sqlite-entry-cache-publication.js";
 import type {
   ProjectedLifecycleMutation,
   SessionEntryRemovalPlan,
@@ -64,7 +71,18 @@ export function publishCommittedSessionIdentity(
   databaseIdentity: string | symbol,
   previous: ReadonlyMap<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>,
   current: ReadonlyMap<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>,
+  prepared?: PreparedSessionEntryChanges,
 ): void {
+  const emit = (mutation: SessionIdentityMutation) => {
+    if (prepared) {
+      bindPreparedSessionEntryPublication(mutation, {
+        kind: "metadata",
+        sharingChange: "changed",
+        prepared,
+      });
+    }
+    emitSessionIdentityMutation(mutation);
+  };
   const currentKeysBySessionId = new Map<string, string[]>();
   for (const [sessionKey, entry] of current) {
     const sessionId = normalizeOptionalString(entry.sessionId);
@@ -100,7 +118,7 @@ export function publishCommittedSessionIdentity(
   for (const [currentKey, previousKeys] of movedKeysByCurrentKey) {
     const currentEntry = current.get(currentKey);
     if (currentEntry) {
-      emitSessionIdentityMutation({
+      emit({
         agentId,
         databaseIdentity,
         kind: "move",
@@ -123,7 +141,7 @@ export function publishCommittedSessionIdentity(
             ? "reset"
             : undefined;
       if (kind) {
-        emitSessionIdentityMutation({
+        emit({
           agentId,
           databaseIdentity,
           kind,
@@ -132,12 +150,7 @@ export function publishCommittedSessionIdentity(
         });
       }
     } else if (!handledPreviousKeys.has(sessionKey)) {
-      publishCommittedSessionEntryRemoval(
-        agentId,
-        databaseIdentity,
-        previousTarget.sessionId,
-        previousTarget.sessionKeys,
-      );
+      emit({ agentId, databaseIdentity, kind: "delete", previous: previousTarget });
     }
   }
 
@@ -145,7 +158,7 @@ export function publishCommittedSessionIdentity(
     if (previous.has(sessionKey) || movedKeysByCurrentKey.has(sessionKey)) {
       continue;
     }
-    emitSessionIdentityMutation({
+    emit({
       agentId,
       databaseIdentity,
       kind: "create",

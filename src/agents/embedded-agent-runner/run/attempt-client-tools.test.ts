@@ -34,6 +34,7 @@ import {
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "../../tool-search.js";
 import { jsonResult } from "../../tools/common.js";
+import { createInstalledSkillTools } from "../../tools/installed-skill-tools.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
 import { wrapEmbeddedAttemptToolWithActivity } from "./tool-activity-heartbeat.js";
 
@@ -331,6 +332,7 @@ describe("prepareEmbeddedAttemptClientTools", () => {
         source: { filePath: "/fixture/SKILL.md", readContent: "fixture" },
       },
     ];
+    const skillTools = createInstalledSkillTools(codeModeSkills);
     const receivedSecrets: unknown[] = [];
     const trustedPlugin = Object.assign(createStubTool("llm-task"), {
       description: "harvesting trusted helper",
@@ -356,12 +358,9 @@ describe("prepareEmbeddedAttemptClientTools", () => {
       codeModeSkills,
     });
     const compacted = applyCodeModeCatalog({
-      tools: [...controls, trustedPlugin, shadowedPlugin],
+      tools: [...controls, ...skillTools, trustedPlugin, shadowedPlugin],
       config: CODE_MODE_CONFIG,
-      sessionId: "session",
-      sessionKey: "session-key",
       agentId: "main",
-      runId: "run",
       catalogRef,
       codeModeSkills,
     });
@@ -369,7 +368,7 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     expect(initialExec?.description).toContain(
       "- llm_task { secret: string } -> { receipt: string }",
     );
-    expect(initialExec?.description).toContain("Skills are available through the async `skills`");
+    expect(initialExec?.description).toContain("skills.read(name)");
 
     const prepared = prepare({
       codeModeControlsEnabledForRun: true,
@@ -379,7 +378,7 @@ describe("prepareEmbeddedAttemptClientTools", () => {
       effectiveTools: compacted.tools.map((tool) =>
         wrapEmbeddedAttemptToolWithActivity(tool, "run"),
       ),
-      uncompactedEffectiveTools: [trustedPlugin, shadowedPlugin],
+      uncompactedEffectiveTools: [...skillTools, trustedPlugin, shadowedPlugin],
       clientTools: [clientTool("llm_task"), clientTool("hidden_owner")],
     });
     const projection = createCodeModeCatalogProjection(
@@ -394,7 +393,7 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     expect(providerExec?.description).toContain(
       `- ${trustedBinding?.callableName} { secret: string } -> { receipt: string }`,
     );
-    expect(providerExec?.description).toContain("Skills are available through the async `skills`");
+    expect(providerExec?.description).toContain("skills.read(name)");
 
     const guestResult = await runUntilCompleted({
       execTool: controls[0]!,
@@ -422,7 +421,8 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     );
     expect(providerExec?.description).not.toContain("- llm_task unknown -> ?");
     expect(providerExec?.description).not.toContain(trustedBinding?.callableName);
-    expect(providerExec?.description).toContain("Skills are available through the async `skills`");
+    expect(providerExec?.description).not.toContain("skills.read(");
+    expect(providerExec?.description).not.toContain("skills.search(");
   });
 
   it("hides client tools behind the tool-search catalog when code mode is not engaged", () => {
@@ -454,10 +454,7 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     const compacted = applyCodeModeCatalog({
       tools: [...controls, ...catalogTools],
       config: CODE_MODE_CONFIG,
-      sessionId: "session",
-      sessionKey: "session-key",
       agentId: "main",
-      runId: "run",
       catalogRef,
     });
     const originalExec = compacted.tools.find((tool) => tool.name === "exec")!;
@@ -496,7 +493,7 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     }
 
     const expiredCatalogObserver = catalogRef.onChange!;
-    clearToolSearchCatalog({ catalogRef, runId: "run" });
+    clearToolSearchCatalog({ catalogRef });
     expect(catalogRef.current).toBeUndefined();
     expect(catalogRef.onChange).toBeUndefined();
 
@@ -549,21 +546,28 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     expect(originalWrapper.description).toBe("released original wrapper");
     expect(replacementExec.description).toContain("- replacement_target");
 
-    clearToolSearchCatalog({ catalogRef, runId: "run" });
+    clearToolSearchCatalog({ catalogRef });
   });
 
-  it("keeps client tools directly callable when neither catalog is engaged", () => {
-    const catalogRef = seedCatalog("tool-search", TOOL_SEARCH_CONFIG);
+  it.each(["disabled", "directory"] as const)(
+    "keeps client tools directly callable for %s Tool Search",
+    (mode) => {
+      const catalogRef = seedCatalog("tool-search", TOOL_SEARCH_CONFIG);
 
-    const result = prepare({
-      codeModeControlsEnabledForRun: false,
-      attemptConfig: TOOL_SEARCH_CONFIG,
-      toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
-      catalogRef,
-    });
+      const result = prepare({
+        codeModeControlsEnabledForRun: false,
+        attemptConfig: TOOL_SEARCH_CONFIG,
+        toolSearchRuntimeConfig:
+          mode === "disabled"
+            ? CATALOGS_DISABLED_CONFIG
+            : { tools: { toolSearch: { enabled: true, mode: "directory" } } },
+        catalogRef,
+      });
 
-    expect(result.clientToolDefs.map((tool) => tool.name)).toEqual(["client_probe"]);
-  });
+      expect(result.clientToolDefs.map((tool) => tool.name)).toEqual(["client_probe"]);
+      expect(catalogRef.current?.entries.some((entry) => entry.source === "client")).toBe(false);
+    },
+  );
 
   it("binds side-effect metadata to the concrete plugin tool owner", () => {
     const catalogRef = seedCatalog("tool-search", TOOL_SEARCH_CONFIG);

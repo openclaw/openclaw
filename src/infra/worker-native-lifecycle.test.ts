@@ -15,7 +15,11 @@ async function runFixture(
     | "explicit-unbound"
     | "supervisor-loss"
     | "native-resource"
+    | "resource-idle-broker"
     | "resource-supervisor-loss"
+    | "resource-auto-close-success"
+    | "resource-auto-close-failure"
+    | "resource-auto-close-refusal"
     | "resource-cold-supervisor-loss"
     | "resource-close-supervisor-loss"
     | "resource-late-attachment"
@@ -40,6 +44,19 @@ async function runFixture(
 }
 
 describe("retained native worker lifecycle", () => {
+  it("retires an idle broker only after independent resource custody joins", async () => {
+    expect(await runFixture("resource-idle-broker")).toEqual({
+      ending: "resource-idle-broker",
+      independentCustodyPreserved: true,
+      idleBrokerJoined: true,
+      sourceReusable: true,
+      firstCloseRejected: true,
+      sameOwnerRetried: true,
+      childClosedBeforeStopped: true,
+      sqliteReusable: true,
+    });
+  }, 20_000);
+
   it("preserves constructor ALS for callbacks serviced from another context", async () => {
     const expected = ["message", "error", "exit"].map((event) => ({
       event,
@@ -98,6 +115,32 @@ describe("retained native worker lifecycle", () => {
       sqliteReusable: true,
     });
   }, 20_000);
+
+  it.each([
+    "resource-auto-close-success",
+    "resource-auto-close-failure",
+    "resource-auto-close-refusal",
+  ] as const)(
+    "retains automatic broker cleanup after real resource supervisor loss during %s",
+    async (ending) => {
+      expect(await runFixture(ending)).toEqual({
+        ending,
+        rejectedWhileBlocked: true,
+        retryRejectedWhileBlocked: true,
+        brokerOwnerSurvived: true,
+        firstCloseRejected: true,
+        sameOwnerRetried: true,
+        childClosedBeforeStopped: true,
+        sqliteReusable: true,
+        originalBrokerJoined: true,
+        nativeBrokerCloses: 1,
+        ...(ending === "resource-auto-close-success"
+          ? { rotatedAfterBrokerClose: true }
+          : { originalFailureOccurrences: 1 }),
+      });
+    },
+    20_000,
+  );
 
   it("joins an accepted resource close when its supervising Worker is lost mid-close", async () => {
     expect(await runFixture("resource-close-supervisor-loss")).toEqual({

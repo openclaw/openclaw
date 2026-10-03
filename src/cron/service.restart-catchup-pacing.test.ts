@@ -199,15 +199,18 @@ describe("CronService restart catch-up after a schedule change", () => {
     await writeCronStoreSnapshot({
       storePath: store.storePath,
       jobs: [
-        dailyJob(
-          jobId,
-          {
-            nextRunAtMs: Date.parse("2026-07-28T16:00:00.000Z"), // 28 Jul 19:00 +03
-            lastRunAtMs: lastRunUnderOldSchedule,
-            lastStatus: "ok",
-          },
-          { kind: "cron", expr: "0 19 * * *", tz: "Europe/Istanbul" },
-        ),
+        {
+          ...dailyJob(
+            jobId,
+            {
+              nextRunAtMs: Date.parse("2026-07-28T16:00:00.000Z"), // 28 Jul 19:00 +03
+              lastRunAtMs: lastRunUnderOldSchedule,
+              lastStatus: "ok",
+            },
+            { kind: "cron", expr: "0 19 * * *", tz: "Europe/Istanbul" },
+          ),
+          updatedAtMs: lastRunUnderOldSchedule,
+        },
       ],
     });
 

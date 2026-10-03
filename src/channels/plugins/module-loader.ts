@@ -26,15 +26,6 @@ function loadModule(modulePath: string): unknown {
   })(modulePath);
 }
 
-function resolveSourceModuleCandidates(rootDir: string, specifier: string): string[] {
-  const normalizedSpecifier = specifier.replace(/\\/g, "/");
-  const resolvedPath = path.resolve(rootDir, normalizedSpecifier);
-  if (path.extname(resolvedPath)) {
-    return [];
-  }
-  return PLUGIN_SOURCE_MODULE_EXTENSIONS.map((extension) => `${resolvedPath}${extension}`);
-}
-
 /**
  * Resolves a plugin-relative module specifier to an existing candidate path.
  */
@@ -61,9 +52,12 @@ function resolvePluginModulePath(rootDir: string, specifier: string): string {
       throw error;
     }
   }
-  for (const candidate of resolveSourceModuleCandidates(rootDir, specifier)) {
-    if (fs.existsSync(candidate)) {
-      return candidate;
+  if (!path.extname(resolvedPath)) {
+    for (const extension of PLUGIN_SOURCE_MODULE_EXTENSIONS) {
+      const candidate = `${resolvedPath}${extension}`;
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
     }
   }
   return resolvedPath;

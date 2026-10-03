@@ -6,6 +6,13 @@ import type {
   ProviderBuiltInModelSuppressionContext as ProviderBuiltInModelSuppressionContextType,
 } from "../plugins/types.js";
 import { createCachedLazyValueGetter } from "./lazy-value.js";
+
+export type {
+  StorageProvider,
+  StorageProviderOpenParams,
+  StorageBackend,
+  StorageObjectInfo,
+} from "../storage/types.js";
 export type {
   PluginCapabilityCatalogContext,
   PluginCapabilityCatalogEntry,
@@ -46,6 +53,8 @@ export type {
   OpenClawPluginSecurityAuditContext,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
+  OpenClawPluginServiceContextV2,
+  OpenClawPluginServiceV2,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
   PluginAgentEventEmitParams,
@@ -66,6 +75,7 @@ export type {
   PluginRunContextGetParams,
   PluginRunContextPatch,
   PluginRuntimeLifecycleRegistration,
+  PluginServiceSchedulerV1,
   PluginSessionActionContext,
   PluginSessionActionRegistration,
   PluginSessionActionResult,
@@ -119,6 +129,7 @@ export type {
   ProviderReplayPolicyContext,
   ProviderReplaySessionEntry,
   ProviderReplaySessionState,
+  ProviderReplaySessionStateV2,
   ProviderResolveConfigApiKeyContext,
   ProviderResolveDynamicModelContext,
   ProviderResolveTransportTurnStateContext,
@@ -126,6 +137,7 @@ export type {
   ProviderResolveWebSocketSessionPolicyContext,
   ProviderResolvedUsageAuth,
   ProviderSanitizeReplayHistoryContext,
+  ProviderSanitizeReplayHistoryContextV2,
   ProviderThinkingPolicyContext,
   ProviderThinkingProfile,
   ProviderToolSchemaDiagnostic,

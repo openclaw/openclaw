@@ -3,6 +3,7 @@ import { readMemoryEntryOriginsInDatabase } from "openclaw/plugin-sdk/memory-cor
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
+  sqliteStringSet,
   tableExists,
   withFreshOpenClawAgentDatabaseReadOnly,
 } from "openclaw/plugin-sdk/sqlite-runtime";
@@ -40,9 +41,9 @@ function queryOrigins(
         .selectFrom("memory_entry_origins")
         .select("entry_key")
         .where("agent_id", "=", request.agentId)
-        .where("entry_key", "in", request.entryKeys);
+        .where("entry_key", "in", sqliteStringSet(request.entryKeys));
       if (request.sessionIds) {
-        query = query.where("session_id", "in", request.sessionIds);
+        query = query.where("session_id", "in", sqliteStringSet(request.sessionIds));
       }
       exists = executeSqliteQuerySync(db, query.limit(1)).rows.length > 0;
     }
@@ -57,7 +58,7 @@ function queryOrigins(
       .selectAll()
       .where("agent_id", "=", request.agentId);
     if (request.sessionIds) {
-      query = query.where("session_id", "in", request.sessionIds);
+      query = query.where("session_id", "in", sqliteStringSet(request.sessionIds));
     }
     return {
       kind: request.kind,

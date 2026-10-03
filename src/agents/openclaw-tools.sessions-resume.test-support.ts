@@ -4,6 +4,7 @@ import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { readInProcessSubagentResume } from "../gateway/in-process-subagent-resume.js";
 import { createOperationalRunInstanceRef } from "./admitted-run-context.js";
 import { subagentRuns } from "./subagents/registry/subagent-registry-memory.js";
+import { mutateSubagentRuns } from "./subagents/registry/subagent-registry-persistence.js";
 import { addSubagentRunForTests } from "./subagents/registry/subagent-registry.test-helpers.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -66,7 +67,7 @@ export function registerSessionsSendResumeTests({
         { agentId: "main", sessionKey: targetKey },
         { sessionId: "tool-resume-session", updatedAt: Date.now() },
       );
-      addSubagentRunForTests({
+      await addSubagentRunForTests({
         runId: previousRunId,
         childSessionKey: targetKey,
         requesterSessionKey: controller,
@@ -80,7 +81,7 @@ export function registerSessionsSendResumeTests({
         expectsCompletionMessage: scenario === "completion unspecified" ? undefined : true,
       });
       if (scenario === "newer completed sibling") {
-        addSubagentRunForTests({
+        await addSubagentRunForTests({
           runId: siblingRunId,
           childSessionKey: targetKey,
           requesterSessionKey: "agent:main:dashboard:separate-requester",
@@ -163,8 +164,10 @@ export function registerSessionsSendResumeTests({
           controllerSessionKey: controller,
         });
       } finally {
-        subagentRuns.delete(previousRunId);
-        subagentRuns.delete(siblingRunId);
+        await mutateSubagentRuns([previousRunId, siblingRunId], (rows) => ({
+          value: undefined,
+          postimages: new Map([...rows.keys()].map((runId) => [runId, null])),
+        }));
       }
     },
   );

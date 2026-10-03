@@ -48,7 +48,6 @@ function encodeCompletionProfile(content: string, encoding: CompletionProfileEnc
   return encoding === "utf16be" ? buffer.swap16() : buffer;
 }
 
-/** Narrows an arbitrary shell label to a completion shell supported by installer logic. */
 export function isCompletionShell(value: string): value is CompletionShell {
   return COMPLETION_SHELLS.includes(value as CompletionShell);
 }
@@ -102,7 +101,6 @@ export function resolveCompletionCachePath(shell: CompletionShell, binName: stri
   );
 }
 
-/** Check if the completion cache file exists for the given shell. */
 export async function completionCacheExists(
   shell: CompletionShell,
   binName = "openclaw",

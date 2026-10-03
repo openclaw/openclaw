@@ -28,6 +28,20 @@ type PackageEntrySourceParams = {
   rejectHardlinks?: boolean;
 };
 
+function reportPackageEntryDiagnostic(
+  params: Pick<PackageEntrySourceParams, "diagnostics" | "pluginIdHint" | "sourceLabel">,
+  level: PluginDiagnostic["level"],
+  message: string,
+): null {
+  params.diagnostics.push({
+    level,
+    ...(params.pluginIdHint ? { pluginId: params.pluginIdHint } : {}),
+    message,
+    source: params.sourceLabel,
+  });
+  return null;
+}
+
 function resolvePackageRuntimeExtensionEntries(params: {
   manifest: PackageManifest | null | undefined;
   extensions: readonly string[];
@@ -242,24 +256,18 @@ function resolvePackageEntrySource(params: PackageEntrySourceParams): string | n
     if (!opened.ok) {
       return matchRootFileOpenFailure(opened, {
         path: () => null,
-        io: () => {
-          params.diagnostics.push({
-            level: "warn",
-            ...(params.pluginIdHint ? { pluginId: params.pluginIdHint } : {}),
-            message: `extension entry unreadable (I/O error): ${params.entryPath}`,
-            source: params.sourceLabel,
-          });
-          return null;
-        },
-        fallback: () => {
-          params.diagnostics.push({
-            level: "error",
-            ...(params.pluginIdHint ? { pluginId: params.pluginIdHint } : {}),
-            message: `extension entry escapes package directory: ${params.entryPath}`,
-            source: params.sourceLabel,
-          });
-          return null;
-        },
+        io: () =>
+          reportPackageEntryDiagnostic(
+            params,
+            "warn",
+            `extension entry unreadable (I/O error): ${params.entryPath}`,
+          ),
+        fallback: () =>
+          reportPackageEntryDiagnostic(
+            params,
+            "error",
+            `extension entry escapes package directory: ${params.entryPath}`,
+          ),
       });
     }
     return opened.exists ? opened.path : null;
@@ -303,13 +311,11 @@ function resolveSafePackageEntry(
     rejectHardlinks: params.rejectHardlinks ?? true,
   });
   if (!checked.ok) {
-    params.diagnostics.push({
-      level: "error",
-      ...(params.pluginIdHint ? { pluginId: params.pluginIdHint } : {}),
-      message: `extension entry escapes package directory: ${params.entryPath}`,
-      source: params.sourceLabel,
-    });
-    return null;
+    return reportPackageEntryDiagnostic(
+      params,
+      "error",
+      `extension entry escapes package directory: ${params.entryPath}`,
+    );
   }
   return { relativePath: path.relative(params.packageDir, absolutePath).replace(/\\/g, "/") };
 }
@@ -337,13 +343,11 @@ function resolvePackageRuntimeEntrySource(
     if (runtimeSource) {
       return runtimeSource;
     }
-    params.diagnostics.push({
-      level: "error",
-      ...(params.pluginIdHint ? { pluginId: params.pluginIdHint } : {}),
-      message: `${params.runtimeEntryLabel ?? "runtime entry"} not found: ${params.runtimeEntryPath}`,
-      source: params.sourceLabel,
-    });
-    return null;
+    return reportPackageEntryDiagnostic(
+      params,
+      "error",
+      `${params.runtimeEntryLabel ?? "runtime entry"} not found: ${params.runtimeEntryPath}`,
+    );
   }
 
   if (params.origin === "config" || params.origin === "global") {
@@ -362,17 +366,15 @@ function resolvePackageRuntimeEntrySource(
       (params.requireBuiltRuntimeEntry ?? params.origin === "global") &&
       isTypeScriptPackageEntry(safeEntry.relativePath)
     ) {
-      params.diagnostics.push({
-        level: "warn",
-        ...(params.pluginIdHint ? { pluginId: params.pluginIdHint } : {}),
-        message: missingCompiledRuntimeEntryMessage({
+      return reportPackageEntryDiagnostic(
+        params,
+        "warn",
+        missingCompiledRuntimeEntryMessage({
           context: "installed",
           entry: safeEntry.relativePath,
           candidates: builtEntryCandidates,
         }),
-        source: params.sourceLabel,
-      });
-      return null;
+      );
     }
   }
 
@@ -387,13 +389,11 @@ function resolvePackageRuntimeEntrySource(
     }
   }
 
-  params.diagnostics.push({
-    level: "error",
-    ...(params.pluginIdHint ? { pluginId: params.pluginIdHint } : {}),
-    message: `${params.sourceEntryLabel ?? "extension entry"} not found: ${safeEntry.relativePath}`,
-    source: params.sourceLabel,
-  });
-  return null;
+  return reportPackageEntryDiagnostic(
+    params,
+    "error",
+    `${params.sourceEntryLabel ?? "extension entry"} not found: ${safeEntry.relativePath}`,
+  );
 }
 
 /** Resolves the runtime setup source for a plugin package manifest. */
@@ -448,12 +448,7 @@ export function resolvePackageRuntimeExtensions(params: {
 }): Array<{ entryPath: string; source: string }> {
   const runtimeResolution = resolvePackageRuntimeExtensionEntries(params);
   if (!runtimeResolution.ok) {
-    params.diagnostics.push({
-      level: "error",
-      ...(params.pluginIdHint ? { pluginId: params.pluginIdHint } : {}),
-      message: runtimeResolution.error,
-      source: params.sourceLabel,
-    });
+    reportPackageEntryDiagnostic(params, "error", runtimeResolution.error);
     return [];
   }
 

@@ -24,36 +24,13 @@ struct ChatCodeToken: Equatable {
 /// of the source text is never altered, only colors are added.
 enum ChatCodeHighlighter {
     struct Language {
-        struct BlockComment {
-            let open: String
-            let close: String
-        }
-
         let keywords: Set<String>
-        let lineCommentPrefixes: [String]
-        let lineCommentNeedsBoundary: Bool
-        let blockComment: BlockComment?
-        let nestedBlockComments: Bool
+        let lineCommentPrefix: String?
+        var lineCommentNeedsBoundary = false
+        let supportsBlockComments: Bool
+        var nestedBlockComments = false
         let stringDelimiters: Set<Character>
         let supportsTripleQuotes: Bool
-
-        init(
-            keywords: Set<String>,
-            lineCommentPrefixes: [String],
-            lineCommentNeedsBoundary: Bool = false,
-            blockComment: BlockComment?,
-            nestedBlockComments: Bool = false,
-            stringDelimiters: Set<Character>,
-            supportsTripleQuotes: Bool)
-        {
-            self.keywords = keywords
-            self.lineCommentPrefixes = lineCommentPrefixes
-            self.lineCommentNeedsBoundary = lineCommentNeedsBoundary
-            self.blockComment = blockComment
-            self.nestedBlockComments = nestedBlockComments
-            self.stringDelimiters = stringDelimiters
-            self.supportsTripleQuotes = supportsTripleQuotes
-        }
     }
 
     static let maxHighlightedLines = 200
@@ -71,21 +48,6 @@ enum ChatCodeHighlighter {
         }
     }
 
-    static func attributedCode(_ code: String, languageId: String?) -> AttributedString {
-        guard let language = self.language(for: languageId), self.isWithinHighlightLimits(code) else {
-            return AttributedString(code)
-        }
-        var output = AttributedString()
-        for token in self.tokens(code: code, language: language) {
-            var piece = AttributedString(token.text)
-            if let color = ChatCodeSyntaxPalette.color(for: token.kind) {
-                piece.foregroundColor = color
-            }
-            output += piece
-        }
-        return output
-    }
-
     static func tokens(code: String, language: Language) -> [ChatCodeToken] {
         let chars = Array(code)
         var tokens: [ChatCodeToken] = []
@@ -101,21 +63,20 @@ enum ChatCodeHighlighter {
         while index < chars.count {
             let character = chars[index]
 
-            if let block = language.blockComment, self.matches(chars, at: index, block.open) {
+            if language.supportsBlockComments, self.matches(chars, at: index, "/*") {
                 flushPlain()
                 index = self.consumeBlockComment(
                     chars,
                     from: index,
-                    block: block,
                     nested: language.nestedBlockComments,
                     into: &tokens)
                 continue
             }
 
-            let startsLineComment = language.lineCommentPrefixes.contains { prefix in
+            let startsLineComment = language.lineCommentPrefix.map { prefix in
                 self.matches(chars, at: index, prefix) &&
                     (!language.lineCommentNeedsBoundary || self.isLineCommentBoundary(chars, at: index))
-            }
+            } ?? false
             if startsLineComment {
                 flushPlain()
                 var end = index
@@ -183,19 +144,18 @@ enum ChatCodeHighlighter {
     private static func consumeBlockComment(
         _ chars: [Character],
         from start: Int,
-        block: Language.BlockComment,
         nested: Bool,
         into tokens: inout [ChatCodeToken]) -> Int
     {
         var depth = 1
-        var end = start + block.open.count
+        var end = start + 2
         while end < chars.count {
-            if nested, self.matches(chars, at: end, block.open) {
+            if nested, self.matches(chars, at: end, "/*") {
                 depth += 1
-                end += block.open.count
-            } else if self.matches(chars, at: end, block.close) {
+                end += 2
+            } else if self.matches(chars, at: end, "*/") {
                 depth -= 1
-                end += block.close.count
+                end += 2
                 if depth == 0 { break }
             } else {
                 end += 1
@@ -267,8 +227,8 @@ enum ChatCodeHighlighter {
             "static", "struct", "subscript", "super", "switch", "throw", "throws", "true", "try",
             "typealias", "unowned", "var", "weak", "where", "while",
         ],
-        lineCommentPrefixes: ["//"],
-        blockComment: Language.BlockComment(open: "/*", close: "*/"),
+        lineCommentPrefix: "//",
+        supportsBlockComments: true,
         nestedBlockComments: true,
         stringDelimiters: ["\""],
         supportsTripleQuotes: true)
@@ -282,8 +242,8 @@ enum ChatCodeHighlighter {
             "protected", "public", "reified", "return", "sealed", "super", "suspend", "this",
             "throw", "true", "try", "typealias", "val", "var", "vararg", "when", "where", "while",
         ],
-        lineCommentPrefixes: ["//"],
-        blockComment: Language.BlockComment(open: "/*", close: "*/"),
+        lineCommentPrefix: "//",
+        supportsBlockComments: true,
         nestedBlockComments: true,
         stringDelimiters: ["\""],
         supportsTripleQuotes: true)
@@ -299,8 +259,8 @@ enum ChatCodeHighlighter {
             "true", "try", "type", "typeof", "undefined", "unknown", "var", "void", "while",
             "yield",
         ],
-        lineCommentPrefixes: ["//"],
-        blockComment: Language.BlockComment(open: "/*", close: "*/"),
+        lineCommentPrefix: "//",
+        supportsBlockComments: true,
         stringDelimiters: ["\"", "'", "`"],
         supportsTripleQuotes: false)
 
@@ -311,8 +271,8 @@ enum ChatCodeHighlighter {
             "global", "if", "import", "in", "is", "lambda", "match", "nonlocal", "not", "or",
             "pass", "raise", "return", "self", "try", "while", "with", "yield",
         ],
-        lineCommentPrefixes: ["#"],
-        blockComment: nil,
+        lineCommentPrefix: "#",
+        supportsBlockComments: false,
         stringDelimiters: ["\"", "'"],
         supportsTripleQuotes: true)
 
@@ -323,16 +283,16 @@ enum ChatCodeHighlighter {
             "return", "select", "set", "shift", "source", "then", "true", "unset", "until",
             "while",
         ],
-        lineCommentPrefixes: ["#"],
+        lineCommentPrefix: "#",
         lineCommentNeedsBoundary: true,
-        blockComment: nil,
+        supportsBlockComments: false,
         stringDelimiters: ["\"", "'"],
         supportsTripleQuotes: false)
 
     private static let json = Language(
         keywords: ["false", "null", "true"],
-        lineCommentPrefixes: [],
-        blockComment: nil,
+        lineCommentPrefix: nil,
+        supportsBlockComments: false,
         stringDelimiters: ["\""],
         supportsTripleQuotes: false)
 }
@@ -348,14 +308,21 @@ public enum ChatCodeHighlightCache {
     private static let capacity = 160
 
     public static func highlighted(code: String, languageId: String?) -> AttributedString {
-        guard ChatCodeHighlighter.language(for: languageId) != nil,
+        guard let language = ChatCodeHighlighter.language(for: languageId),
               ChatCodeHighlighter.isWithinHighlightLimits(code)
         else {
             return AttributedString(code)
         }
         let key = "\(languageId ?? "")\u{0}\(code)"
         if let hit = self.cache[key] { return hit }
-        let value = ChatCodeHighlighter.attributedCode(code, languageId: languageId)
+        var value = AttributedString()
+        for token in ChatCodeHighlighter.tokens(code: code, language: language) {
+            var piece = AttributedString(token.text)
+            if let color = ChatCodeSyntaxPalette.color(for: token.kind) {
+                piece.foregroundColor = color
+            }
+            value += piece
+        }
         if self.cache.count >= self.capacity {
             self.cache.removeAll(keepingCapacity: true)
         }

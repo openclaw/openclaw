@@ -1,9 +1,10 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Googlechat tests cover monitor.reply delivery plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { createGoogleChatTypingMessage, deliverGoogleChatReply } from "./monitor-reply-delivery.js";
 import type { GoogleChatCoreRuntime } from "./monitor-types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -45,13 +46,10 @@ function createCore(params?: {
   } as unknown as GoogleChatCoreRuntime;
 }
 
-let deliverGoogleChatReply: typeof import("./monitor-reply-delivery.js").deliverGoogleChatReply;
-
-beforeEach(async () => {
+beforeEach(() => {
   vi.clearAllMocks();
   mocks.sendGoogleChatMessage.mockResolvedValue(null);
   mocks.updateGoogleChatMessage.mockResolvedValue({});
-  ({ deliverGoogleChatReply } = await import("./monitor-reply-delivery.js"));
 });
 
 afterAll(() => {
@@ -127,6 +125,40 @@ describe("Google Chat reply delivery", () => {
       space: "spaces/AAA",
       text: "second chunk",
       thread: "spaces/AAA/threads/fallback",
+    });
+  });
+
+  it("replaces the typing message for a valid explicit thread target", async () => {
+    const core = createCore();
+    mocks.sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/reply" });
+
+    await deliverGoogleChatReply({
+      payload: {
+        text: "retargeted reply",
+        replyToId: "spaces/AAA/threads/other",
+      },
+      account,
+      spaceId: "spaces/AAA",
+      runtime: createRuntimeSpies(),
+      core,
+      config,
+      typingMessage: createGoogleChatTypingMessage({
+        messageName: "spaces/AAA/messages/typing",
+        requestedThreadName: "spaces/AAA/threads/root",
+        deliveredThreadName: "spaces/AAA/threads/root",
+      }),
+    });
+
+    expect(mocks.deleteGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      messageName: "spaces/AAA/messages/typing",
+    });
+    expect(mocks.updateGoogleChatMessage).not.toHaveBeenCalled();
+    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      space: "spaces/AAA",
+      text: "retargeted reply",
+      thread: "spaces/AAA/threads/other",
     });
   });
 

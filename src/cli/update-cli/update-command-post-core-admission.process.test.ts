@@ -14,6 +14,7 @@ import {
   resolvePackageActivationJournalPath,
 } from "../../infra/package-update-activation-journal.js";
 import { preparePackageActivationJournal } from "../../infra/package-update-activation-prepare.js";
+import { packageActivationRuntimeForTest } from "../../infra/package-update-activation-runtime.test-support.js";
 import { createPackageIntegrityReader } from "../../infra/package-update-integrity.js";
 import { createPublicationOwner } from "../../infra/package-update-publication-owner.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
@@ -64,6 +65,11 @@ beforeAll(async () => {
     packageRoot = state.path("openclaw");
     candidateRoot = state.path("candidate");
     const runtime = await prepareCandidateAuthorityRuntime(candidateRoot);
+    // This compiler-owned legacy test graph is not part of the installed candidate.
+    await fs.promises.rm(path.join(candidateRoot, "dist", "legacy-finalizer"), {
+      recursive: true,
+      force: true,
+    });
     // The receiver verifies its loaded package. Source imports from the checkout
     // would bypass the installed-package boundary this regression must exercise.
     expect(fileURLToPath(runtime.worker)).toBe(
@@ -154,6 +160,7 @@ it.skipIf(process.platform === "win32")(
       const { databasePath } = installPrivateUpdateHandoffStore(control);
       const guardedEnv = writePrivateUpdateHandoffChildGuard(databasePath, control)(state.env);
       vi.stubEnv("NODE_OPTIONS", guardedEnv.NODE_OPTIONS);
+      vi.stubEnv("BUN_OPTIONS", guardedEnv.BUN_OPTIONS);
       const config: OpenClawConfig = {
         plugins: { enabled: false, slots: { memory: "none" } },
         update: { channel: "stable" },
@@ -173,13 +180,14 @@ it.skipIf(process.platform === "win32")(
       fs.writeFileSync(path.join(bin, "openclaw"), "previous launcher\n");
       fs.writeFileSync(path.join(launchers, "openclaw"), "candidate launcher\n");
       const runChild = processRunner.runUtf8CommandWithTimeout;
+      const runtime = packageActivationRuntimeForTest();
 
       await withUpdateCommandExecutor(runId, async (executor) => {
         const fence = await executor.enter(packageRoot);
         const publicationStartedAt = performance.now();
         const reader = createPackageIntegrityReader();
         const prepared = await preparePackageActivationJournal({
-          options: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+          options: { fence, runtime, onPrepared: () => {} },
           liveRoot: packageRoot,
           stageRoot: candidateRoot,
           launcherRoot: launchers,
@@ -217,6 +225,7 @@ it.skipIf(process.platform === "win32")(
             pluginInstallRecords: {},
             updateStartedAtMs: Date.now(),
             timeoutMs: 30_000,
+            nodeRunner: runtime.path,
           });
 
         // Baseline raw-spawns the public CLI without a grant and is refused by

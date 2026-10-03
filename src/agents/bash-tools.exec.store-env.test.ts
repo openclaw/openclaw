@@ -3,8 +3,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withInstallationTarget } from "../infra/installation-target-context.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
-import { writeSecretStoreEntry } from "../secrets/store/secret-store.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import * as secretStore from "../secrets/store/secret-store.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { createRunExit } from "./bash-tools.exec-runtime.test-support.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -132,9 +133,13 @@ const EGRESS_ENV = {
 } as const;
 
 const tempDirs = createTempDirTracker();
-function writeEntries(entries: StoreEntry[]) {
+async function writeEntries(entries: StoreEntry[]) {
   for (const entry of entries) {
-    writeSecretStoreEntry({ scope: { kind: "team" }, ...entry, updatedBy: "test" });
+    await secretStore.writeSecretStoreEntry({
+      scope: { kind: "team" },
+      ...entry,
+      updatedBy: "test",
+    });
   }
 }
 
@@ -220,8 +225,8 @@ describe("exec store environment", () => {
       }
     },
   );
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     vi.unstubAllEnvs();
     tempDirs.cleanup();
   });
@@ -240,14 +245,15 @@ describe("exec store environment", () => {
     mocks.proxyBindings.length = 0;
   });
 
-  it("applies store env on every call to a lazy exec instance", async () => {
-    writeEntries([
+  it("reuses a lazy exec instance's store snapshot and refreshes it for a new run", async () => {
+    await writeEntries([
       { name: "AWS_REGION", value: "us-west-2", kind: "env" },
       { name: "INTERNAL_VALUE", value: "not-for-subprocesses", kind: "secret" },
     ]);
     const tool = createLazyExecTool({ host: "gateway", security: "full", ask: "off" });
 
     await tool.execute("code-mode-first", { command: "echo one", yieldMs: 120_000 });
+    await writeEntries([{ name: "AWS_REGION", value: "eu-west-1", kind: "env" }]);
     await tool.execute("code-mode-nested", { command: "echo two", yieldMs: 120_000 });
 
     expect(mocks.gatewayParams).toHaveLength(2);
@@ -255,13 +261,67 @@ describe("exec store environment", () => {
       expect(params.env.AWS_REGION).toBe("us-west-2");
       expect(params.env).not.toHaveProperty("INTERNAL_VALUE");
     }
+    const nextRun = createLazyExecTool({ host: "gateway", security: "full", ask: "off" });
+    await nextRun.execute("code-mode-next-run", { command: "echo three", yieldMs: 120_000 });
+    expect(mocks.gatewayParams.at(-1)?.env.AWS_REGION).toBe("eu-west-1");
+  });
+
+  it("refuses a cancelled exec after its store read without cancelling the run's shared snapshot", async () => {
+    await writeEntries([{ name: "AWS_REGION", value: "us-west-2", kind: "env" }]);
+    const replyReady = createDeferredCore();
+    const releaseReply = createDeferredCore();
+    const readStore = secretStore.readSecretStoreExecEnvironment;
+    const read = vi
+      .spyOn(secretStore, "readSecretStoreExecEnvironment")
+      .mockImplementationOnce(async (params) => {
+        const environment = await readStore(params);
+        replyReady.resolve();
+        await releaseReply.promise;
+        return environment;
+      });
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    const controller = new AbortController();
+    const execution = tool
+      .execute("cancelled-store-read", { command: "echo cancelled" }, controller.signal)
+      .then(
+        (value) => ({ status: "completed" as const, value }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
+      );
+    void execution.then((outcome) => {
+      replyReady.reject(
+        outcome.status === "rejected"
+          ? outcome.error
+          : new Error("Exec completed before the store reply"),
+      );
+    });
+    try {
+      await replyReady.promise;
+      controller.abort(new Error("synthetic exec cancellation"));
+      releaseReply.resolve();
+      expect(await execution).toMatchObject({
+        status: "rejected",
+        error: expect.objectContaining({ message: "synthetic exec cancellation" }),
+      });
+      expect(mocks.gatewayParams).toEqual([]);
+      expect(mocks.spawnInputs).toEqual([]);
+
+      const later = await tool.execute("shared-store-read", { command: "echo later" });
+      expect(later.details).toMatchObject({ status: "completed", exitCode: 0 });
+      expect(mocks.spawnInputs).toHaveLength(1);
+      expect(mocks.spawnInputs[0]?.env?.AWS_REGION).toBe("us-west-2");
+      expect(read).toHaveBeenCalledOnce();
+    } finally {
+      releaseReply.resolve();
+      await execution;
+      read.mockRestore();
+    }
   });
 
   it("ignores protected store entries without replacing inherited network settings", async () => {
     vi.stubEnv("PATH", "/inherited/bin");
     vi.stubEnv("HTTPS_PROXY", "http://inherited-proxy.test:8080");
     vi.stubEnv("NODE_EXTRA_CA_CERTS", "/inherited/ca.pem");
-    writeEntries([
+    await writeEntries([
       { name: "PATH", value: "/store/bin", kind: "env" },
       { name: "HTTPS_PROXY", value: "http://store-proxy.test:8080", kind: "env" },
       { name: "NODE_EXTRA_CA_CERTS", value: "/store/ca.pem", kind: "env" },
@@ -289,7 +349,7 @@ describe("exec store environment", () => {
     "applies enabled secret egress only to gateway exec (%s)",
     async (host) => {
       vi.stubEnv("OPENCLAW_SECRET_SENTINELS", "false");
-      writeEntries([
+      await writeEntries([
         { name: "AWS_REGION", value: "us-west-2", kind: "env" },
         {
           name: "SERVICE_API_KEY",

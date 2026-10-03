@@ -443,7 +443,7 @@ it.each(["same-owner", "replacement", "incarnation", "authorization"] as const)(
         }),
       ]);
       if (change === "replacement") {
-        f.placements.startDrain({
+        await f.placements.startDrain({
           sessionId: active.sessionId,
           environmentId: active.environmentId,
           ownerEpoch: active.activeOwnerEpoch,
@@ -483,12 +483,12 @@ it.each(["missing", "local", "reclaimed"] as const)(
     const f = await cancellationLoadFixture();
     if (state === "local") {
       const requested = await f.placements.startDispatch(REQUEST);
-      const failed = f.placements.fail({
+      const failed = await f.placements.fail({
         sessionId: REQUEST.sessionId,
         expectedGeneration: requested.generation,
         recoveryError: "fixture local placement",
       });
-      f.placements.transition({
+      await f.placements.transition({
         sessionId: REQUEST.sessionId,
         from: "failed",
         to: "local",
@@ -840,7 +840,7 @@ it.each([
         if (current?.state !== "active") {
           throw new Error("Replacement fixture requires a completed active dispatch");
         }
-        placements.startDrain({
+        await placements.startDrain({
           sessionId: current.sessionId,
           environmentId: current.environmentId,
           ownerEpoch: current.activeOwnerEpoch,
@@ -1004,7 +1004,7 @@ it.each([
         expect(f.harness.environments.destroy).toHaveBeenCalledOnce();
         expect.soft(f.placements.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
         expect(f.placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
-        expect(f.placements.listPendingWorkspaceResults()).toEqual([]);
+        expect(await f.placements.listPendingWorkspaceResultsAsync()).toEqual([]);
         expect(f.harness.environments.createWithRequest).toHaveBeenCalledOnce();
         expect(f.harness.log.filter((event) => event === "placement:requested")).toHaveLength(1);
       }

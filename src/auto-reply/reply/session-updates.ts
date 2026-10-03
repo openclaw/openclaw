@@ -14,6 +14,7 @@ import { projectCompactionAccountingPatch } from "../../config/sessions/session-
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
+import { resolveSessionSkillExecutionWorkspace } from "../../skills/loading/workspace-skill-roots.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
 import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
@@ -44,7 +45,7 @@ async function persistSkillSnapshot(params: {
   expectedSession: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined;
   sessionEntryHandle?: ReplySessionEntryHandle;
   sessionStore?: Record<string, SessionEntry>;
-  sessionKey?: string;
+  sessionKey: string;
   sessionId?: string;
   storePath?: string;
   currentEntry: SessionEntry;
@@ -52,22 +53,15 @@ async function persistSkillSnapshot(params: {
   isFirstTurnInSession: boolean;
 }): Promise<{ entry: SessionEntry | undefined; updated: boolean }> {
   const updates = {
-    sessionId: params.sessionId ?? params.currentEntry.sessionId ?? crypto.randomUUID(),
+    sessionId: params.sessionId ?? params.currentEntry.sessionId,
     updatedAt: Date.now(),
     ...(params.isFirstTurnInSession ? { systemSent: true } : {}),
     skillsSnapshot: params.skillsSnapshot,
   };
-  if (!params.sessionEntryHandle && (!params.sessionStore || !params.sessionKey)) {
-    return { entry: undefined, updated: false };
-  }
-  if (!params.storePath || !params.sessionKey) {
+  if (!params.storePath) {
     const current = params.sessionEntryHandle
-      ? params.sessionKey
-        ? params.sessionEntryHandle.get(params.sessionKey)
-        : params.sessionEntryHandle.getCurrent()
-      : params.sessionKey
-        ? params.sessionStore?.[params.sessionKey]
-        : undefined;
+      ? params.sessionEntryHandle.get(params.sessionKey)
+      : params.sessionStore?.[params.sessionKey];
     if (
       current?.sessionId !== params.expectedSession?.sessionId ||
       current?.lifecycleRevision !== params.expectedSession?.lifecycleRevision
@@ -161,9 +155,10 @@ export async function ensureSkillSnapshot(params: {
   const resolveSnapshot = (snapshot: SessionEntry["skillsSnapshot"]) =>
     resolveReusableWorkspaceSkillSnapshot({
       workspaceDir,
-      ...(params.executionWorkspaceDir
-        ? { executionWorkspaceDir: params.executionWorkspaceDir }
-        : {}),
+      ...resolveSessionSkillExecutionWorkspace(
+        nextEntry?.worktree?.canonicalWorkspaceDir,
+        params.executionWorkspaceDir,
+      ),
       config: cfg,
       agentId,
       skillFilter,
@@ -190,15 +185,11 @@ export async function ensureSkillSnapshot(params: {
         ? initialSnapshotState.snapshot
         : (await resolveSnapshot(current.skillsSnapshot)).snapshot;
     const { entry: persistedEntry, updated } = await persistSkillSnapshot({
+      ...params,
       expectedSession,
-      sessionEntryHandle,
-      sessionStore,
       sessionKey,
-      sessionId,
-      storePath,
       currentEntry: current,
       skillsSnapshot: skillSnapshot,
-      isFirstTurnInSession,
     });
     if (!updated) {
       return {
@@ -228,15 +219,11 @@ export async function ensureSkillSnapshot(params: {
       updatedAt: Date.now(),
     };
     const { entry: persistedEntry, updated } = await persistSkillSnapshot({
+      ...params,
       expectedSession,
-      sessionEntryHandle,
-      sessionStore,
       sessionKey,
-      sessionId,
-      storePath,
       currentEntry: current,
       skillsSnapshot,
-      isFirstTurnInSession,
     });
     if (!updated) {
       return {
@@ -345,7 +332,7 @@ export async function incrementCompactionCount(params: {
                 }
               },
             }
-          : {}),
+          : { workerGuard: {} }),
       },
     );
   } catch (error) {

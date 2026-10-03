@@ -1,6 +1,5 @@
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { clearCliSession } from "../../agents/cli-session.js";
 import type { ModelRef } from "../../agents/model-ref-shared.js";
 import {
   deriveSessionTotalTokens,
@@ -20,28 +19,6 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
-
-function applyCliSessionClearToSessionPatch(
-  params: {
-    providerUsed?: string;
-    clearCliSessionBinding?: boolean;
-  },
-  entry: SessionEntry,
-  patch: Partial<SessionEntry>,
-): Partial<SessionEntry> {
-  const cliProvider = params.providerUsed ?? entry.modelProvider;
-  if (!cliProvider || params.clearCliSessionBinding !== true) {
-    return patch;
-  }
-  const nextEntry = { ...entry, ...patch };
-  clearCliSession(nextEntry, cliProvider);
-  return {
-    ...patch,
-    cliSessionIds: nextEntry.cliSessionIds,
-    cliSessionBindings: nextEntry.cliSessionBindings,
-    claudeCliSessionId: nextEntry.claudeCliSessionId,
-  };
-}
 
 function resolveNonNegativeTokenCount(value: number | undefined): number | undefined {
   const resolved = asNonNegativeFiniteNumber(value);
@@ -78,14 +55,11 @@ export async function persistSessionUsageUpdate(params: {
   promptTokens?: number;
   isHeartbeat?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
-  /** Compaction invalidates native continuity with its accounting commit. */
-  clearCliSessionBinding?: boolean;
   /** Presence overrides usage inference; undefined tokens explicitly mean current context is unknown. */
   currentContextSnapshot?: { tokens: number | undefined };
   preserveFreshTotalTokensOnStaleUsage?: boolean;
   preserveRuntimeModel?: boolean;
   preserveUserFacingSessionModelState?: boolean;
-  logLabel?: string;
 }): Promise<void> {
   const { agentId, storePath, sessionKey, sessionStore, authorize } = params;
   if (!storePath || !sessionKey) {
@@ -93,7 +67,6 @@ export async function persistSessionUsageUpdate(params: {
   }
   const expectedSession = params.expectedSession ? { ...params.expectedSession } : undefined;
 
-  const label = params.logLabel ? `${params.logLabel} ` : "";
   const cfg = params.cfg ?? getRuntimeConfig();
   const agentHarnessId = normalizeOptionalString(params.agentHarnessId);
   const modelSelection = params.runtimeModelSelection ?? {
@@ -218,9 +191,7 @@ export async function persistSessionUsageUpdate(params: {
             patch.totalTokensFresh = false;
             patch.totalTokensVersion = undefined;
           }
-          return preserveUserFacingRunState
-            ? patch
-            : applyCliSessionClearToSessionPatch(params, entry, patch);
+          return patch;
         },
         {
           skipMaintenance: true,
@@ -232,19 +203,19 @@ export async function persistSessionUsageUpdate(params: {
                 },
               }
             : {}),
-          ...(authorize
-            ? {
-                assertCommitAllowed: () => {
+          workerGuard: {
+            assertCurrent: authorize
+              ? () => {
                   if (!authorize()) {
                     throw new Error("session usage accounting authority revoked");
                   }
-                },
-              }
-            : {}),
+                }
+              : undefined,
+          },
         },
       );
     } catch (err) {
-      logVerbose(`failed to persist ${label}usage update: ${String(err)}`);
+      logVerbose(`failed to persist usage update: ${String(err)}`);
     }
   }
 }

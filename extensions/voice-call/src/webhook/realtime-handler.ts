@@ -36,25 +36,20 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
-import { rejectWebSocketUpgrade } from "openclaw/plugin-sdk/websocket-runtime";
+import {
+  rejectWebSocketUpgrade,
+  WebSocket,
+  WebSocketServer,
+} from "openclaw/plugin-sdk/websocket-runtime";
 import { resolveVoiceCallPublicPathPrefix, type VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import { REALTIME_VOICE_END_CALL_TOOL_NAME } from "../realtime-call-control.js";
-import type { CallRecord, EndReason, NormalizedEvent } from "../types.js";
+import type { CallRecord, EndReason, NormalizedEvent, ToolHandlerContext } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
-import { WebSocket, WebSocketServer } from "../websocket.js";
 import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
 import type { StreamDisconnectLifecycle } from "./stream-disconnect-grace.js";
-import {
-  type StreamFrameAdapter,
-  TelnyxStreamFrameAdapter,
-  TwilioStreamFrameAdapter,
-} from "./stream-frame-adapter.js";
+import { StreamFrameAdapter } from "./stream-frame-adapter.js";
 
-export type ToolHandlerContext = {
-  partialUserTranscript?: string;
-  abortSignal?: AbortSignal;
-};
 type ToolHandlerFn = (
   args: unknown,
   callId: string,
@@ -414,8 +409,7 @@ export class RealtimeCallHandler {
     }
 
     const providerName = callerMeta.providerName ?? "twilio";
-    const adapter: StreamFrameAdapter =
-      providerName === "telnyx" ? new TelnyxStreamFrameAdapter() : new TwilioStreamFrameAdapter();
+    const adapter = new StreamFrameAdapter(providerName);
 
     const wss = new WebSocketServer({
       noServer: true,
@@ -684,13 +678,8 @@ export class RealtimeCallHandler {
     if (!isFutureDateTimestampMs(entry.expiry)) {
       return null;
     }
-    return {
-      from: entry.from,
-      to: entry.to,
-      direction: entry.direction,
-      providerName: entry.providerName,
-      callId: entry.callId,
-    };
+    const { expiry: _expiry, ...request } = entry;
+    return request;
   }
 
   private async handleCall(
@@ -2024,7 +2013,10 @@ export class RealtimeCallHandler {
         result !== null && typeof result === "object" && !Array.isArray(result) && "error" in result
       );
     };
-    const emitFinalToolEvent = (result: unknown): void => {
+    const submitFinalToolResult = async (result: unknown): Promise<unknown> => {
+      if (!delegation) {
+        await bridge.submitToolResult(bridgeCallId, result);
+      }
       harness.emit({
         type: hasResultError(result) ? "tool.error" : "tool.result",
         turnId,
@@ -2032,13 +2024,30 @@ export class RealtimeCallHandler {
         payload: { name, result },
         final: true,
       });
-    };
-    const submitFinalToolResult = async (result: unknown): Promise<unknown> => {
-      if (!delegation) {
-        await bridge.submitToolResult(bridgeCallId, result);
-      }
-      emitFinalToolEvent(result);
       return result;
+    };
+    const invokeHandler = async (
+      handlerArgs: unknown,
+      context: ToolHandlerContext,
+    ): Promise<unknown> => {
+      console.log(
+        `[voice-call] realtime tool call executing callId=${callId} tool=${name} hasHandler=${Boolean(handler)}`,
+      );
+      try {
+        return handler
+          ? await handler(handlerArgs, callId, context)
+          : { error: `Tool "${name}" not available` };
+      } catch (error) {
+        return buildRealtimeVoiceAgentErrorProviderResult(error);
+      }
+    };
+    const logResult = (result: unknown): boolean => {
+      const failed = hasResultError(result);
+      const error = failed ? formatErrorMessage(result.error ?? "unknown") : undefined;
+      console.log(
+        `[voice-call] realtime tool call completed callId=${callId} tool=${name} status=${failed ? "error" : "ok"} elapsedMs=${Date.now() - startedAt}${error ? ` error=${error}` : ""}`,
+      );
+      return failed;
     };
     const submitWorkingResponse = async (): Promise<void> => {
       if (
@@ -2163,12 +2172,7 @@ export class RealtimeCallHandler {
           };
           state.partialUserTranscript = context.partialUserTranscript;
           const handlerArgs = withFallbackConsultQuestion(args, context.partialUserTranscript);
-          console.log(
-            `[voice-call] realtime tool call executing callId=${callId} tool=${name} hasHandler=${Boolean(handler)}`,
-          );
-          return !handler
-            ? { error: `Tool "${name}" not available` }
-            : await handler(handlerArgs, callId, context);
+          return await invokeHandler(handlerArgs, context);
         } catch (error) {
           return buildRealtimeVoiceAgentErrorProviderResult(error);
         }
@@ -2179,11 +2183,7 @@ export class RealtimeCallHandler {
           return undefined;
         }
         const result = outcome.result;
-        const failed = hasResultError(result);
-        const error = failed ? formatErrorMessage(result.error ?? "unknown") : undefined;
-        console.log(
-          `[voice-call] realtime tool call completed callId=${callId} tool=${name} status=${failed ? "error" : "ok"} elapsedMs=${Date.now() - startedAt}${error ? ` error=${error}` : ""}`,
-        );
+        const failed = logResult(result);
         await submitFinalToolResult(result);
         if (!failed) {
           this.consumePartialUserTranscript(
@@ -2200,26 +2200,10 @@ export class RealtimeCallHandler {
         }
       }
     }
-    console.log(
-      `[voice-call] realtime tool call executing callId=${callId} tool=${name} hasHandler=${Boolean(handler)}`,
-    );
-    const context = {
+    const result = await invokeHandler(args, {
       partialUserTranscript: this.resolveUserTranscriptContext(callId, userTranscriptOwner),
-    };
-    let result: unknown;
-    try {
-      result = !handler
-        ? { error: `Tool "${name}" not available` }
-        : await handler(args, callId, context);
-    } catch (error) {
-      result = buildRealtimeVoiceAgentErrorProviderResult(error);
-    }
-    const error = hasResultError(result)
-      ? formatErrorMessage(result.error ?? "unknown")
-      : undefined;
-    console.log(
-      `[voice-call] realtime tool call completed callId=${callId} tool=${name} status=${error === undefined ? "ok" : "error"} elapsedMs=${Date.now() - startedAt}${error ? ` error=${error}` : ""}`,
-    );
+    });
+    logResult(result);
     return await submitFinalToolResult(result);
   }
 }

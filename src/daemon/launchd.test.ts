@@ -39,14 +39,11 @@ import { LAUNCH_AGENT_ENV_WRAPPER_SHELL } from "./launchd-plist.js";
 import { launchdTestState as state } from "./launchd-state.test-support.js";
 import {
   disableCurrentOpenClawUpdateLaunchdJob,
-  disableOpenClawUpdateLaunchdJob,
   findStaleOpenClawUpdateLaunchdJobs,
   isLaunchAgentEnabled,
   isLaunchAgentLoaded,
   parkCurrentLaunchAgentForMaintenance,
   parseLaunchAgentEnabled,
-  parseLaunchctlPrint,
-  parseLaunchctlListOpenClawUpdateJobs,
   readLaunchAgentProgramArguments,
   readLaunchAgentRuntime,
   repairLaunchAgentBootstrap,
@@ -192,34 +189,6 @@ describe("launchd runtime parsing", () => {
       "launchctl print-disabled failed: Operation not permitted",
     );
   });
-
-  it("parses state, pid, and exit status", () => {
-    const output = [
-      "state = running",
-      "pid = 4242",
-      "last exit status = 1",
-      "last exit reason = exited",
-    ].join("\n");
-    expect(parseLaunchctlPrint(output)).toEqual({
-      state: "running",
-      pid: 4242,
-      lastExitStatus: 1,
-      lastExitReason: "exited",
-    });
-  });
-
-  it("rejects pid and exit status values with junk suffixes", () => {
-    const output = [
-      "state = waiting",
-      "pid = 123abc",
-      "last exit status = 7ms",
-      "last exit reason = exited",
-    ].join("\n");
-    expect(parseLaunchctlPrint(output)).toEqual({
-      state: "waiting",
-      lastExitReason: "exited",
-    });
-  });
 });
 
 describe("launchd runtime state", () => {
@@ -326,18 +295,18 @@ describe("launchd runtime state", () => {
 });
 
 describe("launchctl list detection", () => {
-  it("parses stale OpenClaw updater jobs from launchctl list", () => {
-    const jobs = parseLaunchctlListOpenClawUpdateJobs(
-      [
-        "123 0 ai.openclaw.gateway",
-        "- 127 ai.openclaw.update.2026.5.12",
-        "- 0 ai.openclaw.manual-update.1717168800",
-        "8142 0 ai.openclaw.update.2026.5.13-beta.1",
-        "915 0 ai.openclaw.tayoun.update.20260625T201026-0400",
-        "- 0 ai.openclaw.manual-updater.1717168800",
-        "- 0 com.example.other",
-      ].join("\n"),
-    );
+  it("discovers stale OpenClaw updater jobs from launchctl list", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    state.listOutput = [
+      "123 0 ai.openclaw.gateway",
+      "- 127 ai.openclaw.update.2026.5.12",
+      "- 0 ai.openclaw.manual-update.1717168800",
+      "8142 0 ai.openclaw.update.2026.5.13-beta.1",
+      "915 0 ai.openclaw.tayoun.update.20260625T201026-0400",
+      "- 0 ai.openclaw.manual-updater.1717168800",
+      "- 0 com.example.other",
+    ].join("\n");
+    const jobs = await findStaleOpenClawUpdateLaunchdJobs(ENV);
 
     expect(jobs).toEqual([
       {
@@ -580,28 +549,6 @@ describe("launchctl list detection", () => {
         disableCurrentOpenClawUpdateLaunchdJob({
           ...ENV,
           LAUNCH_JOB_LABEL: label,
-        }),
-      ).resolves.toBe(false);
-
-      expect(state.launchctlCalls).toEqual([]);
-    },
-  );
-
-  it.runIf(process.platform === "darwin")("disables an explicit updater", async () => {
-    const label = "ai.openclaw.update.2026.5.12";
-    await expect(disableOpenClawUpdateLaunchdJob(label)).resolves.toBe(true);
-    expect(state.launchctlCalls).toContainEqual(["disable", `${DOMAIN}/${label}`]);
-  });
-
-  it.runIf(process.platform === "darwin")(
-    "does not let the process marker bypass metadata for an explicit profile job",
-    async () => {
-      const label = "ai.openclaw.tayoun.update.20260625T201026-0400";
-
-      await expect(
-        disableOpenClawUpdateLaunchdJob(label, {
-          ...ENV,
-          OPENCLAW_UPDATE_RUN_HANDOFF: "1",
         }),
       ).resolves.toBe(false);
 

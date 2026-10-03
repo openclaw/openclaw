@@ -3,7 +3,11 @@ import path from "node:path";
 import { describe, expect, it, vi, type MockInstance } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
+import { SessionMetadataUnavailableError } from "../state/session-metadata-unavailable-error.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   bindHttpResponseAuthority,
@@ -77,6 +81,138 @@ describe("managed media response authority", () => {
       resolvePlaybackTranscodeMock.mockReset().mockResolvedValue({ kind: "passthrough" });
     },
   });
+
+  it("serves a managed attachment without executing SQLite on the request thread", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir);
+    const url = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+    readSessionMessagesMock.mockResolvedValue([
+      { content: [{ type: "image", url }], __openclaw: { id: "msg-1" } },
+    ]);
+    authorizeGatewayHttpRequestOrReplyMock.mockResolvedValue({ assertCurrent: () => {} });
+    resolveSharedSecretHttpOperatorScopesMock.mockReturnValue(["operator.read"]);
+    resolveOpenAiCompatibleHttpSenderIsOwnerMock.mockReturnValue(true);
+    const { res } = makeMockHttpResponse();
+    res.req.url = url;
+    res.req.method = "GET";
+    const chunks: Buffer[] = [];
+    res.on("data", (chunk: Buffer) => chunks.push(chunk));
+    const finished = new Promise<void>((resolve) => {
+      res.once("finish", resolve);
+    });
+    const sql = observeHostDataSql();
+    try {
+      expect(
+        await handleManagedOutgoingImageHttpRequest(res.req, res, {
+          auth: { mode: "none", allowTailscale: false },
+          stateDir,
+        }),
+      ).toBe(true);
+      await finished;
+      expect(res.statusCode).toBe(200);
+      expect(Buffer.concat(chunks).toString()).toBe("original-image");
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+  });
+
+  it.each(["revoked", "rejected", "retired", "schema-missing"] as const)(
+    "refuses a %s worker ownership read before opening media",
+    async (outcome) => {
+      const { attachmentId, sessionKey, originalPath } = await createFixture(stateDir);
+      const url = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+      readSessionMessagesMock.mockResolvedValue([
+        { content: [{ type: "image", url }], __openclaw: { id: "msg-1" } },
+      ]);
+      let current = true;
+      authorizeGatewayHttpRequestOrReplyMock.mockResolvedValue({
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("request revoked");
+          }
+        },
+      });
+      resolveSharedSecretHttpOperatorScopesMock.mockReturnValue(["operator.read"]);
+      resolveOpenAiCompatibleHttpSenderIsOwnerMock.mockReturnValue(true);
+      const entered = createDeferred();
+      const resume = createDeferred();
+      const readDatabases = history.withSessionHistoryWorkerDatabases;
+      let databasePath: string | undefined;
+      let closing: Promise<boolean> | undefined;
+      const readSpy = vi
+        .spyOn(history, "withSessionHistoryWorkerDatabases")
+        .mockImplementation((databases, consume, lane) => {
+          databasePath = databases[0]?.path;
+          return readDatabases(
+            databases,
+            (owners) =>
+              consume(
+                owners.map((owner) => ({
+                  ...owner,
+                  async readExactEntries(input) {
+                    const result = await owner.readExactEntries(input);
+                    entered.resolve();
+                    await resume.promise;
+                    if (outcome === "rejected") {
+                      throw new Error("worker read rejected");
+                    }
+                    if (outcome === "schema-missing") {
+                      throw new SessionMetadataUnavailableError("schema-missing");
+                    }
+                    return result;
+                  },
+                })),
+              ),
+            lane,
+          );
+        });
+      const openSpy = vi.spyOn(fs, "open");
+      const { res, setHeader } = makeMockHttpResponse();
+      res.req.url = url;
+      res.req.method = "GET";
+      const handled = handleManagedOutgoingImageHttpRequest(res.req, res, {
+        auth: { mode: "none", allowTailscale: false },
+        stateDir,
+      });
+      try {
+        await Promise.race([
+          entered.promise,
+          handled.then(() => {
+            throw new Error("ownership read was bypassed");
+          }),
+        ]);
+        current = outcome !== "revoked";
+        if (outcome === "retired") {
+          expect(databasePath).toBeDefined();
+          closing = closeOpenClawAgentDatabaseByPathAsync(databasePath!);
+        }
+        resume.resolve();
+        if (outcome === "schema-missing") {
+          await expect(handled).resolves.toBe(true);
+          expect(res.statusCode).toBe(404);
+        } else {
+          await expect(handled).rejects.toThrow(
+            outcome === "revoked"
+              ? "request revoked"
+              : outcome === "rejected"
+                ? "worker read rejected"
+                : /revoked/,
+          );
+        }
+        expect(openSpy.mock.calls.some(([file]) => String(file) === originalPath)).toBe(false);
+        expect(
+          setHeader.mock.calls.some(([name]) => /content-(length|disposition)/i.test(name)),
+        ).toBe(false);
+        expect(readSessionMessagesMock).not.toHaveBeenCalled();
+      } finally {
+        resume.resolve();
+        await handled.catch(() => {});
+        await closing;
+        readSpy.mockRestore();
+        openSpy.mockRestore();
+      }
+    },
+  );
 
   it.each(["full", "thumbnail", "HEAD", "not-modified", "playback", "preparing"] as const)(
     "refuses revoked media authority after %s preparation",

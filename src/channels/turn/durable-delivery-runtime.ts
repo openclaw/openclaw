@@ -4,6 +4,7 @@ import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-
 import {
   getPluginRegistryGatewayChannelRegistration,
   getPluginRegistryGatewayOwner,
+  isPluginRegistryGatewayViewOf,
 } from "../../plugins/registry-lifecycle.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -41,8 +42,12 @@ export function withDurableDeliveryRuntime<T>(
       reject("The reply delivery runtime changed before sending.");
     }
   };
-  if (current === registry) {
-    return deliver(input.cfg, assertCurrent);
+  if (current === registry || isPluginRegistryGatewayViewOf(registry, current)) {
+    // A filtered agent registry is still this publication, not a reload handoff.
+    // The completed model turn must not select or own the final transport.
+    return runOutsidePluginRuntimeGenerationScope(() =>
+      withPluginRuntimeRegistryScope(current, () => deliver(input.cfg, assertCurrent)),
+    );
   }
   const cfg = getPluginRuntimeLoadContext(current)?.rawConfig;
   const channel = current.channels.find((entry) => entry.plugin.id === input.channel);
@@ -58,20 +63,19 @@ export function withDurableDeliveryRuntime<T>(
     !isDeepStrictEqual(cfg.channels?.defaults, input.cfg.channels?.defaults) ||
     !channel ||
     !retainedChannel ||
-    !prepareRuntimeHandoff ||
     !isDeepStrictEqual(
       cfg.plugins?.entries?.[channel.pluginId],
       input.cfg.plugins?.entries?.[channel.pluginId],
     )
   ) {
-    return reject(
-      "The reply channel changed or cannot preserve its sender; delivery was not started.",
-    );
+    return reject("The reply channel changed; delivery was not started.");
   }
   // Drop both inherited generation selectors, but retain the exact authenticated caller.
+  // The retained registration and unchanged settings keep the admitted sender. Channels whose
+  // credential can change outside config (env, files, SecretRefs) pin it through the callback.
   return runOutsidePluginRuntimeGenerationScope(() =>
     withPluginRuntimeRegistryScope(current, () => {
-      const preparedCfg = prepareRuntimeHandoff(cfg);
+      const preparedCfg = prepareRuntimeHandoff ? prepareRuntimeHandoff(cfg) : cfg;
       assertCurrent();
       return deliver(preparedCfg, assertCurrent);
     }),

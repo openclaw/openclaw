@@ -96,7 +96,7 @@ export function emptyPhaseSignalStore(nowIso: string): ShortTermPhaseSignalStore
   };
 }
 
-export function normalizeShortTermPhaseSignalStore(
+function normalizeShortTermPhaseSignalStore(
   raw: unknown,
   nowIso: string,
 ): ShortTermPhaseSignalStore {

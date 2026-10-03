@@ -39,7 +39,6 @@ import { findTypecheckInertPaths } from "../../scripts/lib/typecheck-inert.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
-import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -691,6 +690,7 @@ describe("scripts/changed-lanes", () => {
       "check:line-cap-ratchet",
       "check:max-lines-ratchet",
       "check:assertion-safety",
+      "check:test-timeout-race-ratchet",
     ]) {
       expect(checked.stderr).toContain(`${command} --staged --base ${base}`);
     }
@@ -822,7 +822,6 @@ describe("scripts/changed-lanes", () => {
     "fails real changed-check lint for $name and passes after repair",
     ({ count, extension, otherPaths }) => {
       const { dir, run } = createRootTestLintFixture();
-      materializeNativeCompiler(dir);
       const targets = Array.from(
         { length: count },
         (_, index) => `test/root-lint-${index}.test.${extension}`,
@@ -918,6 +917,7 @@ describe("scripts/changed-lanes", () => {
     ["config/assertion-safety-baseline.txt", "check:assertion-safety"],
     ["config/env-var-count-budget.txt", "check:max-lines-ratchet"],
     ["config/max-lines-baseline.txt", "check:max-lines-ratchet"],
+    ["config/test-timeout-race-baseline.txt", "check:test-timeout-race-ratchet"],
   ])("targets mixed-owner lint while retaining the guard for %s", (baseline, guard) => {
     const result = detectChangedLanes([
       baseline,
@@ -1656,6 +1656,7 @@ describe("scripts/changed-lanes", () => {
         "check:line-cap-ratchet",
         "check:max-lines-ratchet",
         "check:assertion-safety",
+        "check:test-timeout-race-ratchet",
       ]) {
         expect(commands.find(({ args }) => args[0] === owner)?.args).toEqual([
           owner,

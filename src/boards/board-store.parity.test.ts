@@ -26,7 +26,7 @@ function seedSession(env: NodeJS.ProcessEnv, agentId: string, sessionKey: string
   const database = openOpenClawAgentDatabase({ agentId, env });
   const sessionId = `session-${agentId}-${sessionKey.replaceAll(":", "-")}`;
   replaceSessionEntrySync(
-    { agentId, sessionKey, storePath: database.path },
+    { agentId, env, sessionKey, storePath: database.path },
     { sessionId, updatedAt: Date.now() },
   );
   return database.path;
@@ -813,7 +813,7 @@ describe("SqliteBoardStore persistence", () => {
       path: path.join(stateDir, "000-relocated.sqlite"),
     });
     replaceSessionEntrySync(
-      { agentId, sessionKey, storePath: relocated.path },
+      { agentId, env, sessionKey, storePath: relocated.path },
       { sessionId: "relocated-session", updatedAt: Date.now() },
     );
     relocated.db

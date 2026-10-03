@@ -138,7 +138,7 @@ extension DashboardManager {
     nonisolated static let failureURL = URL(string: "about:blank")!
 
     func canFocusWithoutReload(_ controller: DashboardWindowController) -> Bool {
-        controller.hasCurrentBrowserSession && !controller.isShowingFailurePage
+        controller.documentHost.hasCurrentBrowserSession && !controller.isShowingFailurePage
     }
 
     func loadWindow(
@@ -154,7 +154,7 @@ extension DashboardManager {
         } else if present {
             controller.show(url: configuration.url, auth: configuration.auth)
         } else {
-            controller.loadInBackground(
+            controller.update(
                 url: configuration.url, auth: configuration.auth, restoringRoute: restoringRoute)
         }
     }
@@ -285,10 +285,11 @@ extension DashboardManager {
     {
         // A saved renewal may reach the catalog before its serialized cookie
         // write finishes. The existing account lease remains valid throughout.
-        controller.tlsParams != configuration.tlsParams ||
+        controller.documentHost.tlsParams != configuration.tlsParams ||
             controller.auth != configuration.auth ||
-            !controller.hasCurrentBrowserSession ||
-            controller.browserSession?.browserDataPrincipal != configuration.browserSession?.browserDataPrincipal ||
+            !controller.documentHost.hasCurrentBrowserSession ||
+            controller.documentHost.browserSession?.browserDataPrincipal != configuration.browserSession?
+            .browserDataPrincipal ||
             (comparePrimaryRoute && (endpoint.routeAuthority != displayedRoute?.authority ||
                     endpoint.revision.map { $0 != displayedRoute?.revision } == true))
     }

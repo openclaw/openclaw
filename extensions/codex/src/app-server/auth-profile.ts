@@ -30,6 +30,12 @@ export type CodexAppServerAuthProfileLookup = {
   config?: ProviderAuthAliasConfig;
 };
 
+export type CodexAppServerAuthRuntimeContext = CodexAppServerAuthProfileLookup & {
+  authMode?: "prepared-api-key" | "profile";
+  onAuthRefreshFailure?: () => void;
+};
+
+/** Returns true when an auth profile uses native Codex/OpenAI app-server auth. */
 export function isCodexAppServerNativeAuthProfile(
   lookup: CodexAppServerAuthProfileLookup,
 ): boolean {

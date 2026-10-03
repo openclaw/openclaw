@@ -152,33 +152,49 @@ describe("DockLayoutController open intent", () => {
 });
 
 describe("DockLayoutController inline columns", () => {
-  it("does not reserve the viewport for an embedded dock", () => {
-    const layout = createLayout("right");
-    layout.save({ open: true, dock: "right", height: 320, width: 520 });
-    const host = Object.assign(document.createElement("div"), {
-      addController: vi.fn((_controller: ReactiveController) => undefined),
-      removeController: vi.fn((_controller: ReactiveController) => undefined),
-      requestUpdate: vi.fn(),
-      updateComplete: Promise.resolve(true),
-    });
-    host.setAttribute("embedded", "");
-    const controller = new DockLayoutController(host, {
-      layout,
-      reservationPrefix: "test-embedded",
-      isAvailable: () => true,
-    });
+  it.each([
+    { dock: "right", reserved: { bottom: "0px", right: "520px" } },
+    { dock: "bottom", reserved: { bottom: "320px", right: "0px" } },
+  ] as const)(
+    "lets only the standalone $dock dock own the viewport reservation",
+    ({ dock, reserved }) => {
+      const layout = createLayout("right");
+      layout.save({ open: true, dock, height: 320, width: 520 });
+      const embeddedHost = Object.assign(document.createElement("div"), {
+        addController: vi.fn((_controller: ReactiveController) => undefined),
+        removeController: vi.fn((_controller: ReactiveController) => undefined),
+        requestUpdate: vi.fn(),
+        updateComplete: Promise.resolve(true),
+      });
+      embeddedHost.setAttribute("embedded", "");
+      // Both instances of one panel share its layout store and reservation properties.
+      const options = { layout, reservationPrefix: "test-shared", isAvailable: () => true };
+      const standalone = new DockLayoutController(createControllerHost(), options);
+      const embedded = new DockLayoutController(embeddedHost, options);
+      const reservation = () => ({
+        bottom: document.documentElement.style.getPropertyValue("--oc-test-shared-reserve-bottom"),
+        right: document.documentElement.style.getPropertyValue("--oc-test-shared-reserve-right"),
+      });
+      const cleared = { bottom: "0px", right: "0px" };
 
-    controller.hostConnected();
-    controller.syncReservation();
+      standalone.hostConnected();
+      embedded.hostConnected();
+      standalone.syncReservation();
+      embedded.syncReservation();
+      expect(reservation()).toEqual(reserved);
 
-    expect(
-      document.documentElement.style.getPropertyValue("--oc-test-embedded-reserve-bottom"),
-    ).toBe("0px");
-    expect(
-      document.documentElement.style.getPropertyValue("--oc-test-embedded-reserve-right"),
-    ).toBe("0px");
-    controller.hostDisconnected();
-  });
+      standalone.setOpen(false);
+      embedded.syncReservation();
+      expect(reservation()).toEqual(cleared);
+
+      standalone.setOpen(true);
+      embedded.hostDisconnected();
+      expect(reservation()).toEqual(reserved);
+
+      standalone.hostDisconnected();
+      expect(reservation()).toEqual(cleared);
+    },
+  );
 
   it("resizes and restores a width without reserving the global viewport", async () => {
     const layout = createDockPanelLayout({

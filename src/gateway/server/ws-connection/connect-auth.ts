@@ -280,7 +280,6 @@ async function authenticateGatewayConnectCore(
       sharedAuthOk,
       authOk,
       hasSharedAuth,
-      isLocalClient,
     });
     // Device-less shared auth clears self-declared scopes by default.
     // Only first-party local control paths preserve scopes: backend self-

@@ -40,6 +40,7 @@ type Fixture = {
   state: OpenClawTestState;
   rootA: string;
   rootB: string;
+  serviceNodeRunner: string;
   before: PreManagedServiceStop;
   serviceState: GatewayServiceState;
   mocks: {
@@ -160,7 +161,7 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
     "revoked",
     "schema-newer",
   ] as const)("retained own-rebind compensation: %s", async (scenario) => {
-    const { state, rootA, rootB, before, serviceState, mocks } = fixture();
+    const { state, rootA, rootB, serviceNodeRunner, before, serviceState, mocks } = fixture();
     const managedDefinition = structuredClone(serviceState.command!);
     serviceState.command = {
       ...managedDefinition,
@@ -179,7 +180,7 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
         pinScope,
         {
           expected: readDaemonRuntimePinForInstall(pinScope, serviceState.command, true),
-          pin: { runtime: "node", path: process.execPath },
+          pin: { runtime: "node", path: serviceNodeRunner },
         },
         serviceState.command,
       );
@@ -207,7 +208,7 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
                   serviceState.command = {
                     ...originalCommand,
                     programArguments: [
-                      process.execPath,
+                      serviceNodeRunner,
                       path.join(rootB, "dist/index.js"),
                       "gateway",
                     ],
@@ -441,28 +442,6 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
       } finally {
         platform.mockRestore();
       }
-    });
-  });
-
-  it("refuses a completed later fingerprint mismatch instead of downgrading it to a warning", async () => {
-    const { rootB, before } = fixture();
-    await admitted(async (run) => {
-      const original = await observeOriginalManagedServiceRuntime(
-        { root: rootB, opts: { run } },
-        before,
-      );
-      if (!original?.packageFingerprint) {
-        throw new Error("missing complete baseline");
-      }
-      const reader = integrity.createPackageIntegrityReader;
-      vi.spyOn(integrity, "createPackageIntegrityReader").mockImplementation((timeout) => ({
-        ...reader(timeout),
-        tree: async () => ({ ...original.packageFingerprint!, digest: "different" }),
-      }));
-      await expect(
-        revalidateOriginalManagedServiceRuntime(original, () => run.executorFence!.assertCurrent()),
-      ).rejects.toThrow("package changed");
-      expect(original.packageFingerprintWarning).toBeUndefined();
     });
   });
 

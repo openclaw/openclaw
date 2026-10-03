@@ -22,6 +22,63 @@ function source(request: GatewayBrowserClient["request"]) {
 }
 
 describe("shared system information reads", () => {
+  it.each([
+    ["session-only", ["operator.sessions.read", "operator.sessions.write"], true],
+    ["no grants", [], true],
+    ["unadvertised", ["operator.admin"], false],
+  ] as const)(
+    "does not request unavailable system information for %s connections",
+    async (_name, scopes, advertised) => {
+      const request = vi.fn().mockResolvedValue(deviceSystemInfo);
+      const current = source(request);
+      current.publish({
+        ...current.gateway.snapshot,
+        hello: gatewayHelloForMethods(advertised ? ["system.info"] : [], scopes),
+      });
+      await expect(readSystemInfo(current.gateway)).rejects.toMatchObject({ name: "AbortError" });
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retires a cached sample when permission is revoked and reads anew after restoration", async () => {
+    const request = vi.fn().mockResolvedValue(deviceSystemInfo);
+    const { gateway } = source(request);
+    await readSystemInfo(gateway);
+    gateway.snapshot.hello!.auth!.scopes = ["operator.sessions.read"];
+    await expect(readSystemInfo(gateway)).rejects.toMatchObject({ name: "AbortError" });
+    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.calls[0]?.[2].signal.aborted).toBe(true);
+    gateway.snapshot.hello!.auth!.scopes = ["operator.read"];
+    await readSystemInfo(gateway);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["scopes", "client", "hello", "credentials"] as const)(
+    "discards a pending result after %s change even if transport completes",
+    async (change) => {
+      const pending = createDeferred<typeof deviceSystemInfo>();
+      const request = vi.fn().mockReturnValue(pending.promise);
+      const current = source(request);
+      const result = readSystemInfo(current.gateway);
+      const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
+      if (change === "scopes") {
+        current.gateway.snapshot.hello!.auth!.scopes = ["operator.sessions.read"];
+      } else if (change === "credentials") {
+        Object.assign(current.gateway, { connectionRevision: 1 });
+      } else {
+        current.publish({
+          ...current.gateway.snapshot,
+          ...(change === "client"
+            ? { client: source(request).gateway.snapshot.client }
+            : { hello: gatewayHelloForMethods(["system.info"]) }),
+        });
+      }
+      pending.resolve(deviceSystemInfo);
+      await rejected;
+      expect(request.mock.calls[0]?.[2].signal.aborted).toBe(true);
+    },
+  );
+
   it("defers hidden reads until a visible consumer returns", async () => {
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     const request = vi.fn().mockResolvedValue(deviceSystemInfo);

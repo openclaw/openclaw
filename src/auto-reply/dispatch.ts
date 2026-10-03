@@ -111,19 +111,6 @@ function reserveForegroundReplyLease(
   return key ? foregroundReplyLeases.reserve([key]) : undefined;
 }
 
-async function runOrderedForegroundReplySettledDeliveries(
-  lease: KeyedFifoLease | undefined,
-  onSettled: (() => unknown) | undefined,
-  onFreshSettledDelivery: (() => unknown) | undefined,
-): Promise<void> {
-  if (!onSettled && !onFreshSettledDelivery) {
-    return;
-  }
-  await lease?.wait();
-  await onSettled?.();
-  await onFreshSettledDelivery?.();
-}
-
 function resolveDispatcherSilentReplyContext(
   ctx: MsgContext | FinalizedMsgContext,
   cfg: OpenClawConfig,
@@ -146,20 +133,6 @@ function resolveDispatcherSilentReplyContext(
     sessionKey: policySessionKey,
     surface: finalized.Surface ?? finalized.Provider,
     conversationType,
-  };
-}
-
-function bindReplyPayloadRunState(
-  replyOptions: InternalDispatchReplyOptions | undefined,
-  runState: ReplyPayloadRunState,
-): InternalDispatchReplyOptions {
-  const onAgentRunStart = replyOptions?.onAgentRunStart;
-  return {
-    ...replyOptions,
-    onAgentRunStart: (...args) => {
-      runState.runId = args[0];
-      return onAgentRunStart?.(...args);
-    },
   };
 }
 
@@ -228,7 +201,14 @@ export async function dispatchInboundMessage(params: {
   const replyPayloadRunState = params.replyPayloadRunState ?? {
     runId: replyOptions?.runId,
   };
-  const replyOptionsWithRunState = bindReplyPayloadRunState(replyOptions, replyPayloadRunState);
+  const onAgentRunStart = replyOptions?.onAgentRunStart;
+  const replyOptionsWithRunState: InternalDispatchReplyOptions = {
+    ...replyOptions,
+    onAgentRunStart: (...args) => {
+      replyPayloadRunState.runId = args[0];
+      return onAgentRunStart?.(...args);
+    },
+  };
   const finalized = measureDiagnosticsTimelineSpanSync(
     "auto_reply.finalize_context",
     () => finalizeInboundContext(params.ctx),
@@ -307,13 +287,16 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
   };
   let settledDeliveries = Promise.resolve();
   const settleDeliveries = () =>
-    (settledDeliveries = settledDeliveries.then(() =>
-      runOrderedForegroundReplySettledDeliveries(
-        replyOperationRunState.questionInputHandled ? undefined : foregroundReplyLease,
-        params.dispatcherOptions.onSettled,
-        params.dispatcherOptions.onFreshSettledDelivery,
-      ),
-    ));
+    (settledDeliveries = settledDeliveries.then(async () => {
+      const { onSettled, onFreshSettledDelivery } = params.dispatcherOptions;
+      if (!onSettled && !onFreshSettledDelivery) {
+        return;
+      }
+      const lease = replyOperationRunState.questionInputHandled ? undefined : foregroundReplyLease;
+      await lease?.wait();
+      await onSettled?.();
+      await onFreshSettledDelivery?.();
+    }));
   const replyPayloadBeforeDeliver =
     ownership.outboundHooks === "disabled"
       ? undefined

@@ -55,10 +55,17 @@ import {
   type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.test-helpers.js";
+import { continueLocalCodexSession as continueLocalCodexSessionRuntime } from "./session-catalog-adoption.js";
+import { archiveLocalCodexSession } from "./session-catalog-archive.js";
 import {
   createCodexCatalogHomeResolver as createCodexCatalogHomeResolverRuntime,
   type CodexCatalogHome,
 } from "./session-catalog-homes.js";
+import {
+  createCodexSessionCatalogListOperation,
+  runCatalogListInline,
+} from "./session-catalog-list-operation.js";
+import { readCodexSessionTranscript as readCodexSessionTranscriptRuntime } from "./session-catalog-listing.js";
 import { catalogError, CODEX_LOCAL_SESSION_HOST_ID } from "./session-catalog-parsing.js";
 import {
   CODEX_TERMINAL_RESUME_COMMAND,
@@ -69,7 +76,7 @@ import type {
   CodexSessionCatalogControlFactory,
 } from "./session-catalog-types.js";
 import {
-  codexSessionCatalogRuntime,
+  registerCodexSessionCatalog as registerCodexSessionCatalogRuntime,
   createCodexSessionCatalogControl as createCodexSessionCatalogControlRuntime,
   createCodexSessionCatalogNodeHostCommands as createCodexSessionCatalogNodeHostCommandsRuntime,
   createCodexSessionCatalogNodeInvokePolicies,
@@ -119,12 +126,6 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   process.env.PATH = originalPath;
 });
-
-const archiveLocalCodexSession = codexSessionCatalogRuntime.archiveLocal;
-const continueLocalCodexSessionRuntime = codexSessionCatalogRuntime.continueLocal;
-const listCodexSessionCatalogRuntime = codexSessionCatalogRuntime.list;
-const readCodexSessionTranscriptRuntime = codexSessionCatalogRuntime.readTranscript;
-const registerCodexSessionCatalogRuntime = codexSessionCatalogRuntime.register;
 
 function createCodexSessionCatalogControlFactory(
   params: Omit<
@@ -189,15 +190,22 @@ function asControlFactory(
   };
 }
 
-export function listCodexSessionCatalog(
-  params: Omit<Parameters<typeof listCodexSessionCatalogRuntime>[0], "control"> & {
+export async function listCodexSessionCatalog(
+  params: Omit<Parameters<typeof createCodexSessionCatalogListOperation>[0], "control"> & {
     control:
       | CodexSessionCatalogControl
       | CodexSessionCatalogControlFactory
       | CodexSessionCatalogControlFactoryStub;
   },
 ) {
-  return listCodexSessionCatalogRuntime({ ...params, control: asControlFactory(params.control) });
+  return {
+    hosts: await runCatalogListInline(
+      createCodexSessionCatalogListOperation({
+        ...params,
+        control: asControlFactory(params.control),
+      }),
+    ),
+  };
 }
 
 const catalogOwners = new WeakMap<

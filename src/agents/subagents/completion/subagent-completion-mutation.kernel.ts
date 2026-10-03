@@ -12,6 +12,7 @@ import {
 import { resolveEventSessionKey } from "../../../routing/session-key.js";
 import type { OpenClawStateDatabase } from "../../../state/openclaw-state-db-contract.js";
 import {
+  consumeSubagentPauseNotice,
   completeRequesterSettleWakeState,
   transitionRequesterSettleWakeState,
   ensureCompletionState,
@@ -22,7 +23,6 @@ import {
   markRequesterSettleWakePending,
 } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
-import { consumeSubagentPauseNotice } from "../registry/subagent-registry-run-pause.js";
 import {
   bindSubagentRunRecord,
   rowToSubagentRunRecord,
@@ -102,7 +102,7 @@ function ownsRetiredCancellation(
     candidate.childSessionKey === subagent.childSessionKey &&
     compareSubagentRunGeneration(candidate, subagent) > 0;
   return (
-    bindSubagentRunRecord(subagent).payload_json === bindSubagentRunRecord(expected).payload_json &&
+    compareSubagentRunGeneration(subagent, expected) === 0 &&
     !loadSubagentRunsForChildSessionFromSqlite(subagent.childSessionKey, database).some(
       newerSibling,
     )
@@ -124,9 +124,7 @@ function prepareBlockedSubagentCompletion(
     !subagent.execution.outcome ||
     subagent.pauseReason === "sessions_yield" ||
     subagent.expectsCompletionMessage !== true ||
-    (subagent.delivery?.generation ?? 1) !== generation ||
-    bindSubagentRunRecord(subagent).payload_json !==
-      bindSubagentRunRecord(params.subagent).payload_json
+    (subagent.delivery?.generation ?? 1) !== generation
   ) {
     return undefined;
   }
@@ -281,8 +279,7 @@ function readRequesterBatch(
       subagent.requesterAgentId !== first?.requesterAgentId ||
       subagent.requesterSettleWake.rearmGeneration !==
         first?.requesterSettleWake?.rearmGeneration ||
-      subagent.requesterSettleWake.batchRunIds?.toSorted().join("\0") !== cohort ||
-      bindSubagentRunRecord(subagent).payload_json !== bindSubagentRunRecord(expected).payload_json
+      subagent.requesterSettleWake.batchRunIds?.toSorted().join("\0") !== cohort
     ) {
       throw changedOwner();
     }
@@ -496,6 +493,12 @@ function mutateRequesterWake(
     ) {
       throw new Error("Requester pause notice changed before transition");
     }
+    if (
+      (subagent.requesterSettleWake?.yieldedFinalDeliverable === true) !==
+      (params.operation.state.yieldedFinalDeliverable === true)
+    ) {
+      throw new Error("Requester wake reply policy changed before transition");
+    }
     transitionRequesterSettleWakeState(subagent, params.operation.state);
     return { subagent };
   });
@@ -546,11 +549,7 @@ export function mutateSubagentCompletionInDatabase(
           queueIds: [],
         };
       }
-      if (
-        current.delivery.queueId !== mutation.queueId ||
-        bindSubagentRunRecord(current).payload_json !==
-          bindSubagentRunRecord(mutation.expected).payload_json
-      ) {
+      if (current.delivery.queueId !== mutation.queueId) {
         throw new Error("Subagent completion owner changed before settlement");
       }
       return commitCompletionMutations(database, [{ subagent: mutation.subagent }]);
@@ -568,13 +567,11 @@ export function mutateSubagentCompletionInDatabase(
       const { expected, now } = mutation;
       const endedAt = retiredCancellationEndedAt(expected, now);
       const marker = expected.killReconciliation;
-      if (
-        endedAt === undefined ||
-        !marker ||
-        !Number.isFinite(marker.killedAt) ||
-        marker.killedAt > endedAt
-      ) {
+      if (endedAt === undefined || !marker) {
         return noMutation(null);
+      }
+      if (!Number.isFinite(marker.killedAt) || marker.killedAt > endedAt) {
+        return noMutation(false);
       }
       const current = readSubagentRun(database, expected.runId);
       if (

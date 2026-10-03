@@ -5,6 +5,7 @@ import {
   resetOpenClawOwnedToolHooks,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { RemoteWorkspaceFileReader } from "openclaw/plugin-sdk/file-access-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { Type } from "typebox";
 import { afterEach, beforeEach } from "vitest";
@@ -27,7 +28,6 @@ import {
   turnCompleted,
   type EmbeddedRunAttemptParams,
 } from "./event-projector.test-harness.js";
-import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 
 registerCodexEventProjectorTestLifecycle();
 
@@ -142,7 +142,7 @@ async function createRemoteGeneratedMediaDelivery(
     if (!dataBase64) {
       throw new Error(`Unexpected synthetic media source: ${source}`);
     }
-    return { dataBase64 };
+    return Buffer.from(dataBase64, "base64");
   });
   return { projector, bridge, execute, sources };
 }
@@ -161,9 +161,9 @@ afterEach(async () => {
 
 describe("CodexAppServerEventProjector media projection", () => {
   it("fetches saved-path-only remote images over the bounded Codex command protocol", async () => {
-    const readRemoteWorkspaceFile = vi.fn<CodexRemoteWorkspaceFileReader>(async () => ({
-      dataBase64: tinyPngBase64,
-    }));
+    const readRemoteWorkspaceFile = vi.fn<RemoteWorkspaceFileReader>(async () =>
+      Buffer.from(tinyPngBase64, "base64"),
+    );
     const runAbort = new AbortController();
     const projector = await createProjector(undefined, {
       remoteWorkspaceRoot: "/remote/codex-workspace",
@@ -194,8 +194,8 @@ describe("CodexAppServerEventProjector media projection", () => {
   });
 
   it("fences direct tool-result callbacks after blocked media when projection closes", async () => {
-    const media = createDeferred<{ dataBase64: string }>();
-    const readRemoteWorkspaceFile = vi.fn<CodexRemoteWorkspaceFileReader>(() => media.promise);
+    const media = createDeferred<Buffer>();
+    const readRemoteWorkspaceFile = vi.fn<RemoteWorkspaceFileReader>(() => media.promise);
     const onToolResult = vi.fn();
     const projector = await createProjector(
       { ...(await createParams()), verboseLevel: "full", onToolResult },
@@ -233,11 +233,11 @@ describe("CodexAppServerEventProjector media projection", () => {
       expect(onToolResult).not.toHaveBeenCalled();
       await projector.closeProjection();
       expect(signal?.aborted).toBe(true);
-      media.resolve({ dataBase64: tinyPngBase64 });
+      media.resolve(Buffer.from(tinyPngBase64, "base64"));
       await pending;
       expect(onToolResult).not.toHaveBeenCalled();
     } finally {
-      media.resolve({ dataBase64: tinyPngBase64 });
+      media.resolve(Buffer.from(tinyPngBase64, "base64"));
       await pending;
     }
   });
@@ -330,6 +330,21 @@ describe("CodexAppServerEventProjector media projection", () => {
     const result = resultOf(projector);
     expect(result.assistantTexts).toEqual(["rewritten B"]);
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "rewritten B" }]);
+  });
+
+  it("uses the decoder's whitespace rules for the image byte budget", async () => {
+    const projector = await createProjector({
+      ...(await createParams()),
+      config: {
+        agents: {
+          defaults: { mediaMaxMb: Buffer.from(tinyPngBase64, "base64").length / (1024 * 1024) },
+        },
+      },
+    });
+    await projector.handleNotification(
+      imageEvent("ig_whitespace", tinyPngBase64.split("").join("\u0001")),
+    );
+    await expectImage(projector);
   });
 
   it("rejects oversized typed Codex images instead of using a remote saved path", async () => {

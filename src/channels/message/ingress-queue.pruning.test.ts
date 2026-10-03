@@ -57,9 +57,13 @@ describe("channel ingress pruning", () => {
     });
   });
 
-  it.each(["pending", "completed", "failed"] as const)(
-    "prunes %s overflow without materializing rows",
-    async (status) => {
+  it.each(
+    (["pending", "completed", "failed"] as const).flatMap((status) =>
+      [0, 500].map((protectedRows) => ({ status, protectedRows })),
+    ),
+  )(
+    "prunes $status overflow without materializing rows ($protectedRows protected rows)",
+    async ({ status, protectedRows }) => {
       await withTempState(async (stateDir) => {
         const env = { OPENCLAW_STATE_DIR: stateDir };
         const { db } = openOpenClawStateDatabase({ env });
@@ -81,18 +85,21 @@ describe("channel ingress pruning", () => {
               })),
             ),
         );
+        const protectedIds = Array.from({ length: protectedRows }, (_, index) =>
+          String(index + 18).padStart(4, "0"),
+        );
         const queries = trackSqliteStatementExecutions(db, ["prune"], (sql) =>
           sql.includes('"channel_ingress_events"') ? "prune" : null,
         );
         try {
-          const options = { [`${status}MaxEntries`]: 2 };
+          const options = { [`${status}MaxEntries`]: 2, protectIds: protectedIds };
           // Instrument the worker-owned kernel's native row materialization.
           const prune = () =>
             runOpenClawStateWriteTransaction(
               (tx) => pruneChannelIngressInDatabase(tx.db, { queueName, options, now: 600 }),
               { env },
             );
-          expect(prune()).toBe(518);
+          expect(prune()).toBe(518 - protectedRows);
           expect(queries.rowCounts.prune).toBe(0);
           expect(queries.counts.prune).toBeLessThanOrEqual(3);
           expect(prune()).toBe(0);
@@ -109,7 +116,7 @@ describe("channel ingress pruning", () => {
               .select("event_id")
               .orderBy("event_id", "asc"),
           ).rows.map((row) => row.event_id),
-        ).toEqual(["0518", "0519"]);
+        ).toEqual([...protectedIds, "0518", "0519"]);
       });
     },
   );

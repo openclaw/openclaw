@@ -61,7 +61,10 @@ export async function updateGitHubToolIdentityConfig(params: {
       }
       entry.tools ??= {};
       if (params.identity) {
-        entry.tools.github = params.identity;
+        entry.tools.github =
+          entry.tools.github?.allowInSandbox === undefined
+            ? params.identity
+            : { ...params.identity, allowInSandbox: entry.tools.github.allowInSandbox };
       } else {
         unsetConfigValueAtPath(entry, ["tools", "github"]);
       }

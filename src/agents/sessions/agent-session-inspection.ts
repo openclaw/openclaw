@@ -1,4 +1,7 @@
 import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
+import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
+import type { AssistantMessage } from "../../llm/types.js";
 import { calculateContextTokens, estimateContextTokens } from "../runtime/index.js";
 import { AgentSessionModels } from "./agent-session-models.js";
 import {
@@ -8,12 +11,32 @@ import {
 } from "./agent-session-utils.js";
 import type { ContextUsage } from "./extensions/index.js";
 import { getLatestCompactionEntry } from "./session-manager.js";
+import { warnSessionPersistenceDeprecation } from "./session-persistence-deprecation.js";
 
 export abstract class AgentSessionInspection extends AgentSessionModels {
-  /** Set the current session's display name. */
+  /** @deprecated Use setSessionNameAsync; removed at the next Plugin SDK major. */
   setSessionName(name: string): void {
+    warnSessionPersistenceDeprecation("AgentSession.setSessionName", "setSessionNameAsync");
     this.sessionManager.appendSessionInfo(name);
     this.emit({ type: "session_info_changed", name: this.sessionManager.getSessionName() });
+  }
+
+  /** Persist the display name before publishing its changed event. */
+  async setSessionNameAsync(name: string): Promise<void> {
+    const manager = this.sessionManager;
+    const target = manager.getSessionTarget();
+    const sessionId = manager.getSessionId();
+    const assertCurrent = target ? captureOwnedTranscriptWriteAssertion(target) : undefined;
+    await manager.appendSessionInfoAsync(name);
+    assertCurrent?.();
+    if (
+      this.sessionManager !== manager ||
+      manager.getSessionId() !== sessionId ||
+      !sameSessionTranscriptTargetBinding(target, manager.getSessionTarget())
+    ) {
+      throw new Error("Session changed before publishing its display name");
+    }
+    this.emit({ type: "session_info_changed", name: manager.getSessionName() });
   }
 
   getContextUsage(): ContextUsage | undefined {
@@ -95,19 +118,11 @@ export abstract class AgentSessionInspection extends AgentSessionModels {
    * @returns Text content, or undefined if no assistant message exists
    */
   getLastAssistantText(): string | undefined {
-    const messages = this.messages;
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      // SAFETY: The reverse index stays within the canonical message array.
-      const message = messages[index]!;
-      if (message.role !== "assistant") {
-        continue;
-      }
-      const content = message.content;
-      if (message.stopReason === "aborted" && !hasPersistedAssistantContent(content)) {
-        continue;
-      }
-      return extractTextContent(content).trim() || undefined;
-    }
-    return undefined;
+    const message = this.messages.findLast(
+      (entry): entry is AssistantMessage =>
+        entry.role === "assistant" &&
+        (entry.stopReason !== "aborted" || hasPersistedAssistantContent(entry.content)),
+    );
+    return message ? extractTextContent(message.content).trim() || undefined : undefined;
   }
 }

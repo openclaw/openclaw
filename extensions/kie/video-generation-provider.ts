@@ -89,11 +89,8 @@ function readOutputUrls(data: Record<string, unknown>): string[] {
 }
 
 function remoteImageUrl(value: string): string {
-  if (!URL.canParse(value)) {
-    throw new Error("Kie AI image-to-video requires a remote http(s) image URL or a local buffer.");
-  }
-  const url = new URL(value);
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
+  const url = URL.parse(value);
+  if (!url || (url.protocol !== "https:" && url.protocol !== "http:")) {
     throw new Error("Kie AI image-to-video requires a remote http(s) image URL or a local buffer.");
   }
   return url.href;

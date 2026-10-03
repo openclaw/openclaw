@@ -20,7 +20,8 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ModelCompatConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import * as clientCleanup from "./attempt-client-cleanup.js";
 import { codexTestTurnIds } from "./codex-app-server.test-fixtures.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
@@ -30,11 +31,7 @@ import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
-import {
-  createClientHarness,
-  createCodexTestModel,
-  useAutoCleanupTempDirTracker,
-} from "./test-support.js";
+import { createClientHarness, createCodexTestModel } from "./test-support.js";
 
 const {
   readCodexAppServerBindingMock,
@@ -50,6 +47,7 @@ const {
   runSideQuestionWithManagedWebSearchCall,
   runCodexAppServerSideQuestionImpl,
   createFakeClient,
+  createPendingClient,
   threadResult,
   turnStartResult,
   agentDelta,
@@ -70,27 +68,6 @@ function supervisionConnectionFingerprint(): string {
       pluginConfig: { supervision: { enabled: true } },
     }),
   );
-}
-
-function createPendingClient({ interrupt = true } = {}) {
-  const client = createFakeClient({ completeTurn: false });
-  client.request.mockImplementation(async (method: string) => {
-    if (method === "thread/fork") {
-      return threadResult("side-thread");
-    }
-    if (method === "turn/start") {
-      return turnStartResult("turn-1");
-    }
-    if (
-      method === "thread/inject_items" ||
-      method === "thread/unsubscribe" ||
-      (interrupt && method === "turn/interrupt")
-    ) {
-      return {};
-    }
-    throw new Error(`unexpected request: ${method}`);
-  });
-  return client;
 }
 
 function mockCall(mock: ReturnType<typeof vi.fn>, index = 0): unknown[] {
@@ -174,12 +151,12 @@ function nativeCommandItem(
 useProviderToolSchemaRuntimeForTest(["openai", "codex", "lmstudio"]);
 
 describe("runCodexAppServerSideQuestion", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const tempDirs = useSessionStoreTempDirs(afterAll, "codex-side-question-");
 
   useSideQuestionTestSetup();
 
   it("fences a recovered predecessor when its host rotates before the fork", async () => {
-    const root = tempDirs.make("codex-side-predecessor-");
+    const root = tempDirs.make();
     const storePath = path.join(root, "admitted", "sessions.json");
     const previous = {
       kind: "session" as const,
@@ -2121,8 +2098,9 @@ describe("runCodexAppServerSideQuestion", () => {
   });
 
   it("classifies an active side tool as timed out when side completion expires", async () => {
-    vi.useFakeTimers();
     const client = createPendingClient();
+    const turnStarted = createDeferred<void>();
+    const toolStarted = createDeferred<void>();
     const diagnosticEvents: DiagnosticEventPayload[] = [];
     const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
       diagnosticEvents.push(event),
@@ -2130,6 +2108,7 @@ describe("runCodexAppServerSideQuestion", () => {
     toolExecuteMock.mockImplementation(
       (_callId: string, _args: unknown, signal?: AbortSignal) =>
         new Promise((_resolve, reject) => {
+          toolStarted.resolve();
           signal?.addEventListener(
             "abort",
             () => reject(signal.reason instanceof Error ? signal.reason : new Error("aborted")),
@@ -2140,6 +2119,8 @@ describe("runCodexAppServerSideQuestion", () => {
     const baseRequest = client.request.getMockImplementation()!;
     client.request.mockImplementation(async (method: string, requestParams?: unknown) => {
       if (method === "turn/start") {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        turnStarted.resolve();
         setTimeout(() => {
           void client.handleRequest({
             id: 42,
@@ -2176,7 +2157,9 @@ describe("runCodexAppServerSideQuestion", () => {
         }),
       );
       const runResult = runPromise.catch((error: unknown) => error);
+      await turnStarted.promise;
       await vi.advanceTimersByTimeAsync(0);
+      await toolStarted.promise;
       await vi.advanceTimersByTimeAsync(600_000);
 
       await expect(runResult).resolves.toMatchObject({ name: "TimeoutError" });
@@ -2293,7 +2276,7 @@ describe("runCodexAppServerSideQuestion", () => {
     );
   });
   it("executes inherited Gateway shell tools through the side run's host authority", async () => {
-    const workspaceDir = tempDirs.make("codex-side-gateway-shell-");
+    const workspaceDir = tempDirs.make();
     const config = { tools: { exec: { host: "gateway" as const, mode: "full" as const } } };
     const runId = "side-gateway-shell";
     const sessionId = "side-gateway-session";

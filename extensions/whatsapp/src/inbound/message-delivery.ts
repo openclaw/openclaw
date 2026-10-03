@@ -69,7 +69,7 @@ function recordAcceptedInboundActivity(accountId: string): void {
   });
 }
 
-export type WhatsAppAppendReplyWindow = {
+type WhatsAppAppendReplyWindow = {
   afterMs: number;
   untilMs: number;
   maxAgeMs: number;

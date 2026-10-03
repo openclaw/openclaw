@@ -13,7 +13,6 @@ import {
 import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { z } from "zod";
-import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
 import { toOpenAiChatCompletionsUsage, type OpenAiChatCompletionsUsage } from "../agents/usage.js";
@@ -25,13 +24,8 @@ import { logWarn } from "../logger.js";
 import { extractImageContentFromSource, type InputImageSource } from "../media/input-files.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import {
-  mergeAssistantText,
-  mergePendingAssistantText,
+  createAssistantTextStream,
   resolveAssistantResultText,
-  resolveAssistantTextCompletion,
-  resolveAssistantTextInput,
-  resolveAssistantTextStreamDelta,
-  type AssistantTextSnapshot,
 } from "./agent-event-assistant-text.js";
 import {
   buildAgentMessageFromConversationEntries,
@@ -65,13 +59,13 @@ import {
 } from "./http-utils.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
 import {
-  resolveOpenAiCompatError,
   validateOpenAiSamplingParams,
   resolveResponseFormat,
   resolveStopSequences,
 } from "./openai-compat-errors.js";
 import {
   readOpenAiHttpRunTerminal,
+  resolveOpenAiCompatibleAgentError,
   runOpenAiCompatibleAgentCommand,
   type OpenAiCompatibleHttpOptions,
 } from "./openai-compatible-agent-run.js";
@@ -790,27 +784,15 @@ export async function handleOpenAiHttpRequest(
         return true;
       }
       logWarn(`openai-compat: chat completion failed: ${String(err)}`);
-      if (isClientToolNameConflictError(err)) {
-        sendInvalidRequest(res, "invalid tool configuration");
-        return true;
-      }
-      const mapped = resolveOpenAiCompatError(err);
-      if (mapped) {
-        sendJson(res, mapped.status, { error: mapped.error });
-        return true;
-      }
-      sendJson(res, 500, {
-        error: { message: "internal error", type: "api_error" },
-      });
+      const mapped = resolveOpenAiCompatibleAgentError(err);
+      sendJson(res, mapped.status, { error: mapped.error });
     }
     return true;
   }
 
   setSseHeaders(res);
 
-  let assistantText: AssistantTextSnapshot = { text: "" };
-  let streamedAssistantText = assistantText;
-  let pendingAssistantText: AssistantTextSnapshot | undefined;
+  const textStream = createAssistantTextStream(Boolean(toolChoice.constraint));
   let finalResultText: string | undefined;
   let finalFinishReason: "stop" | "length" = "stop";
   let finalToolCalls: ReturnType<typeof readOpenAiHttpRunTerminal>["pendingToolCalls"];
@@ -843,21 +825,18 @@ export async function handleOpenAiHttpRequest(
         finishStreamWithError(terminalStreamError);
         return;
       }
-      const text = resolveAssistantTextCompletion({
-        assistantText,
-        pending: pendingAssistantText,
-        resultText: finalResultText,
-        streamedText: streamedAssistantText.text,
-        fallbackText: finalToolCalls ? "" : "No response from OpenClaw.",
-      });
-      if (!text.startsWith(streamedAssistantText.text)) {
+      const text = textStream.complete(
+        finalResultText,
+        finalToolCalls ? "" : "No response from OpenClaw.",
+      );
+      if (!text.startsWith(textStream.streamedText)) {
         finishStreamWithError({
           message: "Assistant output cannot be represented as an append-only response stream.",
           type: "api_error",
         });
         return;
       }
-      const content = text.slice(streamedAssistantText.text.length);
+      const content = text.slice(textStream.streamedText.length);
       if (content) {
         writeChatCompletionChoice(res, streamIdentity, { content });
       }
@@ -889,37 +868,14 @@ export async function handleOpenAiHttpRequest(
     }
 
     if (evt.stream === "assistant") {
-      const input = resolveAssistantTextInput(evt.data);
-      if (!input) {
-        return;
-      }
-      // Once a provisional replacement begins, even its terminal text echo
-      // stays held until the run result selects the authoritative output.
-      if (input.replaceable || pendingAssistantText) {
-        pendingAssistantText = mergePendingAssistantText(
-          pendingAssistantText ?? assistantText,
-          input,
-        );
-        return;
-      }
-
-      const previous = assistantText;
-      const merged = mergeAssistantText(previous, input, "append-only");
-      assistantText = merged;
-      // Hold prose until the run proves the requested client-tool call exists.
-      if (toolChoice.constraint) {
-        return;
-      }
-      // SSE cannot retract bytes already delivered, even for an item correction.
-      const content = resolveAssistantTextStreamDelta(previous, merged, streamedAssistantText);
-      if (content === undefined) {
+      const { delta: content, replacement } = textStream.update(evt.data);
+      if (replacement === "unrepresentable") {
         terminalStreamError ??= {
           message: "Assistant output cannot be represented as an append-only response stream.",
           type: "api_error",
         };
         return;
       }
-      streamedAssistantText = assistantText;
       if (!content) {
         return;
       }
@@ -1016,23 +972,7 @@ export async function handleOpenAiHttpRequest(
       }
       terminalLifecyclePhase = "error";
       logWarn(`openai-compat: streaming chat completion failed: ${String(err)}`);
-      if (isClientToolNameConflictError(err)) {
-        finishStreamWithError({
-          message: "invalid tool configuration",
-          type: "invalid_request_error",
-        });
-        return;
-      }
-      const mapped = resolveOpenAiCompatError(err);
-      if (mapped) {
-        finishStreamWithError(mapped.error);
-        return;
-      }
-      if (terminalStreamError) {
-        finishStreamWithError(terminalStreamError);
-        return;
-      }
-      finishStreamWithError({ message: "internal error", type: "api_error" });
+      finishStreamWithError(resolveOpenAiCompatibleAgentError(err, terminalStreamError).error);
     } finally {
       releaseAgentRootWork?.();
       // The provider owns observed terminals; a second end would erase a failed session.

@@ -24,3 +24,9 @@ export type AgentDatabaseDeletionSnapshot = {
 };
 
 export type AgentDeletionJournalStatus = "absent" | "pending" | "complete";
+
+export type AgentDeletionJournalAuthority = Readonly<{
+  agentId: string;
+  operationId: string;
+  cleanupCompleted: boolean;
+}>;

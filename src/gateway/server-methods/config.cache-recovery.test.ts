@@ -79,11 +79,12 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-it.each(
-  (["config.patch", "config.set", "config.apply"] as const).flatMap((method) =>
-    (["before request", "during commit"] as const).map((editAt) => ({ method, editAt })),
-  ),
-)(
+it.each([
+  { method: "config.patch", editAt: "before request" },
+  { method: "config.patch", editAt: "during commit" },
+  { method: "config.set", editAt: "during commit" },
+  { method: "config.apply", editAt: "during commit" },
+] as const)(
   "$method reloads a rejected draft when an external edit occurs $editAt",
   async ({ method, editAt }) => {
     // Exercise the real response cache before watcher notification reaches the Gateway.

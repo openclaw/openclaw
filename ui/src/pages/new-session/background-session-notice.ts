@@ -1,3 +1,4 @@
+import type { AgentWaitResult } from "../../../../src/agents/run-wait.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -17,15 +18,6 @@ import {
 import { showToast } from "../../lib/toast.ts";
 import { captureSessionNoticeOwner } from "./session-notice-owner.ts";
 
-type AgentWaitResult = {
-  status?: "error" | "ok" | "pending" | "timeout";
-  endedAt?: number;
-  error?: string;
-  pendingError?: boolean;
-  providerStarted?: boolean;
-  stopReason?: string;
-};
-
 const RETRY_DELAY_MS = 1_000;
 
 const delayRetry = () =>
@@ -41,10 +33,10 @@ async function notifyWhenBackgroundSessionEnds(params: {
   runId: string;
   isCurrentOwner: () => boolean;
 }): Promise<void> {
-  let result: AgentWaitResult | undefined;
+  let result: Partial<AgentWaitResult> | undefined;
   while (!result) {
     try {
-      const observed = await params.client.request<AgentWaitResult>(
+      const observed = await params.client.request<Partial<AgentWaitResult>>(
         "agent.wait",
         { runId: params.runId, timeoutMs: 30_000 },
         { timeoutMs: null },

@@ -12,12 +12,13 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { updateDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite.kernel.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
-import { failDurableDelivery, type DurableDeliveryCompletion } from "./delivery-completion.js";
+import { failDurableDelivery } from "./delivery-completion.js";
 import * as mediaSpool from "./delivery-queue-media-spool.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import { renewDeliveryPlatformSendLease } from "./delivery-queue-platform-lease.js";
 import { drainPendingDeliveriesCore, recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import * as queueStorage from "./delivery-queue-storage.js";
+import type { DurableDeliveryCompletion } from "./delivery-queue-types.js";
 import {
   claimDeliveryQueueEntryForTest,
   createRecoveryLog,

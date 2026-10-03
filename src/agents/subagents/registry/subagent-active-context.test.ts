@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SubagentRunRecordOverrides } from "../../subagent-test-fixtures.test-helpers.js";
 import { buildActiveSubagentRuntimeContext } from "./subagent-active-context.js";
 import {
-  addSubagentRunForTests,
+  seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -17,12 +17,12 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 const RECENT_PROMPT_MAX_ENTRIES = 8;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-beforeEach(() => {
-  resetSubagentRegistryForTests();
+beforeEach(async () => {
+  await resetSubagentRegistryForTests({ persist: false });
 });
 
-afterEach(() => {
-  resetSubagentRegistryForTests();
+afterEach(async () => {
+  await resetSubagentRegistryForTests({ persist: false });
 });
 
 describe("buildActiveSubagentRuntimeContext", () => {
@@ -38,7 +38,7 @@ describe("buildActiveSubagentRuntimeContext", () => {
         { sessionKey: controllerSessionKey },
         original,
       );
-      addSubagentRunForTests({
+      seedSubagentRunForReadTest({
         runId: "old-child-result",
         childSessionKey: "agent:main:subagent:old-child",
         controllerSessionKey,
@@ -90,7 +90,7 @@ describe("buildActiveSubagentRuntimeContext", () => {
       createdAt: Date.now(),
       execution: { status: "running", startedAt: Date.now() },
     } satisfies SubagentRunRecord;
-    addSubagentRunForTests(run);
+    seedSubagentRunForReadTest(run);
 
     const prompt = await buildActiveSubagentRuntimeContext({
       cfg: {} as OpenClawConfig,
@@ -108,7 +108,7 @@ describe("buildActiveSubagentRuntimeContext", () => {
 
   it("summarizes recently completed children when no active runs remain", async () => {
     const endedAt = Date.now() - 60_000;
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-recent-context",
       childSessionKey: "agent:main:subagent:recent-context",
       controllerSessionKey: "agent:main:main",
@@ -139,7 +139,7 @@ describe("buildActiveSubagentRuntimeContext", () => {
 
   it("includes both active and recently completed sections when mixed", async () => {
     const now = Date.now();
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-mixed-active",
       childSessionKey: "agent:main:subagent:mixed-active",
       controllerSessionKey: "agent:main:main",
@@ -151,7 +151,7 @@ describe("buildActiveSubagentRuntimeContext", () => {
       createdAt: now,
       startedAt: now,
     } satisfies SubagentRunRecordOverrides);
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-mixed-recent",
       childSessionKey: "agent:main:subagent:mixed-recent",
       controllerSessionKey: "agent:main:main",
@@ -190,7 +190,7 @@ describe("buildActiveSubagentRuntimeContext", () => {
       createdAt: Date.now(),
       execution: { status: "running", startedAt: Date.now() },
     } satisfies SubagentRunRecordOverrides;
-    addSubagentRunForTests(run);
+    seedSubagentRunForReadTest(run);
 
     const prompt = await buildActiveSubagentRuntimeContext({
       cfg: { session: { mainKey: "agent:main:main" } } as OpenClawConfig,
@@ -214,7 +214,7 @@ describe("buildActiveSubagentRuntimeContext", () => {
       createdAt: Date.now(),
       execution: { status: "running", startedAt: Date.now() },
     } satisfies SubagentRunRecordOverrides;
-    addSubagentRunForTests(run);
+    seedSubagentRunForReadTest(run);
 
     const prompt = await buildActiveSubagentRuntimeContext({
       cfg: {} as OpenClawConfig,
@@ -232,7 +232,7 @@ describe("buildActiveSubagentRuntimeContext", () => {
   it("sorts and bounds active runs independently of their insertion order", async () => {
     for (let index = 17; index >= 0; index--) {
       const runId = `run-${String(index).padStart(2, "0")}`;
-      addSubagentRunForTests({
+      seedSubagentRunForReadTest({
         runId,
         childSessionKey: `agent:main:subagent:${runId}`,
         controllerSessionKey: "agent:main:main",
@@ -256,7 +256,7 @@ describe("buildActiveSubagentRuntimeContext", () => {
 
   it("keeps retry/recovery guidance for non-success terminal recent children", async () => {
     const now = Date.now();
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-recent-failed",
       childSessionKey: "agent:main:subagent:recent-failed",
       controllerSessionKey: "agent:main:main",
@@ -270,7 +270,7 @@ describe("buildActiveSubagentRuntimeContext", () => {
       endedAt: now - 90_000,
       outcome: { status: "error" as const, error: "boom" },
     } satisfies SubagentRunRecordOverrides);
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-recent-timeout",
       childSessionKey: "agent:main:subagent:recent-timeout",
       controllerSessionKey: "agent:main:main",
@@ -284,7 +284,7 @@ describe("buildActiveSubagentRuntimeContext", () => {
       endedAt: now - 80_000,
       outcome: { status: "timeout" as const },
     } satisfies SubagentRunRecordOverrides);
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-recent-ok-mixed",
       childSessionKey: "agent:main:subagent:recent-ok-mixed",
       controllerSessionKey: "agent:main:main",
@@ -317,7 +317,7 @@ describe("buildActiveSubagentRuntimeContext", () => {
     const total = RECENT_PROMPT_MAX_ENTRIES + 4;
     for (let i = 0; i < total; i += 1) {
       const endedAt = now - (total - i) * 60_000;
-      addSubagentRunForTests({
+      seedSubagentRunForReadTest({
         runId: `run-recent-cap-${i}`,
         childSessionKey: `agent:main:subagent:recent-cap-${i}`,
         controllerSessionKey: "agent:main:main",
@@ -357,7 +357,7 @@ describe("buildActiveSubagentRuntimeContext", () => {
     expect(firstParentTurn).toBeUndefined();
 
     const endedAt = Date.now() - 15_000;
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-later-parent-turn",
       childSessionKey: "agent:main:subagent:later-parent-turn",
       controllerSessionKey: "agent:main:main",

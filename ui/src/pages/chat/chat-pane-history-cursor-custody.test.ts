@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import * as retry from "@openclaw/retry";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ChatEvent } from "../../../../packages/gateway-protocol/src/schema/logs-chat.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -8,7 +9,6 @@ import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
-import * as historyRetry from "./chat-history-retry.ts";
 import type { ChatHistoryResponse } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
@@ -205,7 +205,7 @@ it.each(["retry", "reset-fallback"] as const)(
     const h = await fixture();
     const retryRequested = createDeferred();
     const resumeRetry = createDeferred();
-    const sleep = vi.spyOn(historyRetry, "sleep").mockImplementation(() => {
+    const sleep = vi.spyOn(retry, "sleepWithAbort").mockImplementation(() => {
       retryRequested.resolve();
       return resumeRetry.promise;
     });

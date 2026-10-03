@@ -34,7 +34,7 @@ suite.define(() => {
             },
           });
           await page.goto(`${suite.server.baseUrl}chat#token=test-token`);
-          // Reopen a warm tab so its retained roster keeps this configured target selected offline.
+          // Include an existing browser cache; reconnect must rediscover the target live.
           await expect
             .poll(() =>
               page.evaluate(() =>

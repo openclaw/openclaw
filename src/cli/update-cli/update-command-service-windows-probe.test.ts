@@ -2,7 +2,6 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { buildTaskScript, readScheduledTaskCommand } from "../../daemon/schtasks-layout.js";
 import { readScheduledTaskRuntime } from "../../daemon/schtasks-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
@@ -10,9 +9,8 @@ import {
   createMockGatewayService,
   mockSystemAccountHome,
 } from "../../daemon/service.test-helpers.js";
-import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
-import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import { withServiceHome } from "./update-command-service-home.test-support.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 
 const mocks = vi.hoisted(() => ({ service: vi.fn<() => GatewayService>() }));
@@ -31,33 +29,11 @@ vi.mock("node:child_process", async (importOriginal) => ({
     signal: null,
   })),
 }));
-const dirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   mockSystemAccountHome();
   vi.spyOn(performance, "now").mockReturnValue(1_000);
 });
 afterEach(() => vi.restoreAllMocks());
-
-async function withServiceHome(run: (home: string) => Promise<void>): Promise<void> {
-  const home = dirs.make("openclaw-update-windows-probe-");
-  vi.spyOn(openClawTmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(home);
-  await withEnvAsync(
-    {
-      HOME: home,
-      USERPROFILE: home,
-      APPDATA: path.join(home, "AppData"),
-      OPENCLAW_GATEWAY_PORT: undefined,
-      OPENCLAW_HOME: undefined,
-      OPENCLAW_STATE_DIR: undefined,
-      OPENCLAW_CONFIG_PATH: undefined,
-      OPENCLAW_PROFILE: undefined,
-      OPENCLAW_SUPERVISOR_MODE: undefined,
-      OPENCLAW_SERVICE_MARKER: undefined,
-      OPENCLAW_SERVICE_KIND: undefined,
-    },
-    () => run(home),
-  );
-}
 
 it.each([
   {

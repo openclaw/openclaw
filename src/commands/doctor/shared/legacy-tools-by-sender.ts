@@ -1,135 +1,135 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../../../config/bundled-channel-config-metadata.generated.js";
+import type { LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
+import type { ConfigValidationIssue } from "../../../config/types.openclaw.js";
 import { parseToolsBySenderTypedKey } from "../../../config/types.tools.js";
-import { formatConfigKeyPath, resolveConfigPathTarget } from "../../doctor-config-analysis.js";
+import { visitAgentConfigScopes } from "./legacy-config-record-shared.js";
 
-type LegacyToolsBySenderKeyHit = {
-  toolsBySenderPath: Array<string | number>;
-  pathLabel: string;
-  key: string;
-  targetKey: string;
-};
+const migrationMessage =
+  'Untyped toolsBySender keys are retired. Run "openclaw doctor --fix" to migrate them to id: entries.';
 
-function collectLegacyToolsBySenderKeyHits(
+type SenderPolicyScope = { parent: Record<string, unknown>; path: string };
+type LegacySenderMap = SenderPolicyScope & { policies: Record<string, unknown>; keys: string[] };
+
+const channelSchemas = new Map(
+  GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map(({ channelId, schema }) => [channelId, schema]),
+);
+
+function* channelPolicyScopes(
   value: unknown,
-  pathParts: Array<string | number>,
-  hits: LegacyToolsBySenderKeyHit[],
-) {
-  if (Array.isArray(value)) {
-    for (const [index, entry] of value.entries()) {
-      collectLegacyToolsBySenderKeyHits(entry, [...pathParts, index], hits);
-    }
+  schema: unknown,
+  path: string,
+): Generator<SenderPolicyScope> {
+  const parent = asNullableRecord(value);
+  const node = asNullableRecord(schema);
+  if (!parent || !node) {
     return;
   }
-  const record = asNullableRecord(value);
-  if (!record) {
-    return;
+  const properties = asNullableRecord(node.properties);
+  if (asNullableRecord(properties?.toolsBySender)) {
+    yield { parent, path };
   }
-
-  const toolsBySender = asNullableRecord(record.toolsBySender);
-  if (toolsBySender) {
-    const path = [...pathParts, "toolsBySender"];
-    const pathLabel = formatConfigKeyPath(path);
-    for (const rawKey of Object.keys(toolsBySender)) {
-      const trimmed = rawKey.trim();
-      if (!trimmed || trimmed === "*" || parseToolsBySenderTypedKey(trimmed)) {
-        continue;
-      }
-      hits.push({
-        toolsBySenderPath: path,
-        pathLabel,
-        key: rawKey,
-        targetKey: `id:${trimmed}`,
-      });
+  for (const [key, child] of Object.entries(parent)) {
+    if (key !== "toolsBySender") {
+      yield* channelPolicyScopes(
+        child,
+        properties?.[key] ?? node.additionalProperties,
+        `${path}.${key}`,
+      );
     }
   }
+  for (const union of [node.anyOf, node.oneOf, node.allOf]) {
+    for (const variant of Array.isArray(union) ? union : []) {
+      yield* channelPolicyScopes(parent, variant, path);
+    }
+  }
+}
 
-  for (const [key, nested] of Object.entries(record)) {
-    if (key === "toolsBySender") {
+function* legacySenderMaps(value: unknown): Generator<LegacySenderMap> {
+  const raw = asNullableRecord(value);
+  if (!raw) {
+    return;
+  }
+  const scopes: Array<{ parent: unknown; path: string }> = [{ parent: raw.tools, path: "tools" }];
+  visitAgentConfigScopes(raw, (entry, path) => {
+    scopes.push({ parent: entry.tools, path: `${path}.tools` });
+  });
+  // Channel schemas declare policy locations; opaque plugin/model data is not a core policy.
+  for (const [channelId, config] of Object.entries(asNullableRecord(raw.channels) ?? {})) {
+    for (const scope of channelPolicyScopes(
+      config,
+      channelSchemas.get(channelId),
+      `channels.${channelId}`,
+    )) {
+      scopes.push(scope);
+    }
+  }
+  const seen = new Set<object>();
+  for (const scope of scopes) {
+    const parent = asNullableRecord(scope.parent);
+    const policies = asNullableRecord(parent?.toolsBySender);
+    if (!parent || !policies || seen.has(parent)) {
       continue;
     }
-    collectLegacyToolsBySenderKeyHits(nested, [...pathParts, key], hits);
+    seen.add(parent);
+    const keys = Object.keys(policies).filter(
+      (key) => key.trim() !== "*" && !parseToolsBySenderTypedKey(key),
+    );
+    if (keys.length > 0) {
+      yield { parent, policies, path: `${scope.path}.toolsBySender`, keys };
+    }
   }
 }
 
-export function scanLegacyToolsBySenderKeys(cfg: OpenClawConfig): LegacyToolsBySenderKeyHit[] {
-  const hits: LegacyToolsBySenderKeyHit[] = [];
-  collectLegacyToolsBySenderKeyHits(cfg, [], hits);
-  return hits;
-}
-
-export function collectLegacyToolsBySenderWarnings(params: {
-  hits: LegacyToolsBySenderKeyHit[];
-  doctorFixCommand: string;
-}): string[] {
-  if (params.hits.length === 0) {
-    return [];
-  }
-  const sample = params.hits[0];
-  const sampleLabel = sanitizeForLog(
-    sample ? `${sample.pathLabel}.${sample.key}` : "toolsBySender",
+export function collectLegacyToolsBySenderIssues(raw: unknown): ConfigValidationIssue[] {
+  return Array.from(legacySenderMaps(raw)).flatMap(({ path, keys }) =>
+    keys.map((key) => ({ path: `${path}.${key}`, message: migrationMessage })),
   );
-  return [
-    `- Found ${params.hits.length} legacy untyped toolsBySender key${params.hits.length === 1 ? "" : "s"} (for example ${sampleLabel}).`,
-    "- Untyped sender keys are deprecated; use explicit prefixes (id:, e164:, username:, name:).",
-    `- Run "${params.doctorFixCommand}" to migrate legacy keys to typed id: entries.`,
-  ];
 }
 
-export function maybeRepairLegacyToolsBySenderKeys(cfg: OpenClawConfig): {
-  config: OpenClawConfig;
-  changes: string[];
-} {
-  const hits = scanLegacyToolsBySenderKeys(cfg);
-  if (hits.length === 0) {
-    return { config: cfg, changes: [] };
-  }
-
-  const next = structuredClone(cfg);
-  const summary = new Map<string, { migrated: number; dropped: number; examples: string[] }>();
-
-  for (const hit of hits) {
-    const toolsBySender = asNullableRecord(resolveConfigPathTarget(next, hit.toolsBySenderPath));
-    if (!toolsBySender || !(hit.key in toolsBySender)) {
-      continue;
-    }
-    const row = summary.get(hit.pathLabel) ?? { migrated: 0, dropped: 0, examples: [] };
-
-    if (toolsBySender[hit.targetKey] === undefined) {
-      toolsBySender[hit.targetKey] = toolsBySender[hit.key];
-      row.migrated++;
-      if (row.examples.length < 3) {
-        row.examples.push(`${hit.key} -> ${hit.targetKey}`);
+export const LEGACY_CONFIG_MIGRATION_TOOLS_BY_SENDER: LegacyConfigMigrationSpec = {
+  id: "toolsBySender.typed-keys",
+  describe: "Migrate untyped sender tool policies before config validation",
+  legacyRules: [
+    { path: [], match: (raw) => !legacySenderMaps(raw).next().done, message: migrationMessage },
+  ],
+  apply(raw, changes) {
+    for (const { parent, policies, path, keys } of legacySenderMaps(raw)) {
+      const migrated = new Map<string, [string, unknown]>();
+      let collisions = 0;
+      let emptyKeys = 0;
+      for (const [rawKey, policy] of Object.entries(policies)) {
+        const trimmed = rawKey.trim();
+        const typed = parseToolsBySenderTypedKey(trimmed);
+        const senderId = (typed?.type === "id" ? typed.value : trimmed.replace(/^@/, "")).trim();
+        if (!typed && !senderId) {
+          emptyKeys++;
+          continue;
+        }
+        const identity =
+          typed?.type === "id" || (!typed && trimmed !== "*")
+            ? `id:${senderId.toLowerCase()}`
+            : rawKey;
+        const key = !typed && trimmed !== "*" ? `id:${senderId}` : rawKey;
+        // Runtime previously kept the first normalized ID, regardless of prefix.
+        if (migrated.has(identity)) {
+          collisions++;
+        } else {
+          migrated.set(identity, [key, policy]);
+        }
       }
-    } else {
-      row.dropped++;
-      if (row.examples.length < 3) {
-        row.examples.push(`${hit.key} (kept existing ${hit.targetKey})`);
+      parent.toolsBySender = Object.fromEntries(migrated.values());
+      changes.push(
+        `${path}: migrated ${keys.length - emptyKeys} untyped sender key(s) to id: entries.` +
+          (collisions > 0
+            ? ` Kept the first matching policy for ${collisions} shadowed key(s); original entries remain in the config backup.`
+            : ""),
+      );
+      if (emptyKeys > 0) {
+        changes.push(
+          `${path}: removed ${emptyKeys} empty untyped sender key(s) that matched no sender; original entries remain in the config backup.`,
+        );
       }
     }
-    delete toolsBySender[hit.key];
-    summary.set(hit.pathLabel, row);
-  }
-
-  if (summary.size === 0) {
-    return { config: cfg, changes: [] };
-  }
-
-  const changes: string[] = [];
-  for (const [pathLabel, row] of summary) {
-    if (row.migrated > 0) {
-      const suffix = row.examples.length > 0 ? ` (${row.examples.join(", ")})` : "";
-      changes.push(
-        `- ${pathLabel}: migrated ${row.migrated} legacy key${row.migrated === 1 ? "" : "s"} to typed id: entries${suffix}.`,
-      );
-    }
-    if (row.dropped > 0) {
-      changes.push(
-        `- ${pathLabel}: removed ${row.dropped} legacy key${row.dropped === 1 ? "" : "s"} where typed id: entries already existed.`,
-      );
-    }
-  }
-
-  return { config: next, changes };
-}
+  },
+};

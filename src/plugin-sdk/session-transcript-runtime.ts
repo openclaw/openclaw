@@ -25,7 +25,10 @@ import {
   type SessionTranscriptRawDeltaResult,
   type SessionTranscriptVisibleMessageDeltaLimits,
 } from "../config/sessions/session-accessor.js";
-import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
+import {
+  resolveMirroredTranscriptText,
+  type SessionTranscriptDeliveryMirror,
+} from "../config/sessions/transcript-mirror.js";
 import {
   selectVisibleTranscriptEventEntries,
   selectVisibleTranscriptEvents,
@@ -35,7 +38,6 @@ import type {
   LatestAssistantTranscriptText,
   SessionTranscriptAppendResult,
   SessionTranscriptAssistantMessage,
-  SessionTranscriptDeliveryMirror,
   SessionTranscriptUpdateMode,
 } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

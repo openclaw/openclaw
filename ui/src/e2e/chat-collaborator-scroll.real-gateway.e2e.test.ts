@@ -8,7 +8,8 @@ import type {
   GatewayFrame,
   HelloOk,
 } from "../../../packages/gateway-protocol/src/schema/frames.ts";
-import { ensureProfileForEmail, setDisplayName } from "../../../src/state/user-profiles.ts";
+import { setDisplayName } from "../../../src/state/user-profile-writes.worker.ts";
+import { ensureProfileForEmail } from "../../../src/state/user-profiles.ts";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -342,7 +343,7 @@ suite.define(() => {
               for (const [index, page] of pages.entries()) {
                 await page.addInitScript(() =>
                   localStorage.setItem(
-                    "openclaw:control-ui:community-invite",
+                    "openclaw:control-ui:community-invite:v2",
                     JSON.stringify({ dismissedAtMs: 1770000000000 }),
                   ),
                 );

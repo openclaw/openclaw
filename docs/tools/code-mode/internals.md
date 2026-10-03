@@ -67,6 +67,11 @@ signal, streaming updates where available, and trajectory/audit events.
 Completed nested calls persist as bounded, redacted display-only activity, retaining
 their original parent and invocation ids across history reloads. Provider replay
 contains only the actual model calls; child activity adds no synthetic model turns.
+Runtime transcript views omit these persisted payloads. Finalization and agent-end
+hooks read the accepted activity for their attempt from the transcript when needed.
+If a `before_message_write` hook suppresses a nested activity row, finalization and
+agent-end hooks omit that activity too. The successful tool still counts as completed
+for turn settlement; suppressing its display history does not undo its execution.
 Starts and partial updates remain transient. Older missing child history cannot be
 reconstructed from source code or outer results.
 
@@ -195,8 +200,10 @@ expiry, terminal results, and shutdown release the retained execution.
 
 After successful completion, Node keeps up to four idle workers warm for five
 minutes each, reusing only workers with the same runtime entry and heap limit.
-Each new cell still gets a fresh VM context. Runtime-entry changes and critical
-memory pressure retire idle workers; memory pressure does not discard suspended
+Reuse stays within the creating Gateway or CLI command lifetime; closing that
+host joins worker retirement. Standalone executor calls without a host close
+their completed worker immediately. Each new cell still gets a fresh VM context.
+Runtime-entry changes and critical memory pressure retire idle workers; memory pressure does not discard suspended
 continuations. Failed, timed-out, or aborted cells retire their worker.
 
 Worker supervision keeps runaway computation out of the main event loop.

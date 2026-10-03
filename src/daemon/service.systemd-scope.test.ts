@@ -156,6 +156,7 @@ it.each<ScopeCase>([
               marker: "openclaw" as const,
               label: otherName,
               detail: `unit: ${otherPath}`,
+              sourcePath: otherPath,
             },
           ]
         : []),
@@ -165,6 +166,7 @@ it.each<ScopeCase>([
         marker: "openclaw",
         label: file,
         detail: `unit: ${target.unitPath}`,
+        sourcePath: target.unitPath,
       },
     ]);
     vi.spyOn(fs, "access").mockRejectedValue(
@@ -511,6 +513,7 @@ it("reads the system template instance while a separate user Gateway is installe
       marker: "openclaw",
       label: "openclaw@.service",
       detail: `unit: ${templateUnit}`,
+      sourcePath: templateUnit,
     },
   ]);
   mockProcessPlatform("linux");
@@ -651,6 +654,7 @@ it("findSystemdGatewayInstallation expands a system template to this account's i
       platform: "linux",
       label: "openclaw@.service",
       detail: "unit: /etc/systemd/system/openclaw@.service",
+      sourcePath: "/etc/systemd/system/openclaw@.service",
       scope: "system",
       marker: "openclaw",
     },

@@ -9,6 +9,7 @@ import {
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { createCodexNativeSubagentMonitorRuntime } from "./native-subagent-monitor-runtime.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
   childTurnCompletedNotification,
   closeAgentNotification,
@@ -35,6 +36,36 @@ function itemNotification(
 }
 
 describe("Codex native close admission", () => {
+  it("retires the original native-child custody from a same-build module copy", async () => {
+    const client = createClient();
+    const releaseParentThread = vi.fn();
+    const retainParentThread = vi.fn(() => releaseParentThread);
+    ensureCodexAppServerClientRuntime(client.client, { agentDir: "/tmp/agent" });
+    const parent = await codexNativeSubagentMonitorRuntime.register({
+      client: client.client,
+      parentThreadId: "parent-thread",
+      runtime: createRuntime(),
+      retainParentThread,
+    });
+    try {
+      parent.bindTurn("parent-turn");
+      await notifyChildStarted(client);
+      expect(retainParentThread).toHaveBeenCalledExactlyOnceWith("parent-thread");
+      vi.resetModules();
+      const { codexNativeSubagentMonitorRuntime: nextCopy } =
+        await import("./native-subagent-monitor.js");
+      expect(nextCopy).not.toBe(codexNativeSubagentMonitorRuntime);
+      await nextCopy.retireParent(client.client, "parent-thread");
+      expect(releaseParentThread).toHaveBeenCalledOnce();
+      await codexNativeSubagentMonitorRuntime.retireParent(client.client, "parent-thread");
+      expect(releaseParentThread).toHaveBeenCalledOnce();
+    } finally {
+      await codexNativeSubagentMonitorRuntime.retireParent(client.client, "parent-thread");
+      await parent.unregister();
+      client.close();
+    }
+  });
+
   it("preserves accepted completion across native close", async () => {
     const client = createClient();
     client.setLoadedThreads([]);

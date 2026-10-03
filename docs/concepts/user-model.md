@@ -69,6 +69,11 @@ The personal file supplements, rather than replaces, the shared file, overriding
 conflicting shared user preferences, not project rules or security policy. The
 workspace-root `USER.md` remains shared regardless of the workspace directory's name.
 
+Codex connections without a managed inference relay use shared workspace
+preferences only: they omit the selected personal overlay because native thread
+instructions can be inherited by child agents. Managed relay connections retain
+parent-only personal-profile delivery. See [Codex workspace bootstrap files](/plugins/codex-harness-reference/workspace-bootstrap-files#skills-persona-and-memory-without-a-managed-relay).
+
 Files are refreshed on later turns. Reassigning the session changes personal
 context on the next new turn, not the running turn. Another participant can steer
 under the normal permission and queue rules without switching personal context.
@@ -153,6 +158,14 @@ When a session has someone to credit, its system prompt lists the exact trailers
 Turning **Git co-author credit** off stops attribution for future runs. Gateway-managed publication also checks contributor identity and consent before each pending commit, push, or pull request write. If eligibility changes during publication, it stops before the next write and asks you to review recorded effects before requesting publication again. It does not rewrite commits that already contain the public trailer.
 
 ## Merging duplicate profiles
+
+The Gateway directory method `users.list` requires `operator.read`. Its optional
+`githubAccountIds` filter accepts up to 500 unique positive safe integers. The
+response retains `profiles` and adds `githubProfiles` containing only requested
+verified account IDs and their canonical, non-merged `profileId` matches. Missing
+IDs have no match; other linked accounts are not returned. Omitting the filter
+preserves the ordinary directory response. This lookup reads existing identity
+bindings; it does not link accounts or grant access.
 
 Use [`openclaw users`](/cli/users) to list profile IDs and merge duplicate profiles
 belonging to the same person. Both linking and merging require `operator.admin`.
@@ -275,7 +288,7 @@ My GitHub requires an authenticated, durable Gateway profile, including the loca
 
 The account arrow beside **Publish PR** appears only when both shared and personal accounts are available. Its compact menu shows account names and the selected account; the effective shared account remains the default. With only a shared account, use **Publish PR** directly. With only **My GitHub**, the **Publish as @account** button explicitly selects that account and requests publication in one click; discovery alone never selects personal credentials. If the same account is connected through both routes, the menu labels them separately. Personal publication requires an idle session with a reconciled worktree or accepted repository checkpoint. Setup help appears only when no account is available, and workspace guidance appears only for personal publication.
 
-The composer shows either unpublished branch changes or PR rows. New changes replace earlier PR history, including changes made after merging on the same branch. The account arrow appears only while publication is idle and the account selection is unlocked. Publication recovery stays inside an unpublished branch row. When PR rows are visible, recovery appears separately because a session publication attempt does not necessarily belong to any listed PR. Failed attempts use a collapsed **Publication attempt failed** disclosure; expand it to inspect the original account, error, and recovery actions. A merged PR does not erase a failed attempt, and refreshing its receipt does not retry publication. Pending status and confirmation details remain expanded. Successful publication shows a compact PR link until GitHub metadata supplies the normal PR row; it does not add a separate publication card.
+The composer shows either unpublished branch changes or PR rows. New changes replace earlier PR history, including changes made after merging on the same branch. The account arrow appears only while publication is idle and the account selection is unlocked. Publication recovery stays inside an unpublished branch row. When PR rows are visible, recovery appears separately because a session publication attempt does not necessarily belong to any listed PR. Failed attempts use a collapsed **Publication attempt failed** disclosure; expand it to inspect the original account, error, and recovery actions. When OpenClaw verifies that a failed shared attempt’s accepted changes are already published in the matching PR, it stops offering that obsolete failure as recovery—even after reloading or starting later work. The historical receipt remains unchanged and can still be read explicitly. Unpublished or unverified changes retain their failure; refreshing a receipt never retries publication. Pending status and confirmation details remain expanded. Successful publication shows a compact PR link until GitHub metadata supplies the normal PR row; it does not add a separate publication card.
 
 If the Gateway rejects the selected account before accepting the first publication request, choose **Refresh publication**, review the current account, then explicitly publish again. An unknown outcome keeps the original account and request locked. For shared publication, **Refresh publication** looks up the receipt using the original invocation key; finding no receipt does not prove that the request never ran. **Retry publication** is an explicit replay of that same idempotent request, not a switch of account or a new publication.
 
@@ -291,13 +304,17 @@ Older unfinished shared requests without this requester binding require a new au
 
 Pending session deletion blocks publication actions without discarding the original request. A failed deletion restores its retry. Confirmed deletion retires the attempt. The page clears this memory on reload or connection changes. Profile, session access, and workspace changes also retire affected browser state; they never retarget an existing Gateway request.
 
-Publication requires `operator.write` and current access to change the session. Connecting your account alone does not grant either permission.
+Shared publication also supports `operator.sessions.write` for the session creator. When the Gateway identifies a supported GitHub target in an owned session's managed worktree or repository workspace, session-only callers can use **Publish PR** without access to the broader PR list. A plain conversation or project folder alone does not make publication available. The Gateway rechecks the workspace, unpublished work, current access, and workflow restrictions before publishing. Shared results remain visible after refresh or reconnect.
+
+Personal publication and confirmation require `operator.write` and current access to change the session. Connecting your account alone does not grant either permission.
 
 Personal GitHub is a Gateway-brokered publication connection, not a session-wide shell identity. Ordinary agent `git`/`gh` commands, model-initiated publication, and repository previews and discovery keep their existing credential behavior. OpenClaw cloud workers use the shared execution identity, never your personal connection. For a repository-only session, finish the current turn and wait for its accepted Git-normalized checkpoint. Personal publication is available while the worker is idle or after Stop, without a Gateway checkout. Remote sessions sourced from a Gateway worktree still require **Stop cloud worker…** before personal publication. See [`tools.github`](/gateway/config-tools#tools-github) for shared agent execution.
 
 The Gateway binds personal publication to your authenticated profile, the selected account, and the accepted worktree snapshot or repository checkpoint. Another participant's message cannot switch that account or authorize later work using your connection. If the account becomes unavailable or the workspace changes, publication stops with a recovery action instead of falling back to System or native credentials.
 
 After a Gateway restart, unfinished personal publication requires your explicit confirmation before it continues. Confirmation reuses the original request. It checks for an already-created commit, pushed branch, or pull request, so a lost response does not blindly repeat the action. A changed connection or incompatible workspace requires a new, explicitly selected action. For a repository-only session, confirmation retains the original checkpoint even if later turns have completed. It never silently publishes those later changes.
+
+Archived sessions do not offer personal-publication confirmation. Unarchive the session to restore an otherwise valid pending confirmation; recorded publication results remain visible.
 
 If confirmation cannot access its state store, the Gateway reports a retryable unavailable result with the storage cause. If the workspace exclusion is held, the response names its recorded holder and lease epoch. Caller cancellation is reported separately and does not trigger an automatic retry. Retry uses the original request and accepted checkpoint.
 

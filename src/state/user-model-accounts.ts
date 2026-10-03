@@ -14,7 +14,10 @@ import {
 } from "../infra/kysely-sync.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { SECRET_STORE_VALUE_MAX_BYTES } from "../secrets/store/secret-store-validation-error.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "./openclaw-state-db-readonly.js";
 import { ensureSecretStoreSchema } from "./openclaw-state-db-schema-additive.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
@@ -22,6 +25,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
 import { isUserModelAuthProfileId, parseUserModelAuthProfileId } from "./user-model-account-id.js";
 import { publishUserProfileModelAccountLinksChange } from "./user-profile-events.js";
 import { selectResolvedUserProfile, userProfilesDb } from "./user-profiles-internal.js";
@@ -340,9 +344,11 @@ export function updateUserModelAuthProfile(
   authProfileId: string,
   update: (profile: UserModelAuthProfile) => boolean,
   options: OpenClawStateDatabaseOptions = {},
+  admit?: (stage: "transaction" | "commit") => void,
 ): boolean {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
+      admit?.("transaction");
       const owner = credentialOwner(db, authProfileId);
       const current = owner ? readProfile(db, owner, authProfileId) : undefined;
       if (!owner || !current) {
@@ -356,6 +362,7 @@ export function updateUserModelAuthProfile(
         throw new Error("A personal model account refresh cannot change its provider.");
       }
       writeProfile(db, owner, authProfileId, current);
+      admit?.("commit");
       return true;
     },
     options,
@@ -416,11 +423,36 @@ export function listUserProfileAuthLinks(
   options: OpenClawStateDatabaseOptions = {},
 ): UserProfileAuthLink[] {
   return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      const owner = resolveOwner(db, profileId);
-      return owner ? accountLinks(readLinks(db, owner)) : [];
-    }, options) ?? []
+    withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => listUserProfileAuthLinksInDatabase(db, profileId),
+      options,
+    ) ?? []
   );
+}
+
+export function listUserProfileAuthLinksInDatabase(
+  db: DatabaseSync,
+  profileId: string,
+): UserProfileAuthLink[] {
+  const owner = resolveOwner(db, profileId);
+  return owner ? accountLinks(readLinks(db, owner)) : [];
+}
+
+/** Fresh private account selections are read on the shared-state reader, never the Gateway thread. */
+export async function listUserProfileAuthLinksAsync(
+  profileId: string,
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
+): Promise<UserProfileAuthLink[]> {
+  const context = captureOpenClawStateReadWorkerContext(options);
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "userModelAccounts.links", profileId },
+    { context, current: true, preferIndependentWarmRead: true },
+  );
+  if (reply && (!reply.ok || reply.type !== "userModelAccounts.links")) {
+    throw new Error(reply.ok ? "Unexpected model account links reply" : reply.message);
+  }
+  return reply?.links ?? [];
 }
 
 export function resolveUserProfileAuthLink(

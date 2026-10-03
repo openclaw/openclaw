@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ImageContent } from "openclaw/plugin-sdk/llm";
 import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
+import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 type CodexContextProjection = {
@@ -168,11 +169,8 @@ export function resolveCodexContextEngineProjectionMaxChars(params: {
   contextTokenBudget?: number;
   reserveTokens?: number;
 }): number {
-  const contextTokenBudget =
-    typeof params.contextTokenBudget === "number" && Number.isFinite(params.contextTokenBudget)
-      ? Math.floor(params.contextTokenBudget)
-      : undefined;
-  if (!contextTokenBudget || contextTokenBudget <= 0) {
+  const contextTokenBudget = Math.floor(asFiniteNumber(params.contextTokenBudget) ?? 0);
+  if (contextTokenBudget <= 0) {
     return DEFAULT_RENDERED_CONTEXT_CHARS;
   }
   const scaledChars =
@@ -244,11 +242,8 @@ export function resolveCodexContinuityProjectionMaxChars(params: {
   contextTokenBudget?: number;
   calibration?: CodexContinuityCalibration;
 }): number {
-  const contextTokenBudget =
-    typeof params.contextTokenBudget === "number" && Number.isFinite(params.contextTokenBudget)
-      ? Math.floor(params.contextTokenBudget)
-      : undefined;
-  if (!contextTokenBudget || contextTokenBudget <= 0) {
+  const contextTokenBudget = Math.floor(asFiniteNumber(params.contextTokenBudget) ?? 0);
+  if (contextTokenBudget <= 0) {
     return DEFAULT_RENDERED_CONTEXT_CHARS;
   }
   const continuityBudgetTokens = resolveProjectionPromptBudgetTokens({

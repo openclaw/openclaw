@@ -1,6 +1,10 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isLocalManagedProfile } from "../config.js";
-import { BrowserProfileUnavailableError, type BrowserErrorResponse } from "../errors.js";
+import {
+  BrowserProfileUnavailableError,
+  type BrowserErrorResponse,
+  toBrowserErrorResponse,
+} from "../errors.js";
 import { isManagedOnlyBrowserRequest, resolveRequestedBrowserProfile } from "../request-policy.js";
 import {
   type BrowserRouteContext,
@@ -23,7 +27,7 @@ export function getProfileContext(
     }
     return profile;
   } catch (err) {
-    const mapped = ctx.mapTabError(err);
+    const mapped = toBrowserErrorResponse(err);
     return mapped
       ? { error: mapped.message, status: mapped.status }
       : { error: String(err), status: 404 };

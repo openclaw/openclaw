@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as boundaryPath from "../infra/boundary-path.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
@@ -12,7 +13,13 @@ vi.mock("node:path", async (importOriginal) => {
   return { ...actual, default: actual.win32 };
 });
 
-beforeEach(() => mockProcessPlatform("win32"));
+beforeEach(() => {
+  mockProcessPlatform("win32");
+  // The in-memory migration rows use synthetic roots, including UNC hosts.
+  vi.spyOn(boundaryPath, "resolveIdentityPathViaExistingAncestorSync").mockImplementation(
+    (root) => root,
+  );
+});
 afterEach(() => vi.restoreAllMocks());
 
 describe.each([String.raw`C:\OpenClaw`, String.raw`\\Server\Share\OpenClaw`])(

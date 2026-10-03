@@ -288,13 +288,10 @@ export async function setupAppRecommendations(params: {
         : [],
     ),
   });
-  if (selected.includes(SKIP_VALUE)) {
-    await recordResult([]);
-    return unchangedOutcome(params.config);
-  }
-
   let next = params.config;
-  const selectedMatches = uniqueSelectedMatches(matches, selected);
+  const selectedMatches = selected.includes(SKIP_VALUE)
+    ? []
+    : uniqueSelectedMatches(matches, selected);
   if (selectedMatches.length === 0) {
     await recordResult([]);
     return unchangedOutcome(params.config);

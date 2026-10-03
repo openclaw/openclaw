@@ -54,7 +54,6 @@ export type MatrixVerificationSummary = {
   updatedAt: string;
 };
 
-type MatrixVerificationSummaryListener = (summary: MatrixVerificationSummary) => void;
 type MatrixVerificationOwnerTrustCallback = (deviceId: string) => Promise<void>;
 
 type MatrixShowSasCallbacks = {
@@ -155,11 +154,11 @@ export class MatrixVerificationManager {
   private verificationSessionCounter = 0;
   private readonly trackedVerificationRequests = new WeakSet<object>();
   private readonly trackedVerificationVerifiers = new WeakSet<object>();
-  private readonly summaryListeners = new Set<MatrixVerificationSummaryListener>();
 
   constructor(
     private readonly opts: {
       trustOwnDeviceAfterSas?: MatrixVerificationOwnerTrustCallback;
+      onSummaryChanged?: (summary: MatrixVerificationSummary) => void;
     } = {},
   ) {}
 
@@ -230,19 +229,14 @@ export class MatrixVerificationManager {
       (a, b) => a[1].updatedAtMs - b[1].updatedAtMs,
     );
     const overflow = this.verificationSessions.size - MAX_TRACKED_VERIFICATION_SESSIONS;
-    for (let i = 0; i < overflow; i += 1) {
-      const entry = sortedByAge[i];
-      if (entry) {
-        this.verificationSessions.delete(entry[0]);
-      }
+    for (const [id] of sortedByAge.slice(0, overflow)) {
+      this.verificationSessions.delete(id);
     }
   }
 
   private emitVerificationSummary(session: MatrixVerificationSession): void {
     const summary = this.buildVerificationSummary(session);
-    for (const listener of this.summaryListeners) {
-      listener(summary);
-    }
+    this.opts.onSummaryChanged?.(summary);
   }
 
   private touchVerificationSession(session: MatrixVerificationSession): void {
@@ -464,10 +458,6 @@ export class MatrixVerificationManager {
         return;
       }
       session.sasAutoConfirmStarted = true;
-      // For self-verifications, trustOwnDeviceAfterConfirmedSas is gated on
-      // isSelfVerification, so non-self requests remain unaffected. Without
-      // this, the bot's own device never gets cross-signed when SAS lands
-      // via the auto-confirm timer (initiated remotely).
       void this.confirmSasForSession(session, callbacks)
         .then(() => {
           this.touchVerificationSession(session);
@@ -513,13 +503,6 @@ export class MatrixVerificationManager {
       return;
     }
     await this.opts.trustOwnDeviceAfterSas(deviceId);
-  }
-
-  onSummaryChanged(listener: MatrixVerificationSummaryListener): () => void {
-    this.summaryListeners.add(listener);
-    return () => {
-      this.summaryListeners.delete(listener);
-    };
   }
 
   trackVerificationRequest(request: MatrixVerificationRequestLike): MatrixVerificationSummary {
@@ -569,19 +552,6 @@ export class MatrixVerificationManager {
     this.maybeAutoStartInboundSas(session);
     this.emitVerificationSummary(session);
     return this.buildVerificationSummary(session);
-  }
-
-  async requestOwnUserVerification(
-    crypto: MatrixVerificationCryptoApi | undefined,
-  ): Promise<MatrixVerificationSummary | null> {
-    if (!crypto) {
-      return null;
-    }
-    const request = await crypto.requestOwnUserVerification();
-    if (!request) {
-      return null;
-    }
-    return this.trackVerificationRequest(request);
   }
 
   listVerifications(): MatrixVerificationSummary[] {
@@ -687,15 +657,8 @@ export class MatrixVerificationManager {
     session.sasCallbacks = callbacks;
     session.sasAutoConfirmStarted = true;
     await this.confirmSasForSession(session, callbacks);
-    // Wait for the rust-crypto verifier to fully resolve (done-exchange + any
-    // pending cross-signing uploads triggered by trustOwnDeviceAfterSas) so
-    // the operator's client sees a settled state on the next /keys/query.
-    // verifyPromise is set inside ensureVerificationStarted and already
-    // funnels its own rejection into session.error, so awaiting it here
-    // cannot double-throw.
-    if (session.verifyPromise) {
-      await session.verifyPromise;
-    }
+    // Join the done exchange and cross-signing uploads before the operator's next /keys/query.
+    await session.verifyPromise;
     this.touchVerificationSession(session);
     return this.buildVerificationSummary(session);
   }

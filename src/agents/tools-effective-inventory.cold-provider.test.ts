@@ -355,12 +355,12 @@ module.exports = {
   };
 }
 
-function selectPersistedModel(fixture: ReturnType<typeof createFixture>) {
+async function selectPersistedModel(fixture: ReturnType<typeof createFixture>) {
   fixture.config.agents = {
     defaults: { model: { primary: "other/configured" }, workspace: fixture.input.workspaceDir },
   };
   fixture.inventoryParams.modelId = persistedId;
-  replacePersistedPluginModelCatalogs({
+  await replacePersistedPluginModelCatalogs({
     agentDir: fixture.input.agentDir,
     pluginCatalogWrites: {
       [encodePluginModelCatalogRelativePath(pluginId)]: JSON.stringify({
@@ -434,7 +434,7 @@ describe("cold dynamic-model effective inventory", () => {
     "retires a copied registry view on %s while its donor stays authoritative",
     async (retirement) => {
       await withColdFixture(async (fixture) => {
-        const donor = loadAndActivateRootPluginRegistry({
+        const donor = await loadAndActivateRootPluginRegistry({
           config: fixture.config,
           workspaceDir: fixture.input.workspaceDir,
           onlyPluginIds: [pluginId],
@@ -484,7 +484,7 @@ describe("cold dynamic-model effective inventory", () => {
 
   it("retains SDK provider resources through a copied view without preserving its authority", async () => {
     await withColdFixture(async (fixture) => {
-      const donor = loadAndActivateRootPluginRegistry({
+      const donor = await loadAndActivateRootPluginRegistry({
         config: fixture.config,
         workspaceDir: fixture.input.workspaceDir,
         onlyPluginIds: [pluginId],
@@ -727,7 +727,7 @@ describe("cold dynamic-model effective inventory", () => {
     async (source) => {
       await withColdFixture(async (fixture) => {
         if (source === "persisted") {
-          selectPersistedModel(fixture);
+          await selectPersistedModel(fixture);
         }
         expect(pickerIds(fixture)).toEqual([curatedId]);
         expect(isColdPluginRuntimeLoaded(fixture.selected)).toBe(false);
@@ -905,7 +905,7 @@ describe("cold dynamic-model effective inventory", () => {
     async ({ plugins, source }) => {
       await withColdFixture(async (fixture) => {
         if (source === "persisted") {
-          selectPersistedModel(fixture);
+          await selectPersistedModel(fixture);
         }
         const config: OpenClawConfig = {
           ...fixture.config,

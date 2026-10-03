@@ -10,7 +10,10 @@ import type { OpenClawConfig, OpenClawPluginToolContext } from "../plugin-sdk/pl
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { clearActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import { startPluginServices, type PluginServicesHandle } from "../plugins/services.js";
+import {
+  startPluginServices,
+  type PluginServicesHandle,
+} from "../plugins/services.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPluginStateKeyedStore } from "./plugin-state-store.js";
@@ -106,8 +109,14 @@ describe("action-bound plugin state", () => {
           };
           const gateway: PluginRuntime["gateway"] = {
             isAvailable: async () => true,
+            async openPluginPanel() {
+              throw new Error("Unexpected plugin panel request");
+            },
             async readSessionFacts() {
               throw new Error("Unexpected session facts request");
+            },
+            subscribeSessionChanges() {
+              throw new Error("Unexpected session changes subscription");
             },
             async request() {
               throw new Error("Unexpected Gateway request");
@@ -117,7 +126,7 @@ describe("action-bound plugin state", () => {
             expect(method).toBe("users.list");
             return { profiles: [] };
           });
-          const registry = loadAndActivateRootPluginRegistry({
+          const registry = await loadAndActivateRootPluginRegistry({
             config,
             env: state.env,
             workspaceDir: state.workspaceDir,

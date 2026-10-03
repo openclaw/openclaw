@@ -10,11 +10,11 @@ import { resolveStagedInputMediaPaths } from "../../../media/staged-inputs.js";
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
-import type { NestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import {
   createOpenClawCodingToolsInternal,
   resolveToolLoopDetectionConfig,
 } from "../../agent-tools.js";
+import { assertMemoryFlushPersistenceToolAvailable } from "../../agent-tools.memory-flush.js";
 import { createSkillInstructionDeliveryCache } from "../../agent-tools.read.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import { createCodeModePermissionChangeReason } from "../../code-mode-permission-change.js";
@@ -45,6 +45,7 @@ import type {
   CronToolsAllowCaptureRef,
 } from "../../tools/cron-tool.js";
 import { log } from "../logger.js";
+import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
 import { resolveAttemptSpawnWorkspaceDir } from "./attempt-thread-helpers.js";
 import {
@@ -73,6 +74,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   skillReadResources?: Parameters<typeof createOpenClawCodingToolsInternal>[1];
   skillsSnapshot: EmbeddedRunAttemptParams["skillsSnapshot"];
   codeModeSkills: readonly CodeModeSkill[];
+  installedSkills?: OpenClawCodingToolsOptions["installedSkills"];
   reviewTranscript?: NonNullable<OpenClawCodingToolsOptions["exec"]>["reviewTranscript"];
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor;
 }) {
@@ -153,14 +155,13 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   const computerContextEpoch: ComputerContextEpoch = { value: 0 };
   const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
   const toolSearchCatalogRef = toolSurfaceRuntime.toolSearchCatalogRef;
-  const nestedToolActivities: NestedToolActivity[] = [];
+  const nestedToolActivityState = createAttemptNestedToolActivityState();
   const codeModeSkills = toolPolicyRestrictsTools({ allow: attempt.toolsAllow })
     ? []
     : params.codeModeSkills;
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const cronCreatorToolAllowlistCaptureRef: CronToolsAllowCaptureRef = {};
   const inheritedToolAllowlist: string[] = [];
-  const runCleanups: Array<(reason: string) => Promise<void>> = [];
   const generationCleanups: Array<(reason: string) => Promise<void>> = [];
   const retiringGenerations = new Set<Promise<void>>();
   let retiredCleanupFailed = false;
@@ -293,9 +294,11 @@ export async function prepareEmbeddedAttemptToolBase(params: {
             computerTransport,
             pairedNodeComputerUse,
             conversationRecall: attempt.conversationRecall,
+            memoryAudience: attempt.memoryAudience,
             oneShotCliRun: attempt.oneShotCliRun,
             toolSearchCatalogRef,
             codeModeSkills,
+            installedSkills: params.installedSkills,
             preparedModelRuntime: attempt.preparedModelRuntime,
             requireWorkspaceOnly: attempt.requireWorkspaceOnly,
             sessionReadScopeKey: attempt.sessionReadScopeKey,
@@ -366,6 +369,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     const toolsRaw = attempt.forceRestartSafeTools
       ? constructedToolsRaw.filter((tool) => isAgentToolRestartSafe(tool, restartSafetyOptions))
       : constructedToolsRaw;
+    assertMemoryFlushPersistenceToolAvailable(toolsRaw, attempt.memoryFlushTools);
     if (attempt.forceRestartSafeTools) {
       log.info(
         `restart-safe recovery tool policy retained ${toolsRaw.length}/${constructedToolsRaw.length} concrete tools`,
@@ -389,7 +393,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       recordAgentCleanupFailure();
     }
   };
-  runCleanups.push(releaseTools);
 
   // Until preparation returns, the attempt cannot own these registered resources.
   try {
@@ -447,13 +450,13 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       localModelLeanPreserveToolNames,
       replaySafetyOptions,
       runtimeCapabilityProfile,
-      runCleanups,
+      releaseTools,
       toolSearchCatalogRef,
       toolSurfaceRuntime,
       toolSearchConfig,
       toolSearchControlsEnabledForRun,
       toolSearchRuntimeConfig,
-      nestedToolActivities,
+      nestedToolActivityState,
       toolsEnabled,
       toolsRaw,
     };

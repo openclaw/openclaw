@@ -2,16 +2,15 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /** Normalizes plugin config and resolves effective enablement, slots, and activation sources. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
   resolveMemorySlotDecisionShared,
-  resolvePluginActivationDecisionShared,
-  toPluginActivationState,
+  resolvePluginActivationStateShared,
   type PluginActivationConfigSourceLike,
   type PluginActivationStateLike,
 } from "./config-activation-shared.js";
 import {
   normalizePluginsConfigWithResolverCore,
-  resolveChannelConfigEnablement,
   type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -19,10 +18,7 @@ import { defaultSlotIdForKey } from "./slots.js";
 
 export type PluginActivationState = PluginActivationStateLike;
 
-export type PluginActivationConfigSource = {
-  plugins: NormalizedPluginsConfig;
-  rootConfig?: OpenClawConfig;
-} & PluginActivationConfigSourceLike<OpenClawConfig>;
+export type PluginActivationConfigSource = PluginActivationConfigSourceLike;
 
 export type NormalizedPluginsConfig = SharedNormalizedPluginsConfig;
 
@@ -53,11 +49,43 @@ export function isExplicitPluginDisableMarker(value: unknown): boolean {
   return isRecord(value) && value.enabled === false && Object.keys(value).length === 1;
 }
 
+/** Builds caller-owned policy without exposing the host's prepared objects. */
+export const createNormalizedPluginsConfig = (
+  config?: OpenClawConfig["plugins"],
+): NormalizedPluginsConfig => normalizePluginsConfigWithResolverCore(config, normalizePluginId);
+
 export const normalizePluginsConfig = (
   config?: OpenClawConfig["plugins"],
 ): NormalizedPluginsConfig => {
-  return normalizePluginsConfigWithResolverCore(config, normalizePluginId);
+  if (preparedRuntimePluginsConfig && preparedRuntimePluginsConfig.source === config) {
+    return preparedRuntimePluginsConfig.value;
+  }
+  return createNormalizedPluginsConfig(config);
 };
+
+let preparedRuntimePluginsConfig:
+  | { source: OpenClawConfig["plugins"]; value: NormalizedPluginsConfig }
+  | undefined;
+
+/** Runtime config publication owns replacement, including same-object refreshes and teardown. */
+export function prepareRuntimePluginsConfig(config: OpenClawConfig | null): void {
+  if (!config) {
+    preparedRuntimePluginsConfig = undefined;
+    return;
+  }
+  const value = createNormalizedPluginsConfig(config.plugins);
+  for (const entry of Object.values(value.entries)) {
+    // Plugin payloads retain their original owner; only normalized policy is shared and frozen.
+    const { config: _config, ...policy } = entry;
+    freezeJsonSnapshot(policy);
+    Object.freeze(entry);
+  }
+  Object.freeze(value.entries);
+  for (const field of [value.allow, value.deny, value.loadPaths, value.slots]) {
+    Object.freeze(field);
+  }
+  preparedRuntimePluginsConfig = { source: config.plugins, value: Object.freeze(value) };
+}
 
 /** Resolves the enabled plugin selected to own the context-engine slot. */
 export function resolveSelectedContextEnginePluginId(config?: OpenClawConfig): string | undefined {
@@ -191,13 +219,10 @@ export function resolveEffectivePluginActivationState(params: {
   autoEnabledReason?: string;
   channelIds?: readonly string[];
 }): PluginActivationState {
-  return toPluginActivationState(
-    resolvePluginActivationDecisionShared({
-      ...params,
-      allowBundledChannelExplicitBypassesAllowlist: true,
-      resolveChannelConfigEnablement,
-    }),
-  );
+  return resolvePluginActivationStateShared({
+    ...params,
+    allowBundledChannelExplicitBypassesAllowlist: true,
+  });
 }
 
 function toEnableStateResult(state: PluginActivationState): { enabled: boolean; reason?: string } {

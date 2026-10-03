@@ -148,9 +148,9 @@ async function resolvePluginImplicitProviders(
   ctx: ImplicitProviderContext,
   providers: import("../plugins/types.js").ProviderPlugin[],
   order: import("../plugins/types.js").ProviderCatalogOrder,
-  preparedStaticResults?: ReadonlyMap<
-    import("../plugins/types.js").ProviderPlugin,
-    PreparedProviderStaticCatalog["entries"][number]["result"]
+  preparedStaticConfigs?: ReadonlyMap<
+    string,
+    PreparedProviderStaticCatalog["entries"][number]["providerConfigs"]
   >,
 ): Promise<Record<string, ProviderConfig> | undefined> {
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
@@ -245,16 +245,14 @@ async function resolvePluginImplicitProviders(
       (ctx.providerDiscoveryEntriesOnly === true || !hasRuntimeProviderCatalog(provider));
     // Static catalogs are preferred for entries-only discovery and as a fallback
     // when runtime discovery produces no usable provider config.
-    const hasPreparedStaticResult = preparedStaticResults?.has(provider) === true;
+    const preparedStatic = preparedStaticConfigs?.get(
+      `${provider.pluginId ?? ""}\0${normalizeProviderId(provider.id)}`,
+    );
     let acceptedRuntimeCatalog = false;
     const normalizedResult = await withProviderCatalogExpiry(
       async () => {
         let result;
-        if (useStaticCatalog) {
-          result = hasPreparedStaticResult
-            ? preparedStaticResults.get(provider)
-            : await runProviderStaticCatalog({ provider });
-        } else {
+        if (!useStaticCatalog) {
           result = await runProviderCatalogWithTimeout({
             provider,
             normalizeProviderForScope: ctx.normalizeProviderForScope,
@@ -273,7 +271,10 @@ async function resolvePluginImplicitProviders(
           });
           acceptedRuntimeCatalog = Boolean(result);
         }
-        if (!result && !useStaticCatalog && provider.staticCatalog) {
+        if (useStaticCatalog || (!result && provider.staticCatalog)) {
+          if (preparedStatic) {
+            return preparedStatic;
+          }
           result = await runProviderStaticCatalog({ provider });
         }
         return result ? normalizePluginDiscoveryResult({ provider, result }) : undefined;
@@ -488,13 +489,12 @@ export async function prepareImplicitProviderStaticCatalog(
         const providerConfigs = Object.fromEntries(eligible);
         return {
           provider: entry.provider,
-          result: { providers: providerConfigs },
           providerConfigs,
         };
       }),
       ...providers
         .filter((provider) => provider.staticCatalog && !eligibleProviders.includes(provider))
-        .map((provider) => ({ provider, result: { providers: {} }, providerConfigs: {} })),
+        .map((provider) => ({ provider, providerConfigs: {} })),
     ]),
   });
 }
@@ -635,22 +635,12 @@ export async function resolveImplicitProviders(
       await import("./models-config.providers.discovery-auth.runtime.js");
     Object.assign(context, await prepareProviderDiscoveryAuth(context, discoveryAuthConfig));
   }
-  const preparedStaticResultsByProvider = new Map(
-    preparedStaticEntries?.map(({ provider, result }) => [
+  const preparedStaticConfigs = new Map(
+    preparedStaticEntries?.map(({ provider, providerConfigs }) => [
       `${provider.pluginId ?? ""}\0${normalizeProviderId(provider.id)}`,
-      result,
+      providerConfigs,
     ]) ?? [],
   );
-  const preparedStaticResults = params.preparedStaticProviderCatalog
-    ? new Map(
-        discoveryProviders.flatMap((provider) => {
-          const key = `${provider.pluginId ?? ""}\0${normalizeProviderId(provider.id)}`;
-          return preparedStaticResultsByProvider.has(key)
-            ? [[provider, preparedStaticResultsByProvider.get(key)] as const]
-            : [];
-        }),
-      )
-    : undefined;
   for (const order of PLUGIN_DISCOVERY_ORDERS) {
     Object.assign(
       providers,
@@ -658,7 +648,7 @@ export async function resolveImplicitProviders(
         context,
         discoveryProviders,
         order,
-        preparedStaticResults,
+        preparedStaticConfigs,
       ),
     );
   }

@@ -22,14 +22,16 @@ import {
   createGatewayMethodRegistry,
 } from "../methods/registry.js";
 import { coreGatewayHandlers, handleGatewayRequest } from "../server-methods.js";
-import * as sharing from "../session-sharing.js";
-import * as sessionUtils from "../session-utils.js";
+import * as sharingPreparation from "../session-sharing-preparation.js";
 import * as resolution from "./artifacts-session-resolution.js";
 import { assistantFileMessage } from "./artifacts.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const boundaries = vi.hoisted(() => ({
-  visit: vi.fn<typeof import("../session-transcript-readers.js").visitSessionMessagesAsync>(),
+  visit:
+    vi.fn<
+      typeof import("../session-transcript-native.test-support.js").visitSessionMessagesAsync
+    >(),
   managed:
     vi.fn<
       typeof import("../managed-image-attachments.js").resolveManagedOutgoingMediaArtifactDownload
@@ -250,8 +252,7 @@ async function exercise(
       expect(getActiveGatewayRootWorkCount()).toBe(0);
       return;
     }
-    const sessionReads = vi.spyOn(sessionUtils, "loadGatewaySessionEntryReadOnly");
-    const sharingReads = vi.spyOn(sharing, "resolveSessionSharingTarget");
+    const sessionReads = vi.spyOn(sharingPreparation, "prepareSessionMutationFacts");
     const preparing = createDeferred();
     const release = createDeferred();
     const prepare = resolution.prepareArtifactSessionResolution;
@@ -277,13 +278,10 @@ async function exercise(
       expect(guard).toHaveBeenCalled();
       const readsBeforeRelease = {
         session: sessionReads.mock.calls.length,
-        sharing: sharingReads.mock.calls.length,
         transcript: boundaries.visit.mock.calls.length,
       };
       expect(readsBeforeRelease).toEqual(
-        secondPreparation
-          ? { session: 2, sharing: 2, transcript: 1 }
-          : { session: 0, sharing: 0, transcript: 0 },
+        secondPreparation ? { session: 1, transcript: 1 } : { session: 0, transcript: 0 },
       );
       changeAuthority();
       expect(captured.isCurrent()).toBe(
@@ -310,7 +308,6 @@ async function exercise(
         ]);
         expect(respond).not.toHaveBeenCalled();
         expect(sessionReads).toHaveBeenCalledTimes(readsBeforeRelease.session);
-        expect(sharingReads).toHaveBeenCalledTimes(readsBeforeRelease.sharing);
         expect(boundaries.visit).toHaveBeenCalledTimes(readsBeforeRelease.transcript);
         expect(boundaries.managed).not.toHaveBeenCalled();
         expect(boundaries.managedUrl).not.toHaveBeenCalled();
@@ -327,15 +324,17 @@ async function exercise(
 }
 
 describe("registered artifact request authority after session preparation", () => {
-  it.each(methods)("uses the current default agent after preparing %s", async (method) => {
+  it.each(methods)("uses the current system agent after preparing %s", async (method) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       let config: OpenClawConfig = {
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, work: {} },
+        },
       };
       await state.writeConfig(config);
-      const readers = await vi.importActual<typeof import("../session-transcript-readers.js")>(
-        "../session-transcript-readers.js",
-      );
+      const readers = await import("../session-transcript-native.test-support.js");
       boundaries.visit.mockImplementation(readers.visitSessionMessagesAsync);
       const client: GatewayClient = {
         connId: "artifact-default-agent",
@@ -387,7 +386,13 @@ describe("registered artifact request authority after session preparation", () =
       const prepare = resolution.prepareArtifactSessionResolution;
       vi.spyOn(resolution, "prepareArtifactSessionResolution").mockImplementation(async (query) => {
         const resolve = await prepare(query);
-        config = { agents: { list: [{ id: "main" }, { id: "work", default: true }] } };
+        config = {
+          agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "work" } },
+            entries: { main: {}, work: {} },
+          },
+        };
         return resolve;
       });
       const response = await request(

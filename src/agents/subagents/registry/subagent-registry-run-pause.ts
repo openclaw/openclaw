@@ -1,66 +1,58 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import { clearDeliveryState, ensureCompletionState } from "./subagent-delivery-state.js";
+import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
+import {
+  clearDeliveryState,
+  ensureCompletionState,
+  resetRequesterSettleWakeRetry,
+} from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
-import {
-  captureSubagentRunMutationSnapshot,
-  publishSubagentRunPostimages,
-  SubagentRegistryWriteError,
-} from "./subagent-registry-persistence.js";
-import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
-import { latestSubagentRun } from "./subagent-run-generation.js";
+import { mutateSubagentRuns, SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSameSubagentRunOwner, latestSubagentRun } from "./subagent-run-generation.js";
 
-export function resetRequesterSettleWakeRetry(
-  wake?: RequesterSettleWakeState,
-): RequesterSettleWakeState {
-  return {
-    ...wake,
-    status: "pending",
-    attemptCount: 0,
-    replayCount: undefined,
-    nextAttemptAt: undefined,
-    deferralCount: undefined,
-    lastError: undefined,
-  };
-}
+export type SubagentYieldClaim =
+  | "nothing-pending"
+  | "pending-work"
+  | { messageWaitRegistered: boolean };
 
-/** Capture the accepted tool intent before the runtime publishes its yielded terminal. */
+/** Claim a live native task, recording announcing waits before the yielded terminal. */
 export async function claimSubagentYieldInRuns(params: {
   runId: string;
   sessionKey: string;
-  acknowledgment?: string;
+  agentId: string;
   waitForMessage: boolean;
+  acknowledgment?: string;
   hasPendingWork: () => boolean;
   runs: Map<string, SubagentRunRecord>;
   context: OpenClawStateWorkerContext;
   assertCurrent: () => void;
-  persist: Parameters<typeof publishSubagentRunPostimages>[0]["persist"];
-}): Promise<"accepted" | "nothing-pending" | "pending-work"> {
+}): Promise<SubagentYieldClaim> {
+  const expected = params.runs.get(params.runId);
+  const isEligible = (entry: SubagentRunRecord | undefined): entry is SubagentRunRecord =>
+    Boolean(
+      entry &&
+      isSameSubagentRunOwner(entry, expected) &&
+      matchesSubagentChildSessionOwner(entry, params.sessionKey, params.agentId) &&
+      !entry.collect &&
+      entry.execution.status === "running" &&
+      !entry.killIntent &&
+      !entry.killReconciliation &&
+      !entry.suppressCompletionDelivery &&
+      // A separate admitted follow-up shares the session, not this logical task.
+      isSameSubagentRunOwner(
+        entry,
+        latestSubagentRun(
+          params.runs.values(),
+          (candidate) =>
+            matchesSubagentChildSessionOwner(candidate, params.sessionKey, params.agentId) &&
+            (candidate.taskRunId ?? candidate.runId) === (entry.taskRunId ?? entry.runId),
+        ),
+      ),
+    );
   params.assertCurrent();
-  const entry = params.runs.get(params.runId);
-  if (
-    !entry ||
-    entry.childSessionKey !== params.sessionKey ||
-    entry.collect ||
-    entry.execution.status !== "running" ||
-    entry.killIntent ||
-    entry.killReconciliation ||
-    entry.suppressCompletionDelivery
-  ) {
-    return "nothing-pending";
-  }
-  const taskRunId = entry.taskRunId ?? entry.runId;
-  const ownsTaskGeneration = () =>
-    params.runs.get(params.runId) === entry &&
-    latestSubagentRun(
-      params.runs.values(),
-      (candidate) =>
-        candidate.childSessionKey === params.sessionKey &&
-        (candidate.taskRunId ?? candidate.runId) === taskRunId,
-    ) === entry;
-  // A separate followup may share this session without replacing this task.
-  if (!ownsTaskGeneration()) {
+  if (!isEligible(expected)) {
     return "nothing-pending";
   }
   if (params.hasPendingWork()) {
@@ -69,58 +61,63 @@ export async function claimSubagentYieldInRuns(params: {
   if (!params.waitForMessage) {
     return "nothing-pending";
   }
-  // Quiet tasks can pause too, but never acquire an announcing obligation.
-  if (entry.expectsCompletionMessage !== true || entry.requesterSettleWake?.pauseNotice) {
-    return "accepted";
-  }
   const assertCurrent = () => {
     params.assertCurrent();
-    if (!ownsTaskGeneration()) {
-      throw new Error("Subagent message wait lost its current task generation");
+    if (!isEligible(params.runs.get(params.runId))) {
+      throw new Error("Subagent yield lost its current native task");
     }
     if (params.hasPendingWork()) {
-      throw new Error("Subagent message wait acquired pending background work");
+      throw new Error("Subagent yield has uncollected background work");
     }
   };
-  const previous = captureSubagentRunMutationSnapshot(entry);
-  entry.requesterSettleWake = {
-    ...resetRequesterSettleWakeRetry(previous.requesterSettleWake),
-    batchRunIds: previous.requesterSettleWake?.batchRunIds ?? [entry.runId],
-    pauseNotice: {
-      // Match the announce completion delivery's retained-text bound.
-      acknowledgment: truncateUtf16Safe(
-        params.acknowledgment?.trim() || "Paused awaiting continuation.",
-        12_000,
-      ),
+  let published = false;
+  const claim = await mutateSubagentRuns(
+    [params.runId],
+    (rows) => {
+      const entry = rows.get(params.runId);
+      if (!entry) {
+        throw new Error("Subagent yield lost its current native task");
+      }
+      // Quiet native tasks may pause, but do not acquire a requester notice.
+      if (entry.expectsCompletionMessage !== true) {
+        return { value: { messageWaitRegistered: false } };
+      }
+      if (entry.requesterSettleWake?.pauseNotice) {
+        return { value: { messageWaitRegistered: true } };
+      }
+      const next = structuredClone(entry);
+      next.requesterSettleWake = {
+        ...resetRequesterSettleWakeRetry(entry.requesterSettleWake),
+        batchRunIds: entry.requesterSettleWake?.batchRunIds ?? [entry.runId],
+        pauseNotice: {
+          acknowledgment: truncateUtf16Safe(
+            params.acknowledgment?.trim() || "Paused awaiting continuation.",
+            12_000,
+          ),
+        },
+      };
+      return { value: { messageWaitRegistered: true }, postimages: new Map([[entry.runId, next]]) };
     },
-  };
-  const result = await publishSubagentRunPostimages({
-    runs: params.runs,
-    previous: new Map([[entry, previous]]),
-    persist: params.persist,
-    context: params.context,
-    assertCurrent,
-  });
+    {
+      runs: params.runs,
+      context: params.context,
+      assertCurrent,
+      onPublished: () => {
+        published = true;
+      },
+    },
+  );
   try {
+    // Publication retains the runtime owner across immutable metadata copies.
     assertCurrent();
-    if (result.publication !== "published") {
-      throw new Error("Subagent message wait lost its original run");
-    }
   } catch (error) {
-    throw new SubagentRegistryWriteError("committed", error, result.publication);
+    throw new SubagentRegistryWriteError(
+      published ? "committed" : "not-committed",
+      error,
+      published ? "published" : undefined,
+    );
   }
-  return "accepted";
-}
-
-/** A pause uses the existing retry owner, but never consumes the completion cohort. */
-export function consumeSubagentPauseNotice(entry: SubagentRunRecord): boolean {
-  const wake = entry.requesterSettleWake;
-  if (entry.pauseReason !== "sessions_yield" || !wake?.pauseNotice) {
-    return false;
-  }
-  const { pauseNotice: _notice, ...completionWake } = wake;
-  entry.requesterSettleWake = resetRequesterSettleWakeRetry(completionWake);
-  return true;
+  return claim;
 }
 
 export function markSubagentRunPausedAfterYield(params: {

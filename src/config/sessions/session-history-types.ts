@@ -1,3 +1,4 @@
+import type { TranscriptRedactionSnapshot } from "../../agents/transcript-redact-text.js";
 import type {
   SessionArtifactReadQuery,
   SessionArtifactReadResult,
@@ -9,17 +10,30 @@ import type {
   ReadSessionMessagesResult,
   SessionTranscriptReader,
 } from "../../gateway/session-transcript-read-kernel.js";
+import type {
+  SessionTranscriptSummaryQuery,
+  SessionTranscriptSummaryResult,
+} from "../../gateway/session-transcript-summary.js";
 import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
-import type { ConversationRecord } from "./conversation-registry.js";
+import type { ConversationRecord } from "./conversation-registry.types.js";
+import type { LegacyCompactionMetrics } from "./legacy-compaction-history.js";
 import type {
   SessionTranscriptDisplayDeltaResult,
   SessionTranscriptMessageByIdOptions,
 } from "./session-accessor.sqlite-history-query.js";
 import type {
+  SessionTranscriptBoundedMessageTailOptions,
+  SessionTranscriptBoundedMessageTailPage,
+} from "./session-accessor.sqlite-projection-read.js";
+import type {
   SessionTranscriptRawDeltaLimits,
   SessionTranscriptReadScope,
 } from "./session-accessor.types.js";
 import type { StoredMessageReactionSummary } from "./session-reaction-store.types.js";
+import type {
+  SessionTranscriptAccountingOptions,
+  SessionTranscriptAccountingSnapshot,
+} from "./session-transcript-accounting.types.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
@@ -32,18 +46,16 @@ export type ChatHistoryResponsePage<Messages extends unknown[] | Uint8Array = un
   nextOffset?: number;
   hasMore?: boolean;
   totalMessages?: number;
-  completeSnapshot?: true;
 };
 
 export type ChatHistoryPage = {
-  encodedResponse?: ChatHistoryResponsePage<Uint8Array>;
+  encodedResponse?: ChatHistoryResponsePage<Uint8Array<ArrayBuffer>>;
   windowReset?: boolean;
   activeLeafEntryId?: string | null;
   deltaCursor?: string;
   messages: unknown[];
   activity?: AgentHistoryActivity[];
   responseOffset?: number;
-  completeCliImport?: true;
   // Absent only for anchored (messageId) reads: the anchor may resolve a
   // reset-archive transcript that numeric offset cursors cannot address, so
   // anchored responses expose no paging metadata.
@@ -51,12 +63,13 @@ export type ChatHistoryPage = {
     offset: number;
     totalMessages: number;
     rawPageMessages: number;
-    exhausted?: true;
+    messageSequences?: Record<string, number>;
   };
 };
 
 export type ChatHistoryPageParams = {
   encodeResponse?: boolean;
+  compactionMetrics?: LegacyCompactionMetrics;
   entry: InternalSessionEntry | undefined;
   provider: string | undefined;
   sessionId: string | undefined;
@@ -69,6 +82,8 @@ export type ChatHistoryPageParams = {
   offset: number | undefined;
   messageId: string | undefined;
   ignoreCliSessionImports?: boolean;
+  cliHistoryHomeDir?: string;
+  cliHistoryRedaction?: TranscriptRedactionSnapshot;
 };
 
 type SessionHistoryTranscriptMeta = {
@@ -135,6 +150,25 @@ export type SessionConversationBinding = Pick<
 >;
 
 export type SessionHistoryWorkerRequest =
+  | {
+      kind: "active-accounting";
+      params: { target: SessionTranscriptReadScope; options: SessionTranscriptAccountingOptions };
+    }
+  | {
+      kind: "bounded-tail";
+      params: {
+        target: SessionTranscriptReadScope;
+        options: SessionTranscriptBoundedMessageTailOptions;
+      };
+    }
+  | {
+      kind: "inline-visibility";
+      params: { target: SessionTranscriptReadScope; lookup: SessionHistorySubagentLookup };
+    }
+  | {
+      kind: "summary";
+      params: { target: SessionTranscriptReadScope; query: SessionTranscriptSummaryQuery };
+    }
   | { kind: "reactions"; params: { target: SessionTranscriptReadScope } }
   | {
       kind: "conversation-binding";
@@ -171,6 +205,7 @@ export type SessionHistoryWorkerRequest =
       kind: "recent-page";
       params: {
         target: SessionTranscriptReadScope;
+        exactArchivePath?: string;
         options: Parameters<SessionTranscriptReader["readRecentSessionMessagesWithStatsAsync"]>[1];
       };
     }
@@ -205,6 +240,10 @@ export type SessionHistoryWorkerRequest =
   | { kind: "http"; params: SessionHistoryReadParams };
 
 export type SessionHistoryWorkerResult =
+  | { kind: "active-accounting"; result: SessionTranscriptAccountingSnapshot }
+  | { kind: "bounded-tail"; result: SessionTranscriptBoundedMessageTailPage }
+  | { kind: "inline-visibility"; subagentCoordination: SessionHistorySubagentFacts }
+  | { kind: "summary"; result: SessionTranscriptSummaryResult }
   | { kind: "reactions"; result: Record<string, StoredMessageReactionSummary[]> }
   | { kind: "conversation-binding"; result: SessionConversationBinding | null }
   | { kind: "artifacts"; result: SessionArtifactReadResult }

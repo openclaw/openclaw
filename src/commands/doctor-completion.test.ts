@@ -28,9 +28,11 @@ const originalEnv = captureEnv([
   COMPLETION_SKIP_PLUGIN_COMMANDS_ENV,
 ]);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const originalVersions = process.versions;
 
 afterEach(async () => {
   originalEnv.restore();
+  Object.defineProperty(process, "versions", { value: originalVersions });
   vi.restoreAllMocks();
 });
 
@@ -322,11 +324,16 @@ describe("doctorShellCompletion", () => {
   });
 
   it.each([
-    { generationMode: "core-only" as const, expectedSkipValue: "1" },
-    { generationMode: "full" as const, expectedSkipValue: undefined },
+    { generationMode: "core-only" as const, expectedSkipValue: "1", runtime: "node" },
+    { generationMode: "full" as const, expectedSkipValue: undefined, runtime: "node" },
+    { generationMode: "core-only" as const, expectedSkipValue: "1", runtime: "bun" },
+    { generationMode: "full" as const, expectedSkipValue: undefined, runtime: "bun" },
   ])(
-    "uses explicit $generationMode cache generation even with an ambient skip guard",
-    async ({ generationMode, expectedSkipValue }) => {
+    "uses explicit $generationMode cache generation on $runtime even with an ambient skip guard",
+    async ({ generationMode, expectedSkipValue, runtime }) => {
+      Object.defineProperty(process, "versions", {
+        value: { ...process.versions, bun: runtime === "bun" ? "1.4.3" : undefined },
+      });
       const stateDir = tempDirs.make("openclaw-doctor-state-");
       setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
       setTestEnvValue(COMPLETION_SKIP_PLUGIN_COMMANDS_ENV, "1");
@@ -346,6 +353,9 @@ describe("doctorShellCompletion", () => {
       const spawnCalls = spawnSyncMock.mock.calls as unknown as Array<
         [string, string[], { env?: NodeJS.ProcessEnv }]
       >;
+      const args = spawnCalls.at(-1)?.[1] ?? [];
+      const entryIndex = args.findIndex((arg) => arg.endsWith("openclaw.mjs"));
+      expect(args.slice(0, entryIndex)).toEqual(runtime === "bun" ? ["--no-install"] : []);
       const spawnOptions = spawnCalls.at(-1)?.[2];
       expect(spawnOptions?.env?.[COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]).toBe(expectedSkipValue);
     },

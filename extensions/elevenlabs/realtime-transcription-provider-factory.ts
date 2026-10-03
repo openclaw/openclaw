@@ -57,11 +57,6 @@ const ELEVENLABS_REALTIME_DEFAULT_MODEL = "scribe_v2_realtime";
 const ELEVENLABS_REALTIME_DEFAULT_AUDIO_FORMAT = "ulaw_8000";
 const ELEVENLABS_REALTIME_DEFAULT_SAMPLE_RATE = 8000;
 const ELEVENLABS_REALTIME_DEFAULT_COMMIT_STRATEGY: "manual" | "vad" = "vad";
-const ELEVENLABS_REALTIME_CONNECT_TIMEOUT_MS = 10_000;
-const ELEVENLABS_REALTIME_CLOSE_TIMEOUT_MS = 5_000;
-const ELEVENLABS_REALTIME_MAX_RECONNECT_ATTEMPTS = 5;
-const ELEVENLABS_REALTIME_RECONNECT_DELAY_MS = 1000;
-const ELEVENLABS_REALTIME_MAX_QUEUED_BYTES = 2 * 1024 * 1024;
 
 function readNestedElevenLabsConfig(rawConfig: RealtimeTranscriptionProviderConfig) {
   const raw = readRecord(rawConfig);
@@ -227,11 +222,6 @@ function createElevenLabsRealtimeTranscriptionSession(
     callbacks: config,
     url: () => toElevenLabsRealtimeWsUrl(config),
     headers: { "xi-api-key": config.apiKey },
-    connectTimeoutMs: ELEVENLABS_REALTIME_CONNECT_TIMEOUT_MS,
-    closeTimeoutMs: ELEVENLABS_REALTIME_CLOSE_TIMEOUT_MS,
-    maxReconnectAttempts: ELEVENLABS_REALTIME_MAX_RECONNECT_ATTEMPTS,
-    reconnectDelayMs: ELEVENLABS_REALTIME_RECONNECT_DELAY_MS,
-    maxQueuedBytes: ELEVENLABS_REALTIME_MAX_QUEUED_BYTES,
     connectTimeoutMessage: "ElevenLabs realtime transcription connection timeout",
     reconnectLimitMessage: "ElevenLabs realtime transcription reconnect limit reached",
     sendAudio: sendAudioChunk,

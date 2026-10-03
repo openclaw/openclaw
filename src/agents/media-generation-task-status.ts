@@ -1,9 +1,3 @@
-/**
- * Image generation task status helpers.
- *
- * These wrap the shared media task status helpers with image-specific task kind,
- * source id, duplicate-guard timing, and prompt/status wording.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listMediaGenerationOperations } from "./media-generation-activity.js";
 import {
@@ -29,15 +23,8 @@ export const {
   promptCompletionLabel: "images",
 });
 
-/**
- * Music-generation task status adapters. The module specializes the shared
- * media-generation task helpers with music task ids, duplicate guards, and
- * user-facing status text.
- */
-
 export const MUSIC_GENERATION_TASK_KIND = "music_generation";
 
-/** Binds music-specific task identity, duplicate guards, and visible status text. */
 export const {
   findActiveTaskForSession: findActiveMusicGenerationTaskForSession,
   findDuplicateGuardTaskForSession: findDuplicateGuardMusicGenerationTaskForSession,
@@ -51,16 +38,8 @@ export const {
   promptCompletionLabel: "music tracks",
 });
 
-/**
- * Video generation task status helpers.
- *
- * These wrap the generic media task status helpers with video-specific kind,
- * source, labels, duplicate-guard timing, and prompt-context wording.
- */
-
 export const VIDEO_GENERATION_TASK_KIND = "video_generation";
 
-/** Binds video-specific task identity, duplicate guards, and visible status text. */
 export const {
   findActiveTaskForSession: findActiveVideoGenerationTaskForSession,
   findDuplicateGuardTaskForSession: findDuplicateGuardVideoGenerationTaskForSession,

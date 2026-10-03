@@ -75,10 +75,6 @@ export function definedFields<T extends object>(fields: T): T {
   return fields;
 }
 
-export function asBlobContent(value: string): Uint8Array {
-  return Buffer.from(value, "base64");
-}
-
 export function blobToBase64(value: unknown): string {
   if (value instanceof Uint8Array) {
     return Buffer.from(value).toString("base64");

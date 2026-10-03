@@ -25,7 +25,10 @@ type ScheduleParams = {
 export type GatewaySchedulerScope = Pick<
   GatewayScheduler,
   "signal" | "now" | "schedule" | "beginClose" | "stop"
->;
+> & {
+  /** Preserve synchronous retirement when this owner has no running work. */
+  close: () => Promise<void> | undefined;
+};
 
 type ScheduleOwner = {
   signal: AbortSignal;
@@ -111,14 +114,19 @@ export class GatewayScheduler {
         this.cancel(job);
       }
     };
+    const close = () => {
+      beginClose();
+      const running = [...owner.jobs].flatMap((job) => job.running ?? []);
+      return running.length > 0 ? Promise.all(running).then(() => undefined) : undefined;
+    };
     return {
       signal: owner.signal,
       now: () => this.now(),
       schedule: (params) => this.scheduleOwned(params, owner),
       beginClose,
+      close,
       stop: async () => {
-        beginClose();
-        await Promise.all([...owner.jobs].flatMap((job) => job.running ?? []));
+        await close();
       },
     };
   }
@@ -274,7 +282,13 @@ export class GatewayScheduler {
   }
 
   private run(job: ScheduledWork): Promise<void> {
-    log.debug(`running ${job.id}`);
+    // Cadence jobs can run every few milliseconds (event-loop sampling runs every 20ms),
+    // so only one-shot runs are worth a debug line.
+    if (job.everyMs === undefined) {
+      log.debug(`running ${job.id}`);
+    } else {
+      log.trace(`running ${job.id}`);
+    }
     const done = createDeferredCore();
     const work = new AsyncWorkScope();
     job.running = done.promise;

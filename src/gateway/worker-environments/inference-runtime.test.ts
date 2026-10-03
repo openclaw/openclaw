@@ -524,6 +524,74 @@ describe("worker inference provider runtime", () => {
     },
   );
 
+  it("canonicalizes fresh reasoning before continuation without rewriting approved history", async () => {
+    const runtime = setup();
+    const signature =
+      '{"type":"reasoning","id":"rs_fresh","encrypted_content":"gAAAA-synthetic==","summary":[{"type":"summary_text","text":"fresh summary"}]}';
+    const canonical =
+      '{"id":"rs_fresh","type":"reasoning","summary":[],"encrypted_content":"gAAAA-synthetic=="}';
+    const message = finalMessage();
+    const toolCall = {
+      type: "toolCall" as const,
+      id: TOOL_CALL.id,
+      name: TOOL_CALL.name,
+      arguments: { token: "synthetic-tool-input" },
+    };
+    message.content = [
+      { type: "thinking", thinking: "fresh summary", thinkingSignature: signature },
+      { type: "text", text: "Calling lookup" },
+      toolCall,
+    ];
+    const original = structuredClone(message);
+    runtime.stream.mockImplementation(() => {
+      const stream = createAssistantMessageEventStream();
+      stream.push({ type: "toolcall_start", contentIndex: 2, partial: message });
+      stream.push({
+        type: "toolcall_delta",
+        contentIndex: 2,
+        delta: JSON.stringify(toolCall.arguments),
+        partial: message,
+      });
+      stream.push({ type: "toolcall_end", contentIndex: 2, toolCall, partial: message });
+      stream.push({ type: "done", reason: "toolUse", message });
+      return stream;
+    });
+
+    const outcome = await runtime.executor(params(request(), vi.fn()));
+
+    expect(outcome.type).toBe("done");
+    if (outcome.type !== "done") {
+      throw new Error("expected successful worker inference");
+    }
+    expect(outcome.message.content).toEqual([
+      { type: "thinking", thinking: "fresh summary", thinkingSignature: canonical },
+      { type: "text", text: "Calling lookup" },
+      toolCall,
+    ]);
+    expect(message).toEqual(original);
+
+    const continuation = request();
+    continuation.context.messages.push(
+      {
+        ...outcome.message,
+        content: [{ type: "thinking", thinking: "approved history", thinkingSignature: signature }],
+      },
+      outcome.message,
+      {
+        role: "toolResult",
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        content: [{ type: "text", text: "found" }],
+        isError: false,
+        timestamp: 30,
+      },
+    );
+    const approvedHistory = structuredClone(continuation.context.messages);
+    await runtime.executor(params(continuation, vi.fn()));
+    expect(runtime.stream.mock.calls[1]?.[1].messages).toEqual(approvedHistory);
+    expect(continuation.context.messages).toEqual(approvedHistory);
+  });
+
   it("returns a typed error when authoritative replay cannot be persisted", async () => {
     const runtime = setup();
     const message = finalMessage();
@@ -911,6 +979,7 @@ describe("worker inference provider runtime", () => {
       maxTokens: 256,
       reasoning: "low",
       thinkingBudgets: { low: 1 },
+      fastMode: false,
     });
     expect(runtime.stream.mock.calls[0]?.[2]?.thinkingBudgets).toEqual({ low: 96 });
     expect(inferenceRequest.options.thinkingBudgets).toEqual({ low: 96 });

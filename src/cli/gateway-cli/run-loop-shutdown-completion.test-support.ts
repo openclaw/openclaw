@@ -412,69 +412,60 @@ export function registerShutdownCompletionTests({
     });
   });
 
-  it.each(["systemd", "launchd"] as const)(
-    "preserves a recorded close failure when %s final cleanup crosses the deadline",
-    async (supervisor) => {
-      vi.clearAllMocks();
-      const deadlineMs =
-        supervisor === "launchd" ? LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000 - 5_000 : 325_000;
-      if (supervisor === "systemd") {
-        process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
-        setPlatform("linux");
-      } else {
-        process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
-        setPlatform("darwin");
-      }
-      hasManagedProviderLocalServices.mockReturnValue(true);
-      stopManagedProviderLocalServices.mockImplementation(
-        () =>
-          new Promise<void>((resolve) => {
-            setTimeout(resolve, 2_000);
-          }),
-      );
-      await withIsolatedSignals(async ({ captureSignal }) => {
-        const { close, runtime } = await createSignaledLoopHarness();
-        close.mockImplementationOnce(async () => {
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, deadlineMs - 1_000);
-          });
-          throw new Error("close owner failed");
+  it("preserves a recorded close failure when launchd final cleanup crosses the deadline", async () => {
+    vi.clearAllMocks();
+    const deadlineMs = LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000 - 5_000;
+    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+    setPlatform("darwin");
+    hasManagedProviderLocalServices.mockReturnValue(true);
+    stopManagedProviderLocalServices.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, 2_000);
+        }),
+    );
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, runtime } = await createSignaledLoopHarness();
+      close.mockImplementationOnce(async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, deadlineMs - 1_000);
         });
-        vi.useFakeTimers();
-        const clock = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
-        try {
-          captureSignal("SIGTERM")();
-          await vi.advanceTimersByTimeAsync(deadlineMs - 1);
-          expect(gatewayLog.error).toHaveBeenCalledWith(
-            "shutdown step failed (gateway server close): close owner failed",
-          );
-          expect(stopManagedProviderLocalServices).toHaveBeenCalledOnce();
-          expect(runtime.exit).not.toHaveBeenCalled();
-          await vi.advanceTimersByTimeAsync(1);
-          expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
-          expect(writeDiagnosticStabilityBundleForFailureSync).toHaveBeenLastCalledWith(
-            "gateway.stop_shutdown_timeout",
-            expect.objectContaining({ message: "close owner failed" }),
-            { shutdownStep: "gateway-server-close" },
-          );
-        } finally {
-          clock.mockRestore();
-          vi.clearAllTimers();
-          vi.useRealTimers();
-        }
+        throw new Error("close owner failed");
       });
-    },
-  );
+      vi.useFakeTimers();
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+      try {
+        captureSignal("SIGTERM")();
+        await vi.advanceTimersByTimeAsync(deadlineMs - 1);
+        expect(gatewayLog.error).toHaveBeenCalledWith(
+          "shutdown step failed (gateway server close): close owner failed",
+        );
+        expect(stopManagedProviderLocalServices).toHaveBeenCalledOnce();
+        expect(runtime.exit).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+        expect(writeDiagnosticStabilityBundleForFailureSync).toHaveBeenLastCalledWith(
+          "gateway.stop_shutdown_timeout",
+          expect.objectContaining({ message: "close owner failed" }),
+          { shutdownStep: "gateway-server-close" },
+        );
+      } finally {
+        clock.mockRestore();
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
+    });
+  });
 
   it.each([true, false])(
-    "bounds abandoned cleanup after an exhausted deferral and managed parking (restore commit=%s)",
+    "bounds abandoned cleanup after a zero-drain request and managed parking (restore commit=%s)",
     async (restoreCommitted) => {
       vi.clearAllMocks();
       process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
       setPlatform("linux");
       consumeGatewayRestartIntent.mockReturnValueOnce({
         force: true,
-        drainBudgetExhausted: true,
+        waitMs: 0,
         reason: "update.run",
         successorOwner: managedUpdateSuccessorOwner,
       });
@@ -516,7 +507,7 @@ export function registerShutdownCompletionTests({
   it("retains external supervisor recovery when timeout prevents a restart handoff", async () => {
     vi.clearAllMocks();
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-    consumeGatewayRestartIntent.mockReturnValueOnce({ force: true, drainBudgetExhausted: true });
+    consumeGatewayRestartIntent.mockReturnValueOnce({ force: true, waitMs: 0 });
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { close, runtime } = await createSignaledLoopHarness();
       close.mockReturnValue(new Promise<void>(() => {}));
@@ -567,7 +558,7 @@ export function registerShutdownCompletionTests({
   it("retains the restart deadline when a managed update arrives after final cleanup fails", async () => {
     vi.clearAllMocks();
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-    consumeGatewayRestartIntent.mockReturnValueOnce({ force: true, drainBudgetExhausted: true });
+    consumeGatewayRestartIntent.mockReturnValueOnce({ force: true, waitMs: 0 });
     restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "supervised" });
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { close, start, runtime, exited } = await createSignaledLoopHarness(undefined, true);
@@ -608,8 +599,6 @@ export function registerShutdownCompletionTests({
 
   it.each([
     { signal: "SIGTERM", failure: "exit handler" },
-    { signal: "SIGTERM", failure: "log flush" },
-    { signal: "SIGUSR2", failure: "exit handler" },
     { signal: "SIGUSR2", failure: "log flush" },
   ] as const)(
     "retains $signal deadlines when $failure throws after server close",

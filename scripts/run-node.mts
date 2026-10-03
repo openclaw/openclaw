@@ -28,9 +28,13 @@ import {
   resolveGitHead,
   writeRuntimePostBuildStamp as writeDistRuntimePostBuildStamp,
 } from "./lib/local-build-metadata.mts";
+import { resolveQaCodexApiKeyEnvPatch, type ReadQaCodexApiKey } from "./lib/qa-codex-auth-env.mts";
 import {
+  captureRunNodeInputState,
+  type RunNodeInputState,
   collectRunNodeBundledPluginBuildEntries,
   hasDirtySourceTree,
+  resolveRunNodeInputSignature,
   hasDirtyRuntimePostBuildInputs,
   isRuntimePostBuildRelevantPath,
   listBundledPluginRuntimeEntryPaths,
@@ -42,6 +46,7 @@ import {
   resolveStaticExtensionAssetSource,
   shouldCopyStaticExtensionAssets,
 } from "./lib/static-extension-assets.mts";
+import { resolveTestRuntime } from "./lib/test-runtime.mts";
 import {
   isBuildRelevantRunNodePath,
   normalizeRunNodePath as normalizePath,
@@ -88,6 +93,7 @@ type RunNodeMainParams = {
   env?: NodeJS.ProcessEnv;
   runRuntimePostBuild?: RunNodeRuntimePostBuild;
   platform?: NodeJS.Platform;
+  readCodexApiKey?: ReadQaCodexApiKey;
 };
 type RunNodeProgress = {
   clearLine(): void;
@@ -231,12 +237,12 @@ const findLatestMtime = (
 const readJsonStamp = (filePath: string, deps: RunNodeRequirementDeps) => {
   const mtime = statMtime(filePath, deps.fs);
   if (mtime == null) {
-    return { mtime: null, head: null, inputsClean: null };
+    return { mtime: null, head: null, inputsClean: null, inputSignature: null, staticAssets: null };
   }
   try {
     const raw = deps.fs.readFileSync(filePath, "utf8").trim();
     if (!raw.startsWith("{")) {
-      return { mtime, head: null, inputsClean: null };
+      return { mtime, head: null, inputsClean: null, inputSignature: null, staticAssets: null };
     }
     const parsed = JSON.parse(raw);
     const head = typeof parsed?.head === "string" && parsed.head.trim() ? parsed.head.trim() : null;
@@ -244,9 +250,15 @@ const readJsonStamp = (filePath: string, deps: RunNodeRequirementDeps) => {
       mtime,
       head,
       inputsClean: typeof parsed?.inputsClean === "boolean" ? parsed.inputsClean : null,
+      staticAssets: Object.hasOwn(parsed, "staticAssets") ? parsed.staticAssets === true : null,
+      inputSignature: Object.hasOwn(parsed, "inputSignature")
+        ? typeof parsed.inputSignature === "string" && /^[a-f0-9]{64}$/u.test(parsed.inputSignature)
+          ? parsed.inputSignature
+          : ""
+        : null,
     };
   } catch {
-    return { mtime, head: null, inputsClean: null };
+    return { mtime, head: null, inputsClean: null, inputSignature: null, staticAssets: null };
   }
 };
 
@@ -500,7 +512,10 @@ const hasMissingRequiredRuntimePostBuildOutput = (deps: RunNodeRequirementDeps) 
 };
 
 /** Decides whether source changes require a new dev build. */
-export const resolveBuildRequirement = (deps: RunNodeRequirementDeps): BuildRequirement => {
+export const resolveBuildRequirement = (
+  deps: RunNodeRequirementDeps,
+  options: { allowEquivalentInputs?: boolean } = {},
+): BuildRequirement => {
   if (deps.env.OPENCLAW_FORCE_BUILD === "1") {
     return { shouldBuild: true, reason: "force_build" };
   }
@@ -521,14 +536,47 @@ export const resolveBuildRequirement = (deps: RunNodeRequirementDeps): BuildRequ
   }
 
   const currentHead = resolveGitHead(deps);
+  if (
+    stamp.inputSignature === "" ||
+    (!currentHead && stamp.inputSignature !== null && stamp.inputsClean !== true)
+  ) {
+    return { shouldBuild: true, reason: "build_inputs_unverified" };
+  }
   if (currentHead && !stamp.head) {
     return { shouldBuild: true, reason: "build_stamp_missing_head" };
   }
-  if (currentHead && stamp.head && currentHead !== stamp.head) {
+  const headChanged = Boolean(currentHead && stamp.head && currentHead !== stamp.head);
+  const immutable = isImmutableGitDeployment(deps);
+  if (headChanged && (!options.allowEquivalentInputs || immutable)) {
     return { shouldBuild: true, reason: "git_head_changed" };
   }
   if (currentHead) {
     const dirty = hasDirtySourceTree(deps);
+    // Preserve the portable clean-artifact contract; fingerprints are needed
+    // for dirty inputs and test capsules whose private carrier HEAD changed.
+    if (
+      !headChanged &&
+      dirty === false &&
+      stamp.inputsClean === true &&
+      (!options.allowEquivalentInputs ||
+        isImmutableGitDeployment(deps) ||
+        stamp.inputSignature === null)
+    ) {
+      return hasMissingBuiltBundledPluginRuntimeEntryOutput(deps)
+        ? { shouldBuild: true, reason: "missing_bundled_plugin_dist_entry" }
+        : { shouldBuild: false, reason: "clean" };
+    }
+    if (options.allowEquivalentInputs && stamp.inputSignature !== null && !immutable) {
+      if (stamp.inputSignature !== resolveRunNodeInputSignature(deps, "build")) {
+        return { shouldBuild: true, reason: "build_inputs_changed" };
+      }
+      return hasMissingBuiltBundledPluginRuntimeEntryOutput(deps)
+        ? { shouldBuild: true, reason: "missing_bundled_plugin_dist_entry" }
+        : { shouldBuild: false, reason: "clean" };
+    }
+    if (headChanged) {
+      return { shouldBuild: true, reason: "git_head_changed" };
+    }
     if (dirty === true) {
       return { shouldBuild: true, reason: "dirty_watched_tree" };
     }
@@ -563,7 +611,7 @@ export const resolveBuildRequirement = (deps: RunNodeRequirementDeps): BuildRequ
 /** Decides whether runtime postbuild artifacts need to be regenerated. */
 export const resolveRuntimePostBuildRequirement = (
   deps: RunNodeRuntimeRequirementDeps,
-  options: { requireCleanInputs?: boolean } = {},
+  options: { requireCleanInputs?: boolean; allowEquivalentInputs?: boolean } = {},
 ): RuntimePostBuildRequirement => {
   if (deps.env.OPENCLAW_FORCE_RUNTIME_POSTBUILD === "1") {
     return { shouldSync: true, reason: "force_runtime_postbuild" };
@@ -572,6 +620,13 @@ export const resolveRuntimePostBuildRequirement = (
   const stamp = readRuntimePostBuildStamp(deps);
   if (stamp.mtime == null) {
     return { shouldSync: true, reason: "missing_runtime_postbuild_stamp" };
+  }
+
+  if (
+    shouldCopyStaticExtensionAssets({ env: deps.env }) &&
+    (stamp.staticAssets === false || (stamp.inputSignature !== null && stamp.staticAssets !== true))
+  ) {
+    return { shouldSync: true, reason: "static_assets_not_prepared" };
   }
 
   const buildStamp = readBuildStamp(deps);
@@ -583,14 +638,53 @@ export const resolveRuntimePostBuildRequirement = (
   }
 
   const currentHead = resolveGitHead(deps);
+  if (
+    stamp.inputSignature === "" ||
+    (!currentHead && stamp.inputSignature !== null && stamp.inputsClean !== true)
+  ) {
+    return { shouldSync: true, reason: "runtime_inputs_unverified" };
+  }
   if (currentHead && !stamp.head) {
     return { shouldSync: true, reason: "runtime_postbuild_stamp_missing_head" };
   }
-  if (currentHead && stamp.head && currentHead !== stamp.head) {
+  const headChanged = Boolean(currentHead && stamp.head && currentHead !== stamp.head);
+  if (
+    headChanged &&
+    (!options.allowEquivalentInputs ||
+      isImmutableGitDeployment(deps) ||
+      buildStamp.head !== stamp.head)
+  ) {
     return { shouldSync: true, reason: "git_head_changed" };
   }
   if (currentHead) {
     const dirty = hasDirtyRuntimePostBuildInputs(deps);
+    if (
+      !headChanged &&
+      dirty === false &&
+      stamp.inputsClean === true &&
+      (!options.allowEquivalentInputs ||
+        isImmutableGitDeployment(deps) ||
+        stamp.inputSignature === null)
+    ) {
+      return hasMissingRequiredRuntimePostBuildOutput(deps)
+        ? { shouldSync: true, reason: "missing_runtime_postbuild_output" }
+        : { shouldSync: false, reason: "clean" };
+    }
+    if (
+      options.allowEquivalentInputs &&
+      stamp.inputSignature !== null &&
+      !isImmutableGitDeployment(deps)
+    ) {
+      if (stamp.inputSignature !== resolveRunNodeInputSignature(deps, "runtime")) {
+        return { shouldSync: true, reason: "runtime_inputs_changed" };
+      }
+      return hasMissingRequiredRuntimePostBuildOutput(deps)
+        ? { shouldSync: true, reason: "missing_runtime_postbuild_output" }
+        : { shouldSync: false, reason: "clean" };
+    }
+    if (headChanged) {
+      return { shouldSync: true, reason: "git_head_changed" };
+    }
     if (dirty === true) {
       return { shouldSync: true, reason: "dirty_runtime_postbuild_inputs" };
     }
@@ -622,6 +716,7 @@ const BUILD_REASON_LABELS = {
   missing_dist_entry: "dist entry missing",
   config_newer: "config newer than build stamp",
   build_stamp_missing_head: "build stamp missing git head",
+  build_inputs_changed: "build input bytes or toolchain changed",
   build_inputs_unverified: "build inputs were not verified clean",
   git_head_changed: "git head changed",
   dirty_watched_tree: "dirty watched source tree",
@@ -638,6 +733,8 @@ const RUNTIME_POSTBUILD_REASON_LABELS = {
   missing_build_stamp: "build stamp missing",
   build_stamp_newer: "build stamp newer than runtime postbuild stamp",
   runtime_postbuild_stamp_missing_head: "runtime postbuild stamp missing git head",
+  static_assets_not_prepared: "runtime static assets were not verified",
+  runtime_inputs_changed: "runtime input bytes or toolchain changed",
   runtime_inputs_unverified: "runtime postbuild inputs were not verified clean",
   git_head_changed: "git head changed",
   dirty_runtime_postbuild_inputs: "dirty runtime postbuild inputs",
@@ -1079,7 +1176,7 @@ const getInterruptedSpawnOutcome = (
   return null;
 };
 
-const runNodeChild = async (deps: RunNodeDeps, args: string[]) => {
+const runNodeChild = async (deps: RunNodeDeps, args: string[], execPath = deps.execPath) => {
   deps.cancellation.signal.throwIfAborted();
   const useProcessGroup = shouldUseRunNodeChildProcessGroup(deps);
   // The parent route grants lifecycle IPC; generic children must not extend
@@ -1090,7 +1187,7 @@ const runNodeChild = async (deps: RunNodeDeps, args: string[]) => {
       mode: "command-path",
     }) !== null;
   const nodeProcess = asRunNodeChild(
-    deps.spawn(deps.execPath, args, {
+    deps.spawn(execPath, args, {
       cwd: deps.cwd,
       detached: useProcessGroup,
       env: deps.env,
@@ -1113,7 +1210,11 @@ const runNodeChild = async (deps: RunNodeDeps, args: string[]) => {
 };
 
 const runOpenClaw = (deps: RunNodeDeps) =>
-  runNodeChild(deps, [...resolveRunNodeDiagnosticArgs(deps), "openclaw.mjs", ...deps.args]);
+  runNodeChild(
+    deps,
+    [...resolveRunNodeDiagnosticArgs(deps), "openclaw.mjs", ...deps.args],
+    resolveTestRuntime(deps.env) === "bun" ? "bun" : deps.execPath,
+  );
 
 const pipeSpawnedOutput = (
   childProcess: RunNodeChild,
@@ -1387,16 +1488,19 @@ const syncRuntimeArtifacts = async (deps: RunNodeDeps) => {
   return true;
 };
 
-const writeRuntimePostBuildStamp = (deps: RunNodeDeps) => {
+const writeRuntimePostBuildStamp = (deps: RunNodeDeps, inputState: RunNodeInputState | null) => {
   try {
     writeDistRuntimePostBuildStamp({
       cwd: deps.cwd,
       fs: deps.fs,
       env: deps.env,
       spawnSync: deps.spawnSync,
+      inputState,
     });
+    return true;
   } catch (error) {
     logRunner(`Failed to write runtime postbuild stamp: ${getErrorMessage(error)}`, deps);
+    return false;
   }
 };
 
@@ -1424,12 +1528,14 @@ const syncRuntimeArtifactsAndStamp = async (deps: RunNodeDeps) =>
           return false;
         }
         deps.cancellation.signal.throwIfAborted();
+        const inputState = captureRunNodeInputState(deps, "runtime");
+        deps.fs.rmSync(deps.runtimePostBuildStampPath, { force: true });
         const synced = await syncRuntimeArtifacts(deps);
         deps.cancellation.signal.throwIfAborted();
         if (synced) {
-          writeRuntimePostBuildStamp(deps);
+          return writeRuntimePostBuildStamp(deps, inputState);
         }
-        return synced;
+        return false;
       });
     },
     deps.cancellation.signal,
@@ -1561,6 +1667,7 @@ function createRunNodeDeps(params: RunNodeMainParams) {
     args,
     env,
     platform: params.platform ?? process.platform,
+    readCodexApiKey: params.readCodexApiKey,
     signalProcess:
       params.signalProcess ??
       ((pid: number, signal?: NodeJS.Signals | number) => process.kill(pid, signal)),
@@ -1578,10 +1685,25 @@ function createRunNodeDeps(params: RunNodeMainParams) {
 }
 
 /** Read-only build admission shared by explicit test preparation and the source runner. */
-export function resolveRunNodePreparation(cwd: string, env: NodeJS.ProcessEnv) {
+export function resolveRunNodePreparation(
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  options: { allowEquivalentInputs?: boolean } = {},
+) {
   const deps = createRunNodeDeps({ cwd, env, args: [] });
-  const build = resolveBuildRequirement(deps).shouldBuild;
-  const runtime = !build && resolveRuntimePostBuildRequirement(deps).shouldSync;
+  let build = resolveBuildRequirement(deps, options).shouldBuild;
+  let runtime = !build && resolveRuntimePostBuildRequirement(deps, options).shouldSync;
+  // A partial refresh must not relabel an older compiled generation while CLI
+  // and UI metadata still retain its identity. Reuse only a coherent generation.
+  if (
+    !build &&
+    runtime &&
+    options.allowEquivalentInputs &&
+    resolveGitHead(deps) !== readBuildStamp(deps).head
+  ) {
+    build = true;
+    runtime = false;
+  }
   return { build, runtime, immutable: (build || runtime) && isImmutableGitDeployment(deps) };
 }
 
@@ -1592,6 +1714,14 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNo
     deps.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
     deps.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
     deps.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS ??= "0";
+    Object.assign(
+      deps.env,
+      resolveQaCodexApiKeyEnvPatch({
+        args: deps.args,
+        env: deps.env,
+        readCodexApiKey: deps.readCodexApiKey,
+      }),
+    );
   }
   deps.outputTee = createRunNodeOutputTee(deps);
   // Children own signal forwarding; retain cancellation across in-process steps

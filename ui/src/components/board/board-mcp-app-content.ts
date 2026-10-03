@@ -31,6 +31,7 @@ export function renderBoardMcpAppContent(options: BoardMcpAppContentOptions): Te
           .sessionKey=${options.sessionKey}
           .viewId=${ready.viewId}
           .fillContainer=${true}
+          .surface=${"board"}
           .title=${widget.title || widget.name}
           @openclaw-mcp-app-view-expired=${options.expired}
         ></mcp-app-view>`

@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { getRuntimeConfig } from "../../../config/io.js";
 import { resolveHostAccountName } from "../../../infra/host-account-name.js";
 import { prepareUserProfileRoleAuthority } from "../../../state/user-channel-identity-operations.js";
+import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import {
   ensureCanonicalGatewayOwnerProfile,
   ensureCanonicalUserProfileForEmail,
@@ -93,6 +94,10 @@ async function resolveAuthenticatedProfile(
   assertCurrent?: () => void,
 ) {
   assertCurrent?.();
+  if (hasGatewayOperatorAccessPolicies(getRuntimeConfig())) {
+    (await prepareUserProfileCatalog()).release();
+    assertCurrent?.();
+  }
   const authority = await prepareUserProfileRoleAuthority(profileId);
   assertCurrent?.();
   if (!authority?.isCurrent()) {
@@ -105,6 +110,7 @@ async function resolveAuthenticatedProfile(
     recipient: {
       profileId: authority.profileId,
       role: authority.role,
+      githubLogin: authority.githubLogin ?? null,
       aliases: new Set(authority.aliases),
     },
   };

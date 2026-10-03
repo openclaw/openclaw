@@ -18,7 +18,6 @@ import type { SessionsListResult } from "./session-utils.types.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
-  seedSessionTranscript,
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
@@ -36,7 +35,7 @@ const LIST_PARAMS = {
   limit: 100,
 };
 
-test("sessions.list keeps roster enumeration bounded as ordinary rows grow", async () => {
+test("sessions.list keeps warm roster enumeration bounded as ordinary rows grow", async () => {
   await createSessionStoreDir();
   testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
   const rosterReads: number[] = [];
@@ -50,13 +49,11 @@ test("sessions.list keeps roster enumeration bounded as ordinary rows grow", asy
       });
     }
     await writeSessionStore({ entries });
-    expect((await directSessionReq("sessions.list", LIST_PARAMS)).ok).toBe(true);
+    const request = { ...LIST_PARAMS, limit: rows + 1 };
+    expect((await directSessionReq("sessions.list", request)).ok).toBe(true);
     const roster = vi.spyOn(agentScope, "listAgentIds");
     try {
-      const result = await directSessionReq<SessionsListResult>("sessions.list", {
-        ...LIST_PARAMS,
-        limit: rows + 1,
-      });
+      const result = await directSessionReq<SessionsListResult>("sessions.list", request);
       expect(result.ok).toBe(true);
       expect(result.payload?.totalCount).toBe(rows + 1);
       expect(result.payload?.sessions.map(({ key }) => key)).toEqual([
@@ -100,16 +97,23 @@ test("sessions.list retains stored titles and transcript previews beyond the dat
       },
       storePath,
     });
-    await seedSessionTranscript({
-      agentId,
-      messages: [
-        { role: "user", content: `Title ${agentId}` },
-        { role: "assistant", content: `Reply ${agentId}` },
-      ],
-      sessionId,
-      sessionKey,
-      storePath,
-    });
+    await sessionAccessor.replaceTranscriptEvents({ agentId, sessionId, sessionKey, storePath }, [
+      { type: "session", version: 3, id: sessionId, cwd: "/tmp" },
+      {
+        type: "message",
+        id: "question",
+        parentId: null,
+        timestamp: "2026-06-19T12:00:01.000Z",
+        message: { role: "user", content: `Title ${agentId}`, timestamp: 1 },
+      },
+      {
+        type: "message",
+        id: "reply",
+        parentId: "question",
+        timestamp: "2026-06-19T12:00:02.000Z",
+        message: { role: "assistant", content: `Reply ${agentId}`, timestamp: 2 },
+      },
+    ]);
   }
 
   const cfg = { session: { store: storeTemplate }, agents: testState.agentsConfig };

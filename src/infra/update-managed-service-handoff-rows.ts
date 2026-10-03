@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import { z } from "zod";
-import { executeSqliteQuerySync, prepareSqliteQueryTakeFirstSync } from "./kysely-sync.js";
+import { hasErrnoCode } from "./errno.js";
+import {
+  createSqliteQueryCache,
+  executeSqliteQuerySync,
+  prepareSqliteQueryTakeFirstSync,
+} from "./kysely-sync.js";
 import {
   leaseQueries,
   type createManagedHandoffLeaseDatabase,
@@ -9,17 +14,23 @@ import {
   type LeaseTable,
   type ManagedUpdateLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
-import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease-types.js";
+import type {
+  BorrowedLegacyHandoffParent,
+  ManagedHandoffLease,
+} from "./update-managed-service-handoff-lease-types.js";
 import {
   readBorrowedLegacyHandoffParent,
   isBorrowedLegacyHandoffParentCurrent,
-  type BorrowedLegacyHandoffParent,
 } from "./update-managed-service-handoff-legacy-parent.js";
 import {
+  isRetiredManagedHandoffLeasePayload,
   parseManagedHandoffLeasePayload,
   type HandoffProcessIdentity,
 } from "./update-managed-service-handoff-schema.js";
-import { isManagedHandoffSchemaEmpty } from "./update-managed-service-handoff-source-inspection.js";
+import {
+  hasManagedHandoffSchemaObject,
+  isManagedHandoffSchemaEmpty,
+} from "./update-managed-service-handoff-source-inspection.js";
 
 export const managedHandoffLeaseText = z.string().min(1).max(4096);
 export const triageFailureSchema = z.strictObject({
@@ -30,10 +41,10 @@ export const triageFailureSchema = z.strictObject({
   expectedVersion: z.string().max(100).optional(),
   gateway: z.enum(["verify-running", "preserve"]),
 });
-const text = managedHandoffLeaseText;
 
 type LeaseRead =
-  | { kind: "absent" | "unreadable" }
+  | { kind: "absent" }
+  | { kind: "unreadable"; error: unknown }
   | { kind: "current"; lease: ManagedHandoffLease };
 
 export function createManagedHandoffLeaseRows(
@@ -42,29 +53,26 @@ export function createManagedHandoffLeaseRows(
   processes: Parameters<typeof isBorrowedLegacyHandoffParentCurrent>[2],
 ) {
   const { databasePath } = options;
-  const rowReaders = new WeakMap<HandoffDatabase, (root: string) => LeaseRow | undefined>();
+  const rowReader = createSqliteQueryCache((db) =>
+    prepareSqliteQueryTakeFirstSync<string, LeaseRow>(db, (parameter) =>
+      leaseQueries(db)
+        .selectFrom("managed_update_handoffs")
+        .select(["owner", "payload_json", "updated_at"])
+        .where(
+          "install_root",
+          "=",
+          parameter((key) => key),
+        ),
+    ),
+  );
   function row(db: HandoffDatabase, root: string) {
-    let readRow = rowReaders.get(db);
-    if (!readRow) {
-      readRow = prepareSqliteQueryTakeFirstSync<string, LeaseRow>(db, (parameter) =>
-        leaseQueries(db)
-          .selectFrom("managed_update_handoffs")
-          .select(["owner", "payload_json", "updated_at"])
-          .where(
-            "install_root",
-            "=",
-            parameter((key) => key),
-          ),
-      );
-      rowReaders.set(db, readRow);
-    }
-    return readRow(root);
+    return rowReader(db)(root);
   }
   function handle(root: string, value: LeaseRow): ManagedHandoffLease {
     const payload = parseManagedHandoffLeasePayload(value.payload_json);
     if (
       !payload ||
-      !text.safeParse(value.owner).success ||
+      !managedHandoffLeaseText.safeParse(value.owner).success ||
       (payload.version === 2 &&
         payload.mutationOriginal &&
         (payload.mutationOriginal.key === root || root.includes("/.openclaw-update-child-"))) ||
@@ -85,6 +93,17 @@ export function createManagedHandoffLeaseRows(
       ...payload,
     };
   }
+  function descendants(db: HandoffDatabase, parent: { key: string }): LeaseTable[] {
+    const prefix = `${parent.key}/.openclaw-update-child-`;
+    return executeSqliteQuerySync(
+      db,
+      leaseQueries(db)
+        .selectFrom("managed_update_handoffs")
+        .select(["install_root", "owner", "payload_json", "updated_at"])
+        .where("install_root", ">=", prefix)
+        .where("install_root", "<", prefix + "\uffff"),
+    ).rows;
+  }
   function deleteRow(db: HandoffDatabase, root: string, value: LeaseRow) {
     return (
       executeSqliteQuerySync(
@@ -102,7 +121,7 @@ export function createManagedHandoffLeaseRows(
     db: HandoffDatabase,
     lease: ManagedHandoffLease,
     values: Pick<LeaseTable, "payload_json" | "updated_at"> &
-      Partial<Pick<LeaseTable, "install_root">>,
+      Partial<Pick<LeaseTable, "install_root" | "owner" | "recovery_json">>,
   ) {
     return (
       executeSqliteQuerySync(
@@ -129,10 +148,42 @@ export function createManagedHandoffLeaseRows(
         const value = row(db, root);
         return value ? { kind: "current", lease: handle(root, value) } : { kind: "absent" };
       });
-    } catch {
-      return { kind: "unreadable" };
+    } catch (error) {
+      return { kind: "unreadable", error };
     }
   }
+  function readRetainedSources(): ManagedHandoffLease[] {
+    try {
+      fs.lstatSync(databasePath);
+    } catch (error) {
+      if (hasErrnoCode(error, "ENOENT")) {
+        return [];
+      }
+      throw error;
+    }
+    return withDatabase(false, (db) => {
+      // Only ordinary inspection may accept an uninitialized store.
+      if (!options.existingIdentity && !hasManagedHandoffSchemaObject(db)) {
+        return [];
+      }
+      return executeSqliteQuerySync(
+        db,
+        leaseQueries(db)
+          .selectFrom("managed_update_handoffs")
+          .select(["install_root", "owner", "payload_json", "updated_at"]),
+      ).rows.flatMap((entry) =>
+        // A retired record decodes exactly, so unlike unreadable data it proves
+        // the row predates native custody and cannot borrow any source. A record
+        // this build cannot decode may still name a source it holds, so it is
+        // never discarded here: releasing that source is the hazard this refusal
+        // exists for. Store-level damage recovers in the database owner instead.
+        isRetiredManagedHandoffLeasePayload(entry.payload_json)
+          ? []
+          : [handle(entry.install_root, entry)],
+      );
+    });
+  }
+
   function readLegacyParent(
     root: string,
     executor?: HandoffProcessIdentity,
@@ -149,10 +200,12 @@ export function createManagedHandoffLeaseRows(
   return {
     row,
     handle,
+    descendants,
     deleteRow,
     updateRow,
     read,
     readLegacyParent,
+    readRetainedSources,
     currentLegacyParent,
     sameRow,
   };

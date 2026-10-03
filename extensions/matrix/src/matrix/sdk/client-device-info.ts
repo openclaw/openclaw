@@ -12,37 +12,25 @@ export async function resolveMatrixCrossSigningPublicationStatus(params: {
     user_signing_keys?: Record<string, unknown>;
   }>;
 }): Promise<MatrixOwnCrossSigningPublicationStatus> {
-  if (!params.userId) {
-    return {
-      userId: null,
-      masterKeyPublished: false,
-      selfSigningKeyPublished: false,
-      userSigningKeyPublished: false,
-      published: false,
-    };
+  let response: Awaited<ReturnType<typeof params.query>> | undefined;
+  if (params.userId) {
+    try {
+      response = await params.query();
+    } catch {
+      // Failed diagnostics report unpublished keys.
+    }
   }
-
-  try {
-    const response = await params.query();
-    const masterKeyPublished = Boolean(response.master_keys?.[params.userId]);
-    const selfSigningKeyPublished = Boolean(response.self_signing_keys?.[params.userId]);
-    const userSigningKeyPublished = Boolean(response.user_signing_keys?.[params.userId]);
-    return {
-      userId: params.userId,
-      masterKeyPublished,
-      selfSigningKeyPublished,
-      userSigningKeyPublished,
-      published: masterKeyPublished && selfSigningKeyPublished && userSigningKeyPublished,
-    };
-  } catch {
-    return {
-      userId: params.userId,
-      masterKeyPublished: false,
-      selfSigningKeyPublished: false,
-      userSigningKeyPublished: false,
-      published: false,
-    };
-  }
+  const userId = params.userId || null;
+  const masterKeyPublished = Boolean(userId && response?.master_keys?.[userId]);
+  const selfSigningKeyPublished = Boolean(userId && response?.self_signing_keys?.[userId]);
+  const userSigningKeyPublished = Boolean(userId && response?.user_signing_keys?.[userId]);
+  return {
+    userId,
+    masterKeyPublished,
+    selfSigningKeyPublished,
+    userSigningKeyPublished,
+    published: masterKeyPublished && selfSigningKeyPublished && userSigningKeyPublished,
+  };
 }
 
 export async function listMatrixOwnDevices(client: MatrixJsClient): Promise<MatrixOwnDeviceInfo[]> {

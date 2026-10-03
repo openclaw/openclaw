@@ -12,6 +12,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveBootstrapFilesForPreparation } from "openclaw/plugin-sdk/codex-mcp-projection";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isMessageOnlyCodexSourceReply } from "./dynamic-tool-profile.js";
 import { flattenCodexDynamicToolFunctions, type CodexDynamicToolSpec } from "./protocol.js";
 
@@ -35,15 +36,16 @@ export type CodexWorkspaceBootstrapContext = {
   inheritsAgentWorkspace: boolean;
   promptContextFiles?: EmbeddedContextFile[];
   threadDeveloperInstructionFiles?: EmbeddedContextFile[];
-  turnScopedDeveloperInstructionFiles?: EmbeddedContextFile[];
+  personaFiles?: EmbeddedContextFile[];
   memoryReferenceFiles?: EmbeddedContextFile[];
   memoryToolRoutedBootstrapFiles?: CodexBootstrapFile[];
   memoryToolNames?: string[];
   memoryToolRouted?: boolean;
   promptContext?: string;
   threadDeveloperInstructions?: string;
-  turnScopedDeveloperInstructions?: string;
-  memoryCollaborationInstructions?: string;
+  personaInstructions?: string;
+  sharedPersonaInstructions?: string;
+  memoryInstructions?: string;
 };
 
 /** A child baseline reads the bounded workspace snapshot without invoking admission hooks. */
@@ -80,7 +82,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
 }): Promise<CodexWorkspaceBootstrapContext> {
   const availableToolNames = new Set(
     flattenCodexDynamicToolFunctions(params.tools).map((tool) =>
-      normalizeCodexDynamicToolName(tool.name),
+      normalizeLowercaseStringOrEmpty(tool.name),
     ),
   );
   const executionWorkspace = params.executionWorkspace ?? params.resolvedWorkspace;
@@ -147,14 +149,14 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
     const threadDeveloperInstructionFiles = includeAgentWorkspaceInstructions
       ? prepared.instructionSnapshot.files
       : [];
-    const turnScopedDeveloperInstructionFiles = injectOpenClawContext ? prepared.personaFiles : [];
+    const personaFiles = injectOpenClawContext ? prepared.personaFiles : [];
     return {
       bootstrapFiles,
       contextFiles,
       inheritsAgentWorkspace,
       promptContextFiles,
       threadDeveloperInstructionFiles,
-      turnScopedDeveloperInstructionFiles,
+      personaFiles,
       memoryReferenceFiles,
       memoryToolRoutedBootstrapFiles,
       memoryToolNames,
@@ -164,11 +166,12 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       threadDeveloperInstructions: includeAgentWorkspaceInstructions
         ? (params.agentWorkspaceDeveloperInstructions ?? prepared.instructionSnapshot.instructions)
         : undefined,
-      turnScopedDeveloperInstructions: injectOpenClawContext
-        ? prepared.personaInstructions
+      personaInstructions: injectOpenClawContext ? prepared.personaInstructions : undefined,
+      sharedPersonaInstructions: injectOpenClawContext
+        ? prepared.sharedPersonaInstructions
         : undefined,
-      memoryCollaborationInstructions: injectOpenClawContext
-        ? renderCodexWorkspaceMemoryCollaborationInstructions({
+      memoryInstructions: injectOpenClawContext
+        ? renderCodexWorkspaceMemoryInstructions({
             files: memoryReferenceFiles,
             toolNames: memoryToolNames,
             memoryRecallInstructions: prepared.memoryRecallInstructions,
@@ -230,7 +233,7 @@ function renderCodexWorkspaceMemoryReference(params: {
   return lines.join("\n").trim();
 }
 
-function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
+function renderCodexWorkspaceMemoryInstructions(params: {
   files: EmbeddedContextFile[];
   toolNames: readonly string[];
   memoryRecallInstructions?: string;
@@ -248,7 +251,7 @@ function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
 
 function renderCodexMemoryToolSearchBridge(toolNames: readonly string[]): string | undefined {
   const memoryToolNames = toolNames
-    .map((name) => normalizeCodexDynamicToolName(name))
+    .map(normalizeLowercaseStringOrEmpty)
     .filter((name) => CODEX_MEMORY_TOOL_NAMES.has(name))
     .toSorted();
   if (memoryToolNames.length === 0) {
@@ -296,10 +299,6 @@ export function getCodexContextFileDisplayBasename(filePath: string): string {
 
 export function getCodexContextFileBasename(filePath: string): string {
   return normalizeCodexContextFilePath(filePath).split("/").pop() ?? "";
-}
-
-export function normalizeCodexDynamicToolName(name: string): string {
-  return name.trim().toLowerCase();
 }
 
 export function isNonEmptyString(value: unknown): value is string {

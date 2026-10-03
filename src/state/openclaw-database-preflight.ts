@@ -96,6 +96,7 @@ export async function assertOpenClawDatabasesReady(
         configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
         config?: OpenClawConfig;
         onDeferredSchemaPublication?: (publication: DeferredStateSchemaPublication) => void;
+        onVerified?: (schemas: OpenClawDatabaseSchemaPreflight) => void;
       }
     | { operation: "gateway-restart"; config?: OpenClawConfig }
     | { operation: "gateway-startup"; config: OpenClawConfig }
@@ -180,6 +181,7 @@ export async function assertOpenClawDatabasesReady(
     for (const publication of schemas.deferredSchemaPublications ?? []) {
       options.onDeferredSchemaPublication?.(publication);
     }
+    options.onVerified?.(schemas);
   }
 }
 
@@ -296,14 +298,16 @@ export async function preflightOpenClawDatabaseSchemas(
     ? getAgentDatabaseStartupAdmission()
     : undefined;
   const prepareSchemaHeader = startup?.prepareSchemaHeaders(options.env);
-  const readPreparedSchemaHeader =
+  const preparedStartup =
     options.reuseStartupSchemaPreparation &&
     !options.requireStartupMigrationReadiness &&
     !options.verifyCurrentSchemaShape &&
     !options.agentAdmissionConfig
-      ? getAgentDatabaseStartupAdmission()?.takePreparedSchemaHeaders(options.env)
+      ? getAgentDatabaseStartupAdmission()
       : undefined;
-  const priorRefusals = startup?.captureRefusals(options.env);
+  const readPreparedSchemaHeader = preparedStartup?.takePreparedSchemaHeaders(options.env);
+  const refusalOwner = startup ?? preparedStartup;
+  const priorRefusals = refusalOwner?.captureRefusals(options.env);
   const statePath = nodePath.resolve(resolveOpenClawStateSqlitePath(options.env));
   let registeredDatabases: ReturnType<typeof readAgentDatabasePreflightTargets> = [];
   let deletionJournal: AgentDeletionJournalDisposition = {
@@ -494,7 +498,7 @@ export async function preflightOpenClawDatabaseSchemas(
     inspectionTargets,
     async (row, inspection, claimAgentTarget, inspectSchema) => {
       const agentPath = row.path;
-      if (startup?.reuseRefusal(row, inspection, priorRefusals)) {
+      if (refusalOwner?.reuseRefusal(row, inspection, priorRefusals)) {
         return;
       }
       const { presence } = row;

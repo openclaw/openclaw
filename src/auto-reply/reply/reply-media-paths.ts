@@ -24,12 +24,15 @@ import { logVerbose } from "../../globals.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
-import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { HostReadMediaTypeError, LocalMediaAccessError } from "../../media/local-media-access.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import { resolveOutboundAttachmentFromUrl } from "../../media/outbound-attachment.js";
-import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
+import {
+  resolveAgentScopedOutboundMediaAccess,
+  type HostOutboundMediaAccess,
+} from "../../media/read-capability.js";
+import { resolveWebchatAttachmentFromUrl } from "../../media/webchat-attachment.js";
 import {
   appendReplyMediaFailures,
   copyReplyPayloadMetadata,
@@ -141,10 +144,12 @@ export function createReplyMediaSourcePreparer(params: {
   requesterSenderE164?: string;
   sandboxRoot?: string;
   sandboxContainerWorkdir?: string;
-  mediaAccess?: OutboundMediaAccess;
-  workspaceMediaAccess?: OutboundMediaAccess;
+  mediaAccess?: HostOutboundMediaAccess;
+  workspaceMediaAccess?: HostOutboundMediaAccess;
   /** Physical remote alias of the captured logical workspace. */
   workspaceMediaRoot?: string;
+  /** Streams local audio/video up to this size instead of the channel cap. */
+  localMediaMaxBytes?: number;
 }): (sources: readonly string[]) => Promise<PreparedReplyMedia> {
   // Prefer an explicit agentId so callers without a resolved sessionKey (e.g.
   // `openclaw agent --deliver` with `--reply-channel/--reply-to`) still get
@@ -200,12 +205,33 @@ export function createReplyMediaSourcePreparer(params: {
     return await sandboxWorkspacePromise;
   };
 
-  const resolveMediaAccessForSource = (
+  const persistLocalReplyMedia = async (
     media: string,
     sessionWorkspaceDir?: string,
     workspaceDir?: string,
-  ) =>
-    resolveAgentScopedOutboundMediaAccess({
+  ): Promise<{ path: string; contentType?: string }> => {
+    if (!isLikelyLocalMediaSource(media)) {
+      return { path: media };
+    }
+    const managedMediaPath = await resolveAllowedManagedMediaPath(media);
+    if (managedMediaPath) {
+      return {
+        path: managedMediaPath,
+        contentType: mimeTypeFromFilePath(managedMediaPath),
+      };
+    }
+    if (
+      params.workspaceMediaRoot &&
+      !resolveAbsoluteWorkspaceMedia(media) &&
+      !(await resolveInboundMediaReference(media))
+    ) {
+      throw new Error("Attachment path is outside the remote workspace.");
+    }
+    const cached = persistedMediaBySource.get(media);
+    if (cached) {
+      return await cached;
+    }
+    const mediaAccess = resolveAgentScopedOutboundMediaAccess({
       cfg: params.cfg,
       agentId,
       workspaceDir: workspaceDir ?? params.workspaceDir,
@@ -226,29 +252,14 @@ export function createReplyMediaSourcePreparer(params: {
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
     });
-
-  const persistLocalReplyMedia = async (
-    media: string,
-    sessionWorkspaceDir?: string,
-    workspaceDir?: string,
-  ): Promise<{ path: string; contentType?: string }> => {
-    if (!isLikelyLocalMediaSource(media)) {
-      return { path: media };
-    }
-    const managedMediaPath = await resolveAllowedManagedMediaPath(media);
-    if (managedMediaPath) {
-      return {
-        path: managedMediaPath,
-        contentType: mimeTypeFromFilePath(managedMediaPath),
-      };
-    }
-    const cached = persistedMediaBySource.get(media);
-    if (cached) {
-      return await cached;
-    }
-    const persistPromise = resolveOutboundAttachmentFromUrl(media, maxBytes, {
-      mediaAccess: resolveMediaAccessForSource(media, sessionWorkspaceDir, workspaceDir),
-    })
+    const persistPromise = (
+      params.localMediaMaxBytes
+        ? resolveWebchatAttachmentFromUrl(media, maxBytes, {
+            mediaAccess,
+            localMediaMaxBytes: params.localMediaMaxBytes,
+          })
+        : resolveOutboundAttachmentFromUrl(media, maxBytes, { mediaAccess })
+    )
       .then((saved) => ({
         ...saved,
         contentType: saved.contentType ?? mimeTypeFromFilePath(media) ?? "application/octet-stream",
@@ -382,10 +393,14 @@ export function createReplyMediaSourcePreparer(params: {
       try {
         prepared.push({ source, outcome: await normalizeMediaSource(source) });
       } catch (error) {
-        prepared.push({
-          source,
-          outcome: { failure: createReplyMediaFailure(source, index, error) },
-        });
+        const failure = createReplyMediaFailure(source, index, error);
+        if (params.workspaceMediaRoot && isLikelyLocalMediaSource(source)) {
+          failure.label = truncateUtf16Safe(
+            `Remote file: ${failure.label}`,
+            MAX_FAILURE_LABEL_LENGTH,
+          );
+        }
+        prepared.push({ source, outcome: { failure } });
         logVerbose(`dropping blocked reply media ${source}: ${String(error)}`);
       }
     }
@@ -429,8 +444,8 @@ export function applyPreparedReplyMedia(
     for (const source of previousSourceUrls?.get(sourceKey) ?? []) {
       sourceUrls.add(source);
     }
-    if (normalized.mediaUrl !== media.trim()) {
-      sourceUrls.add(media.trim());
+    if (normalized.mediaUrl !== media) {
+      sourceUrls.add(media);
     }
     if (sourceUrls.size > 0) {
       sourcesByReference.set(normalizedKey, sourceUrls);

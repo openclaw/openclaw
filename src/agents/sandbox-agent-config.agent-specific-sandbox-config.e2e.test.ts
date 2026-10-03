@@ -1,6 +1,7 @@
 // Verifies agent-specific sandbox config, workspace roots, and Docker setup commands.
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { splitSandboxBindSpec } from "./sandbox/bind-spec.js";
 import { sandboxMountOptionsReadOnly } from "./sandbox/workspace-mounts.js";

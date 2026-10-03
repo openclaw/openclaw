@@ -1,4 +1,5 @@
 // Verifies config path normalization and platform-specific behavior.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";

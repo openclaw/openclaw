@@ -22,7 +22,7 @@ import { scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import { resolveInFlightRunSnapshot } from "../chat-abort.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
 import { isQueuedChatTurnForSession } from "../chat-queued-turns.js";
-import { resolveClaudeCliBindingSessionId } from "../cli-session-history.js";
+import { resolveClaudeCliBindingSessionId } from "../cli-session-history.claude.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { SerializedJsonArray } from "../serialized-json.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
@@ -35,7 +35,6 @@ import { prepareProjectedSessionPresentation } from "../session-row-presentation
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
 import { buildGatewaySessionRow } from "../session-utils-row.js";
 import { getSessionDefaults, resolveSessionModelRef } from "../session-utils.js";
-import { prepareSessionWorkspaceIcon } from "../workspace-icon-http.js";
 import {
   boundInFlightRunSnapshotForChatHistory,
   reportOmittedChatHistory,
@@ -165,15 +164,6 @@ export async function handleChatHistoryRequest({
         );
       }
       return;
-    }
-    if (method === "chat.startup") {
-      void prepareSessionWorkspaceIcon({ sessionKey, agentId: sessionAgentId }).catch(
-        (error: unknown) => {
-          context.logGateway.debug(
-            `chat.startup continuing without a workspace icon: ${formatErrorMessage(error)}`,
-          );
-        },
-      );
     }
     const readStartupProjection = () =>
       measureDiagnosticsTimelineSpan(

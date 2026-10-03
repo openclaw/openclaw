@@ -12,7 +12,6 @@ const COMPAT_CONFIG_API_FILES = new Set([
   "src/config/io.ts",
   "src/config/mutate.ts",
   "src/memory-host-sdk/runtime-core.ts",
-  "src/plugin-sdk/config-runtime.ts",
   "src/plugin-sdk/memory-core-host-runtime-core.ts",
   "src/plugins/compat/registry.ts",
   "src/plugins/registry.runtime-config.test.ts",
@@ -90,7 +89,6 @@ function isProductionExtensionFile(relPath: string) {
   if (
     relPath.includes("/test-support/") ||
     relPath.includes(".test.") ||
-    relPath.includes(".live.test.") ||
     relPath.includes(".test-d.") ||
     relPath.includes(".test-harness.") ||
     relPath.includes(".test-shared.") ||
@@ -106,17 +104,13 @@ function isProductionExtensionFile(relPath: string) {
 function isTestOrHarnessFile(relPath: string) {
   return (
     relPath.includes("test-support") ||
-    relPath.includes("/test-support/") ||
     relPath.includes("/test-helpers/") ||
     relPath.includes(".test.") ||
-    relPath.includes(".live.test.") ||
     relPath.includes(".test-d.") ||
     relPath.includes(".test-harness.") ||
     relPath.includes(".test-shared.") ||
     relPath.endsWith(".test-helpers.ts") ||
-    relPath.endsWith(".test-support.ts") ||
-    relPath.endsWith("-test-helpers.ts") ||
-    relPath.endsWith("-test-support.ts")
+    relPath.endsWith("-test-helpers.ts")
   );
 }
 

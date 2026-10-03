@@ -157,8 +157,8 @@ class MxcFsBridge implements SandboxFsBridge {
     }
 
     const root = await fsRoot(source.mount.hostRoot);
-    const targetParent = resolveRelativeParentPath(target.relativePath);
-    if (targetParent) {
+    const targetParent = path.dirname(target.relativePath);
+    if (targetParent !== "." && targetParent !== "") {
       await root.mkdir(targetParent);
     }
     await root.move(source.relativePath, target.relativePath, { overwrite: true });
@@ -184,18 +184,7 @@ class MxcFsBridge implements SandboxFsBridge {
     const cwd = params.cwd?.trim() ? path.resolve(params.cwd) : this.defaultContainerRoot;
     const containerPath = path.isAbsolute(input) ? path.resolve(input) : path.resolve(cwd, input);
 
-    return (
-      this.resolveMountedTarget(containerPath, this.protectedSkillMounts) ??
-      this.resolveMountedTarget(containerPath, this.workspaceMounts) ??
-      this.throwSandboxRootEscape(params.filePath)
-    );
-  }
-
-  private resolveMountedTarget(
-    containerPath: string,
-    mounts: readonly MxcFsMount[],
-  ): ResolvedMxcPath | null {
-    for (const mount of mounts) {
+    for (const mount of [...this.protectedSkillMounts, ...this.workspaceMounts]) {
       if (!isPathInside(mount.containerRoot, containerPath)) {
         continue;
       }
@@ -208,15 +197,11 @@ class MxcFsBridge implements SandboxFsBridge {
         mount,
       };
     }
-    return null;
-  }
-
-  private throwSandboxRootEscape(filePath: string): never {
     const allowedRoots = [
       ...new Set(this.workspaceMounts.map((mount) => mount.containerRoot)),
     ].join(", ");
     throw new Error(
-      `Path escapes sandbox root (${allowedRoots}; container root ${this.sandbox.containerWorkdir}): ${filePath}. Use a path under ${this.sandbox.containerWorkdir}\\ instead.`,
+      `Path escapes sandbox root (${allowedRoots}; container root ${this.sandbox.containerWorkdir}): ${params.filePath}. Use a path under ${this.sandbox.containerWorkdir}\\ instead.`,
     );
   }
 
@@ -280,9 +265,4 @@ function dedupeAndSortMounts(mounts: readonly MxcFsMount[]): readonly MxcFsMount
       right.containerRoot.length - left.containerRoot.length ||
       right.hostRoot.length - left.hostRoot.length,
   );
-}
-
-function resolveRelativeParentPath(relativePath: string): string | null {
-  const parent = path.dirname(relativePath);
-  return parent === "." || parent === "" ? null : parent;
 }

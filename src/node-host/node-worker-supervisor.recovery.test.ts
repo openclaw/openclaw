@@ -3,7 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import * as spawnPs from "../infra/spawn-ps.js";
@@ -545,13 +549,13 @@ describe("node worker supervisor recovery", () => {
     await supervisor.close();
   });
 
-  it.runIf(process.platform !== "win32").each([
+  it.runIf(process.platform !== "win32").for([
     { operation: "cancel", state: "cancelled", leader: "live" },
     { operation: "initialize", state: "interrupted", leader: "dead" },
     { operation: "environment stop", state: "cancelled", leader: "live" },
   ])(
     "$operation kills the exact stale-owner worker group with a $leader leader before releasing capacity",
-    async ({ operation, state, leader }) => {
+    async ({ operation, state, leader }, { signal }) => {
       const { bundleRoot, env, root, workspaceDir } = fixture("node-worker-stale-running-");
       const marker = path.join(root, "recovery-grandchild.pid");
       const workerSource = `
@@ -635,10 +639,13 @@ describe("node worker supervisor recovery", () => {
           let stopping: Promise<unknown> | undefined;
           let stopSettled = false;
           try {
-            const startupOwner = await withTestTimeout(
-              readiness.ready,
-              5_000,
-              "native readiness was not captured",
+            const startupOwner = await withinTest(
+              awaitGateBeforeSettlement(
+                readiness.ready,
+                admission,
+                "admission settled before native readiness was captured",
+              ),
+              signal,
             );
             expect((await store.get(delayed.launchId))?.state).toBe("pending");
             expect(inspectNodeWorkerProcessIdentity(startupOwner)).toBe("live");

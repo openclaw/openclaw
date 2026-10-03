@@ -25,7 +25,12 @@ import {
 } from "./request-authority.js";
 import type { TelegramRichMessageContextParams } from "./rich-message.js";
 import { maybePersistResolvedTelegramTarget } from "./target-writeback.js";
-import { normalizeTelegramChatId, normalizeTelegramLookupTarget } from "./targets.js";
+import {
+  hasRejectedTelegramTopic,
+  normalizeTelegramChatId,
+  normalizeTelegramLookupTarget,
+  TELEGRAM_INVALID_TOPIC_ID_MESSAGE,
+} from "./targets.js";
 
 export type TelegramApi = Bot["api"];
 export type TelegramApiOverride = Partial<TelegramApi>;
@@ -288,7 +293,11 @@ async function resolveChatId(
   const lookupTarget = normalizeTelegramLookupTarget(to);
   const getChat = params.api.getChat;
   if (!lookupTarget || typeof getChat !== "function") {
-    throw new Error("Telegram recipient must be a numeric chat ID");
+    throw new Error(
+      hasRejectedTelegramTopic(to)
+        ? TELEGRAM_INVALID_TOPIC_ID_MESSAGE
+        : "Telegram recipient must be a numeric chat ID",
+    );
   }
   try {
     const chat = await getChat.call(params.api, lookupTarget);
@@ -337,11 +346,7 @@ export function normalizeMessageId(raw: string | number): number {
     return Math.trunc(raw);
   }
   if (typeof raw === "string") {
-    const value = raw.trim();
-    if (!value) {
-      throw new Error("Message id is required for Telegram actions");
-    }
-    const parsed = parseStrictInteger(value);
+    const parsed = parseStrictInteger(raw);
     if (parsed !== undefined) {
       return parsed;
     }
@@ -485,7 +490,6 @@ export function createTelegramRequestWithDiag(params: {
 function wrapTelegramChatNotFoundError(err: unknown, params: { chatId: string; input: string }) {
   const errorMsg = formatErrorMessage(err);
 
-  // Check for 403 "bot is not a member" or "bot was blocked" errors
   if (/403.*(bot.*not.*member|bot.*blocked|bot.*kicked)/i.test(errorMsg)) {
     return new Error(
       [

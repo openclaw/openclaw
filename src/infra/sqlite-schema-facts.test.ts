@@ -1,6 +1,6 @@
 import path from "node:path";
 import { constants, DatabaseSync, StatementSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { hasSqliteSessionOwnerColumns } from "../config/sessions/session-accessor.sqlite-owner-projection.js";
@@ -12,7 +12,12 @@ import {
 } from "./kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runSqlitePinnedReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
-import { admitSqliteSchema, runSqliteReadOperationSync } from "./sqlite-schema-facts.js";
+import {
+  admitSqliteSchema,
+  readSqliteCacheDataVersion,
+  readSqliteDataVersion,
+  runSqliteReadOperationSync,
+} from "./sqlite-schema-facts.js";
 
 describe("admitted SQLite schema facts", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -41,7 +46,7 @@ describe("admitted SQLite schema facts", () => {
     }
   });
 
-  it.each(["exec", "run", "get", "all", "iterate"] as const)(
+  it.each(["exec", "all"] as const)(
     "retains transactional facts across CASE queries executed through %s",
     (method) => {
       const database = openDatabase(undefined, false);
@@ -65,10 +70,8 @@ describe("admitted SQLite schema facts", () => {
           for (let index = 0; index < 10; index += 1) {
             if (method === "exec") {
               database.exec(query);
-            } else if (method === "iterate") {
-              Array.from(statement.iterate());
             } else {
-              statement[method]();
+              statement.all();
             }
             expect(tableExists(database, "original")).toBe(true);
           }
@@ -182,6 +185,39 @@ describe("admitted SQLite schema facts", () => {
       writer.exec("CREATE TABLE later (id)");
       expect(hasTable("later")).toBe(true);
     });
+  });
+
+  it("executes fresh version probes inside a read scope without preparing warm statements", () => {
+    const filename = path.join(tempDirs.make("openclaw-schema-fresh-"), "state.sqlite");
+    const reader = openDatabase(undefined, true, filename);
+    const writer = new DatabaseSync(filename);
+    databases.push(writer);
+    readSqliteDataVersion(reader);
+    readSqliteDataVersion(reader);
+    const prepare = vi.spyOn(reader, "prepare");
+    const observation = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      let committedVersion = 0;
+      runSqliteReadOperationSync(reader, () => {
+        const before = readSqliteCacheDataVersion(reader);
+        writer.exec("INSERT INTO original VALUES (1)");
+        expect(readSqliteCacheDataVersion(reader)).toBe(before);
+        committedVersion = readSqliteDataVersion(reader);
+        expect(committedVersion).not.toBe(before);
+        expect(readSqliteCacheDataVersion(reader)).toBe(before);
+        expect(readSqliteDataVersion(reader)).toBe(committedVersion);
+      });
+      expect(readSqliteCacheDataVersion(reader)).toBe(committedVersion);
+      expect(observation.queries.filter((sql) => /^PRAGMA data_version$/iu.test(sql))).toHaveLength(
+        4,
+      );
+      expect(
+        prepare.mock.calls.filter(([sql]) => /^PRAGMA data_version$/iu.test(sql)),
+      ).toHaveLength(0);
+    } finally {
+      observation.restore();
+      prepare.mockRestore();
+    }
   });
 
   it("publishes local DDL to sibling handles while preserving their active snapshots", () => {

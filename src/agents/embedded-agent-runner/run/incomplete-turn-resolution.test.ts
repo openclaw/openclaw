@@ -12,6 +12,31 @@ import {
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 describe("incomplete-turn terminal metadata", () => {
+  it("accepts a completed speech-only answer with provider reasoning", () => {
+    const assistant = buildEmbeddedRunnerAssistant({
+      content: [
+        { type: "thinking", thinking: "Prepare a spoken greeting.", thinkingSignature: "" },
+        { type: "text", text: "" },
+      ],
+      openclawDelivery: { tts: { tagged: true, text: "Have a lovely day." } },
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      currentAttemptAssistant: assistant,
+      currentAttemptCompletedAssistant: assistant,
+    });
+
+    expect(
+      resolveIncompleteTurnPayloadText({
+        payloadCount: 1,
+        aborted: false,
+        externalAbort: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBeNull();
+  });
+
   it("keeps the side-effect warning when the terminal error is a provider refusal", () => {
     const assistant = buildEmbeddedRunnerAssistant({
       provider: "anthropic",

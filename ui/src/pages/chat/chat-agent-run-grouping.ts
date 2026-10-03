@@ -12,7 +12,11 @@ import type {
   StreamRunRenderItem,
   WorkGroupRenderItem,
 } from "./chat-thread-grouping.ts";
-import { assistantGroupIsForwardedBoundary, chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
+import {
+  chatItemStartsDisplayTurn,
+  chatItemStartsUserTurn,
+  hasForwardedSource,
+} from "./chat-turn-boundary.ts";
 import { extractMessageMediaText } from "./components/chat-message-media.ts";
 
 type AgentRunFramePart =
@@ -49,6 +53,15 @@ export function chatItemGroups(item: AgentRunFrameInput | AgentRunFrameRenderIte
 }
 
 function itemRunId(item: AgentRunFramePart): string | undefined {
+  if (item.kind === "work-group") {
+    if (item.replyRunId) {
+      return item.replyRunId;
+    }
+    // Matching execution IDs cannot erase a forwarded presentation boundary.
+    if (item.groups.some(hasForwardedSource)) {
+      return undefined;
+    }
+  }
   if (item.kind === "stream-run") {
     return item.runId;
   }
@@ -58,6 +71,11 @@ function itemRunId(item: AgentRunFramePart): string | undefined {
 }
 
 function itemFailsFrame(item: AgentRunFramePart): boolean {
+  // A later reply owns completed work; recovered failures remain in the log,
+  // while the reply itself determines its frame’s terminal outcome.
+  if (item.kind === "work-group" && item.replyRunId) {
+    return false;
+  }
   return chatItemGroups(item).some((group) =>
     group.messages.some(
       ({ message }) =>
@@ -179,26 +197,37 @@ export function coalesceAgentRunFrames(
   let runId: string | undefined;
   let parts: AgentRunFramePart[] = [];
   const flush = (failed = false) => {
-    if (!runId || !boundaryId || parts.length === 0) {
+    if (!runId || parts.length === 0) {
       return;
     }
-    const semanticKey = frameKey(runId, boundaryId, frameSegmentId(parts, segmentId));
+    const active = parts.some(itemIsActive);
+    const actionOwner = active || failed ? null : completedFrameActionOwner(parts);
+    if (!boundaryId && !active && !actionOwner) {
+      result.push(...parts);
+      parts = [];
+      runId = undefined;
+      return;
+    }
+    // A history window can start inside a known run. This frame-local identity
+    // supplies no prompt/recipient facts and must not leak into the next run.
+    const frameBoundaryId = boundaryId ?? `send:${runId}`;
+    const semanticKey = frameKey(runId, frameBoundaryId, frameSegmentId(parts, segmentId));
     // A peer input can split one causal run into separate presentation rows.
     // Reopening it must not reuse the earlier row’s DOM or measured height.
     const key = emittedFrameKeys.has(semanticKey)
-      ? frameKey(runId, boundaryId, JSON.stringify([presentationBoundaryKey, parts[0]!.key]))
+      ? frameKey(runId, frameBoundaryId, JSON.stringify([presentationBoundaryKey, parts[0]!.key]))
       : semanticKey;
     emittedFrameKeys.add(semanticKey);
     result.push({
       kind: "agent-run-frame",
       key,
       runId,
-      boundaryId,
+      boundaryId: frameBoundaryId,
       outcome: failed
         ? { kind: "failed" }
-        : parts.some(itemIsActive)
+        : active
           ? { kind: "active" }
-          : { kind: "completed", actionOwner: completedFrameActionOwner(parts) },
+          : { kind: "completed", actionOwner },
       parts,
     });
     parts = [];
@@ -213,16 +242,12 @@ export function coalesceAgentRunFrames(
       continue;
     }
     const boundaryGroup = chatItemGroups(item)[0];
-    if (boundaryGroup && chatItemStartsUserTurn(boundaryGroup)) {
+    if (boundaryGroup && chatItemStartsDisplayTurn(boundaryGroup)) {
       flush();
       presentationBoundaryKey = boundaryGroup.key;
       segmentId = undefined;
       const nextBoundaryId = groupBoundaryId(boundaryGroup);
-      if (
-        boundaryGroup.role === "user" ||
-        assistantGroupIsForwardedBoundary(boundaryGroup) ||
-        !nextBoundaryId
-      ) {
+      if (boundaryGroup.role === "user" || hasForwardedSource(boundaryGroup) || !nextBoundaryId) {
         result.push(item);
         boundaryId = nextBoundaryId;
         continue;
@@ -230,8 +255,11 @@ export function coalesceAgentRunFrames(
       boundaryId = nextBoundaryId;
     }
     const candidateBoundaryId = item.kind === "stream-run" ? item.boundaryId : undefined;
-    if (candidateBoundaryId && candidateBoundaryId !== boundaryId) {
-      flush();
+    if (candidateBoundaryId) {
+      const effectiveBoundaryId = boundaryId ?? (runId ? `send:${runId}` : undefined);
+      if (candidateBoundaryId !== effectiveBoundaryId) {
+        flush();
+      }
       boundaryId = candidateBoundaryId;
     }
     const candidateRunId = itemRunId(item);
@@ -251,7 +279,7 @@ export function coalesceAgentRunFrames(
       }
       continue;
     }
-    if (!boundaryId || !candidateRunId) {
+    if (!candidateRunId) {
       flush();
       result.push(item);
       boundaryId = undefined;

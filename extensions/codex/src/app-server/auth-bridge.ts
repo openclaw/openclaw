@@ -49,6 +49,8 @@ import {
   withEphemeralCodexAuthStore,
 } from "./auth-start-options.js";
 import type {
+  CodexAppServerAuthRequirement,
+  CodexAppServerAuthHandoff,
   CodexAppServerPreparedAuth,
   CodexAppServerPreparedAuthProfileSnapshot,
   CodexAppServerResolvedPreparedAuth,
@@ -80,12 +82,8 @@ import {
   isCodexResponsesOAuthCredential,
   resolveCodexResponsesOAuthProfileFingerprint,
 } from "./responses-oauth.js";
+import { codexPrewriteRejectionCause } from "./rpc-error.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
-
-export type {
-  CodexAppServerPreparedAuth,
-  CodexAppServerResolvedPreparedAuth,
-} from "./auth-types.js";
 
 const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai:default";
 const CODEX_HOME_ENV_VAR = "CODEX_HOME";
@@ -105,11 +103,6 @@ const activeComputerUseArtifactReconciliations = new Map<
   { latestEpoch?: number; appliedCacheBinding?: string; active: number; tail: Promise<void> }
 >();
 type AuthProfileOrderConfig = Parameters<typeof resolveCodexAppServerAuthProfileId>[0]["config"];
-export type CodexAppServerAuthRequirement = "api-key" | "subscription";
-export type CodexAppServerAuthHandoff = Readonly<{
-  accessFingerprint: string;
-  chatgptAccountId: string;
-}>;
 const scopedOAuthRefreshQueues = new WeakMap<
   AuthProfileStore,
   Map<string, Promise<OAuthCredential>>
@@ -726,9 +719,13 @@ export async function applyCodexAppServerAuthProfile(params: {
   }
   if (loginParams) {
     // Refresh and overload backoff can outlive the caller; check at the physical write.
-    await params.client.request("account/login/start", loginParams, {
-      assertCurrent: params.assertCurrent,
-    });
+    try {
+      await params.client.request("account/login/start", loginParams, {
+        assertCurrent: params.assertCurrent,
+      });
+    } catch (error) {
+      throw codexPrewriteRejectionCause(error);
+    }
     if (loginParams.type === "chatgptAuthTokens") {
       params.assertCurrent?.();
       return {

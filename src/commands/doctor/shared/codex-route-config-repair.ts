@@ -11,20 +11,16 @@ import {
   getSharedDefaultCompactionOverrideConsumers,
 } from "./codex-route-compaction-scan.js";
 import {
-  asAgentRuntimePolicyConfig,
   readAgentPrimaryModelRef,
-  readLegacyDefaultsRuntime,
-  resolveRuntime,
   type LegacyCodexModelIdentity,
 } from "./codex-route-model-ref.js";
 import {
   recordCodexModelHit,
   rewriteModelConfigSlot,
   rewriteModelsMap,
-  visitChannelModelSlots,
+  visitNonAgentModelSlots,
 } from "./codex-route-model-slots.js";
 import {
-  clearConfigLegacyAgentRuntimePolicies,
   ensureCodexRuntimePolicy,
   rewriteModelConfigSlotIfCanonicalCodexRuntime,
   rewriteStringModelSlotIfCanonicalCodexRuntime,
@@ -68,7 +64,6 @@ function rewriteAgentModelRefs(params: {
   agent: MutableRecord | undefined;
   path: string;
   agentId?: string;
-  currentRuntime?: string;
   inheritedModelRef?: string;
   inheritedCompaction?: unknown;
   inheritedCompactionPath?: string;
@@ -108,7 +103,6 @@ function rewriteAgentModelRefs(params: {
         container: params.agent,
         key,
         path: `${params.path}.${key}`,
-        runtime: params.currentRuntime,
         blockedModelIdentities: params.blockedModelIdentities,
       });
       preserveCodexRuntimePolicyForNewHits(start);
@@ -152,7 +146,6 @@ function rewriteAgentModelRefs(params: {
     agent: params.agent,
     path: params.path,
     agentId: params.agentId,
-    currentRuntime: params.currentRuntime,
     inheritedModelRef: params.inheritedModelRef,
     inheritedCompaction: params.inheritedCompaction,
     inheritedCompactionPath: params.inheritedCompactionPath,
@@ -194,41 +187,29 @@ function rewriteAgentModelRefs(params: {
   }
 }
 
-function rewriteConfigModelRefsWithCompactionPolicy(params: {
+export function rewriteConfigModelRefs(params: {
   cfg: OpenClawConfig;
-  preserveSharedDefaultCompactionOverrides: SharedDefaultCompactionOverrideConsumers;
-  ignoreLegacyAgentRuntimePins?: boolean;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
   env?: NodeJS.ProcessEnv;
 }): ConfigRouteRepairResult {
+  const preserveSharedDefaultCompactionOverrides =
+    getSharedDefaultCompactionOverrideConsumers(params);
   const nextConfig = structuredClone(params.cfg);
   const hits: CodexRouteHit[] = [];
   const runtimePolicyChanges: string[] = [];
   const unsupportedCompactionChanges: string[] = [];
-  const ignoreLegacyAgentRuntimePins =
-    params.ignoreLegacyAgentRuntimePins ??
-    configRepairWouldClearLegacyRuntimePins({
-      cfg: nextConfig,
-      blockedModelIdentities: params.blockedModelIdentities,
-      env: params.env,
-    });
   unsupportedCompactionChanges.push(
     ...maybeMigrateLegacyLosslessCompactionConfig({
       cfg: nextConfig,
-      ignoreLegacyAgentRuntimePins,
       env: params.env,
     }),
   );
   const preservedLegacyLosslessCompactionPaths = new Set(
     collectLegacyLosslessCompactionConfigs({
       cfg: nextConfig,
-      ignoreLegacyAgentRuntimePins,
       env: params.env,
     }).flatMap((hit) => (hit.modelPath ? [hit.providerPath, hit.modelPath] : [hit.providerPath])),
   );
-  const defaultsRuntime = ignoreLegacyAgentRuntimePins
-    ? undefined
-    : readLegacyDefaultsRuntime(nextConfig.agents?.defaults);
   const rewrittenInheritedCompactionModels = new Map<string, string>();
   rewriteAgentModelRefs({
     cfg: nextConfig,
@@ -236,9 +217,8 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
     hits,
     agent: asMutableRecord(nextConfig.agents?.defaults),
     path: "agents.defaults",
-    currentRuntime: resolveRuntime({ defaultsRuntime }),
     rewriteModelsMap: true,
-    preserveUnsupportedCompactionOverrides: params.preserveSharedDefaultCompactionOverrides,
+    preserveUnsupportedCompactionOverrides: preserveSharedDefaultCompactionOverrides,
     preserveUnsupportedCompactionPaths: preservedLegacyLosslessCompactionPaths,
     rewrittenInheritedCompactionModels,
     runtimePolicyChanges,
@@ -256,12 +236,6 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
       agent: agentRecord,
       path,
       agentId,
-      currentRuntime: resolveRuntime({
-        agentRuntime: ignoreLegacyAgentRuntimePins
-          ? undefined
-          : asAgentRuntimePolicyConfig(agentRecord.agentRuntime),
-        defaultsRuntime,
-      }),
       inheritedModelRef,
       inheritedCompaction: nextConfig.agents?.defaults?.compaction,
       inheritedCompactionPath: "agents.defaults.compaction",
@@ -274,119 +248,16 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
       env: params.env,
     });
   }
-  rewriteNonAgentModelRefs({
-    cfg: nextConfig,
-    hits,
-    blockedModelIdentities: params.blockedModelIdentities,
-    env: params.env,
+  visitNonAgentModelSlots(nextConfig, (slot) => {
+    rewriteStringModelSlotIfCanonicalCodexRuntime({ ...params, cfg: nextConfig, hits, ...slot });
   });
-  // A retained legacy provider can still own config, session, or cron refs that need these pins.
-  // Keep global pins intact until the manual provider conflict is reconciled as one unit.
-  const shouldClearRuntimePins =
-    !params.blockedModelIdentities?.size && hits.some((hit) => !isCompactionOnlyRouteHit(hit));
-  const runtimePinChanges = shouldClearRuntimePins
-    ? clearConfigLegacyAgentRuntimePolicies(nextConfig)
-    : [];
   return {
     cfg:
-      hits.length > 0 ||
-      runtimePolicyChanges.length > 0 ||
-      runtimePinChanges.length > 0 ||
-      unsupportedCompactionChanges.length > 0
+      hits.length > 0 || runtimePolicyChanges.length > 0 || unsupportedCompactionChanges.length > 0
         ? nextConfig
         : params.cfg,
     changes: hits,
-    runtimePinChanges,
     runtimePolicyChanges,
     unsupportedCompactionChanges,
   };
-}
-
-function rewriteNonAgentModelRefs(params: {
-  cfg: OpenClawConfig;
-  hits: CodexRouteHit[];
-  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
-  env?: NodeJS.ProcessEnv;
-}): void {
-  visitChannelModelSlots(params.cfg, (slot) => {
-    rewriteStringModelSlotIfCanonicalCodexRuntime({ ...params, ...slot });
-  });
-  for (const [index, mapping] of (params.cfg.hooks?.mappings ?? []).entries()) {
-    rewriteStringModelSlotIfCanonicalCodexRuntime({
-      cfg: params.cfg,
-      hits: params.hits,
-      container: mapping as MutableRecord,
-      key: "model",
-      path: `hooks.mappings.${index}.model`,
-      blockedModelIdentities: params.blockedModelIdentities,
-      env: params.env,
-    });
-  }
-  rewriteStringModelSlotIfCanonicalCodexRuntime({
-    cfg: params.cfg,
-    hits: params.hits,
-    container: asMutableRecord(params.cfg.hooks?.gmail),
-    key: "model",
-    path: "hooks.gmail.model",
-    blockedModelIdentities: params.blockedModelIdentities,
-    env: params.env,
-  });
-  rewriteStringModelSlotIfCanonicalCodexRuntime({
-    cfg: params.cfg,
-    hits: params.hits,
-    container: asMutableRecord(params.cfg.tts),
-    key: "summaryModel",
-    path: "tts.summaryModel",
-    blockedModelIdentities: params.blockedModelIdentities,
-    env: params.env,
-  });
-  rewriteStringModelSlotIfCanonicalCodexRuntime({
-    cfg: params.cfg,
-    hits: params.hits,
-    container: asMutableRecord(asMutableRecord(params.cfg.channels?.discord)?.voice),
-    key: "model",
-    path: "channels.discord.voice.model",
-    blockedModelIdentities: params.blockedModelIdentities,
-    env: params.env,
-  });
-}
-
-export function configRepairWouldClearLegacyRuntimePins(params: {
-  cfg: OpenClawConfig;
-  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
-  env?: NodeJS.ProcessEnv;
-}): boolean {
-  const dryRun = rewriteConfigModelRefsWithCompactionPolicy({
-    cfg: params.cfg,
-    preserveSharedDefaultCompactionOverrides: { model: true, provider: true },
-    ignoreLegacyAgentRuntimePins: false,
-    blockedModelIdentities: params.blockedModelIdentities,
-    env: params.env,
-  });
-  return dryRun.runtimePinChanges.length > 0;
-}
-
-export function rewriteConfigModelRefs(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
-}): ConfigRouteRepairResult {
-  const preserveSharedDefaultCompactionOverrides = getSharedDefaultCompactionOverrideConsumers({
-    cfg: params.cfg,
-    ignoreLegacyAgentRuntimePins: configRepairWouldClearLegacyRuntimePins(params),
-    env: params.env,
-  });
-  return rewriteConfigModelRefsWithCompactionPolicy({
-    cfg: params.cfg,
-    preserveSharedDefaultCompactionOverrides,
-    blockedModelIdentities: params.blockedModelIdentities,
-    env: params.env,
-  });
-}
-
-function isCompactionOnlyRouteHit(hit: CodexRouteHit): boolean {
-  return (
-    hit.path.startsWith("agents.") &&
-    (hit.path.endsWith(".compaction.model") || hit.path.endsWith(".compaction.memoryFlush.model"))
-  );
 }

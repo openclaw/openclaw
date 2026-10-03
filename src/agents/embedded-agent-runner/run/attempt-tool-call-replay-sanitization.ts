@@ -27,7 +27,7 @@ import {
   type ToolCallIdMode,
 } from "../../tool-call-id.js";
 import { createCompletedToolCallPredicate } from "../../tool-call-shared.js";
-import type { TranscriptPolicy } from "../../transcript-policy.js";
+import type { TranscriptPolicy } from "../../transcript-policy.types.js";
 import { isRunnerToolCallBlock } from "./attempt-tool-call-block-type.js";
 import { resolveToolCallName } from "./attempt-tool-call-name-resolution.js";
 

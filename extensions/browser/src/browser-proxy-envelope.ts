@@ -25,7 +25,6 @@ export function assertBrowserProxyFileCountWithinLimit(
   }
 }
 
-/** Enforce the shared per-file and raw aggregate Browser proxy limits. */
 export function assertBrowserProxyFileBytesWithinLimits(
   fileBytes: number,
   totalBytes: number,

@@ -26,6 +26,7 @@ import {
   resolveRequesterScopedMcpConnections,
 } from "./mcp-connection-resolver.js";
 import { createMcpProofPluginRegistry } from "./mcp-connection-resolver.test-fixtures.js";
+import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 
 type AuthenticatedMcpProofEndpoint = {
@@ -694,17 +695,26 @@ describe("mcp connection resolver helpers", () => {
     expect(sseKept.transport).toBe("sse");
     expect(sseKept.url).toBe("https://live.example/sse");
 
-    const sseFromType = applyMcpConnectionOverride(
+    const canonicalDefault = applyMcpConnectionOverride(
       { type: "sse", toolFilter: { include: ["x"] } },
       { url: "https://live.example/sse-type" },
     );
-    expect(sseFromType.transport).toBe("sse");
-    expect(sseFromType).not.toHaveProperty("type");
+    expect(canonicalDefault.transport).toBe("streamable-http");
+    expect(canonicalDefault).not.toHaveProperty("type");
 
     const sseCase = applyMcpConnectionOverride(
       { transport: "SSE" },
       { url: "https://live.example/sse-case" },
     );
     expect(sseCase.transport).toBe("sse");
+
+    const unsupported = applyMcpConnectionOverride(
+      { transport: "custom", type: " CuStOm " },
+      { url: "https://live.example/unsupported" },
+    );
+    expect(unsupported.transport).toBe("custom");
+    expect(
+      resolveMcpTransportConfig("unsupported", unsupported, { logWarnings: false }),
+    ).toBeNull();
   });
 });

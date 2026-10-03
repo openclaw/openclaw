@@ -15,11 +15,8 @@ import {
   retainUserProfileCatalog,
 } from "./user-profile-list.js";
 import { linkCanonicalUserProfileEmail } from "./user-profile-writes.js";
-import {
-  ensureProfileForEmail,
-  ensureProfileForTailscaleIdentity,
-  linkEmail,
-} from "./user-profiles.js";
+import { linkEmail } from "./user-profile-writes.worker.js";
+import { ensureProfileForEmail, ensureProfileForTailscaleIdentity } from "./user-profiles.js";
 
 const delivery = vi.hoisted(() => ({
   afterResult: undefined as (() => void) | undefined,

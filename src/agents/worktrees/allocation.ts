@@ -34,6 +34,7 @@ export async function withWorktreeAllocationLease<T>(
     abortAcquisition();
   }
   try {
+    params.commitGuard?.();
     return await withOpenClawStateLease(
       {
         scope: WORKTREE_CREATE_LEASE_SCOPE,

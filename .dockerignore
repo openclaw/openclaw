@@ -6,6 +6,10 @@
 .env
 .env.*
 
+# Keep Crabbox's per-run credentials and transient state out of images.
+.crabbox
+**/.crabbox
+
 .bun-cache
 .bun
 .artifacts

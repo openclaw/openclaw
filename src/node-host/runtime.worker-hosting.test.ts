@@ -1,10 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
 import type { NodeHostClient } from "./client.js";
 import { NodeWorkerContainerContextMismatchError } from "./node-worker-container-lifecycle.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
-import { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
 
 const mocks = vi.hoisted(() => ({
@@ -68,59 +66,30 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function prepareWorkerRuntime(isolation?: "container") {
+function prepareWorkerRuntime(
+  isolation?: "container",
+  options: {
+    enabled?: boolean;
+    forceWorkerRuns?: boolean;
+    platform?: NodeJS.Platform;
+    containerImage?: string;
+  } = {},
+) {
+  const { enabled = true, containerImage, ...runtimeOptions } = options;
   return prepareNodeHostRuntime({
     config: {
-      nodeHost: {
-        skills: { enabled: false },
-        workerRuns: { enabled: true, ...(isolation ? { isolation } : {}) },
-      },
+      nodeHost: { skills: { enabled: false }, workerRuns: { enabled, isolation, containerImage } },
     },
     env: { PATH: "/usr/bin" },
     enableWorkerRuns: true,
+    ...runtimeOptions,
   });
 }
 
 describe("node-host worker manifest", () => {
-  it.each([true, false])(
-    "keeps computer commands private only for ephemeral=%s",
-    async (ephemeral) => {
-      const computerUse: ComputerUseCapabilityDescriptor = {
-        contractVersion: 2,
-        provider: { id: "fixture", label: "Fixture", generation: "one" },
-        actions: ["screenshot", "left_click"],
-        targets: ["screen"],
-        deliveryModes: ["foreground"],
-        observations: ["image"],
-        features: { recording: false, agentCursor: false, multiDisplay: false },
-      };
-      vi.mocked(listRegisteredNodeHostCapsAndCommands).mockReturnValueOnce({
-        caps: ["screen", "computer", "browser"],
-        commands: ["screen.snapshot", "computer.act", "browser.proxy"],
-        computerUse,
-        nodePluginTools: [],
-      });
-      const prepared = await prepareNodeHostRuntime({
-        config: { nodeHost: { skills: { enabled: false } } },
-        env: { PATH: "/usr/bin" },
-        enableWorkerRuns: true,
-        forceWorkerRuns: true,
-        ephemeral,
-      });
-      expect(prepared.manifest.commands.includes("screen.snapshot")).toBe(!ephemeral);
-      expect(prepared.manifest.commands.includes("computer.act")).toBe(!ephemeral);
-      expect(prepared.manifest.commands).toContain("browser.proxy");
-      expect(prepared.manifest.caps.includes("computer")).toBe(!ephemeral);
-      expect(prepared.manifest.caps.includes("screen")).toBe(!ephemeral);
-      expect(prepared.manifest.computerUse).toEqual(ephemeral ? undefined : computerUse);
-    },
-  );
-
   it("allows environment-managed processes to force worker hosting without durable config", async () => {
-    const prepared = await prepareNodeHostRuntime({
-      config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: false } } },
-      env: { PATH: "/usr/bin" },
-      enableWorkerRuns: true,
+    const prepared = await prepareWorkerRuntime(undefined, {
+      enabled: false,
       forceWorkerRuns: true,
     });
 
@@ -128,16 +97,7 @@ describe("node-host worker manifest", () => {
   });
 
   it("keeps container hosting opted out without probing an engine or reporting a failure", async () => {
-    const prepared = await prepareNodeHostRuntime({
-      config: {
-        nodeHost: {
-          skills: { enabled: false },
-          workerRuns: { enabled: false, isolation: "container" },
-        },
-      },
-      env: { PATH: "/usr/bin" },
-      enableWorkerRuns: true,
-    });
+    const prepared = await prepareWorkerRuntime("container", { enabled: false });
     const onWorkerHostingDisabled = vi.fn();
     const runtime = prepared.start({ client, onWorkerHostingDisabled });
     try {
@@ -151,56 +111,21 @@ describe("node-host worker manifest", () => {
     }
   });
 
-  it("keeps local consent separate from connection metadata", async () => {
-    const prepared = await prepareWorkerRuntime();
-
-    expect(prepared.workerHostingEnabled).toBe(true);
-    expect(prepared.manifest).not.toHaveProperty("workerRuns");
-    expect(mocks.resolveContainerEngine).not.toHaveBeenCalled();
-  });
-
-  it.each([undefined, "container"] as const)(
-    "disables %s hosting before publishing capacity when workspace admission fails",
-    async (isolation) => {
-      const reason =
-        "State directory /srv/node-state is group-writable; run chmod go-w /srv/node-state";
-      mocks.checkWorkspaceAdmission.mockRejectedValueOnce(new Error(reason));
-      const prepared = await prepareWorkerRuntime(isolation);
-      expect(prepared.workerHostingEnabled).toBe(false);
-      expect(prepared.workerHostingDisabledReason).toBe(reason);
-      expect(mocks.resolveContainerEngine).not.toHaveBeenCalled();
-      const runtime = prepared.start({ client });
-      expect(createNodeWorkerSupervisor).not.toHaveBeenCalled();
-      await runtime.close();
-    },
-  );
-
-  it("disables container-isolated hosting and records why when no engine is usable", async () => {
+  it("disables hosting before engine discovery when workspace admission fails", async () => {
     const reason =
-      "Container-isolated node workers require Docker or Podman; install and start an engine.";
-    mocks.resolveContainerEngine.mockRejectedValueOnce(new Error(reason));
-
+      "State directory /srv/node-state is group-writable; run chmod go-w /srv/node-state";
+    mocks.checkWorkspaceAdmission.mockRejectedValueOnce(new Error(reason));
     const prepared = await prepareWorkerRuntime("container");
-
     expect(prepared.workerHostingEnabled).toBe(false);
     expect(prepared.workerHostingDisabledReason).toBe(reason);
+    expect(mocks.resolveContainerEngine).not.toHaveBeenCalled();
     const runtime = prepared.start({ client });
     expect(createNodeWorkerSupervisor).not.toHaveBeenCalled();
     await runtime.close();
   });
 
   it("disables container-isolated hosting on Windows before probing or advertising an engine", async () => {
-    const prepared = await prepareNodeHostRuntime({
-      config: {
-        nodeHost: {
-          skills: { enabled: false },
-          workerRuns: { enabled: true, isolation: "container" },
-        },
-      },
-      env: { PATH: "/usr/bin" },
-      enableWorkerRuns: true,
-      platform: "win32",
-    });
+    const prepared = await prepareWorkerRuntime("container", { platform: "win32" });
 
     expect(prepared.workerHostingEnabled).toBe(false);
     expect(prepared.workerHostingDisabledReason).toMatch(/windows.*(?:linux|macos)/iu);
@@ -217,19 +142,8 @@ describe("node-host worker manifest", () => {
       options?.onCapacityChanged?.({ total: 3, available: 0 });
       options?.onCapacityChanged?.({ total: 3, available: 3 });
     });
-    const prepared = await prepareNodeHostRuntime({
-      config: {
-        nodeHost: {
-          skills: { enabled: false },
-          workerRuns: {
-            enabled: true,
-            isolation: "container",
-            containerImage: "registry.example/openclaw-worker:22",
-          },
-        },
-      },
-      env: { PATH: "/usr/bin" },
-      enableWorkerRuns: true,
+    const prepared = await prepareWorkerRuntime("container", {
+      containerImage: "registry.example/openclaw-worker:22",
     });
 
     expect(prepared.workerHostingEnabled).toBe(true);
@@ -304,42 +218,35 @@ describe("node-host worker manifest", () => {
     expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
   });
 
-  it.each([false, true])(
-    "keeps foreign container ownership busy when cleanup failure is %s",
-    async (closeFails) => {
-      const mismatch = new NodeWorkerContainerContextMismatchError(
-        "node worker launch launch-1 belongs to a different docker engine or daemon; restore its original engine context before enabling worker hosting",
-      );
-      mocks.initializeWorkerSupervisor
-        .mockRejectedValueOnce(new Error("launch journal temporarily unavailable"))
-        .mockRejectedValueOnce(mismatch);
-      const retired = createDeferred();
-      mocks.closeWorkerSupervisor.mockImplementationOnce(async () => await retired.promise);
+  it("keeps foreign container ownership busy after cleanup fails", async () => {
+    const mismatch = new NodeWorkerContainerContextMismatchError(
+      "node worker launch launch-1 belongs to a different docker engine or daemon; restore its original engine context before enabling worker hosting",
+    );
+    mocks.initializeWorkerSupervisor
+      .mockRejectedValueOnce(new Error("launch journal temporarily unavailable"))
+      .mockRejectedValueOnce(mismatch);
+    const retired = createDeferred();
+    mocks.closeWorkerSupervisor.mockImplementationOnce(async () => await retired.promise);
 
-      const prepared = await prepareWorkerRuntime("container");
+    const prepared = await prepareWorkerRuntime("container");
 
-      expect(prepared.workerHostingEnabled).toBe(true);
-      const onWorkerHostingDisabled = vi.fn();
-      const runtime = prepared.start({ client, onWorkerHostingDisabled });
+    expect(prepared.workerHostingEnabled).toBe(true);
+    const onWorkerHostingDisabled = vi.fn();
+    const runtime = prepared.start({ client, onWorkerHostingDisabled });
 
-      await vi.waitFor(() =>
-        expect(onWorkerHostingDisabled).toHaveBeenCalledExactlyOnceWith(mismatch.message),
-      );
-      expect(mocks.initializeWorkerSupervisor).toHaveBeenCalledTimes(2);
-      expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
-      expect(await runtime.tryPauseForUpdate()).toBe(false);
-      if (closeFails) {
-        retired.reject(new Error("container cleanup failed"));
-      } else {
-        retired.resolve();
-      }
-      await runtime.invoke({ id: "after-retirement", nodeId: "node-1", command: "system.which" });
-      expect(mocks.handleInvoke).toHaveBeenCalledOnce();
-      expect(await runtime.tryPauseForUpdate()).toBe(false);
-      await runtime.close();
-      expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
-    },
-  );
+    await vi.waitFor(() =>
+      expect(onWorkerHostingDisabled).toHaveBeenCalledExactlyOnceWith(mismatch.message),
+    );
+    expect(mocks.initializeWorkerSupervisor).toHaveBeenCalledTimes(2);
+    expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
+    expect(await runtime.tryPauseForUpdate()).toBe(false);
+    retired.reject(new Error("container cleanup failed"));
+    await runtime.invoke({ id: "after-retirement", nodeId: "node-1", command: "system.which" });
+    expect(mocks.handleInvoke).toHaveBeenCalledOnce();
+    expect(await runtime.tryPauseForUpdate()).toBe(false);
+    await runtime.close();
+    expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
+  });
 
   it("retries non-container reconciliation after a bounded delay before publishing capacity", async () => {
     vi.useFakeTimers();

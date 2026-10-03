@@ -26,7 +26,11 @@ import {
   type RuntimeParityCacheDiagnostics,
 } from "./runtime-parity-cache-diagnostics.js";
 import type { RuntimeParityUsage } from "./runtime-parity-usage.js";
-import { readQaMessageFunctionCalls, readQaTranscriptMessages } from "./runtime-transcript.js";
+import {
+  extractQaMessageText,
+  readQaMessageFunctionCalls,
+  readQaTranscriptMessages,
+} from "./runtime-transcript.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 
 export type { RuntimeParityUsage } from "./runtime-parity-usage.js";
@@ -194,10 +198,6 @@ type RuntimeParityObservedToolCall = RuntimeParityToolCall & {
   hasResult?: boolean;
 };
 
-type RuntimeParityPendingToolCall = RuntimeParityObservedToolCall & {
-  resolved: boolean;
-};
-
 type RuntimeParityCaptureSources = {
   sessions: Array<{
     transcriptBytes: string;
@@ -274,51 +274,11 @@ function readAssistantUsage(message: Record<string, unknown>): RuntimeParityUsag
   return usage;
 }
 
-function addUsage(target: RuntimeParityUsage, next: RuntimeParityUsage) {
-  target.inputTokens += next.inputTokens;
-  target.outputTokens += next.outputTokens;
-  target.totalTokens += next.totalTokens;
-  if (next.cacheRead !== undefined) {
-    target.cacheRead = (target.cacheRead ?? 0) + next.cacheRead;
-  }
-  if (next.cacheWrite !== undefined) {
-    target.cacheWrite = (target.cacheWrite ?? 0) + next.cacheWrite;
-  }
-}
-
 function extractAssistantText(message: Record<string, unknown>) {
-  const rawContent = message.content;
-  if (typeof rawContent === "string") {
-    return rawContent.trim();
-  }
-  if (!Array.isArray(rawContent)) {
-    return "";
-  }
-  const parts: string[] = [];
-  for (const block of rawContent) {
-    if (typeof block === "string") {
-      if (block.trim()) {
-        parts.push(block.trim());
-      }
-      continue;
-    }
-    if (!isMessageRecord(block)) {
-      continue;
-    }
-    const text = readNonEmptyString(block.text);
-    if (text) {
-      parts.push(text);
-      continue;
-    }
-    const nestedText = readNonEmptyString(block.content);
-    if (
-      nestedText &&
-      (block.type === "output_text" || block.type === "text" || block.type === "message")
-    ) {
-      parts.push(nestedText);
-    }
-  }
-  return parts.join("\n").trim();
+  return extractQaMessageText(
+    message,
+    (type) => type === "output_text" || type === "text" || type === "message",
+  );
 }
 
 function parseJsonRecord(value: string): Record<string, unknown> | undefined {
@@ -379,11 +339,11 @@ function extractToolResults(message: Record<string, unknown>): Array<{
     readNonEmptyString(message.name) ??
     readNonEmptyString(message.tool);
   if ((message.role === "tool" || message.role === "toolResult") && message.content !== undefined) {
-    const contentText = extractAssistantText(message);
     results.push({
       tool: toolName,
       result: message.content,
-      ...(message.isError === true || TOOL_RESULT_ERROR_RE.test(contentText)
+      ...(message.isError === true ||
+      (message.isError !== false && TOOL_RESULT_ERROR_RE.test(extractAssistantText(message)))
         ? { errorClass: "tool-result-error" }
         : {}),
     });
@@ -417,7 +377,7 @@ function extractToolResults(message: Record<string, unknown>): Array<{
       result: content,
       ...(block.is_error === true ||
       type === "tool_result_error" ||
-      TOOL_RESULT_ERROR_RE.test(contentText)
+      (block.is_error !== false && TOOL_RESULT_ERROR_RE.test(contentText))
         ? { errorClass: "tool-result-error" }
         : {}),
     });
@@ -454,7 +414,7 @@ function classifyToolResultError(params: {
 }
 
 function createToolCallCapture() {
-  const ordered: RuntimeParityPendingToolCall[] = [];
+  const ordered: RuntimeParityObservedToolCall[] = [];
   return {
     ordered,
     call(tool: string, args: unknown, callId?: string) {
@@ -466,7 +426,6 @@ function createToolCallCapture() {
           callId,
           hasArguments: true,
           hasResult: false,
-          resolved: false,
         }) - 1
       );
     },
@@ -480,14 +439,13 @@ function createToolCallCapture() {
       },
     ) {
       const pending = index === undefined ? undefined : ordered[index];
-      const resolved: RuntimeParityPendingToolCall = {
+      const resolved: RuntimeParityObservedToolCall = {
         tool: result.tool ?? pending?.tool ?? "unknown",
         argsHash: pending?.argsHash ?? parity.stableHash(null),
         resultHash: parity.stableHash(result.value),
         callId: result.callId,
         hasArguments: pending?.hasArguments === true,
         hasResult: true,
-        resolved: true,
         ...(result.errorClass ? { errorClass: result.errorClass } : {}),
       };
       if (index === undefined || !pending) {
@@ -497,12 +455,12 @@ function createToolCallCapture() {
       }
     },
     finish(): RuntimeParityObservedToolCall[] {
-      return ordered.map(({ resolved, ...toolCall }) => {
-        if (!resolved) {
+      for (const toolCall of ordered) {
+        if (!toolCall.hasResult) {
           toolCall.errorClass ??= TOOL_RESULT_MISSING_ERROR_CLASS;
         }
-        return toolCall;
-      });
+      }
+      return ordered;
     },
   };
 }
@@ -658,7 +616,7 @@ function resolveTrajectoryToolCallOrder(
       return undefined;
     }
     const toolMatch = ordered.findIndex(
-      (pending) => !pending.resolved && (!tool || pending.tool === tool),
+      (pending) => !pending.hasResult && (!tool || pending.tool === tool),
     );
     if (toolMatch >= 0) {
       return toolMatch;
@@ -901,7 +859,15 @@ function aggregateUsage(records: RuntimeParityTranscriptRecord[]): RuntimeParity
       continue;
     }
     const usage = readAssistantUsage(record.message);
-    addUsage(totals, usage);
+    totals.inputTokens += usage.inputTokens;
+    totals.outputTokens += usage.outputTokens;
+    totals.totalTokens += usage.totalTokens;
+    if (usage.cacheRead !== undefined) {
+      totals.cacheRead = (totals.cacheRead ?? 0) + usage.cacheRead;
+    }
+    if (usage.cacheWrite !== undefined) {
+      totals.cacheWrite = (totals.cacheWrite ?? 0) + usage.cacheWrite;
+    }
   }
   return totals;
 }
@@ -1142,10 +1108,6 @@ function isRuntimeParityRootSession(entry: SessionEntry) {
   return true;
 }
 
-function runtimeParitySessionEnv(stateDir: string): NodeJS.ProcessEnv {
-  return { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-}
-
 async function readRuntimeParitySessionEntries(params: {
   gateway: QaGatewayLike;
   agentId: string;
@@ -1181,8 +1143,7 @@ async function loadRuntimeParityCaptureSources(params: {
   agentId: string;
   preferredSessionKeys?: readonly string[];
 }): Promise<RuntimeParityCaptureSources> {
-  const stateDir = `${params.gateway.tempRoot}/state`;
-  const env = runtimeParitySessionEnv(stateDir);
+  const env = { ...process.env, OPENCLAW_STATE_DIR: `${params.gateway.tempRoot}/state` };
   const storePath = resolveStorePath(undefined, { agentId: params.agentId, env });
   const sessionEntries = await readRuntimeParitySessionEntries({
     gateway: params.gateway,

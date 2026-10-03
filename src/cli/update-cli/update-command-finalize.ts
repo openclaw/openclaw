@@ -19,6 +19,7 @@ import {
   DoctorMaintenanceRefusalError,
   normalizeUpdatePostInstallDoctorWarnings,
 } from "../../infra/update-doctor-result.js";
+import type { ManagedHandoffRepair } from "../../infra/update-managed-service-handoff-lease-types.js";
 import { POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV } from "../../infra/update-post-core-context.js";
 import { formatUpdateRunOwnership } from "../../infra/update-run-activity.js";
 import {
@@ -60,6 +61,7 @@ import {
   runUpdateFinalizationDoctorInFreshProcess,
   withPrePluginUpdateDoctorEnv,
 } from "./update-command-fresh-doctor.js";
+import { refuseImmutableUpdateActivation } from "./update-command-immutable.js";
 import { settleUpdateDoctorMaintenance } from "./update-command-maintenance.js";
 import {
   collectPostCorePluginAdvisories,
@@ -86,10 +88,13 @@ import {
 export async function updateFinalizeCommand(
   opts: UpdateFinalizeOptions,
   recoveryRunIds?: readonly string[],
+  handoff?: ManagedHandoffRepair,
 ): Promise<void> {
   // Refuse retained recovery before discovery; preflight rechecks before state writes.
   await assertUpdateRecoveryAdmission({ env: process.env });
-  await refuseHostOwnedUpdate(await resolveUpdateRoot(), opts);
+  const discoveredRoot = await resolveUpdateRoot();
+  await refuseHostOwnedUpdate(discoveredRoot, opts);
+  await refuseImmutableUpdateActivation(discoveredRoot, opts);
   const invocationCwd = tryProcessCwd();
   suppressDeprecations();
   const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
@@ -105,6 +110,7 @@ export async function updateFinalizeCommand(
   let exitCode: number | undefined;
   await withCommandProcessScope(async (stopChildren) => {
     const lifecycle = new UpdateFinalizationLifecycle(Boolean(opts.json), timeoutMs, stopChildren);
+    lifecycle.handoff = handoff;
     try {
       const { root, installKind, runId } = await withUpdateAdmissionReporting(
         opts,
@@ -131,6 +137,11 @@ export async function updateFinalizeCommand(
                 });
                 if (resolvedInstallKind === "host") {
                   reportHostOwnedUpdate(await readInstallOwner(resolvedRoot), opts);
+                }
+                if (resolvedInstallKind === "immutable") {
+                  throw new Error(
+                    "Use openclaw update recover --root <installation-root> for immutable activation recovery.",
+                  );
                 }
                 lifecycle.recordInstallKind(
                   resolvedInstallKind,
@@ -364,6 +375,7 @@ async function updateFinalizeCommandInternal(
             workspaceSuggestions: true,
             timeoutMs: lifecycle.budget("doctor"),
             onWarnings: onDoctorWarnings,
+            onDoctorStep: (step) => lifecycle.recordDoctorStep(step),
           }),
         undefined,
         {
@@ -436,6 +448,7 @@ async function updateFinalizeCommandInternal(
           json: opts.json === true,
           timeoutMs: lifecycle.budget("targetConfigConvergence"),
           onWarnings: onDoctorWarnings,
+          onDoctorStep: (step) => lifecycle.recordDoctorStep(step),
         });
         const resolvedWarnings = await readResolvedDeferredPluginMigrationWarnings(doctorWarnings);
         phase.assertCurrent();
@@ -525,6 +538,9 @@ async function updateFinalizeCommandInternal(
               })
             : undefined;
         const observed = failure ? await lifecycle.observeFailure(failure) : undefined;
+        if (!failure) {
+          lifecycle.handoff?.complete(invokingRunId);
+        }
         if (opts.json) {
           defaultRuntime.writeJson({
             ...result,

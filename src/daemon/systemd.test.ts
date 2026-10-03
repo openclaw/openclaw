@@ -27,18 +27,7 @@ const assertNoSystemSystemdOwnershipMock = vi.hoisted(() =>
   vi.fn<(unitName: string, timeoutMs?: number) => Promise<void>>(async () => {}),
 );
 const findSystemGatewayServicesMock = vi.hoisted(() =>
-  vi.fn<
-    () => Promise<
-      Array<{
-        platform: "linux";
-        label: string;
-        detail: string;
-        scope: "user" | "system";
-        marker?: "openclaw" | "clawdbot";
-        legacy?: boolean;
-      }>
-    >
-  >(async () => []),
+  vi.fn<typeof import("./inspect.js").findSystemGatewayServices>(async () => []),
 );
 
 vi.mock("./inspect.js", () => ({
@@ -596,6 +585,7 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
         platform: "linux",
         label: "openclaw-rescue.service",
         detail: "unit: /etc/systemd/system/openclaw-rescue.service",
+        sourcePath: "/etc/systemd/system/openclaw-rescue.service",
         scope: "system",
         marker: "openclaw",
       },
@@ -640,6 +630,7 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
         platform: "linux",
         label: "openclaw.service",
         detail: "unit: /etc/systemd/system/openclaw.service",
+        sourcePath: "/etc/systemd/system/openclaw.service",
         scope: "system",
         marker: "openclaw",
       },
@@ -660,6 +651,7 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
         platform: "linux",
         label: "openclaw.service",
         detail: "unit: /etc/systemd/system/openclaw.service",
+        sourcePath: "/etc/systemd/system/openclaw.service",
         scope: "system",
         marker: "openclaw",
       },
@@ -678,6 +670,7 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
         platform: "linux",
         label: "openclaw.service",
         detail: "unit: /etc/systemd/system/openclaw.service",
+        sourcePath: "/etc/systemd/system/openclaw.service",
         scope: "system",
         marker: "openclaw",
       },

@@ -36,114 +36,110 @@ function deferredReaders() {
 }
 
 describe("ordinary service inspection deadline", () => {
-  it("preserves completed native unknown diagnostics after the shared allowance expires", async () => {
-    const { load, runtime, entered, service } = deferredReaders();
-    const nativeRuntime: GatewayServiceRuntime = {
-      status: "unknown",
-      detail: "native service inspection timed out",
-      inspectionFailure: {
-        code: "service-runtime-inspection-failed",
-        detail: "native runtime timeout",
+  it.each(["diagnostic", "positive", "strict"] as const)(
+    "handles native observations settling after expiry: %s",
+    async (scenario) => {
+      const { load, runtime, entered, service } = deferredReaders();
+      const nativeRuntime: GatewayServiceRuntime =
+        scenario === "positive"
+          ? { status: "running", pid: 4242 }
+          : {
+              status: "unknown",
+              detail: "native service inspection timed out",
+              inspectionFailure: {
+                code: "service-runtime-inspection-failed",
+                detail: "native runtime timeout",
+                timeoutMs: 100,
+              },
+            };
+      const pending = readGatewayServiceState(service, {
+        env: {},
         timeoutMs: 100,
-      },
-    };
-    const pending = readGatewayServiceState(service, { env: {}, timeoutMs: 100 });
-    await entered.promise;
-    now = 101;
-    load.reject(new Error("native load timeout"));
-    runtime.resolve(nativeRuntime);
+        requireEffective: scenario === "strict",
+      });
+      const rejected =
+        scenario === "strict"
+          ? expect(pending).rejects.toThrow("Service inspection deadline expired.")
+          : undefined;
+      await entered.promise;
+      now = 101;
+      if (scenario === "diagnostic") {
+        load.reject(new Error("native load timeout"));
+      } else {
+        load.resolve(scenario === "positive");
+      }
+      runtime.resolve(nativeRuntime);
+      if (rejected) {
+        await rejected;
+        return;
+      }
+      const state = await pending;
+      expect(state).toMatchObject({
+        installed: true,
+        running: false,
+        command,
+        loadState: { status: "unknown" },
+        runtime: { status: "unknown" },
+      });
+      if (scenario === "diagnostic") {
+        expect(state.loadState).toEqual({
+          status: "unknown",
+          detail: "Error: native load timeout",
+        });
+        expect(state.runtime).toBe(nativeRuntime);
+        expect(service.isLoaded).toHaveBeenCalledWith({ env: command.environment, timeoutMs: 100 });
+        expect(service.readRuntime).toHaveBeenCalledWith(command.environment, { timeoutMs: 100 });
+      } else {
+        expect(state.runtime?.pid).toBeUndefined();
+        expect(state.runtime?.missingUnit).not.toBe(true);
+      }
+    },
+  );
 
-    const state = await pending;
-    expect(state.loadState).toEqual({ status: "unknown", detail: "Error: native load timeout" });
-    expect(state.runtime).toBe(nativeRuntime);
-    expect(state).toMatchObject({ installed: true, running: false, command });
-    expect(service.isLoaded).toHaveBeenCalledWith({ env: command.environment, timeoutMs: 100 });
-    expect(service.readRuntime).toHaveBeenCalledWith(command.environment, { timeoutMs: 100 });
-  });
-
-  it("does not promote positive runtime observations that settle after the deadline", async () => {
-    const { load, runtime, entered, service } = deferredReaders();
-    const pending = readGatewayServiceState(service, { env: {}, timeoutMs: 100 });
-    await entered.promise;
-    now = 101;
-    load.resolve(true);
-    runtime.resolve({ status: "running", pid: 4242 });
-
-    const state = await pending;
-    expect(state).toMatchObject({
-      installed: true,
-      running: false,
-      loadState: { status: "unknown" },
-      runtime: { status: "unknown" },
-    });
-    expect(state.runtime?.pid).toBeUndefined();
-    expect(state.runtime?.missingUnit).not.toBe(true);
-  });
-
-  it("retains the command and merged environment without admitting native reads after expiry", async () => {
-    const service = createMockGatewayService({
-      readCommand: vi.fn(async () => {
-        now = 101;
-        return command;
-      }),
-    });
-    const state = await readGatewayServiceState(service, {
-      env: { HOME: "/fixture" },
-      timeoutMs: 100,
-    });
-    expect(state).toMatchObject({
-      installed: true,
-      command,
-      env: { HOME: "/fixture", OPENCLAW_GATEWAY_PORT: "18789" },
-      loadState: { status: "unknown" },
-      runtime: { status: "unknown" },
-      running: false,
-    });
-    expect(service.isLoaded).not.toHaveBeenCalled();
-    expect(service.readRuntime).not.toHaveBeenCalled();
-  });
-
-  it("does not admit any native reader when the allowance is already exhausted", async () => {
-    const service = createMockGatewayService();
-    const state = await readGatewayServiceState(service, { env: {}, timeoutMs: 0 });
-    expect(state).toMatchObject({
-      loadState: { status: "unknown" },
-      runtime: { status: "unknown" },
-      running: false,
-    });
-    expect(service.readCommand).not.toHaveBeenCalled();
-    expect(service.isLoaded).not.toHaveBeenCalled();
-    expect(service.readRuntime).not.toHaveBeenCalled();
-  });
-
-  it("does not use an absence observation returned after the deadline as stopped evidence", async () => {
-    const service = createMockGatewayService({
-      isAbsent: vi.fn(async () => {
-        now = 101;
-        return true;
-      }),
-    });
-    const state = await readGatewayServiceState(service, { env: {}, timeoutMs: 100 });
-    expect(state.loadState.status).toBe("unknown");
-    expect(state.runtime?.status).toBe("unknown");
-    expect(state.runtime?.missingUnit).not.toBe(true);
-    expect(service.readCommand).not.toHaveBeenCalled();
-  });
-
-  it("keeps strict operation expiry a rejection", async () => {
-    const { load, runtime, entered, service } = deferredReaders();
-    const pending = readGatewayServiceState(service, {
-      env: {},
-      timeoutMs: 100,
-      requireEffective: true,
-    });
-    const rejected = expect(pending).rejects.toThrow("Service inspection deadline expired.");
-    await entered.promise;
-    now = 101;
-    load.resolve(false);
-    runtime.resolve({ status: "unknown", detail: "native timeout" });
-    await rejected;
-  });
+  it.each(["initial", "command", "absence"] as const)(
+    "does not admit native status reads after expiry at %s",
+    async (boundary) => {
+      const service = createMockGatewayService({
+        ...(boundary === "command"
+          ? {
+              readCommand: vi.fn(async () => {
+                now = 101;
+                return command;
+              }),
+            }
+          : {}),
+        ...(boundary === "absence"
+          ? {
+              isAbsent: vi.fn(async () => {
+                now = 101;
+                return true;
+              }),
+            }
+          : {}),
+      });
+      const state = await readGatewayServiceState(service, {
+        env: { HOME: "/fixture" },
+        timeoutMs: boundary === "initial" ? 0 : 100,
+      });
+      expect(state).toMatchObject({
+        loadState: { status: "unknown" },
+        runtime: { status: "unknown" },
+        running: false,
+      });
+      if (boundary === "command") {
+        expect(state).toMatchObject({
+          installed: true,
+          command,
+          env: { HOME: "/fixture", OPENCLAW_GATEWAY_PORT: "18789" },
+        });
+      } else {
+        expect(service.readCommand).not.toHaveBeenCalled();
+      }
+      expect(state.runtime?.missingUnit).not.toBe(true);
+      expect(service.isLoaded).not.toHaveBeenCalled();
+      expect(service.readRuntime).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(
     (

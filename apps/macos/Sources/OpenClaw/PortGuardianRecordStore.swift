@@ -92,10 +92,6 @@ final class PortGuardianRecordStore: @unchecked Sendable {
         Self.closeLegacyLock(self.legacyLockDescriptor)
     }
 
-    func records() throws -> [PortGuardian.Record] {
-        try self.readRecords()
-    }
-
     @discardableResult
     func upsert(_ record: PortGuardian.Record) throws -> PortGuardian.Record {
         try Self.validate(record)
@@ -120,11 +116,7 @@ final class PortGuardianRecordStore: @unchecked Sendable {
         try records.forEach(Self.validate)
         return try self.mapDatabaseError {
             try self.withValidatedMutationTransaction {
-                var deleted: [PortGuardian.Record] = []
-                for record in records where try self.deleteIfMatchesUnlocked(record) {
-                    deleted.append(record)
-                }
-                return deleted
+                try records.filter { try self.deleteIfMatchesUnlocked($0) }
             }
         }
     }
@@ -149,7 +141,7 @@ final class PortGuardianRecordStore: @unchecked Sendable {
         guard let legacyLockDescriptor else {
             throw PortGuardianStoreError("Legacy PortGuardian migration requires its compatibility lock")
         }
-        return try self.withLegacyCoordinationLock {
+        return try self.legacyCoordinationLock.withLock {
             guard let source = try Self.withExclusiveLegacyLock(legacyLockDescriptor, body: {
                 try Self.readLegacySource(recordURL)
             }) else { return 0 }
@@ -176,12 +168,6 @@ final class PortGuardianRecordStore: @unchecked Sendable {
                 return byPID.count
             }
         }
-    }
-
-    private func withLegacyCoordinationLock<T>(_ body: () throws -> T) rethrows -> T {
-        self.legacyCoordinationLock.lock()
-        defer { self.legacyCoordinationLock.unlock() }
-        return try body()
     }
 
     private static func decodeLegacyRecords(_ data: Data) throws -> [Int32: PortGuardian.Record] {
@@ -279,7 +265,7 @@ final class PortGuardianRecordStore: @unchecked Sendable {
         return LegacySource(snapshot: before, data: data)
     }
 
-    private func readRecords() throws -> [PortGuardian.Record] {
+    func records() throws -> [PortGuardian.Record] {
         try self.mapDatabaseError {
             let statement = try self.database.prepare("""
             SELECT port, pid, command, mode, timestamp

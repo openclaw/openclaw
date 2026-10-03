@@ -124,10 +124,11 @@ describe("buildSystemPromptReport", () => {
     },
   ])("reports complete skill blocks in order: $skillsPrompt", ({ skillsPrompt, entries }) => {
     const report = makeReport({
+      systemPrompt: `## Skills\n${skillsPrompt.trim()}`,
       skillsPrompt,
     });
 
-    expect(report.skills.promptChars).toBe(skillsPrompt.length);
+    expect(report.skills.promptChars).toBe(skillsPrompt.trim().length);
     expect(report.skills.entries).toEqual(entries);
   });
 

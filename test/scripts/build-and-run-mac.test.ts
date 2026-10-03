@@ -111,13 +111,27 @@ describe("scripts/build-and-run-mac.sh", () => {
       for (const sourcePath of [
         scriptPath,
         "scripts/prepare-apple-mermaid.mjs",
+        "scripts/lib/pnpm-lockfile-documents.mjs",
         "scripts/pnpm-runner.mts",
         "scripts/windows-cmd-helpers.mjs",
+        "scripts/run-node-package-bin.mts",
       ]) {
         const target = join(root, sourcePath);
         mkdirSync(dirname(target), { recursive: true });
         copyFileSync(sourcePath, target);
       }
+      for (const directory of ["packages/mermaid-renderer", "packages/normalization-core"]) {
+        mkdirSync(join(root, directory), { recursive: true });
+      }
+      for (const file of ["package.json", "pnpm-workspace.yaml", "tsconfig.json"]) {
+        writeFileSync(join(root, file), "{}\n");
+      }
+      writeFileSync(
+        join(root, "pnpm-lock.yaml"),
+        "importers:\n  packages/mermaid-renderer: {}\npackages: {}\nsnapshots: {}\n",
+      );
+      mkdirSync(join(root, "patches"));
+      writeFileSync(join(root, ".npmrc"), "");
       const resources = join(
         root,
         "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Resources/Mermaid",

@@ -97,7 +97,6 @@ export function createUpdateCliFixture() {
   let fixtureCount = 0;
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const tempDirsToCleanup = new Set<string>();
-  const fixtureStateDatabases = new Set<string>();
 
   const createCaseDir = (prefix: string) => {
     const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
@@ -105,10 +104,7 @@ export function createUpdateCliFixture() {
     return dir;
   };
 
-  const initializeExistingUpdateProfile = createUpdateStateProfileInitializer(
-    fixtureRoot,
-    fixtureStateDatabases,
-  );
+  const initializeExistingUpdateProfile = createUpdateStateProfileInitializer(fixtureRoot);
 
   const baseConfig: OpenClawConfig = {};
   const baseSnapshot = createUpdateCliBaseSnapshot(baseConfig);
@@ -210,12 +206,12 @@ export function createUpdateCliFixture() {
     ffree: 0,
   });
 
-  const reportCandidateSteps = <T extends { steps: UpdateRunResult["steps"] }>(
-    options: { onStep?: (step: UpdateRunResult["steps"][number]) => void },
+  const reportCandidateSteps = async <T extends { steps: UpdateRunResult["steps"] }>(
+    options: { onStep?: (step: UpdateRunResult["steps"][number]) => void | Promise<void> },
     result: T,
-  ): T => {
+  ): Promise<T> => {
     for (const step of result.steps) {
-      options.onStep?.(step);
+      await options.onStep?.(step);
     }
     return result;
   };
@@ -575,7 +571,6 @@ export function createUpdateCliFixture() {
     expectFailedManagedGitRestart,
     expectFreshPostUpdateDoctor,
     fixtureRoot,
-    fixtureStateDatabases,
     FRESH_POST_UPDATE_ENTRYPOINT,
     globalNpmConfig,
     initializeExistingUpdateProfile,

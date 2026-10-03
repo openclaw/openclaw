@@ -6,6 +6,7 @@ import http from "node:http";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { AgentSideConnection, ndJsonStream, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 
 const directory = process.argv[2];
@@ -18,6 +19,11 @@ const promptGateUrl = process.argv
   .find((value) => value.startsWith("--prompt-gate-url="))
   ?.slice("--prompt-gate-url=".length);
 const captureWorkerEnv = process.argv.slice(3).includes("--capture-worker-env");
+const receiptModule = process.argv
+  .slice(3)
+  .find((value) => value.startsWith("--receipt-module="))
+  ?.slice("--receipt-module=".length);
+const receipts = receiptModule ? await import(pathToFileURL(receiptModule).href) : undefined;
 const sessions = new Map();
 const configOptions = (state) => [
   {
@@ -60,6 +66,7 @@ const file = (id) => path.join(directory, `${id}.json`);
 const save = (id) => fs.writeFile(file(id), JSON.stringify(sessions.get(id)));
 async function holdControl(name, value) {
   await fs.writeFile(path.join(directory, `${name}-entered`), value);
+  receipts?.sendReceipt(path.join(directory, `${name}-entered`), value);
   const deadline = Date.now() + 30000;
   while (true) {
     try {

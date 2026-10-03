@@ -160,9 +160,18 @@ async function captureXaiResponsesPayloadWithThinking(
     contextWindow: 500_000,
     maxTokens: 64_000,
   } as Model<"openai-responses">);
+  const wrapped = wrapXaiProviderStream({
+    provider: "xai",
+    modelId,
+    model,
+    streamFn: streamSimple,
+  });
+  if (!wrapped) {
+    throw new Error("expected the xAI stream wrapper");
+  }
 
   const payloadPromise = new Promise<Record<string, unknown>>((resolve, reject) => {
-    const stream = streamSimple(
+    const stream = wrapped(
       model,
       { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
       {
@@ -175,10 +184,12 @@ async function captureXaiResponsesPayloadWithThinking(
         },
       },
     );
-    void stream.result().then(
-      () => reject(new Error("provider payload callback was not invoked")),
-      (error: unknown) => reject(error instanceof Error ? error : new Error(String(error))),
-    );
+    void Promise.resolve(stream)
+      .then((result) => result.result())
+      .then(
+        () => reject(new Error("provider payload callback was not invoked")),
+        (error: unknown) => reject(error instanceof Error ? error : new Error(String(error))),
+      );
   });
 
   return await payloadPromise;
@@ -525,35 +536,23 @@ describe("xai stream wrappers", () => {
     expect(payload).not.toHaveProperty("include");
   });
 
-  it("keeps native xAI Responses thinking efforts before the shared runtime dispatches payloads", async () => {
-    const payload = await captureXaiResponsesPayloadWithThinking();
+  it.each([
+    ["grok-4.5", "low", { effort: "low", summary: "auto" }],
+    ["grok-4.7", "xhigh", { effort: "xhigh", summary: "auto" }],
+    ["grok-4.6", "xhigh", { effort: "xhigh", summary: "auto" }],
+    ["grok-4.5", "off", { effort: "low", summary: "auto" }],
+    ["grok-4.3", "off", { effort: "none" }],
+    ["grok-4.20-0309-reasoning", "off", undefined],
+  ] as const)(
+    "preserves %s %s at the final xAI Responses payload boundary",
+    async (modelId, thinking, expectedReasoning) => {
+      const payload = await captureXaiResponsesPayloadWithThinking(thinking, modelId);
 
-    expect(payload.reasoning).toEqual({ effort: "low", summary: "auto" });
-    expect(payload.include).toEqual(["reasoning.encrypted_content"]);
-  }, 10_000);
-
-  it.each(["grok-4.7", "grok-4.6"])(
-    "preserves %s xhigh at the final xAI Responses payload boundary",
-    async (modelId) => {
-      const payload = await captureXaiResponsesPayloadWithThinking("xhigh", modelId);
-
-      expect(payload.reasoning).toEqual({ effort: "xhigh", summary: "auto" });
+      expect(payload.reasoning).toEqual(expectedReasoning);
       expect(payload.include).toEqual(["reasoning.encrypted_content"]);
     },
     10_000,
   );
-
-  it("clamps unsupported Grok 4.5 off reasoning to low", async () => {
-    const payload = await captureXaiResponsesPayloadWithThinking("off");
-
-    expect(payload.reasoning).toEqual({ effort: "low", summary: "auto" });
-  }, 10_000);
-
-  it("maps Grok 4.3 off reasoning to xAI none", async () => {
-    const payload = await captureXaiResponsesPayloadWithThinking("off", "grok-4.3");
-
-    expect(payload.reasoning).toEqual({ effort: "none" });
-  }, 10_000);
 
   it.each([
     ["xai", XAI_BASE_URL],

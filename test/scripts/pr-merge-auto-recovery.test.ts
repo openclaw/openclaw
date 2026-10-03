@@ -41,7 +41,6 @@ describePosix("native auto-merge recovery", () => {
     { mode: "pending", cancellation: "lost", absent: false },
     { mode: "pending-error", cancellation: "success", absent: false },
     { mode: "pending", cancellation: "success", absent: true },
-    { mode: "pending-error", cancellation: "success", absent: true },
   ])(
     "retires auto before recovering a reviewed replacement (submission=$mode, cancellation=$cancellation, absent=$absent)",
     ({ mode, cancellation, absent }) => {

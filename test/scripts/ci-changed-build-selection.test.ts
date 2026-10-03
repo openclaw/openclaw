@@ -94,7 +94,7 @@ it("executes the source TUI assertion helper without admitting deferred PTY buil
   expect(targets.filter((target) => tuiPtyTestFiles.includes(target))).toEqual([]);
   expect(testProjects.buildVitestRunPlans([helper])).toEqual([
     {
-      config: "test/vitest/vitest.tui-pty.config.ts",
+      config: "test/vitest/vitest.tui.config.ts",
       forwardedArgs: [],
       includePatterns: [helper],
       watchMode: false,
@@ -124,7 +124,7 @@ it("keeps source execution when narrow config owners no longer admit an artifact
       expect(shards).not.toBeNull();
       expect(shards?.some((shard) => shard.requiresDist)).toBe(false);
       expect(shards?.filter((shard) => shard.configs.includes(boundaryConfig))).toHaveLength(1);
-      if (changedPaths.includes(tuiConfig)) {
+      if (changedPaths.includes(helper)) {
         expect(shards?.flatMap((shard) => shard.targets ?? [])).toContain(helper);
       }
     }

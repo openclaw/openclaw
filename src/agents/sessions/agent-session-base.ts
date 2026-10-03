@@ -2,6 +2,7 @@ import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { notifyListeners } from "../../shared/listeners.js";
 import type {
   Agent,
   AgentEvent,
@@ -41,7 +42,6 @@ import {
   retireQueuedUserMessage,
 } from "./queued-user-message-retirement.js";
 import type { ResourceLoader } from "./resource-loader.js";
-import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import type { SessionManager } from "./session-manager.js";
 import { prepareSessionToolResult } from "./session-tool-result-redaction.js";
 import type { SettingsManager } from "./settings-manager.js";
@@ -81,6 +81,7 @@ export abstract class AgentSessionBase {
   protected autoCompactionAbortController: AbortController | undefined = undefined;
   protected overflowRecoveryAttempts = 0;
   protected contextOverflowRecoveryOwner: "session" | "caller";
+  protected resolveCompactionThinkingLevel?: AgentSessionConfig["resolveCompactionThinkingLevel"];
 
   protected branchSummaryAbortController: AbortController | undefined = undefined;
   private extensionModifiedToolResultIds = new Set<string>();
@@ -142,6 +143,7 @@ export abstract class AgentSessionBase {
     };
     this.withExternalSessionWriteSettlement = config.withSessionWriteSettlement;
     this.contextOverflowRecoveryOwner = config.contextOverflowRecoveryOwner ?? "session";
+    this.resolveCompactionThinkingLevel = config.resolveCompactionThinkingLevel;
     this.cleanupProviderSessionResourcesOnDispose =
       config.cleanupProviderSessionResourcesOnDispose ?? true;
   }
@@ -380,13 +382,11 @@ export abstract class AgentSessionBase {
     if (event.type === "message_end") {
       if (event.message.role === "custom") {
         const message = event.message;
-        await withSessionManagerWrite(this.sessionManager, () =>
-          this.sessionManager.appendCustomMessageEntry(
-            message.customType,
-            message.content,
-            message.display,
-            message.details,
-          ),
+        await this.sessionManager.appendCustomMessageEntryAsync(
+          message.customType,
+          message.content,
+          message.display,
+          message.details,
         );
       } else if (
         event.message.role === "user" ||
@@ -568,19 +568,15 @@ export abstract class AgentSessionBase {
    * Call this when completely done with the session.
    */
   dispose(): void {
-    const abortOperations = [
-      () => this.abortRetry(),
-      () => this.abortCompaction(),
-      () => this.abortBranchSummary(),
-      () => this.agent.abort(),
-    ];
-    for (const abortOperation of abortOperations) {
-      try {
-        abortOperation();
-      } catch {
-        // One broken abort hook must not prevent the remaining work from being cancelled.
-      }
-    }
+    notifyListeners(
+      [
+        () => this.abortRetry(),
+        () => this.abortCompaction(),
+        () => this.abortBranchSummary(),
+        () => this.agent.abort(),
+      ],
+      undefined,
+    );
 
     this.currentExtensionRunner.invalidate();
     this.disconnectFromAgent();

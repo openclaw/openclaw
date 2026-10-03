@@ -34,11 +34,12 @@ import {
   unregisterOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db-registry.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
@@ -284,7 +285,7 @@ describe("resident sessions.list", () => {
           visibility: "shared",
         },
       );
-      closeOpenClawAgentDatabaseByPath(extraDatabasePath);
+      await closeOpenClawAgentDatabaseByPathAsync(extraDatabasePath);
       unregisterOpenClawAgentDatabase({ agentId: "main", env: state.env, path: extraDatabasePath });
 
       const context = requestContext(config);
@@ -352,7 +353,7 @@ describe("resident sessions.list", () => {
       const opened = await listSessions({ client, context, request });
       expect(opened.sessions.map((session) => session.key)).not.toContain(childKey);
 
-      expect(closeOpenClawAgentDatabaseByPath(incognitoPath)).toBe(true);
+      expect(await closeOpenClawAgentDatabaseByPathAsync(incognitoPath)).toBe(true);
       const closed = await listSessions({ client, context, request });
       expect(closed.sessions.map((session) => session.key)).not.toContain(childKey);
     });
@@ -622,7 +623,7 @@ describe("resident sessions.list", () => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(now);
       const config = await seedSessions();
       const runId = "sessions-list-cache-live-subagent";
-      addSubagentRunForTests({
+      await addSubagentRunForTests({
         runId,
         childSessionKey: "agent:main:active",
         controllerSessionKey: "agent:main:draft",
@@ -680,7 +681,7 @@ describe("resident sessions.list", () => {
         });
       } finally {
         clearAgentRunContext(runId);
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
       }
     });
   });
@@ -900,16 +901,16 @@ describe("resident sessions.list", () => {
         const client = identifiedClient("viewer@example.com");
         await initializeSessionReadContext(context);
         const projection = getSessionRowProjection(context)!;
-        const ensure = projection.ensureMaterialized.bind(projection);
+        const ensure = projection.prepareSelection.bind(projection);
         let releaseRows!: () => void;
         const gate = new Promise<void>((resolve) => {
           releaseRows = resolve;
         });
         const readiness = vi
-          .spyOn(projection, "ensureMaterialized")
-          .mockImplementationOnce(async () => {
+          .spyOn(projection, "prepareSelection")
+          .mockImplementationOnce(async (...args) => {
             await gate;
-            await ensure();
+            await ensure(...args);
           });
 
         const firstPage = listSessions({
@@ -954,13 +955,14 @@ describe("resident sessions.list", () => {
       const request = { archived: "all" as const, limit: 100 };
       await initializeSessionReadContext(context);
       const projection = getSessionRowProjection(context)!;
-      vi.spyOn(projection, "ensureMaterialized").mockRejectedValueOnce(
-        new Error("synthetic materialization failure"),
-      );
+      const readiness = vi
+        .spyOn(projection, "prepareSelection")
+        .mockRejectedValueOnce(new Error("synthetic materialization failure"));
 
       await expect(listSessions({ client, context, request })).rejects.toThrow(
         "synthetic materialization failure",
       );
+      expect(readiness).toHaveBeenCalledOnce();
       await expect(listSessions({ client, context, request })).resolves.toMatchObject({
         sessions: expect.any(Array),
       });

@@ -2,15 +2,13 @@ import { randomUUID } from "node:crypto";
 // Verifies host hook cleanup behavior for session-store state.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
 import * as agentDeletionDiscovery from "../state/agent-deletion-discovery.js";
@@ -19,15 +17,13 @@ import {
   completeAgentDeletionJournalInDatabase,
 } from "../state/agent-deletion-journal.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import * as agentWriteAdmission from "../state/openclaw-agent-write-admission.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { runPluginHostCleanup } from "./host-hook-cleanup.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 
@@ -35,19 +31,15 @@ describe("plugin host cleanup session stores", () => {
   let stateDir: string | undefined;
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 
-  afterEach(async () => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-host-cleanup-noop-");
+
+  afterEach(() => {
     envSnapshot.restore();
-    if (stateDir) {
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
     stateDir = undefined;
   });
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   async function createRetainedAndActiveStores() {
-    const fixtureStateDir = tempDirs.make("openclaw-cleanup-deleted-agent-");
+    const fixtureStateDir = sessionDirs.make();
     setTestEnvValue("OPENCLAW_STATE_DIR", fixtureStateDir);
     const activeStore = path.join(fixtureStateDir, "agents", "main", "sessions", "sessions.json");
     const retainedStore = path.join(
@@ -70,7 +62,7 @@ describe("plugin host cleanup session stores", () => {
         },
       );
     }
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync();
     const retainedDatabase = path.join(
       fixtureStateDir,
       "agents",
@@ -100,9 +92,7 @@ describe("plugin host cleanup session stores", () => {
   }
 
   it("leaves entries unchanged when cleanup finds no plugin-owned state", async () => {
-    stateDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-cleanup-noop-"),
-    );
+    stateDir = sessionDirs.make();
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     const storePath = path.join(stateDir, "sessions.json");
     await replaceSessionEntry({ sessionKey: "agent:main:main", storePath }, {
@@ -123,9 +113,7 @@ describe("plugin host cleanup session stores", () => {
   });
 
   it("cleans healthy agent state without opening a refused agent store", async () => {
-    stateDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cleanup-admission-"),
-    );
+    stateDir = sessionDirs.make();
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     const storePath = path.join(stateDir, "sessions.json");
     const scope = { agentId: "main", sessionKey: "agent:main:main", storePath };
@@ -185,7 +173,7 @@ describe("plugin host cleanup session stores", () => {
       loadSessionEntry({ agentId: "main", storePath: activeStore, sessionKey: "agent:main:main" })
         ?.pluginExtensions,
     ).toBeUndefined();
-    expect(await fs.readFile(retainedDatabase)).toEqual(before);
+    expect((await fs.readFile(retainedDatabase)).equals(before)).toBe(true);
   });
 
   it("still cleans an active store when the retained-deletion snapshot read rejects", async () => {
@@ -214,14 +202,14 @@ describe("plugin host cleanup session stores", () => {
         loadSessionEntry({ agentId: "main", storePath: activeStore, sessionKey: "agent:main:main" })
           ?.pluginExtensions,
       ).toBeUndefined();
-      expect(await fs.readFile(retainedDatabase)).toEqual(before);
+      expect((await fs.readFile(retainedDatabase)).equals(before)).toBe(true);
     } finally {
       snapshotRead.mockRestore();
     }
   });
 
   it("preserves deleted logical rows in an active-owned shared store", async () => {
-    const fixtureStateDir = tempDirs.make("openclaw-cleanup-deleted-shared-");
+    const fixtureStateDir = sessionDirs.make();
     setTestEnvValue("OPENCLAW_STATE_DIR", fixtureStateDir);
     const sharedStore = path.join(fixtureStateDir, "shared", "sessions.json");
     const retiredDatabase = openOpenClawAgentDatabase({ agentId: "retired", env: process.env });
@@ -236,7 +224,7 @@ describe("plugin host cleanup session stores", () => {
         },
       );
     }
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync();
     const retiredBefore = loadSessionEntry({
       agentId: "retired",
       storePath: sharedStore,
@@ -289,7 +277,7 @@ describe("plugin host cleanup session stores", () => {
   });
 
   it("does not silently skip an unfinished deletion fence", async () => {
-    const fixtureStateDir = tempDirs.make("openclaw-cleanup-deletion-held-");
+    const fixtureStateDir = sessionDirs.make();
     setTestEnvValue("OPENCLAW_STATE_DIR", fixtureStateDir);
     const storePath = path.join(fixtureStateDir, "agents", "retired", "sessions", "sessions.json");
     await replaceSessionEntry(
@@ -300,7 +288,7 @@ describe("plugin host cleanup session stores", () => {
         pluginExtensions: { fixture: { active: true } },
       },
     );
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync();
     const databasePath = path.join(
       fixtureStateDir,
       "agents",
@@ -334,15 +322,13 @@ describe("plugin host cleanup session stores", () => {
     expect(result.failures).toEqual([
       expect.objectContaining({ pluginId: "fixture", hookId: "session-store" }),
     ]);
-    expect(await fs.readFile(databasePath)).toEqual(before);
+    expect((await fs.readFile(databasePath)).equals(before)).toBe(true);
   });
 
   it.each(["cancelled", "already-cleared", "locked", "revoked", "committed"] as const)(
     "revalidates queued cleanup and counts only committed changes (%s)",
     async (mode) => {
-      stateDir = await fs.realpath(
-        await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cleanup-queued-")),
-      );
+      stateDir = sessionDirs.make();
       setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
       const scope = {
         agentId: "main",
@@ -389,6 +375,15 @@ describe("plugin host cleanup session stores", () => {
         { replaceEntry: true, skipMaintenance: true },
       );
       await entered.promise;
+      const queued = createDeferredCore();
+      const admit = agentWriteAdmission.runOpenClawAgentWriteAdmission;
+      const admission = vi
+        .spyOn(agentWriteAdmission, "runOpenClawAgentWriteAdmission")
+        .mockImplementation((...args) => {
+          const result = admit(...args);
+          queued.resolve();
+          return result;
+        });
       let current = true;
       const revoked = new Error("session reset authority changed");
       const cleanup = runPluginHostCleanup({
@@ -407,8 +402,14 @@ describe("plugin host cleanup session stores", () => {
       });
       const settled = Promise.allSettled([blocker, cleanup]);
       try {
+        await Promise.race([
+          queued.promise,
+          cleanup.then(() => {
+            throw new Error("Cleanup completed before writer admission");
+          }),
+        ]);
         expect(
-          [...SQLITE_SESSION_WRITER_QUEUES.values()].reduce(
+          [...agentWriteAdmission.SQLITE_SESSION_WRITER_QUEUES.values()].reduce(
             (count, queue) => count + queue.pending.length,
             0,
           ),
@@ -441,6 +442,7 @@ describe("plugin host cleanup session stores", () => {
           expect(after).toEqual(before);
         }
       } finally {
+        admission.mockRestore();
         release.resolve();
         await settled;
       }
@@ -448,9 +450,7 @@ describe("plugin host cleanup session stores", () => {
   );
 
   it("can defer persistent session-state cleanup to an atomic owner", async () => {
-    stateDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-cleanup-deferred-"),
-    );
+    stateDir = sessionDirs.make();
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     const storePath = path.join(stateDir, "sessions.json");
     await replaceSessionEntry({ sessionKey: "agent:main:main", storePath }, {
@@ -509,9 +509,7 @@ describe("plugin host cleanup session stores", () => {
   ])(
     "clears only the selected %s session's plugin state",
     async (_, targetKey, siblingKey, filter) => {
-      stateDir = await fs.mkdtemp(
-        path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-cleanup-opaque-"),
-      );
+      stateDir = sessionDirs.make();
       setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
       const storePath = path.join(stateDir, "sessions.json");
       for (const [sessionKey, sessionId] of [
@@ -550,7 +548,7 @@ describe("plugin host cleanup session stores", () => {
       });
 
       expect(result).toEqual({ cleanupCount: 1, failures: [] });
-      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawAgentDatabasesAsync();
       const target = loadSessionEntry({ sessionKey: targetKey, storePath });
       expect(target?.pluginExtensions).toEqual({ other: { state: { preserved: true } } });
       expect(target?.pluginNextTurnInjections).toBeUndefined();
@@ -561,9 +559,7 @@ describe("plugin host cleanup session stores", () => {
   it.each(["shared-session", "signal:group: Opaque"])(
     "matches runtime session ID %s case-insensitively without interpreting it as a key",
     async (runtimeSessionId) => {
-      stateDir = await fs.mkdtemp(
-        path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-cleanup-multistore-"),
-      );
+      stateDir = sessionDirs.make();
       setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
       const firstStorePath = path.join(stateDir, "agents", "a", "sessions", "sessions.json");
       const secondStorePath = path.join(stateDir, "agents", "b", "sessions", "sessions.json");
@@ -653,9 +649,7 @@ describe("plugin host cleanup session stores", () => {
   );
 
   it("clears shared custom SQLite stores for each resolved agent", async () => {
-    stateDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-cleanup-shared-custom-"),
-    );
+    stateDir = sessionDirs.make();
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     const sharedStorePath = path.join(stateDir, "custom", "sessions.json");
     const beforeUpdatedAt = 100;
@@ -703,9 +697,7 @@ describe("plugin host cleanup session stores", () => {
   });
 
   it("preserves locked sessions for every harness owned by a disabled plugin", async () => {
-    stateDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-cleanup-locked-harness-"),
-    );
+    stateDir = sessionDirs.make();
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     const storePath = path.join(stateDir, "sessions.json");
     const updatedAt = 100;

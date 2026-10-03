@@ -4,6 +4,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import * as worker from "./code-mode-executor.js";
 import type { CodeModeSkill } from "./code-mode-skills.js";
+import { waitForPendingBridgeSettlement } from "./code-mode-state.js";
 import type { SettledBridgeRequest } from "./code-mode-worker-types.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
@@ -17,6 +18,7 @@ import {
 } from "./code-mode.test-support.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
 import { jsonResult, ToolInputError, type AnyAgentTool } from "./tools/common.js";
+import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
 
 async function runCode(code: string, targets: AnyAgentTool[]) {
   const { ctx, tools } = createCodeModeHarness();
@@ -167,7 +169,10 @@ afterEach(resetCodeModeTestState);
 describe("Code Mode program data", () => {
   async function run(tools: AnyAgentTool[], code: string, skills: CodeModeSkill[] = []) {
     const h = createCodeModeHarness({ codeModeSkills: skills, codeMode: { maxOutputBytes: 1024 } });
-    applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, ...tools] });
+    applyCodeModeCatalog({
+      ...h.ctx,
+      tools: [...h.tools, ...createInstalledSkillTools(skills), ...tools],
+    });
     return runUntilCompleted({ execTool: h.tools[0]!, waitTool: h.tools[1]!, code });
   }
 
@@ -211,13 +216,13 @@ describe("Code Mode program data", () => {
         value:
           bytes < 10 * 1024 * 1024
             ? { length: bytes, tail: "END!" }
-            : { error: expect.stringMatching(/program-data budget exceeded/) },
+            : { error: expect.stringMatching(/instruction limit/) },
       });
     },
   );
 });
 
-it("clears host and worker-input aliases while retained readiness promises stay payload-free", async () => {
+it("clears host and worker-input aliases after bridge settlement", async () => {
   const original = worker.runCodeModeExecutor;
   const arrays: SettledBridgeRequest[][] = [];
   const aliases: SettledBridgeRequest[] = [];
@@ -246,8 +251,10 @@ it("clears host and worker-input aliases while retained readiness promises stay 
     );
     expect(first.status).toBe("waiting");
     const retainedState = testing.activeRuns.get(String(first.runId))!;
-    const ready = await Promise.all(retainedState.pending.map((entry) => entry.promise));
-    expect(ready.every((value) => value === undefined)).toBe(true);
+    await waitForPendingBridgeSettlement(retainedState.pending, {
+      kind: "draining",
+      requiredRequestIds: retainedState.pending.map((entry) => entry.id),
+    });
     const final = await waitUntilCompleted({ details: first, waitTool: h.tools[1]! });
     expect(final).toMatchObject({ status: "completed", value: ["fulfilled", "rejected"] });
     expect(aliases.some((reply) => reply.ok)).toBe(true);
@@ -255,7 +262,7 @@ it("clears host and worker-input aliases while retained readiness promises stay 
     expect(arrays.every((array) => array.length === 0)).toBe(true);
     expect(aliases.every((reply) => reply.json === "")).toBe(true);
     for (const pending of retainedState.pending) {
-      expect(await pending.promise).toBeUndefined();
+      expect(pending.settled).toBe(true);
       expect(() => pending.reply.take()).toThrow("unavailable");
     }
   } finally {
@@ -292,7 +299,10 @@ it.each(["cancel", "expiry"])(
       } else {
         clearToolSearchCatalog(h.ctx);
       }
-      await Promise.all(retained.pending.map((entry) => entry.promise));
+      await waitForPendingBridgeSettlement(retained.pending, {
+        kind: "draining",
+        requiredRequestIds: retained.pending.map((entry) => entry.id),
+      });
       release.resolve();
       await finished.promise;
       await Promise.resolve();

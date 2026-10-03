@@ -117,9 +117,7 @@ export function registerSecurityCli(program: Command) {
         token,
         password,
       });
-      const fixResult = opts.fix
-        ? await fixSecurityFootguns().catch((_err: unknown) => null)
-        : null;
+      const fixResult = opts.fix ? await fixSecurityFootguns() : null;
 
       const sourceConfig = getRuntimeConfig();
       const { resolvedConfig: cfg, diagnostics: secretDiagnostics } =
@@ -169,11 +167,9 @@ export function registerSecurityCli(program: Command) {
         lines.push(muted(`[secrets] ${diagnostic}`));
       }
 
-      if (opts.fix) {
+      if (fixResult) {
         lines.push(muted(`Fix: ${formatCliCommand("openclaw security audit --fix")}`));
-        if (!fixResult) {
-          lines.push(muted("Fixes: failed to apply (unexpected error)"));
-        } else if (
+        if (
           fixResult.errors.length === 0 &&
           fixResult.changes.length === 0 &&
           fixResult.actions.every((a) => !a.ok)

@@ -4,6 +4,7 @@ import { setImmediate as realImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   cancelSqliteWalWriteAdmission,
@@ -108,6 +109,47 @@ describe("sqlite WAL checkpoint tick", () => {
       maintenance?.close();
       db.close();
       vi.useRealTimers();
+    }
+  });
+
+  it("joins admitted maintenance before native close and refuses subsequent wakes", async () => {
+    vi.useFakeTimers();
+    const sqlite = requireNodeSqlite();
+    const dbPath = path.join(tempDirs.make("openclaw-sqlite-wal-retirement-"), "openclaw.sqlite");
+    const db = new sqlite.DatabaseSync(dbPath);
+    const maintenance = configureSqliteWalMaintenance(db, { checkpointIntervalMs: 100 });
+    const entered = createDeferredCore();
+    const released = createDeferredCore();
+    const execute = vi.fn(async () => {
+      entered.resolve();
+      await released.promise;
+      expect(db.isOpen).toBe(true);
+      return undefined;
+    });
+    registerSqliteWalWorkerMaintenance(db, execute);
+    try {
+      vi.advanceTimersByTime(100);
+      await entered.promise;
+      const closed = vi.fn();
+      const closing = maintenance.stop().then(() => {
+        maintenance.close();
+        db.close();
+        closed();
+      });
+      await Promise.resolve();
+      expect(closed).not.toHaveBeenCalled();
+      released.resolve();
+      await closing;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(closed).toHaveBeenCalledOnce();
+      expect(execute).toHaveBeenCalledOnce();
+    } finally {
+      released.resolve();
+      await maintenance.stop();
+      if (db.isOpen) {
+        maintenance.close();
+        db.close();
+      }
     }
   });
 

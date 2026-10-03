@@ -13,7 +13,6 @@ import {
   type HelloOk,
   selectGatewayConnectAuth,
   shouldRetryGatewayWithDeviceToken,
-  isRetryableGatewayStartupUnavailableError,
   resolveGatewayStartupRetryAfterMs,
   resolveSafeTimeoutDelayMs,
   shouldPauseGatewayReconnect,
@@ -94,6 +93,8 @@ export type GatewayHelloOk = Omit<HelloOk, "server" | "features" | "snapshot" | 
 };
 
 export type GatewayBrowserClientOptions = GatewayBrowserConnectOptions & {
+  /** Local identity admitted by boot-record; never sent to the server. */
+  offlineRecoveryScope?: string;
   onHello?: (hello: GatewayHelloOk) => void;
   onEvent?: (evt: EventFrame) => void;
   onClose?: (info: {
@@ -321,7 +322,7 @@ export class GatewayBrowserClient {
       !this.client.connected ||
       (this.lastInboundActivityAtMs !== null &&
         this.maxInboundSilenceMs !== null &&
-        Date.now() - this.lastInboundActivityAtMs > this.maxInboundSilenceMs)
+        Date.now() - this.lastInboundActivityAtMs >= this.maxInboundSilenceMs)
     );
   }
 
@@ -332,6 +333,21 @@ export class GatewayBrowserClient {
 
   get recoveryScope() {
     return this.recovery.value;
+  }
+
+  private offlineStorageRetired = false;
+
+  get offlineRecoveryRetired(): boolean {
+    return this.offlineStorageRetired;
+  }
+
+  get offlineRecoveryScope(): string | undefined {
+    return this.opts.offlineRecoveryScope;
+  }
+
+  retireOfflineRecoveryScope(): void {
+    this.opts.offlineRecoveryScope = undefined;
+    this.offlineStorageRetired = true;
   }
 
   get recoveryScopeReady() {
@@ -391,6 +407,9 @@ export class GatewayBrowserClient {
     // Publish this connection's identity before listeners can capture recovery intent.
     // A legacy hello must not retain its predecessor while its digest is pending.
     this.recovery.value = hello.auth?.recoveryScope ?? "";
+    // Replace retained identity before consumers can act on a different account.
+    this.opts.offlineRecoveryScope = hello.auth?.recoveryScope;
+    this.offlineStorageRetired = false;
     this.maxPayloadBytes = hello.policy?.maxPayload;
     this.startTickWatch(hello);
     this.pendingDeviceTokenRetry = false;
@@ -437,6 +456,7 @@ export class GatewayBrowserClient {
     migrateRecoveryScope?.(this.opts.url, legacyScope, serverScope!);
     this.recovery.value = serverScope ?? legacyScope;
     this.recovery.resolved = true;
+    this.opts.offlineRecoveryScope = this.recovery.value || undefined;
     this.opts.onRecoveryScopeChange?.();
   }
 
@@ -458,7 +478,7 @@ export class GatewayBrowserClient {
     this.tickWatchTimer = setInterval(() => {
       // Preserve long-running requests while real Gateway heartbeats arrive;
       // only a silent socket should enter the shared reconnect lifecycle.
-      if (this.needsWakeReconnect) {
+      if (this.connected && this.needsWakeReconnect) {
         this.forceReconnect("tick timeout");
       }
     }, tickIntervalMs);
@@ -505,11 +525,12 @@ export class GatewayBrowserClient {
       });
     }
     const startupRetryAfterMs = resolveGatewayStartupRetryAfterMs(err);
-    if (isRetryableGatewayStartupUnavailableError(err)) {
+    if (startupRetryAfterMs !== null) {
       return {
         closeCode: STARTUP_RETRY_CLOSE_CODE,
         closeReason: "gateway starting",
-        reconnectDelayMs: startupRetryAfterMs ?? undefined,
+        // Startup overrides bypass transport backoff; spread tabs without retrying before the hint.
+        reconnectDelayMs: Math.ceil(startupRetryAfterMs * (1 + Math.random() * 0.2)),
       };
     }
     return { closeCode: CONNECT_FAILED_CLOSE_CODE, closeReason: "connect failed" };

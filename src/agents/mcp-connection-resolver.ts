@@ -5,7 +5,7 @@
 import crypto from "node:crypto";
 import { filterStringRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveOpenClawMcpTransportAlias } from "../config/mcp-config-normalize.js";
+import { resolveConfiguredMcpTransport } from "../config/mcp-config-normalize.js";
 import { logWarn } from "../logger.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -265,14 +265,8 @@ export function applyMcpConnectionOverride(
   } else {
     delete base.headers;
   }
-  // Resolve effective transport with the same alias mapping as config canonicalize
-  // BEFORE stripping `type`, so SSE-only servers keep sse (including case variants).
-  const fromTransport =
-    typeof base.transport === "string"
-      ? resolveOpenClawMcpTransportAlias(base.transport)
-      : undefined;
-  const fromType = resolveOpenClawMcpTransportAlias(base.type);
-  base.transport = fromTransport ?? fromType ?? "streamable-http";
+  const transport = resolveConfiguredMcpTransport(base);
+  base.transport = !transport || transport === "stdio" ? "streamable-http" : transport;
   // Resolver-supplied headers are the auth surface; strip static OAuth so the
   // transport layer does not drop Authorization from overrides.
   delete base.auth;

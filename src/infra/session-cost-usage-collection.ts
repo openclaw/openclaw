@@ -19,17 +19,18 @@ import {
   resolveSessionFilePathCore,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
+import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
+import { listSessionTranscriptInstances } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { listSessionTranscriptArchivesReadOnly } from "../config/sessions/session-accessor.sqlite-history.js";
 import {
-  listSessionTranscriptArchivesReadOnly,
-  listSessionTranscriptInstances,
-  loadSessionEntryReadOnly,
   loadTranscriptEventsSync,
   readTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync,
-} from "../config/sessions/session-accessor.js";
-import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
+} from "../config/sessions/session-accessor.sqlite-read.js";
+import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
   listDurableSqliteTargetPathsForSessionStorePath,
+  prepareSqliteTargetFromSessionStorePath,
   resolveSqliteTargetFromSessionStorePath,
 } from "../config/sessions/session-sqlite-target.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
@@ -37,6 +38,7 @@ import { streamSessionTranscriptLines } from "../config/sessions/transcript-stre
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveRealpathOrAbsolute } from "./boundary-path.js";
 import { hasErrnoCode } from "./errno.js";
@@ -420,9 +422,8 @@ export async function* readTranscriptRecordsBestEffort(
   }
 }
 
-export function resolveExistingUsageSessionFile(params: {
+export async function resolveUsageSessionSource(params: {
   sessionId?: string;
-  sessionEntry?: SessionEntry;
   sessionFile?: string;
   agentId: string;
   sessionTarget?: {
@@ -431,109 +432,78 @@ export function resolveExistingUsageSessionFile(params: {
     sessionKey: string;
     storePath: string;
   };
-}): string | undefined {
+}): Promise<{ sessionFile: string; entry?: SessionEntry } | undefined> {
+  const signal = getAsyncWorkSignal();
+  const assertCurrent = () => signal?.throwIfAborted();
+  assertCurrent();
   const sessionId = normalizeOptionalString(params.sessionId);
-  const target = params.sessionTarget
-    ? {
-        agentId: normalizeOptionalString(params.sessionTarget.agentId),
-        sessionId: normalizeOptionalString(params.sessionTarget.sessionId),
-        sessionKey: normalizeOptionalString(params.sessionTarget.sessionKey),
-        storePath: normalizeOptionalString(params.sessionTarget.storePath),
-      }
-    : undefined;
-  const completeTarget = Boolean(
-    target?.agentId && target.sessionId && target.sessionKey && target.storePath,
-  );
-  if (target && completeTarget) {
-    const targetKeyAgentId = parseAgentSessionKey(target.sessionKey)?.agentId;
-    const targetKeyEntry = loadSessionEntryReadOnly({
-      agentId: target.agentId!,
-      sessionKey: target.sessionKey!,
-      storePath: target.storePath!,
-      projection: "list",
-    });
-    // Complete targets remain authoritative after metadata cleanup; reject
-    // only an existing key row that proves the identity is stale.
+  const target = params.sessionTarget;
+  if (target) {
+    const agentId = normalizeOptionalString(target.agentId);
+    const targetSessionId = normalizeOptionalString(target.sessionId);
+    const sessionKey = normalizeOptionalString(target.sessionKey);
+    const storePath = normalizeOptionalString(target.storePath);
+    if (!agentId || !targetSessionId || !sessionKey || !storePath) {
+      return undefined;
+    }
+    const targetKeyAgentId = parseAgentSessionKey(sessionKey)?.agentId;
     if (
-      (sessionId !== undefined && target.sessionId !== sessionId) ||
-      target.agentId !== params.agentId ||
-      (targetKeyAgentId && targetKeyAgentId !== target.agentId) ||
-      (targetKeyEntry && targetKeyEntry.sessionId !== target.sessionId)
+      (sessionId !== undefined && targetSessionId !== sessionId) ||
+      agentId !== params.agentId ||
+      (targetKeyAgentId && targetKeyAgentId !== agentId)
     ) {
       return undefined;
     }
-    return formatCanonicalUsageCostSqliteMarker({
-      agentId: target.agentId!,
-      sessionId: target.sessionId!,
-      storePath: target.storePath!,
-    });
+    return withSessionEntryReadOnlyInWorker(
+      { agentId, sessionKey, storePath, projection: "list" },
+      assertCurrent,
+      async (read, owner) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        // A retained transcript can outlive its metadata row, but never its successor.
+        if (read.value && read.value.sessionId !== targetSessionId) {
+          return undefined;
+        }
+        const physicalPath =
+          owner.scope?.storePath ??
+          (await prepareSqliteTargetFromSessionStorePath(storePath, { agentId }, signal)).path;
+        owner.assertCurrent();
+        return {
+          entry: read.value,
+          sessionFile: formatSqliteSessionFileMarker({
+            agentId,
+            sessionId: targetSessionId,
+            storePath: physicalPath,
+          }),
+        };
+      },
+    );
   }
-  const legacySessionFile = (params.sessionEntry as { sessionFile?: unknown } | undefined)
-    ?.sessionFile;
-  const entryMarker = parseSqliteSessionFileMarker(
-    typeof legacySessionFile === "string" ? legacySessionFile : undefined,
-  );
-  const explicitMarker = parseSqliteSessionFileMarker(params.sessionFile);
-  const matchingEntryMarker =
-    entryMarker &&
-    entryMarker.agentId === params.agentId &&
-    (!sessionId || entryMarker.sessionId === sessionId)
-      ? entryMarker
-      : undefined;
-  const matchingExplicitMarker =
-    explicitMarker &&
-    explicitMarker.agentId === params.agentId &&
-    (!sessionId || explicitMarker.sessionId === sessionId)
-      ? explicitMarker
-      : undefined;
-  if (!matchingEntryMarker && explicitMarker && !matchingExplicitMarker) {
-    return undefined;
-  }
-  const sqliteMarker = matchingEntryMarker ?? matchingExplicitMarker;
-  const targetKeyAgentId = parseAgentSessionKey(target?.sessionKey)?.agentId;
-  const targetKeyEntry =
-    target?.sessionKey && sqliteMarker && !completeTarget
-      ? loadSessionEntryReadOnly({
-          agentId: sqliteMarker.agentId,
-          sessionKey: target.sessionKey,
-          storePath: sqliteMarker.storePath,
-          projection: "list",
-        })
-      : undefined;
-  if (
-    target &&
-    !completeTarget &&
-    sqliteMarker &&
-    ((target.agentId && target.agentId !== sqliteMarker.agentId) ||
-      (target.sessionId && target.sessionId !== sqliteMarker.sessionId) ||
-      (targetKeyAgentId && targetKeyAgentId !== sqliteMarker.agentId) ||
-      (target.sessionKey && targetKeyEntry?.sessionId !== sqliteMarker.sessionId) ||
-      (target.storePath && path.resolve(target.storePath) !== path.resolve(sqliteMarker.storePath)))
-  ) {
-    return undefined;
-  }
+  const sqliteMarker = parseSqliteSessionFileMarker(params.sessionFile);
   if (sqliteMarker) {
-    return formatSqliteSessionFileMarker(sqliteMarker);
-  }
-  // An explicit JSONL artifact remains a supported read boundary, but a stale
-  // entry marker alone must not redirect the requested session.
-  if (entryMarker && !params.sessionFile) {
-    return undefined;
+    if (
+      sqliteMarker.agentId !== params.agentId ||
+      (sessionId && sqliteMarker.sessionId !== sessionId)
+    ) {
+      return undefined;
+    }
+    return { sessionFile: formatSqliteSessionFileMarker(sqliteMarker) };
   }
 
   const candidate =
     params.sessionFile ??
     (sessionId
-      ? resolveSessionFilePathCore(sessionId, params.sessionEntry, {
+      ? resolveSessionFilePathCore(sessionId, undefined, {
           agentId: params.agentId,
         })
       : undefined);
 
   if (candidate && fs.existsSync(candidate)) {
-    return candidate;
+    return { sessionFile: candidate };
   }
   if (!sessionId) {
-    return candidate;
+    return candidate ? { sessionFile: candidate } : undefined;
   }
 
   try {
@@ -552,7 +522,7 @@ export function resolveExistingUsageSessionFile(params: {
 
     const primary = entries.find((entry) => entry.name === baseFileName);
     if (primary) {
-      return path.join(sessionsDir, primary.name);
+      return { sessionFile: path.join(sessionsDir, primary.name) };
     }
 
     const latestArchive = entries
@@ -570,8 +540,9 @@ export function resolveExistingUsageSessionFile(params: {
         return tsB - tsA || b.localeCompare(a);
       })[0];
 
-    return latestArchive ? path.join(sessionsDir, latestArchive) : candidate;
+    const sessionFile = latestArchive ? path.join(sessionsDir, latestArchive) : candidate;
+    return sessionFile ? { sessionFile } : undefined;
   } catch {
-    return candidate;
+    return candidate ? { sessionFile: candidate } : undefined;
   }
 }

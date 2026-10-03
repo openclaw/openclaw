@@ -20,9 +20,26 @@ const ctx = await createVitest({
 try {
   const emptyDiscoveryAllowed = Boolean(ctx.config.passWithNoTests);
   const specifications = await ctx.globTestSpecifications();
-  process.env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE = includeFile;
   const paths = (files) =>
     files.map((file) => path.relative(process.cwd(), file.moduleId).replaceAll("\\", "/")).sort();
+  const packageNodeFiles = paths(
+    specifications.filter((file) => ["unit", "unit-node"].includes(file.project.name)),
+  );
+  const rootCtx = await createVitest({
+    config: path.resolve("test/vitest/vitest.ui.config.ts"),
+    watch: false,
+    reporters: [],
+    configLoader: "runner",
+    api: false,
+    cache: false,
+  });
+  let rootNodeFiles;
+  try {
+    rootNodeFiles = paths(await rootCtx.globTestSpecifications());
+  } finally {
+    await rootCtx.close();
+  }
+  process.env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE = includeFile;
   const rows = [];
   for (const index of [undefined, 1, 2, 3]) {
     ctx.config.shard = index ? { index, count: 3 } : undefined;
@@ -215,6 +232,8 @@ try {
     output,
     JSON.stringify({
       discovered: paths(specifications),
+      packageNodeFiles,
+      rootNodeFiles,
       rows,
       scheduling,
       empty: { modules: empty.testModules.length, errors: empty.unhandledErrors.length },

@@ -76,6 +76,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   if (opts.json) {
     defaultRuntime.writeJson({
       ...status,
+      extraServices: status.extraServices.map(({ sourcePath: _sourcePath, ...service }) => service),
       service: projectDaemonServiceForJson(status.service, { includeDefinitionPaths: false }),
     });
     return;
@@ -179,10 +180,11 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       const configPath = `${shortenHomePath(config.path)}${config.exists ? "" : " (missing)"}${config.valid ? "" : " (invalid)"}`;
       printInfo(`Config (${kind}):`, configPath);
       if (!config.valid && config.issues?.length) {
-        const issueLabel = kind === "cli" ? "Config issue:" : "Service config issue:";
+        const issueLabel =
+          kind === "cli" ? "Warning: Config issue:" : "Warning: Service config issue:";
         for (const issue of config.issues.slice(0, 5)) {
-          defaultRuntime.error(
-            `${errorText(issueLabel)} ${formatConfigIssueLine(issue, "", { normalizeRoot: true })}`,
+          printWarning(
+            `${issueLabel} ${formatConfigIssueLine(issue, "", { normalizeRoot: true })}`,
           );
         }
       }
@@ -194,6 +196,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
           printWarning(formatConfigIssueLine(warning, "-", { normalizeRoot: true }));
         }
       }
+    }
+    if (!status.config.cli.valid || status.config.daemon?.valid === false) {
+      printWarning(`Run \`${formatCliCommand("openclaw doctor --fix")}\` to repair configuration.`);
     }
     if (status.config.mismatch) {
       printError(

@@ -1,10 +1,10 @@
 import { ChannelType, PermissionFlagsBits as P, Routes } from "discord-api-types/v10";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as api from "./send.permissions.js";
 import { EMPTY_DISCORD_TEST_OPTS as opts } from "./test-support/config.js";
 
 const mockRest = vi.hoisted(() => ({ get: vi.fn() }));
 vi.mock("./client.js", () => ({ resolveDiscordRest: () => mockRest }));
-let api: typeof import("./send.permissions.js");
 type Role = [id: string, permissions: bigint, position?: number];
 type Fixture = {
   owner?: string;
@@ -85,9 +85,6 @@ function mockGuild({
 }
 
 describe("discord guild permission authorization", () => {
-  beforeAll(async () => {
-    api = await import("./send.permissions.js");
-  });
   beforeEach(() => {
     mockRest.get.mockReset();
   });

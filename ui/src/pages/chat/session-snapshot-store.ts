@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
 import {
   getSessionCacheValue,
@@ -13,6 +12,7 @@ import {
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import {
+  isPersistableChatSnapshotKey,
   CHAT_SNAPSHOT_METADATA_STORE_NAME,
   CHAT_SNAPSHOT_STORE_NAME,
   debugSnapshotStore,
@@ -182,6 +182,9 @@ async function writeSnapshotRecords(
     return [];
   }
   try {
+    if (generation !== snapshotStoreGeneration) {
+      return [];
+    }
     const transaction = database.transaction(
       [CHAT_SNAPSHOT_STORE_NAME, CHAT_SNAPSHOT_METADATA_STORE_NAME],
       "readwrite",
@@ -238,6 +241,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
   // cooldown bounds the resulting redundant fetches without per-row IDB reads.
   private readonly savedAtBySession = new Map<string, number>();
   private savedAtSeed: Promise<void> | null = null;
+  private savedAtSeedRetirements: Set<string> | null = null;
   private cancelScheduledWrite: (() => void) | null = null;
   private writeChain = Promise.resolve();
 
@@ -260,6 +264,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
   captureReadScope(sessionKey: string): () => boolean {
     const generation = snapshotStoreGeneration;
     const revision = this.revisions.get(sessionKey) ?? 0;
+    this.revisions.set(sessionKey, revision);
     return () =>
       generation === snapshotStoreGeneration && revision === (this.revisions.get(sessionKey) ?? 0);
   }
@@ -276,6 +281,9 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     }
     const value = await (prewarm?.promise ?? readStoredChatSnapshotRecord(sessionKey));
     if (value === undefined || !isCurrent()) {
+      return null;
+    }
+    if (!isPersistableChatSnapshotKey(sessionKey)) {
       return null;
     }
     const record = parseSnapshotRecord(value, sessionKey);
@@ -303,7 +311,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
 
   write(sessionKey: string, snapshot: ChatSessionSnapshot): void {
     // The message cache remains the live UI owner; only durable admission is denied.
-    if (isIncognitoSessionKey(sessionKey)) {
+    if (!isPersistableChatSnapshotKey(sessionKey)) {
       return;
     }
     discardPrewarmedChatSnapshot(sessionKey);
@@ -368,6 +376,21 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     await this.writeChain;
   }
 
+  forgetScope(prefix: string): void {
+    this.savedAtSeedRetirements?.add(prefix);
+    for (const key of new Set([
+      ...this.revisions.keys(),
+      ...this.pending.keys(),
+      ...this.hydratedSnapshots.keys(),
+      ...this.savedAtBySession.keys(),
+      ...(this.memoryCache?.keys() ?? []),
+    ])) {
+      if (key.startsWith(prefix)) {
+        this.forget(key);
+      }
+    }
+  }
+
   clearMemory(): void {
     this.cancelScheduledWrite?.();
     this.cancelScheduledWrite = null;
@@ -407,24 +430,31 @@ export class SessionSnapshotStore implements ChatCacheObserver {
   }
 
   private async seedSavedAtIndex(): Promise<void> {
+    const retiredScopes = new Set<string>();
+    this.savedAtSeedRetirements = retiredScopes;
     const generation = snapshotStoreGeneration;
     const revisions = new Map(this.revisions);
-    const records = await readSnapshotMetadata();
-    if (generation !== snapshotStoreGeneration) {
-      return;
-    }
-    if (!records) {
-      this.resetSavedAtIndex();
-      return;
-    }
-    for (const record of records) {
-      if (
-        (revisions.get(record.sessionKey) ?? 0) !== (this.revisions.get(record.sessionKey) ?? 0)
-      ) {
-        continue;
+    try {
+      const records = await readSnapshotMetadata();
+      if (generation !== snapshotStoreGeneration) {
+        return;
       }
-      const current = this.savedAtBySession.get(record.sessionKey) ?? 0;
-      this.savedAtBySession.set(record.sessionKey, Math.max(current, record.savedAt));
+      if (!records) {
+        this.resetSavedAtIndex();
+        return;
+      }
+      for (const record of records) {
+        if (
+          [...retiredScopes].some((prefix) => record.sessionKey.startsWith(prefix)) ||
+          (revisions.get(record.sessionKey) ?? 0) !== (this.revisions.get(record.sessionKey) ?? 0)
+        ) {
+          continue;
+        }
+        const current = this.savedAtBySession.get(record.sessionKey) ?? 0;
+        this.savedAtBySession.set(record.sessionKey, Math.max(current, record.savedAt));
+      }
+    } finally {
+      this.savedAtSeedRetirements = null;
     }
   }
 
@@ -436,9 +466,11 @@ export class SessionSnapshotStore implements ChatCacheObserver {
   }
 }
 
-subscribeSnapshotInvalidation(async ({ sessionKey }) => {
+subscribeSnapshotInvalidation(async ({ sessionKey, scopePrefix }) => {
   for (const store of activeStores) {
-    if (sessionKey) {
+    if (scopePrefix) {
+      store.forgetScope(scopePrefix);
+    } else if (sessionKey) {
       store.forget(sessionKey);
     } else {
       store.clearMemory();

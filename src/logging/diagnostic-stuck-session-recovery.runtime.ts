@@ -111,27 +111,15 @@ function isActiveRunProgressStale(params: {
 
 function formatRecoveryContext(
   params: StuckSessionRecoveryRequest,
-  extra?: { activeSessionId?: string; lane?: string; activeCount?: number; queuedCount?: number },
+  activeSessionId: string,
 ): string {
-  const fields = [
-    `sessionId=${params.sessionId ?? extra?.activeSessionId ?? "unknown"}`,
+  return [
+    `sessionId=${params.sessionId ?? activeSessionId}`,
     `sessionKey=${params.sessionKey ?? "unknown"}`,
     `age=${Math.round(params.ageMs / 1000)}s`,
     `queueDepth=${params.queueDepth ?? 0}`,
-  ];
-  if (extra?.activeSessionId) {
-    fields.push(`activeSessionId=${extra.activeSessionId}`);
-  }
-  if (extra?.lane) {
-    fields.push(`lane=${extra.lane}`);
-  }
-  if (extra?.activeCount !== undefined) {
-    fields.push(`laneActive=${extra.activeCount}`);
-  }
-  if (extra?.queuedCount !== undefined) {
-    fields.push(`laneQueued=${extra.queuedCount}`);
-  }
-  return fields.join(" ");
+    `activeSessionId=${activeSessionId}`,
+  ].join(" ");
 }
 
 function reportRecoveryOutcome(outcome: StuckSessionRecoveryOutcome): StuckSessionRecoveryOutcome {
@@ -173,10 +161,21 @@ export async function recoverStuckDiagnosticSession(
       };
     }
     const terminalWorkerError = params.sessionId
-      ? recoverTerminalSessionPlacementTurn({
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-        })
+      ? await recoverTerminalSessionPlacementTurn(
+          { sessionId: params.sessionId, sessionKey: params.sessionKey },
+          () => {
+            if (
+              !isDiagnosticSessionStateCurrent({
+                sessionId: params.sessionId,
+                sessionKey: params.sessionKey,
+                generation: params.stateGeneration,
+                state: params.expectedState ?? "processing",
+              })
+            ) {
+              throw new Error("Diagnostic session state changed before terminal worker recovery");
+            }
+          },
+        )
       : undefined;
     if (terminalWorkerError !== undefined) {
       // The placement owner already recorded failure and released its cleanup wait.
@@ -189,6 +188,22 @@ export async function recoverStuckDiagnosticSession(
         sessionKey: params.sessionKey,
         error: terminalWorkerError,
       });
+    }
+    if (
+      !isDiagnosticSessionStateCurrent({
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        generation: params.stateGeneration,
+        state: params.expectedState ?? "processing",
+      })
+    ) {
+      return {
+        status: "skipped",
+        action: "observe_only",
+        reason: "stale_session_state",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+      };
     }
     const fallbackActiveSessionId =
       params.sessionId && isEmbeddedAgentRunHandleActive(params.sessionId)
@@ -283,13 +298,13 @@ export async function recoverStuckDiagnosticSession(
           activeWorkKind: "embedded_run",
         };
         diag.warn(
-          `stuck session recovery skipped: ${formatRecoveryContext(params, { activeSessionId })}`,
+          `stuck session recovery skipped: ${formatRecoveryContext(params, activeSessionId)}`,
         );
         return reportRecoveryOutcome(outcome);
       }
       if (params.allowActiveAbort !== true) {
         diag.warn(
-          `stuck session recovery reclaiming stale active run: ${formatRecoveryContext(params, { activeSessionId })}`,
+          `stuck session recovery reclaiming stale active run: ${formatRecoveryContext(params, activeSessionId)}`,
         );
       }
       // Active embedded runs own their cleanup; registry terminal settle bounds
@@ -345,7 +360,7 @@ export async function recoverStuckDiagnosticSession(
           diag.warn(
             `stuck session recovery reclaiming stale active reply work: ${formatRecoveryContext(
               params,
-              { activeSessionId: activeWorkSessionId },
+              activeWorkSessionId,
             )}`,
           );
         }

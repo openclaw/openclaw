@@ -1,5 +1,6 @@
 // Covers heartbeat event prompt filtering.
 import { describe, expect, it } from "vitest";
+import { appendExecTimeoutRetryGuidance } from "../agents/bash-tools.exec-output.js";
 import {
   buildCronEventPrompt,
   buildExecEventPrompt,
@@ -48,16 +49,19 @@ describe("heartbeat event prompts", () => {
 
   it.each([
     {
-      name: "builds user-relay exec prompt by default",
+      name: "makes exec follow-ups conditional on new user-relevant information",
       events: ["Exec finished (node=abc id=123, code 0)\nUploaded file"],
       opts: undefined,
       expected: [
         "Exec finished",
         "Uploaded file",
-        "Please relay the command output to the user",
-        "If it failed",
+        "requested result not yet delivered",
+        "continue any outstanding authorized work",
+        "routine output, duplicate or superseded results",
+        "failures already recovered from",
+        "reply NO_REPLY only",
       ],
-      unexpected: ["system messages above", "Handle the result internally", "[truncated]"],
+      unexpected: ["system messages above", "Please relay the command output", "[truncated]"],
     },
     {
       name: "builds internal-only exec prompt when delivery is disabled",
@@ -85,15 +89,43 @@ describe("heartbeat event prompts", () => {
       unexpected: ["Please relay the command output to the user", "abc12345"],
     },
     {
-      name: "reports metadata-only failed exec completions without asking for logs",
+      name: "applies relevance guidance to failures without captured logs",
       events: ["Exec failed (abc12345, code 1)"],
       opts: undefined,
       expected: [
         "without captured stdout/stderr",
         "include the exit status or signal",
         "Do not ask the user to provide missing logs",
+        "Notify the user only",
+        "failures already recovered from",
+        "reply NO_REPLY only",
       ],
       unexpected: ["Please relay the command output to the user"],
+    },
+    {
+      name: "keeps timeout retry guidance when the command printed nothing",
+      events: [
+        appendExecTimeoutRetryGuidance("Exec failed (abc12345, signal SIGTERM)", "overall-timeout"),
+      ],
+      opts: undefined,
+      expected: [
+        "Exec failed (abc12345, signal SIGTERM) without captured stdout/stderr.",
+        "Verify the resulting state before retrying",
+        "include the exit status or signal",
+      ],
+      unexpected: ["no command output was found"],
+    },
+    {
+      name: "keeps timeout retry guidance after captured output",
+      events: [
+        appendExecTimeoutRetryGuidance(
+          "Exec failed (abc12345, signal SIGTERM) :: partial output",
+          "overall-timeout",
+        ),
+      ],
+      opts: undefined,
+      expected: ["partial output", "Verify the resulting state before retrying"],
+      unexpected: ["without captured stdout/stderr"],
     },
   ])("$name", ({ events, opts, expected, unexpected }) => {
     const prompt = buildExecEventPrompt(events, opts);
@@ -103,6 +135,20 @@ describe("heartbeat event prompts", () => {
     for (const part of unexpected) {
       expect(prompt).not.toContain(part);
     }
+  });
+
+  it.each([
+    "Exec completed (report-job, code 0) :: Report ready",
+    "Exec failed (report-job, code 1)",
+  ])("uses the response tool for a nonempty completion: %s", (event) => {
+    const prompt = buildExecEventPrompt([event], { useHeartbeatResponseTool: true });
+
+    expect(prompt).toContain("requested result not yet delivered");
+    expect(prompt).toContain("heartbeat_respond");
+    expect(prompt).toContain("notify=false");
+    expect(prompt).toContain("notify=true with notificationText");
+    expect(prompt).not.toContain("reply NO_REPLY only");
+    expect(prompt).not.toContain("Please relay the command output");
   });
 
   it("uses heartbeat_respond for empty cron events in response-tool mode", () => {
@@ -128,6 +174,18 @@ describe("heartbeat event classification", () => {
     { value: "Exec Finished (node=abc, code 1)", expected: true },
     { value: "Exec completed (rotate api keys)", expected: false },
     { value: "Exec failed: notify me if this happens", expected: false },
+    {
+      value: "Exec failed (abc12345, signal SIGTERM)\n\nRemind me to retry tomorrow.",
+      expected: false,
+    },
+    {
+      value:
+        appendExecTimeoutRetryGuidance(
+          "Exec failed (abc12345, signal SIGTERM)",
+          "overall-timeout",
+        ) + "\n\nRemind me to retry tomorrow.",
+      expected: false,
+    },
   ])("classifies exec completion events for %j", ({ value, expected }) => {
     expect(isExecCompletionEvent(value)).toBe(expected);
   });
@@ -170,6 +228,18 @@ describe("isExecCompletionEvent", () => {
     expect(isExecCompletionEvent("Exec completed (abc12345, code 0)")).toBe(true);
   });
 
+  it.each(["overall-timeout", "no-output-timeout"] as const)(
+    "matches %s completions that carry retry guidance without output",
+    (reason) => {
+      const event = appendExecTimeoutRetryGuidance(
+        "Exec failed (calm-del, signal SIGKILL)",
+        reason,
+      );
+      expect(isExecCompletionEvent(event)).toBe(true);
+      expect(isRelayableExecCompletionEvent(event)).toBe(true);
+    },
+  );
+
   it("is case-insensitive", () => {
     expect(isExecCompletionEvent("EXEC COMPLETED (abc12345, code 0)")).toBe(true);
     expect(isExecCompletionEvent("exec failed (abc12345, code 2)")).toBe(true);
@@ -200,6 +270,7 @@ describe("buildExecEventPrompt truncation", () => {
 
     expect(result).toContain(`${safePrefix}\n\n[truncated]`);
     expect(result).not.toContain("🚀tail");
-    expect(result.length).toBeLessThan(8_500);
+    const promptOverhead = buildExecEventPrompt(["x"]).length - 1;
+    expect(result.length).toBe(safePrefix.length + "\n\n[truncated]".length + promptOverhead);
   });
 });

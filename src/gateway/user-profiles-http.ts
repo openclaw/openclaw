@@ -8,6 +8,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveHostAccountAvatar } from "../infra/host-account-avatar.js";
+import { LruCache } from "../infra/lru-cache.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { createProfileAvatarReader } from "../state/user-profiles-avatar.js";
@@ -80,17 +81,11 @@ type GravatarHit = {
 type GravatarResult = GravatarHit | { kind: "miss" } | { kind: "error" };
 type CachedGravatarResult = Exclude<GravatarResult, { kind: "error" }> & { expiresAtMs: number };
 
-const gravatarCache = new Map<string, CachedGravatarResult>();
+const gravatarCache = new LruCache<CachedGravatarResult>(GRAVATAR_CACHE_MAX_ENTRIES, {
+  maxBytes: GRAVATAR_CACHE_MAX_BYTES,
+  sizeOf: (result) => (result.kind === "hit" ? result.bytes.byteLength : 0),
+});
 const gravatarRequests = new Map<string, Promise<GravatarResult>>();
-let gravatarCacheBytes = 0;
-
-function deleteCachedGravatar(hash: string): void {
-  const cached = gravatarCache.get(hash);
-  if (cached?.kind === "hit") {
-    gravatarCacheBytes -= cached.bytes.byteLength;
-  }
-  gravatarCache.delete(hash);
-}
 
 function hashEmail(email: string): string {
   return createHash("sha256").update(email.trim().toLowerCase()).digest("hex");
@@ -102,14 +97,8 @@ function getCachedGravatar(hash: string, nowMs: number): GravatarResult | undefi
     return undefined;
   }
   if (cached.expiresAtMs <= nowMs) {
-    deleteCachedGravatar(hash);
+    gravatarCache.delete(hash);
     return undefined;
-  }
-  // Map insertion order is the LRU order. Promote on every hit.
-  deleteCachedGravatar(hash);
-  gravatarCache.set(hash, cached);
-  if (cached.kind === "hit") {
-    gravatarCacheBytes += cached.bytes.byteLength;
   }
   return cached.kind === "hit"
     ? { kind: "hit", bytes: cached.bytes, mime: cached.mime, etag: cached.etag }
@@ -122,22 +111,7 @@ function cacheGravatar(
   nowMs: number,
 ) {
   const ttlMs = result.kind === "hit" ? GRAVATAR_HIT_TTL_MS : GRAVATAR_MISS_TTL_MS;
-  deleteCachedGravatar(hash);
-  const cached = { ...result, expiresAtMs: nowMs + ttlMs } satisfies CachedGravatarResult;
-  gravatarCache.set(hash, cached);
-  if (cached.kind === "hit") {
-    gravatarCacheBytes += cached.bytes.byteLength;
-  }
-  while (
-    gravatarCache.size > GRAVATAR_CACHE_MAX_ENTRIES ||
-    gravatarCacheBytes > GRAVATAR_CACHE_MAX_BYTES
-  ) {
-    const oldest = gravatarCache.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    deleteCachedGravatar(oldest);
-  }
+  gravatarCache.set(hash, { ...result, expiresAtMs: nowMs + ttlMs });
 }
 
 function normalizeContentType(value: string | null): string {
@@ -410,7 +384,10 @@ export async function handleUserProfileAvatarHttpRequest(
         sendAvatar(req, res, { ...result, byteLength: result.bytes.byteLength });
         return true;
       }
-      transientFailure ||= result.kind === "error";
+      if (result.kind === "error") {
+        transientFailure = true;
+        break;
+      }
     }
   } catch (error) {
     if (!waiterSignal.aborted) {

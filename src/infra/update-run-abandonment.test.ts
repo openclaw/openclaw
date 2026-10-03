@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UPDATE_RUN_DRIVER_LIMIT } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createUpdateCommandExecutionGuards } from "../cli/update-cli/update-command-execution-guards.js";
 import { createUpdateRunProgress } from "../cli/update-cli/update-command-run.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as pidAlive from "../shared/pid-alive.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createRetainedUpdateRecovery } from "./update-retained-recovery.test-support.js";
 import { inspectUpdateRunAbandonment } from "./update-run-activity.js";
 import { readUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
@@ -49,10 +50,10 @@ beforeEach(() => {
   vi.setSystemTime(new Date("2026-09-07T12:00:00Z"));
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
   vi.restoreAllMocks();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   tempDirs.cleanup();
 });
 
@@ -267,17 +268,24 @@ describe("abandoned update runs", () => {
   it("keeps a command running after heartbeat errors and warns once across its steps", async () => {
     const options = isolatedOptions();
     const run = adoptUpdateRun(createUpdateRun({ trigger: "cli" }, options).runId, options);
-    const progress = createUpdateRunProgress({ runId: run.runId, env: options.env }, {});
+    const progressRun = { runId: run.runId, env: options.env };
+    const guards = createUpdateCommandExecutionGuards(
+      { run: progressRun },
+      options.env.OPENCLAW_STATE_DIR,
+    );
+    const progress = createUpdateRunProgress(progressRun, {}, guards.recordStep);
     progress.onHeartbeat = vi.fn(() => {
       throw new Error("SQLITE_BUSY: database is locked");
     });
     const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
     for (const name of ["install", "build"]) {
       const command = createDeferredCore<Awaited<ReturnType<CommandRunner>>>();
+      const started = createDeferredCore();
       const aborted = vi.fn(() => command.reject(new Error("command aborted")));
       const pending = runStep({
         runCommand: (_argv, input) => {
           input.signal?.addEventListener("abort", aborted);
+          started.resolve();
           return command.promise;
         },
         name,
@@ -289,6 +297,7 @@ describe("abandoned update runs", () => {
         totalSteps: 2,
       });
       const settled = pending.catch((error: unknown) => error);
+      await Promise.race([started.promise, pending]);
       await vi.advanceTimersByTimeAsync(UPDATE_RUN_HEARTBEAT_MS * 2);
       expect(aborted).not.toHaveBeenCalled();
       command.resolve({ stdout: "", stderr: "", code: 0 });
@@ -718,11 +727,20 @@ describe("abandoned update runs", () => {
       const options = isolatedOptions();
       const created = createUpdateRun({ trigger: "cli" }, options);
       const run = adoptUpdateRun(created.runId, options);
-      const progress = createUpdateRunProgress({ runId: run.runId, env: options.env }, {});
+      const progressRun = { runId: run.runId, env: options.env };
+      const guards = createUpdateCommandExecutionGuards(
+        { run: progressRun },
+        options.env.OPENCLAW_STATE_DIR,
+      );
+      const progress = createUpdateRunProgress(progressRun, {}, guards.recordStep);
       const command = createDeferredCore<Awaited<ReturnType<CommandRunner>>>();
       const heartbeat = vi.spyOn(progress, "onHeartbeat");
+      const started = createDeferredCore();
       const pending = runStep({
-        runCommand: () => command.promise,
+        runCommand: () => {
+          started.resolve();
+          return command.promise;
+        },
         name: "build",
         argv: ["pnpm", "build"],
         cwd: options.env.OPENCLAW_STATE_DIR,
@@ -734,10 +752,17 @@ describe("abandoned update runs", () => {
       const settled = fails
         ? expect(pending).rejects.toThrow("build interrupted")
         : expect(pending).resolves.toMatchObject({ exitCode: 0 });
+      await Promise.race([started.promise, pending]);
+      const admitted = getUpdateRun(run.runId, options);
+      if (!admitted) {
+        throw new Error("Started command has no admitted progress receipt");
+      }
+      // The worker uses its own clock; age the step from its committed admission.
+      vi.setSystemTime(admitted.updatedAtMs);
       await vi.advanceTimersByTimeAsync(ABANDONED_UPDATE_RUN_MS + UPDATE_RUN_HEARTBEAT_MS);
 
       const active = getUpdateRun(run.runId, options);
-      expect(active?.updatedAtMs).toBeGreaterThan(run.updatedAtMs + ABANDONED_UPDATE_RUN_MS);
+      expect(active?.updatedAtMs).toBeGreaterThan(admitted.updatedAtMs + ABANDONED_UPDATE_RUN_MS);
       expect(active?.steps).toContainEqual(
         expect.objectContaining({ step: "build", status: "in_progress" }),
       );

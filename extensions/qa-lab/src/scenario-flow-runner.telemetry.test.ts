@@ -183,36 +183,55 @@ async function runTaskEvidence(codeMode: boolean, fault?: Fault, tiedSerial = fa
   });
 }
 
-describe("task telemetry evidence", () => {
-  it.each([false, true])(
-    "accepts ordered correlated task work with codeMode=%s",
-    async (codeMode) => {
-      await expect(runTaskEvidence(codeMode)).resolves.toMatchObject({ status: "pass" });
-    },
-  );
-
-  it.each([false, true])("accepts tied serial task work with codeMode=%s", async (codeMode) => {
-    await expect(runTaskEvidence(codeMode, undefined, true)).resolves.toMatchObject({
+describe.each([false, true])("task telemetry evidence with codeMode=%s", (codeMode) => {
+  it.each([false, true])("accepts correlated serial task work with tied=%s", async (tied) => {
+    await expect(runTaskEvidence(codeMode, undefined, tied)).resolves.toMatchObject({
       status: "pass",
     });
   });
 
-  describe.each([false, true])("invalid evidence with codeMode=%s", (codeMode) => {
-    it.each<Fault>([
-      "missing-read",
-      "missing-write",
-      "reordered",
-      "unmatched",
-      "failed",
-      "fake",
-      "parallel",
-      "tied-parallel",
-      "early-result",
-      "early-artifact",
-      "overclaim",
-      "repeat-write",
-    ])("rejects %s despite a plausible start trace and artifact", async (fault) => {
-      await expect(runTaskEvidence(codeMode, fault)).rejects.toThrow(/task|artifact|claim/);
-    });
+  // Common task assertions need one mode; correlation and ordering use both adapters.
+  const faults: Fault[] = codeMode
+    ? ["unmatched", "failed", "parallel", "tied-parallel"]
+    : [
+        "missing-read",
+        "missing-write",
+        "reordered",
+        "unmatched",
+        "failed",
+        "fake",
+        "parallel",
+        "tied-parallel",
+        "early-result",
+        "early-artifact",
+        "overclaim",
+        "repeat-write",
+      ];
+  it.each(faults)("rejects %s despite a plausible start trace and artifact", async (fault) => {
+    const result = runTaskEvidence(codeMode, fault);
+    await expect(result).rejects.toThrow(/task|artifact|claim/);
+    if (fault === "parallel" || fault === "tied-parallel") {
+      const error = await result.catch((failure: unknown) => failure);
+      expect(error).toBeInstanceOf(Error);
+      const message = String(error);
+      expect(message).toContain('{"inbound":');
+      const evidence = JSON.parse(message.slice(message.indexOf('{"inbound":')));
+      expect(evidence).toEqual({
+        inbound: expect.any(Number),
+        outbound: expect.any(Number),
+        logical: ["read", "read", "write"].map((toolName) => ({
+          toolName,
+          startedAt: expect.any(Number),
+          timestamp: expect.any(Number),
+          startAfterIndex: expect.any(Number),
+          resultIndex: expect.any(Number),
+          completed: true,
+          successful: true,
+        })),
+      });
+      expect(message).not.toContain(paths.ledger);
+      expect(message).not.toContain(paths.note);
+      expect(message).not.toContain(paths.artifact);
+    }
   });
 });

@@ -11,7 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, type SecretInput } from "../config/types.secrets.js";
 import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
-import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
+import { discoverAuthStorageFacts, discoverModels } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
@@ -125,14 +125,6 @@ const describeLive = LIVE ? describe : describe.skip;
 
 function parseCsvFilter(raw?: string): Set<string> | null {
   return parseLiveCsvFilter(raw, { lowercase: false });
-}
-
-function parseProviderFilter(raw?: string): Set<string> | null {
-  return parseCsvFilter(raw);
-}
-
-function parseModelFilter(raw?: string): Set<string> | null {
-  return parseCsvFilter(raw);
 }
 
 function parseExplicitLiveModelRefs(
@@ -707,9 +699,7 @@ describe("resolveLiveModelsJsonTimeoutMs", () => {
 
 describe("explicit live model discovery scope", () => {
   it("derives provider ids from explicit model refs", () => {
-    const filter = parseModelFilter(
-      "zai/glm-5.1, together/Qwen/Qwen2.5-7B-Instruct-Turbo, glm-5.1",
-    );
+    const filter = parseCsvFilter("zai/glm-5.1, together/Qwen/Qwen2.5-7B-Instruct-Turbo, glm-5.1");
     const explicitRefs = parseExplicitLiveModelRefs(filter);
 
     expect(explicitRefs).toEqual([
@@ -725,11 +715,11 @@ describe("explicit live model discovery scope", () => {
   });
 
   it("merges explicit model providers with OPENCLAW_LIVE_PROVIDERS", () => {
-    const explicitRefs = parseExplicitLiveModelRefs(parseModelFilter("zai/glm-5.1"));
+    const explicitRefs = parseExplicitLiveModelRefs(parseCsvFilter("zai/glm-5.1"));
 
     expect(
       resolveLiveProviderDiscoveryProviderIds({
-        providerFilter: parseProviderFilter("deepseek,together"),
+        providerFilter: parseCsvFilter("deepseek,together"),
         explicitRefs,
       }),
     ).toEqual(["deepseek", "together", "zai"]);
@@ -749,7 +739,7 @@ describe("explicit live model discovery scope", () => {
     expect(
       filterLiveModelRefsByProvider(
         listPrioritizedSmallLiveModelRefs(),
-        parseProviderFilter("openrouter"),
+        parseCsvFilter("openrouter"),
       ).map((ref) => ref.provider),
     ).toEqual(["openrouter", "openrouter", "openrouter"]);
   });
@@ -811,8 +801,8 @@ describe("explicit live model discovery scope", () => {
     expect(result.plugins?.entries?.ollama).toEqual({ enabled: true });
     expect(result.models?.providers?.ollama).toEqual({
       api: "ollama",
-      baseUrl: OLLAMA_DEFAULT_BASE_URL,
-      apiKey: OLLAMA_LOCAL_API_KEY_MARKER,
+      baseUrl: "http://127.0.0.1:11434",
+      apiKey: "ollama-local",
       models: [],
     });
   });
@@ -1594,9 +1584,9 @@ describeLive("live models (profile keys)", () => {
       const useModern = rawModels === "modern" || rawModels === "all";
       const useSmall = rawModels === "small";
       const useExplicit = Boolean(rawModels) && !useModern && !useSmall;
-      const filter = useExplicit ? parseModelFilter(rawModels) : null;
+      const filter = useExplicit ? parseCsvFilter(rawModels) : null;
       const explicitRefs = useExplicit ? parseExplicitLiveModelRefs(filter) : [];
-      const providers = parseProviderFilter(process.env.OPENCLAW_LIVE_PROVIDERS);
+      const providers = parseCsvFilter(process.env.OPENCLAW_LIVE_PROVIDERS);
       const priorityRefs = useSmall
         ? filterLiveModelRefsByProvider(listPrioritizedSmallLiveModelRefs(), providers)
         : [];
@@ -1652,12 +1642,15 @@ describeLive("live models (profile keys)", () => {
           logProgress("[live-models] loading configured small model refs");
         }
         logProgress("[live-models] loading auth storage");
-        const authStorage = await withLiveStageTimeout(
+        const { authStorage } = await withLiveStageTimeout(
           Promise.resolve().then(() =>
-            discoverAuthStorage(agentDir, {
+            discoverAuthStorageFacts(agentDir, {
               config: cfg,
               env: process.env,
-              externalCli: externalCliDiscoveryForProviders({ cfg, providers: providerList ?? [] }),
+              externalCli: externalCliDiscoveryForProviders({
+                cfg,
+                providers: providerList ?? [],
+              }),
               ...(providerList
                 ? {
                     skipExternalAuthProfiles: true,

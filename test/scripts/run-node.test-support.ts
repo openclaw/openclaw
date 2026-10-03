@@ -5,13 +5,13 @@ import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expect, it as baseIt, vi } from "vitest";
+import { copyBundledPluginMetadata } from "../../scripts/copy-bundled-plugin-metadata.mts";
 import {
   bundledDistPluginFile,
   bundledPluginFile,
   bundledPluginRoot,
-} from "openclaw/plugin-sdk/test-fixtures";
-import { expect, it as baseIt, vi } from "vitest";
-import { copyBundledPluginMetadata } from "../../scripts/copy-bundled-plugin-metadata.mts";
+} from "../../scripts/lib/bundled-plugin-paths.mjs";
 import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
@@ -440,7 +440,13 @@ export async function runNodeCommand(
     cwd: tmp,
     args: ["status"],
     ...overrides,
-    env: { ...process.env, OPENCLAW_RUNNER_LOG: "0", ...env },
+    // Each fixture selects its CLI runtime independently of the Vitest worker.
+    env: {
+      ...process.env,
+      OPENCLAW_RUNNER_LOG: "0",
+      OPENCLAW_VITEST_RUNTIME: undefined,
+      ...env,
+    },
     execPath: process.execPath,
     platform: options.platform ?? process.platform,
   } as RunNodeTestOptions);

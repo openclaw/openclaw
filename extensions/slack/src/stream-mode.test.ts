@@ -17,38 +17,15 @@ describe("resolveSlackStreamingConfig", () => {
     });
   });
 
-  it("maps legacy streamMode values to unified streaming modes", () => {
-    expect(resolveSlackStreamingConfig({ streamMode: "append" })).toEqual({
-      mode: "block",
-      nativeStreaming: true,
-    });
-    expect(resolveSlackStreamingConfig({ streamMode: "status_final" })).toEqual({
-      mode: "progress",
-      nativeStreaming: true,
-    });
-  });
-
-  it("maps legacy streaming booleans to unified mode and native streaming toggle", () => {
-    expect(resolveSlackStreamingConfig({ streaming: false })).toEqual({
-      mode: "off",
-      nativeStreaming: false,
-    });
-    expect(resolveSlackStreamingConfig({ streaming: true })).toEqual({
-      mode: "partial",
-      nativeStreaming: true,
-    });
-  });
-
-  it("accepts unified enum values directly", () => {
-    expect(resolveSlackStreamingConfig({ streaming: "off" })).toEqual({
-      mode: "off",
-      nativeStreaming: true,
-    });
-    expect(resolveSlackStreamingConfig({ streaming: "progress" })).toEqual({
-      mode: "progress",
-      nativeStreaming: true,
-    });
-  });
+  it.each(["off", "partial", "block", "progress"] as const)(
+    "keeps %s mode independent of the native transport setting",
+    (mode) => {
+      expect(resolveSlackStreamingConfig({ streaming: { mode, nativeTransport: false } })).toEqual({
+        mode,
+        nativeStreaming: false,
+      });
+    },
+  );
 });
 
 describe("applyAppendOnlyStreamUpdate", () => {

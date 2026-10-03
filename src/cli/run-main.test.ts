@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import process from "node:process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -6,6 +7,7 @@ import {
   type PluginManifestCommandAliasRegistry,
 } from "../plugins/manifest-command-aliases.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
   resolveGatewayCatalogCommandPath,
   resolveGatewayRunPreBootstrapOptions,
@@ -66,6 +68,7 @@ vi.mock("../logging/console.js", async (importOriginal) => ({
 
 describe("CLI host admission and Gateway fast-path parsing", () => {
   const previousExitCode = process.exitCode;
+  const pathEnv = captureEnv(["PATH", "OPENCLAW_PATH_BOOTSTRAPPED"]);
   beforeEach(() => {
     process.exitCode = undefined;
     runGatewayCommand.mockClear();
@@ -74,6 +77,7 @@ describe("CLI host admission and Gateway fast-path parsing", () => {
     vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   });
   afterEach(() => {
+    pathEnv.restore();
     process.exitCode = previousExitCode;
     vi.restoreAllMocks();
   });

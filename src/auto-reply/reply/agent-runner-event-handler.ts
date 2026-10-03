@@ -1,4 +1,5 @@
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
@@ -12,7 +13,6 @@ import {
   createCompactionHookNoticePayload,
   createCompactionNoticePayload,
   formatCompactionModelRef,
-  readCompactionHookMessages,
 } from "./compaction-notice.js";
 
 const agentCompactionLog = createSubsystemLogger("auto-reply/compaction");
@@ -220,7 +220,7 @@ export function createAgentRunEventHandler(params: {
 
     const phase = readStringValue(evt.data.phase) ?? "";
     const backend = readStringValue(evt.data.backend);
-    const hookMessages = readCompactionHookMessages(evt.data.messages);
+    const hookMessages = normalizeTrimmedStringList(evt.data.messages);
     const sendCompactionUserNotices = async (noticePhase: "start" | "end" | "incomplete") => {
       if (hookMessages.length > 0) {
         const noticePayload = createCompactionHookNoticePayload({

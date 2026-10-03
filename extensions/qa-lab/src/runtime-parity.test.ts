@@ -1,16 +1,11 @@
 // Qa Lab tests cover runtime parity classification behavior.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
-  appendSqliteTrajectoryRuntimeEvents,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
-  formatSqliteSessionFileMarker,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stableHash } from "./parity-shared.js";
@@ -23,9 +18,11 @@ import {
   type RuntimeParityCell,
   type RuntimeParityToolCall,
 } from "./runtime-parity.js";
-import { createTempDirHarness } from "./temp-dir.test-helper.js";
+import { createRuntimeParityTranscriptHarness } from "./runtime-parity.test-helper.js";
+import { readQaScenarioFile } from "./scenario-catalog.js";
+import { buildQaToolCoverageReport } from "./tool-coverage-report.js";
 
-const tempDirs = createTempDirHarness();
+const { seedRuntimeParityTranscript, cleanup } = createRuntimeParityTranscriptHarness();
 
 afterEach(async () => {
   vi.unstubAllGlobals();
@@ -35,73 +32,8 @@ afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
-  await tempDirs.cleanup();
+  await cleanup();
 });
-
-async function seedRuntimeParityTranscript(params: {
-  heartbeatIsolatedBaseSessionKey?: string;
-  messages: Array<Record<string, unknown>>;
-  sessionId: string;
-  sessionKey: string;
-  tempRoot?: string;
-  trajectoryEvents?: Array<{
-    data?: Record<string, unknown>;
-    type: string;
-  }>;
-  updatedAt?: number;
-}) {
-  const tempRoot = params.tempRoot ?? (await tempDirs.makeTempDir("openclaw-qa-runtime-parity-"));
-  const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(tempRoot, "state") };
-  const storePath = resolveStorePath(undefined, { agentId: "qa", env });
-  await upsertSessionEntry({
-    agentId: "qa",
-    env,
-    sessionKey: params.sessionKey,
-    storePath,
-    entry: {
-      sessionId: params.sessionId,
-      sessionFile: formatSqliteSessionFileMarker({
-        agentId: "qa",
-        sessionId: params.sessionId,
-        storePath,
-      }),
-      updatedAt: params.updatedAt ?? 100,
-      ...(params.heartbeatIsolatedBaseSessionKey
-        ? { heartbeatIsolatedBaseSessionKey: params.heartbeatIsolatedBaseSessionKey }
-        : {}),
-    },
-  });
-  for (const [index, message] of params.messages.entries()) {
-    await appendSessionTranscriptMessageByIdentity({
-      agentId: "qa",
-      env,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      storePath,
-      now: index + 1,
-      message: message as never,
-    });
-  }
-  if (params.trajectoryEvents?.length) {
-    appendSqliteTrajectoryRuntimeEvents(
-      { agentId: "qa", env, sessionId: params.sessionId, storePath },
-      params.trajectoryEvents.map((event, index) => ({
-        traceSchema: "openclaw-trajectory",
-        schemaVersion: 1,
-        traceId: params.sessionId,
-        source: "runtime",
-        type: event.type,
-        ts: new Date(index + 1).toISOString(),
-        seq: index + 1,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        runId: "run-1",
-        data: event.data,
-      })),
-    );
-  }
-  return tempRoot;
-}
 
 async function captureRuntimeParityWithMockRequests(params: {
   messages?: Array<Record<string, unknown>>;
@@ -262,6 +194,17 @@ describe("runtime parity", () => {
           toolName: "image_generate",
           content: [{ type: "text", text: "Image generation started" }],
         },
+        {
+          role: "assistant",
+          content: [
+            "  plain  ",
+            { type: "output_text", content: "nested" },
+            { type: "message", content: "message" },
+            { type: "unknown", text: " priority ", content: "ignored" },
+            { type: "toolResult", content: "ignored tool result" },
+            { type: "Output_Text", content: "ignored normalized type" },
+          ],
+        },
       ],
     });
 
@@ -276,7 +219,97 @@ describe("runtime parity", () => {
     expect(cell.toolCalls).toHaveLength(1);
     expect(cell.toolCalls[0]).toMatchObject({ tool: "image_generate" });
     expect(cell.toolCalls[0]?.errorClass).toBeUndefined();
+    expect(cell.finalText).toBe("plain nested message priority");
   });
+
+  it.each(["toolResult", "tool_result"] as const)(
+    "counts successful %s reads containing failure prose in tool coverage",
+    async (format) => {
+      const results = [
+        {
+          id: "read-happy",
+          args: { path: "QA_KICKOFF_TASK.md" },
+          text: "Track what worked, what failed, what was blocked, and what you observed.",
+          isError: false,
+        },
+        {
+          id: "read-denied",
+          args: { __qaFailureMode: "denied-input" },
+          text: 'Validation failed for tool "read":\n  - path: must have required properties path',
+          isError: true,
+        },
+        { id: "read-typed-error", args: {}, text: "Unavailable", isError: true },
+        { id: "read-untyped-error", args: {}, text: "ENOENT: missing file" },
+        ...(format === "tool_result"
+          ? [{ id: "read-error-block", args: {}, text: "Unavailable", isError: false }]
+          : []),
+      ];
+      const tempRoot = await seedRuntimeParityTranscript({
+        sessionId: "read-tool-coverage",
+        sessionKey: "agent:qa:read-tool-coverage",
+        messages: results.flatMap(({ id, args, text, isError }) => [
+          {
+            role: "assistant",
+            content: [{ type: "toolCall", id, name: "read", arguments: args }],
+          },
+          format === "toolResult"
+            ? {
+                role: "toolResult",
+                toolCallId: id,
+                toolName: "read",
+                content: [{ type: "text", text }],
+                ...(isError === undefined ? {} : { isError }),
+              }
+            : {
+                role: "user",
+                content: [
+                  {
+                    type: id === "read-error-block" ? "tool_result_error" : "tool_result",
+                    tool_use_id: id,
+                    content: [{ type: "text", text }],
+                    ...(isError === undefined ? {} : { is_error: isError }),
+                  },
+                ],
+              },
+        ]),
+      });
+      const openclaw = await captureRuntimeParityCell({
+        runtime: "openclaw",
+        gateway: { tempRoot },
+        scenarioResult: { status: "pass" },
+        wallClockMs: 10,
+      });
+      const scenario = readQaScenarioFile("qa/scenarios/runtime/tools/fs-read.yaml");
+      const runtimeParity = await runRuntimeParityScenario({
+        scenarioId: scenario.id,
+        runCell: async (runtime) => ({
+          status: "pass",
+          cell:
+            runtime === "openclaw"
+              ? openclaw
+              : makeRuntimeParityCell("codex", [
+                  { tool: "bash", argsHash: "native-read", resultHash: "file-contents" },
+                ]),
+        }),
+      });
+      const report = buildQaToolCoverageReport({
+        scenarios: [scenario],
+        summary: { scenarios: [{ name: scenario.id, status: "pass", runtimeParity }] },
+      });
+
+      expect(report.pass).toBe(true);
+      expect(report.failures).toEqual([]);
+      expect(report.rows[0]).toMatchObject({
+        tool: "fs.read",
+        openclawToolCalls: results.length,
+        openclawSuccessfulToolCalls: 1,
+      });
+      expect(openclaw.toolCalls.map((call) => call.errorClass)).toEqual([
+        undefined,
+        ...results.slice(1).map(() => "tool-result-error"),
+      ]);
+    },
+  );
 
   it("captures native tool execution from the canonical SQLite trajectory", async () => {
     const cell = await captureRuntimeParityWithMockRequests({

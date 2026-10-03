@@ -1,5 +1,7 @@
 import "./sessions-spawn-tool.mocks.test-support.js";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSubagentRunRecord } from "../subagent-test-fixtures.test-helpers.js";
+import { countActiveRunsForSessionFromRuns } from "../subagents/registry/subagent-registry-queries.js";
 import {
   expectRegisteredSubagentRun,
   supportedSpawnModelChoice,
@@ -16,6 +18,49 @@ describe("sessions_spawn visible work receipts", () => {
   beforeEach(() => {
     hoisted.prepareModelChoiceMock.mockReset().mockImplementation(supportedSpawnModelChoice);
     hoisted.inProcessCreationMock.mockReset();
+  });
+
+  it("keeps visible child quotas separate for agents sharing a bare requester key", async () => {
+    hoisted.prepareModelChoiceMock.mockResolvedValue({
+      kind: "automatic",
+      ref: { provider: "mock-provider", model: "primary" },
+    });
+    const otherAgentRun = createSubagentRunRecord({
+      runId: "other-agent-run",
+      childSessionKey: "agent:other:subagent:child",
+      requesterSessionKey: "global",
+      requesterAgentId: "other",
+      createdAt: Date.now(),
+    });
+    const runs = new Map([[otherAgentRun.runId, otherAgentRun]]);
+    hoisted.inProcessCreationMock.mockResolvedValue({
+      key: "agent:main:dashboard:quota-child",
+      runStarted: true,
+      runId: "quota-child-run",
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "global",
+      requesterAgentIdOverride: "main",
+      config: {
+        session: { scope: "global" },
+        agents: {
+          defaults: {
+            model: "mock-provider/primary",
+            subagents: { maxChildrenPerAgent: 1 },
+          },
+          entries: { main: {}, other: {} },
+        },
+      },
+      registerRun: vi.fn(),
+      countActiveRuns: (key, options) => countActiveRunsForSessionFromRuns(runs, key, options),
+    });
+
+    const result = await tool.execute("visible-bare-key-quota", {
+      task: "inspect the repository",
+      visible: true,
+    });
+
+    expect(result.details).toMatchObject({ status: "accepted", runId: "quota-child-run" });
   });
 
   it("creates visible sessions while carrying inherited tool restrictions forward", async () => {
@@ -66,6 +111,7 @@ describe("sessions_spawn visible work receipts", () => {
         via: "spawn",
         actor: { type: "agent", id: "main" },
         requesterSessionKey: "agent:main:main",
+        requesterSenderIsOwner: false,
         completionOwnerSessionKey: "agent:main:main",
         spawnModelAutoSelection: { model: "mock-provider/primary", hasFallbackOrigin: false },
         inheritedToolPolicy: {

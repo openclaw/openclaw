@@ -14,11 +14,12 @@ import {
   waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type {
-  GeneratedVideoAsset,
-  VideoGenerationProvider,
-  VideoGenerationRequest,
-  VideoGenerationSourceAsset,
+import {
+  selectSupportedVideoDuration,
+  type GeneratedVideoAsset,
+  type VideoGenerationProvider,
+  type VideoGenerationRequest,
+  type VideoGenerationSourceAsset,
 } from "openclaw/plugin-sdk/video-generation";
 import { resolveOpenRouterGenerationRequestContext } from "./generation-request-context.js";
 import {
@@ -181,17 +182,7 @@ function resolveDurationSeconds(
   if (durationSeconds === rounded && effectiveDurations.includes(rounded)) {
     return rounded;
   }
-  return effectiveDurations.reduce((best, current) => {
-    const currentDistance = Math.abs(current - rounded);
-    const bestDistance = Math.abs(best - rounded);
-    if (currentDistance < bestDistance) {
-      return current;
-    }
-    if (currentDistance === bestDistance && current > best) {
-      return current;
-    }
-    return best;
-  });
+  return selectSupportedVideoDuration(rounded, effectiveDurations);
 }
 
 function resolveSeed(seed: unknown): number | undefined {
@@ -319,12 +310,8 @@ function resolveDeliverableOpenRouterVideoUrl(value: string | undefined): string
   if (!normalized) {
     return undefined;
   }
-  try {
-    const url = new URL(normalized);
-    return url.protocol === "https:" || url.protocol === "http:" ? normalized : undefined;
-  } catch {
-    return undefined;
-  }
+  const url = URL.parse(normalized);
+  return url?.protocol === "https:" || url?.protocol === "http:" ? normalized : undefined;
 }
 
 async function downloadOpenRouterVideo(params: {

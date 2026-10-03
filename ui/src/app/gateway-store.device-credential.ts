@@ -1,3 +1,4 @@
+import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { CONTROL_UI_OPERATOR_ROLE } from "../api/gateway.ts";
 import { retireStoredGoalOperations } from "../lib/chat/goal-operation-storage.ts";
 import {
@@ -5,6 +6,7 @@ import {
   loadDeviceAuthToken,
   peekStoredDeviceIdentityId,
 } from "../lib/nodes/index.ts";
+import { clearBootRecords } from "./boot-record.ts";
 import type { ApplicationGateway, ApplicationGatewayConnectOptions } from "./gateway.ts";
 import { persistSessionToken } from "./settings.ts";
 
@@ -13,6 +15,7 @@ type DeviceCredentialHost = {
   gatewayUrl: () => string;
   connect: (overrides: ApplicationGatewayConnectOptions) => void;
   isStopped: () => boolean;
+  retireOfflineAccess: () => void;
 };
 
 export function createDeviceCredentialMethods(
@@ -38,6 +41,8 @@ export function createDeviceCredentialMethods(
         return false;
       }
       const gatewayUrl = host.gatewayUrl();
+      clearBootRecords(gatewayCredentialScope(gatewayUrl));
+      host.retireOfflineAccess();
       // Token-only reset: keep the browser device identity so the gateway can
       // mint a fresh token for the same device on the next pairing/login.
       clearDeviceAuthToken({

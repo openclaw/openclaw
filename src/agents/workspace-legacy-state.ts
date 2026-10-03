@@ -9,6 +9,7 @@ import { root } from "../infra/fs-safe.js";
 import { pathMayExistSync } from "../infra/path-existence.js";
 import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { formatDoctorStateRepairFailure } from "../infra/state-repair-message.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { resolveUserPath } from "../utils.js";
 import {
   resolveCanonicalWorkspacePath,
@@ -51,19 +52,14 @@ type LegacyWorkspaceResetPlan = {
 };
 
 function uniqueSiblingPaths(paths: readonly string[]): string[] {
-  const seen = new Set<string>();
-  return paths.filter((candidate) => {
+  return dedupeByKey(paths, (candidate) => {
     let key = path.resolve(candidate);
     try {
       key = path.join(fs.realpathSync.native(path.dirname(candidate)), path.basename(candidate));
     } catch {
       // Missing parents stay distinct lexical migration inputs.
     }
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
+    return key;
   });
 }
 

@@ -57,7 +57,7 @@ extension DashboardWindowOwnershipTests {
             self.completion(), target: .primary, sourceURL: sourceURL)
 
         // The failure is presented without a modal loop; read the pending alert directly.
-        #expect(manager._testPendingGatewayAlerts().map(\.messageText).contains(expectedTitle))
+        #expect(manager.alertPresenter._testPendingAlerts.map(\.messageText).contains(expectedTitle))
         print("\(probeKey)=ok")
     }
 
@@ -129,7 +129,7 @@ extension DashboardWindowOwnershipTests {
 
         // WebKit cancels the held successor, so the finished document survives and takes the queue.
         controller.webView.stopLoading()
-        try await DashboardTestWait.state("queued commands after successor cancellation") {
+        try await TestWait.state("queued commands after successor cancellation") {
             controller._testPendingNativeCommands.isEmpty
         }
         #expect(controller.canDeliverNativeCommands)
@@ -148,7 +148,7 @@ extension DashboardWindowOwnershipTests {
         controller.show(url: server.url(), auth: auth)
         try await self.waitForDashboard(controller, path: "/")
         controller.webView(controller.webView, didFail: nil, withError: URLError(.networkConnectionLost))
-        try await DashboardTestWait.state("failure page") {
+        try await TestWait.state("failure page") {
             !controller.webView.isLoading && controller.webView.url?.absoluteString == "about:blank"
         }
 
@@ -159,7 +159,7 @@ extension DashboardWindowOwnershipTests {
         controller.dispatchNativeCommand(.newSession)
         controller.webView(controller.webView, didFinish: nil)
         controller.webView.stopLoading()
-        try await DashboardTestWait.state("restore cancellation") {
+        try await TestWait.state("restore cancellation") {
             !controller.webView.isLoading && controller.webView.url?.absoluteString == "about:blank"
         }
         #expect(controller._testPendingNativeCommands == [.newSession])
@@ -386,7 +386,7 @@ extension DashboardWindowOwnershipTests {
             }
             await gate.waitUntilRequested()
             manager.openOrFocusDashboard(for: action == "other-open" ? .primary : target)
-            try await DashboardTestWait.state("manual notification window admission") {
+            try await TestWait.state("manual notification window admission") {
                 manager._testController() != nil || !manager._testAuxiliaryWindows().isEmpty
             }
             let opened = try #require(manager._testController() ?? manager._testAuxiliaryWindows().first?.controller)
@@ -461,7 +461,7 @@ extension DashboardWindowOwnershipTests {
                 throw error
             }
             await recoveryGate.release()
-            try await DashboardTestWait.state("notification gateway recovery") {
+            try await TestWait.state("notification gateway recovery") {
                 (window.windowController as? DashboardWindowController)?.pendingGatewaySwitch == nil
             }
             let restored = try #require(window.windowController as? DashboardWindowController)
@@ -563,7 +563,7 @@ extension DashboardWindowOwnershipTests {
             do {
                 try writeConfig(url: nextURL, token: nextToken)
                 manager.dispatchNativeCommand(.commandPalette)
-                try await DashboardTestWait.state("notification controller replacement") {
+                try await TestWait.state("notification controller replacement") {
                     manager._testController() !== original
                 }
                 replacement = try #require(manager._testController())
@@ -630,7 +630,7 @@ extension DashboardWindowOwnershipTests {
 
     private func waitForQueuedToggles(_ manager: DashboardManager) async throws -> DashboardWindowController {
         var reopened: DashboardWindowController?
-        try await DashboardTestWait.state("queued notification toggles") {
+        try await TestWait.state("queued notification toggles") {
             guard let controller = manager._testController(), controller.isWindowOpen,
                   let commands = try? await controller.webView.evaluateJavaScript("window.commandEvents") as? [String],
                   commands.filter({ $0 == "toggle" }).count == 2

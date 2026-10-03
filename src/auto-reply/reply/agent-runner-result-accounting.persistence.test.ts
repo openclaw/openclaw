@@ -19,6 +19,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   disposeOpenClawAgentDatabaseByPath,
   isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
@@ -55,13 +56,17 @@ let suiteRoot: string;
 let storePath: string;
 let fixtureSequence = 0;
 beforeAll(() => {
-  suiteRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-accounting-suite-"));
+  // openclaw-temp-dir: allow suite database root drains before removal
+  suiteRoot = fs.mkdtempSync(
+    path.join(fs.realpathSync.native(os.tmpdir()), "openclaw-accounting-suite-"),
+  );
   storePath = path.join(suiteRoot, "openclaw-agent.sqlite");
   openOpenClawAgentDatabase({ agentId: "main", path: storePath });
 });
 afterAll(async () => {
   await drainSessionStoreWriterQueuesForTest();
   disposeOpenClawAgentDatabaseByPath(storePath);
+  await closeOpenClawAgentDatabasesAsync(suiteRoot);
   expect(isOpenClawAgentDatabaseOpen(storePath)).toBe(false);
   fs.rmSync(suiteRoot, { recursive: true, force: true });
 });

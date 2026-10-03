@@ -467,7 +467,6 @@ export async function gatherDispatchRequest(
       });
     }));
   const hookRunner = getGlobalHookRunner();
-  // Extract message context for hooks (plugin and internal)
   const timestamp =
     typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined;
   const messageIdForHook =

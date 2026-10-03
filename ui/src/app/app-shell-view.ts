@@ -19,6 +19,7 @@ import {
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId, resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
+import type { ChatPaneBase } from "../pages/chat/chat-pane-base.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import { renderPluginSurface } from "../plugins/control-ui-view.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
@@ -89,6 +90,7 @@ export interface ShellViewHost
   refreshControlUi: () => Promise<boolean>;
   recoverNotFoundRoute: () => boolean;
   requestUpdate(): void;
+  querySelectorAll: ParentNode["querySelectorAll"];
   resizeNavigation(splitRatio: number): void;
   readonly toggleNavigationSurface: (trigger?: HTMLElement) => void;
 }
@@ -110,7 +112,14 @@ export function renderApplicationShell(host: ShellViewHost) {
   const navigationSnapshot = context.navigation.snapshot;
   const overlaySnapshot = context.overlays.snapshot;
   const controlUiRefreshRequired = overlaySnapshot.controlUiRefreshRequired;
-  const connectionStatus = resolveGatewayStatus(gatewaySnapshot, controlUiRefreshRequired);
+  const historyRecovering = [...host.querySelectorAll<ChatPaneBase>("openclaw-chat-pane")].some(
+    (pane) => pane.conversationPresented && pane.historyRecovering,
+  );
+  const connectionStatus = resolveGatewayStatus(
+    gatewaySnapshot,
+    controlUiRefreshRequired,
+    historyRecovering,
+  );
   const presentationScope = gatewayPresentationScope(context.gateway);
   // Initial hello can paint the shell before recovery finishes. Keep that brief
   // startup state in existing chrome rather than inserting and removing a row.

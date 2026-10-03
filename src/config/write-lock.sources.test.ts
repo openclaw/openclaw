@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import * as fileLocks from "../infra/file-lock.js";
+import * as fileLocks from "../plugin-sdk/file-lock.js";
 import {
   captureConfigWriteLockGuard,
   markActiveConfigMutationPath,

@@ -5,7 +5,6 @@ import { formatCommandExecResult, formatCommandExecText } from "./command-exec-r
 import { parseExportCommandOutputPath } from "./commands-export-common.js";
 import { buildCurrentOpenClawCliExecRequest } from "./commands-openclaw-cli.js";
 import {
-  buildPrivateCommandApprovalRequest,
   deliverPrivateCommandReply,
   resolveCommandExecApprovalRoute,
   resolvePrivateCommandRouteTargets,
@@ -45,17 +44,11 @@ export async function buildExportTrajectoryCommandReply(
     return { text: `❌ Failed to prepare trajectory export request: ${formatErrorMessage(error)}` };
   }
   if (params.isGroup) {
-    const now = Date.now();
     const targets = await resolvePrivateCommandRouteTargets({
       commandParams: params,
-      request: buildPrivateCommandApprovalRequest({
-        commandParams: params,
-        id: "trajectory-export-private-route",
-        command: request.command,
-        commandArgv: request.argv,
-        agentId: params.agentId,
-        createdAtMs: now,
-      }),
+      id: "trajectory-export-private-route",
+      command: request.command,
+      commandArgv: request.argv,
     });
     const privateTarget = targets[0];
     if (!privateTarget) {

@@ -55,6 +55,29 @@ type LegacyCaptureEventRow = {
   meta_json: string | null;
 };
 
+const CAPTURE_EVENT_COLUMNS = [
+  "session_id",
+  "ts",
+  "source_scope",
+  "source_process",
+  "protocol",
+  "direction",
+  "kind",
+  "flow_id",
+  "method",
+  "host",
+  "path",
+  "status",
+  "close_code",
+  "content_type",
+  "headers_json",
+  "data_text",
+  "data_blob_id",
+  "data_sha256",
+  "error_text",
+  "meta_json",
+] as const satisfies readonly (keyof LegacyCaptureEventRow)[];
+
 type LegacyCaptureBlobRow = {
   blobId: string;
   contentType: string | null;
@@ -157,28 +180,7 @@ function readLegacyDebugProxyCapture(params: { sourcePath: string; blobDir: stri
       "db_path",
       "blob_dir",
     ]);
-    assertTableColumns(db, "capture_events", [
-      "session_id",
-      "ts",
-      "source_scope",
-      "source_process",
-      "protocol",
-      "direction",
-      "kind",
-      "flow_id",
-      "method",
-      "host",
-      "path",
-      "status",
-      "close_code",
-      "content_type",
-      "headers_json",
-      "data_text",
-      "data_blob_id",
-      "data_sha256",
-      "error_text",
-      "meta_json",
-    ]);
+    assertTableColumns(db, "capture_events", CAPTURE_EVENT_COLUMNS);
     const sessions = db
       .prepare(
         `SELECT id, started_at, ended_at, mode, source_scope, source_process, proxy_url, blob_dir
@@ -188,10 +190,7 @@ function readLegacyDebugProxyCapture(params: { sourcePath: string; blobDir: stri
       .all() as LegacyCaptureSessionRow[];
     const events = db
       .prepare(
-        `SELECT
-           session_id, ts, source_scope, source_process, protocol, direction, kind, flow_id,
-           method, host, path, status, close_code, content_type, headers_json, data_text,
-           data_blob_id, data_sha256, error_text, meta_json
+        `SELECT ${CAPTURE_EVENT_COLUMNS.join(", ")}
          FROM capture_events
          ORDER BY ts ASC, id ASC`,
       )
@@ -268,28 +267,11 @@ function readLegacyDebugProxyCapture(params: { sourcePath: string; blobDir: stri
 }
 
 function eventValues(event: LegacyCaptureEventRow): SQLInputValue[] {
-  return [
-    event.session_id,
-    normalizeSqliteInteger(event.ts),
-    event.source_scope,
-    event.source_process,
-    event.protocol,
-    event.direction,
-    event.kind,
-    event.flow_id,
-    event.method,
-    event.host,
-    event.path,
-    normalizeSqliteInteger(event.status),
-    normalizeSqliteInteger(event.close_code),
-    event.content_type,
-    event.headers_json,
-    event.data_text,
-    event.data_blob_id,
-    event.data_sha256,
-    event.error_text,
-    event.meta_json,
-  ];
+  return CAPTURE_EVENT_COLUMNS.map((column) =>
+    column === "ts" || column === "status" || column === "close_code"
+      ? normalizeSqliteInteger(event[column])
+      : event[column],
+  );
 }
 
 function archiveLegacyDebugProxySqlite(params: {
@@ -492,19 +474,12 @@ export function migrateLegacyDebugProxyCaptureSidecar(params: {
         const existingEventCount = db.prepare(
           `SELECT COUNT(*) AS count
            FROM capture_events
-           WHERE session_id IS ? AND ts IS ? AND source_scope IS ? AND source_process IS ?
-             AND protocol IS ? AND direction IS ? AND kind IS ? AND flow_id IS ?
-             AND method IS ? AND host IS ? AND path IS ? AND status IS ? AND close_code IS ?
-             AND content_type IS ? AND headers_json IS ? AND data_text IS ? AND data_blob_id IS ?
-             AND data_sha256 IS ? AND error_text IS ? AND meta_json IS ?
+           WHERE ${CAPTURE_EVENT_COLUMNS.map((column) => `${column} IS ?`).join(" AND ")}
           `,
         );
         const insertEvent = db.prepare(
-          `INSERT INTO capture_events (
-            session_id, ts, source_scope, source_process, protocol, direction, kind, flow_id,
-            method, host, path, status, close_code, content_type, headers_json, data_text,
-            data_blob_id, data_sha256, error_text, meta_json
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO capture_events (${CAPTURE_EVENT_COLUMNS.join(", ")})
+           VALUES (${CAPTURE_EVENT_COLUMNS.map(() => "?").join(", ")})`,
         );
         const existingCounts = new Map<string, number>();
         const seenCounts = new Map<string, number>();

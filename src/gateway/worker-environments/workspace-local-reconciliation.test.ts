@@ -19,7 +19,8 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 async function prepareUnchangedWorkspace(options?: {
   localContent?: string;
   assertCurrent?: () => void;
-  beforeRemoteFence?: (call: number, root: string) => Promise<void>;
+  beforeRemoteFence?: () => Promise<void>;
+  onRenew?: (root: string) => Promise<void>;
 }) {
   const root = tempDirs.make("openclaw-unchanged-reconciliation-");
   const stagingRoot = tempDirs.make("openclaw-unchanged-reconciliation-staging-");
@@ -37,9 +38,8 @@ async function prepareUnchangedWorkspace(options?: {
   };
   const record = vi.fn();
   const publishAcceptedManifest = vi.fn();
-  let remoteFences = 0;
   const verifyStable = vi.fn(async () => {
-    await options?.beforeRemoteFence?.(++remoteFences, root);
+    await options?.beforeRemoteFence?.();
   });
   const reconcile = await prepareLocalWorkspaceReconciliation({
     request: {
@@ -65,7 +65,12 @@ async function prepareUnchangedWorkspace(options?: {
     publishAcceptedManifest,
     verifyStable,
   });
-  const quiescence = { assertActive: vi.fn(async () => {}), resume: vi.fn(async () => {}) };
+  const quiescence = {
+    assertActive: vi.fn(async () => {
+      await options?.onRenew?.(root);
+    }),
+    resume: vi.fn(async () => {}),
+  };
   return {
     root,
     base,
@@ -80,7 +85,7 @@ async function prepareUnchangedWorkspace(options?: {
 }
 
 describe("unchanged local workspace reconciliation", () => {
-  it("keeps durable result refs while accepting exact matches with one final renewal", async () => {
+  it("keeps durable result refs with one remote verification after final renewal", async () => {
     const fixture = await prepareUnchangedWorkspace();
     const { root, base, ref, reconciliation, quiescence, journal } = fixture;
     expect(reconciliation.acceptUnchangedStagedResult).toBeTypeOf("function");
@@ -94,7 +99,7 @@ describe("unchanged local workspace reconciliation", () => {
     const applied = await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
 
     expect(applied).toMatchObject({ manifestRef: base.manifestRef, conflictPaths: [] });
-    expect(fixture.verifyStable).toHaveBeenCalledTimes(2);
+    expect(fixture.verifyStable).toHaveBeenCalledOnce();
     expect(quiescence.assertActive).toHaveBeenCalledOnce();
     expect(journal.begin).not.toHaveBeenCalled();
     expect(journal.commit).toHaveBeenCalledExactlyOnceWith(base.manifestRef);
@@ -122,7 +127,7 @@ describe("unchanged local workspace reconciliation", () => {
     );
 
     expect(applied?.manifestRef).not.toBe(fixture.base.manifestRef);
-    expect(fixture.verifyStable).toHaveBeenCalledTimes(4);
+    expect(fixture.verifyStable).toHaveBeenCalledTimes(3);
     expect(fixture.quiescence.assertActive).toHaveBeenCalledTimes(2);
     expect(fixture.publishAcceptedManifest).toHaveBeenCalledOnce();
     expect(fixture.journal.commit).toHaveBeenCalledExactlyOnceWith(applied?.manifestRef);
@@ -134,15 +139,19 @@ describe("unchanged local workspace reconciliation", () => {
   it.each(["remote", "local"] as const)(
     "rejects a late %s write after the final renewal without accepting the result",
     async (side) => {
+      let remoteChanged = false;
       const fixture = await prepareUnchangedWorkspace({
-        beforeRemoteFence: async (call, root) => {
-          if (call !== 2) {
-            return;
+        onRenew: async (root) => {
+          if (side === "local") {
+            await fs.writeFile(path.join(root, "result.txt"), "late local write\n");
+          } else {
+            remoteChanged = true;
           }
-          if (side === "remote") {
+        },
+        beforeRemoteFence: async () => {
+          if (remoteChanged) {
             throw new Error("late remote write");
           }
-          await fs.writeFile(path.join(root, "result.txt"), "late local write\n");
         },
       });
 
@@ -172,10 +181,8 @@ describe("unchanged local workspace reconciliation", () => {
           throw new Error("stale result owner");
         }
       },
-      beforeRemoteFence: async (call) => {
-        if (call === 2) {
-          current = false;
-        }
+      beforeRemoteFence: async () => {
+        current = false;
       },
     });
 

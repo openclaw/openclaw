@@ -232,7 +232,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
     expect(tool?.description).toContain("configured agent (see agents_list);");
     expect(tool?.description).toContain("sessions_history");
     expect(tool?.description).not.toContain("agents_wait");
-    expect(tool?.description).not.toContain("subagents");
+    expect(tool?.description).not.toContain("`subagents`");
     expect(tool?.description).toContain("persistent/thread-bound");
     expect(tool?.description).toContain("(self: current session only)");
     expect(tool?.description).not.toContain('runtime="acp"');
@@ -251,7 +251,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
     ] as AnyAgentTool[]);
 
     expect(tool?.description).toContain(
-      "Default to a hidden subagent for internal QA, research, coding, review, tests, and parallel work supporting the current task. This includes substantial, bounded API/service investigations that can be handed off with the needed context and capabilities. Omit `visible` or set it false, and report results through the parent.",
+      "Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner. Once delegation is appropriate, use a hidden subagent unless the user needs a separate, independently steerable session. This includes substantial, bounded API/service investigations that can be handed off with the needed context and capabilities. For hidden subagents, omit `visible` or set it false, and report results through the parent.",
     );
     expect(tool?.description).not.toContain("trial-and-error");
     expect(tool?.description).toContain("configured agent (see agents_list);");

@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import type { AgentToolSurfacePresentation } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { modelKey } from "../shared/model-key.js";
@@ -8,10 +9,7 @@ import { resolveAgentConfig } from "./agent-scope-config.js";
 import type { CodeModeFailureCode } from "./code-mode-executor-types.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { CODE_MODE_RESULTS_API_FILE } from "./code-mode-results-api.js";
-import {
-  MAX_CODE_MODE_PENDING_TOOL_CALLS,
-  type CodeModeConfig as CodeModeWorkerConfig,
-} from "./code-mode-worker-types.js";
+import { MAX_CODE_MODE_PENDING_TOOL_CALLS } from "./code-mode-worker-types.js";
 import type { ToolSearchConfig, ToolSearchToolContext } from "./tool-search.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
 
@@ -36,14 +34,9 @@ export const DEFAULT_HEADLESS_TOOL_CALLS = 5;
 export const MAX_HEADLESS_TOOL_CALLS = 200;
 
 /** Resolved Code Mode runtime limits. */
-export type CodeModeConfig = CodeModeWorkerConfig & {
+export type CodeModeConfig = Omit<AgentToolSurfacePresentation["codeMode"], "enabled"> & {
   /** Effective activation policy; "auto" follows the model catalog flag. */
   enabled: boolean | "auto";
-  executor: "node" | "quickjs";
-  mode: "only";
-  snapshotTtlSeconds: number;
-  searchDefaultLimit: number;
-  maxSearchLimit: number;
 };
 
 export type {
@@ -71,17 +64,10 @@ export type CodeModeHeadlessResult =
     };
 
 function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | undefined {
-  const codeMode = value;
-  if (codeMode === true) {
-    return { enabled: true };
+  if (typeof value === "boolean" || value === "auto") {
+    return { enabled: value };
   }
-  if (codeMode === false) {
-    return { enabled: false };
-  }
-  if (codeMode === "auto") {
-    return { enabled: "auto" };
-  }
-  return isRecord(codeMode) ? codeMode : undefined;
+  return isRecord(value) ? value : undefined;
 }
 
 function readCodeModeRawConfig(
@@ -234,6 +220,7 @@ export function resolveCodeModeHeadlessConfig(
 export function readCode(args: unknown): {
   code: string;
   restartSafe: boolean;
+  required: boolean;
 } {
   const params = asToolParamsRecord(args);
   // Full-schema tool calls can materialize an unused alias as blank.
@@ -252,6 +239,10 @@ export function readCode(args: unknown): {
       "Code Mode accepts JavaScript only. Remove language and typecheck; use API.read(...) for tool types.",
     );
   }
+  const required = params.required;
+  if (required !== undefined && typeof required !== "boolean") {
+    throw new ToolInputError("required must be a boolean.");
+  }
   const restartSafe = params.restartSafe;
   if (restartSafe !== undefined && typeof restartSafe !== "boolean") {
     throw new ToolInputError("restartSafe must be a boolean.");
@@ -259,6 +250,7 @@ export function readCode(args: unknown): {
   return {
     code,
     restartSafe: restartSafe === true,
+    required: required === true,
   };
 }
 

@@ -302,21 +302,16 @@ export function resolveLmstudioServerBase(configuredBaseUrl?: string): string {
   const configured = configuredBaseUrl?.trim();
   const resolved = configured || LMSTUDIO_DEFAULT_BASE_URL;
   const fetchableBaseUrl = toFetchableLmstudioBaseUrl(resolved);
-  try {
-    const parsed = new URL(fetchableBaseUrl);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      throw new TypeError(`Unsupported LM Studio protocol: ${parsed.protocol}`);
-    }
+  const parsed = URL.parse(fetchableBaseUrl);
+  if (parsed && (parsed.protocol === "http:" || parsed.protocol === "https:")) {
     const pathname = normalizeUrlPath(parsed.pathname);
     parsed.pathname = pathname.length > 0 ? pathname : "/";
     parsed.search = "";
     parsed.hash = "";
     return parsed.toString().replace(/\/$/, "");
-  } catch {
-    const trimmed = resolved.replace(/\/+$/, "");
-    const normalized = normalizeUrlPath(trimmed);
-    return normalized.length > 0 ? normalized : LMSTUDIO_DEFAULT_BASE_URL;
   }
+  const normalized = normalizeUrlPath(resolved.replace(/\/+$/, ""));
+  return normalized.length > 0 ? normalized : LMSTUDIO_DEFAULT_BASE_URL;
 }
 
 /** Resolves LM Studio inference base URL and always appends /v1. */

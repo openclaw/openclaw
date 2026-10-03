@@ -122,18 +122,6 @@ function readPendingReapprovals(config: FileTransferPolicyConfig): PendingReappr
   });
 }
 
-function matchesPendingReapproval(
-  input: FilePolicyInput,
-  policySelector: string,
-  pending: PendingReapproval,
-): boolean {
-  return (
-    pending.kind === input.kind &&
-    pending.path === input.path &&
-    pending.selector === policySelector
-  );
-}
-
 function readPluginConfigFromRuntimeConfig(): Record<string, unknown> | null {
   const plugins = asOptionalObjectRecord(getRuntimeConfig().plugins);
   const entries = asOptionalObjectRecord(plugins?.entries);
@@ -150,12 +138,8 @@ function readFileTransferConfig(
   );
 }
 
-function readNodes(config: FileTransferPolicyConfig): FilePolicyConfig | null {
-  return asFilePolicyConfig(config.nodes);
-}
-
 function hasLegacyPositiveRules(config: FileTransferPolicyConfig): boolean {
-  const nodes = readNodes(config);
+  const nodes = asFilePolicyConfig(config.nodes);
   if (!nodes) {
     return false;
   }
@@ -296,7 +280,7 @@ function evaluateFilePolicyInternal(
       askable: false,
     };
   }
-  const config = pluginPolicy ? readNodes(pluginPolicy) : null;
+  const config = pluginPolicy ? asFilePolicyConfig(pluginPolicy.nodes) : null;
   if (!pluginPolicy || !config) {
     return {
       ok: false,
@@ -354,8 +338,11 @@ function evaluateFilePolicyInternal(
     return { ok: true, reason: "matched-allow", maxBytes, followSymlinks };
   }
 
-  const pendingReapproval = readPendingReapprovals(pluginPolicy).find((pending) =>
-    matchesPendingReapproval(input, resolved.key, pending),
+  const pendingReapproval = readPendingReapprovals(pluginPolicy).find(
+    (pending) =>
+      pending.kind === input.kind &&
+      pending.path === input.path &&
+      pending.selector === resolved.key,
   );
 
   if (askMode === "always") {
@@ -436,7 +423,7 @@ export function snapshotNodeFileReadPolicy(input: {
   pluginConfig?: Record<string, unknown>;
 }) {
   const policy = readFileTransferConfig(input.pluginConfig);
-  const nodes = policy && readNodes(policy);
+  const nodes = policy && asFilePolicyConfig(policy.nodes);
   const resolved = nodes && resolveNodePolicy(nodes, input.nodeId, input.nodeDisplayName);
   if (!resolved) {
     throw new Error("Node file read policy is unavailable");

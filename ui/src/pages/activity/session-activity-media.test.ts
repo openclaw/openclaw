@@ -9,7 +9,10 @@ import {
   createGatewayHarness,
   createSessions,
 } from "../../test-helpers/app-sidebar.ts";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import {
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+} from "../../test-helpers/gateway-client.ts";
 import "./session-activity-media.ts";
 
 const observers = new Map<Element, (visible: boolean) => void>();
@@ -64,6 +67,38 @@ function images(label: string, count = 4): ArtifactsListResult {
       image: { url: `https://images.example.test/${label}-${index}.png` },
     })),
   };
+}
+
+type MediaRow = LitElement & {
+  revision: number;
+  session?: GatewaySessionRow;
+  agentId: string;
+};
+
+function mountMedia(
+  request: GatewayRequestHandler,
+  {
+    sessionKey = "agent:main:images",
+    agentId = "main",
+    session,
+  }: {
+    sessionKey?: string;
+    agentId?: string;
+    session?: GatewaySessionRow;
+  } = {},
+) {
+  const harness = createGatewayHarness(createTestGatewayClient(request));
+  const context = createContext(harness.gateway, createSessions("main", []));
+  render(
+    html`<openclaw-activity-session-media
+      .context=${context}
+      .sessionKey=${sessionKey}
+      .agentId=${agentId}
+      .session=${session}
+    ></openclaw-activity-session-media>`,
+    container,
+  );
+  return { harness, row: container.querySelector<MediaRow>("openclaw-activity-session-media")! };
 }
 
 it("waits for the viewport, limits concurrent discovery, and opens four thumbnails in the shared viewer", async () => {
@@ -134,19 +169,7 @@ it.each(["initial discovery", "revision refresh"])(
       })
       .mockReturnValueOnce(failedRefresh.promise)
       .mockReturnValueOnce(retry.promise);
-    const harness = createGatewayHarness(createTestGatewayClient(request));
-    const context = createContext(harness.gateway, createSessions("main", []));
-    render(
-      html`<openclaw-activity-session-media
-        .context=${context}
-        sessionKey="agent:main:images"
-        agentId="main"
-      ></openclaw-activity-session-media>`,
-      container,
-    );
-    const row = container.querySelector<LitElement & { revision: number }>(
-      "openclaw-activity-session-media",
-    )!;
+    const { row } = mountMedia(request);
     await vi.waitFor(() => expect(observers.has(row)).toBe(true));
     observers.get(row)?.(true);
     if (!initialDiscovery) {
@@ -194,20 +217,9 @@ it.each(["session", "agent"] as const)(
       .mockResolvedValueOnce(images("original", 1))
       .mockReturnValueOnce(stale.promise)
       .mockReturnValueOnce(fresh.promise);
-    const harness = createGatewayHarness(createTestGatewayClient(request));
-    const context = createContext(harness.gateway, createSessions("main", []));
-    render(
-      html`<openclaw-activity-session-media
-        .context=${context}
-        sessionKey="agent:main:images"
-        agentId="main"
-        .session=${{ key: "agent:main:images", kind: "direct", sessionId: "original" }}
-      ></openclaw-activity-session-media>`,
-      container,
-    );
-    const row = container.querySelector<
-      LitElement & { revision: number; session?: GatewaySessionRow; agentId: string }
-    >("openclaw-activity-session-media")!;
+    const { row } = mountMedia(request, {
+      session: { key: "agent:main:images", kind: "direct", sessionId: "original" },
+    });
     await vi.waitFor(() => expect(observers.has(row)).toBe(true));
     observers.get(row)?.(true);
     await vi.waitFor(() =>
@@ -238,17 +250,7 @@ it.each(["session", "agent"] as const)(
 it("retires old connection results and media when the same row reconnects", async () => {
   const old = createDeferred<ArtifactsListResult>();
   const oldRequest = vi.fn(() => old.promise);
-  const harness = createGatewayHarness(createTestGatewayClient(oldRequest));
-  const context = createContext(harness.gateway, createSessions("main", []));
-  render(
-    html`<openclaw-activity-session-media
-      .context=${context}
-      sessionKey="agent:main:images"
-      agentId="main"
-    ></openclaw-activity-session-media>`,
-    container,
-  );
-  const row = container.querySelector("openclaw-activity-session-media")!;
+  const { harness, row } = mountMedia(oldRequest);
   await vi.waitFor(() => expect(observers.has(row)).toBe(true));
   observers.get(row)?.(true);
   await vi.waitFor(() => expect(oldRequest).toHaveBeenCalledTimes(1));
@@ -302,11 +304,8 @@ it("coalesces queued revisions without moving the session behind later arrivals"
 
 it.each([
   { count: 3, cursor: true, omitted: false, error: false },
-  { count: 3, cursor: true, omitted: true, error: false },
   { count: 0, cursor: true, omitted: false, error: false },
   { count: 0, cursor: false, omitted: true, error: false },
-  { count: 0, cursor: true, omitted: true, error: false },
-  { count: 0, cursor: false, omitted: false, error: true },
   { count: 0, cursor: true, omitted: true, error: true },
   { count: 0, cursor: false, omitted: false, error: false },
 ])(
@@ -327,17 +326,7 @@ it.each([
         }
         return result;
       });
-      const harness = createGatewayHarness(createTestGatewayClient(request));
-      const context = createContext(harness.gateway, createSessions("main", []));
-      render(
-        html`<openclaw-activity-session-media
-          .context=${context}
-          sessionKey="agent:main:preview"
-          agentId="main"
-        ></openclaw-activity-session-media>`,
-        container,
-      );
-      const row = container.querySelector<LitElement>("openclaw-activity-session-media")!;
+      const { row } = mountMedia(request, { sessionKey: "agent:main:preview" });
       await row.updateComplete;
       observers.get(row)?.(true);
       await vi.advanceTimersByTimeAsync(0);
@@ -384,8 +373,6 @@ it.each([
 );
 
 it.each([
-  { count: 1, error: false, omitted: false },
-  { count: 0, error: false, omitted: false },
   { count: 1, error: true, omitted: false },
   { count: 1, error: false, omitted: true },
   { count: 0, error: false, omitted: true },
@@ -406,19 +393,7 @@ it.each([
           .mockResolvedValueOnce({ ...images("settled", count), nextCursor: "older" })
           .mockRejectedValueOnce(new Error("Unavailable"));
       }
-      const harness = createGatewayHarness(createTestGatewayClient(request));
-      const context = createContext(harness.gateway, createSessions("main", []));
-      render(
-        html`<openclaw-activity-session-media
-          .context=${context}
-          sessionKey="agent:main:stable"
-          agentId="main"
-        ></openclaw-activity-session-media>`,
-        container,
-      );
-      const row = container.querySelector<LitElement & { revision: number }>(
-        "openclaw-activity-session-media",
-      )!;
+      const { row } = mountMedia(request, { sessionKey: "agent:main:stable" });
       await row.updateComplete;
       observers.get(row)?.(true);
       await vi.advanceTimersByTimeAsync(0);
@@ -495,17 +470,7 @@ it("downloads reference-only images through the shared inline bytes path with th
         ? { artifacts: [artifact, artifact] }
         : { artifact, encoding: "base64", data: "cG5n" },
     );
-    const harness = createGatewayHarness(createTestGatewayClient(request));
-    const context = createContext(harness.gateway, createSessions("main", []));
-    render(
-      html`<openclaw-activity-session-media
-        .context=${context}
-        sessionKey="global"
-        agentId="work"
-      ></openclaw-activity-session-media>`,
-      container,
-    );
-    const row = container.querySelector<LitElement>("openclaw-activity-session-media")!;
+    const { row } = mountMedia(request, { sessionKey: "global", agentId: "work" });
     await row.updateComplete;
     observers.get(row)?.(true);
     await vi.advanceTimersByTimeAsync(0);

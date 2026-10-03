@@ -145,7 +145,7 @@ export function assertParentSubagentResumeSuccessorCurrent(
   }
 }
 
-/** Loads the existing replacement owner before admission's final synchronous transfer. */
+/** Loads the replacement owner; final admission awaits its durable ownership transfer. */
 export async function prepareParentSubagentResume(params: {
   cfg: OpenClawConfig;
   resume: TrustedSubagentResume;
@@ -154,22 +154,27 @@ export async function prepareParentSubagentResume(params: {
   runId: string;
   task: string;
   assertAdmissionCurrent: () => void;
+  onAdopted?: (entry: SubagentRunRecord) => void;
   gatewayContextResolver?: GatewayContextResolver;
-}): Promise<() => string> {
+}): Promise<() => Promise<string>> {
   const runtime = await import("../agents/subagents/registry/subagent-registry.js");
-  return () => {
+  return async () => {
     params.assertAdmissionCurrent();
     const expected = assertParentSubagentResumeCurrent({
       ...params,
       sessionId: params.getSessionId(),
     });
-    // No await separates revalidation from the registry's atomic task/flow replacement.
-    const adopted = runtime.adoptPausedSubagentRunForFollowUp({
+    const adopted = await runtime.adoptPausedSubagentRunForFollowUp({
       childSessionKey: params.resume.childSessionKey,
       runId: params.runId,
       task: params.task,
       expected,
+      onPublished: params.onAdopted,
       gatewayContextResolver: params.gatewayContextResolver,
+      assertCurrent: () => {
+        params.assertAdmissionCurrent();
+        assertParentSubagentResumeCurrent({ ...params, sessionId: params.getSessionId() });
+      },
     });
     if (!adopted) {
       throw new Error("Paused task replacement was rejected; no continuation was started.");

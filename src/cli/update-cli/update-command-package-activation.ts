@@ -1,12 +1,13 @@
+import { capturePackageActivationRuntime } from "../../infra/package-update-activation-paths.js";
+import type { PackageActivationRuntime } from "../../infra/package-update-activation-runtime.types.js";
 import { defaultRuntime } from "../../runtime.js";
-import { resolveNodeRunner } from "./shared.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import { reserveUpdateCommandExecutorSlot } from "./update-command-executor.js";
 import type { PackageInstallUpdateParams } from "./update-command-package.js";
 
 export function createPackageUpdateActivationOptions(params: {
   run: MutableUpdateExecutionParams["opts"]["run"];
-  nodeRunner?: string;
+  runtime?: PackageActivationRuntime;
   assertCurrent: () => void;
 }): Pick<PackageInstallUpdateParams, "reserveInstallSlot" | "getActivation"> {
   return {
@@ -23,7 +24,12 @@ export function createPackageUpdateActivationOptions(params: {
       return run && fence
         ? {
             fence,
-            nodeRunner: params.nodeRunner ?? resolveNodeRunner(),
+            runtime:
+              params.runtime ??
+              capturePackageActivationRuntime(
+                process.versions.bun ? "bun" : "node",
+                process.execPath,
+              ),
             onPrepared: (command: string) => {
               params.assertCurrent();
               defaultRuntime.error(

@@ -1,3 +1,4 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { createLlmRuntime, getAiTransportHost } from "@openclaw/ai";
 import type { Model } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";

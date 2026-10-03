@@ -1,62 +1,36 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import type {
   WorkboardSessionFacts,
-  WorkboardSessionPlacement,
   WorkboardSessionsBoard,
   WorkboardSessionsBoardRead,
+  WorkboardSessionsBoardView,
 } from "@openclaw/workboard-contract";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
+import {
+  isIncognitoSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "openclaw/plugin-sdk/session-key-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi, OpenClawPluginService } from "../api.js";
-import {
-  parseSessionPlacements,
-  sessionFactsHash,
-  sessionMatchesColumn,
-  sessionsBoardFallback,
-  sessionsBoardSpecHash,
-  SESSIONS_BOARD_BATCH_SIZE,
-  SESSIONS_BOARD_MODEL_BATCH_SIZE,
-  SESSIONS_BOARD_MODEL_INTERVAL_MS,
-} from "./sessions-board-classification.js";
-import {
-  createSessionsBoardCompletion,
-  type SessionsBoardCompletionInput,
-} from "./sessions-board-model.js";
-import type { WorkboardStore } from "./store.js";
+import { sessionMatchesColumn, sessionsBoardFallback } from "./sessions-board-rules.js";
+import type { WorkboardBoardStore } from "./store-boards.js";
 
 type Gateway = Pick<
   OpenClawPluginApi["runtime"]["gateway"],
-  "request" | "readSessionFacts" | "isAvailable"
+  "request" | "readSessionFacts" | "subscribeSessionChanges"
 >;
 type SessionsBoardServiceParams = {
-  store: WorkboardStore;
+  store: WorkboardBoardStore;
   gateway: Gateway;
-  getConfig?: () => OpenClawConfig;
-  complete?: (input: SessionsBoardCompletionInput) => Promise<string>;
   now?: () => number;
-};
-type BoardState = {
-  facts: WorkboardSessionFacts[];
-  checkedAt: number;
-  lastReadAt: number;
-  specHash?: string;
-  warning?: string;
-  failed: boolean;
-  classifiedAt?: number;
-  lastModelAt: number;
-  forceRequested: boolean;
-  forced: Set<string>;
-  modelQueue: string[];
-  again: boolean;
-  pending?: Promise<void>;
-  timer?: ReturnType<typeof setTimeout>;
 };
 type CallerAuthority = { assertCurrent: () => void };
 type Operations = {
-  read: (boardId: string) => Promise<WorkboardSessionsBoardRead>;
+  read: (
+    boardId: string,
+    view?: WorkboardSessionsBoardView,
+    caller?: CallerAuthority,
+  ) => Promise<WorkboardSessionsBoardRead>;
   update: (
     boardId: string,
     patch: unknown,
@@ -68,13 +42,12 @@ type Operations = {
     columnId: string,
     caller?: CallerAuthority,
   ) => Promise<WorkboardSessionsBoardRead>;
-  refresh: (boardId: string, caller?: CallerAuthority) => Promise<WorkboardSessionsBoardRead>;
-  /** Reclassify every active Sessions board, or only boards read within `viewedWithinMs`. */
-  sweep: (options?: { viewedWithinMs?: number }) => Promise<void>;
 };
 export type WorkboardSessionsBoardService = OpenClawPluginService &
   Operations & { stop: () => Promise<void> };
 type Owner = Operations & { cancel: () => void; stop: () => Promise<void> };
+type CachedFacts = { sessionId: string; facts?: WorkboardSessionFacts; dirty: boolean };
+const FACTS_BATCH_SIZE = 40;
 
 function activeState() {
   return resolveGlobalSingleton<{ owner?: Owner }>(
@@ -88,11 +61,21 @@ function activeState() {
 }
 
 /** Uses the existing Gateway session-list owner in the invoking caller's scope. */
-async function listSessions(gateway: Gateway, board: WorkboardSessionsBoard) {
-  const sessions = new Map<string, string>();
+async function listSessions(
+  gateway: Gateway,
+  board: WorkboardSessionsBoard,
+  view?: WorkboardSessionsBoardView,
+) {
+  const sessions = new Map<string, WorkboardSessionFacts>();
+  let people: WorkboardSessionsBoardRead["people"];
   let offset = 0;
   for (;;) {
-    const payload = await gateway.request(
+    const payload = await gateway.request<{
+      sessions: unknown[];
+      hasMore?: boolean;
+      nextOffset?: number;
+      people?: WorkboardSessionsBoardRead["people"];
+    }>(
       "sessions.list",
       {
         limit: 1000,
@@ -106,23 +89,46 @@ async function listSessions(gateway: Gateway, board: WorkboardSessionsBoard) {
         ...(board.sessions.scope?.agentIds?.length === 1
           ? { agentId: board.sessions.scope.agentIds[0] }
           : {}),
+        ...view,
       },
       { scopes: ["operator.read"] },
     );
     if (!isRecord(payload) || !Array.isArray(payload.sessions)) {
       throw new Error("sessions.list returned an invalid Sessions board roster.");
     }
+    if (offset === 0 && view?.includePeople) {
+      people = payload.people;
+    }
     for (const session of payload.sessions) {
       if (
         isRecord(session) &&
         typeof session.key === "string" &&
-        typeof session.sessionId === "string"
+        typeof session.sessionId === "string" &&
+        session.visibility !== "draft" &&
+        session.incognito !== true &&
+        !isIncognitoSessionKey(session.key)
       ) {
-        sessions.set(session.key, session.sessionId);
+        sessions.set(session.key, {
+          key: session.key,
+          sessionId: session.sessionId,
+          agentId: resolveAgentIdFromSessionKey(session.key),
+          label: typeof session.label === "string" ? session.label : undefined,
+          derivedTitle: typeof session.derivedTitle === "string" ? session.derivedTitle : undefined,
+          run: "idle",
+          pullRequests: [],
+          pullRequestsUnavailable: true,
+          archived: session.archived === true,
+          lastActivityAt:
+            typeof session.lastActivityAt === "number"
+              ? session.lastActivityAt
+              : typeof session.updatedAt === "number"
+                ? session.updatedAt
+                : Date.now(),
+        });
       }
     }
     if (payload.hasMore !== true) {
-      return sessions;
+      return { sessions, people };
     }
     const next = payload.nextOffset;
     if (typeof next !== "number" || !Number.isSafeInteger(next) || next <= offset) {
@@ -148,14 +154,16 @@ function createOwner(
   context: ParametersOfStart,
   isCurrent: () => boolean,
 ): Owner {
-  const runAsService = AsyncLocalStorage.snapshot();
-  const lifetime = new AbortController();
-  const boards = new Map<string, BoardState>();
+  const cache = new Map<string, CachedFacts>();
+  const refreshes = new Map<string, Promise<void>>();
+  const reads = new Map<string, Promise<WorkboardSessionsBoardRead>>();
   const now = params.now ?? Date.now;
-  const complete = params.complete ?? createSessionsBoardCompletion();
+  let stopped = false;
+  let hasRead = false;
+  let factsFailureLogged = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const assertCurrent = () => {
-    lifetime.signal.throwIfAborted();
-    if (!isCurrent()) {
+    if (stopped || !isCurrent()) {
       throw new Error("Sessions board service is no longer active.");
     }
   };
@@ -163,338 +171,195 @@ function createOwner(
     assertCurrent();
     caller?.assertCurrent();
   };
-  const stateFor = (id: string): BoardState => {
-    let state = boards.get(id);
-    if (!state) {
-      state = {
-        facts: [],
-        checkedAt: -Infinity,
-        lastReadAt: -Infinity,
-        lastModelAt: -Infinity,
-        failed: false,
-        forceRequested: false,
-        forced: new Set(),
-        modelQueue: [],
-        again: false,
-      };
-      boards.set(id, state);
-    }
-    return state;
-  };
-  const deferModel = (id: string, state: BoardState) => {
-    if (state.timer || lifetime.signal.aborted) {
+  const unsubscribe = params.gateway.subscribeSessionChanges(({ sessionKey }) => {
+    const previous = cache.get(sessionKey);
+    if (stopped || !hasRead) {
       return;
     }
-    state.timer = setTimeout(
-      () => {
-        state.timer = undefined;
-        void schedule(id);
-      },
-      Math.max(0, state.lastModelAt + SESSIONS_BOARD_MODEL_INTERVAL_MS - now()),
-    );
-    state.timer.unref?.();
-  };
-  const classify = async (id: string, state: BoardState) => {
-    assertCurrent();
-    const board = await params.store.getSessionsBoard(id);
-    const roster = await listSessions(params.gateway, board);
-    const facts: WorkboardSessionFacts[] = [];
-    const keys = [...roster.keys()];
-    for (let offset = 0; offset < keys.length; offset += SESSIONS_BOARD_BATCH_SIZE) {
-      assertCurrent();
-      const result = await params.gateway.readSessionFacts({
-        sessionKeys: keys.slice(offset, offset + SESSIONS_BOARD_BATCH_SIZE),
-      });
-      facts.push(
-        ...result.sessions.filter(
-          (session) =>
-            roster.get(session.key) === session.sessionId && inScope(session, board, now()),
-        ),
-      );
+    // Replacing the cell also rejects a result started before this publication.
+    if (previous) {
+      cache.set(sessionKey, { ...previous, dirty: true });
     }
-    assertCurrent();
-    const previousFacts = state.facts.map(sessionFactsHash).join(":");
-    const previousWarning = state.warning;
-    state.facts = facts;
-    state.checkedAt = now();
-    state.specHash = sessionsBoardSpecHash(board);
-    const prWarning = facts.some((session) => session.pullRequestsUnavailable)
-      ? "Some pull-request information is unavailable. Refresh to retry."
-      : undefined;
-    if (state.forceRequested) {
-      for (const session of facts) {
-        state.forced.add(session.key);
-      }
-      state.forceRequested = false;
+    if (timer) {
+      return;
     }
-    const present = new Set(keys);
-    for (const key of state.forced) {
-      if (!present.has(key)) {
-        state.forced.delete(key);
-      }
-    }
-    let cached = new Map(
-      (await params.store.listSessionPlacements(id)).map((entry) => [entry.sessionKey, entry]),
-    );
-    const columns = new Set(board.sessions.columns.map((column) => column.id));
-    const fallback = sessionsBoardFallback(board);
-    const writes: Array<WorkboardSessionPlacement & { expectedUpdatedAt?: number }> = [];
-    const needsModel: WorkboardSessionFacts[] = [];
-    for (const session of facts) {
-      const old = cached.get(session.key);
-      const factsHash = sessionFactsHash(session);
-      const cacheHash = `${state.specHash}:${factsHash}`;
-      if (
-        old?.source === "operator" &&
-        old.factsHash.endsWith(`:${factsHash}`) &&
-        columns.has(old.columnId)
-      ) {
-        state.forced.delete(session.key);
-        continue;
-      }
-      if (
-        !state.forced.has(session.key) &&
-        old?.factsHash === cacheHash &&
-        columns.has(old.columnId)
-      ) {
-        continue;
-      }
-      const column = !board.sessions.instructions?.trim()
-        ? board.sessions.columns.find((entry) => sessionMatchesColumn(session, entry))
-        : undefined;
-      if (column) {
-        writes.push({
-          sessionKey: session.key,
-          columnId: column.id,
-          source: "state",
-          reason: "Matched column rules",
-          factsHash: cacheHash,
-          updatedAt: now(),
-          expectedUpdatedAt: old?.updatedAt,
-        });
-        state.forced.delete(session.key);
-      } else {
-        needsModel.push(session);
-        // A changed fact retires a pin immediately. Keep its position while inference retries.
-        if (!old || old.source === "operator" || !columns.has(old.columnId)) {
-          writes.push({
-            sessionKey: session.key,
-            columnId: old && columns.has(old.columnId) ? old.columnId : fallback.id,
-            source: "state",
-            reason: "unresolved",
-            factsHash: `pending:${factsHash}`,
-            updatedAt: now(),
-            expectedUpdatedAt: old?.updatedAt,
-          });
-        }
-      }
-    }
-    try {
-      if (writes.length) {
-        if (
-          !(await params.store.writeSessionPlacements(id, writes, {
-            expectedSpec: board.sessions,
-            assertCurrent,
-          }))
-        ) {
-          state.again = true;
-          return;
-        }
-        cached = new Map(
-          (await params.store.listSessionPlacements(id)).map((entry) => [entry.sessionKey, entry]),
-        );
-        state.classifiedAt = now();
-      }
-      if (!needsModel.length) {
-        state.modelQueue = [];
-        state.failed = false;
-        state.warning = prWarning;
-        return;
-      }
-      if (now() < state.lastModelAt + SESSIONS_BOARD_MODEL_INTERVAL_MS) {
-        deferModel(id, state);
-        return;
-      }
-      const queued = new Map(state.modelQueue.map((key, index) => [key, index]));
-      needsModel.sort(
-        (left, right) =>
-          (queued.get(left.key) ?? queued.size) - (queued.get(right.key) ?? queued.size),
-      );
-      const batch = needsModel.slice(0, SESSIONS_BOARD_MODEL_BATCH_SIZE);
-      // Repeatedly changing runs return to the tail instead of starving later sessions.
-      state.modelQueue = [...needsModel.slice(batch.length), ...batch].map(
-        (session) => session.key,
-      );
-      const cfg = params.getConfig?.() ?? context.config;
-      const agentId = board.orchestration?.defaultAssignee ?? resolveDefaultAgentId(cfg);
-      state.lastModelAt = now();
-      const output = parseSessionPlacements(
-        await complete({
-          board,
-          sessions: batch,
-          cfg,
-          agentId,
-          signal: lifetime.signal,
-          assertCurrent,
-        }),
-        board,
-        batch,
-      );
-      assertCurrent();
-      const modelWrites = batch.map(
-        (session): WorkboardSessionPlacement & { expectedUpdatedAt?: number } => {
-          const result = output.get(session.key) ?? { columnId: fallback.id, reason: "unresolved" };
-          return {
-            sessionKey: session.key,
-            ...result,
-            source: "model",
-            factsHash: `${state.specHash}:${sessionFactsHash(session)}`,
-            updatedAt: now(),
-            expectedUpdatedAt: cached.get(session.key)?.updatedAt,
-          };
-        },
-      );
-      if (
-        !(await params.store.writeSessionPlacements(id, modelWrites, {
-          expectedSpec: board.sessions,
-          assertCurrent,
-        }))
-      ) {
-        state.again = true;
-        return;
-      }
-      for (const session of batch) {
-        state.forced.delete(session.key);
-      }
-      state.classifiedAt = now();
-      state.failed = false;
-      state.warning = prWarning;
-      if (needsModel.length > batch.length) {
-        deferModel(id, state);
-      }
-    } catch (error) {
-      assertCurrent();
-      state.warning =
-        "Utility-model classification is unavailable. Previous placements are retained; check the agent's utility model and refresh.";
-      if (!state.failed) {
-        context.logger.warn(
-          `Sessions board ${id} classification failed: ${redactToolPayloadText(String(error)).slice(0, 300)}`,
-        );
-      }
-      state.failed = true;
-    } finally {
-      if (
-        isCurrent() &&
-        !lifetime.signal.aborted &&
-        (previousWarning !== state.warning ||
-          previousFacts !== facts.map(sessionFactsHash).join(":"))
-      ) {
+    timer = setTimeout(() => {
+      timer = undefined;
+      if (!stopped && isCurrent()) {
         params.store.announceChangeEpoch();
       }
-    }
-  };
-  const schedule = (id: string, force = false): Promise<void> =>
-    runAsService(() => {
-      if (lifetime.signal.aborted || !isCurrent()) {
-        return Promise.resolve();
-      }
-      const state = stateFor(id);
-      state.forceRequested ||= force;
-      if (state.pending) {
-        state.again = true;
-        return state.pending;
-      }
-      const pending = params.store
-        .runOperation(() => classify(id, state))
-        .catch((error: unknown) => {
-          if (!isCurrent() || lifetime.signal.aborted) {
-            return;
-          }
-          state.warning = "Session facts are unavailable. Refresh to retry.";
-          if (!state.failed) {
-            context.logger.warn(
-              `Sessions board ${id} refresh failed: ${redactToolPayloadText(String(error)).slice(0, 300)}`,
-            );
-          }
-          state.failed = true;
-          state.checkedAt = now();
-          params.store.announceChangeEpoch();
-        })
-        .finally(() => {
-          if (state.pending === pending) {
-            state.pending = undefined;
-          }
-          if (state.again && isCurrent() && !lifetime.signal.aborted) {
-            state.again = false;
-            void schedule(id);
-          }
-        });
-      state.pending = pending;
-      return pending;
-    });
-  const read = async (id: string): Promise<WorkboardSessionsBoardRead> => {
-    assertCurrent();
+    }, 5_000);
+    timer.unref?.();
+  });
+  const read = async (
+    id: string,
+    view?: WorkboardSessionsBoardView,
+    caller?: CallerAuthority,
+  ): Promise<WorkboardSessionsBoardRead> => {
+    const assertReadCurrent = interactiveAuthority(caller);
+    assertReadCurrent();
     const board = await params.store.getSessionsBoard(id);
-    const state = stateFor(id);
-    state.lastReadAt = now();
-    if (state.specHash !== sessionsBoardSpecHash(board) || now() - state.checkedAt >= 60_000) {
-      void schedule(id);
+    hasRead = true;
+    const { sessions: roster, people } = await listSessions(params.gateway, board, view);
+    assertReadCurrent();
+    const unavailable = new Set<string>();
+    const reasons = new Set<string>();
+    // Results belong to this caller's roster; omitted facts are not permission to reuse old data.
+    const omitted = new Set<string>();
+    while (refreshes.has(id)) {
+      // A departing caller must not retire another reader's live authority.
+      await refreshes.get(id)?.catch(() => {});
+      assertReadCurrent();
     }
-    // Foreground authorization stays in the requesting operator/tool scope, not the service scope.
-    const visible = await listSessions(params.gateway, board);
+    const missing = [...roster.values()].filter((row) => {
+      const cached = cache.get(row.key);
+      return (
+        row.key !== board.sessions.agentSessionKey &&
+        (!cached || cached.sessionId !== row.sessionId || cached.dirty)
+      );
+    });
+    const refresh = async () => {
+      for (let offset = 0; offset < missing.length; offset += FACTS_BATCH_SIZE) {
+        const batch = missing.slice(offset, offset + FACTS_BATCH_SIZE);
+        for (const row of batch) {
+          if (cache.get(row.key)?.sessionId !== row.sessionId) {
+            cache.set(row.key, { sessionId: row.sessionId, dirty: true });
+          }
+        }
+        const before = new Map(batch.map((row) => [row.key, cache.get(row.key)]));
+        try {
+          const result = await params.gateway.readSessionFacts({
+            sessionKeys: batch.map((row) => row.key),
+          });
+          assertReadCurrent();
+          const returned = new Map(result.sessions.map((facts) => [facts.key, facts]));
+          for (const row of batch) {
+            const facts = returned.get(row.key);
+            if (!facts || facts.sessionId !== row.sessionId) {
+              omitted.add(row.key);
+              if (cache.get(row.key) === before.get(row.key)) {
+                cache.delete(row.key);
+              }
+            } else if (cache.get(row.key) === before.get(row.key)) {
+              cache.set(row.key, { sessionId: facts.sessionId, facts, dirty: false });
+            }
+          }
+        } catch (error) {
+          assertReadCurrent();
+          for (const row of batch) {
+            unavailable.add(row.key);
+          }
+          reasons.add(redactToolPayloadText(String(error)).replace(/\s+/g, " ").slice(0, 300));
+        }
+      }
+    };
+    if (missing.length) {
+      const computation = refresh();
+      refreshes.set(id, computation);
+      try {
+        await computation;
+      } finally {
+        if (refreshes.get(id) === computation) {
+          refreshes.delete(id);
+        }
+      }
+    }
     const placements = new Map(
       (await params.store.listSessionPlacements(id)).map((entry) => [entry.sessionKey, entry]),
     );
-    assertCurrent();
+    assertReadCurrent();
     const fallback = sessionsBoardFallback(board);
     const sessions: WorkboardSessionsBoardRead["sessions"] = [];
-    for (const facts of state.facts) {
-      if (visible.get(facts.key) !== facts.sessionId || !inScope(facts, board, now())) {
+    for (const row of roster.values()) {
+      if (omitted.has(row.key)) {
         continue;
       }
-      const placement = placements.get(facts.key);
-      const valid =
-        placement && board.sessions.columns.some((column) => column.id === placement.columnId);
+      const cached = cache.get(row.key);
+      const known = cached?.sessionId === row.sessionId ? cached.facts : undefined;
+      const facts = known ?? row;
+      if (!inScope(facts, board, now())) {
+        continue;
+      }
+      const pin = placements.get(row.key);
+      const pinned =
+        pin?.source === "operator" &&
+        board.sessions.columns.some((column) => column.id === pin.columnId);
+      const match = known
+        ? board.sessions.columns.find((column) => sessionMatchesColumn(facts, column))
+        : undefined;
       sessions.push({
         ...facts,
-        columnId: valid ? placement.columnId : fallback.id,
-        source: valid ? placement.source : "state",
-        reason: valid ? placement.reason : "unresolved",
+        columnId: pinned ? pin.columnId : (match ?? fallback).id,
+        source: pinned ? "operator" : "state",
+        reason: pinned
+          ? pin.reason
+          : !known || (!match && facts.pullRequestsUnavailable)
+            ? "facts-unavailable"
+            : match
+              ? "Matched column rules"
+              : "fallback",
       });
+    }
+    const warnings: string[] = [];
+    if (unavailable.size) {
+      const warning = `Session facts are unavailable for ${unavailable.size} sessions: ${[...reasons].join("; ")}. Showing the last known placement.`;
+      warnings.push(warning);
+      if (!factsFailureLogged) {
+        context.logger.warn(warning);
+      }
+      factsFailureLogged = true;
+    } else {
+      factsFailureLogged = false;
+    }
+    if (sessions.some((session) => session.pullRequestsUnavailable)) {
+      warnings.push(
+        "Some pull-request information is unavailable. The board updates when background facts are ready.",
+      );
     }
     return {
       board,
       columns: board.sessions.columns,
       sessions,
-      ...(state.warning ? { warning: state.warning } : {}),
-      ...(state.classifiedAt !== undefined ? { classifiedAt: state.classifiedAt } : {}),
+      ...(people !== undefined ? { people } : {}),
+      ...(warnings.length ? { warning: warnings.join(" ") } : {}),
     };
   };
   const cancel = () => {
-    lifetime.abort();
-    for (const state of boards.values()) {
-      if (state.timer) {
-        clearTimeout(state.timer);
-        state.timer = undefined;
-      }
+    stopped = true;
+    unsubscribe();
+    if (timer) {
+      clearTimeout(timer);
     }
+    timer = undefined;
+    cache.clear();
   };
   return {
-    read,
+    read(id, view, caller) {
+      // A caller's roster and people facets cannot be shared with a different viewer.
+      if (caller) {
+        return read(id, view, caller);
+      }
+      const key = JSON.stringify([id, view]);
+      const pending = reads.get(key);
+      if (pending) {
+        return pending;
+      }
+      const computation = read(id, view).finally(() => {
+        if (reads.get(key) === computation) {
+          reads.delete(key);
+        }
+      });
+      reads.set(key, computation);
+      return computation;
+    },
     cancel,
     async stop() {
       cancel();
-      await Promise.allSettled(
-        [...boards.values()].flatMap((state) => (state.pending ? [state.pending] : [])),
-      );
-      boards.clear();
     },
     async update(id, patch, caller) {
       const assertWriteCurrent = interactiveAuthority(caller);
       assertWriteCurrent();
-      const board = await params.store.updateSessionsBoard(id, patch, assertWriteCurrent);
-      void schedule(id);
-      return board;
+      return await params.store.updateSessionsBoard(id, patch, assertWriteCurrent);
     },
     async move(id, sessionKey, columnId, caller) {
       const assertWriteCurrent = interactiveAuthority(caller);
@@ -503,7 +368,7 @@ function createOwner(
       if (!board.sessions.columns.some((column) => column.id === columnId)) {
         throw new Error("Unknown Sessions board column.");
       }
-      const visible = await listSessions(params.gateway, board);
+      const { sessions: visible } = await listSessions(params.gateway, board);
       if (!visible.has(sessionKey)) {
         throw new Error("Session is not available in this board's scope.");
       }
@@ -511,7 +376,7 @@ function createOwner(
       const facts = result.sessions.find(
         (entry) =>
           entry.key === sessionKey &&
-          entry.sessionId === visible.get(sessionKey) &&
+          entry.sessionId === visible.get(sessionKey)?.sessionId &&
           inScope(entry, board, now()),
       );
       if (!facts) {
@@ -521,62 +386,24 @@ function createOwner(
         (entry) => entry.sessionKey === sessionKey,
       );
       if (
-        !(await params.store.writeSessionPlacements(
+        !(await params.store.writeSessionPlacement(
           id,
-          [
-            {
-              sessionKey,
-              columnId,
-              source: "operator",
-              reason: "Moved by operator",
-              factsHash: `${sessionsBoardSpecHash(board)}:${sessionFactsHash(facts)}`,
-              updatedAt: now(),
-              expectedUpdatedAt: previous?.updatedAt,
-            },
-          ],
+          {
+            sessionKey,
+            columnId,
+            source: "operator",
+            reason: "Moved by operator",
+            factsHash: "",
+            updatedAt: now(),
+            expectedUpdatedAt: previous?.updatedAt,
+          },
           { expectedSpec: board.sessions, assertCurrent: assertWriteCurrent },
         ))
       ) {
         throw new Error("Sessions board changed. Refresh and retry the move.");
       }
-      const state = stateFor(id);
-      state.facts = [...state.facts.filter((entry) => entry.key !== sessionKey), facts];
-      return await read(id);
+      return await read(id, undefined, caller);
     },
-    async refresh(id, caller) {
-      await params.store.getSessionsBoard(id);
-      interactiveAuthority(caller)();
-      void schedule(id, true);
-      return await read(id);
-    },
-    sweep: (options) =>
-      runAsService(async () => {
-        if (lifetime.signal.aborted || !isCurrent() || !(await params.gateway.isAvailable())) {
-          return;
-        }
-        const current = (await params.store.listBoards()).boards.filter(
-          (board) => board.kind === "sessions" && !board.archivedAt,
-        );
-        const ids = new Set(current.map((board) => board.id));
-        for (const [id, state] of boards) {
-          if (!ids.has(id) && !state.pending) {
-            if (state.timer) {
-              clearTimeout(state.timer);
-            }
-            boards.delete(id);
-          }
-        }
-        const viewedWithinMs = options?.viewedWithinMs;
-        await Promise.all(
-          current
-            .filter(
-              (board) =>
-                viewedWithinMs === undefined ||
-                now() - stateFor(board.id).lastReadAt <= viewedWithinMs,
-            )
-            .map((board) => schedule(board.id)),
-        );
-      }),
   };
 }
 
@@ -596,10 +423,19 @@ export function createWorkboardSessionsBoardService(
   };
   return {
     id: "workboard-sessions-board",
-    reload: { configPrefixes: ["agents", "models", "auth", "plugins"] },
     async start(context) {
       const state = activeState();
       await state.owner?.stop();
+      state.owner = undefined;
+      const repaired = await params.store.repairSessionPlacements();
+      if (repaired.placements) {
+        context.logger.info(
+          `Sessions board removed ${repaired.placements} non-operator placements.`,
+        );
+      }
+      if (repaired.boards) {
+        context.logger.info(`Sessions board updated default rules on ${repaired.boards} boards.`);
+      }
       const owner = createOwner(params, context, () => activeState().owner === owner);
       owned = state.owner = owner;
     },
@@ -614,10 +450,8 @@ export function createWorkboardSessionsBoardService(
       }
       await owner.stop();
     },
-    read: (id) => current().read(id),
+    read: (id, view, caller) => current().read(id, view, caller),
     update: (id, patch, caller) => current().update(id, patch, caller),
     move: (id, key, column, caller) => current().move(id, key, column, caller),
-    refresh: (id, caller) => current().refresh(id, caller),
-    sweep: (options) => activeState().owner?.sweep(options) ?? Promise.resolve(),
   };
 }

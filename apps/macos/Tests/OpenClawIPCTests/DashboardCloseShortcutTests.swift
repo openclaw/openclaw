@@ -4,7 +4,7 @@ import Testing
 import WebKit
 @testable import OpenClaw
 
-@Suite(.serialized, .timeLimit(.minutes(1)))
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardCloseShortcutTests {
     @Test func `command W routes native browser focus to the visible presenting panel`() async throws {
@@ -31,13 +31,13 @@ struct DashboardCloseShortcutTests {
         #expect(window.makeFirstResponder(browser))
 
         try self.pressCommandW(in: window)
-        try await DashboardTestWait.state("visible panel close scope") {
+        try await TestWait.state("visible panel close scope") {
             try await controller.webView.evaluateJavaScript("window.closeScope") as? String == "visible-panel"
         }
         #expect(window.isVisible)
         controller.nativeBrowser.releaseScope("visible-panel")
         try self.pressCommandW(in: window)
-        try await DashboardTestWait.state("older panel close scope") {
+        try await TestWait.state("older panel close scope") {
             try await controller.webView.evaluateJavaScript("window.closeScope") as? String == "older-panel"
         }
         #expect(window.isVisible)
@@ -63,7 +63,7 @@ struct DashboardCloseShortcutTests {
         """)
 
         try self.pressCommandW(in: window, baseCharacter: baseCharacter)
-        try await DashboardTestWait.state("focused panel close") {
+        try await TestWait.state("focused panel close") {
             if !window.isVisible {
                 return true
             }
@@ -74,7 +74,7 @@ struct DashboardCloseShortcutTests {
 
         // With no panel claiming the next command, ordinary window closing remains available.
         try self.pressCommandW(in: window, baseCharacter: baseCharacter)
-        try await DashboardTestWait.state("unclaimed shortcut window close") { !window.isVisible }
+        try await TestWait.state("unclaimed shortcut window close") { !window.isVisible }
     }
 
     @Test func `traffic light closes the window without asking the focused panel`() async throws {
@@ -108,7 +108,7 @@ struct DashboardCloseShortcutTests {
         let window = try #require(controller.window)
         try #require(window.isVisible)
         try self.pressCommandW(in: window)
-        try await DashboardTestWait.state("unavailable dashboard window close") { !window.isVisible }
+        try await TestWait.state("unavailable dashboard window close") { !window.isVisible }
         #expect(!window.isVisible)
     }
 
@@ -132,7 +132,7 @@ struct DashboardCloseShortcutTests {
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
-        controller.loadInBackground(
+        controller.update(
             url: server.url(), auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
         controller.show()
         return controller

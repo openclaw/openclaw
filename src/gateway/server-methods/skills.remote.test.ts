@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import {
@@ -15,16 +15,22 @@ import {
   resolveWorkspaceSkillSourcePlan,
   type WorkspaceSkillSourceRequest,
 } from "../../skills/loading/workspace-skill-sources.js";
+import { closeSkillsWatchers } from "../../skills/runtime/refresh.js";
 import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import { createSessionRowProjection } from "../session-row-projection.js";
 import { skillsHandlers } from "./skills.js";
 import { callGatewayHandler } from "./skills.test-helpers.js";
 import type { GatewayClient } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
+// skills.status opens real watchers; close them before their roots are removed so they
+// cannot outlive this file and re-arm timers on a later file's fake clock.
+afterEach(() => closeSkillsWatchers(true));
 
 it("reads remote skill status, cards and binary requirements through the workspace binding", async () => {
   const root = tempDirs.make("gateway-remote-skills-");
@@ -159,8 +165,13 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
           updatedAt: 1,
           visibility: "shared",
           createdActor: { type: "human", source: "profile", id: alice.id },
-          skillLibrarySelections: seedSkillLibrarySelection(authority),
+          skillLibrarySelections: await seedSkillLibrarySelection(authority),
         },
+      );
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      const requestContext = bindSessionRowProjection(
+        { getRuntimeConfig: () => cfg },
+        () => projection,
       );
       const entered = createDeferred();
       const resume = createDeferred();
@@ -186,7 +197,7 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
         "skills.status",
         { sessionKey },
         {
-          context: { getRuntimeConfig: () => cfg },
+          context: requestContext,
           client: {
             authenticatedUserProfile: { profileId: bob.id },
             connect: { scopes: ["operator.read", "operator.write"] },
@@ -194,7 +205,11 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
         },
       );
       try {
-        await entered.promise;
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          result,
+          "skills.status skipped remote discovery",
+        );
         if (change !== "unchanged") {
           await patchSessionEntryCore({ agentId: "main", sessionKey }, () =>
             change === "revoked" ? { visibility: "draft" } : { sessionId: "replacement" },
@@ -226,6 +241,7 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
         try {
           await result;
         } finally {
+          projection.dispose();
           release();
         }
       }

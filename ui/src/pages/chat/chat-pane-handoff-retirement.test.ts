@@ -3,7 +3,7 @@ import { expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
-import { retireSessionPaneHandoffs } from "./chat-pane-handoff-lifecycle.ts";
+import { paneSessionHandoffs, retireSessionPaneHandoffs } from "./chat-pane-handoff-lifecycle.ts";
 import {
   clearPaneSessionHandoffs,
   consumePaneSessionHandoff,
@@ -33,18 +33,28 @@ it.each(["gateway", "principal"] as const)(
       const otherOwner = gateway.snapshot.client;
       principal.recoveryScope = "original";
       fixture.publish({ ...gateway.snapshot, client: owner });
+      // A principal change retires presentation identity irreversibly. Stage
+      // the current owner again so deletion, not the switch, retires this entry.
+      preparePaneSessionHandoff(context, "original", key, { draft: "retire", attachments: [] });
       retireSessionPaneHandoffs(context, [{ key, retireBeforeRevision: 200 }]);
 
+      expect(paneSessionHandoffs.get(context)?.get("original")).toEqual([]);
+      expect(paneSessionHandoffs.get(context)?.get("other")).toHaveLength(1);
       expect(consumePaneSessionHandoff(context, "original", key)).toBeNull();
       expect(consumePaneSessionHandoff(context, "other", key)).toBeNull();
       if (change === "principal") {
         principal.recoveryScope = "other";
       }
       fixture.publish({ ...gateway.snapshot, client: otherOwner });
+      if (change === "principal") {
+        expect(consumePaneSessionHandoff(context, "other", key)).toBeNull();
+        preparePaneSessionHandoff(context, "other", key, { draft: "keep", attachments: [] });
+      }
       expect(consumePaneSessionHandoff(context, "other", key)).toEqual({
         draft: "keep",
         attachments: [],
       });
+      expect(consumePaneSessionHandoff(context, "other", key)).toBeNull();
     } finally {
       clearPaneSessionHandoffs(context, "original");
       clearPaneSessionHandoffs(context, "other");

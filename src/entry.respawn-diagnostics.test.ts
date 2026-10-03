@@ -87,29 +87,16 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each([true, false])(
-  "prepares early runtime diagnostics after async support resolves to %s",
-  async (supported) => {
-    boundary.mode = "compile-cache";
-    boundary.trace = false;
-    boundary.runtimeSupported = supported;
-
-    await import("./entry.js");
-
-    expect(boundary.events).toEqual(
-      supported ? ["spawn"] : ["dotenv", "trace formatting", "spawn"],
-    );
-  },
-);
-
 it.each([
-  { mode: "flags", trace: false },
-  { mode: "flags", trace: true },
-  { mode: "compile-cache", trace: false },
-  { mode: "compile-cache", trace: true },
+  { mode: "flags", trace: false, supported: true },
+  { mode: "flags", trace: true, supported: true },
+  { mode: "compile-cache", trace: false, supported: true },
+  { mode: "compile-cache", trace: false, supported: false },
+  { mode: "compile-cache", trace: true, supported: true },
 ] as const)(
-  "preserves the idle Doctor launcher through $mode respawn diagnostics (trace: $trace)",
-  async ({ mode, trace }) => {
+  "preserves the idle Doctor launcher through $mode respawn diagnostics (trace: $trace, supported: $supported)",
+  async ({ mode, trace, supported }) => {
+    boundary.runtimeSupported = supported;
     boundary.mode = mode;
     boundary.trace = trace;
     const launcherTitle = process.title;
@@ -122,15 +109,20 @@ it.each([
 
     expect(boundary.spawnTitle).toBe(launcherTitle);
     expect(process.title).toBe(launcherTitle);
-    expect(boundary.events).toEqual(trace ? ["dotenv", "trace formatting", "spawn"] : ["spawn"]);
+    const recoveryEvents = supported ? [] : ["dotenv", "trace formatting"];
+    expect(boundary.events).toEqual([
+      ...recoveryEvents,
+      ...(trace ? ["dotenv", "trace formatting", "spawn"] : ["spawn"]),
+    ]);
     expect(stderr).not.toHaveBeenCalled();
     expect(boundary.writer).toBeTypeOf("function");
     await boundary.writer?.("startup failed");
-    expect(boundary.events).toEqual(
-      trace
+    expect(boundary.events).toEqual([
+      ...recoveryEvents,
+      ...(trace
         ? ["dotenv", "trace formatting", "spawn", "diagnostic"]
-        : ["spawn", "dotenv", "trace formatting", "diagnostic"],
-    );
+        : ["spawn", "dotenv", "trace formatting", "diagnostic"]),
+    ]);
     expect(stderr).toHaveBeenCalledWith(expect.stringContaining("startup failed"));
   },
 );

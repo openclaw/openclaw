@@ -1,14 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, aroundEach, beforeEach, expect, vi } from "vitest";
+import { afterAll, afterEach, aroundEach, beforeEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ActiveSessionSqliteMigrationRun } from "../infra/session-sqlite-migration-manifest.js";
 import { resolveTargetSqlitePath } from "../infra/session-sqlite-migration-readers.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { ExitError } from "../runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { runDoctorSessionSqlite, type DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
 import { doctorCommand } from "./doctor.js";
 
@@ -139,7 +144,31 @@ export function useDoctorSessionSqliteTestFixture() {
     OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
     OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
   };
-  const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-doctor-session-sqlite-");
+  // Platform-alias cases keep their requested lexical root; drain its canonical owner path.
+  const explicitRoots = new Set<string>();
+  const explicitTempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterAll(async () => {
+      if (explicitRoots.size === 0) {
+        return;
+      }
+      for (const root of explicitRoots) {
+        await closeOpenClawAgentDatabasesAsync(root);
+      }
+      await closeStateDatabaseForTest();
+      cleanup();
+    }),
+  );
+  const autoCleanupTempDirs = {
+    make(prefix: string, tempRoot?: string) {
+      if (!tempRoot) {
+        return sessionDirs.make();
+      }
+      const root = explicitTempDirs.make(prefix, tempRoot);
+      explicitRoots.add(fs.realpathSync.native(root));
+      return root;
+    },
+  };
   // Reuse child imports within each case; snapshots still admit and read fresh state.
   aroundEach((runTest) => withSqliteReadOnlyWorkerScope(runTest));
   beforeEach(() => {

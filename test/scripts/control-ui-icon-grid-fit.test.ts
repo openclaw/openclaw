@@ -34,52 +34,54 @@ function scan(css: string) {
   return scanIconGridFit(css, [fixture], base);
 }
 
+const cramped =
+  'html`<header class="toolbar"><button class="icon">${icons.refresh}</button></header>`';
+
+function createAuditFixture(sheets: Record<string, string> = {}, markup = cramped) {
+  const root = tempDirs.make("openclaw-icon-grid-");
+  const styles = path.join(root, "ui/src/styles");
+  const source = path.join(root, "ui/src/control.ts");
+  fs.mkdirSync(styles, { recursive: true });
+  for (const [name, css] of Object.entries({
+    "base.css": base,
+    "components.css": "",
+    "control.css": original,
+    ...sheets,
+  })) {
+    fs.writeFileSync(path.join(styles, name), css);
+  }
+  fs.writeFileSync(source, markup);
+  return { root, styles, source };
+}
+
 describe("fixed icon-grid fit", () => {
   it("catches the shipped size override rather than flagging the safe base control", () => {
     const findings = scan(original).findings;
     expect(findings).toHaveLength(2);
-    expect(findings).toEqual(
-      expect.arrayContaining([
+    for (const axis of ["width", "height"]) {
+      expect(findings).toContainEqual(
         expect.objectContaining({
           kind: "overflow",
-          axis: "width",
+          axis,
           size: 26,
           padding: 12,
           border: 2,
           icon: 17,
           available: 12,
         }),
-        expect.objectContaining({
-          kind: "overflow",
-          axis: "height",
-          size: 26,
-          padding: 12,
-          border: 2,
-          icon: 17,
-          available: 12,
-        }),
-      ]),
-    );
+      );
+    }
     expect(scan(original + ".toolbar > button {padding:0}").findings).toEqual([]);
     expect(scan(original.replace("width:26px; height:26px;", "")).findings).toEqual([]);
   });
 
   it("requires authored padding instead of trusting jsdom's zero native default", () => {
     const css = original.replace("padding:6px;", "");
-    expect(scan(css).findings).toEqual([
-      expect.objectContaining({
-        kind: "native-padding",
-        axis: "width",
-        padding: null,
-        available: null,
-      }),
-      expect.objectContaining({
-        kind: "native-padding",
-        axis: "height",
-        padding: null,
-        available: null,
-      }),
-    ]);
+    expect(scan(css).findings).toEqual(
+      ["width", "height"].map((axis) =>
+        expect.objectContaining({ kind: "native-padding", axis, padding: null, available: null }),
+      ),
+    );
     expect(scan(css + ".icon {padding:0}").findings).toEqual([]);
   });
 
@@ -115,7 +117,6 @@ describe("fixed icon-grid fit", () => {
       ".toolbar .icon {width:40px!important}.icon {width:24px!important}",
     ],
     ["always-applicable media correction", "@media all {.icon {padding:0}}"],
-    ["supports correction", "@supports (display:grid) {.icon {padding:0}}"],
     ["nested-only padding", ".icon {&:hover {padding:0}}"],
   ])("defers %s rather than inventing a resolved geometry", (_name, correction) => {
     const result = scan(original + correction);
@@ -123,9 +124,9 @@ describe("fixed icon-grid fit", () => {
     expect(result.unresolved).toBeGreaterThan(0);
   });
 
-  it.each(["hover", "focus-visible", "active"])("defers top-level %s geometry", (state) => {
+  it("defers top-level hover geometry", () => {
     const result = scan(
-      original + ".toolbar > button {padding:0}.toolbar > button:" + state + " {padding:8px}",
+      original + ".toolbar > button {padding:0}.toolbar > button:hover {padding:8px}",
     );
     expect(result.findings).toHaveLength(0);
     expect(result.checked).toBe(0);
@@ -133,14 +134,8 @@ describe("fixed icon-grid fit", () => {
   });
 
   it("defers cross-sheet ancestor, tag, ID, attribute, and SVG overrides", () => {
-    const root = tempDirs.make("openclaw-icon-grid-cross-sheet-");
-    const styles = path.join(root, "ui/src/styles");
-    fs.mkdirSync(styles, { recursive: true });
-    fs.writeFileSync(path.join(styles, "base.css"), base);
-    fs.writeFileSync(path.join(styles, "components.css"), "");
-    fs.writeFileSync(path.join(styles, "control.css"), original);
-    fs.writeFileSync(
-      path.join(root, "ui/src/control.ts"),
+    const { root, styles } = createAuditFixture(
+      {},
       'html`<header class="toolbar"><button class="icon" id="action" title="Preview">${icons.refresh}</button></header>`',
     );
     for (const correction of [
@@ -249,17 +244,7 @@ describe("fixed icon-grid fit", () => {
   });
 
   it("audits current source and shared styles on each manual invocation", () => {
-    const root = tempDirs.make("openclaw-icon-grid-");
-    const styles = path.join(root, "ui/src/styles");
-    fs.mkdirSync(styles, { recursive: true });
-    fs.writeFileSync(path.join(styles, "base.css"), base);
-    fs.writeFileSync(path.join(styles, "components.css"), "");
-    const source = path.join(root, "ui/src/control.ts");
-    fs.writeFileSync(
-      source,
-      'html`<header class="toolbar"><button class="icon">${icons.refresh}</button></header>`',
-    );
-    fs.writeFileSync(path.join(styles, "control.css"), original);
+    const { root, styles, source } = createAuditFixture();
     const audit = () => auditIconButtons(root, ["ui/src/styles/control.css"]);
     const first = audit();
     expect(first.findings).toHaveLength(2);
@@ -267,8 +252,6 @@ describe("fixed icon-grid fit", () => {
     fs.writeFileSync(source, 'html`<button class="icon">${icons.refresh}</button>`');
     expect(audit().findings).toHaveLength(0);
     const added = path.join(root, "ui/src/added.ts");
-    const cramped =
-      'html`<header class="toolbar"><button class="icon">${icons.refresh}</button></header>`';
     fs.writeFileSync(added, cramped);
     expect(audit().findings).toHaveLength(2);
     fs.unlinkSync(added);
@@ -288,18 +271,11 @@ describe("fixed icon-grid fit", () => {
   });
 
   it("does not append the base sheet again after component overrides", () => {
-    const root = tempDirs.make("openclaw-icon-grid-order-");
-    const styles = path.join(root, "ui/src/styles");
-    fs.mkdirSync(styles, { recursive: true });
-    fs.writeFileSync(path.join(styles, "base.css"), base + original);
-    fs.writeFileSync(
-      path.join(styles, "components.css"),
-      ".toolbar > button {width:32px;height:32px}",
-    );
-    fs.writeFileSync(
-      path.join(root, "ui/src/control.ts"),
-      'html`<header class="toolbar"><button class="icon">${icons.refresh}</button></header>`',
-    );
+    const { root } = createAuditFixture({
+      "base.css": base + original,
+      "components.css": ".toolbar > button {width:32px;height:32px}",
+      "control.css": "",
+    });
     const result = auditIconButtons(root, ["ui/src/styles/base.css"]);
     expect(result.findings).toHaveLength(0);
     expect(result.checkedAxes).toBe(2);

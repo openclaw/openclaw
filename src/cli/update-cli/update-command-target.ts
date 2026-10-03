@@ -18,6 +18,7 @@ import {
   resolveExtendedStablePackage,
   resolveNpmChannelTag,
 } from "../../infra/update-check.js";
+import { readDevUpdateTarget } from "../../infra/update-dev-target.js";
 import { createFreeBsdPkgOwnershipInspection } from "../../infra/update-freebsd-pkg-ownership.js";
 import {
   canResolveRegistryVersionForPackageTarget,
@@ -67,7 +68,6 @@ import { inspectNpmGlobalDestination } from "./update-command-package-destinatio
 import { UnreportedUpdateAdmissionOutcome, type RefuseUpdate } from "./update-command-result.js";
 import {
   assertUpdatePackageActivationAdmission,
-  readDevUpdateTarget,
   recordUpdateCommandTarget,
   type prepareUpdateCommand,
 } from "./update-command-run.js";

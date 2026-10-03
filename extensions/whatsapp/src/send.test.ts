@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as waitForLogTick } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
@@ -952,7 +953,7 @@ describe("web outbound", () => {
     expect(sendPoll).not.toHaveBeenCalled();
   });
 
-  it("redacts recipients and poll text in outbound logs", async () => {
+  it("redacts recipients and poll text in outbound logs", async ({ signal }) => {
     const logPath = path.join(os.tmpdir(), `openclaw-outbound-${crypto.randomUUID()}.log`);
     setLoggerOverride({ level: "trace", file: logPath });
 
@@ -965,15 +966,27 @@ describe("web outbound", () => {
     const redactedTarget = redactIdentifier("+1555");
     const redactedJid = redactIdentifier("1555@s.whatsapp.net");
     let content = "";
-    await vi.waitFor(
-      () => {
+    // The async file transport's flush promise is not exposed through the plugin SDK.
+    try {
+      for (;;) {
+        signal.throwIfAborted();
         content = fsSync.existsSync(logPath) ? fsSync.readFileSync(logPath, "utf-8") : "";
-        expect(content).toContain(redactedTarget);
-        expect(content).toContain(redactedJid);
-        expect(content).toContain("sent poll");
-      },
-      { timeout: 2_000, interval: 5 },
-    );
+        if ([redactedTarget, redactedJid, "sent poll"].every((text) => content.includes(text))) {
+          break;
+        }
+        await waitForLogTick(10, undefined, { signal });
+      }
+    } catch (error) {
+      if (signal.aborted) {
+        throw new Error(`Timed out waiting for the redacted sent-poll log in ${logPath}`, {
+          cause: error,
+        });
+      }
+      throw error;
+    }
+    expect(content).toContain(redactedTarget);
+    expect(content).toContain(redactedJid);
+    expect(content).toContain("sent poll");
 
     expect(content).not.toContain(`"to":"+1555"`);
     expect(content).not.toContain(`"jid":"1555@s.whatsapp.net"`);

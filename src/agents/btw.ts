@@ -111,19 +111,6 @@ function collectTextContent(content: Array<{ type?: string; text?: string }>): s
     .join("");
 }
 
-function resolveReturnedAuthProfileSource(
-  sessionEntry: StoredSessionEntry | undefined,
-  authProfileId: string | undefined,
-): "auto" | "user" | undefined {
-  if (!authProfileId?.trim()) {
-    return undefined;
-  }
-  if (sessionEntry?.authProfileOverride?.trim() !== authProfileId) {
-    return "auto";
-  }
-  return resolveCollapsedSessionAuthPinSource(sessionEntry);
-}
-
 // Planning and immediate resolution share one scoped snapshot so provider
 // bindings and cooldown decisions cannot diverge inside a side question.
 function resolveBtwAuthProfileStore(params: {
@@ -633,8 +620,11 @@ async function runCliBtwSideQuestion(params: {
     }
     return { text };
   } finally {
-    await prepared?.preparedBackend.cleanup?.();
-    preparedRunAdmission.close();
+    try {
+      await prepared?.preparedBackend.cleanup?.();
+    } finally {
+      preparedRunAdmission.close();
+    }
   }
 }
 
@@ -1099,6 +1089,7 @@ export async function runBtwSideQuestion(
         imageLimits,
       });
     }
+    params.opts?.abortSignal?.throwIfAborted();
     if (messages.length === 0 && !inFlightPrompt?.trim()) {
       throw new Error("No active session context.");
     }
@@ -1112,10 +1103,9 @@ export async function runBtwSideQuestion(
     });
     const fallbackRuntime = fallbackPolicy.runtime.trim();
     const sessionAuthProfileId = params.sessionEntry.authProfileOverride?.trim() || undefined;
-    const sessionAuthProfileSource = resolveReturnedAuthProfileSource(
-      params.sessionEntry,
-      sessionAuthProfileId,
-    );
+    const sessionAuthProfileSource = sessionAuthProfileId
+      ? resolveCollapsedSessionAuthPinSource(params.sessionEntry)
+      : undefined;
     const cliProviderFromSessionAuth = sessionAuthProfileId
       ? resolveCliRuntimeExecutionProvider({
           provider: params.provider,

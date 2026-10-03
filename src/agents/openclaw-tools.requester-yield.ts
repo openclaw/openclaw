@@ -73,13 +73,14 @@ export function createRequesterYieldCallback(params: {
     const completionClaimed = runtimeClaimed || registryClaimed;
     if (requesterSessionKey && params.requesterTurnRunId) {
       const { claimSubagentYield } = await import("./subagents/registry/subagent-registry.js");
-      // A visible child has a dashboard key. Only the native task owner can
-      // accept a message wait; key shape and human ownership are not authority.
       const claim = await claimSubagentYield({
         runId: params.requesterTurnRunId,
         sessionKey: requesterSessionKey,
+        agentId: params.requesterAgentId,
         waitForMessage: intent?.waitFor === "message",
         acknowledgment: intent?.acknowledgment,
+        // Exec completion cannot resume a self-paused task. An independently
+        // owned runtime/child completion can, and retains its existing claim.
         hasPendingWork: () =>
           !completionClaimed &&
           (listRunningSessions().some((session) => session.scopeKey === processScopeKey) ||
@@ -94,8 +95,8 @@ export function createRequesterYieldCallback(params: {
             "Background exec is still running or has an uncollected result in this subagent session. Use process to poll and collect it before yielding; background exec completion cannot resume this subagent, and run-scoped proxy credentials expire when the turn ends.",
         };
       }
-      if (claim === "accepted") {
-        return true;
+      if (claim !== "nothing-pending") {
+        return claim;
       }
     }
     if (completionClaimed) {

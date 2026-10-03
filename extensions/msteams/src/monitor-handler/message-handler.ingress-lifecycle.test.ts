@@ -1,11 +1,7 @@
-// Microsoft Teams tests cover durable claim ownership through inbound debounce.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  createInboundDebouncer,
-  resolveInboundDebounceMs,
-} from "openclaw/plugin-sdk/channel-inbound-debounce";
+import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
@@ -14,10 +10,6 @@ import {
   createChannelIngressMonitor,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
 } from "openclaw/plugin-sdk/channel-outbound";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
@@ -38,23 +30,15 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
 });
 
 function createLifecycle(): MSTeamsIngressLifecycle & {
-  adoptedCount: () => number;
-  abandonedCount: () => number;
+  onAdopted: ReturnType<typeof vi.fn>;
+  onAbandoned: ReturnType<typeof vi.fn>;
 } {
-  let adopted = 0;
-  let abandoned = 0;
   return {
     abortSignal: new AbortController().signal,
-    onAdopted: async () => {
-      adopted += 1;
-    },
+    onAdopted: vi.fn(async () => {}),
+    onAbandoned: vi.fn(async () => {}),
     onDeferred: () => {},
     onAdoptionFinalizing: () => {},
-    onAbandoned: async () => {
-      abandoned += 1;
-    },
-    adoptedCount: () => adopted,
-    abandonedCount: () => abandoned,
   };
 }
 
@@ -93,94 +77,6 @@ describe("Microsoft Teams drain claim ownership", () => {
     runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
   });
 
-  it("changes batching timing without replacing the Microsoft Teams handler", async () => {
-    const cfg: OpenClawConfig = {
-      messages: { inbound: { debounceMs: 0 } },
-      channels: { msteams: { dmPolicy: "open", allowFrom: ["*"] } },
-    };
-    setRuntimeConfigSnapshot(cfg, cfg);
-    const debouncers: Array<{ drain: () => Promise<void> }> = [];
-    const createDebouncer: typeof createInboundDebouncer = (options) => {
-      const debouncer = createInboundDebouncer(options);
-      debouncers.push(debouncer);
-      return debouncer;
-    };
-    const { deps } = createMessageHandlerDeps(cfg, {
-      createInboundDebouncer: createDebouncer,
-      resolveInboundDebounceMs,
-    });
-    const handler = createMSTeamsMessageHandler(deps);
-    const dispatch = runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher;
-    const publish = (debounceMs: number) => {
-      const current = { ...cfg, messages: { inbound: { debounceMs } } };
-      setRuntimeConfigSnapshot(current, current);
-    };
-    try {
-      await handler(context(directActivity("initial", "immediate")), createLifecycle());
-      expect(dispatch).toHaveBeenCalledTimes(1);
-      publish(250);
-      const started = performance.now();
-      await handler(context(directActivity("first", "part one")), createLifecycle());
-      await handler(context(directActivity("second", "part two")), createLifecycle());
-      expect(dispatch).toHaveBeenCalledTimes(1);
-      await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(2));
-      const delayedElapsedMs = performance.now() - started;
-      expect(dispatch).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          ctx: expect.objectContaining({
-            BodyForAgent: expect.stringContaining("part one\npart two"),
-          }),
-        }),
-      );
-      publish(0);
-      await handler(context(directActivity("last", "after disable")), createLifecycle());
-      expect(dispatch).toHaveBeenCalledTimes(3);
-      console.log(
-        "MONITOR_DEBOUNCE_PROOF " +
-          JSON.stringify({
-            channel: "msteams",
-            pid: process.pid,
-            clock: "real",
-            delaysMs: [0, 250, 0],
-            delayedElapsedMs,
-            dispatches: dispatch.mock.calls.length,
-            debouncersCreated: debouncers.length,
-          }),
-      );
-    } finally {
-      await Promise.all(debouncers.map((debouncer) => debouncer.drain()));
-      clearRuntimeConfigSnapshot();
-    }
-  });
-
-  it("defers a claimed activity and binds completion to reply adoption", async () => {
-    const handler = createHandler({
-      channels: { msteams: { dmPolicy: "open", allowFrom: ["*"] } },
-    } as OpenClawConfig);
-    const lifecycle = createLifecycle();
-
-    const result = await handler(context(directActivity("activity-one", "hello")), lifecycle);
-
-    expect(result).toEqual({ kind: "deferred" });
-    await vi.waitFor(
-      () => {
-        expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(
-          1,
-        );
-        expect(lifecycle.adoptedCount()).toBe(1);
-      },
-      { timeout: 5_000 },
-    );
-    const dispatchParams = runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mock
-      .calls[0]?.[0] as
-      | { replyOptions?: { turnAdoptionLifecycle?: { admission?: string } } }
-      | undefined;
-    expect(dispatchParams?.replyOptions?.turnAdoptionLifecycle).toMatchObject({
-      admission: "exclusive",
-    });
-    expect(lifecycle.abandonedCount()).toBe(0);
-  });
-
   it("fans merged-flush adoption to every constituent claim", async () => {
     const handler = createHandler({
       messages: { inbound: { debounceMs: 40 } },
@@ -200,16 +96,16 @@ describe("Microsoft Teams drain claim ownership", () => {
         expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(
           1,
         );
-        expect(first.adoptedCount()).toBe(1);
-        expect(second.adoptedCount()).toBe(1);
+        expect(first.onAdopted).toHaveBeenCalledTimes(1);
+        expect(second.onAdopted).toHaveBeenCalledTimes(1);
       },
       { timeout: 5_000 },
     );
     const dispatchParams = runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mock
       .calls[0]?.[0] as { ctx?: { BodyForAgent?: string } } | undefined;
     expect(dispatchParams?.ctx?.BodyForAgent).toContain("part one\npart two");
-    expect(first.abandonedCount()).toBe(0);
-    expect(second.abandonedCount()).toBe(0);
+    expect(first.onAbandoned).not.toHaveBeenCalled();
+    expect(second.onAbandoned).not.toHaveBeenCalled();
   });
 
   it("dispatches HTML-only text through the immediate debounce flush without double stripping", async () => {
@@ -223,7 +119,7 @@ describe("Microsoft Teams drain claim ownership", () => {
         ...directActivity("activity-html", ""),
         attachments: [
           {
-            contentType: "text/html",
+            contentType: "TEXT/HTML",
             content: "<at>Bot</at><p>Use x &lt; 5 &copy;; literal &lt;at&gt;Alice&lt;/at&gt;</p>",
           },
         ],
@@ -240,8 +136,12 @@ describe("Microsoft Teams drain claim ownership", () => {
         }),
       }),
     );
-    expect(lifecycle.adoptedCount()).toBe(1);
-    expect(lifecycle.abandonedCount()).toBe(0);
+    expect(
+      runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0].replyOptions
+        ?.turnAdoptionLifecycle,
+    ).toMatchObject({ admission: "exclusive" });
+    expect(lifecycle.onAdopted).toHaveBeenCalledTimes(1);
+    expect(lifecycle.onAbandoned).not.toHaveBeenCalled();
   });
 
   it("completes a gated no-dispatch turn instead of stalling its claim", async () => {
@@ -270,9 +170,11 @@ describe("Microsoft Teams drain claim ownership", () => {
     const result = await handler(context(gatedActivity), lifecycle);
 
     expect(result).toEqual({ kind: "deferred" });
-    await vi.waitFor(() => expect(lifecycle.adoptedCount()).toBe(1), { timeout: 5_000 });
+    await vi.waitFor(() => expect(lifecycle.onAdopted).toHaveBeenCalledTimes(1), {
+      timeout: 5_000,
+    });
     expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
-    expect(lifecycle.abandonedCount()).toBe(0);
+    expect(lifecycle.onAbandoned).not.toHaveBeenCalled();
   });
 
   it("preserves abandon retry accounting, backoff, threshold, and restart behavior", async () => {

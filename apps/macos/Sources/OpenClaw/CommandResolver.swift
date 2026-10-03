@@ -173,8 +173,8 @@ enum CommandResolver {
         guard FileManager().fileExists(atPath: base.path) else { return [] }
         guard let entries = try? FileManager().contentsOfDirectory(atPath: base.path) else { return [] }
 
-        let sorted = entries.compactMap { entry -> (name: String, version: RuntimeVersion)? in
-            guard let version = RuntimeVersion.from(string: entry),
+        let sorted = entries.compactMap { entry -> (name: String, version: Semver)? in
+            guard let version = RuntimeLocator.parseVersion(entry),
                   RuntimeLocator.isSupportedNodeVersion(version)
             else { return nil }
             return (entry, version)
@@ -292,6 +292,20 @@ enum CommandResolver {
     }
 
     static func resolveLocalCLI(searchPaths: [String]?, projectRoot: URL?) async -> LocalCLIResolution {
+        if BundledRuntime.isBundledApp {
+            do {
+                if let runtime = try BundledRuntime.seeded() {
+                    return .executable(runtime.cliCommand)
+                }
+            } catch {
+                return .unavailable(error.localizedDescription)
+            }
+            // Existing external and managed Node installs remain inspectable before adoption.
+            if let openclawPath = openclawExecutable(searchPaths: searchPaths) {
+                return .executable([openclawPath])
+            }
+            return .unavailable("OpenClaw's bundled runtime is not prepared. Retry setup in OpenClaw.app.")
+        }
         let root = projectRoot ?? self.projectRoot()
         if let openclawPath = projectOpenClawExecutable(projectRoot: root) {
             return .executable([openclawPath])

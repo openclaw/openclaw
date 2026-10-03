@@ -718,8 +718,8 @@
 
   display: inline-block;
   max-inline-size: 100%;
-  position: static;
-  padding: 0.08em 0.45em 0.08em 0.4em;
+  padding: 0.08em 0.45em;
+  padding-inline-start: 1.7em;
   border-radius: var(--radius-sm);
   background: var(--github-item-bg);
   /* Unknown, unavailable and draft states remain neutral, not disabled. */
@@ -762,12 +762,9 @@
 }
 
 .chat-text a.markdown-github-item::before {
-  position: static;
-  display: inline-block;
-  margin-inline-end: 0.3em;
-  vertical-align: -0.12em;
-  mask: var(--github-item-icon) center / contain no-repeat;
-  -webkit-mask: var(--github-item-icon) center / contain no-repeat;
+  --github-mark: var(--github-item-icon);
+
+  inset-inline-start: 0.4em;
 }
 
 /* GitHub Octicons issue-opened-16 and git-pull-request-16 (MIT). */

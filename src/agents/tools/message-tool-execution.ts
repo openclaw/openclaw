@@ -3,6 +3,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import { resolveActiveReplyOperationForSessionId } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
@@ -688,6 +689,12 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             currentSourceReply
           ) {
             messageDelivery.sourceReplyDelivered = true;
+            // A later stall cannot erase this answer; recovery and its notice read it.
+            if (options?.sessionId) {
+              resolveActiveReplyOperationForSessionId(
+                options.sessionId,
+              )?.markSourceReplyDelivered();
+            }
           }
           if (
             action === "poll-vote" &&

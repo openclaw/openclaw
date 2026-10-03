@@ -36,15 +36,18 @@ extension OpenClawChatViewModel {
     static func messageContentFingerprint(for message: OpenClawChatMessage) -> String {
         message.content.map { item in
             let type = (item.type ?? "text").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let text = (item.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let id = (item.id ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let name = (item.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let fileName = (item.fileName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let artifactId = (item.artifactId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let url = (item.url ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let openUrl = (item.openUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let mimeType = (item.mimeType ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return [type, text, id, name, fileName, artifactId, url, openUrl, mimeType]
+            return [
+                type,
+                item.text,
+                item.id,
+                item.name,
+                item.fileName,
+                item.artifactId,
+                item.url,
+                item.openUrl,
+                item.mimeType,
+            ]
+                .map { ($0 ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
                 .joined(separator: "\\u{001F}")
         }.joined(separator: "\\u{001E}")
     }
@@ -52,11 +55,9 @@ extension OpenClawChatViewModel {
     static func finalMessageContentFingerprint(for message: OpenClawChatMessage) -> String {
         message.content.map { item in
             let type = (item.type ?? "text").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let text = (item.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let artifactId = (item.artifactId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let url = (item.url ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let openUrl = (item.openUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return [type, text, artifactId, url, openUrl].joined(separator: "\\u{001F}")
+            return [type, item.text, item.artifactId, item.url, item.openUrl]
+                .map { ($0 ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+                .joined(separator: "\\u{001F}")
         }.joined(separator: "\\u{001E}")
     }
 
@@ -515,7 +516,7 @@ extension OpenClawChatViewModel {
     {
         guard !previous.isEmpty, !incoming.isEmpty else { return incoming }
 
-        var previousMessagesByKey: [String: [OpenClawChatMessage]] = [:]
+        var previousMessagesByKey: [String: ArraySlice<OpenClawChatMessage>] = [:]
         for message in previous {
             guard let key = Self.messageIdentityKey(for: message) else { continue }
             previousMessagesByKey[key, default: []].append(message)
@@ -523,16 +524,9 @@ extension OpenClawChatViewModel {
 
         return incoming.map { message in
             guard let key = Self.messageIdentityKey(for: message),
-                  var matches = previousMessagesByKey[key],
-                  let existing = matches.first
+                  let existing = previousMessagesByKey[key]?.popFirst()
             else {
                 return message
-            }
-            matches.removeFirst()
-            if matches.isEmpty {
-                previousMessagesByKey.removeValue(forKey: key)
-            } else {
-                previousMessagesByKey[key] = matches
             }
             guard existing.id != message.id else { return message }
             return Self.adoptingCanonicalMessage(message, over: existing)
@@ -786,6 +780,7 @@ extension OpenClawChatViewModel {
         // is written through so the next cold open pre-paints current rows.
         self.hasAppliedLiveHistory = true
         self.isShowingCachedTranscript = false
+        self.syncSessionReactions()
         // An empty post-send refresh is incomplete by contract: reconciliation
         // preserves the visible transcript, so preserve its last canonical cache too.
         if !preservingOptimisticLocalMessages || !incoming.isEmpty {

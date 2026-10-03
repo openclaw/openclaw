@@ -123,43 +123,33 @@ describe("progress-card loop outcomes", () => {
       ).toBe(index === 2);
     }
   });
-  it.each(["read", "error"])("does not normalize a real receipt used as %s", async (kind) => {
-    const { execute } = createFixture();
-    const state = makeState();
-    for (let index = 0; index < 2; index++) {
-      const { result } = await execute({ markdown });
-      recordToolCallOutcome(state, {
-        toolName: kind === "read" ? "read" : "progress_card",
-        toolParams: { markdown },
-        result: kind === "error" ? Object.assign(result, { isError: true }) : result,
-      });
-    }
-    expect(new Set(state.toolCallHistory?.map((record) => record.resultHash)).size).toBe(2);
-  });
-  it("keeps semantic outcomes private and independent of receipt wording", async () => {
-    const { execute } = createFixture();
-    const state = makeState();
-    for (let index = 0; index < 2; index++) {
-      const { result } = await execute({ markdown });
-      expect(Object.keys(result).toSorted()).toEqual(["content", "details"]);
-      result.content = [{ type: "text", text: "New receipt wording " + index }];
-      recordToolCallOutcome(state, { toolName: "progress_card", toolParams: { markdown }, result });
-    }
-    expect(new Set(state.toolCallHistory?.map((record) => record.resultHash)).size).toBe(1);
-  });
-  it("does not normalize unmarked progress-card receipts", () => {
-    const state = makeState();
-    for (let revision = 1; revision <= 2; revision++) {
-      recordToolCallOutcome(state, {
-        toolName: "progress_card",
-        toolParams: { markdown },
-        result: {
-          isError: false,
-          details: { revision, steps: null },
-          content: [{ type: "text", text: "Read failed at revision " + revision }],
-        },
-      });
-    }
-    expect(new Set(state.toolCallHistory?.map((record) => record.resultHash)).size).toBe(2);
-  });
+  it.each(["read", "error", "rewritten", "unmarked"] as const)(
+    "normalizes only private successful progress-card outcomes: %s",
+    async (kind) => {
+      const { execute } = createFixture();
+      const state = makeState();
+      for (let revision = 1; revision <= 2; revision++) {
+        const result =
+          kind === "unmarked"
+            ? {
+                isError: false,
+                details: { revision, steps: null },
+                content: [{ type: "text" as const, text: "Read failed at revision " + revision }],
+              }
+            : (await execute({ markdown })).result;
+        if (kind === "rewritten") {
+          expect(Object.keys(result).toSorted()).toEqual(["content", "details"]);
+          result.content = [{ type: "text", text: "New receipt wording " + revision }];
+        }
+        recordToolCallOutcome(state, {
+          toolName: kind === "read" ? "read" : "progress_card",
+          toolParams: { markdown },
+          result: kind === "error" ? Object.assign(result, { isError: true }) : result,
+        });
+      }
+      expect(new Set(state.toolCallHistory?.map((record) => record.resultHash)).size).toBe(
+        kind === "rewritten" ? 1 : 2,
+      );
+    },
+  );
 });

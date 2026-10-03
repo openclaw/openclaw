@@ -3,8 +3,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
-import { trimToValue } from "../mantis-options.runtime.js";
 import {
   copyCrabboxArtifacts,
   type CommandRunner,
@@ -15,7 +15,6 @@ import {
   renderMantisDesktopRecordingScript,
   resolveMantisCrabboxLeaseOptions,
   type MantisCrabboxLeaseOptions,
-  runCommand,
   shellQuote,
 } from "./crabbox-runtime.js";
 import {
@@ -275,9 +274,9 @@ export async function runMantisDesktopBrowserSmoke(
   try {
     const leaseId = await session.acquire({ idleTimeout, machineClass, ttl });
     const inspected = await session.inspect();
-    await runCommand({
-      command: crabboxBin,
-      args: [
+    await runner(
+      crabboxBin,
+      [
         "run",
         "--provider",
         provider,
@@ -297,11 +296,12 @@ export async function runMantisDesktopBrowserSmoke(
           videoDurationSeconds,
         }),
       ],
-      cwd: repoRoot,
-      env,
-      runner,
-      stdio: "inherit",
-    });
+      {
+        cwd: repoRoot,
+        env,
+        stdio: "inherit",
+      },
+    );
     await copyCrabboxArtifacts({
       cwd: repoRoot,
       env,

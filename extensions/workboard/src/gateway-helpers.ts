@@ -1,4 +1,3 @@
-import { WORKBOARD_STATUSES } from "@openclaw/workboard-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -115,11 +114,6 @@ export function assertNoCursorAdvance(params: Record<string, unknown>) {
   if (params.advance === true) {
     throw new Error("notification cursor advancement requires workboard.notifications.advance.");
   }
-}
-
-export async function listWorkboardCards(store: WorkboardStore, boardId: unknown) {
-  const [cards, { boards }] = await Promise.all([store.list({ boardId }), store.listBoards()]);
-  return { cards: cards.map(redactClaimToken), boards, statuses: WORKBOARD_STATUSES };
 }
 
 export function resolveGatewayWorkboardWorkspaceAccess(params: {

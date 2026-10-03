@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { getNativeSessionDeletionParticipant } from "../../agents/harness/native-session/deletion-participant.js";
 import {
   captureAgentHarnessSessionDeletions,
   captureAgentHarnessSessionContextResets,
@@ -51,6 +52,12 @@ import type {
 import type { SessionEntry } from "./types.js";
 
 type DeletionEntry = { sessionKey: string; entry: SessionEntry };
+type SessionMutationRun<T> = (
+  assertCurrent: () => void,
+  captureSettlement: (
+    entries: readonly DeletionEntry[],
+  ) => ReturnType<typeof captureSqliteSessionDeletionSettlement>,
+) => Promise<T>;
 type PreparedDeletion = {
   target: AgentHarnessSessionDeletionTarget;
   mutations: readonly PreparedAgentHarnessSessionDeletion[];
@@ -58,6 +65,17 @@ type PreparedDeletion = {
   contextReset?: boolean;
 };
 const deletions = new AsyncLocalStorage<ReadonlyMap<string, PreparedDeletion>>();
+const workerParticipant = new AsyncLocalStorage<
+  (sessionKey: string, entry: SessionEntry) => void
+>();
+
+/** The executing owner supplies the typed precommit participant at the existing deletion edge. */
+export function withSqliteSessionDeletionWorkerParticipant<T>(
+  commit: (sessionKey: string, entry: SessionEntry) => void,
+  run: () => T,
+): T {
+  return workerParticipant.run(commit, run);
+}
 const transactionMutations = new AsyncLocalStorage<{
   rollback: AgentHarnessSessionDeletionMutation[];
   initializations: Set<SessionInitialization>;
@@ -72,6 +90,48 @@ export function hasPreparedNativeSessionDeletion(): boolean {
       (entry) => entry.mutations.length > 0 || entry.target.initialization !== undefined,
     )
   );
+}
+
+/** Opaque SDK mutations keep their native transaction; only owner-minted participants qualify. */
+export function captureNativeSessionWorkerDeletion(entries: readonly DeletionEntry[]) {
+  const captured = entries.map(({ sessionKey, entry }) => ({
+    sessionKey,
+    entry,
+    prepared: deletions.getStore()?.get(sessionKey),
+  }));
+  if (
+    !captured.some(({ prepared }) => prepared?.mutations.length || prepared?.target.initialization)
+  ) {
+    return undefined;
+  }
+  const participants = [];
+  for (const { sessionKey, entry, prepared } of captured) {
+    if (!prepared) {
+      return undefined;
+    }
+    for (const mutation of prepared.mutations) {
+      const participant = getNativeSessionDeletionParticipant(mutation);
+      if (!participant) {
+        return undefined;
+      }
+      participants.push({ sessionKey, entry, participant });
+    }
+  }
+  return {
+    participants,
+    assertCurrent() {
+      for (const { prepared } of captured) {
+        prepared?.assertIdle();
+      }
+    },
+    committed() {
+      for (const { prepared } of captured) {
+        if (prepared?.target.initialization) {
+          commitSessionInitializationRollback(prepared.target.initialization);
+        }
+      }
+    },
+  };
 }
 
 type PreparedSessionWrite<T> = {
@@ -148,7 +208,7 @@ export async function withSqliteSessionDeletions<T>(
     "agentId" | "databaseAgentId" | "env" | "ownerStorePath" | "path"
   >,
   entries: readonly DeletionEntry[],
-  run: (assertCurrent: () => void) => Promise<T>,
+  run: SessionMutationRun<T>,
   options: { additionalIdentities?: readonly string[] } = {},
 ): Promise<T> {
   return withSqliteSessionMutations(scope, entries, run, options);
@@ -158,7 +218,7 @@ export async function withSqliteSessionDeletions<T>(
 export async function withSqliteSessionContextReset<T>(
   scope: Parameters<typeof withSqliteSessionDeletions>[0],
   entry: DeletionEntry,
-  run: (assertCurrent: () => void) => Promise<T>,
+  run: SessionMutationRun<T>,
 ): Promise<T> {
   return withSqliteSessionMutations(scope, [entry], run, { contextReset: true });
 }
@@ -166,7 +226,7 @@ export async function withSqliteSessionContextReset<T>(
 async function withSqliteSessionMutations<T>(
   scope: Parameters<typeof withSqliteSessionDeletions>[0],
   entries: readonly DeletionEntry[],
-  run: (assertCurrent: () => void) => Promise<T>,
+  run: SessionMutationRun<T>,
   options: { additionalIdentities?: readonly string[]; contextReset?: boolean },
 ): Promise<T> {
   const targets: AgentHarnessSessionDeletionTarget[] = [
@@ -360,9 +420,20 @@ async function withSqliteSessionMutations<T>(
           ]),
         ),
         async () => {
+          let active = true;
+          const assertActive = () => {
+            if (!active) {
+              throw new Error("Session mutation preparation is no longer active");
+            }
+            assertCurrent();
+          };
           try {
-            return await run(assertCurrent);
+            return await run(assertCurrent, (checkedEntries) => {
+              assertActive();
+              return captureSqliteSessionDeletionSettlement(checkedEntries, assertActive);
+            });
           } finally {
+            active = false;
             // Conversation deletion owns repository cleanup, including retained publication
             // sources after a Gateway move. History rotation and failed deletion keep the row.
             for (const workspace of repositoryWorkspaces) {
@@ -418,7 +489,7 @@ async function withSqliteSessionMutations<T>(
         },
       );
     };
-    return await runExclusiveSessionLifecycleMutation({
+    return await runExclusiveSessionLifecycleMutation("delete-prepare", {
       scope: ownerStorePath,
       identities: [
         ...targets.flatMap((target) => [target.sessionKey, target.sessionId]),
@@ -433,6 +504,11 @@ async function withSqliteSessionMutations<T>(
 
 /** Called only at the synchronous SQL edge, after the operation revalidates its row snapshot. */
 export function commitSqliteSessionDeletion(sessionKey: string, entry: SessionEntry): void {
+  const workerCommit = workerParticipant.getStore();
+  if (workerCommit) {
+    workerCommit(sessionKey, entry);
+    return;
+  }
   const prepared = deletions.getStore()?.get(sessionKey);
   if (!prepared) {
     if (captureAgentHarnessSessionDeletions()) {
@@ -459,6 +535,75 @@ export function commitSqliteSessionDeletion(sessionKey: string, entry: SessionEn
   if (prepared.target.initialization) {
     transaction.initializations.add(prepared.target.initialization);
   }
+}
+
+/** Retain host companions while their checked deletion commits in the worker. */
+function captureSqliteSessionDeletionSettlement(
+  entries: readonly DeletionEntry[],
+  assertCurrent: () => void,
+) {
+  const captured = structuredClone(entries);
+  for (const { sessionKey } of captured) {
+    if (!deletions.getStore()?.has(sessionKey)) {
+      throw new Error(`Session mutation target was not prepared: ${sessionKey}`);
+    }
+  }
+  const runInOwner = AsyncLocalStorage.snapshot();
+  const rollback: AgentHarnessSessionDeletionMutation[] = [];
+  const initializations = new Set<SessionInitialization>();
+  let entered = false;
+  let settled = false;
+  return {
+    beforeCommit() {
+      assertCurrent();
+      if (entered || settled) {
+        throw new Error("Session deletion companions already entered settlement");
+      }
+      entered = true;
+      runInOwner(() =>
+        transactionMutations.run({ rollback, initializations }, () => {
+          for (const { sessionKey, entry } of captured) {
+            commitSqliteSessionDeletion(sessionKey, entry);
+          }
+        }),
+      );
+    },
+    settle(outcome: "committed" | "rolled-back" | "unknown") {
+      if (settled) {
+        throw new Error("Session deletion companions already settled");
+      }
+      settled = true;
+      runInOwner(() => {
+        if (outcome === "committed") {
+          initializations.forEach(commitSessionInitializationRollback);
+        } else if (outcome === "rolled-back") {
+          const failures = rollbackSessionDeletionCompanions(rollback);
+          if (failures.length > 0) {
+            throw createSqliteLifecycleAggregateError(
+              failures,
+              "Session deletion rollback failed",
+              failures[0],
+            );
+          }
+        }
+        // Unknown outcomes neither restore removed companions nor consume initialization.
+      });
+    },
+  };
+}
+
+function rollbackSessionDeletionCompanions(
+  mutations: readonly AgentHarnessSessionDeletionMutation[],
+): unknown[] {
+  const failures: unknown[] = [];
+  for (const mutation of mutations.toReversed()) {
+    try {
+      mutation.rollback();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  return failures;
 }
 
 /** Roll back companion state only if SQLite failed before COMMIT, never after publication. */
@@ -490,13 +635,7 @@ export function runSqliteSessionDeletionTransaction<T>(
   } catch (error) {
     const failures = [error];
     if (!committed) {
-      for (const mutation of rollback.toReversed()) {
-        try {
-          mutation.rollback();
-        } catch (rollbackError) {
-          failures.push(rollbackError);
-        }
-      }
+      failures.push(...rollbackSessionDeletionCompanions(rollback));
     }
     if (failures.length > 1) {
       throw createSqliteLifecycleAggregateError(

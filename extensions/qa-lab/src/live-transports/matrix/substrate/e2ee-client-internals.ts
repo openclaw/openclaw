@@ -35,6 +35,7 @@ async function withMatrixQaE2eeTimeout<T>(
 }
 
 export function createMatrixQaE2eeClientLifecycle(params: {
+  abortPendingRequests: () => void;
   detachListeners: () => void;
   drainPendingDecryptions: () => Promise<void>;
   shutdownTimeoutMs: number;
@@ -70,9 +71,14 @@ export function createMatrixQaE2eeClientLifecycle(params: {
           Promise.allSettled(activeOperations),
           graceMs,
           "active Matrix SDK operations did not settle before shutdown",
-        ).catch((error: unknown) =>
-          failShutdown("waiting for active Matrix SDK operations", error),
-        );
+        ).catch(async (error: unknown) => {
+          params.abortPendingRequests();
+          // The grace deadline decides whether persistence is safe, not whether
+          // non-abortable work has settled. Requests are already canceled; join
+          // the admitted work before discard can destroy its client resources.
+          await Promise.allSettled(activeOperations);
+          return await failShutdown("waiting for active Matrix SDK operations", error);
+        });
       }
       await withMatrixQaE2eeTimeout(
         params.drainPendingDecryptions(),
@@ -86,15 +92,18 @@ export function createMatrixQaE2eeClientLifecycle(params: {
 
   const runMatrixQaE2eeClientOperation = async <T>(operation: {
     label: string;
-    run: () => Promise<T>;
+    run: (assertActive: () => void) => Promise<T>;
     timeoutMs: number;
   }): Promise<T> => {
-    if (shutdownStarted) {
-      throw new Error(
-        `Matrix E2EE client shutdown has started; cannot start ${operation.label}. Retry the QA scenario with a fresh client.`,
-      );
-    }
-    const active = operation.run();
+    const assertActive = () => {
+      if (shutdownStarted) {
+        throw new Error(
+          `Matrix E2EE client shutdown has started; cannot start ${operation.label}. Retry the QA scenario with a fresh client.`,
+        );
+      }
+    };
+    assertActive();
+    const active = operation.run(assertActive);
     activeOperations.add(active);
     void active.finally(() => activeOperations.delete(active)).catch(() => undefined);
 

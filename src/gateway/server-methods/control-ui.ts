@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveConfiguredGitHubHost } from "../../agents/github-host.js";
 import {
   GitHubIdentityError,
   prepareGitHubReadIdentity,
@@ -34,7 +35,7 @@ import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
 import { buildGatewaySessionRow } from "../session-utils.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
-import { loadSessionEntriesForTarget } from "./sessions-shared.js";
+import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -60,6 +61,9 @@ async function prepareControlUiGitHubIdentity(
   const config = context.getRuntimeConfig();
   const configuredIdentity = () => {
     const current = context.getRuntimeConfig();
+    if (resolveConfiguredGitHubHost(current) !== "github.com") {
+      return undefined;
+    }
     return (
       resolveConfiguredGitHubToolIdentity({ config: current, agentId, scope: "agent" }) ??
       resolveConfiguredGitHubToolIdentity({ config: current, agentId, scope: "system" })
@@ -223,9 +227,10 @@ function loadControlUiSessionPreview(
   if (!requestedAgent.ok) {
     return null;
   }
-  const { target, storePath, store, entry } = loadSessionEntriesForTarget({
+  const { target, storePath, store, entry } = loadAccessorSessionEntryForGatewayTarget({
     key: sessionKey,
     cfg,
+    clone: false,
     ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
   });
   if (!entry) {
@@ -297,9 +302,10 @@ async function prepareCheckDetailsSession(
     if (!requested.ok) {
       return undefined;
     }
-    const { target, entry, storePath } = loadSessionEntriesForTarget({
+    const { target, entry, storePath } = loadAccessorSessionEntryForGatewayTarget({
       key: sessionKey,
       cfg,
+      clone: false,
       agentId: requested.agentId,
     });
     const entryFilter = createSessionListEntryFilter({ client, cfg });
@@ -476,13 +482,9 @@ export function createControlUiHandlers(
                   .has(client.connId) === true,
             })
           : undefined;
-        const currentBinding = async () => {
-          if (!client) {
-            return await prepareCheckDetailsSession(parsed.sessionKey, context, client);
-          }
-          return (await reader?.()) ?? null;
-        };
-        const binding = await currentBinding();
+        const binding = client
+          ? ((await reader?.()) ?? null)
+          : await prepareCheckDetailsSession(parsed.sessionKey, context, client);
         if (!binding) {
           throw new gitHubPublicApi.ControlUiGitHubError(404, "Session CI details unavailable");
         }

@@ -120,6 +120,15 @@ test("maintenance preparation yields to foreground writes and retains commit adm
   const releaseArchive = createDeferredCore();
   const admissions: number[] = [];
   const order: string[] = [];
+  const write = (name: string, onEntered?: () => void) =>
+    runExclusiveSqliteSessionWrite(
+      options,
+      async () => {
+        onEntered?.();
+        order.push(name);
+      },
+      "session-entry.patch",
+    );
   const worker = new Worker(
     `const { parentPort } = require("node:worker_threads");
      parentPort.on("message", (message) => {
@@ -199,45 +208,22 @@ test("maintenance preparation yields to foreground writes and retains commit adm
   let laterObservedCommit = false;
   try {
     // A preceding archive request can still acquire this store's writer.
-    precedingWriter = runExclusiveSqliteSessionWrite(
-      options,
-      async () => {
-        order.push("preceding-writer");
-      },
-      "session-entry.patch",
-    );
+    precedingWriter = write("preceding-writer");
     await precedingWriter;
     releaseArchive.resolve();
     await earlierArchive;
     await Promise.race([preparation.promise, settledFinalization]);
-    preparationWriter = runExclusiveSqliteSessionWrite(
-      options,
-      async () => {
-        order.push("preparation-writer");
-      },
-      "session-entry.patch",
-    );
+    preparationWriter = write("preparation-writer");
     worker.postMessage({ type: "prepare" }, []);
     await Promise.race([validationGap.promise, settledFinalization]);
     expect(order).toEqual(["preceding-writer", "preparation-writer"]);
-    validationWriter = runExclusiveSqliteSessionWrite(
-      options,
-      async () => {
-        order.push("validation-writer");
-      },
-      "session-entry.patch",
-    );
+    validationWriter = write("validation-writer");
     worker.postMessage({ type: "continue" }, []);
     await Promise.race([commitGap.promise, settledFinalization]);
     expect(order).toEqual(["preceding-writer", "preparation-writer", "validation-writer"]);
-    laterWriter = runExclusiveSqliteSessionWrite(
-      options,
-      async () => {
-        laterObservedCommit = storage.committed;
-        order.push("later-writer");
-      },
-      "session-entry.patch",
-    );
+    laterWriter = write("later-writer", () => {
+      laterObservedCommit = storage.committed;
+    });
     worker.postMessage({ type: "settle" }, []);
     await expect(finalization).resolves.toMatchObject({ kind: "maintenance-finalize" });
     await Promise.all([preparationWriter, validationWriter, laterWriter]);

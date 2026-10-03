@@ -140,34 +140,21 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       );
       return jsonResult({ ok: true, message });
     }
-    case "deleteMessage": {
-      if (!ctx.isActionEnabled("messages")) {
-        throw new Error("Discord message deletes are disabled.");
-      }
-      const channelId = ctx.resolveChannelId();
-      const messageId = readStringParam(ctx.params, "messageId", {
-        required: true,
-      });
-      await ctx.assertReadTargetAllowed({ channelId });
-      await discordMessagingActionRuntime.deleteMessageDiscord(
-        channelId,
-        messageId,
-        ctx.withOpts(),
-      );
-      return jsonResult({ ok: true });
-    }
+    case "deleteMessage":
     case "pinMessage":
     case "unpinMessage": {
-      if (!ctx.isActionEnabled("pins")) {
-        throw new Error("Discord pins are disabled.");
+      const deleting = ctx.action === "deleteMessage";
+      if (!ctx.isActionEnabled(deleting ? "messages" : "pins")) {
+        throw new Error(
+          deleting ? "Discord message deletes are disabled." : "Discord pins are disabled.",
+        );
       }
       const channelId = ctx.resolveChannelId();
-      const messageId = readStringParam(ctx.params, "messageId", {
-        required: true,
-      });
+      const messageId = readStringParam(ctx.params, "messageId", { required: true });
       await ctx.assertReadTargetAllowed({ channelId });
-      const mutate =
-        ctx.action === "pinMessage"
+      const mutate = deleting
+        ? discordMessagingActionRuntime.deleteMessageDiscord
+        : ctx.action === "pinMessage"
           ? discordMessagingActionRuntime.pinMessageDiscord
           : discordMessagingActionRuntime.unpinMessageDiscord;
       await mutate(channelId, messageId, ctx.withOpts());
@@ -194,7 +181,6 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       }
       const channelId = readStringParam(ctx.params, "channelId");
       const channelIds = readStringArrayParam(ctx.params, "channelIds");
-      // Resolve guildId from channel info when not explicitly provided.
       if (!guildId) {
         const rawInferChannelId = channelId ?? channelIds?.[0];
         if (rawInferChannelId) {

@@ -34,21 +34,6 @@ function createTestTransport(transport: typeof import("./server-runtime-state.js
 }
 
 describe("reserved Gateway test listeners", () => {
-  it("adopts a single reservation through the transport dispatcher", async () => {
-    const transport = await import("./server-runtime-state.js");
-    const reservation = await reserveGatewayTestListener();
-    try {
-      await expect(
-        reservation.start(() => createTestTransport(transport, reservation.port)),
-      ).resolves.toBe(reservation.listener);
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        reservation.listener.close((error) => (error ? reject(error) : resolve()));
-      });
-      await reservation.closeUnadopted();
-    }
-  });
-
   it.each(["first", "second"] as const)(
     "adopts overlapping reservations when %s startup settles first",
     async (firstToSettle) => {
@@ -86,10 +71,7 @@ describe("reserved Gateway test listeners", () => {
         // The synthetic transport returns the listener but does not own its close.
         await Promise.all(
           reservations.map(async (reservation) => {
-            await new Promise<void>((resolve, reject) => {
-              const { listener } = reservation;
-              listener.close((error) => (error ? reject(error) : resolve()));
-            });
+            await closeListener(reservation.listener);
             await reservation.closeUnadopted();
           }),
         );

@@ -26,7 +26,7 @@ import {
   type SessionCapabilityStore,
 } from "./subagents/spawn/subagent-capabilities.js";
 
-const MAX_DELEGATION_LINEAGE_DEPTH = 32;
+export const MAX_DELEGATION_LINEAGE_DEPTH = 32;
 
 type RequesterToolPolicySource = "current-request" | "persisted-child" | "completion-handoff";
 
@@ -199,6 +199,7 @@ export function hasVerifiedRequesterCompletionHandoff(
     | "sessionId"
     | "modelProvider"
     | "modelId"
+    | "preparedSessionCapabilityStore"
   >,
 ): boolean {
   const delegatedPolicy = resolveDelegatedPolicy(params, undefined);

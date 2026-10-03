@@ -9,10 +9,9 @@ import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { validateWorkerComputerParams } from "../../packages/gateway-protocol/src/index.js";
-import { PresenceQueryParamsSchema } from "../../packages/gateway-protocol/src/schema/presence.js";
 import {
   type WorkerConnectRequestFrame,
   WorkerConnectRequestFrameSchema,
@@ -32,7 +31,6 @@ import {
   validateWorkerGatewayToolInvokeParams,
   type WorkerGatewayToolInvokeParams,
   type WorkerToolSurface,
-  WorkerToolSurfaceSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import {
   type WorkerInferenceCancelRequestFrame,
@@ -44,36 +42,32 @@ import {
   type WorkerInferenceTerminalFrame,
   type WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
 import { createNoisyPngBuffer, createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+  withTestTimeout,
+} from "../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { listRunningSessions, waitForExecScope } from "../agents/bash-process-registry.js";
 import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
 import { hasModelFallbackStop } from "../agents/failover-error.js";
-import {
-  prepareCoreToolPolicy,
-  projectAgentToolDefinition,
-} from "../agents/prepared-tool-surface.js";
+import { prepareCoreToolPolicy } from "../agents/prepared-tool-surface.js";
 import * as agentSessionSdk from "../agents/sessions/sdk.js";
-import {
-  SessionPortalToolSchema,
-  SESSION_PORTAL_TOOL_DESCRIPTION,
-} from "../agents/tools/portal-tool-contract.js";
-import { PRESENCE_TOOL_DESCRIPTION } from "../agents/tools/presence-tool-contract.js";
-import {
-  PlacedSessionsSendSchema,
-  PlacedSessionsSpawnSchema,
-  PLACED_SESSIONS_SEND_DESCRIPTION,
-  PLACED_SESSIONS_SPAWN_DESCRIPTION,
-} from "../agents/tools/sessions-placement-tool-contract.js";
+import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as boundaryFileRead from "../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import { runExec } from "../process/exec.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { prepareSkillBundle } from "../skills/library/bundle.js";
-import { createWorkerComputerTool } from "./computer-runtime.js";
 import * as workerTranscriptRuntime from "./embedded-agent-transcript.runtime.js";
 import {
   buildWorkerConnectParams,
@@ -86,7 +80,6 @@ import {
   WorkerConnectionStoppedError,
 } from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
-import { createWorkerPlacementTools } from "./worker-placement-tools.js";
 import {
   buildWorkerProcessTurn,
   parseWorkerProcessMessage,
@@ -105,6 +98,7 @@ import {
 } from "./worker-runtime-gateway-tools.suite.js";
 import { registerWorkerPermissionTests } from "./worker-runtime-permissions.suite.js";
 import { registerWorkerReplayWindowTests } from "./worker-runtime-replay.suite.js";
+import { createWorkerToolSurfaceForTest } from "./worker-tool-surface.test-support.js";
 import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
 
 const browserRuntimeMocks = vi.hoisted(() => ({
@@ -171,7 +165,7 @@ type FakeGatewayOptions = {
   admissionFailure?: "gateway-unavailable" | "invalid-credential" | "owner-epoch-mismatch";
   backgroundCommand?: string;
   execCommand?: string;
-  execApprovals?: ExecApprovalsFile;
+  execApprovals?: Parameters<typeof saveExecApprovals>[0];
   inferencePlans?: InferencePlan[];
   outageOnInferenceCancel?: boolean;
   ignoreFirstAdmission?: boolean;
@@ -922,6 +916,14 @@ function descriptor(socketPath: string, workspaceDir: string): WorkerLaunchDescr
 
 const gateways: FakeWorkerGateway[] = [];
 const tempDirs: string[] = [];
+let receipts: FixtureReceiptChannel;
+
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 
 async function setup(options?: FakeGatewayOptions): Promise<{
   gateway: FakeWorkerGateway;
@@ -934,100 +936,12 @@ async function setup(options?: FakeGatewayOptions): Promise<{
   const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-worker-workspace-"));
   tempDirs.push(workspaceDir);
   const launch = descriptor(gateway.socketPath, workspaceDir);
-  gateway.toolSurface = () => {
-    const assignment = launch.assignment;
-    const policy = prepareCoreToolPolicy({
+  gateway.toolSurface = () =>
+    createWorkerToolSurfaceForTest({
+      assignment: launch.assignment,
       config: gateway.config,
-      agentId: assignment.agentId,
-      modelProvider: assignment.modelRef.provider,
-      modelId: assignment.modelRef.model,
-      ...(assignment.permissionMode
-        ? {
-            sessionPermissionPolicy: {
-              mode: assignment.permissionMode,
-              root: assignment.workspaceDir,
-            },
-          }
-        : {}),
+      sessionId: SESSION_ID,
     });
-    const definitions = new Map(
-      createWorkerPlacementTools({
-        policy,
-        cwd: assignment.workspaceDir,
-        containmentRoot: assignment.workerContainmentRoot ?? assignment.workspaceDir,
-        execAuthority: assignment.toolAuthority.exec,
-        permissionMode: assignment.permissionMode,
-        agentId: assignment.agentId,
-        sessionKey: `worker:${SESSION_ID}`,
-        sessionId: SESSION_ID,
-        runId: assignment.runId,
-      }).map((tool) => [tool.name, projectAgentToolDefinition(tool)]),
-    );
-    if (assignment.browser) {
-      definitions.set("browser", {
-        name: "browser",
-        label: "Browser",
-        description: "Control the attached worker browser.",
-        parameters: Type.Object({}),
-        executionMode: undefined,
-      });
-    }
-    if (assignment.computer) {
-      definitions.set(
-        "computer",
-        projectAgentToolDefinition(
-          createWorkerComputerTool({
-            descriptor: assignment.computer,
-            runId: assignment.runId,
-            requestComputer: async () => {
-              throw new Error("Definition preparation cannot invoke the desktop");
-            },
-            registerRunCleanup: () => {},
-          }),
-        ),
-      );
-    }
-    const gatewayDefinitions = [
-      ["sessions_spawn", PlacedSessionsSpawnSchema, PLACED_SESSIONS_SPAWN_DESCRIPTION],
-      ["sessions_send", PlacedSessionsSendSchema, PLACED_SESSIONS_SEND_DESCRIPTION],
-      ["portal", SessionPortalToolSchema, SESSION_PORTAL_TOOL_DESCRIPTION],
-      ["presence", PresenceQueryParamsSchema, PRESENCE_TOOL_DESCRIPTION],
-    ] as const;
-    for (const [name, parameters, description] of gatewayDefinitions) {
-      definitions.set(name, {
-        name,
-        label: name,
-        description,
-        parameters,
-        executionMode: undefined,
-      });
-    }
-    const surface = {
-      generation: "runtime-surface",
-      policy,
-      tools: assignment.toolAuthority.allowedToolNames.flatMap((name) => {
-        const definition = definitions.get(name);
-        if (!definition) {
-          return [];
-        }
-        const gatewayTool = gatewayDefinitions.some(([toolName]) => toolName === name);
-        return [
-          {
-            id: name,
-            definition,
-            execution: gatewayTool ? "gateway" : "placement",
-            ...(name === "sessions_spawn" || name === "sessions_send"
-              ? { replay: true as const }
-              : {}),
-          },
-        ];
-      }),
-    };
-    if (!Value.Check(WorkerToolSurfaceSchema, surface)) {
-      throw new Error("Invalid test tool surface");
-    }
-    return surface;
-  };
   return { gateway, workspaceDir, launch };
 }
 
@@ -1674,7 +1588,12 @@ describe("worker runtime", () => {
       } else {
         start.mockResolvedValue({
           type: "worker-hello-ok",
-          toolSurface: { generation: "surface", tools: [], policy: prepareCoreToolPolicy({}) },
+          toolSurface: {
+            generation: "surface",
+            presentation: createToolSurfacePresentationForTest(),
+            tools: [],
+            policy: prepareCoreToolPolicy({}),
+          },
           environmentId: launch.admission.environmentId,
           sessionId: SESSION_ID,
           ownerEpoch: OWNER_EPOCH,
@@ -2208,17 +2127,32 @@ describe("worker runtime", () => {
 
   it.skipIf(process.platform === "win32")(
     "prevents retained processes from reading a later turn's GitHub profile",
-    async () => {
+    async ({ signal }) => {
       const { gateway, launch, workspaceDir } = await setup({
         inferencePlans: ["background-tool", "text", "tool", "text"],
-        backgroundCommand: [
-          'printf "%s" "$GH_CONFIG_DIR" > retained-profile.txt',
-          "while [ ! -e retained-marker ]; do sleep 0.01; done",
-          '{ cat "$GH_CONFIG_DIR/hosts.yml"; printf "exit=%s\\n" "$?"; } > retained-read.tmp 2>&1',
-          "mv retained-read.tmp retained-read.txt",
-        ].join("; "),
+        backgroundCommand: `exec '${process.execPath.replaceAll("'", "'\\''")}' retained-profile.mjs`,
         execCommand: "printf turn-b-completed",
       });
+      const profilePath = path.join(workspaceDir, "retained-profile.txt");
+      await writeFile(
+        path.join(workspaceDir, "retained-profile.mjs"),
+        [
+          'import { execFile } from "node:child_process";',
+          'import { writeFileSync } from "node:fs";',
+          fixtureReceiptClientSource(receipts.endpoint),
+          `writeFileSync(${JSON.stringify(profilePath)}, process.env.GH_CONFIG_DIR);`,
+          `sendReceipt(${JSON.stringify(profilePath)}, "ready");`,
+          "await new Promise((resolve, reject) => {",
+          `  execFile("sh", ["-c", ${JSON.stringify(
+            [
+              "while [ ! -e retained-marker ]; do sleep 0.01; done",
+              '{ cat "$GH_CONFIG_DIR/hosts.yml"; printf "exit=%s\\n" "$?"; } > retained-read.tmp 2>&1',
+              "mv retained-read.tmp retained-read.txt",
+            ].join("; "),
+          )}], (error) => error ? reject(error) : resolve());`,
+          "});",
+        ].join("\n"),
+      );
       launch.assignment.github = {
         login: "worker-a",
         token: "worker-turn-a-token",
@@ -2249,14 +2183,13 @@ describe("worker runtime", () => {
           result: { status: "completed" },
           retainWorker: true,
         });
-        const previousProfileDir = await waitForFast(async () => {
-          const profileDir = await readFile(
-            path.join(workspaceDir, "retained-profile.txt"),
-            "utf8",
-          );
-          expect(profileDir).not.toBe("");
-          return profileDir;
-        });
+        // A receipt can arrive after the exec settles; its durable file is written first.
+        await withinTest(
+          Promise.race([receipts.waitFor(profilePath, "ready"), waitForExecScope(scopeKey)]),
+          signal,
+        );
+        const previousProfileDir = await readFile(profilePath, "utf8");
+        expect(previousProfileDir).not.toBe("");
         const stateDir = process.env.OPENCLAW_STATE_DIR!;
         const next = structuredClone(launch);
         next.assignment.runId = "worker-next-run-2";
@@ -2300,13 +2233,21 @@ describe("worker runtime", () => {
         expect(hosts).not.toContain("worker-a");
         expect(hosts).not.toContain(launch.assignment.github.token);
         await writeFile(path.join(workspaceDir, "retained-marker"), "read");
-        const retainedRead = await waitForFast(() =>
-          readFile(path.join(workspaceDir, "retained-read.txt"), "utf8"),
-        );
+        // idle-ready follows exec settlement and both profile disposals, including the shell's mv.
+        expect(
+          await withinTest(
+            awaitGateBeforeSettlement(
+              idleReady.promise,
+              command,
+              "worker command ended before the retained process became idle",
+            ),
+            signal,
+          ),
+        ).toBe(next.assignment.turnId);
+        const retainedRead = await readFile(path.join(workspaceDir, "retained-read.txt"), "utf8");
         expect(retainedRead).toContain(launch.assignment.github.token);
         expect(retainedRead).not.toContain(next.assignment.github.token);
         expect(retainedRead).toMatch(/exit=0/u);
-        expect(await idleReady.promise).toBe(next.assignment.turnId);
         await expect(stat(previousProfileDir)).rejects.toMatchObject({ code: "ENOENT" });
         await expect(stat(nextProfileDir)).rejects.toMatchObject({ code: "ENOENT" });
       } finally {

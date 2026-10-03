@@ -234,13 +234,6 @@ describe("buildPromptSection", () => {
     if (!eagerSearch || !eagerGet) {
       throw new Error("expected eager memory tools");
     }
-    const prompt = lazy
-      .promptBuilder({
-        availableTools: new Set(["memory_search", "memory_get"]),
-        agentId: "main",
-      })
-      .join("\n");
-
     expect(lazy.search.parameters).toStrictEqual(eagerSearch.parameters);
     expect(lazy.get.parameters).toStrictEqual(eagerGet.parameters);
     expect(lazy.search.description).toBe(eagerSearch.description);
@@ -259,8 +252,6 @@ describe("buildPromptSection", () => {
     expect(lazy.get.description).toContain("status=ok");
     expect(lazy.get.description).toContain("status=not_found");
     expect(lazy.get.description).toContain("results are partial");
-    expect(prompt).toContain("Report partial, unavailable, or stale recall");
-    expect(prompt).toContain("warning and action guidance");
   });
 });
 

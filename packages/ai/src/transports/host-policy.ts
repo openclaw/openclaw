@@ -1,5 +1,9 @@
 import type { Model } from "@openclaw/llm-core";
-import { getAiTransportHost, type AiProviderRequestPolicyInput } from "../host.js";
+import {
+  getAiTransportHost,
+  type AiProviderRequestPolicyInput,
+  type AiTransportHost,
+} from "../host.js";
 
 export function buildGuardedModelFetch(
   model: Model,
@@ -14,6 +18,21 @@ export function buildGuardedModelFetch(
     return host.buildModelFetch(model, timeoutMs) ?? globalThis.fetch;
   }
   return host.buildModelFetch(model) ?? globalThis.fetch;
+}
+
+/** SDKs keep their default transport unless their embedding owner requires an explicit one. */
+export function buildManagedModelFetch(
+  model: Model,
+  host: AiTransportHost = getAiTransportHost(),
+): typeof fetch | undefined {
+  if (!host.requiresManagedTransport(model)) {
+    return undefined;
+  }
+  const fetcher = host.buildModelFetch(model);
+  if (!fetcher) {
+    throw new Error("The embedding host requires a managed provider transport");
+  }
+  return fetcher;
 }
 
 export function resolveProviderEndpoint(model: { baseUrl?: string }): { endpointClass: string } {

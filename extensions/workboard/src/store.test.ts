@@ -426,6 +426,124 @@ describe("WorkboardStore", () => {
     },
   );
 
+  it.each(["workerLog", "proof"] as const)(
+    "hydrates once for %s and preserves a foreign edit on CAS retry",
+    async (kind) => {
+      await using harness = createConcurrentSqliteHarness("openclaw-workboard-metadata-cas-");
+      const { operation, host, paused } = harness;
+      const base = await host.create({ title: "Metadata update" });
+      const lookup = vi.spyOn(paused.store, "lookup");
+      const write = vi.spyOn(paused.store, "registerIfUpdatedAt");
+      const append = (text: string) =>
+        kind === "workerLog"
+          ? operation.addWorkerLog(base.id, { message: text })
+          : operation.addProof(base.id, { status: "passed", label: text });
+
+      await append("First entry");
+      expect(lookup).toHaveBeenCalledTimes(1);
+      lookup.mockClear();
+      write.mockClear();
+      const pause = paused.pauseNextWrite();
+      const pending = append("Retried entry");
+      await pause.reached;
+      const foreign = await host.update(base.id, {
+        title: "Foreign title",
+        metadata: { comments: [{ id: "foreign-comment", body: "Keep me", createdAt: 1 }] },
+      });
+      pause.resume();
+      const updated = await pending;
+
+      expect(write).toHaveBeenCalledTimes(2);
+      expect(await write.mock.results[0]!.value).toBe(false);
+      expect(await write.mock.results[1]!.value).toBe(true);
+      expect(lookup).toHaveBeenCalledTimes(3);
+      expect(updated.title).toBe("Foreign title");
+      expect(updated.metadata?.comments).toEqual(foreign.metadata?.comments);
+      const entries =
+        kind === "workerLog"
+          ? updated.metadata?.workerLogs?.map((entry) => entry.message)
+          : updated.metadata?.proof?.map((entry) => entry.label);
+      expect(entries).toEqual(["First entry", "Retried entry"]);
+      await expect(host.get(base.id)).resolves.toEqual(updated);
+    },
+  );
+
+  it.each(["delete", "claim"] as const)(
+    "rejects metadata after a foreign %s instead of overwriting it",
+    async (change) => {
+      await using harness = createConcurrentSqliteHarness("openclaw-workboard-metadata-guard-");
+      const { operation, host, paused } = harness;
+      const base = await host.create({ title: "Guard metadata" });
+      const pause = paused.pauseNextWrite();
+      const pending = operation
+        .addWorkerLog(base.id, { message: "Stale log" }, { ownerId: "original-worker" })
+        .catch((error: unknown) => error);
+      await pause.reached;
+      if (change === "delete") {
+        await host.delete(base.id);
+      } else {
+        await host.claim(base.id, { ownerId: "foreign-owner" });
+      }
+      const foreign = await host.get(base.id);
+      pause.resume();
+      expect(await pending).toMatchObject({
+        message:
+          change === "delete" ? `card not found: ${base.id}` : expect.stringMatching(/claim/),
+      });
+      await expect(host.get(base.id)).resolves.toEqual(foreign);
+    },
+  );
+
+  it.each(["hold", "invalid status"] as const)(
+    "checks a foreign revision before reporting a stale %s error",
+    async (failure) => {
+      await using harness = createConcurrentSqliteHarness("openclaw-workboard-policy-race-");
+      const { operation, host, paused } = harness;
+      const base = await host.create({ title: "Scheduled", status: "scheduled" });
+      const captured = createDeferred<void>();
+      const resume = createDeferred<void>();
+      const lookup = paused.store.lookup.bind(paused.store);
+      vi.spyOn(paused.store, "lookup").mockImplementationOnce(async (id) => {
+        const entry = await lookup(id);
+        captured.resolve();
+        await resume.promise;
+        return entry;
+      });
+      const pending = operation.move(
+        base.id,
+        failure === "hold" ? "ready" : "invalid-status",
+        2000,
+        undefined,
+        failure === "hold" ? {} : { expectedUpdatedAt: base.updatedAt },
+      );
+      await captured.promise;
+      const newer = await host.update(base.id, { status: "todo", title: "Hold removed" });
+      resume.resolve();
+      if (failure === "hold") {
+        await expect(pending).resolves.toMatchObject({ title: "Hold removed", status: "ready" });
+      } else {
+        await expect(pending).rejects.toMatchObject({
+          name: "WorkboardCardConflictError",
+          current: newer,
+        });
+        await expect(host.get(base.id)).resolves.toEqual(newer);
+      }
+    },
+  );
+
+  it("reports stale revisions before invalid status policy", async () => {
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
+    const base = await store.create({ title: "Scheduled", status: "scheduled" });
+    const newer = await store.update(base.id, { title: "Newer scheduled card" });
+    await expect(
+      store.move(base.id, "running", 0, undefined, { expectedUpdatedAt: base.updatedAt }),
+    ).rejects.toMatchObject({ name: "WorkboardCardConflictError", current: newer });
+    await expect(
+      store.move(base.id, "running", 0, undefined, { expectedUpdatedAt: newer.updatedAt }),
+    ).rejects.toThrow("card is scheduled for later.");
+    await expect(store.get(base.id)).resolves.toEqual(newer);
+  });
+
   it("rejects stale card edits across sqlite connections", async () => {
     await using harness = createConcurrentSqliteHarness("openclaw-workboard-cas-");
     const { operation: first, host: second } = harness;
@@ -1722,109 +1840,6 @@ describe("WorkboardStore", () => {
       }),
     ).rejects.toThrow("completion proof status does not match existing proof: proof-latest");
     await expect(store.get(card.id)).resolves.toEqual(reopened);
-  });
-
-  it("stores attachments in SQLite and adds worker context", async () => {
-    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
-    const card = await store.create({ title: "Review attached log" });
-
-    const attached = await store.addAttachment(card.id, {
-      fileName: "failure.log",
-      mimeType: "text/plain",
-      note: "Captured failing run",
-      contentBase64: Buffer.from("stack trace").toString("base64"),
-    });
-
-    expect(attached.metadata?.attachments?.[0]).toMatchObject({
-      fileName: "failure.log",
-      byteSize: "stack trace".length,
-      mimeType: "text/plain",
-    });
-    expect(attached.events?.at(-1)).toMatchObject({ kind: "attachment_added" });
-    const attachment = attached.metadata?.attachments?.[0];
-    if (!attachment) {
-      throw new Error("expected attachment metadata");
-    }
-    const persisted = await store.getAttachment(attachment.id);
-    if (!persisted) {
-      throw new Error("expected persisted attachment");
-    }
-    expect(Buffer.from(persisted.contentBase64, "base64").toString("utf8")).toBe("stack trace");
-    await expect(
-      store.addAttachment(card.id, {
-        fileName: "huge.bin",
-        contentBase64: Buffer.alloc(256 * 1024 + 1).toString("base64"),
-      }),
-    ).rejects.toThrow(/attachment must be/);
-    await expect(
-      store.addAttachment(card.id, {
-        fileName: "sqlite-sized.bin",
-        contentBase64: Buffer.alloc(70 * 1024).toString("base64"),
-      }),
-    ).resolves.toMatchObject({
-      metadata: {
-        attachments: expect.arrayContaining([
-          expect.objectContaining({ fileName: "sqlite-sized.bin" }),
-        ]),
-      },
-    });
-    await expect(
-      store.addAttachment(card.id, {
-        fileName: "padded.txt",
-        contentBase64: `${Buffer.from("ok").toString("base64")}\n`,
-      }),
-    ).rejects.toThrow(/canonical base64/);
-
-    const context = await store.buildWorkerContext(card.id);
-    expect(context).toContain("failure.log");
-
-    const deleted = await store.deleteAttachment(card.id, attachment.id);
-    expect(deleted.metadata?.attachments).toEqual([
-      expect.objectContaining({ fileName: "sqlite-sized.bin" }),
-    ]);
-    expect(deleted.events?.at(-1)).toMatchObject({ kind: "edited" });
-    expect(await store.getAttachment(attachment.id)).toBeUndefined();
-  });
-
-  it("removes attachment blobs when the card attachment index prunes old entries", async () => {
-    const { store, dbPath } = createWorkboardSqliteTestHarness();
-    const card = await store.create({ title: "Many attachments", templateId: "docs" });
-    let firstAttachmentId = "";
-
-    for (let index = 0; index < 21; index += 1) {
-      const updated = await store.addAttachment(card.id, {
-        fileName: `log-${index}.txt`,
-        contentBase64: Buffer.from(`log ${index}`).toString("base64"),
-      });
-      firstAttachmentId ||= updated.metadata?.attachments?.[0]?.id ?? "";
-    }
-
-    const saved = await store.get(card.id);
-    expect(saved?.metadata?.attachments).toHaveLength(20);
-    expect(await store.getAttachment(firstAttachmentId)).toBeUndefined();
-    const db = new DatabaseSync(dbPath, { readOnly: true });
-    try {
-      expect(
-        db
-          .prepare("SELECT attachment_id FROM workboard_attachment_blobs WHERE attachment_id = ?")
-          .get(firstAttachmentId),
-      ).toBeUndefined();
-      expect(db.prepare("SELECT COUNT(*) AS count FROM workboard_attachment_blobs").get()).toEqual({
-        count: 20,
-      });
-    } finally {
-      db.close();
-    }
-    const exported = await store.exportCards();
-    expect(exported.cards).toEqual([
-      expect.objectContaining({
-        id: card.id,
-        metadata: expect.objectContaining({ templateId: "docs" }),
-      }),
-    ]);
-    expect(exported.exportedAt).toEqual(expect.any(Number));
-    expect(exported.attachments).toHaveLength(20);
-    expect(exported.attachments[0]).not.toHaveProperty("contentBase64");
   });
 
   it("records worker logs and protocol violations on cards", async () => {

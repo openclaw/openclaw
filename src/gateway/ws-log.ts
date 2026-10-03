@@ -99,7 +99,7 @@ export function formatForLog(value: unknown): string {
         : JSON.stringify(value);
     return str ? redactLogText(str) : "";
   } catch {
-    return String(value);
+    return redactLogText(String(value));
   }
 }
 

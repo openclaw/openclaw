@@ -2,16 +2,19 @@
 import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { tryParsePersistedExecApprovals } from "./exec-approvals-config.js";
+import {
+  parseLegacyExecApprovals,
+  tryParsePersistedExecApprovals,
+} from "./exec-approvals-config.js";
+import { saveExecApprovals } from "./exec-approvals-store.test-support.js";
 import { makeExecApprovalsTempDir } from "./exec-approvals-test-helpers.js";
 import {
-  isSafeBinUsage,
+  evaluateExecAllowlist,
   matchAllowlist,
   normalizeExecApprovals,
-  normalizeSafeBins,
-  resolveExecApprovals,
+  resolveSafeBins,
+  resolveExecApprovalsLocked,
   resolveExecApprovalsFromFile,
-  saveExecApprovals,
   type ExecApprovalsAgent,
   type ExecAllowlistEntry,
   type ExecApprovalsFile,
@@ -31,7 +34,7 @@ describe("exec approval temp fixture cleanup", { concurrent: false }, () => {
 });
 
 describe("exec approvals wildcard agent", () => {
-  it("merges wildcard allowlist entries with agent entries", () => {
+  it("merges wildcard allowlist entries with agent entries", async () => {
     const dir = makeExecApprovalsTempDir();
     const prevOpenClawHome = process.env.OPENCLAW_HOME;
 
@@ -45,7 +48,7 @@ describe("exec approvals wildcard agent", () => {
         },
       });
 
-      const resolved = resolveExecApprovals("main");
+      const resolved = await resolveExecApprovalsLocked("main");
       expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual([
         "/bin/hostname",
         "/usr/bin/uname",
@@ -62,10 +65,6 @@ describe("exec approvals wildcard agent", () => {
 });
 
 describe("exec approvals node host allowlist check", () => {
-  // These tests verify the allowlist satisfaction logic used by the node host path
-  // The node host checks: matchAllowlist() || isSafeBinUsage() for each command segment
-  // Using hardcoded resolution objects for cross-platform compatibility
-
   it.each([
     {
       resolution: {
@@ -115,12 +114,21 @@ describe("exec approvals node host allowlist check", () => {
       resolvedPath: "/usr/local/bin/unknown-tool",
       executableName: "unknown-tool",
     };
-    const safe = isSafeBinUsage({
-      argv: ["unknown-tool", "--help"],
-      resolution,
-      safeBins: normalizeSafeBins(["jq", "curl"]),
+    const result = evaluateExecAllowlist({
+      analysis: {
+        ok: true,
+        segments: [
+          {
+            raw: "unknown-tool --help",
+            argv: ["unknown-tool", "--help"],
+            resolution: { kind: "command", execution: resolution, policy: resolution },
+          },
+        ],
+      },
+      allowlist: [],
+      safeBins: resolveSafeBins(["jq", "curl"]),
     });
-    expect(safe).toBe(false);
+    expect(result.allowlistSatisfied).toBe(false);
   });
 
   it("satisfies via safeBins even when not in allowlist", () => {
@@ -137,17 +145,26 @@ describe("exec approvals node host allowlist check", () => {
     expect(match).toBeNull();
 
     // But is a safe bin with non-file args
-    const safe = isSafeBinUsage({
-      argv: ["head", "-n", "1"],
-      resolution,
-      safeBins: normalizeSafeBins(["head"]),
+    const result = evaluateExecAllowlist({
+      analysis: {
+        ok: true,
+        segments: [
+          {
+            raw: "head -n 1",
+            argv: ["head", "-n", "1"],
+            resolution: { kind: "command", execution: resolution, policy: resolution },
+          },
+        ],
+      },
+      allowlist: entries,
+      safeBins: resolveSafeBins(["head"]),
     });
     // Safe bins are disabled on Windows (PowerShell parsing/expansion differences).
     if (process.platform === "win32") {
-      expect(safe).toBe(false);
+      expect(result.allowlistSatisfied).toBe(false);
       return;
     }
-    expect(safe).toBe(true);
+    expect(result.allowlistSatisfied).toBe(true);
   });
 });
 
@@ -180,7 +197,7 @@ describe("exec approvals default agent migration", () => {
   });
 });
 
-describe("persisted exec approvals schema", () => {
+describe("exec approvals policy schemas", () => {
   it("round-trips exact MCP grants and tolerates unrelated future agent metadata", () => {
     const mcpTools = [
       { server: "project.docs", tool: "write_note", source: "allow-always", addedAt: 123 },
@@ -200,25 +217,31 @@ describe("persisted exec approvals schema", () => {
       source: "allow-always",
       addedAt: 123,
     };
-    const parsed = tryParsePersistedExecApprovals(
+    const parsed = parseLegacyExecApprovals(
       JSON.stringify({
         version: 1,
         agents: { main: { mcpTools: [grant] }, default: { ask: "off" } },
       }),
     );
-    expect(parsed?.agents?.main).toMatchObject({ mcpTools: [grant], ask: "off" });
-    expect(parsed?.agents?.default).toBeUndefined();
+    if (!parsed.ok) {
+      throw new Error(parsed.error);
+    }
+    expect(parsed.value.agents?.main).toMatchObject({ mcpTools: [grant], ask: "off" });
+    expect(parsed.value.agents?.default).toBeUndefined();
   });
 
   it("keeps legacy string allowlist entries while normalizing them", () => {
-    const parsed = tryParsePersistedExecApprovals(
+    const parsed = parseLegacyExecApprovals(
       JSON.stringify({
         version: 1,
         agents: { main: { allowlist: ["  ls  ", { pattern: "cat", source: "legacy" }] } },
       }),
     );
-    expect(parsed?.agents?.main?.allowlist?.[0]).toMatchObject({ pattern: "ls" });
-    expect(parsed?.agents?.main?.allowlist?.[1]).toEqual(
+    if (!parsed.ok) {
+      throw new Error(parsed.error);
+    }
+    expect(parsed.value.agents?.main?.allowlist?.[0]).toMatchObject({ pattern: "ls" });
+    expect(parsed.value.agents?.main?.allowlist?.[1]).toEqual(
       expect.objectContaining({ pattern: "cat", source: undefined }),
     );
   });

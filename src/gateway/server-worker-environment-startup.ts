@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
@@ -15,6 +16,7 @@ import {
 } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
+import { configuredDefaultRepository } from "./configured-default-repository.js";
 import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
@@ -39,7 +41,12 @@ import {
   createWorkerPlacementRuntimeInstallReader,
   type WorkerPlacementRuntimeInstallReader,
 } from "./worker-environments/placement-projector.js";
+import { resolveDefaultWorkerPlacementExecutionMode } from "./worker-environments/placement-session-runtime.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import {
+  readPreparedPoolPresenceDemand,
+  writePreparedPoolPresenceDemand,
+} from "./worker-environments/prepared-pool-presence-worker.js";
 import type { WorkerPlacementDispatchContract } from "./worker-environments/service-contract.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
 import type { WorkerEnvironmentServiceOptions } from "./worker-environments/service.types.js";
@@ -399,7 +406,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     getNodeTransport: () => deviceRuntime.getNodeTransport(),
     gatewayNamespace: nodeWorkerGatewayNamespace,
   });
-  const workerEnvironmentServiceBase = createWorkerEnvironmentService({
+  const workerEnvironmentService = createWorkerEnvironmentService({
     scheduler: params.scheduler,
     projectNamespace: nodeWorkerGatewayNamespace,
     prepareComputer: computers.prepare,
@@ -411,6 +418,31 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       params.desktopSessionRegistry.hasActivity(environmentId, ownerEpoch),
     store: params.startup.store,
     getConfig: getRuntimeConfig,
+    resolveHumanPresenceDemand: () => {
+      const config = getRuntimeConfig();
+      const repository = configuredDefaultRepository(config);
+      if (!repository?.profileId) {
+        return undefined;
+      }
+      const agentId = resolveDefaultAgentId(config);
+      const executionMode = resolveDefaultWorkerPlacementExecutionMode({ cfg: config, agentId });
+      if (!executionMode) {
+        return undefined;
+      }
+      return {
+        profileId: repository.profileId,
+        executionMode,
+        repository: {
+          agentId,
+          url: repository.url,
+          ...(repository.ref ? { ref: repository.ref } : {}),
+        },
+      };
+    },
+    presenceDemandStore: {
+      read: readPreparedPoolPresenceDemand,
+      write: writePreparedPoolPresenceDemand,
+    },
     maintainProviders: (signal) =>
       maintainConfiguredWorkerProviders({
         getRegistry: params.getPluginRegistry,
@@ -553,10 +585,10 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     logger: workerEnvironmentLog,
   });
   try {
-    await workerEnvironmentServiceBase.ready();
+    await workerEnvironmentService.ready();
   } catch (error) {
     try {
-      await workerEnvironmentServiceBase.stop();
+      await workerEnvironmentService.stop();
     } catch (cleanupError) {
       if (cleanupError !== error) {
         if (cleanupError instanceof AggregateError && cleanupError.errors.includes(error)) {
@@ -571,7 +603,6 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     }
     throw error;
   }
-  const workerEnvironmentService = workerEnvironmentServiceBase;
   bindDeviceWorkerAvailability(workerEnvironmentService, deviceRuntime.resolveAvailability);
   bindDeviceWorkerReconciliation(workerEnvironmentService, async (deviceId) => {
     const environmentIds = params.startup.store

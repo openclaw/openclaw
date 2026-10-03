@@ -119,7 +119,12 @@ final class DashboardDeviceSettingsMessageHandler: NSObject, WKScriptMessageHand
                 return
             }
             let previousNativeExperienceEnabled = AppStateStore.shared.nativeExperienceEnabled
-            await owner.applyDeviceSettingsRequest(request)
+            do {
+                try await owner.applyDeviceSettingsRequest(request)
+            } catch {
+                replyHandler(nil, error.localizedDescription)
+                return
+            }
             let snapshot: DeviceSettingsSnapshot? = if case .set = request {
                 await owner.readDeviceSettingsSnapshot(sourceID: sourceID)
             } else {
@@ -187,6 +192,8 @@ final class DashboardDeviceSettingsMessageHandler: NSObject, WKScriptMessageHand
             _ = CookieSyncManager.shared.lastSummary
             _ = BrowserProfileImportModel.shared.importAvailable
             _ = AppStateStore.shared.connectionMode
+            _ = GatewayProcessManager.shared.gatewayHosting
+            _ = GatewayProcessManager.shared.keepGatewayRunningAvailable
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self, self.observationGeneration == generation else { return }

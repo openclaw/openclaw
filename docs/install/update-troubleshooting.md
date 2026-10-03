@@ -241,6 +241,36 @@ procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
 once, then restart the named system unit; subsequent updates can use the fixed
 updater.
 
+## Candidate migration rehearsal timeouts
+
+Current updaters give snapshot preparation and each candidate check separate
+budgets derived from the copied database and plugin sizes. SQLite integrity
+checks report their database size, elapsed time, and active phase while running.
+A check that exhausts its budget reports
+`candidate-migration-rehearsal: <step> exceeded budget after <n> s (<last output>)`.
+The last output is an observation, not proof that the check completed. Preserve
+that detail when reporting a slow integrity check or migration. An explicit
+`--timeout` still controls the candidate check deadline.
+
+The published 2026.9.3 updater shares a five-minute deadline across snapshot
+preparation and candidate checks. Increasing `--timeout` cannot extend that cap.
+Stopping the Gateway can remove writer contention, but it cannot extend this
+deadline or eliminate migration work on the copied databases. Candidate-side
+Doctor improvements can reduce that work; they cannot change the installed
+updater's deadline.
+
+That release can also report a skipped repair with “could not provide a usable
+inference route” after a rehearsal timeout. This comes from a broad error handler
+while preparing automatic repair, not from an inference check performed by the
+rehearsal. Inspect the original failed step and elapsed time. Current updaters
+retain the `candidate-checks-timeout` reason and do not run inference repair for
+that failure. If the installed updater cannot finish, preserve a
+[verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup)
+and use the installation owner's
+[manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+with an exact compatible target, then run the target's `openclaw doctor --fix`
+before starting its Gateway.
+
 ## Published 2026.9.4 on large agent fleets
 
 The published 2026.9.4 updater shares a five-minute deadline across snapshot
@@ -404,6 +434,13 @@ openclaw plugins enable <id>
 
 Updates from the fixed release onward inspect these plugins normally.
 
+The 2026.9.5 updater can also report `Cannot use 'import.meta' outside a module`
+for ESM plugins, including bundles using `import.meta.dir`. Use the same temporary
+disable/update/enable sequence: a new candidate cannot replace the parser already
+running in the installed updater. Version 2026.9.6 admits retained `import.meta`
+syntax. Current snapshot inventory also records unparseable entries as named
+plugin warnings instead of aborting the snapshot.
+
 ### Large model-catalog temporary directories
 
 Older releases can retain several complete plugin copies inside
@@ -471,8 +508,8 @@ Windows host-wide legacy capture cleanup remains report-only.
   generated report's `Rollback outcome` line and `openclaw update status`
   record whether the previous install was restored and is safe to restart.
   `openclaw gateway status --deep` shows what is serving; confirm both before
-  assuming the previous version runs. The generated failure report redacts
-  the package manager's own error line; the failing step's bounded stderr tail
+  assuming the previous version runs. Current failure reports retain sanitized
+  npm error lines and codes while redacting commands and private paths. The failing step's bounded stderr tail
   is kept in the durable run record and in the update-failure context saved
   under `logs/support/` in the state directory. Two causes belong to the
   published 2026.9.3 and 2026.9.4 updaters, and a later release cannot rescue
@@ -492,6 +529,17 @@ changed` when the updater's umask differs from the installed launcher's
   not writable by the invoking user; fix ownership and permissions, then retry.
   Re-run the [installer](/install/installer) if the package install is
   incomplete.
+- `ETARGET`, `E404`, or `EINTEGRITY` during `package-install`: the report names
+  the npm error code and the dependency when npm supplies a registry spec.
+  Current updaters retry named dependency failures once with npm's `--prefer-online`
+  or Bun's `--no-cache` (pnpm has no equivalent forced metadata refresh);
+  a successful retry records a stale-cache repair warning. An unavailable
+  OpenClaw target is left to target resolution. If `ETARGET` or `E404` persists,
+  run `npm cache verify`, check the configured registry or mirror, and run
+  `npm view <spec> version` with the reported spec before retrying. A candidate
+  cannot repair this behavior in an older installed updater; use the
+  [manual install procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+  once to obtain the repaired updater.
 - `runtime-verification-failed` near 300 seconds at `candidate gateway canary`
   when updating from 2026.9.4: the installed updater shares that deadline across
   the snapshot and candidate checks, even with a larger `--timeout`. The elapsed
@@ -500,6 +548,14 @@ changed` when the updater's umask differs from the installed launcher's
   then run `openclaw doctor --fix` and restart the Gateway. See
   [#144858](https://github.com/openclaw/openclaw/issues/144858) and
   [#154381](https://github.com/openclaw/openclaw/issues/154381).
+- `Plugin dependency <name> is unresolvable inside the temporary update copy`:
+  an undeclared optional package was found only above the rehearsal directory.
+  Update inspection ignores that ancestor package and continues with a warning;
+  declared dependencies and links escaping the copy still fail containment.
+  After two identical candidate Doctor failures for the same version, automatic
+  updates pause before starting another rehearsal. Inspect the recorded failure
+  with `openclaw update status --json`, fix its cause, and run `openclaw update`
+  to retry. A new candidate version also clears the pause.
 - `doctor-failed`: run `openclaw doctor` on the Gateway host, resolve its
   findings, then retry. See [Doctor](/cli/doctor) for the check list and
   `--fix` behavior.

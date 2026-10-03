@@ -378,8 +378,6 @@ test("sessions.delete retains failed placement when worker cleanup is unavailabl
       context: {
         workerEnvironmentService: {
           get: () => ({ state: "failed", leaseId: "lease-1" }),
-          hasInferenceForSession: () => false,
-          cancelInferenceForSession: () => [],
         } as never,
         workerSessionPlacementService: placementService,
       },
@@ -446,7 +444,6 @@ test.each([
       context: {
         workerEnvironmentService: {
           get: getWorkerEnvironment,
-          hasInferenceForSession: () => false,
         } as never,
         workerSessionPlacementService: placementService,
       },
@@ -853,7 +850,7 @@ test.each(["worker-turn", "remote-exec"] as const)(
     expect(retireSessionPlacement).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
     expect(placementStore.get(REQUEST.sessionId)).toBeUndefined();
-    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(loadSessionEntry(REQUEST.sessionKey).entry).toBeUndefined();
   },
 );
@@ -869,7 +866,7 @@ test.each(["worker-turn", "remote-exec"] as const)(
     const harness = createHarness(openOpenClawStateDatabase(), placementStore, {
       reconcileCommitsManifest: false,
       reconcileCommitsManifestOnApply: true,
-      verifyFailureCall: 3,
+      verifyFailurePhase: "after-apply",
     });
     await harness.service.dispatch({ ...REQUEST, executionMode });
     const forceDestroyEnvironment = vi.spyOn(harness.service, "forceDestroyEnvironment");
@@ -880,8 +877,6 @@ test.each(["worker-turn", "remote-exec"] as const)(
         context: {
           workerEnvironmentService: {
             ...harness.environments,
-            hasInferenceForSession: () => false,
-            cancelInferenceForSession: () => [],
           },
           workerPlacementDispatchService: harness.service,
           workerSessionPlacementService: placementStore,
@@ -899,7 +894,7 @@ test.each(["worker-turn", "remote-exec"] as const)(
       workspaceBaseManifestRef: harness.reconciledManifestRef,
       turnClaim: { owner: executionMode === "remote-exec" ? "local" : "worker" },
     });
-    expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toMatchObject([
       { workspaceAcceptedAtMs: null },
     ]);
   },

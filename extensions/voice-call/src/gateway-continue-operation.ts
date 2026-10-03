@@ -6,19 +6,15 @@ import type { VoiceCallConfig } from "./config.js";
 import type { VoiceCallRuntime } from "./runtime.js";
 import { TELEPHONY_DEFAULT_TTS_TIMEOUT_MS } from "./telephony-tts.js";
 
-// Async operation store for gateway continue-call requests that outlive one HTTP response.
-
 const VOICE_CALL_CONTINUE_OPERATION_BUFFER_MS = 30000;
 const VOICE_CALL_CONTINUE_OPERATION_CLEANUP_MS = 5 * 60 * 1000;
 
-/** Payload returned immediately when a continue operation starts. */
 type VoiceCallContinueOperationStartPayload = {
   operationId: string;
   status: "pending";
   pollTimeoutMs: number;
 };
 
-/** Payload returned while polling a continue operation. */
 type VoiceCallContinueOperationResultPayload =
   | VoiceCallContinueOperationStartPayload
   | {
@@ -32,7 +28,6 @@ type VoiceCallContinueOperationResultPayload =
       error: string;
     };
 
-/** Request needed to start a continue-call operation. */
 type VoiceCallContinueOperationRequest = {
   rt: VoiceCallRuntime;
   run: () => Promise<{ success: true; transcript?: string }>;
@@ -59,13 +54,6 @@ export function createVoiceCallContinueOperationStore(params: {
     );
   };
 
-  const scheduleCleanup = (operationId: string) => {
-    const timer = setTimeout(() => {
-      operations.delete(operationId);
-    }, VOICE_CALL_CONTINUE_OPERATION_CLEANUP_MS);
-    timer.unref?.();
-  };
-
   // continueCall can wait for speech/TTS/transcript work; callers poll this in the meantime.
   const start = (
     request: VoiceCallContinueOperationRequest,
@@ -81,10 +69,6 @@ export function createVoiceCallContinueOperationStore(params: {
     void request
       .run()
       .then((result) => {
-        const current = operations.get(operationId);
-        if (!current || current.status !== "pending") {
-          return;
-        }
         operations.set(operationId, {
           operationId,
           status: "completed",
@@ -92,10 +76,6 @@ export function createVoiceCallContinueOperationStore(params: {
         });
       })
       .catch((err: unknown) => {
-        const current = operations.get(operationId);
-        if (!current || current.status !== "pending") {
-          return;
-        }
         operations.set(operationId, {
           operationId,
           status: "failed",
@@ -103,7 +83,10 @@ export function createVoiceCallContinueOperationStore(params: {
         });
       })
       .finally(() => {
-        scheduleCleanup(operationId);
+        const timer = setTimeout(() => {
+          operations.delete(operationId);
+        }, VOICE_CALL_CONTINUE_OPERATION_CLEANUP_MS);
+        timer.unref?.();
       });
 
     return { operationId, status: "pending", pollTimeoutMs };

@@ -24,7 +24,11 @@ export class FakeChild extends EventEmitter {
   }
 }
 
-export function createCanarySnapshotResult(input: string, databasePath?: string): SpawnResult {
+export function createCanarySnapshotResult(
+  input: string,
+  databasePath?: string,
+  warnings: string[] = [],
+): SpawnResult {
   const request: unknown = JSON.parse(input);
   return {
     code: 0,
@@ -34,6 +38,7 @@ export function createCanarySnapshotResult(input: string, databasePath?: string)
             databases: databasePath ? [[databasePath, { spellings: [databasePath] }]] : [],
             pluginBytes: 0,
             pluginPlan: "plugin-copy-plan.json",
+            warnings,
           }
         : { versions: [], pluginPaths: {} },
     ),

@@ -101,7 +101,7 @@ it("hands off durable notes once on resume without replaying transient context",
     { persistedThreads: [threadId] },
   );
   const run = runCodexAppServerAttempt(params);
-  await Promise.race([harness.waitForMethod("turn/start"), run]);
+  await run.waitForTurnAccepted();
   await harness.completeTurn({ threadId, turnId: "turn-1" });
   await run;
   const request = harness.requests.find((item) => item.method === "turn/start");
@@ -121,7 +121,8 @@ it("hands off durable notes once on resume without replaying transient context",
   });
   nextParams.sessionTarget = params.sessionTarget;
   const next = runCodexAppServerAttempt(nextParams);
-  await Promise.race([vi.waitFor(() => expect(turnNumber).toBe(2), fastWait), next]);
+  await next.waitForTurnAccepted();
+  expect(turnNumber).toBe(2);
   await harness.completeTurn({ threadId, turnId: "turn-2" });
   await next;
   const nextRequest = harness.requests.findLast((item) => item.method === "turn/start");

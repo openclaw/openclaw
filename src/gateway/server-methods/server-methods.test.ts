@@ -31,8 +31,8 @@ import {
   augmentChatHistoryWithCanvasBlocks,
   dropPreSessionStartAnnouncePairs,
   projectChatDisplayMessages,
-  sanitizeChatHistoryMessages,
 } from "../chat-display-projection.js";
+import { sanitizeChatHistoryMessages } from "../chat-display-projection.sanitize.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import type { HealthSummary } from "../health/types.js";
 import { createChatAbortMarker } from "../server-chat-state.js";
@@ -754,7 +754,8 @@ describe("projectChatDisplayMessages", () => {
   const safeFailureContent = [
     { type: "text", text: "The agent run failed before producing a reply." },
   ];
-  const networkFailureText = "LLM request failed: network connection error.";
+  const networkFailureText =
+    "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
   const networkFailureContent = (reply?: string, type = "text") => [
     { type, text: [networkFailureText, reply].filter(Boolean).join("\n\n") },
   ];
@@ -934,7 +935,7 @@ describe("projectChatDisplayMessages", () => {
           content: [
             {
               type: "text",
-              text: "Context overflow: this conversation is too large for the model. Try /compact, use /new to start a fresh session, or retry the command with a tighter output limit.",
+              text: "This conversation is too long for the model. Try /compact, or start a new conversation with /new.",
             },
           ],
           stopReason: "error",

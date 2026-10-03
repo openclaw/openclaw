@@ -187,7 +187,9 @@ describe("worktrees gateway methods", () => {
       includeRepositoryStatus: true,
     });
 
-    // Write scope cannot probe arbitrary host paths for branch names.
+    // Write scope cannot probe arbitrary host paths for branch names; the
+    // denial uses the shared structured missing-scope contract so clients can
+    // tell an authorization failure apart from a repository inspection failure.
     const denied = await call(
       handlers,
       "worktrees.branches",
@@ -195,7 +197,15 @@ describe("worktrees gateway methods", () => {
       { client: writeClient, context: emptyConfigContext },
     );
     expect(denied?.[0]).toBe(false);
-    expect(String((denied?.[2] as { message?: string })?.message)).toContain("operator.admin");
+    expect(denied?.[2]).toMatchObject({
+      code: "FORBIDDEN",
+      message: "missing scope: operator.admin",
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: "operator.admin",
+        requiredScopes: ["operator.admin"],
+      },
+    });
   });
 
   it("allows write-scoped branch listing for a subdirectory inside an agent workspace", async () => {
@@ -275,7 +285,14 @@ describe("worktrees gateway methods", () => {
         { client: writeClient, context: emptyConfigContext },
       );
       expect(denied?.[0]).toBe(false);
-      expect(String((denied?.[2] as { message?: string })?.message)).toContain("operator.admin");
+      expect(denied?.[2]).toMatchObject({
+        code: "FORBIDDEN",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.admin",
+          requiredScopes: ["operator.admin"],
+        },
+      });
     } finally {
       await removeProjectRegistry(project);
     }
@@ -392,10 +409,21 @@ describe("worktrees gateway methods", () => {
     ]);
   });
 
-  it("rejects invalid parameters", async () => {
+  it.each([
+    ["worktrees.create", { repoRoot: "" }],
+    ["worktrees.remove", { id: record.id, force: true, ifLossless: true }],
+    ["worktrees.remove", { id: record.id, exactState: { head: "incomplete" } }],
+    ["worktrees.restore", { id: record.id, recoverExactState: { head: "incomplete" } }],
+    ["worktrees.recoverRemoval", { id: record.id, snapshot: "a".repeat(40) }],
+    ["worktrees.retireSnapshot", { id: record.id }],
+  ])("refuses invalid %s parameters before admitting a mutation", async (method, params) => {
     const handlers = createWorktreesHandlers({} as never);
-    const response = await call(handlers, "worktrees.create", { repoRoot: "" });
+    const response = await call(handlers, method, params);
 
     expect(response?.[0]).toBe(false);
+    expect(response?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      details: { mutationAccepted: false },
+    });
   });
 });

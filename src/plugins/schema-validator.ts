@@ -4,11 +4,13 @@ import {
   type TypeBoxValidationError,
 } from "@openclaw/normalization-core/json-schema";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 // Compiles plugin manifest schemas for validation without runtime loading.
 import { Format } from "typebox/format";
-import { Compile, Pointer, type Validator as TypeBoxValidator } from "typebox/schema";
+import { Check, Compile, Pointer, type Validator as TypeBoxValidator } from "typebox/schema";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
+import { LruCache } from "../infra/lru-cache.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import {
   applyJsonSchemaDefaults,
@@ -16,7 +18,6 @@ import {
 } from "../shared/json-schema-defaults.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
-import { PluginLruCache } from "./plugin-lru-cache.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 type CachedValidator = {
@@ -32,7 +33,7 @@ type CachedValidator = {
  */
 export type JsonSchemaValue = JsonSchemaObject | boolean;
 
-const schemaCache = new PluginLruCache<CachedValidator>(512);
+const schemaCache = new LruCache<CachedValidator>(512);
 const annotationOnlyFormats = [
   "date-time",
   "date",
@@ -61,13 +62,9 @@ function schemaHasDefaults(schema: unknown): boolean {
     return false;
   }
   if (Array.isArray(schema)) {
-    return schema.some((item) => schemaHasDefaults(item));
+    return schema.some(schemaHasDefaults);
   }
-  const record = schema as Record<string, unknown>;
-  if (Object.hasOwn(record, "default")) {
-    return true;
-  }
-  return Object.values(record).some((value) => schemaHasDefaults(value));
+  return Object.hasOwn(schema, "default") || Object.values(schema).some(schemaHasDefaults);
 }
 
 // Transfer only defaults selected by the source; re-evaluating branches on resolved
@@ -156,21 +153,6 @@ function checkSchemaWithCurrentFormats(
   return normalizeTypeBoxValidationErrors(validate.Errors(value)[1]);
 }
 
-function isDefaultActivatedConditionalFailure(params: {
-  schema: JsonSchemaValue;
-  validate: TypeBoxValidator;
-  originalValue: unknown;
-  defaultedValue: unknown;
-}): boolean {
-  const relaxedConditionalValidator = compileSchema(
-    relaxConditionalRequiredKeywords(params.schema),
-  );
-  if (checkSchemaWithCurrentFormats(relaxedConditionalValidator, params.defaultedValue)) {
-    return false;
-  }
-  return checkSchemaWithCurrentFormats(params.validate, params.originalValue) === null;
-}
-
 /**
  * Sanitized validation error surfaced to config diagnostics, gateway hooks, and SDK callers.
  * `path`/`message` stay raw for programmatic handling; `text` is terminal-safe display text.
@@ -211,19 +193,6 @@ function appendPathSegment(path: string, segment: string): string {
   return `${path}.${trimmed}`;
 }
 
-function firstStringParam(value: unknown): string | null {
-  if (typeof value === "string" && value.trim()) {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    const first = value.find(
-      (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
-    );
-    return first ?? null;
-  }
-  return null;
-}
-
 function resolveMissingProperties(error: TypeBoxValidationError): string[] {
   const properties =
     error.keyword === "required"
@@ -262,7 +231,10 @@ function resolveAdditionalProperty(error: TypeBoxValidationError): string | unde
   if (error.keyword !== "additionalProperties") {
     return undefined;
   }
-  return firstStringParam(error.params?.additionalProperty) ?? undefined;
+  const value = error.params?.additionalProperty;
+  return Array.isArray(value)
+    ? value.find((entry): entry is string => readNonBlankString(entry) !== undefined)
+    : readNonBlankString(value);
 }
 
 function resolveAdditionalProperties(error: TypeBoxValidationError): string[] {
@@ -432,12 +404,11 @@ export function validateJsonSchemaValue(params: {
       !(
         params.applyDefaults &&
         value !== originalValue &&
-        isDefaultActivatedConditionalFailure({
-          schema: params.schema,
-          validate: cached.validate,
-          originalValue,
-          defaultedValue: value,
-        })
+        Check(
+          normalizeJsonSchemaForTypeBox(relaxConditionalRequiredKeywords(params.schema)),
+          value,
+        ) &&
+        cached.validate.Check(originalValue)
       )
     ) {
       return { ok: false, errors: formatValidationErrors(errors) };

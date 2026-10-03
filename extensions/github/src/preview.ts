@@ -9,6 +9,7 @@ import {
   discardResponse,
   fetchGitHubApi,
   GITHUB_API_ORIGIN,
+  githubRestApiPath,
   readBoundedResponse,
   readGitHubJsonResponse,
   requiredString,
@@ -69,7 +70,17 @@ export async function assertPublicGitHubRepository(
 ): Promise<void> {
   // Stop before item reads so shared credentials cannot probe private item numbers.
   const repository = await readGitHubJsonResponse(
-    await fetchGitHubApi(repositoryUrl, fetchImpl, token, undefined, identity, undefined, signal),
+    await fetchGitHubApi(
+      repositoryUrl,
+      fetchImpl,
+      token,
+      undefined,
+      identity,
+      undefined,
+      signal,
+      undefined,
+      GITHUB_API_ORIGIN,
+    ),
   );
   if (!isPublicGitHubRepository(repository)) {
     throw new ControlUiGitHubError(404, "GitHub repository is not public");
@@ -77,7 +88,7 @@ export async function assertPublicGitHubRepository(
 }
 
 function redirectedRepositoryApiUrl(target: ControlUiGitHubPreviewTarget, url: URL): string | null {
-  const segments = url.pathname.split("/").filter(Boolean);
+  const segments = githubRestApiPath(url, GITHUB_API_ORIGIN).split("/").filter(Boolean);
   const collection = target.kind === "pull" ? "pulls" : "issues";
   // The commits request redirects to the same item path plus one known suffix.
   const itemSegments = segments.at(-1) === "commits" ? segments.slice(0, -1) : segments;
@@ -145,30 +156,27 @@ function safeAvatarUrl(raw: string | undefined): URL | null {
   if (!raw) {
     return null;
   }
-  try {
-    const url = new URL(raw);
-    const rawPathEnd = raw.search(/[?#]/u);
-    const rawPath = rawPathEnd === -1 ? raw : raw.slice(0, rawPathEnd);
-    if (
-      url.protocol !== "https:" ||
-      url.hostname !== GITHUB_AVATAR_HOST ||
-      url.hash ||
-      url.username ||
-      url.password ||
-      url.port ||
-      rawPath.includes("..") ||
-      rawPath.includes("\\") ||
-      url.pathname.includes("..") ||
-      url.pathname.includes("\\")
-    ) {
-      return null;
-    }
-    url.search = "";
-    url.searchParams.set("s", "64");
-    return url;
-  } catch {
+  const url = URL.parse(raw);
+  const rawPathEnd = raw.search(/[?#]/u);
+  const rawPath = rawPathEnd === -1 ? raw : raw.slice(0, rawPathEnd);
+  if (
+    !url ||
+    url.protocol !== "https:" ||
+    url.hostname !== GITHUB_AVATAR_HOST ||
+    url.hash ||
+    url.username ||
+    url.password ||
+    url.port ||
+    rawPath.includes("..") ||
+    rawPath.includes("\\") ||
+    url.pathname.includes("..") ||
+    url.pathname.includes("\\")
+  ) {
     return null;
   }
+  url.search = "";
+  url.searchParams.set("s", "64");
+  return url;
 }
 
 async function fetchCoAuthors(
@@ -261,7 +269,17 @@ async function fetchPreview(
   identity?: ControlUiGitHubPreviewIdentity,
 ): Promise<ControlUiGitHubPreview> {
   const request = (url: string, beforeRedirect?: (url: URL) => Promise<void>) =>
-    fetchGitHubApi(url, fetchImpl, token, beforeRedirect, identity, undefined, signal);
+    fetchGitHubApi(
+      url,
+      fetchImpl,
+      token,
+      beforeRedirect,
+      identity,
+      undefined,
+      signal,
+      undefined,
+      GITHUB_API_ORIGIN,
+    );
   const assertPublicRepository = (url: string) =>
     assertPublicGitHubRepository(url, fetchImpl, token, identity, signal);
   const repositoryUrl = `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}`;
