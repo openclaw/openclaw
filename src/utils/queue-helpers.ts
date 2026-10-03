@@ -6,14 +6,13 @@ import { expectDefined } from "@openclaw/normalization-core";
  * debounce drains, and force individual collection when cross-channel ordering matters.
  */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { QueueDropPolicy } from "../config/types.queue.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 
 type QueueSummaryState = {
   droppedCount: number;
   summaryLines: string[];
 };
-
-type QueueDropPolicy = "summarize" | "old" | "new";
 
 type QueueState<T> = QueueSummaryState & {
   items: T[];

@@ -368,14 +368,35 @@ function withGatewayServiceMutationGuards(
           );
         }
         assertDaemonRuntimePinCurrent(scope, update.expected);
-        if (update.pin || update.expected.stored) {
-          const previous = await service.readCommand(args.env);
+        const checkDefinition = Boolean(
+          update.pin ||
+          update.expected.stored ||
+          update.requireDefinitionMatch ||
+          update.requireRunning,
+        );
+        if (checkDefinition) {
+          const current = update.requireRunning
+            ? await readGatewayServiceState(service, {
+                env: args.env,
+                requireEffective: true,
+                requireLoadedCommand: true,
+              })
+            : undefined;
+          const previous = current ? current.command : await service.readCommand(args.env);
           args.assertCurrent?.();
           assertDaemonRuntimePinPlan(update.expected, previous);
           assertDaemonRuntimePinCurrent(scope, update.expected);
+          if (
+            current &&
+            (current.loadState.status !== "loaded" || !current.running || current.inspectionReason)
+          ) {
+            throw new Error(
+              "The Gateway is paused or its running state could not be verified. Start it before choosing Use bundled runtime.",
+            );
+          }
         }
         await mutate(args);
-        if (update.pin || update.expected.stored) {
+        if (checkDefinition) {
           const command = await service.readCommand(args.env);
           args.assertCurrent?.();
           assertDaemonRuntimePinDefinition(

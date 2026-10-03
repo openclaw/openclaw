@@ -534,7 +534,7 @@ describe("tool-card outcomes", () => {
     { status: "skipped", label: "Skipped" },
     { status: undefined, label: "Outcome unknown" },
   ] as const)(
-    "preserves prepared $status outcomes through live items and history attachment",
+    "reconciles prepared $status outcomes through live items and history attachment",
     ({ status, label }) => {
       const item = projectAgentActivityItem({
         itemId: "collaboration-call",
@@ -570,6 +570,7 @@ describe("tool-card outcomes", () => {
         [live, true],
         [history.messages[0], false],
       ] as const) {
+        const expectedLabel = status === undefined && runActive ? "Running" : label;
         const group = createToolGroup("outcome", [createMessageEntry("call", message)]);
         render(renderActivityGroup([group], { showReasoning: false, runActive }), container);
         expect(container.querySelectorAll(".chat-tool-failure")).toHaveLength(
@@ -584,8 +585,10 @@ describe("tool-card outcomes", () => {
           }),
           container,
         );
-        expect(textOf(container, ".chat-tool-card__outcome")).toBe(label);
-        expect(container.querySelector(".chat-tool-row--running")).toBeNull();
+        expect(textOf(container, ".chat-tool-card__outcome")).toBe(expectedLabel);
+        expect(container.querySelector(".chat-tool-row--running") !== null).toBe(
+          status === undefined && runActive,
+        );
         const card = extractToolCardsCached(message)[0]!;
         expect(card.outputText).toBeUndefined();
         expect(card.isError).toBeUndefined();

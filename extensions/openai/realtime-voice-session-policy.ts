@@ -49,21 +49,7 @@ export type OpenAIRealtimeUserMessageOptions = {
   toolChoice?: { type: "function"; name: string };
 };
 
-export type OpenAIRealtimeVoiceProviderConfig = {
-  apiKey?: string;
-  model?: string;
-  voice?: string;
-  temperature?: number;
-  vadThreshold?: number;
-  silenceDurationMs?: number;
-  prefixPaddingMs?: number;
-  interruptResponseOnInputAudio?: boolean;
-  minBargeInAudioEndMs?: number;
-  reasoningEffort?: string;
-  azureEndpoint?: string;
-  azureDeployment?: string;
-  azureApiVersion?: string;
-};
+export type OpenAIRealtimeVoiceProviderConfig = Partial<ReturnType<typeof normalizeProviderConfig>>;
 
 export type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest &
   Omit<OpenAIRealtimeVoiceProviderConfig, "voice"> & {
@@ -167,9 +153,7 @@ export type RealtimeEvent = {
 
 type RealtimeGaSessionPolicy = ReturnType<typeof buildOpenAIRealtimeGaSessionPolicy>;
 
-export function normalizeProviderConfig(
-  config: RealtimeVoiceProviderConfig,
-): OpenAIRealtimeVoiceProviderConfig {
+export function normalizeProviderConfig(config: RealtimeVoiceProviderConfig) {
   const raw = resolveOpenAIProviderConfigRecord(config);
   return {
     apiKey: normalizeResolvedSecretInputString({

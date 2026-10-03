@@ -546,14 +546,18 @@ fresh product qualification. Historical root-only receipts retain
 dispatching child lanes. Npm preflight and package/install acceptance still run
 against the exact Release SHA and its new tarball bytes.
 
-Current all-group FRV also owns read-only npm source/build/qualification and
-Docker preparation. Use its successful run as `preflight_run_id`; the candidate
+Current all-group FRV also owns read-only core and selected-plugin npm
+source/build/qualification plus Docker preparation. Use its successful run as
+`preflight_run_id`; the candidate
 helper defaults to that run. Do not dispatch a second npm preflight unless
 recovering historical separate evidence. Regular final qualification records
 SDK reports for both `beta` and `latest`; review the acknowledgement for the
-actual publication channel. Prepared descriptors live in `publicationArtifacts` in
-the exact final manifest. Product evidence reuse never substitutes Code-SHA
-package or image bytes for the final Release SHA. For failed independent npm qualification, use `pnpm frv continue --failed`:
+actual publication channel. Prepared descriptors live in `publicationArtifacts`
+in the exact final manifest. Release Prepare adopts the manifest's plugin npm
+descriptor and prepares only ClawHub; it never repacks plugin npm after FRV.
+Product evidence reuse never substitutes Code-SHA
+package or image bytes for the final Release SHA. For failed independent npm
+qualification, use `pnpm frv continue --failed`:
 failed npm jobs retry on their original run, successful preparation jobs
 and diagnostic children carry forward, and the parent verifies the resulting
 receipts. Failure alone is not a continuation rejection. Frozen workflows
@@ -731,24 +735,10 @@ manifest target, package versions, saved `run_attempt`, and final tag to identif
 the same candidate. Reject narrow runs, untrusted tooling, mismatched targets,
 and earlier-attempt evidence.
 
-Run the npm preflight separately from trusted `main`. Here `tag` is the exact
-candidate SHA; it is an npm-preflight input, not the workflow transport ref:
-
-```bash
-gh workflow run openclaw-npm-release.yml \
-  --repo openclaw/openclaw \
-  --ref main \
-  -f tag="$VALIDATION_SHA" \
-  -f preflight_only=true \
-  -f npm_dist_tag=extended-stable \
-  -f release_candidate_branch="$CONTEXT_REF"
-```
-
-This standalone run is a supplemental validation-only preflight. Do not pass
-its run ID as publication `preflight_run_id`: a `main` workflow head does not
-have the canonical candidate branch/SHA identity required by that publication
-input. Publication continues to use the Full Release Validation run's
-manifest-bound integrated npm artifact and exact run attempt.
+The all-group parent prepares core and selected plugin npm tarballs itself and
+records their immutable descriptors in `publicationArtifacts`. Publication
+must consume those exact artifacts and attempts. A standalone npm or plugin npm
+preflight is diagnostic-only and cannot replace the manifest-bound evidence.
 
 Product failures need an approved backport. Frozen-target tooling failures need
 the smallest behavior-preserving repair. Provider, approval, runner, or log
@@ -929,6 +919,7 @@ Record:
 - active full parent run URL, attempt, workflow SHA, and any superseded parent
   with the exact replacement reason
 - selected child run IDs and conclusions: CI, Release Checks, Plugin Prerelease, NPM Telegram, Product Performance; record deferred confidence as not run
+- exact core and plugin npm publication artifact descriptors from the terminal manifest
 - all selected lane conclusions, including Linux/Windows/macOS cross-OS
 - performance comparison result versus earlier releases when available
 - targeted local proof commands

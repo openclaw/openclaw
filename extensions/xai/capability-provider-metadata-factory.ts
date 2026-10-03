@@ -169,16 +169,6 @@ export function createXaiVideoGenerationProviderMetadata(
 
 export type XaiRealtimeTranscriptionEncoding = "pcm" | "mulaw" | "alaw";
 
-type XaiRealtimeTranscriptionProviderConfig = {
-  apiKey?: string;
-  baseUrl?: string;
-  sampleRate?: number;
-  encoding?: XaiRealtimeTranscriptionEncoding;
-  interimResults?: boolean;
-  endpointingMs?: number;
-  language?: string;
-};
-
 function normalizeRealtimeTranscriptionEncoding(
   value: unknown,
 ): XaiRealtimeTranscriptionEncoding | undefined {
@@ -200,7 +190,7 @@ function normalizeRealtimeTranscriptionEncoding(
 
 export function normalizeXaiRealtimeTranscriptionProviderConfig(
   config: RealtimeTranscriptionProviderConfig,
-): XaiRealtimeTranscriptionProviderConfig {
+) {
   const raw = isRecord(config) ? config : undefined;
   const providers = isRecord(raw?.providers) ? raw.providers : undefined;
   const nested = providers?.xai ?? raw?.xai ?? raw;

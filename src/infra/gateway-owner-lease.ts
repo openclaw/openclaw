@@ -4,12 +4,17 @@ import type { DatabaseSync } from "node:sqlite";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import type { OpenClawStateSchemaReadAdmission } from "../state/openclaw-state-db-contract.js";
+import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
+import { withOpenClawStateReadOnlyLocation } from "../state/openclaw-state-db-read-connection.js";
 import {
   withExistingOpenClawStateDatabaseCurrentReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../state/openclaw-state-db-readonly.js";
 import { withOpenClawStateStartupMigrationCheckpointDatabase } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  existingPathOrUndefined,
+  resolveOpenClawStateSqlitePath,
+} from "../state/openclaw-state-db.paths.js";
 import { startOpenClawStateLeaseHeartbeat } from "../state/openclaw-state-lease-heartbeat.js";
 import {
   acquireOpenClawStateLeaseInTransaction,
@@ -27,8 +32,9 @@ import type {
   GatewayOwnerLeaseIdentity,
   GatewayOwnerSupervisor,
 } from "./gateway-owner-lease.types.js";
-import { captureGatewayStateOwner } from "./gateway-state-owner.js";
+import { captureGatewayStateOwner, type StateDatabaseSchemaLease } from "./gateway-state-owner.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
+import { prepareSqliteReadOnlyLocationSync } from "./sqlite-snapshot-source.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { STARTUP_MIGRATION_LEASE_TTL_MS } from "./startup-migration-checkpoint.js";
 
@@ -67,14 +73,31 @@ function readStoppedGatewayOwnerLease(db: DatabaseSync) {
 /** Physical custody alone must not bypass a fresh, unverifiable lease during maintenance. */
 export function assertGatewayOwnerLeaseStopped(
   env: NodeJS.ProcessEnv,
-  openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
+  maintenanceOwner?: StateDatabaseSchemaLease,
 ): void {
+  if (maintenanceOwner) {
+    const pathname = resolveOpenClawStateSqlitePath(env);
+    maintenanceOwner.assertDatabaseAccess(pathname);
+    if (existingPathOrUndefined(pathname) === undefined) {
+      return;
+    }
+    // Doctor must inspect lease authority before it can repair a quarantined database.
+    withOpenClawStateReadOnlyLocation(
+      ({ db }) => {
+        maintenanceOwner.assertDatabaseAccess(pathname);
+        readStoppedGatewayOwnerLease(db);
+      },
+      pathname,
+      prepareSqliteReadOnlyLocationSync(pathname),
+      openDoctorStateSchemaReadAdmission,
+    );
+    return;
+  }
   withExistingOpenClawStateDatabaseCurrentReadOnly(
     ({ db }) => {
       readStoppedGatewayOwnerLease(db);
     },
     { env },
-    openStateSchemaReadAdmission,
   );
 }
 

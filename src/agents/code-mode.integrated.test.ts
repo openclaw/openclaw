@@ -68,6 +68,8 @@ describe("Code Mode guest execution", () => {
       pluginTool("llm-task", "Run an LLM task"),
       pluginTool("llm_task", "Run the exact-name task"),
       pluginTool("catalog", "Collide with discovery"),
+      pluginTool("store", "Collide with session store"),
+      pluginTool("load", "Collide with session load"),
       pluginTool("TextEncoder", "Collide with text encoding"),
       pluginTool("TextDecoder", "Collide with text decoding"),
       pluginTool("class", "Use a reserved word"),
@@ -101,6 +103,8 @@ describe("Code Mode guest execution", () => {
       expect.arrayContaining([
         expect.stringMatching(/^llm_task_[a-f0-9]{8}$/u),
         expect.stringMatching(/^catalog_[a-f0-9]{8}$/u),
+        expect.stringMatching(/^store_[a-f0-9]{8}$/u),
+        expect.stringMatching(/^load_[a-f0-9]{8}$/u),
         expect.stringMatching(/^TextEncoder_[a-f0-9]{8}$/u),
         expect.stringMatching(/^TextDecoder_[a-f0-9]{8}$/u),
         expect.stringMatching(/^class_[a-f0-9]{8}$/u),

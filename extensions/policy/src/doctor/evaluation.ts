@@ -13,7 +13,7 @@ import {
   invalidChannelDenyRuleFindings,
 } from "./access-findings.js";
 import { agentWorkspaceFindings } from "./agent-workspace-findings.js";
-import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
+import { CHECK_IDS } from "./check-ids.js";
 import { dataHandlingFindings, secretAuthProvenanceFindings } from "./data-auth-findings.js";
 import { execApprovalsFindings } from "./exec-approval-findings.js";
 import { ingressFindings } from "./ingress-findings.js";
@@ -78,15 +78,16 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     includeExecApprovals: false,
   });
   const findings: HealthFinding[] = [];
+  const initialEvaluation: PolicyEvaluation = {
+    policyPath,
+    evidence,
+    expectedAttestationHash: settings.expectedAttestationHash,
+    findings,
+    attestedFindings: findings,
+  };
 
   if (!policyChecksEnabled(ctx, settings)) {
-    return {
-      policyPath,
-      evidence,
-      expectedAttestationHash: settings.expectedAttestationHash,
-      findings,
-      attestedFindings: findings,
-    };
+    return initialEvaluation;
   }
 
   const policyFile = await readPolicyFile(ctx);
@@ -99,25 +100,13 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
       path: policyPath,
       fixHint: `Restore ${policyPath} or add the policy artifact for this workspace.`,
     });
-    return {
-      policyPath,
-      evidence,
-      expectedAttestationHash: settings.expectedAttestationHash,
-      findings,
-      attestedFindings: findings,
-    };
+    return initialEvaluation;
   }
 
   const parsedPolicy = parsePolicyFile(policyFile.raw);
   if (!parsedPolicy.ok) {
     findings.push(policyParseFinding(policyFile.displayName, policyFile.ocDocName, parsedPolicy));
-    return {
-      policyPath,
-      evidence,
-      expectedAttestationHash: settings.expectedAttestationHash,
-      findings,
-      attestedFindings: findings,
-    };
+    return initialEvaluation;
   }
 
   const policy = parsedPolicy.value;
@@ -139,12 +128,8 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
       fixHint: `Restore the approved policy artifact or update plugins.entries.policy.config.expectedHash after review.`,
     });
     return {
-      policyPath,
+      ...initialEvaluation,
       policy: { value: policy, hash: policyHash },
-      evidence,
-      expectedAttestationHash: settings.expectedAttestationHash,
-      findings,
-      attestedFindings: findings,
     };
   }
 
@@ -160,13 +145,6 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
   );
   const requiredMetadata =
     metadataRequirementFindings.length === 0 ? requiredToolMetadata(policy) : new Set<string>();
-  const includeSecrets = policyHasRules(policy, "secrets");
-  const includeAuthProfiles = policyHasRules(policy, "auth");
-  const includeIngress = policyHasRules(policy, "ingress");
-  const includeGatewayExposure = policyHasRules(policy, "gateway");
-  const includeAgentWorkspace = policyHasRules(policy, "agents");
-  const includeDataHandling = policyHasRules(policy, "dataHandling");
-  const includeSandboxPosture = policyHasRules(policy, "sandbox");
   const includeExecApprovals = policyHasRules(policy, "execApprovals");
   const routing =
     isRecord(policy) &&
@@ -179,14 +157,14 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
       : undefined;
   const execApprovalsFile = includeExecApprovals ? await readExecApprovalsFile(ctx) : undefined;
   const evidenceOptions = {
-    includeIngress,
-    includeGatewayExposure,
-    includeAgentWorkspace,
-    includeDataHandling,
+    includeIngress: policyHasRules(policy, "ingress"),
+    includeGatewayExposure: policyHasRules(policy, "gateway"),
+    includeAgentWorkspace: policyHasRules(policy, "agents"),
+    includeDataHandling: policyHasRules(policy, "dataHandling"),
     includeToolPosture: policyHasRules(policy, "tools"),
-    includeSandboxPosture,
-    includeSecrets,
-    includeAuthProfiles,
+    includeSandboxPosture: policyHasRules(policy, "sandbox"),
+    includeSecrets: policyHasRules(policy, "secrets"),
+    includeAuthProfiles: policyHasRules(policy, "auth"),
     includeExecApprovals,
     execApprovalsRaw: includeExecApprovals ? (execApprovalsFile?.raw ?? null) : undefined,
     routing,
@@ -293,13 +271,6 @@ function policyParseFinding(
     target: `oc://${policyDocName}`,
     fixHint: `Fix ${policyPath} so policy conformance checks can run.`,
   };
-}
-
-export function findingsForCheck(
-  evaluation: PolicyEvaluation,
-  checkId: (typeof POLICY_CHECK_IDS)[number],
-): readonly HealthFinding[] {
-  return evaluation.findings.filter((finding) => finding.checkId === checkId);
 }
 
 function hasPolicyValidationFinding(findings: readonly HealthFinding[]): boolean {

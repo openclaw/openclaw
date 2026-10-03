@@ -544,6 +544,11 @@ export const en: TranslationMap & {
       },
     },
   },
+  agentStartup: {
+    title: "Starting up",
+    description: "The agent is getting ready. This view will load automatically.",
+    short: "Starting up…",
+  },
   lazyView: {
     errorTitle: "Panel failed to load",
     genericSubtitle: "Something went wrong while loading this panel.",

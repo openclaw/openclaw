@@ -18,6 +18,9 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  "apps/linux/scripts/runtime-boundary.test.mjs!",
+  "apps/linux/scripts/stage-runtime.mjs!",
+  "apps/linux/scripts/stage-runtime.test.mjs!",
   // apps/linux/README.md invokes this live Windows native-browser proof driver by path.
   "apps/linux/scripts/test-inline-browser.mjs!",
   // Linux App CI executes the injected native-auth bridge tests through Node.
@@ -212,10 +215,6 @@ const repositoryScriptEntries = [
   "scripts/openclaw-release-clawhub-runtime-state.ts!",
   // Protected preparation/button workflows invoke this coordinator by path.
   "scripts/openclaw-release-ready.mjs!",
-  // Plugin Prerelease builds immutable package artifacts, then scans them in a bounded child.
-  "scripts/plugin-npm-security-prepare.mts!",
-  "scripts/plugin-npm-security-scan-runner.mjs!",
-  "scripts/plugin-npm-security-scan.mts!",
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
   "scripts/oxlint-boundary-guards.mjs!",
   "scripts/plugin-prerelease-liveish-matrix.mts!",

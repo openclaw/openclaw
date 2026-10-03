@@ -155,11 +155,15 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
 
     For the embedded OpenClaw runtime, available API-key OpenAI Responses
     routes that support Fast mode offer Standard, Fast, and Ultrafast in the
-    Control UI without requiring a catalog to advertise the tier. If a response
+    Control UI without requiring a catalog to advertise the tier, whether the
+    key comes from an auth profile, environment, or provider config (including
+    SecretRefs). If a response
     to an Ultrafast request echoes a different `service_tier`, OpenClaw records
-    the downgrade for that profile and model and removes Ultrafast from later
-    model-list results until account discovery refreshes, credentials change, or
-    the prepared runtime retires. ChatGPT-account
+    the downgrade for that selected credential, model, and route and removes
+    Ultrafast from later model-list results. Profile observations clear when
+    account discovery refreshes or credentials change; direct-key observations
+    clear when their configured binding changes. Both clear when the prepared
+    runtime retires. ChatGPT-account
     availability remains based on authenticated account catalog discovery.
 
     ```json5

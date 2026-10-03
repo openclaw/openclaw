@@ -202,6 +202,8 @@ Opening a queued-message editor after the other pane releases its edit clears th
 edit-conflict notice.
 
 Editing an unsent queued message remains safe if the connection drops mid-edit.
+Confirming text with an input method keeps the queued-message editor open;
+press Enter again after composition finishes to save the edit.
 Open queued-message edits stay available when you switch conversations, even after
 visiting enough chats to replace older cached views. Finish or cancel the edit to
 release that retained conversation.

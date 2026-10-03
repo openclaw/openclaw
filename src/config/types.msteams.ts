@@ -1,10 +1,10 @@
 import type { ChannelPreviewStreamingConfig } from "./types.base.js";
 import type {
   ChannelBotInteractionConfig,
+  CommonChannelGroupConfig,
   CommonChannelMessagingConfig,
 } from "./types.channel-messaging-common.js";
 import type { SecretInput } from "./types.secrets.js";
-import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type MSTeamsWebhookConfig = {
   /** @deprecated Type-only until the next SDK major; Doctor migrates this to legacyWebhook.port. */
@@ -47,14 +47,12 @@ export type MSTeamsSsoConfig = {
 export type MSTeamsReplyStyle = "thread" | "top-level";
 
 /** Channel-level config for MS Teams. */
-export type MSTeamsChannelConfig = {
-  /** Require @mention to respond. Default: true. */
-  requireMention?: boolean;
+export type MSTeamsChannelConfig = Pick<
+  CommonChannelGroupConfig,
+  "requireMention" | "tools" | "toolsBySender"
+> & {
   /** Override mention gating in channel threads rooted at this bot's message. */
   requireMentionInBotThreads?: boolean;
-  /** Optional tool policy overrides for this channel. */
-  tools?: GroupToolPolicyConfig;
-  toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Reply style: "thread" replies to the message, "top-level" posts a new message. */
   replyStyle?: MSTeamsReplyStyle;
 };
