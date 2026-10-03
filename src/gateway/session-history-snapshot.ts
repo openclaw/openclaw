@@ -187,7 +187,7 @@ function paginateSessionMessages(
 /** Retain the actor across lazy adapter loading without expanding shared execution imports. */
 export function createIncognitoSessionComputeReader(
   params: Parameters<
-    typeof import("../config/sessions/session-incognito-compute-read.js").createIncognitoSessionComputeReader
+    typeof import("../config/sessions/session-incognito-compute-read.js").bindIncognitoSessionComputeReader
   >[0],
 ) {
   const { actor, authority, signal } = params;
@@ -197,10 +197,10 @@ export function createIncognitoSessionComputeReader(
     authority,
     target,
     async () => {
-      const { createIncognitoSessionComputeReader: createReader } =
+      const { bindIncognitoSessionComputeReader } =
         await import("../config/sessions/session-incognito-compute-read.js");
       signal?.throwIfAborted();
-      return createReader({ actor, authority, target, signal });
+      return bindIncognitoSessionComputeReader({ actor, authority, target, signal });
     },
     signal,
   );

@@ -21,7 +21,7 @@ async function readContextResult<Value>(
 }
 
 /** Inactive adapters retain one actor; P7 supplies them to the production owners. */
-export function createIncognitoSessionComputeReader(params: {
+export function bindIncognitoSessionComputeReader(params: {
   actor: IncognitoAgentDatabaseExecution;
   authority: IncognitoSessionAuthority;
   target: IncognitoHistoryTarget;
