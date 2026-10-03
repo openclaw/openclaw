@@ -67,7 +67,7 @@ type DiagnosticSessionEvent = DiagnosticBaseEvent &
 /** Payload-free facts from authenticated Gateway WebSocket request owners. */
 type DiagnosticGatewayRpcEvent = DiagnosticBaseEvent & {
   type: "gateway.rpc";
-  /** Canonical core method name, or a fixed other/unknown bucket. */
+  /** Registered method name, or a fixed other/unknown bucket. */
   method: string;
 } & (
     | { phase: "received" }
