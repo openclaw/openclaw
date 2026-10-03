@@ -187,7 +187,7 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
           model: "anthropic/claude-opus-4-6",
           utilityModel: "openai/gpt-5.4-mini",
         },
-        list: [{ id: "ops", utilityModel: "google/gemini-3.1-flash-lite-preview" }],
+        entries: { ops: { utilityModel: "google/gemini-3.1-flash-lite-preview" } },
       },
     } as OpenClawConfig;
 

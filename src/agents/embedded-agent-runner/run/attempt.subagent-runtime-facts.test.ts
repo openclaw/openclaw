@@ -123,6 +123,8 @@ describe("subagent facts through full attempt history preparation", () => {
     expect(queued.systemPrompt).not.toContain("run-worker");
     expectSubagentCarrier(queued.messages, "status=queued");
     expectSubagentCarrier(running.messages, "status=running");
-    expectSubagentCarrier(empty.messages, "## Active Subagents\nnone");
+    expect(empty.messages).not.toContainEqual(
+      expect.objectContaining({ customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE }),
+    );
   });
 });

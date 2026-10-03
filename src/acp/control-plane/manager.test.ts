@@ -120,7 +120,7 @@ describe("AcpSessionManager", () => {
     const cfg = {
       ...baseCfg,
       session: { mainKey: "main" },
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
     } satisfies OpenClawConfig;
     await f.run("after restart", "r-main", { cfg, sessionKey: "main" });
     expectRecordFields(mockCallArg(hoisted.readAcpSessionEntryMock), {

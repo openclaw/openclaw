@@ -207,7 +207,7 @@ describe("buildSystemPromptParams", () => {
     const { runtimeInfo } = buildSystemPromptParams({
       config: {
         agents: {
-          list: [{ id: "main", identity: { name: identityName } }],
+          entries: { main: { identity: { name: identityName } } },
         },
       },
       agentId: "main",

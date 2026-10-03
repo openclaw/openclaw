@@ -490,7 +490,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
 
   it("keeps configured, retired and agent-scoped sentinel stores distinct", async () => {
     await withCreatorRows(async ({ callerId, creatorId, keys }) => {
-      const cfg: OpenClawConfig = { agents: { list: [{ id: "work", default: true }] } };
+      const cfg: OpenClawConfig = { agents: { entries: { work: {} } } };
       const workKey = "agent:work:prepared-work";
       const client = eventClients(creatorId)[0]!.client;
       const receive = (sessionKeys: string[], agentId?: string) =>

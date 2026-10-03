@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { disposeMcpClient } from "./mcp-client-lifecycle.js";
 import { redactMcpDiagnosticError } from "./mcp-error.js";
@@ -696,5 +697,78 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
       setTimeout(resolve, 80);
     });
     expect(getCount).toBe(1);
+  });
+
+  it("keeps the client usable after cancelling an unread HTTP error body", async () => {
+    const cancelled = createDeferredCore();
+    const server = createServer((_request, response) => {
+      response.once("close", () => cancelled.resolve());
+      response.writeHead(405, { "content-type": "application/json" });
+      response.write(JSON.stringify({ error: "Method not allowed" }));
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const client = new Client({ name: "test", version: "1" });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected TCP server address");
+      }
+      const fetchMock = initializedFetch({
+        onGet: () => fetch(`http://127.0.0.1:${address.port}/mcp`),
+        onPost: (message) =>
+          message.method === "ping"
+            ? jsonResponse({ jsonrpc: "2.0", id: message.id, result: {} })
+            : new Response(null, { status: 202 }),
+      });
+      const transport = new OpenClawStreamableHTTPClientTransport(
+        new URL("http://mcp.invalid/mcp"),
+        { fetch: fetchMock },
+      );
+      await client.connect(transport);
+      await cancelled.promise;
+      await expect(client.ping()).resolves.toEqual({});
+    } finally {
+      await client.close();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeAllConnections();
+      });
+    }
+  });
+
+  it("preserves response size limits on non-ok HTTP error responses", async () => {
+    let sourceCancelled: () => void;
+    const cancelPromise = new Promise<void>((resolve) => {
+      sourceCancelled = resolve;
+    });
+    const fetchMock = initializedFetch({
+      onGet: () => new Response(null, { status: 405 }),
+      onPost: (message) => {
+        if (message.method === "ping") {
+          return new Response(
+            new ReadableStream({
+              pull(controller) {
+                controller.enqueue(new TextEncoder().encode(OVERSIZED_MCP_TEXT));
+              },
+              cancel() {
+                sourceCancelled();
+              },
+            }),
+            { status: 500, headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response(null, { status: 202 });
+      },
+    });
+    const transport = new OpenClawStreamableHTTPClientTransport(new URL("http://mcp.invalid/mcp"), {
+      fetch: fetchMock,
+    });
+    const client = new Client({ name: "test", version: "1" });
+    await client.connect(transport);
+    await expect(client.ping()).rejects.toThrow(/Streamable HTTP error/);
+    await expect(settlesWithin(cancelPromise, 1_000)).resolves.toBe(true);
+    await client.close();
   });
 });

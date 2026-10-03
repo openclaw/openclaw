@@ -9,6 +9,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
   assertBrowserProxyFileBytesWithinLimits,
   assertBrowserProxyFileCountWithinLimit,
@@ -414,32 +415,6 @@ export function ensureBrowserProxyUploadCleanup(options?: {
   return recovery;
 }
 
-async function waitForStagingLock(previous: Promise<void>, signal?: AbortSignal): Promise<void> {
-  if (!signal) {
-    await previous;
-    return;
-  }
-  signal.throwIfAborted();
-  let onAbort: (() => void) | undefined;
-  const aborted = new Promise<never>((_, reject) => {
-    onAbort = () => {
-      try {
-        signal.throwIfAborted();
-      } catch (error) {
-        reject(error instanceof Error ? error : new Error(String(error)));
-      }
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-  try {
-    await Promise.race([previous, aborted]);
-  } finally {
-    if (onAbort) {
-      signal.removeEventListener("abort", onAbort);
-    }
-  }
-}
-
 async function withStagingLock<T>(
   uploadDir: string,
   task: () => Promise<T>,
@@ -459,7 +434,10 @@ async function withStagingLock<T>(
     }
   });
   try {
-    await waitForStagingLock(previous, signal);
+    signal?.throwIfAborted();
+    await racePromiseWithAbortSignal(previous, signal, ({ reason }) =>
+      reason instanceof Error ? reason : new Error(String(reason)),
+    );
     return await task();
   } finally {
     release();

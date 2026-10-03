@@ -499,6 +499,7 @@ export function renderChat(props: ChatProps) {
           ? nothing
           : renderChatSelectionAnnotations({ ...props, disabled: !canCompose })
       }
+      ${props.composerRecovery ?? nothing}
     </div>`,
   );
   const taskSuggestionTray = renderChatTaskSuggestionTray(props);

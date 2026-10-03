@@ -16,6 +16,7 @@ import type { ChannelId } from "../channels/plugins/types.public.js";
 import { listLegacyOAuthSidecarPaths } from "../commands/doctor-auth-legacy-paths.js";
 import { createConfigRuntimeEnv } from "../config/config-env-vars.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import { resolveConfigPath, resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -86,6 +87,7 @@ import {
 import {
   detectManagedWorktreeStateMigration,
   prepareDoctorAgentDatabaseDiscovery,
+  resolveConcreteBindingAccountId,
 } from "./state-migrations.doctor-discovery.js";
 import {
   detectLegacyExecApprovals,
@@ -228,15 +230,10 @@ import {
 
 const autoMigrateChecked = new Set<string>();
 
-function resolveConcreteBindingAccountId(value: unknown): string | undefined {
-  const accountId = normalizeOptionalString(value);
-  return accountId && accountId !== "*" ? accountId : undefined;
-}
-
 export async function detectLegacyStateMigrations(params: {
-  cfg: OpenClawConfig;
+  cfg: OpenClawConfigWithLegacyRoster;
   /** Doctor's original resolved locators, before roster ownership was materialized. */
-  sourceConfigBeforeMigrations?: OpenClawConfig;
+  sourceConfigBeforeMigrations?: OpenClawConfigWithLegacyRoster;
   /** Legacy session file inspection belongs to Doctor, including its read-only preview. */
   mode?: "automatic" | "doctor";
   pluginDoctorConfig?: OpenClawConfig;
@@ -2456,8 +2453,8 @@ export async function runLegacyStateMigrations(params: {
 
 /** Run canonical startup migrations and explicit Doctor-owned file repairs. */
 export async function autoMigrateLegacyState(params: {
-  cfg: OpenClawConfig;
-  sourceConfigBeforeMigrations?: OpenClawConfig;
+  cfg: OpenClawConfigWithLegacyRoster;
+  sourceConfigBeforeMigrations?: OpenClawConfigWithLegacyRoster;
   invocationPurpose?: LegacyStateMigrationInvocationPurpose;
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
   pluginDoctorConfig?: OpenClawConfig;

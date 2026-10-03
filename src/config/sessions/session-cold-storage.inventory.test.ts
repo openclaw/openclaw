@@ -75,7 +75,11 @@ it.each(["sqlite", "file"] as const)(
     try {
       const config = maintenanceConfig(fixture.scope.storePath);
       if (storage === "sqlite") {
-        config.agents = { list: [{ id: "main" }, { id: "other" }] };
+        config.agents = {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "main" } },
+          entries: { main: {}, other: {} },
+        };
       }
       const result = await getSessionColdStorageStatus(config);
       expect(result).toEqual([
@@ -124,7 +128,11 @@ it.each(["sqlite", "file"] as const)(
 it("counts a configured incognito store through its existing native owner without creating a file", async () => {
   const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
   const config = maintenanceConfig(storePath);
-  config.agents = { list: [{ id: "main" }, { id: "other" }] };
+  config.agents = {
+    ownership: "explicit",
+    defaults: { sessionStore: { agentId: "main" } },
+    entries: { main: {}, other: {} },
+  };
   const empty = {
     agentId: "main",
     storePath,

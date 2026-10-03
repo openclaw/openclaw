@@ -94,7 +94,7 @@ describe("collectGatewayHealthSnapshot legacy owner projection", () => {
           },
         },
       },
-    } satisfies OpenClawConfig;
+    };
     testConfig = createCanonicalAgentConfigFixture(legacyConfig).config;
 
     const migrated = await collectGatewayHealthSnapshot({ audience: "admin", probe: false });

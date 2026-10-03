@@ -131,7 +131,7 @@ describe("update.run acknowledgement", () => {
   it("rejects an ambiguous session alias before recording or handing off an update", async () => {
     const respond = vi.fn();
     await invokeUpdateRun({ sessionKey: "global" }, respond, {
-      agents: { list: [{ id: "operations" }, { id: "research" }] },
+      agents: { entries: { operations: {}, research: {} } },
     });
     expect(respond).toHaveBeenCalledExactlyOnceWith(
       false,

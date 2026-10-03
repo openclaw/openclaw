@@ -15,7 +15,7 @@ it.runIf(process.env.OPENCLAW_SESSION_DIRTY_PARENT_BENCH === "1")(
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = {
         agents: {
-          list: [{ id: "main", default: true }],
+          entries: { main: {} },
           defaults: { model: "unit-test/model" },
         },
       };

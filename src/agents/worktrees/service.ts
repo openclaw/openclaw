@@ -19,11 +19,7 @@ import {
 } from "./capacity.js";
 import { withManagedWorktreeGit } from "./checkout-policy.js";
 import { resolveWorktreeSourceProfile } from "./checkout-profiles.js";
-import {
-  addManagedWorktree,
-  collectWorktreeTemplates,
-  WORKTREE_TEMPLATE_DIRECTORY,
-} from "./checkout.js";
+import { addManagedWorktree } from "./checkout.js";
 import { ensureEmptyWorktreeSource, removeUnusedEmptyWorktreeSource } from "./empty-source.js";
 import { WorktreeRepositoryError } from "./errors.js";
 import { enforceWorktreeCleanupLimits } from "./gc-limits.js";
@@ -105,7 +101,8 @@ import {
   verifyManagedWorktreeExactSnapshot,
 } from "./snapshot-host.js";
 import { restoreManagedWorktreeSnapshot } from "./snapshot-restore.js";
-import { hasTemplates } from "./template-registry.js";
+import { collectWorktreeTemplates, WORKTREE_TEMPLATE_DIRECTORY } from "./template-cache.js";
+import { hasTemplatesAsync } from "./template-registry-async.js";
 import type {
   CreateEmptyManagedWorktreeParams,
   CreateManagedWorktreeParams,
@@ -1314,7 +1311,7 @@ export class ManagedWorktreeService {
     try {
       // Empty caches must not wait behind checkout creation. Collection rereads
       // the templates under the lease before retiring any artifacts.
-      if (hasTemplates(this.env)) {
+      if (await hasTemplatesAsync(this.env)) {
         await this.withAllocationLease(params, async (guard) => {
           await collectWorktreeTemplates(
             this.env,

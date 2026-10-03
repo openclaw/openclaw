@@ -420,7 +420,7 @@ describe("scripts/docker/setup.sh", () => {
           OPENCLAW_DOCKER_SOCKET: socketPath,
           DOCKER_STUB_AGENTS_JSON: JSON.stringify({
             defaults: { sandbox: { docker: { image: defaultImage } } },
-            list: [{ id: "custom", sandbox: { docker: { image: agentImage } } }],
+            entries: { custom: { sandbox: { docker: { image: agentImage } } } },
           }),
           DOCKER_STUB_MISSING_IMAGES: agentImage,
         },
@@ -476,23 +476,21 @@ describe("scripts/docker/setup.sh", () => {
                 browser: { enabled: true, image: browserImage },
               },
             },
-            list: [
-              { id: "ssh", sandbox: { backend: "ssh", docker: { image: ignoredImages[0] } } },
-              {
-                id: "shared",
+            entries: {
+              ssh: { sandbox: { backend: "ssh", docker: { image: ignoredImages[0] } } },
+              shared: {
                 sandbox: {
                   scope: "shared",
                   docker: { image: ignoredImages[1] },
                   browser: { image: ignoredImages[2] },
                 },
               },
-              { id: "off", sandbox: { mode: "off", docker: { image: ignoredImages[3] } } },
-              {
-                id: "browser-denied",
+              off: { sandbox: { mode: "off", docker: { image: ignoredImages[3] } } },
+              "browser-denied": {
                 sandbox: { browser: { enabled: true, image: ignoredImages[4] } },
                 tools: { sandbox: { tools: { deny: ["browser"] } } },
               },
-            ],
+            },
           }),
           DOCKER_STUB_SANDBOX_TOOLS_JSON: JSON.stringify({ alsoAllow: ["group:ui"] }),
           DOCKER_STUB_BROWSER_CONTRACT: "2026-05-12-cdp-relay-auth",

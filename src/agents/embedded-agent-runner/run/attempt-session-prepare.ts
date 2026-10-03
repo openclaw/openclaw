@@ -3,6 +3,7 @@ import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core";
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
+import { isRuntimeContextMessage, setRuntimeContextRetention } from "../../../llm/types.js";
 import {
   attachRuntimePromptMediaFacts,
   readPersistedMediaFacts,
@@ -64,6 +65,7 @@ import {
   preparePersistedCurrentUserTurn,
   reconcilePrePersistedCurrentUserTurn,
 } from "./pre-persisted-user-turn.js";
+import { setSteeringRuntimeContextRetention } from "./runtime-context-prompt.js";
 import { resolveSessionBoundaryPromptCacheKey } from "./session-boundary-prompt-cache-key.js";
 import { resolveEmbeddedSessionContextLimits } from "./session-context-limits.js";
 import { withEmbeddedAttemptToolActivity } from "./tool-activity-heartbeat.js";
@@ -315,6 +317,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
   setCurrentUserTimestampOverride: (override: CurrentUserTimestampOverride | undefined) => void;
 }> {
   const { activeSession, attempt, isRawModelRun, sessionManager } = input;
+  setSteeringRuntimeContextRetention(activeSession, input.appendOnlyRuntimeContext === true);
   const preserveExactPrompt = isRawModelRun || attempt.operation === "settled-tool-finalization";
   if (isRawModelRun) {
     // Raw probes measure only the requested provider prompt. Restored history,
@@ -434,8 +437,8 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
         : relocateCurrentRuntimeContextCarrierToTail(normalized),
     );
     for (const message of converted) {
-      if (message.role === "user" && message.runtimeContextCarrier) {
-        message.runtimeContextCarrierRetained = input.appendOnlyRuntimeContext;
+      if (isRuntimeContextMessage(message)) {
+        setRuntimeContextRetention(message, input.appendOnlyRuntimeContext);
       }
     }
     if (

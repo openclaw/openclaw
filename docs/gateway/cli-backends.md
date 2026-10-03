@@ -325,7 +325,15 @@ context note before the current user prompt. Chat history first matches imported
 Claude user turns against the full local text, including any literal quote of the
 note. If that does not match, it ignores one exact context note for comparison, so
 the same turn appears once. Stored transcript text and unmatched imported turns
-remain intact.
+remain intact. Native and OpenClaw history share bounded pages and message-anchor
+lookups. The history worker prepares a temporary merged index without modifying
+the canonical transcript. A cold index scans bounded source pages to preserve
+global deduplication; subsequent reads select only their requested window. The
+index is discarded when either transcript changes or its database owner closes.
+Reset-archive fallbacks rebuild the index per request because their source files
+have a separate revision from the active database.
+Incognito history uses a request-scoped memory index and never writes that index
+to disk. No migration or update repair is required.
 
 ### History account boundaries
 

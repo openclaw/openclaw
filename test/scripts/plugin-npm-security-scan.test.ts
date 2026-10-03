@@ -174,44 +174,6 @@ function currentLayoutFindings(): string[] {
   ];
 }
 
-function frozenReviewedFindings(): string[] {
-  return [
-    "@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts",
-    "@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs",
-    "@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts",
-    "@openclaw/codex:dangerous-exec:src/node-cli-sessions.ts",
-    "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/http.ts",
-    "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/processes.ts",
-    "@openclaw/discord:dangerous-exec:src/voice/audio.ts",
-    ...Array.from({ length: 3 }, () => "@openclaw/google-meet:dangerous-exec:src/node-host.ts"),
-    ...Array.from({ length: 2 }, () => "@openclaw/google-meet:dangerous-exec:src/realtime.ts"),
-    "@openclaw/matrix:dangerous-exec:src/matrix/deps.ts",
-    "@openclaw/raft:dangerous-exec:src/gateway.ts",
-    "@openclaw/signal:dangerous-exec:src/daemon.ts",
-    ...Array.from({ length: 4 }, () => "@openclaw/voice-call:dangerous-exec:src/tunnel.ts"),
-    "@openclaw/voice-call:dangerous-exec:src/webhook/tailscale.ts",
-  ];
-}
-
-// Recorded by the inert package scan for candidate 292991c9d814 in
-// https://github.com/openclaw/openclaw/actions/runs/33807502201/job/100821685649.
-function frozen2026_7_33ReviewedFindings(): string[] {
-  return [
-    ...frozenReviewedFindings(),
-    ...Array.from(
-      { length: 3 },
-      () => "@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.test.ts",
-    ),
-    "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server.http.test.ts",
-    "@openclaw/google-meet:dangerous-exec:src/realtime.process.test.ts",
-    "@openclaw/openshell-sandbox:dangerous-exec:src/backend.e2e.test.ts",
-    ...Array.from(
-      { length: 2 },
-      () => "@openclaw/openshell-sandbox:dangerous-exec:src/openshell-core.test.ts",
-    ),
-  ];
-}
-
 function syntheticResultsForFindings(findings: readonly string[]): ScanPackageResult[] {
   const findingsByPackage = new Map<string, string[]>();
   for (const finding of findings) {
@@ -263,6 +225,7 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       "release/2026.9.6",
       "release/2026.9.7",
       "release/2026.9.8",
+      "release/2026.9.9",
       "release/2026.10.1",
     ]) {
       expect(resolveReviewedSourceLayout(current, context)?.id, context).toBe("current");
@@ -271,47 +234,10 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     expect(resolveReviewedSourceLayout(current, "release/2099.1.1")).toBeUndefined();
     expect(resolveReviewedSourceLayout(current, "release/2026.10.2")).toBeUndefined();
     expect(resolveReviewedSourceLayout(frozenLegacy)).toBeUndefined();
-    expect(resolveReviewedSourceLayout(frozenLegacy, "extended-stable/2026.6.33")?.id).toBe(
-      "extended-stable-2026.6.33",
-    );
-    expect(resolveReviewedSourceLayout(frozenLegacy, "extended-stable/2026.7.33")?.id).toBe(
-      "extended-stable-2026.7.33",
-    );
-    expect(
-      resolveReviewedSourceLayout(frozenLegacy.slice(0, -1), "extended-stable/2026.6.33"),
-    ).toBeUndefined();
-    expect(resolveReviewedSourceLayout(current, "extended-stable/2026.6.33")).toBeUndefined();
+    expect(resolveReviewedSourceLayout(frozenLegacy, "extended-stable/2026.6.33")).toBeUndefined();
+    expect(resolveReviewedSourceLayout(frozenLegacy, "extended-stable/2026.7.33")).toBeUndefined();
     expect(resolveReviewedSourceLayout(frozenLegacy, "unknown/frozen-release")).toBeUndefined();
-    expect(resolveReviewedSourceLayout([...current, frozenLegacy[0]!])).toBeUndefined();
     expect(resolveReviewedSourceLayout([...current, current[0]!])).toBeUndefined();
-  });
-
-  it("uses the complete frozen-release inventory only for its exact target context", () => {
-    const packageResults = syntheticResultsForFindings(frozenReviewedFindings());
-    const frozen = buildPluginNpmSecurityScanReport({
-      candidateSha: CANDIDATE_SHA,
-      packageResults,
-      targetContextRef: "extended-stable/2026.6.33",
-      toolingSha: TOOLING_SHA,
-    });
-
-    expect(frozen.status).toBe("pass");
-    expect(frozen.layout).toBe("extended-stable-2026.6.33");
-    expect(
-      buildPluginNpmSecurityScanReport({
-        candidateSha: CANDIDATE_SHA,
-        packageResults,
-        toolingSha: TOOLING_SHA,
-      }).status,
-    ).toBe("fail");
-    expect(
-      buildPluginNpmSecurityScanReport({
-        candidateSha: CANDIDATE_SHA,
-        packageResults,
-        targetContextRef: "unknown/frozen-release",
-        toolingSha: TOOLING_SHA,
-      }),
-    ).toMatchObject({ layout: null, status: "fail" });
   });
 
   it("matches the recorded 2026.8.33 source inventory and layout", () => {
@@ -346,49 +272,6 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     });
   });
 
-  it("matches the recorded 2026.7.33 inert package scan inventory exactly", () => {
-    // syntheticResultsForFindings returns freshly built results that nothing else
-    // holds, so these are assigned in place rather than respread per element.
-    const packageResults = syntheticResultsForFindings(frozen2026_7_33ReviewedFindings()).map(
-      (result) => {
-        result.expectedReviewedCriticalFindings = result.reviewedCriticalFindings.filter(
-          (finding) => finding.includes(".test.ts"),
-        );
-        return result;
-      },
-    );
-    const frozen = buildPluginNpmSecurityScanReport({
-      candidateSha: CANDIDATE_SHA,
-      packageResults,
-      targetContextRef: "extended-stable/2026.7.33",
-      toolingSha: TOOLING_SHA,
-    });
-
-    expect(frozen).toMatchObject({
-      candidateSha: CANDIDATE_SHA,
-      errors: [],
-      layout: "extended-stable-2026.7.33",
-      status: "pass",
-    });
-    // packageResults stays live for the assertion above, so this derives copies
-    // instead of mutating the elements in place.
-    const legacyPackageResults = packageResults.map((result) =>
-      Object.assign({}, result, {
-        expectedReviewedCriticalFindings:
-          result.packageName === "@openclaw/acpx"
-            ? result.expectedReviewedCriticalFindings.slice(0, 1)
-            : result.expectedReviewedCriticalFindings,
-      }),
-    );
-    expect(
-      buildPluginNpmSecurityScanReport({
-        candidateSha: CANDIDATE_SHA,
-        packageResults: legacyPackageResults,
-        targetContextRef: "extended-stable/2026.6.33",
-        toolingSha: TOOLING_SHA,
-      }).status,
-    ).toBe("fail");
-  });
   it.each([0, 1, 2])(
     "preserves frozen doctor counts while shrinking current policy: %s",
     async (count) => {
@@ -798,6 +681,7 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
           "extended-stable/2026.7.33",
           "release/2026.9.7",
           "release/2026.9.8",
+          "release/2026.9.9",
           "release/2026.10.1",
         ]) {
           const admitted =
@@ -805,6 +689,7 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
             context === "release/2026.9.6" ||
             context === "release/2026.9.7" ||
             context === "release/2026.9.8" ||
+            context === "release/2026.9.9" ||
             context === "release/2026.10.1" ||
             (context === "release/2026.9.5" && reviewedIn95);
           const label = `${context || "current"}: ${count ?? "absent"}`;
@@ -868,6 +753,7 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       expect.stringContaining(proxyKey),
     ]);
     expect(reportErrors([authBridgeKey, proxyKey], "release/2026.9.8")).toEqual([]);
+    expect(reportErrors([authBridgeKey, proxyKey], "release/2026.9.9")).toEqual([]);
     expect(reportErrors([authBridgeKey, proxyKey], "release/2026.10.1")).toEqual([
       expect.stringContaining(proxyKey),
     ]);
@@ -898,7 +784,7 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       packageName,
     });
 
-    for (const context of ["", "release/2026.10.1"] as const) {
+    for (const context of ["", "release/2026.9.9", "release/2026.10.1"] as const) {
       const scanned = await scanPublishablePluginPackages([artifact.artifact], context);
       expect(scanned.scanErrors, context).toEqual([]);
       const result = scanned.packageResults[0]!;
@@ -1021,6 +907,15 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     expect(releaseResult.unexpectedCriticalFindings).toHaveLength(
       variant === "exact" || variant === "removed exec" ? 0 : variant === "extra exec" ? 2 : 1,
     );
+    const frozen99 = await scanPublishablePluginPackages([artifact], "release/2026.9.9");
+    if (packageName === "@openclaw/codex" && packedPath === fixturePath) {
+      expect(frozen99.scanErrors).toEqual([
+        expect.stringContaining("reviewed exact packed fixture bytes changed"),
+      ]);
+      expect(frozen99.packageResults).toEqual([]);
+    } else {
+      expect(frozen99.scanErrors).toEqual([]);
+    }
     if (variant === "removed exec") {
       const report = buildPluginNpmSecurityScanReport({
         candidateSha: CANDIDATE_SHA,

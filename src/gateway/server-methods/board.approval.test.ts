@@ -40,7 +40,7 @@ describe("board widget approval", () => {
 
   it("reuses a reviewed document in a new session but still gates changed bytes and names", async () => {
     let cfg = {
-      agents: { list: [{ id: "main" }] },
+      agents: { entries: { main: {} } },
       tools: { exec: { mode: "auto" as const, reviewer: { timeoutMs: 30_000 } } },
     };
     reviewWidgetApproval.mockResolvedValue({
@@ -207,7 +207,7 @@ describe("board widget approval", () => {
         undefined,
         {
           getRuntimeConfig: () => ({
-            agents: { list: [{ id: "main" }] },
+            agents: { entries: { main: {} } },
             ...(mode ? { tools: { exec: { mode } } } : {}),
           }),
         },

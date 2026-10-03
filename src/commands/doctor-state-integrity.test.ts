@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
@@ -260,7 +261,7 @@ describe("doctor state integrity", () => {
         setTestEnvValue("OPENCLAW_AGENT_DIR", path.join(stateDir, "agents", "legacy", "agent"));
       }
       const researchReachable = fs.existsSync(path.join(stateDir, "agents", "research", "agent"));
-      const cfg: OpenClawConfig = {
+      const cfg: OpenClawConfigWithLegacyRoster = {
         agents: relocated
           ? { entries: { ops: { default: true }, research: {} } }
           : { list: [{ id: "main", default: true }, { id: "ops" }, { id: "research" }] },
@@ -286,9 +287,9 @@ describe("doctor state integrity", () => {
 
   it("protects the shared legacy main auth-store for an ops-only roster", async () => {
     createAgentDir("main");
-    expect(
-      await runStateIntegrityText({ agents: { entries: { ops: { default: true } } } }),
-    ).not.toContain("Examples: main");
+    expect(await runStateIntegrityText({ agents: { entries: { ops: {} } } })).not.toContain(
+      "Examples: main",
+    );
   });
 
   it("orders equal-time SQLite recovery warnings by session key", async () => {

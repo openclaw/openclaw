@@ -149,7 +149,7 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
 
   it.each([
     {
-      name: "the configured roster default for an embedded provider",
+      name: "the sole configured agent for an embedded provider",
       runAgentId: undefined,
       expectedAgentId: "ops",
       provider: "anthropic",
@@ -165,7 +165,7 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
       expectsCompaction: true,
     },
     {
-      name: "the configured roster default before provider runtime selection",
+      name: "the sole configured agent before provider runtime selection",
       runAgentId: undefined,
       expectedAgentId: "ops",
       provider: "openai",
@@ -195,7 +195,7 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
       const result = await runSessionCompactionIfNeeded({
         cfg: {
           agents: {
-            list: [{ id: "ops", default: true }, { id: "worker" }],
+            entries: runAgentId ? { ops: {}, worker: {} } : { ops: {} },
             defaults: { compaction: { memoryFlush: {} } },
           },
         },

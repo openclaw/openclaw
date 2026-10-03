@@ -51,8 +51,6 @@ function withoutAgentIdentities(config: ReturnType<typeof projectionConfig>) {
         Object.fromEntries(
           Object.entries(agents.entries).map(([id, entry]) => [id, withoutIdentity(entry)]),
         ),
-      // The loader's non-enumerable list is a projection when entries owns the roster.
-      list: Object.hasOwn(agents, "entries") ? undefined : agents.list?.map(withoutIdentity),
     },
   };
 }

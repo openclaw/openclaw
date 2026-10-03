@@ -999,7 +999,7 @@ describe("tools.effective handler", () => {
         sessionKey: "global",
         agentId: "work",
       },
-      { agents: { list: [{ id: "main" }, { id: "work" }] } },
+      { agents: { entries: { main: {}, work: {} } } },
     );
     await invoke();
 
@@ -1031,7 +1031,7 @@ describe("tools.effective handler", () => {
         session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
         agents: {
           ownership: "explicit",
-          list: [{ id: "ops" }, { id: "research" }],
+          entries: { ops: {}, research: {} },
           defaults: { sessionStore: { agentId: "ops" } },
         },
       },
@@ -1057,7 +1057,7 @@ describe("tools.effective handler", () => {
         sessionKey: "agent:main:abc",
         agentId: "work",
       },
-      { agents: { list: [{ id: "main" }, { id: "work" }] } },
+      { agents: { entries: { main: {}, work: {} } } },
     );
     await invoke();
 

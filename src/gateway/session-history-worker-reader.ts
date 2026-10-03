@@ -2,6 +2,7 @@ import { toUSVString } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
+import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
 import type {
   SessionHistoryWorkerRequest,
   SessionHistoryWorkerResult,
@@ -190,42 +191,55 @@ export async function readSessionHistoryRequest(
       await import("./server-methods/chat-history-page-kernel.js");
     const { encodeChatHistoryResponsePage } =
       await import("./server-methods/chat-history-response-page.js");
-    const page = await readChatHistoryPageKernel(request.params, options);
-    const messages = page.messages.filter(
-      (message): message is Record<string, unknown> => asOptionalRecord(message) !== undefined,
-    );
-    const profileIds = messages.flatMap((message) => {
-      const identity = readTranscriptSenderIdentity(
-        asOptionalRecord(message["__openclaw"])?.senderIdentity,
-      );
-      return message.role === "user" && identity?.type === "profile" ? [identity.id] : [];
-    });
-    const { path, environment: env } = expectDefined(
-      readTarget.stateDatabase,
-      "RPC history requires its captured shared-state owner",
-    );
-    const state = { path, env };
-    const jobIds = [...new Set(readForwardedCronJobIds(messages).map(toUSVString))];
-    const names = jobIds.length
-      ? withExistingOpenClawStateDatabaseReadOnly(
-          ({ db }) =>
-            readCronJobNamesInDatabase(db, jobIds, resolveCronJobsStorePath(undefined, env)),
-          state,
-        )
+    const cli = getCliSessionBinding(request.params.entry, "claude-cli")?.sessionId
+      ? await (
+          await import("./cli-session-history.js")
+        ).prepareCliSessionHistoryReader(request.params, options.readers)
       : undefined;
-    let profiles: ReturnType<typeof getUserProfileDisplays> | undefined;
-    const project = createCurrentUserProfileMessageProjector((id) =>
-      resolveCurrentUserProfileDisplay(id, (senderId) =>
-        (profiles ??= getUserProfileDisplays(profileIds, state)).get(senderId),
-      ),
-    );
-    page.messages = projectForwardedMessages(messages, (jobId) =>
-      names?.get(toUSVString(jobId)),
-    ).map(project);
-    return {
-      kind: "rpc",
-      page: encodeChatHistoryResponsePage(page, request.params),
-    };
+    try {
+      const page = await readChatHistoryPageKernel(request.params, {
+        ...options,
+        ...(cli ? { readers: cli.readers, readMessageSequence: cli.sequence } : {}),
+      });
+      cli?.applyPagination(page);
+      const messages = page.messages.filter(
+        (message): message is Record<string, unknown> => asOptionalRecord(message) !== undefined,
+      );
+      const profileIds = messages.flatMap((message) => {
+        const identity = readTranscriptSenderIdentity(
+          asOptionalRecord(message["__openclaw"])?.senderIdentity,
+        );
+        return message.role === "user" && identity?.type === "profile" ? [identity.id] : [];
+      });
+      const { path, environment: env } = expectDefined(
+        readTarget.stateDatabase,
+        "RPC history requires its captured shared-state owner",
+      );
+      const state = { path, env };
+      const jobIds = [...new Set(readForwardedCronJobIds(messages).map(toUSVString))];
+      const names = jobIds.length
+        ? withExistingOpenClawStateDatabaseReadOnly(
+            ({ db }) =>
+              readCronJobNamesInDatabase(db, jobIds, resolveCronJobsStorePath(undefined, env)),
+            state,
+          )
+        : undefined;
+      let profiles: ReturnType<typeof getUserProfileDisplays> | undefined;
+      const project = createCurrentUserProfileMessageProjector((id) =>
+        resolveCurrentUserProfileDisplay(id, (senderId) =>
+          (profiles ??= getUserProfileDisplays(profileIds, state)).get(senderId),
+        ),
+      );
+      page.messages = projectForwardedMessages(messages, (jobId) =>
+        names?.get(toUSVString(jobId)),
+      ).map(project);
+      return {
+        kind: "rpc",
+        page: encodeChatHistoryResponsePage(page, request.params),
+      };
+    } finally {
+      cli?.dispose();
+    }
   }
   const { readSessionHistorySnapshotKernel } = await import("./session-history-snapshot.js");
   return {

@@ -5327,7 +5327,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         watchService.emitExecApprovalSnapshotRequest(
             makeWatchApprovalSnapshotRequest("snapshot-canonical", sentAt: 224))
         try await TestWait.observed("Watch acknowledgment after canonical readback") {
-            watchService.lastSentExecApprovalSnapshot?.requestId == "snapshot-canonical"
+            watchService.lastSentExecApprovalSnapshot?.requestId == "snapshot-canonical" &&
+                watchService.lastSentExecApprovalSnapshot?.approvals.isEmpty == true &&
+                watchService.lastSentExecApprovalResolved?.approvalId == "approval-watch-stale-cache"
         }
 
         #expect(watchService.lastSentExecApprovalSnapshot?.approvals.isEmpty == true)
