@@ -8,6 +8,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import * as provenance from "../media/generated-html-provenance.js";
 import { saveMediaBuffer } from "../media/store.js";
 import * as webMedia from "../media/web-media.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
@@ -36,9 +37,9 @@ it("settles accepted media provenance cleanup across the close prelude before sh
     await fs.unlink(artifact.path);
     const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
     let acceptedSignal: AbortSignal | undefined;
-    const prune = webMedia.pruneStaleTrustedGeneratedHtmlMarkers;
+    const prune = provenance.pruneGeneratedHtmlProvenance;
     const pruning = vi
-      .spyOn(webMedia, "pruneStaleTrustedGeneratedHtmlMarkers")
+      .spyOn(provenance, "pruneGeneratedHtmlProvenance")
       .mockImplementation(async (context) => {
         acceptedSignal = getAsyncWorkSignal();
         pruningEntered.resolve();

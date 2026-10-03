@@ -292,8 +292,8 @@ export async function pruneOutboundMedia(): Promise<void> {
     recursive: true,
     pruneEmptyDirs: true,
   });
-  const { pruneStaleTrustedGeneratedHtmlMarkers } = await import("./web-media.js");
-  await pruneStaleTrustedGeneratedHtmlMarkers(context);
+  const { pruneGeneratedHtmlProvenance } = await import("./generated-html-provenance.js");
+  await pruneGeneratedHtmlProvenance(context);
 }
 
 /** Prunes expired non-playback media, optionally recursing into scoped subdirectories. */
@@ -301,8 +301,8 @@ export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMed
   const context = captureOpenClawStateWorkerContext();
   await pruneNonPlaybackMedia(ttlMs, options);
   // Trust metadata must not outlive the staged file that it authorizes.
-  const { pruneStaleTrustedGeneratedHtmlMarkers } = await import("./web-media.js");
-  await pruneStaleTrustedGeneratedHtmlMarkers(context);
+  const { pruneGeneratedHtmlProvenance } = await import("./generated-html-provenance.js");
+  await pruneGeneratedHtmlProvenance(context);
 }
 
 /** Media-store file metadata returned after bytes are persisted under a safe media ID. */

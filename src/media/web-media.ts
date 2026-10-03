@@ -20,7 +20,7 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { FsSafeError } from "../infra/fs-safe.js";
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
-import { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -29,10 +29,10 @@ import { resolveUserPath } from "../utils.js";
 import { readOutboundMediaFile } from "./bounded-read-file.js";
 import { readRemoteMediaBuffer } from "./fetch.js";
 import {
+  pruneGeneratedHtmlProvenance,
   readGeneratedHtmlProvenance,
   writeGeneratedHtmlProvenance,
 } from "./generated-html-provenance.js";
-import type { GeneratedHtmlProvenanceRow } from "./generated-html-provenance.worker-contract.js";
 import { ImageOptimizationLimitError } from "./image-optimization-error.js";
 import { MAX_IMAGE_INPUT_PIXELS } from "./image-processor-config.js";
 import { createImageProcessorWithPixelLimits } from "./image-processor.js";
@@ -375,41 +375,8 @@ export async function markTrustedGeneratedHtmlPath(
 }
 
 /** Removes provenance whose staged regular file no longer exists. */
-export async function pruneStaleTrustedGeneratedHtmlMarkers(
-  context = captureOpenClawStateWorkerContext(),
-): Promise<void> {
-  const reply = await readGeneratedHtmlProvenance(context, {
-    type: "generatedHtmlProvenance.list",
-    input: undefined,
-  });
-  const rows = reply?.type === "generatedHtmlProvenance.list" ? reply.rows : [];
-  const stale: GeneratedHtmlProvenanceRow[] = [];
-  for (const row of rows) {
-    let info: Awaited<ReturnType<typeof lstat>>;
-    try {
-      info = await lstat(row.realpath);
-    } catch (error) {
-      if (isNotFoundPathError(error)) {
-        stale.push(row);
-      } else {
-        logVerbose(
-          `trusted-html prune kept uninspectable marker (${row.realpath}): ${formatErrorMessage(error)}`,
-        );
-      }
-      continue;
-    }
-    if (!info?.isFile() || info.isSymbolicLink() || info.nlink !== 1) {
-      stale.push(row);
-    }
-  }
-  if (stale.length === 0) {
-    return;
-  }
-  const removed = await writeGeneratedHtmlProvenance(context, {
-    type: "generatedHtmlProvenance.prune",
-    input: stale,
-  });
-  logVerbose(`trusted-html prune removed ${removed} stale marker(s)`);
+export async function pruneStaleTrustedGeneratedHtmlMarkers(): Promise<void> {
+  await pruneGeneratedHtmlProvenance(captureOpenClawStateWorkerContext());
 }
 
 function isTrustedGeneratedHostReadHtml(params: {
