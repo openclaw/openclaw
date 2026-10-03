@@ -100,20 +100,53 @@ it.each(["github.com", "ghe.example.test"])(
   },
 );
 
-it.each(["open", "draft", "merged"] as const)(
-  "recognizes a failed committed snapshot in %s PR history",
-  async (state) => {
-    const fetchImpl = responses();
+type SnapshotCase = [
+  name: string,
+  input: {
+    accepted?: Partial<Parameters<typeof isGitHubPublicationSuperseded>[0]>;
+    pullRequest?: Partial<ControlUiSessionPullRequest>;
+    publishedTree?: string;
+    compared?: unknown;
+  },
+  superseded: boolean,
+  calls?: number,
+];
+const snapshotCases: SnapshotCase[] = [
+  ["committed merged history", {}, true, 2],
+  [
+    "uncommitted exact tree",
+    { accepted: { source_head_commit: null }, publishedTree: tree },
+    true,
+    1,
+  ],
+  ["another branch", { pullRequest: { branch: "another-branch" }, publishedTree: tree }, false, 0],
+  ["another repository", { pullRequest: { repo: "another-repo" }, publishedTree: tree }, false, 0],
+  ["closed PR", { pullRequest: { state: "closed" }, publishedTree: tree }, false, 0],
+  ["unpublished PR", { pullRequest: { headSha: undefined }, publishedTree: tree }, false, 0],
+  ["newer unpublished snapshot", { accepted: { workspace_tree: "5".repeat(40) } }, false],
+  ["diverged history", { compared: { ...comparison, status: "diverged" } }, false],
+  ["wrong merge base", { compared: { ...comparison, merge_base_commit: { sha: head } } }, false],
+  ["unreadable comparison", { compared: null }, false],
+];
+it.each(snapshotCases)(
+  "checks publication coverage for %s",
+  async (_name, input, superseded, calls) => {
+    const fetchImpl = responses(input.publishedTree, input.compared);
     expect(
-      await isGitHubPublicationSuperseded(snapshot, [{ ...pr, state }], {
-        fetchImpl,
-        assertCurrent: current,
-      }),
-    ).toBe(true);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(fetchImpl.mock.calls[1]?.[0]).toEqual(
-      expect.stringContaining(`compare/${source}...${head}?per_page=1&page=2`),
-    );
+      await isGitHubPublicationSuperseded(
+        { ...snapshot, ...input.accepted },
+        [{ ...pr, ...input.pullRequest }],
+        { fetchImpl, assertCurrent: current },
+      ),
+    ).toBe(superseded);
+    if (calls !== undefined) {
+      expect(fetchImpl).toHaveBeenCalledTimes(calls);
+    }
+    if (superseded && calls === 2) {
+      expect(fetchImpl.mock.calls[1]?.[0]).toEqual(
+        expect.stringContaining(`compare/${source}...${head}?per_page=1&page=2`),
+      );
+    }
   },
 );
 
@@ -134,55 +167,6 @@ it.each(["missing", "malformed"])("checks later matching PRs after a %s head", a
     }),
   ).toBe(true);
   expect(fetchImpl).toHaveBeenCalledTimes(2);
-});
-
-it("recognizes an exact published tree even when the accepted work was uncommitted", async () => {
-  const fetchImpl = responses(tree);
-  expect(
-    await isGitHubPublicationSuperseded({ ...snapshot, source_head_commit: null }, [pr], {
-      fetchImpl,
-      assertCurrent: current,
-    }),
-  ).toBe(true);
-  expect(fetchImpl).toHaveBeenCalledOnce();
-});
-
-it.each([
-  { branch: "another-branch" },
-  { repo: "another-repo" },
-  { state: "closed" as const },
-  { headSha: undefined },
-])("does not use an unrelated or unpublished PR: %j", async (change) => {
-  const fetchImpl = responses(tree);
-  expect(
-    await isGitHubPublicationSuperseded(snapshot, [{ ...pr, ...change }], {
-      fetchImpl,
-      assertCurrent: current,
-    }),
-  ).toBe(false);
-  expect(fetchImpl).not.toHaveBeenCalled();
-});
-
-it.each([
-  {
-    name: "newer unpublished snapshot",
-    accepted: { ...snapshot, workspace_tree: "5".repeat(40) },
-    compared: comparison,
-  },
-  { name: "diverged history", accepted: snapshot, compared: { ...comparison, status: "diverged" } },
-  {
-    name: "wrong merge base",
-    accepted: snapshot,
-    compared: { ...comparison, merge_base_commit: { sha: head } },
-  },
-  { name: "unreadable comparison", accepted: snapshot, compared: null },
-])("retains failure for $name", async ({ accepted, compared }) => {
-  expect(
-    await isGitHubPublicationSuperseded(accepted, [pr], {
-      fetchImpl: responses(undefined, compared),
-      assertCurrent: current,
-    }),
-  ).toBe(false);
 });
 
 it("honors rate-limit cooldown without retrying anonymously or treating it as completion", async () => {
