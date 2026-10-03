@@ -38,14 +38,16 @@ function requireMSTeamsSharePointSiteId(siteId?: string): string {
  * upload boundary so text-only messages never wait on Graph. Group chats and
  * private/shared channels still require sharePointSiteId.
  */
-export async function resolveUploadSiteId(params: {
-  configuredSiteId?: string;
-  teamId?: string;
-  channelId?: string;
-  tokenProvider: MSTeamsAccessTokenProvider;
-  getTeamDetails?: (teamId: string) => Promise<{ aadGroupId?: string }>;
-  fetchFn?: typeof fetch;
-}): Promise<string> {
+export async function resolveUploadSiteId(
+  params: {
+    configuredSiteId?: string;
+    teamId?: string;
+    channelId?: string;
+    tokenProvider: MSTeamsAccessTokenProvider;
+    getTeamDetails?: (teamId: string) => Promise<{ aadGroupId?: string }>;
+    fetchFn?: typeof fetch;
+  } & MSTeamsSendHandoff,
+): Promise<string> {
   if (params.configuredSiteId !== undefined) {
     const explicit = params.configuredSiteId.trim();
     if (!explicit) {
@@ -58,9 +60,16 @@ export async function resolveUploadSiteId(params: {
   if (!params.teamId) {
     return requireMSTeamsSharePointSiteId(undefined);
   }
+  const lookupTeam = params.getTeamDetails;
+  assertMSTeamsSendHandoff(params);
   const groupId = await resolveTeamGroupId({
     conversationTeamId: params.teamId,
-    getTeamDetails: params.getTeamDetails,
+    getTeamDetails: lookupTeam
+      ? async (teamId) => {
+          assertMSTeamsSendHandoff(params);
+          return await lookupTeam(teamId);
+        }
+      : undefined,
   });
   if (!groupId) {
     throw new Error(
@@ -68,18 +77,23 @@ export async function resolveUploadSiteId(params: {
         "Set channels.msteams.sharePointSiteId as a fallback.",
     );
   }
+  const handoff = { assertDirectAdapterHandoff: params.assertDirectAdapterHandoff };
   if (params.channelId) {
+    assertMSTeamsSendHandoff(params);
     await assertStandardChannelForAutoUpload({
       groupId,
       channelId: params.channelId,
       tokenProvider: params.tokenProvider,
       fetchFn: params.fetchFn,
+      ...handoff,
     });
   }
+  assertMSTeamsSendHandoff(params);
   return await resolveTeamSiteId({
     groupId,
     tokenProvider: params.tokenProvider,
     fetchFn: params.fetchFn,
+    ...handoff,
   });
 }
 

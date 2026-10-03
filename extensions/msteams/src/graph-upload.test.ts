@@ -1001,6 +1001,85 @@ describe("resolveUploadSiteId dynamic resolution", () => {
     expect(fetchFn.mock.calls.some(([url]) => String(url).includes("/sites/root"))).toBe(false);
   });
 
+  it("stops team lookup when delivery authority is already closed", async () => {
+    const authority = createGraphSendAuthority();
+    authority.revoke();
+    const getTeamDetails = vi.fn(async () => ({ aadGroupId: "group-revoked" }));
+    const fetchFn = createGraphFetch(
+      fixedGraphRoute("membershipType", { membershipType: "standard" }),
+      fixedGraphRoute("/sites/root", { id: "site-should-not-load" }),
+    );
+
+    await expect(
+      resolveUploadSiteId({
+        teamId: "19:team-revoked@thread.skype",
+        channelId: "19:channel-revoked@thread.tacv2",
+        tokenProvider,
+        getTeamDetails,
+        fetchFn: fetchFn as unknown as typeof fetch,
+        ...authority.handoff,
+      }),
+    ).rejects.toMatchObject({ cause: authority.error });
+    expect(getTeamDetails).not.toHaveBeenCalled();
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(tokenProvider.getAccessToken).not.toHaveBeenCalled();
+  });
+
+  it("stops Graph discovery when delivery authority closes after team lookup", async () => {
+    const authority = createGraphSendAuthority();
+    const getTeamDetails = vi.fn(async () => {
+      authority.revoke();
+      return { aadGroupId: "group-revoked" };
+    });
+    const fetchFn = createGraphFetch(
+      fixedGraphRoute("membershipType", { membershipType: "standard" }),
+      fixedGraphRoute("/sites/root", { id: "site-should-not-load" }),
+    );
+
+    await expect(
+      resolveUploadSiteId({
+        teamId: "19:team-after-lookup@thread.skype",
+        channelId: "19:channel-after-lookup@thread.tacv2",
+        tokenProvider,
+        getTeamDetails,
+        fetchFn: fetchFn as unknown as typeof fetch,
+        ...authority.handoff,
+      }),
+    ).rejects.toMatchObject({ cause: authority.error });
+    expect(getTeamDetails).toHaveBeenCalledOnce();
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(tokenProvider.getAccessToken).not.toHaveBeenCalled();
+  });
+
+  it("stops the site request when delivery authority closes after the membership check", async () => {
+    const authority = createGraphSendAuthority();
+    const membership = fixedGraphRoute("membershipType", { membershipType: "standard" });
+    const fetchFn = createGraphFetch(
+      {
+        includes: membership.includes,
+        respond: async (init) => {
+          const response = await membership.respond(init);
+          authority.revoke();
+          return response;
+        },
+      },
+      fixedGraphRoute("/sites/root", { id: "site-should-not-load" }),
+    );
+
+    await expect(
+      resolveUploadSiteId({
+        teamId: "19:team-after-membership@thread.skype",
+        channelId: "19:channel-after-membership@thread.tacv2",
+        tokenProvider,
+        getTeamDetails: async () => ({ aadGroupId: "group-standard" }),
+        fetchFn: fetchFn as unknown as typeof fetch,
+        ...authority.handoff,
+      }),
+    ).rejects.toMatchObject({ cause: authority.error });
+    expect(fetchFn).toHaveBeenCalledOnce();
+    expect(fetchFn.mock.calls.some(([url]) => String(url).includes("/sites/root"))).toBe(false);
+  });
+
   it("skips membership lookup when an explicit site is configured", async () => {
     const fetchFn = createGraphFetch();
     const getTeamDetails = vi.fn(async () => ({ aadGroupId: "unused" }));

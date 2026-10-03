@@ -287,6 +287,7 @@ export async function sendMessageMSTeams(
         teamId: ctx.ref.teamId,
         channelId: conversationType === "channel" ? conversationId : undefined,
         tokenProvider,
+        assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
         getTeamDetails: async (teamId) => {
           const getById = await resolveReferenceScopedTeamsGetById(ctx.app, ctx.ref.serviceUrl);
           if (!getById) {
