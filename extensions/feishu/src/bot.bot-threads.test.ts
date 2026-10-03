@@ -120,6 +120,7 @@ describe("Feishu bot-owned thread mentions", () => {
       root: { senderId: "ou-bot", senderOpenId: "ou-bot" },
       expected: true,
     },
+    { name: "another app", root: { senderId: "cli_other" }, expected: false },
     { name: "a user", root: { senderType: "user" }, expected: false },
     { name: "untyped open ID", root: { senderId: "ou-bot" }, expected: false },
     { name: "unreadable root", lookupFailed: true, expected: false },

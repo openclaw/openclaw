@@ -499,7 +499,7 @@ function outputClient(
     } else {
       const id = pathname.match(/\/artifacts\/([^/]+)\/content$/u)?.[1];
       const bytes = id ? content[id] : undefined;
-      if (!bytes) {
+      if (!bytes || pathname !== `${sessionPath}/artifacts/${id}/content`) {
         throw new Error(`Unexpected fixture request: ${pathname}`);
       }
       options.onContent?.();

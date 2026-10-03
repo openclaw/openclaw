@@ -450,7 +450,7 @@ it("reports unsupported tool restrictions without replacing the bound native ses
   });
 });
 
-it("reports Gateway sandbox placement independently of images", async () => {
+it.each([false, true])("reports Gateway sandbox placement with images: %s", async (withImages) => {
   await withOpenClawTestState({ label: "agentsapi-sandbox-preflight" }, async (state) => {
     const params = await createAttempt(state.stateDir);
     const harness = registerHarness(state.env);
@@ -458,7 +458,9 @@ it("reports Gateway sandbox placement independently of images", async () => {
       const pending = harness.runAttempt({
         ...params,
         sandbox: createSandboxTestContext(),
-        images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
+        images: withImages
+          ? [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }]
+          : undefined,
       });
       await expect(pending).rejects.toBeInstanceOf(AgentHarnessPreflightError);
       await expect(pending).rejects.toMatchObject({

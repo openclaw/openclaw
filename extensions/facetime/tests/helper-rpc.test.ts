@@ -222,7 +222,33 @@ describe("FaceTime helper RPC", () => {
     helper = undefined;
   });
 
-  it("fans answerCall out to FaceTime and Phone helpers", async () => {
+  it("sends set-muted actions over newline-framed JSON and resolves acknowledgements", async () => {
+    const { rpc, client } = await startConnectedHelper();
+
+    const received = readHelperPayload(client);
+
+    const actionPromise = rpc.setMuted("call-1", false);
+    const payload = await received;
+    expect(payload).toMatchObject({
+      action: "set-muted",
+      data: { callUUID: "call-1", muted: false },
+    });
+    expect(typeof payload.transactionId).toBe("string");
+
+    sendHelperPayload(client, {
+      transactionId: payload.transactionId,
+      conversation_audio_started: true,
+    });
+    await expect(actionPromise).resolves.toMatchObject({
+      transactionId: payload.transactionId,
+      conversation_audio_started: true,
+    });
+  });
+
+  it.each([
+    ["answerCall", "answer-call"],
+    ["leaveCall", "leave-call"],
+  ] as const)("fans %s out to FaceTime and Phone helpers", async (method, action) => {
     const { rpc, port } = await startDefaultHelper();
 
     const faceTimeClient = await connectHelper(rpc, port);
@@ -232,14 +258,14 @@ describe("FaceTime helper RPC", () => {
       readHelperPayload(faceTimeClient),
       readHelperPayload(phoneClient),
     ]);
-    const actionPromise = rpc.answerCall("call-phone");
+    const actionPromise = rpc[method]("call-phone");
     const [faceTimePayload, phonePayload] = await payloadsPromise;
     expect(faceTimePayload).toMatchObject({
-      action: "answer-call",
+      action,
       data: { callUUID: "call-phone" },
     });
     expect(phonePayload).toMatchObject({
-      action: "answer-call",
+      action,
       data: { callUUID: "call-phone" },
     });
 
@@ -383,6 +409,20 @@ describe("FaceTime helper RPC", () => {
       bundleIdentifier: "com.apple.FaceTime",
       processId: 1234,
     });
+    expect(rpc.connectedSockets).toBe(0);
+  });
+
+  it("rejects the retired pre-build-id authentication shape", async () => {
+    const onStale = vi.fn();
+    const { rpc, port } = await startDefaultHelper({ onStale });
+    const client = await connectClient(port);
+    client.write(
+      `${JSON.stringify({ event: "ping", bundle_identifier: "com.apple.FaceTime" })}\r\n`,
+    );
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(onStale).not.toHaveBeenCalled();
     expect(rpc.connectedSockets).toBe(0);
   });
 

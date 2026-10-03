@@ -3,6 +3,20 @@ import { normalizeCompatibilityConfig } from "../doctor-contract-api.js";
 import { resolveFaceTimeConfig, validateFaceTimeConfig } from "../src/config.js";
 
 describe("facetime config", () => {
+  it("defaults omitted policy to owner without exposing a helper endpoint", () => {
+    const config = resolveFaceTimeConfig({ ownerHandles: ["mailto:omar@example.com"] });
+
+    expect(config.ownerHandles).toEqual(["mailto:omar@example.com"]);
+    expect(config.realtime.toolPolicy).toBe("owner");
+    expect(config.realtime).toMatchObject({
+      provider: undefined,
+      model: undefined,
+      voice: undefined,
+    });
+    expect("helperHost" in config).toBe(false);
+    expect("helperPort" in config).toBe(false);
+  });
+
   it.each(["administrator", null])(
     "rejects explicit invalid tool policy %j instead of upgrading authority",
     (toolPolicy) => {

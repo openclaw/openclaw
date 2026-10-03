@@ -45,6 +45,30 @@ describe("FaceTime helper supervisor", () => {
     vi.useRealTimers();
   });
 
+  it("cancels reinjection after an authenticated helper reconnects", async () => {
+    const connectedBundles: string[] = [];
+    const runCommandWithTimeout = vi
+      .fn<SupervisorParams["runCommandWithTimeout"]>()
+      .mockResolvedValue(completed);
+    const { supervisor } = createSupervisor({
+      runCommandWithTimeout,
+      connectedBundles: () => connectedBundles,
+      initialGraceMs: 100,
+    });
+
+    supervisor.start();
+    connectedBundles.push("com.apple.FaceTime", "com.apple.mobilephone");
+    supervisor.connected("com.apple.FaceTime");
+    supervisor.connected("com.apple.mobilephone");
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(supervisor.status()).toEqual([
+      expect.objectContaining({ target: "FaceTime", connected: true, attempts: 0 }),
+      expect.objectContaining({ target: "Phone", connected: true, attempts: 0 }),
+    ]);
+  });
+
   it("backs off and reports the last injection failure", async () => {
     const { supervisor, run } = createSupervisor({
       connectedBundles: () => ["com.apple.mobilephone"],

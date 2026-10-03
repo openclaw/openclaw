@@ -97,6 +97,18 @@ describe("PDF document extractor worker", () => {
     expect(textOnly?.text).toBe(result?.text);
   });
 
+  it("renders real pages within the aggregate pixel budget", async () => {
+    const result = await createPdfDocumentExtractor().extract({ ...request, minTextChars: 10_000 });
+    expect(result?.images).toHaveLength(2);
+    const pixels = result!.images.reduce((total, image) => {
+      const png = Buffer.from(image.data, "base64");
+      expect(png.subarray(1, 4).toString()).toBe("PNG");
+      return total + png.readUInt32BE(16) * png.readUInt32BE(20);
+    }, 0);
+    expect(pixels).toBeLessThanOrEqual(request.maxPixels);
+    expect(pixels).toBeGreaterThan(request.maxPixels / 2);
+  });
+
   it("joins canceled extraction before allowing the next document to succeed", async () => {
     const extractor = createPdfDocumentExtractor();
     await extractor.extract(request);

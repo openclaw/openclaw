@@ -257,6 +257,30 @@ const dormantUploadMessage =
   "the hosted environment is dormant; submit new input to start a fresh sandbox";
 
 describe("Agents API file upload transport", () => {
+  it("uploads through the reused session's connected environment and verifies its receipt", async () => {
+    queueUploadContext();
+    queueResponse(Response.json(uploadReceipt));
+
+    await expect(
+      createClient().uploadFile("session-fixture", inputFile, new AbortController().signal),
+    ).resolves.toEqual({ status: "uploaded" });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(3);
+    expect([requestAt(0), requestAt(1)].map((request) => new URL(request.url).pathname)).toEqual([
+      "/v1/agents/sessions/session-fixture",
+      "/v1/agents/environments/environment-fixture",
+    ]);
+    const upload = requestAt(2);
+    expect(upload.method).toBe("POST");
+    expect(new URL(upload.url).pathname).toBe("/v1/agents/environments/environment-fixture/files");
+    expect(upload.headers.get("Idempotency-Key")).toEqual(expect.any(String));
+    expect(await upload.json()).toEqual({
+      type: "inline",
+      path: "/workspace/inputs/fixture.bin",
+      data: "AP+AQQ==",
+    });
+  });
+
   it.each([
     {
       name: "another disconnected environment",
