@@ -29,7 +29,7 @@ afterEach(() => {
   vi.resetModules();
 });
 
-function observeHeartbeatWorkers(fault?: "EIO") {
+function observeHeartbeatWorkers(fault?: "EIO" | SharedArrayBuffer) {
   const workers: Worker[] = [];
   const ready: Promise<unknown>[] = [];
   const beats: BigInt64Array<SharedArrayBuffer>[] = [];
@@ -40,17 +40,38 @@ function observeHeartbeatWorkers(fault?: "EIO") {
       throw new Error("Expected shared heartbeat observation");
     }
     beats.push(new BigInt64Array(data.lastBeat));
-    const entry =
-      fault === "EIO"
-        ? new URL(
-            `data:text/javascript,${encodeURIComponent(`
+    const entry = fault
+      ? new URL(
+          `data:text/javascript,${encodeURIComponent(`
               import fs from "node:fs";
-              fs.utimesSync = () => { throw Object.assign(new Error("synthetic EIO"), { code: "EIO" }); };
+              import { parentPort, workerData } from "node:worker_threads";
+              if (workerData.pause) {
+                const pause = new Int32Array(workerData.pause);
+                let paused = false;
+                for (const name of ["utimesSync", "futimesSync"]) {
+                  const touch = fs[name];
+                  fs[name] = (...args) => {
+                    if (!paused) {
+                      paused = true;
+                      parentPort.postMessage("paused");
+                      Atomics.wait(pause, 0, 0);
+                    }
+                    return touch(...args);
+                  };
+                }
+              } else {
+                fs.futimesSync = () => { throw Object.assign(new Error("synthetic EIO"), { code: "EIO" }); };
+              }
               await import(${JSON.stringify(String(url))});
             `)}`,
-          )
-        : url;
-    const worker = createWorker(entry, options);
+        )
+      : url;
+    const worker = createWorker(
+      entry,
+      fault instanceof SharedArrayBuffer
+        ? { ...options, workerData: { ...data, pause: fault, intervalMs: 1 } }
+        : options,
+    );
     workers.push(worker);
     ready.push(once(worker, "message"));
     return worker;
@@ -102,9 +123,9 @@ it.each(["persistent", "transient"] as const)(
   async (kind) => {
     const rootPath = path.join(tempDirs.make("openclaw-owner-heartbeat-io-"), "root.lock");
     fs.writeFileSync(rootPath, "root-owner");
-    const touch = fs.utimesSync;
+    const touch = fs.futimesSync;
     let failures = 0;
-    vi.spyOn(fs, "utimesSync").mockImplementation((lockPath, atime, mtime) => {
+    vi.spyOn(fs, "futimesSync").mockImplementation((lockPath, atime, mtime) => {
       if (kind === "persistent" || failures++ < 1) {
         throw Object.assign(new Error("synthetic EIO renewing owner"), { code: "EIO" });
       }
@@ -141,9 +162,9 @@ it.each(["persistent", "transient"] as const)(
 it("keeps the failure deadline ahead of mtime expiry after a slow successful touch", async () => {
   const rootPath = path.join(tempDirs.make("openclaw-owner-heartbeat-slow-"), "root.lock");
   fs.writeFileSync(rootPath, "root-owner");
-  const touch = fs.utimesSync;
+  const touch = fs.futimesSync;
   let first = true;
-  vi.spyOn(fs, "utimesSync").mockImplementation((lockPath, atime, mtime) => {
+  vi.spyOn(fs, "futimesSync").mockImplementation((lockPath, atime, mtime) => {
     if (!first) {
       throw Object.assign(new Error("synthetic EIO after slow touch"), { code: "EIO" });
     }
@@ -206,7 +227,12 @@ it.each(["EIO", "worker exit"] as const)(
         message: expect.stringContaining(gateway.lockPath),
       });
       expect(() => owner.assertCurrent()).toThrow(reason);
-      expect(() => acquireStateDatabaseSchemaLease(databasePath)).toThrow(reason);
+      expect(() => acquireStateDatabaseSchemaLease(databasePath)).toThrow(
+        expect.objectContaining({
+          name: "GatewayStateOwnerContentionError",
+          cause: owner.signal.reason,
+        }),
+      );
       expect(workers).toHaveLength(1);
     } finally {
       await gateway.release();
@@ -282,6 +308,45 @@ it("renews retained custody during synchronous work and never touches a successo
   }
 });
 
+it("never renews a successor after suspension between verification and the timestamp syscall", async () => {
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  const { workers, ready } = observeHeartbeatWorkers(pause.buffer);
+  const root = tempDirs.make("openclaw-owner-paused-");
+  const gateway = await acquireGatewayLock({
+    allowInTests: true,
+    env: { OPENCLAW_STATE_DIR: root },
+    timeoutMs: 0,
+  });
+  if (!gateway) {
+    throw new Error("Expected Gateway custody");
+  }
+  try {
+    expect(await Promise.all(ready)).toEqual([["paused"]]);
+    const worker = workers[0];
+    if (!worker) {
+      throw new Error("Expected the paused heartbeat worker");
+    }
+    const exited = once(worker, "exit");
+    const held = fs.statSync(gateway.lockPath, { bigint: true });
+    fs.renameSync(gateway.lockPath, `${gateway.lockPath}.retired`);
+    fs.writeFileSync(gateway.lockPath, "successor");
+    const stamp = new Date(Date.now() + 60_000);
+    fs.utimesSync(gateway.lockPath, stamp, stamp);
+    const successor = fs.statSync(gateway.lockPath, { bigint: true });
+    expect(successor.ino).not.toBe(held.ino);
+    Atomics.store(pause, 0, 1);
+    Atomics.notify(pause, 0);
+    await exited;
+    expect(fs.statSync(gateway.lockPath, { bigint: true }).mtimeNs).toBe(successor.mtimeNs);
+    expect(fs.readFileSync(gateway.lockPath, "utf8")).toBe("successor");
+  } finally {
+    Atomics.store(pause, 0, 1);
+    Atomics.notify(pause, 0);
+    await gateway.release();
+    await Promise.all(workers.map((worker) => worker.terminate()));
+  }
+});
+
 it("keeps renewing the root when a projection disappears during its heartbeat", async () => {
   const root = tempDirs.make("openclaw-owner-heartbeat-release-");
   const rootPath = path.join(root, "root.lock");
@@ -290,12 +355,12 @@ it("keeps renewing the root when a projection disappears during its heartbeat", 
   for (const [lockPath, raw] of Object.entries(locks)) {
     fs.writeFileSync(lockPath, raw);
   }
-  const touch = fs.utimesSync;
-  vi.spyOn(fs, "utimesSync").mockImplementation((lockPath, atime, mtime) => {
-    if (lockPath === projectionPath) {
+  const touch = fs.futimesSync;
+  vi.spyOn(fs, "futimesSync").mockImplementation((fd, atime, mtime) => {
+    if (fs.existsSync(projectionPath) && fs.fstatSync(fd).ino === fs.statSync(projectionPath).ino) {
       fs.unlinkSync(projectionPath);
     }
-    touch(lockPath, atime, mtime);
+    touch(fd, atime, mtime);
   });
   const runtime = await startRuntime(locks);
   try {

@@ -165,6 +165,43 @@ describe("gateway lock namespaces", () => {
     },
   );
 
+  it.each(["darwin", "win32"] as const)(
+    "does not repeat an unavailable %s boot subprocess during owner admission",
+    async (platform) => {
+      const otherPlatform = platform === "darwin" ? "win32" : "darwin";
+      const observedPlatform = vi.spyOn(process, "platform", "get").mockReturnValue(otherPlatform);
+      const boot = vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader");
+      boot.mockReturnValue(() => ({
+        platform: otherPlatform,
+        identity:
+          otherPlatform === "darwin"
+            ? "01234567-89ab-cdef-0123-456789abcdef"
+            : "2026-10-01T00:00:00.0000000Z",
+      }));
+      // Move the observation to another platform before exercising a failed probe.
+      readGatewayLockProcessNamespace();
+      observedPlatform.mockReturnValue(platform);
+      const probe = vi.fn(() => {
+        throw Object.assign(new Error("boot subprocess timed out"), { code: "ETIMEDOUT" });
+      });
+      boot.mockReturnValue(probe);
+      const payload = {
+        ...createLockPayload({ configPath: "/unused", startTime: 123 }),
+        processNamespace: null,
+      };
+      await expect(resolveGatewayOwnerStatus(2_147_483_647, payload, platform)).resolves.toBe(
+        "dead",
+      );
+      await expect(
+        resolveGatewayOwnerStatus(process.pid, payload, platform, undefined, () => 123),
+      ).resolves.toBe("alive");
+      await expect(
+        resolveGatewayOwnerStatus(process.pid, payload, platform, undefined, () => 124),
+      ).resolves.toBe("dead");
+      expect(probe).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each(["boot identity", "PID namespace"] as const)(
     "preserves fresh ownership and reclaims an expired heartbeat when the Linux %s probe fails",
     async (probe) => {

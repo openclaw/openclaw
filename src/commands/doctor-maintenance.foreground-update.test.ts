@@ -171,10 +171,11 @@ it.each([
       if (outcome === "rowless-released") {
         monotonicMs = GATEWAY_SHUTDOWN_RESERVE_MS;
         await vi.advanceTimersByTimeAsync(50);
-        expect(vi.getTimerCount()).toBe(0);
       } else {
         await vi.advanceTimersToNextTimerAsync();
       }
+      // Leave the rowless clock at its deadline: admission may still await I/O,
+      // but it must complete without another ownership-settlement poll.
       const completed = await result;
       maintenance = "maintenance" in completed ? completed.maintenance : undefined;
       if (released) {
@@ -199,6 +200,9 @@ it.each([
         maintenance = "maintenance" in completed ? completed.maintenance : undefined;
       }
       await maintenance?.release();
+      if (outcome === "rowless-released") {
+        expect(vi.getTimerCount()).toBe(0);
+      }
     }
   },
 );

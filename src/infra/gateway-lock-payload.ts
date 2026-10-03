@@ -19,24 +19,29 @@ const ProcessNamespaceSchema = z.discriminatedUnion("platform", [
   freebsdBoot.extend({ host }),
 ]);
 type ProcessNamespace = z.infer<typeof ProcessNamespaceSchema>;
-let processNamespace: ProcessNamespace | undefined;
+let processNamespace: { platform: NodeJS.Platform; value: ProcessNamespace | null } | undefined;
 
-/** Successful identity is stable for this process; unavailable probes remain retryable. */
+/** Cache OS subprocess failures too; only Linux's cheap /proc probes remain retryable. */
 export function readGatewayLockProcessNamespace(): ProcessNamespace | null {
-  if (processNamespace?.platform === process.platform) {
-    return processNamespace;
+  if (
+    processNamespace?.platform === process.platform &&
+    (processNamespace.value !== null || process.platform !== "linux")
+  ) {
+    return processNamespace.value;
   }
   try {
     const boot = createManagedHandoffBootIdentityReader(process.env)();
-    processNamespace = ProcessNamespaceSchema.parse({
+    const value = ProcessNamespaceSchema.parse({
       host: os.hostname(),
       ...boot,
       ...(boot.platform === "linux"
         ? { pidNsInode: fs.statSync("/proc/self/ns/pid", { bigint: true }).ino.toString() }
         : {}),
     });
-    return processNamespace;
+    processNamespace = { platform: value.platform, value };
+    return value;
   } catch {
+    processNamespace = { platform: process.platform, value: null };
     return null;
   }
 }

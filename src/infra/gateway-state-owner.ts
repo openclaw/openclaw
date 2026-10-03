@@ -116,7 +116,15 @@ type ProcessOwner = {
 };
 
 function hasPhysicalOwnership(owner: ProcessOwner): boolean {
-  return verifyOwnerLock(owner, owner.locks.values().next().value);
+  try {
+    return verifyOwnerLock(owner, owner.locks.values().next().value);
+  } catch (error) {
+    // Observers report their own unavailable-read contract; lease assertions keep the loss cause.
+    if (owner.lost.signal.aborted) {
+      return false;
+    }
+    throw error;
+  }
 }
 
 function verifyOwnerLock(owner: ProcessOwner, lock: StateOwnerFile | undefined): boolean {
@@ -188,14 +196,11 @@ export function getStateDatabaseSchemaLease(
   databasePath: string,
 ): StateDatabaseSchemaLease | undefined {
   const entry = schemaOwners.getStore()?.get(resolveGatewayStateOwnerPath(databasePath));
-  if (!entry) {
-    return undefined;
-  }
-  if (!entry.active) {
+  if (entry && !entry.active) {
     throw new Error("State schema maintenance scope is no longer current");
   }
-  entry.lease.assertCurrent();
-  return entry.lease;
+  entry?.lease.assertCurrent();
+  return entry?.lease;
 }
 
 export const GatewayStateOwnerContentionError = resolveGlobalSingleton(
@@ -481,9 +486,8 @@ export function acquireStateDatabaseSchemaLease(
   readOwnerPaths.clear();
   const pathname = resolveGatewayStateOwnerPath(databasePath);
   let owner = owners.get(pathname);
-  owner?.lost.signal.throwIfAborted();
   if (owner && (!owner.accepting || !hasPhysicalOwnership(owner))) {
-    throw new GatewayStateOwnerContentionError(databasePath);
+    throw new GatewayStateOwnerContentionError(databasePath, owner.lost.signal.reason);
   }
   if (owner) {
     assertStateDatabaseAccessAllowed(databasePath);
@@ -595,9 +599,8 @@ export function tryBorrowGatewayStateOwner(
   if (!owner || owner.kind !== "process") {
     return undefined;
   }
-  owner.lost.signal.throwIfAborted();
   if (!owner.accepting || !hasPhysicalOwnership(owner)) {
-    throw new GatewayStateOwnerContentionError(databasePath);
+    throw new GatewayStateOwnerContentionError(databasePath, owner.lost.signal.reason);
   }
   assertStateDatabaseAccessAllowed(databasePath);
   return acquireStateDatabaseSchemaLease(databasePath);
@@ -656,9 +659,7 @@ export function assertStateDatabaseReadAllowed(databasePath: string): void {
   const key = path.resolve(databasePath);
   const now = performance.now();
   const cached = readOwnerPaths.get(key);
-  cached?.owner.lost.signal.throwIfAborted();
   cached?.owner.heartbeat?.inspect();
-  cached?.owner.lost.signal.throwIfAborted();
   const projection = cached?.owner.getProjection?.();
   if (
     cached &&
