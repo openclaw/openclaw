@@ -11,10 +11,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import {
-  assertAdmittedRunOperatorAuthority,
-  type AdmittedRunOperatorAuthority,
-} from "../admitted-run-context.js";
+import { assertAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import {
   captureActiveCronManagementAuthority,
   type CronCreatorAuthorityCapability,
@@ -39,36 +36,7 @@ import {
   haveSameRequesterUserTurnSource,
   type RequesterUserTurnSource,
 } from "./requester-cron-authority-source.js";
-
-type RequesterCronAuthority = {
-  managementEntitlement?: NonNullable<CronCreatorAuthorityCapability["managementEntitlement"]>;
-  operatorAuthority?: AdmittedRunOperatorAuthority;
-  releaseOperatorAuthority?: () => void;
-  requesterOwner?: CronCreatorAuthorityCapability["requesterOwner"];
-  requesterSessionKey: string;
-  requesterSessionId: string;
-  requesterAgentId: string;
-  requesterTurnRunId: string;
-  lifecycleGeneration: string;
-  sessionLifecycleRevision?: string;
-  admittedRunId?: string;
-  runScopeBound?: true;
-  active: boolean;
-} & (
-  | {
-      kind: "yield";
-      sessionFacts: SessionFactsRead<PreparedSessionMutationFacts>;
-      runs: ReadonlyMap<string, SubagentRunRecord>;
-      batch: readonly SubagentRunRecord[];
-      rearmGeneration?: number;
-    }
-  | {
-      kind: "followup";
-      sourceSessionKey: string;
-      isFollowupCurrent: () => boolean;
-      releaseFollowup: () => void;
-    }
-);
+import type { RequesterCronAuthority } from "./requester-cron-authority.types.js";
 
 type RequesterCronAuthorityState = {
   byEntry: WeakMap<object, RequesterCronAuthority>;
