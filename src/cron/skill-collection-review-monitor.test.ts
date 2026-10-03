@@ -229,4 +229,100 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
     expect(spec?.input.enabled).toBe(true);
     expect(spec?.input.displayName).not.toContain("no-rooted-runtime");
   });
+
+  it("disables the review when the agent tool policy leaves no maintenance tool callable", () => {
+    const cfg = {
+      agents: {
+        defaults: { model: "anthropic/claude-sonnet-4-6" },
+        list: [
+          { id: "main" },
+          { id: "ghostface-killah", tools: { profile: "minimal" } },
+          {
+            id: "inspectah-deck",
+            tools: { profile: "minimal", alsoAllow: ["firecrawl_search", "firecrawl_scrape"] },
+          },
+        ],
+      },
+      skills: { workshop: { autonomous: { mode: "auto" } } },
+    } as OpenClawConfig;
+
+    const byAgent = new Map(
+      Array.from(
+        resolveSkillCollectionReviewMonitorSpecs(cfg, []),
+        (spec) => [spec.agentId, spec.input] as const,
+      ),
+    );
+
+    expect(byAgent.get("main")?.enabled).toBe(true);
+    expect(byAgent.get("ghostface-killah")?.enabled).toBe(false);
+    expect(byAgent.get("ghostface-killah")?.displayName).toBe(
+      "[tool-policy-denied] Skill collection review (ghostface-killah)",
+    );
+    expect(byAgent.get("inspectah-deck")?.enabled).toBe(false);
+    expect(byAgent.get("inspectah-deck")?.payload.toolsAllow).toEqual([
+      "ls",
+      "read",
+      "write",
+      "edit",
+      "apply_patch",
+      "exec",
+      "process",
+    ]);
+  });
+
+  it("keeps the review enabled while any maintenance tool remains callable", () => {
+    const cfg = {
+      agents: {
+        defaults: { model: "anthropic/claude-sonnet-4-6" },
+        list: [
+          { id: "partial", tools: { deny: ["process"] } },
+          { id: "granted", tools: { profile: "minimal", alsoAllow: ["read"] } },
+        ],
+      },
+      skills: { workshop: { autonomous: { mode: "auto" } } },
+    } as OpenClawConfig;
+
+    const byAgent = new Map(
+      Array.from(
+        resolveSkillCollectionReviewMonitorSpecs(cfg, []),
+        (spec) => [spec.agentId, spec.input] as const,
+      ),
+    );
+
+    expect(byAgent.get("partial")?.enabled).toBe(true);
+    expect(byAgent.get("granted")?.enabled).toBe(true);
+    expect(byAgent.get("partial")?.displayName).not.toContain("tool-policy-denied");
+    expect(byAgent.get("granted")?.displayName).not.toContain("tool-policy-denied");
+  });
+
+  it("disables an existing enabled review once its tool policy stops providing the tools", () => {
+    const options = { schedulerSeed: "test-seed" };
+    const [initial] = resolveSkillCollectionReviewMonitorSpecs(
+      {
+        agents: { defaults: { model: "anthropic/claude-sonnet-4-6" }, list: [{ id: "reviewer" }] },
+        skills: { workshop: { autonomous: { mode: "auto" } } },
+      } as OpenClawConfig,
+      [],
+      options,
+    );
+    const existing = {
+      ...initial!.input,
+      id: "existing-review",
+      enabled: true,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      state: {},
+    };
+    const restricted = {
+      agents: {
+        defaults: { model: "anthropic/claude-sonnet-4-6" },
+        list: [{ id: "reviewer", tools: { profile: "minimal" } }],
+      },
+      skills: { workshop: { autonomous: { mode: "auto" } } },
+    } as OpenClawConfig;
+
+    const [projected] = resolveSkillCollectionReviewMonitorSpecs(restricted, [existing], options);
+    expect(projected?.input.enabled).toBe(false);
+    expect(projected?.input.displayName).toContain("tool-policy-denied");
+  });
 });

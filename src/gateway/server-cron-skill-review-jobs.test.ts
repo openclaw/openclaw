@@ -6,7 +6,7 @@ import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/ses
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CronService } from "../cron/service.js";
 import { saveCronJobsStore } from "../cron/store.js";
-import type { CronJob } from "../cron/types.js";
+import type { CronJob, CronJobCreate } from "../cron/types.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   getOpenClawAgentDatabaseIfOpen,
@@ -423,5 +423,72 @@ describe("reconcileSkillCollectionReviewJobs", () => {
       cron.stop();
       await testState.cleanup();
     }
+  });
+
+  it("reconciles a policy-blocked review to disabled and re-enables it after the policy is relaxed", async () => {
+    const blocked = {
+      agents: {
+        defaults: { model: "anthropic/claude-sonnet-4-6" },
+        list: [{ id: "blocked", tools: { profile: "minimal" } }],
+      },
+      skills: { workshop: { autonomous: { mode: "auto" } } },
+    } as OpenClawConfig;
+    const added: CronJobCreate[] = [];
+    let stored: CronJob[] = [];
+    const cron = {
+      add: vi.fn(async (input: CronJobCreate) => {
+        added.push(input);
+        const job = {
+          ...input,
+          id: `review-${added.length}`,
+          createdAtMs: 1,
+          updatedAtMs: 1,
+          state: {},
+        } as CronJob;
+        stored = [job];
+        return job;
+      }),
+      remove: vi.fn(async () => ({ ok: true, removed: true })),
+      list: vi.fn(async () => stored),
+    };
+
+    await reconcileSkillCollectionReviewJobs({ cron: cron as never, cfg: blocked, logger });
+    expect(added[0]?.enabled).toBe(false);
+    expect(added[0]?.displayName).toBe("[tool-policy-denied] Skill collection review (blocked)");
+
+    // A config reload that restores the tools must clear the reason and re-enable the job.
+    const relaxed = {
+      ...blocked,
+      agents: {
+        defaults: { model: "anthropic/claude-sonnet-4-6" },
+        list: [{ id: "blocked" }],
+      },
+    } as OpenClawConfig;
+    await reconcileSkillCollectionReviewJobs({ cron: cron as never, cfg: relaxed, logger });
+    expect(added[1]?.enabled).toBe(true);
+    expect(added[1]?.displayName).toBe("Skill collection review (blocked)");
+  });
+
+  it("keeps a partially denied agent's review enabled through reconciliation", async () => {
+    const cfg = {
+      agents: {
+        defaults: { model: "anthropic/claude-sonnet-4-6" },
+        list: [{ id: "partial", tools: { deny: ["process"] } }],
+      },
+      skills: { workshop: { autonomous: { mode: "auto" } } },
+    } as OpenClawConfig;
+    const added: CronJobCreate[] = [];
+    const cron = {
+      add: vi.fn(async (input: CronJobCreate) => {
+        added.push(input);
+        return { ...input, id: "review", createdAtMs: 1, updatedAtMs: 1, state: {} } as CronJob;
+      }),
+      remove: vi.fn(async () => ({ ok: true, removed: true })),
+      list: vi.fn(async () => [] as CronJob[]),
+    };
+
+    await reconcileSkillCollectionReviewJobs({ cron: cron as never, cfg, logger });
+    expect(added[0]?.enabled).toBe(true);
+    expect(added[0]?.displayName).toBe("Skill collection review (partial)");
   });
 });
