@@ -4,12 +4,25 @@ import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { nodeFilePath } from "../../test-utils/node-file-path.js";
+import * as workspaceCopy from "../workspace-bootstrap-copy.js";
+import * as workspaceBootstrap from "../workspace-bootstrap-publish.js";
+import { WorkspaceBootstrapSeedConflictError } from "../workspace-bootstrap-publish.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../workspace-bootstrap-read.js";
-import { DEFAULT_AGENTS_FILENAME, DEFAULT_SOUL_FILENAME } from "../workspace.js";
-import { ensureSandboxWorkspace } from "./workspace.js";
+import { WorkspaceAliasRepointedError } from "../workspace-state-identity.js";
+import * as workspaceOwner from "../workspace.js";
+import {
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  ensureSandboxWorkspace,
+} from "../workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -26,6 +39,88 @@ describe("ensureSandboxWorkspace", () => {
     await expect(fs.readFile(path.join(sandbox, DEFAULT_AGENTS_FILENAME), "utf-8")).resolves.toBe(
       "seeded-agents",
     );
+  });
+
+  it("keeps sandbox copying and scaffolding ahead of a later custom-purpose caller", async ({
+    signal,
+  }) => {
+    const root = tempDirs.make("openclaw-sandbox-ordering-");
+    const seed = path.join(root, "seed");
+    const sandbox = path.join(root, "sandbox");
+    const soulPath = path.join(sandbox, DEFAULT_SOUL_FILENAME);
+    const soul = "Synthetic sandbox persona.\n";
+    const purpose = "Late custom owner";
+    await fs.mkdir(seed);
+    await fs.writeFile(path.join(seed, DEFAULT_SOUL_FILENAME), soul);
+    const copied = createDeferred();
+    const release = createDeferred();
+    const publish = workspaceBootstrap.publishBootstrapFile;
+    let held = false;
+    const copy = vi
+      .spyOn(workspaceBootstrap, "publishBootstrapFile")
+      .mockImplementation(async (...args) => {
+        const result = await publish(...args);
+        if (!held && args[0] === soulPath) {
+          held = true;
+          copied.resolve();
+          await release.promise;
+        }
+        return result;
+      });
+    const preparing = ensureSandboxWorkspace(sandbox, seed);
+    void preparing.catch(() => undefined);
+    let follower: ReturnType<typeof workspaceOwner.ensureAgentWorkspace> | undefined;
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(copied.promise, preparing, "Sandbox seed was not copied"),
+        signal,
+      );
+      follower = workspaceOwner.ensureAgentWorkspace({ dir: sandbox, purpose });
+      void follower.catch(() => undefined);
+      release.resolve();
+      await expect(preparing).resolves.toBeUndefined();
+      await expect(follower).rejects.toBeInstanceOf(WorkspaceBootstrapSeedConflictError);
+      await expect(follower).rejects.toThrow("Existing AGENTS.md was preserved");
+      expect(await fs.readFile(path.join(sandbox, DEFAULT_AGENTS_FILENAME), "utf8")).not.toContain(
+        purpose,
+      );
+      expect(await fs.readFile(soulPath, "utf8")).toBe(soul);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([preparing, follower]);
+      copy.mockRestore();
+    }
+  });
+
+  it("keeps the copied workspace identity through ordinary preparation", async () => {
+    const root = tempDirs.make("openclaw-sandbox-handoff-");
+    const seed = path.join(root, "seed");
+    const original = path.join(root, "original");
+    const replacement = path.join(root, "replacement");
+    const alias = path.join(root, "workspace");
+    await Promise.all([seed, original, replacement].map((dir) => fs.mkdir(dir)));
+    await fs.writeFile(path.join(seed, DEFAULT_AGENTS_FILENAME), "Synthetic seed instructions.\n");
+    const linkType = process.platform === "win32" ? "junction" : "dir";
+    await fs.symlink(original, alias, linkType);
+    const copy = workspaceCopy.copyWorkspaceBootstrapFiles;
+    const handoff = vi
+      .spyOn(workspaceCopy, "copyWorkspaceBootstrapFiles")
+      .mockImplementationOnce(async (...args) => {
+        await copy(...args);
+        await fs.unlink(alias);
+        await fs.symlink(replacement, alias, linkType);
+      });
+    try {
+      await expect(ensureSandboxWorkspace(alias, seed, true)).rejects.toBeInstanceOf(
+        WorkspaceAliasRepointedError,
+      );
+      expect(await fs.readFile(path.join(original, DEFAULT_AGENTS_FILENAME), "utf8")).toBe(
+        "Synthetic seed instructions.\n",
+      );
+      expect(await fs.readdir(replacement)).toEqual([]);
+    } finally {
+      handoff.mockRestore();
+    }
   });
 
   it.runIf(process.platform !== "win32")("skips symlinked bootstrap seed files", async () => {

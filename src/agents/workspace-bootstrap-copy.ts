@@ -1,40 +1,31 @@
-/**
- * Sandbox workspace bootstrapper.
- *
- * Creates sandbox workspaces and seeds agent bootstrap files through root-boundary reads.
- */
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OptionalBootstrapFileName } from "../../config/types.agent-defaults.js";
-import { openRootFile } from "../../infra/boundary-file-read.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveUserPath } from "../../utils.js";
-import { publishBootstrapFile } from "../workspace-bootstrap-publish.js";
-import {
-  MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
-  readWorkspaceBootstrapFile,
-} from "../workspace-bootstrap-read.js";
+import { openRootFile } from "../infra/boundary-file-read.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_SOUL_FILENAME,
   DEFAULT_USER_FILENAME,
-  ensureAgentWorkspace,
-} from "../workspace.js";
+} from "./workspace-bootstrap-policy.js";
+import { publishBootstrapFile } from "./workspace-bootstrap-publish.js";
+import {
+  MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+  readWorkspaceBootstrapFile,
+} from "./workspace-bootstrap-read.js";
 
 const log = createSubsystemLogger("sandbox-workspace");
 
-export async function ensureSandboxWorkspace(
+export async function copyWorkspaceBootstrapFiles(
   workspaceDir: string,
-  seedFrom?: string,
-  skipBootstrap?: boolean,
-  skipOptionalBootstrapFiles?: OptionalBootstrapFileName[],
+  seed: string | undefined,
+  assertCurrent: () => void,
 ) {
   await fs.mkdir(workspaceDir, { recursive: true });
-  if (seedFrom) {
-    const seed = resolveUserPath(seedFrom);
+  assertCurrent();
+  if (seed) {
     const files = [
       DEFAULT_AGENTS_FILENAME,
       DEFAULT_SOUL_FILENAME,
@@ -74,12 +65,8 @@ export async function ensureSandboxWorkspace(
       } finally {
         syncFs.closeSync(opened.fd);
       }
-      await publishBootstrapFile(dest, content);
+      await publishBootstrapFile(dest, content, assertCurrent);
     }
   }
-  await ensureAgentWorkspace({
-    dir: workspaceDir,
-    ensureBootstrapFiles: !skipBootstrap,
-    skipOptionalBootstrapFiles,
-  });
+  assertCurrent();
 }

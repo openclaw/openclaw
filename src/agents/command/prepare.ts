@@ -72,6 +72,12 @@ export async function prepareAgentCommandExecution(
   runtime: RuntimeEnv,
   runtimeContext?: PreparedAgentCommandRuntimeContext,
 ) {
+  const {
+    abortSignal,
+    assertSourceCurrent,
+    operatorAuthority,
+    lifecycleGeneration: preparationLifecycleGeneration,
+  } = opts;
   const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
   const message = opts.message ?? "";
   if (!message.trim()) {
@@ -250,13 +256,13 @@ export async function prepareAgentCommandExecution(
   const { getAcpSessionManager } = await loadAcpManagerRuntime();
   const acpManager = getAcpSessionManager();
   const assertAcpPreparationCurrent = () => {
-    if (opts.abortSignal?.aborted) {
-      throw createAbortError("Operation aborted", { cause: opts.abortSignal.reason });
+    if (abortSignal?.aborted) {
+      throw createAbortError("Operation aborted", { cause: abortSignal.reason });
     }
-    opts.assertSourceCurrent?.();
-    opts.operatorAuthority?.assertCurrent();
-    if (opts.lifecycleGeneration !== undefined) {
-      assertAgentRunLifecycleGenerationCurrent(opts.lifecycleGeneration);
+    assertSourceCurrent?.();
+    operatorAuthority?.assertCurrent();
+    if (preparationLifecycleGeneration !== undefined) {
+      assertAgentRunLifecycleGenerationCurrent(preparationLifecycleGeneration);
     }
     assertAgentDatabaseAdmitted(sessionAgentId);
   };
@@ -370,6 +376,7 @@ export async function prepareAgentCommandExecution(
       ensureBootstrapFiles: !agentCfg?.skipBootstrap,
       skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
       provisioning: workspaceProvisioning,
+      guard: { assertHost: assertAcpPreparationCurrent },
     });
     const runId = opts.runId?.trim() || sessionId;
     let promptMessage = message;

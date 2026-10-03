@@ -25,7 +25,7 @@ src/agents/tools/ask-user-tool.test.ts	2
 src/agents/tools/message-tool.hosted-transport.test.ts	1
 src/agents/tools/message-tool.scheduled-lifetime.test.ts	1
 src/agents/tools/pdf-native-providers.test.ts	1
-src/agents/workspace.test.ts	2
+src/agents/workspace.test.ts	1
 src/auto-reply/dispatch.block-streaming-recovery.test.ts	2
 src/auto-reply/dispatch.question-input.test.ts	2
 src/auto-reply/reply/agent-runner-steer-adoption.question-recovery.test.ts	2

@@ -567,6 +567,13 @@ and exact expired-state deletion use the shared-state writer. Read-only snapshot
 retain the existing reader. The host captures the physical database and filesystem
 evidence before waiting, rechecks current authority and workspace identity at
 transaction and commit admission, and validates the evidence after delivery.
+Local preparation, consented bootstrap seeding, sandbox copying, and dev-template
+publication share a FIFO keyed by the canonical filesystem directory. Each caller
+retains its own path identity, options, and authority while waiting; different
+directories remain independent. A predecessor may create an initially absent
+directory, but existing directory identities and alias targets remain pinned.
+The queue holds admitted filesystem and worker operations through settlement.
+Sandbox copying and its following preparation retain the same queue slot.
 Workspace guards separate SQL-free host authority from a serialized recovery-hold
 predicate. The shared recovery reader evaluates that predicate on the worker's
 transaction connection before commit; refusal preserves the caller's duplicate-agent
