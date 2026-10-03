@@ -97,6 +97,10 @@ async function extractBackupArchive(
   symbolicLinkPaths: ReadonlySet<string>,
 ): Promise<void> {
   let extractionError: Error | undefined;
+  // Captured config and database snapshots are archived before the directory walk
+  // reaches their parents, so node-tar materializes those directories with default
+  // permissions and never revisits them when the later directory entry arrives.
+  const archivedDirectoryModes = new Map<string, number>();
   await tar.x({
     file: archivePath,
     gzip: true,
@@ -114,6 +118,9 @@ async function extractBackupArchive(
       if (target !== undefined) {
         entry.linkpath = target;
       }
+      if (entry.type === "Directory" && typeof entry.mode === "number") {
+        archivedDirectoryModes.set(entry.path.replace(/\/+$/u, ""), entry.mode & 0o7777);
+      }
     },
     onwarn: (code, message, data) => {
       extractionError ??=
@@ -122,6 +129,40 @@ async function extractBackupArchive(
   });
   if (extractionError) {
     throw extractionError;
+  }
+  await tightenRestoredDirectoryModes(targetPath, archivedDirectoryModes);
+}
+
+/** Restored directories never keep permissions broader than their archived entry. */
+async function tightenRestoredDirectoryModes(
+  targetPath: string,
+  archivedDirectoryModes: ReadonlyMap<string, number>,
+): Promise<void> {
+  if (process.platform === "win32") {
+    return;
+  }
+  for (const [entryPath, archivedMode] of archivedDirectoryModes) {
+    const directoryPath = path.join(targetPath, entryPath);
+    if (!isPathInside(targetPath, directoryPath)) {
+      continue;
+    }
+    let stat: import("node:fs").Stats;
+    try {
+      stat = await fs.lstat(directoryPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        continue;
+      }
+      throw error;
+    }
+    if (!stat.isDirectory()) {
+      continue;
+    }
+    const currentMode = stat.mode & 0o7777;
+    const tightenedMode = currentMode & archivedMode;
+    if (tightenedMode !== currentMode) {
+      await fs.chmod(directoryPath, tightenedMode);
+    }
   }
 }
 

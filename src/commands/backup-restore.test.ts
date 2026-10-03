@@ -386,6 +386,49 @@ describe("backupRestoreCommand", () => {
     );
   });
 
+  it.runIf(process.platform !== "win32")(
+    "tightens restored directory permissions when file entries precede their directory entries",
+    async () => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-restore-directory-modes-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          const archivePath = state.path("backup.tar.gz");
+          const targetPath = state.path("restored");
+          const archiveRoot = "2026-08-12T00-00-00.000Z-openclaw-backup";
+          const payloadPath = buildBackupArchivePath(archiveRoot, "/tmp/openclaw.json");
+          const privateDir = `${archiveRoot}/payload/private`;
+          const agentsDir = `${privateDir}/agents`;
+          await writeArchive({
+            archivePath,
+            archiveRoot,
+            payloadPath,
+            extraEntries: [
+              // Captured snapshots are archived before the walk reaches their parent directories.
+              encodeTarEntry({ path: `${agentsDir}/agent.sqlite`, contents: "db\n" }),
+              encodeTarEntry({ path: privateDir, type: "Directory" }),
+              encodeTarEntry({ path: agentsDir, type: "Directory" }),
+            ],
+          });
+
+          await backupRestoreCommand(createTestRuntime(), {
+            archive: archivePath,
+            target: targetPath,
+          });
+
+          const modeOf = async (relative: string) =>
+            (await fs.stat(path.join(targetPath, relative))).mode & 0o777;
+          await expect(modeOf(privateDir)).resolves.toBe(0o700);
+          await expect(modeOf(agentsDir)).resolves.toBe(0o700);
+          await expect(modeOf(`${agentsDir}/agent.sqlite`)).resolves.toBe(0o600);
+        },
+      );
+    },
+  );
+
   it("accepts an empty directory and refuses a non-empty target", async () => {
     await withOpenClawTestState(
       {
