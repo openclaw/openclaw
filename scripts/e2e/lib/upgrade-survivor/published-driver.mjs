@@ -254,9 +254,13 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     // Between a release and its forward-port, main lags npm latest. The cell proves
     // the update mechanics, not the version label: relabel the candidate to the
     // driver version so the future-version guard sees an upgrade, not a downgrade.
+    let candidateRelabel;
     if (compareReleaseVersions(build.version, driverVersion) < 0) {
       candidatePackage = await relabelCandidate(build.version, driverVersion);
-      build = { ...build, version: driverVersion, relabeledFrom: build.version };
+      // The installed candidate reports only its build identity; keep the relabel
+      // provenance in inputs.json/candidate-relabel.json, not in the compared build.
+      candidateRelabel = { from: build.version, to: driverVersion };
+      build = { ...build, version: driverVersion };
     }
     const driverBuild = legacySqlite
       ? readJson(path.join(packageRoot, "dist/build-info.json"))
@@ -264,6 +268,7 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     writeJson("inputs", {
       driverVersion,
       candidate: build,
+      ...(candidateRelabel ? { candidateRelabel } : {}),
       ...(legacySqlite
         ? {
             driverBuild,
