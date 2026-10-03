@@ -373,6 +373,21 @@ const sharedHost = isolationMode === "shared-host";
 if (ownedWatchdog && !sharedHost) throw new Error("native quiescence requires a shared host");
 let leasePath = path.join(leaseDirectory, workspaceKey + "." + nonce + ".json");
 ${REMOTE_QUIESCENCE_LEASE_JS}
+${REMOTE_QUIESCENCE_PS_JS}
+${REMOTE_QUIESCENCE_CONTROL_JS}
+const frozen = new Map();
+let watchdogReference = null;
+function writeLease(processes = [...frozen].map(([pid, start]) => ({ pid, start }))) {
+  persistLease(leasePath, {
+    version: 1,
+    nonce,
+    sharedHost,
+    processes,
+    watchdog: watchdogReference,
+    expiresAtMs: Date.now() + watchdogTimeoutMs,
+  });
+}
+function acquireWorkspaceLease() {
 if (process.platform === "win32" && sharedHost) {
   withWindowsWorkspaceLease(windowsLeaseDatabasePath, workspaceKey, (raw) => {
     if (raw !== null) {
@@ -396,27 +411,10 @@ if (process.platform === "win32" && sharedHost) {
     return JSON.stringify(lease);
   });
   process.stderr.write("workspace quiescence: Windows shared host declared; using manifest fences without process freezing\n");
-  process.stdout.write("quiesced " + nonce + "\n");
-  process.exit(0);
+  return;
 }
 if (typeof process.getuid !== "function") throw new Error("workspace quiescence requires POSIX");
-const uid = process.getuid();
-if (uid === 0) throw new Error("workspace quiescence refuses root-owned worker sessions");
-${REMOTE_QUIESCENCE_PS_JS}
-${REMOTE_QUIESCENCE_CONTROL_JS}
-const frozen = new Map();
-let watchdogReference = null;
-function writeLease(processes = [...frozen].map(([pid, start]) => ({ pid, start }))) {
-  persistLease(leasePath, {
-    version: 1,
-    nonce,
-    sharedHost,
-    processes,
-    watchdog: watchdogReference,
-    expiresAtMs: Date.now() + watchdogTimeoutMs,
-  });
-}
-function acquireWorkspaceLease() {
+if (process.getuid() === 0) throw new Error("workspace quiescence refuses root-owned worker sessions");
 processProbe = createProcessProbe();
 const orphanNames = fs.readdirSync(leaseDirectory).filter((name) =>
   name.startsWith(workspaceKey + ".") && name.endsWith(".json"),
