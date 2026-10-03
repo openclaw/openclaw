@@ -6,9 +6,11 @@ import {
 import {
   crabboxCommandError,
   crabboxCommandOutput,
+  isFixedLeaseIdUnsupported,
   isUnrecognizedLease,
   leaseRunArgs,
   runCrabboxCommand,
+  runCrabboxCommandWithCoordinatorRetry,
   type CrabboxCommandRunner,
   type LeaseCommandContext,
 } from "./crabbox-worker-command.js";
@@ -54,6 +56,7 @@ type ProvisionInspectContext = Omit<LeaseCommandContext, "id"> & {
   runCommand: CrabboxCommandRunner;
   stopLease: (context: LeaseCommandContext) => Promise<void>;
   signal?: AbortSignal;
+  sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 };
 
 // Crabbox states describe lease usability, not proven cleanup: released leases can retain
@@ -78,10 +81,11 @@ export async function inspectWithContext(
     timeoutMs?: number;
     waitForReady?: boolean;
     signal?: AbortSignal;
+    sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
   },
 ): Promise<ParsedInspect | undefined> {
   const action = params.waitForReady ? "status" : "inspect";
-  const result = await runCrabboxCommand({
+  const result = await runCrabboxCommandWithCoordinatorRetry({
     action,
     args: [
       action,
@@ -99,6 +103,7 @@ export async function inspectWithContext(
     binary: params.binary,
     runCommand: params.runCommand,
     signal: params.signal,
+    sleep: params.sleep,
     timeoutMs: params.timeoutMs ?? resolveCrabboxLifecycleTimeoutMs(params.provider),
   });
   if (result.termination === "exit" && result.code === 0) {
@@ -150,6 +155,12 @@ export async function runProvisionWarmup(
   });
   if (result.termination === "exit" && result.code === 0) {
     return;
+  }
+  // Crabbox internal/cli/run.go rejects this capability before Warmup/Acquire.
+  if (isFixedLeaseIdUnsupported(result, params.provider)) {
+    throw new WorkerProviderError(
+      `Crabbox backend ${params.provider} does not support fixed idempotent lease IDs. OpenClaw cloud workers need a Crabbox backend with fixed lease ID support.`,
+    );
   }
   const error = crabboxCommandError("warmup", result);
   if (result.termination === "exit" && result.code !== null) {
@@ -249,10 +260,14 @@ export async function runProvisionSetup(
   },
 ): Promise<void> {
   try {
+    const run =
+      params.phase === "profile setup" || params.phase === "node enrollment setup"
+        ? runCrabboxCommandWithCoordinatorRetry
+        : runCrabboxCommand;
     const result = await withCrabboxWorkerEnvProfile(
       params.forwardedEnv,
       (names, profilePath, childEnv) =>
-        runCrabboxCommand({
+        run({
           action: params.phase,
           args: leaseRunArgs({ ...params, id: params.inspect.id }, names, profilePath),
           binary: params.binary,
@@ -260,6 +275,7 @@ export async function runProvisionSetup(
           input: params.setup,
           runCommand: params.runCommand,
           signal: params.signal,
+          sleep: params.sleep,
           timeoutMs: remainingProvisionTimeout(
             params.deadline,
             params.timeoutMs ?? CRABBOX_SETUP_TIMEOUT_MS,

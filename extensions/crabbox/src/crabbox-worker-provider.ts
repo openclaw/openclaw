@@ -12,7 +12,7 @@ import { ensureManagedCrabboxBinary } from "./crabbox-managed-binary.js";
 import {
   type CrabboxCommandRunner,
   type LeaseCommandContext,
-  runCrabboxCommand,
+  runCrabboxCommandWithCoordinatorRetry,
   stopCrabboxLease,
 } from "./crabbox-worker-command.js";
 import { createCrabboxHeartbeatManager } from "./crabbox-worker-heartbeat.js";
@@ -104,7 +104,7 @@ export function createCrabboxWorkerProvider(
   const openclawRoot = dependencies.openclawRoot ?? process.cwd();
   const heartbeats = createCrabboxHeartbeatManager({
     run: (context, signal) =>
-      runCrabboxCommand({
+      runCrabboxCommandWithCoordinatorRetry({
         action: "heartbeat",
         args: [
           "heartbeat",
@@ -118,6 +118,7 @@ export function createCrabboxWorkerProvider(
         ],
         binary: context.binary,
         runCommand,
+        sleep,
         signal,
         timeoutMs: context.heartbeatTimeoutMs,
       }),
@@ -172,6 +173,7 @@ export function createCrabboxWorkerProvider(
       ...context,
       runCommand,
       warn,
+      sleep,
     });
     await warmImages.release(context);
   };
@@ -284,6 +286,7 @@ export function createCrabboxWorkerProvider(
           ...context,
           id: leaseId,
           runCommand,
+          sleep,
           timeoutMs: remainingProvisionTimeout(
             deadline,
             resolveCrabboxLifecycleTimeoutMs(parsed.provider),
@@ -310,6 +313,7 @@ export function createCrabboxWorkerProvider(
         profile: parsed,
         runCommand,
         stopLease,
+        sleep,
         signal: preparationSignal,
       };
       if (isNonRunnableState(inspected.state)) {
@@ -665,6 +669,7 @@ export function createCrabboxWorkerProvider(
       const inspected = await inspectWithContext({
         ...context,
         runCommand,
+        sleep,
       });
       if (!inspected || isNonRunnableState(inspected.state)) {
         await heartbeats.stop(context.id);
