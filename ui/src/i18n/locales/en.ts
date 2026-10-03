@@ -3062,6 +3062,9 @@ export const en: TranslationMap & {
       activeLeafChanged: "The session switched branches — review and resend.",
     },
     waitingForApproval: "Waiting for approval…",
+    waitingOnSubagents: "Waiting on subagents",
+    yieldWaiting: "Handed off and waiting",
+    yieldResumed: "Resumed",
     startupStatus: {
       retrying: "Retrying… {attempt}/{maxAttempts}",
       preparingWorkspace: "Preparing workspace…",

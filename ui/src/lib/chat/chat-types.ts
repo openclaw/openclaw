@@ -229,6 +229,7 @@ export type ChatItem =
       tone?: "danger";
       /** Collapse the body behind a disclosure; the label line stays visible. */
       collapsedBody?: true;
+      sessionsYield?: "waiting" | "resumed";
     }
   | {
       kind: "divider";

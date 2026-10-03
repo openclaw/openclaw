@@ -19,6 +19,14 @@ and outcomes available. Completed group summaries retain their operation counts.
 Tool Search calls use the called tool's name, icon, and input details in tool rows
 and activity summaries.
 
+When the parent turn has ended but subagents are still active, the chat shows
+**Waiting on subagents**. A single active child already loaded in the pane can
+be opened from its name beside the indicator. Elapsed time appears when the
+loaded history records a yield after the parent's last run began.
+Successful `sessions_yield` calls leave a quiet **Handed off and waiting** marker
+with a timestamp; it changes to **Resumed** when the conversation continues.
+Private continuation context stays hidden.
+
 When your role or session policy blocks messages, the composer is disabled and
 shows the reason before you try to send. This includes sandbox requirements,
 shared-session write restrictions, and read-only operator access. Your existing
