@@ -620,16 +620,19 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     readPreparedRowContext: () =>
       disposed ? undefined : inOwnerContext(() => metadata.readPrepared(epoch)),
     readPreparedSpawnedBy,
-    capture: rowReads.createSessionRowCapture(
-      lookup,
-      (row) =>
+    capture(query: records.Lookup) {
+      const row = lookup(query);
+      // Capture retains published identity while category facts wait for reconciliation.
+      return row &&
+        row.unresolvedDatabaseFacts !== "category" &&
         !topologyDirty &&
         !row.entry &&
         row.storedEntry !== undefined &&
         row.unresolvedDatabaseFacts !== true &&
-        Boolean(inOwnerContext(subagents.snapshotIdentity)),
-      (row) => acquireEntry(row, row.storedEntry),
-    ),
+        inOwnerContext(subagents.snapshotIdentity)
+        ? (acquireEntry(row, row.storedEntry) ?? row)
+        : row;
+    },
     findBySessionId(query: Parameters<typeof rowReads.findSessionRowById>[0]) {
       return rowReads.findSessionRowById(query, { disposed, lookup, matching, scope });
     },

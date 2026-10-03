@@ -61,7 +61,6 @@ import {
 import {
   isLegacyDefaultMainAliasKey,
   resolveCanonicalAgentSessionOwner,
-  isSurfaceGroupKey,
   type PreparedLegacySessionSurfaces,
 } from "./state-migrations.session-surfaces.js";
 import type { MigrationMessages, SessionStoreAliasPlan } from "./state-migrations.types.js";
@@ -195,7 +194,7 @@ function canonicalizeSessionKeyForAgent(
   if (rawLower.startsWith("group:") || rawLower.startsWith("channel:")) {
     return normalizeLowercaseStringOrEmpty(`agent:${agentId}:unknown:${raw}`);
   }
-  if (isSurfaceGroupKey(raw)) {
+  if (raw.includes(":group:") || raw.includes(":channel:")) {
     return `agent:${agentId}:${normalized}`;
   }
   return normalizeSessionKeyPreservingOpaquePeerIds(`agent:${agentId}:${raw}`);
@@ -968,7 +967,6 @@ export async function saveSessionStoreStrict(
   store: Record<string, SessionEntry>,
 ): Promise<void> {
   await saveLegacySessionStore(storePath, store, {
-    requireWriteSuccess: true,
     skipMaintenance: true,
   });
 }

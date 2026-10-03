@@ -8,14 +8,8 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contra
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { SessionEntry } from "./types.js";
 
-export const SESSION_ENTRY_SNAPSHOT_FIELDS = [
-  "sessionDiffBaseline",
-  "skillsSnapshot",
-  "systemPromptReport",
-] as const;
-
 export type SessionEntrySnapshot = {
-  field: (typeof SESSION_ENTRY_SNAPSHOT_FIELDS)[number];
+  field: (typeof snapshotColumns)[number][0];
   valueJson: string;
 };
 
@@ -51,20 +45,27 @@ export function sessionEntrySnapshotColumnsForKeys(keys?: readonly string[]) {
 
 export const sessionEntrySnapshotColumns = sessionEntrySnapshotColumnsForKeys();
 
-export function splitSessionEntrySnapshots(entry: SessionEntry | Record<string, unknown>): {
+export function splitSessionEntrySnapshots(
+  entry: SessionEntry | Record<string, unknown>,
+  mode: "complete" | { previousEntry: SessionEntry | undefined } = "complete",
+): {
   entryJson: string;
   snapshots: SessionEntrySnapshot[];
+  snapshotsChanged: boolean;
 } {
   const { sessionDiffBaseline, skillsSnapshot, systemPromptReport, ...hot } = entry;
   const values = { sessionDiffBaseline, skillsSnapshot, systemPromptReport };
+  const snapshotsChanged =
+    mode === "complete" ||
+    snapshotColumns.some(([field]) => values[field] !== mode.previousEntry?.[field]);
   const snapshots: SessionEntrySnapshot[] = [];
-  for (const field of SESSION_ENTRY_SNAPSHOT_FIELDS) {
+  for (const [field] of snapshotsChanged ? snapshotColumns : []) {
     const valueJson = JSON.stringify(values[field]);
     if (valueJson !== undefined) {
       snapshots.push({ field, valueJson });
     }
   }
-  return { entryJson: JSON.stringify(hot), snapshots };
+  return { entryJson: JSON.stringify(hot), snapshots, snapshotsChanged };
 }
 
 export function attachSessionEntrySnapshots<T extends object>(

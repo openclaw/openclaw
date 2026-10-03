@@ -19,6 +19,68 @@ async function withStateDirFixture(run: (root: string) => Promise<void>): Promis
 }
 
 describe("legacy state dir auto-migration", () => {
+  it.each([
+    { location: "source", selector: "default" },
+    { location: "source", selector: "environment" },
+    { location: "source", selector: "config" },
+    { location: "source", selector: "prefixed-config" },
+    { location: "source", selector: "selected-config" },
+    { location: "target", selector: "default" },
+    { location: "custom", selector: "default" },
+  ])(
+    "preserves retired OAuth sidecars before relocating $location with $selector selection",
+    async ({ location, selector }) => {
+      await withStateDirFixture(async (root) => {
+        const legacyDir = path.join(root, ".clawdbot");
+        const targetDir = path.join(root, ".openclaw");
+        const stateDir =
+          location === "custom"
+            ? path.join(root, "custom-state")
+            : location === "target"
+              ? targetDir
+              : legacyDir;
+        const oauthDir = path.join(stateDir, selector === "default" ? "credentials" : "oauth$old");
+        const sidecarPath = path.join(oauthDir, "auth-profiles", `${"a".repeat(32)}.json`);
+        const sidecarBytes = Buffer.from("retired encrypted bytes\u0000not parsed\n");
+        const env: NodeJS.ProcessEnv = { HOME: root, OPENCLAW_HOME: root };
+        if (location === "custom") {
+          env.OPENCLAW_STATE_DIR = stateDir;
+        }
+        if (selector === "environment") {
+          env.OPENCLAW_OAUTH_DIR = oauthDir;
+        }
+        const config =
+          selector === "config" || selector === "prefixed-config" || selector === "selected-config"
+            ? { env: { vars: { OPENCLAW_OAUTH_DIR: "~/.clawdbot/oauth$old" } } }
+            : {};
+        fs.mkdirSync(legacyDir, { recursive: true });
+        fs.mkdirSync(path.dirname(sidecarPath), { recursive: true });
+        fs.writeFileSync(sidecarPath, sidecarBytes);
+        const configPath =
+          selector === "selected-config"
+            ? path.join(root, "selected-config.json")
+            : path.join(stateDir, "clawdbot.json");
+        if (selector === "selected-config") {
+          env.OPENCLAW_CONFIG_PATH = configPath;
+        }
+        const configBytes = `${selector === "prefixed-config" ? "unexpected prefix\n" : ""}${JSON.stringify(config)}`;
+        fs.writeFileSync(configPath, configBytes);
+        const envBefore = { ...env };
+
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          await expect(autoMigrateLegacyStateDir({ env, homedir: () => root })).rejects.toThrow(
+            "Upgrade through OpenClaw 2026.9.7",
+          );
+          expect(fs.lstatSync(legacyDir).isSymbolicLink()).toBe(false);
+          expect(fs.existsSync(targetDir)).toBe(location === "target");
+          expect(fs.readFileSync(sidecarPath)).toEqual(sidecarBytes);
+          expect(fs.readFileSync(configPath, "utf8")).toBe(configBytes);
+          expect(env).toEqual(envBefore);
+        }
+      });
+    },
+  );
+
   it("skips a legacy symlinked state dir when it points outside supported legacy roots", async () => {
     await withStateDirFixture(async (root) => {
       const legacySymlink = path.join(root, ".clawdbot");

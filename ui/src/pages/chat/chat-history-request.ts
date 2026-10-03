@@ -14,6 +14,7 @@ import {
 import { subscribeToSharedRequest } from "../../lib/shared-request-subscription.ts";
 import {
   CHAT_HISTORY_RETRY_WINDOW_MS,
+  isAgentDatabaseInspectionPendingError,
   isRetryableChatReadError,
   resolveChatReadRetryDelayMs,
 } from "./chat-history-retry.ts";
@@ -91,6 +92,7 @@ type SharedChatHistoryConsumer = {
   isCurrent: () => boolean;
   captureRun?: () => ChatHistoryRunObservation | undefined;
   retryDeadlineMs: number;
+  lastRetryableError?: unknown;
   onRetry?: () => void;
 };
 
@@ -128,7 +130,7 @@ async function requestChatHistory<T extends ChatHistoryResponse>(
   shouldContinue: () => boolean,
   shouldRetry: () => boolean,
   signal: AbortSignal,
-  onRetry: () => void,
+  onRetry: (error: unknown) => void,
 ): Promise<T> {
   let attemptNumber = 0;
   for (;;) {
@@ -138,7 +140,7 @@ async function requestChatHistory<T extends ChatHistoryResponse>(
       if (!shouldContinue() || !shouldRetry() || !isRetryableChatReadError(err, method)) {
         throw err;
       }
-      onRetry();
+      onRetry(err);
       await sleepWithAbort(resolveChatReadRetryDelayMs(err, attemptNumber++), signal);
       if (!shouldContinue() || !shouldRetry()) {
         throw err;
@@ -242,9 +244,10 @@ export function requestSharedHistory(
       shouldContinue,
       shouldRetry,
       controller.signal,
-      () => {
+      (error) => {
         for (const entry of consumers) {
           if (entry.isCurrent()) {
+            entry.lastRetryableError = error;
             entry.onRetry?.();
           }
         }
@@ -266,11 +269,14 @@ export function requestSharedHistory(
   const deadline = new AbortController();
   const timeout = setTimeout(
     () => {
+      const timeoutError = new GatewayProtocolRequestTimeoutError(
+        { method, timeoutMs: CHAT_HISTORY_RETRY_WINDOW_MS, requestSent: true },
+        t("chat.historyRequestTimedOut"),
+      );
       deadline.abort(
-        new GatewayProtocolRequestTimeoutError(
-          { method, timeoutMs: CHAT_HISTORY_RETRY_WINDOW_MS, requestSent: true },
-          t("chat.historyRequestTimedOut"),
-        ),
+        isAgentDatabaseInspectionPendingError(consumer.lastRetryableError)
+          ? consumer.lastRetryableError
+          : timeoutError,
       );
     },
     Math.max(0, consumer.retryDeadlineMs - Date.now()),

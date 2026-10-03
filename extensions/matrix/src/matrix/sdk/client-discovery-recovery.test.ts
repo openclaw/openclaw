@@ -86,16 +86,38 @@ describe("Matrix startup with unavailable joined-room discovery", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["503", "429", "connection"])(
-    "keeps healthy encrypted rooms usable after a recoverable %s failure without allowing plaintext",
+  it.each(["503", "429", "connection", "401", "403", "abort", "malformed"])(
+    "preserves encrypted startup safety after %s discovery",
     async (failure) => {
+      const abort = new AbortController();
+      const errcode =
+        failure === "401" ? "M_UNKNOWN_TOKEN" : failure === "403" ? "M_FORBIDDEN" : "M_UNKNOWN";
       discovery = async () => {
+        if (failure === "abort") {
+          abort.abort();
+          throw new TypeError("connection closed during abort");
+        }
         if (failure === "connection") {
           throw new TypeError("fetch failed");
         }
-        return Response.json({ errcode: "M_UNKNOWN" }, { status: Number(failure) });
+        return failure === "malformed"
+          ? Response.json({ joined_rooms: [null] })
+          : Response.json({ errcode }, { status: Number(failure) });
       };
-      await expect(client.start()).resolves.toBeUndefined();
+      const startup = client.start({ abortSignal: abort.signal });
+      if (failure === "401" || failure === "403") {
+        await expect(startup).rejects.toMatchObject({ httpStatus: Number(failure), errcode });
+        return;
+      }
+      if (failure === "abort") {
+        await expect(startup).rejects.toMatchObject({ name: "AbortError" });
+        return;
+      }
+      if (failure === "malformed") {
+        await expect(startup).rejects.toThrow("invalid joined rooms");
+        return;
+      }
+      await expect(startup).resolves.toBeUndefined();
       await expect(client.prepareRoomForMessageSend(healthy)).resolves.toBe("m.room.encrypted");
       vi.spyOn(client, "getRoomStateEvent").mockResolvedValue(encryption);
       await expect(
@@ -108,28 +130,4 @@ describe("Matrix startup with unavailable joined-room discovery", () => {
       ).toBe(false);
     },
   );
-
-  it.each([
-    { status: 401, errcode: "M_UNKNOWN_TOKEN" },
-    { status: 403, errcode: "M_FORBIDDEN" },
-  ])("preserves fatal discovery authentication errors ($status)", async ({ status, errcode }) => {
-    discovery = async () => Response.json({ errcode }, { status });
-    await expect(client.start()).rejects.toMatchObject({ httpStatus: status, errcode });
-  });
-
-  it("preserves cancellation when the joined-room request also fails", async () => {
-    const abort = new AbortController();
-    discovery = async () => {
-      abort.abort();
-      throw new TypeError("connection closed during abort");
-    };
-    await expect(client.start({ abortSignal: abort.signal })).rejects.toMatchObject({
-      name: "AbortError",
-    });
-  });
-
-  it("does not hide malformed authoritative room lists", async () => {
-    discovery = async () => Response.json({ joined_rooms: [null] });
-    await expect(client.start()).rejects.toThrow("invalid joined rooms");
-  });
 });

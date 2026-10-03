@@ -80,6 +80,7 @@ describe("session tool outcomes", () => {
       const { session } = await createAgentSession({
         agentDir,
         model: testModel,
+        thinkingLevel: "medium" as const,
         noTools: "builtin",
         customTools: toToolDefinitions(
           outcomes.map((outcome) => {

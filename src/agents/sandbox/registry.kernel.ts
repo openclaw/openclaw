@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Insertable, Selectable, Updateable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
@@ -9,6 +10,13 @@ import type { SandboxBrowserRegistryEntry, SandboxRegistryEntry } from "./regist
 export type SandboxRegistryInsert = Insertable<DB["sandbox_registry_entries"]>;
 export type SandboxRegistryWrite =
   | { operation: "update"; entry: SandboxRegistryEntry }
+  | { operation: "updateBrowser"; entry: SandboxBrowserRegistryEntry }
+  | { operation: "removeBrowser"; containerName: string }
+  | {
+      operation: "removeGeneration";
+      kind: "container" | "browser";
+      entry: SandboxRegistryEntry | SandboxBrowserRegistryEntry;
+    }
   | { operation: "complete"; entry: SandboxRegistryEntry; retired: boolean }
   | { operation: "remove"; containerName: string; preserveRemovalIntent?: boolean };
 
@@ -52,12 +60,16 @@ export function assertSandboxRegistryReservationCurrent(
   }
 }
 
-function removeContainerRegistryRowInDatabase(db: DatabaseSync, containerName: string): void {
+function removeRegistryRowInDatabase(
+  db: DatabaseSync,
+  kind: "container" | "browser",
+  containerName: string,
+): void {
   executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<SandboxRegistryDatabase>(db)
       .deleteFrom("sandbox_registry_entries")
-      .where("registry_kind", "=", "container")
+      .where("registry_kind", "=", kind)
       .where("container_name", "=", containerName),
   );
 }
@@ -66,6 +78,29 @@ export function writeSandboxRegistryInDatabase(
   db: DatabaseSync,
   write: SandboxRegistryWrite,
 ): void {
+  if (write.operation === "removeGeneration") {
+    const { kind, entry } = write;
+    const row = readSandboxRegistryRowInDatabase(db, kind, entry.containerName);
+    const current = row && (kind === "browser" ? rowToBrowserEntry(row) : rowToContainerEntry(row));
+    if (!current || !sameSandboxRegistryGeneration(current, entry)) {
+      throw new Error("Sandbox runtime generation changed during retirement");
+    }
+    removeRegistryRowInDatabase(db, kind, entry.containerName);
+    return;
+  }
+  if (write.operation === "updateBrowser") {
+    const { entry } = write;
+    const row = readSandboxRegistryRowInDatabase(db, "browser", entry.containerName);
+    insertSandboxRegistryRowInDatabase(
+      db,
+      browserEntryToRow(entry, row ? rowToBrowserEntry(row) : null),
+    );
+    return;
+  }
+  if (write.operation === "removeBrowser") {
+    removeRegistryRowInDatabase(db, "browser", write.containerName);
+    return;
+  }
   if (write.operation === "remove") {
     if (write.preserveRemovalIntent) {
       const row = readSandboxRegistryRowInDatabase(db, "container", write.containerName);
@@ -74,7 +109,7 @@ export function writeSandboxRegistryInDatabase(
         return;
       }
     }
-    removeContainerRegistryRowInDatabase(db, write.containerName);
+    removeRegistryRowInDatabase(db, "container", write.containerName);
     return;
   }
   const { entry } = write;
@@ -89,7 +124,7 @@ export function writeSandboxRegistryInDatabase(
   }
   assertSandboxRegistryReservationCurrent(existing, entry);
   if (write.retired) {
-    removeContainerRegistryRowInDatabase(db, entry.containerName);
+    removeRegistryRowInDatabase(db, "container", entry.containerName);
   } else {
     insertSandboxRegistryRowInDatabase(
       db,
@@ -102,6 +137,16 @@ export function writeSandboxRegistryInDatabase(
       ),
     );
   }
+}
+
+// Activity stamps can advance without changing custody; all allocation facts must match.
+function sameSandboxRegistryGeneration(
+  current: SandboxRegistryEntry | SandboxBrowserRegistryEntry,
+  expected: SandboxRegistryEntry | SandboxBrowserRegistryEntry,
+): boolean {
+  const { lastUsedAtMs: _currentUse, ...currentGeneration } = current;
+  const { lastUsedAtMs: _expectedUse, ...expectedGeneration } = expected;
+  return isDeepStrictEqual(currentGeneration, expectedGeneration);
 }
 
 export function containerEntryToRow(

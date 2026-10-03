@@ -206,7 +206,10 @@ describe("prepared subagent publication ownership", () => {
       fail.mockRestore();
     }
     const copy = expectDefined(await readLatest(), "retained committed row");
-    copy.task = "Caller must not mutate committed facts";
+    expect(() => {
+      copy.task = "Caller must not mutate committed facts";
+    }).toThrow(TypeError);
+    expect(await readLatest()).toBe(copy);
     expect(await readLatest()).toMatchObject(removed);
     expect(getSubagentRunsSnapshotForRead(new Map()).has(intended.runId)).toBe(false);
     const committed = { ...retained, createdAt: 1_000 };
@@ -254,7 +257,9 @@ describe("prepared subagent publication ownership", () => {
           ),
         ).rejects.toThrow("Synthetic database failure");
         const copy = expectDefined(await readLatest(), "other database committed row");
-        copy.task = "Caller must not mutate committed facts";
+        expect(() => {
+          copy.task = "Caller must not mutate committed facts";
+        }).toThrow(TypeError);
         expect(await readLatest()).toMatchObject(otherDurable);
       });
       expect(await readLatest()).toMatchObject(retained);

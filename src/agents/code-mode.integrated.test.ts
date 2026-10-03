@@ -2,11 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { codeModeFailureCode } from "./code-mode-errors.js";
 import * as worker from "./code-mode-executor.js";
-import {
-  resolveCodeModeConfig,
-  addClientToolsToCodeModeCatalog,
-  applyCodeModeCatalog,
-} from "./code-mode.js";
+import { addClientToolsToCodeModeCatalog, applyCodeModeCatalog } from "./code-mode.js";
 import {
   resetCodeModeTestState,
   pluginToolWithExecute,
@@ -197,17 +193,17 @@ describe("Code Mode guest execution", () => {
     },
   );
 
-  it("never exposes Node module-loader globals to the real guest worker", async () => {
+  it("never exposes Node module loaders or the raw host callback to the guest", async () => {
     const { tools: codeModeTools } = createGuestHarness([pluginTool("fake_noop", "Noop")]);
 
     const details = await run(
       codeModeTools,
-      "return [typeof process, typeof module, typeof require];",
+      "return [typeof process, typeof module, typeof require, typeof globalThis.__openclawHostRequest];",
     );
 
     expect(details).toMatchObject({
       status: "completed",
-      value: ["undefined", "undefined", "undefined"],
+      value: ["undefined", "undefined", "undefined", "undefined"],
     });
     expect(testing.activeRuns.size).toBe(0);
   });
@@ -258,10 +254,22 @@ describe("Code Mode guest execution", () => {
     },
   );
 
-  it.each(["node", "quickjs"] as const)(
-    "%s surfaces guest errors at the submitted source line",
-    async (executor) => {
-      const code = "const valid = 1;\nreturn missingFn();";
+  it.each([
+    {
+      executor: "node",
+      source: "return missingFn();",
+      error: "ReferenceError: missingFn is not defined",
+    },
+    {
+      executor: "quickjs",
+      source: "return missingFn();",
+      error: "ReferenceError: missingFn is not defined",
+    },
+    { executor: "node", source: 'throw new Error("interrupted");', error: "Error: interrupted" },
+  ] as const)(
+    "$executor preserves guest error classification and source lines: $error",
+    async ({ executor, source, error }) => {
+      const code = "const valid = 1;\n" + source;
       const { ctx, tools: codeModeTools } = createCodeModeHarness({ codeMode: { executor } });
       applyCodeModeCatalog({
         tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
@@ -276,31 +284,15 @@ describe("Code Mode guest execution", () => {
       );
 
       expect(details.status).toBe("failed");
-      const error = String(details.error);
+      const diagnostic = String(details.error);
       expect(details).toMatchObject({ code: "internal_error", failurePhase: "guest" });
-      expect(error).toContain("ReferenceError");
-      expect(error).toContain("missingFn is not defined");
-      expect(error).toMatch(/openclaw-code-mode:user\.js:2:\d+/);
-      expect(error).not.toContain("<eval>");
-      expect(error.startsWith("at ")).toBe(false);
+      expect(diagnostic).toContain(error);
+      expect(diagnostic).toMatch(/openclaw-code-mode:user\.js:2:\d+/);
+      expect(diagnostic).not.toContain("<eval>");
+      expect(diagnostic.startsWith("at ")).toBe(false);
     },
   );
 
-  it("does not expose the raw host request callback", async () => {
-    const { tools: codeModeTools } = createGuestHarness([pluginTool("fake_noop", "Noop")]);
-
-    const details = resultDetails(
-      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
-        "code-hidden-host-request",
-        { code: "return typeof globalThis.__openclawHostRequest;" },
-      ),
-    );
-
-    expect(details).toMatchObject({
-      status: "completed",
-      value: "undefined",
-    });
-  });
   it.each([false, true])(
     "refuses a new host effect after the boundary deadline (resume=%s)",
     async (resume) => {
@@ -403,28 +395,5 @@ describe("Code Mode guest execution", () => {
     });
     const guestError = { ...timeout, code: "internal_error" };
     expect(testing.normalizeCodeModeTimeoutResult(guestError)).toEqual(guestError);
-  });
-
-  it("does not classify guest interrupted errors as timeouts", async () => {
-    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
-
-    const result = await testing.runCodeModeExecutor(
-      {
-        kind: "exec",
-        source: 'throw new Error("interrupted");',
-        config,
-        catalog: [],
-        namespaces: [],
-      },
-      { timeoutMs: 10_000, executor: config.executor },
-    );
-
-    expect(result.status).toBe("failed");
-    // A guest error whose message happens to be "interrupted" must stay
-    // internal_error and not be misclassified as a QuickJS interrupt/timeout.
-    expect(result).toMatchObject({ code: "internal_error" });
-    if (result.status === "failed") {
-      expect(result.error).toContain("interrupted");
-    }
   });
 });

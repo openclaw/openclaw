@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createSourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { finalizeCronPromptForResolvedTools } from "./run-delivery-trace.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
@@ -69,14 +68,20 @@ describe("cron source delivery policy", () => {
         messageToolAvailable: false,
         deliveryRequested: true,
         resolvedDelivery: { ok: true, channel: "messagechat", to: "123" },
-        sourceDelivery: createSourceDeliveryPlan({
+        sourceDelivery: {
           owner: "message_tool_then_direct_fallback",
           reason: "cron_announce",
           target: { channel: "messagechat", to: "123" },
-          messageToolEnabled: true,
-          messageToolForced: true,
-          directFallback: true,
-        }),
+          normalFinal: "private",
+          sourceReplyDeliveryMode: "message_tool_only",
+          messageTool: {
+            enabled: true,
+            force: true,
+            requireExplicitTarget: false,
+            requireExplicitTargetEvidence: false,
+          },
+          fallback: { directDelivery: true, skipWhenMessageToolSentToTarget: true },
+        },
       }),
     ).toThrow("Cron source delivery requires the message tool");
   });

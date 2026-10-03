@@ -93,10 +93,6 @@ type ConfiguredGatewayTargetIdentity = {
   tlsSource?: "local loopback" | "config gateway.remote.url";
 };
 
-function appendControlUiBasePath(url: string, basePath: string): string {
-  return `${url}${normalizeControlUiBasePath(basePath)}`;
-}
-
 function resolveExactConfiguredGatewayTarget(params: {
   buildConnectionDetails: (options: {
     config: OpenClawConfig;
@@ -107,49 +103,36 @@ function resolveExactConfiguredGatewayTarget(params: {
   explicitUrl: string;
   localPortOverride?: number;
 }): ConfiguredGatewayTargetIdentity | undefined {
-  const candidates: Array<{
-    target: string;
-    identity: ConfiguredGatewayTargetIdentity;
-  }> = [];
   if (params.config.gateway?.mode === "remote") {
     const remoteUrl = trimToUndefined(params.config.gateway.remote?.url);
-    if (remoteUrl) {
-      candidates.push({
-        target: remoteUrl,
-        identity: { authSurface: "remote", tlsSource: "config gateway.remote.url" },
-      });
-    }
-  } else {
-    const localGateway = { ...params.config.gateway, mode: "local" as const };
-    delete localGateway.remote;
-    const localUrl = params.buildConnectionDetails({
-      config: { ...params.config, gateway: localGateway },
-      ignoreEnvUrlOverride: true,
-      ...(params.localPortOverride !== undefined
-        ? { localPortOverride: params.localPortOverride }
-        : {}),
-    }).url;
-    const basePath = params.config.gateway?.controlUi?.basePath ?? "";
-    candidates.push({
-      target: appendControlUiBasePath(localUrl, basePath),
-      identity: { authSurface: "local", tlsSource: "local loopback" },
-    });
-    const publicOrigin = resolveGatewayPublicOrigin(params.config);
-    if (publicOrigin) {
-      candidates.push({
-        target: appendControlUiBasePath(
-          publicOrigin.replace(/^https:/u, "wss:").replace(/^http:/u, "ws:"),
-          basePath,
-        ),
-        // A public reverse proxy may terminate a different certificate than the
-        // direct local listener, so local auth ownership does not imply a TLS pin.
-        identity: { authSurface: "local" },
-      });
-    }
+    return remoteUrl && remoteUrl === params.explicitUrl
+      ? { authSurface: "remote", tlsSource: "config gateway.remote.url" }
+      : undefined;
   }
-  // Direct-local is listed before publicOrigin so an identical URL retains
-  // the local listener's TLS identity instead of becoming ambiguous.
-  return candidates.find(({ target }) => target === params.explicitUrl)?.identity;
+  const localGateway = { ...params.config.gateway, mode: "local" as const };
+  delete localGateway.remote;
+  const localUrl = params.buildConnectionDetails({
+    config: { ...params.config, gateway: localGateway },
+    ignoreEnvUrlOverride: true,
+    ...(params.localPortOverride !== undefined
+      ? { localPortOverride: params.localPortOverride }
+      : {}),
+  }).url;
+  const basePath = normalizeControlUiBasePath(params.config.gateway?.controlUi?.basePath ?? "");
+  // Prefer the direct listener's TLS identity when publicOrigin names the same URL.
+  if (`${localUrl}${basePath}` === params.explicitUrl) {
+    return { authSurface: "local", tlsSource: "local loopback" };
+  }
+  const publicOrigin = resolveGatewayPublicOrigin(params.config);
+  if (
+    publicOrigin &&
+    `${publicOrigin.replace(/^https:/u, "wss:").replace(/^http:/u, "ws:")}${basePath}` ===
+      params.explicitUrl
+  ) {
+    // A reverse proxy can terminate a different certificate than the local listener.
+    return { authSurface: "local" };
+  }
+  return undefined;
 }
 
 /** Resolve the only URL overrides allowed to displace configured Gateway targets. */
@@ -318,7 +301,7 @@ export async function resolveGatewayClientBootstrap(params: {
       resolvedAuth: auth,
       deviceAuthScope,
       allowStoredOriginAuth: params.allowStoredOriginAuth,
-      errorHint: params.overrideAuthErrorHint ?? "Fix: pass --token or --password with --url.",
+      errorHint: params.overrideAuthErrorHint,
       configPath: params.configPath,
     });
   }

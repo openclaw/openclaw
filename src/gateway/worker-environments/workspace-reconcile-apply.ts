@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
+import { isDeepStrictEqual } from "node:util";
 import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import {
   createStagedInputPathMatcher,
@@ -229,13 +230,7 @@ async function applyStagedWorkerWorkspaceWithMemo(
     appliedEntries,
   });
   const confirmedPreflight = await inspectPaths();
-  if (
-    JSON.stringify([...confirmedPreflight.applyPaths].toSorted()) !==
-      JSON.stringify([...preflight.applyPaths].toSorted()) ||
-    JSON.stringify(confirmedPreflight.conflictPaths) !== JSON.stringify(preflight.conflictPaths) ||
-    JSON.stringify(confirmedPreflight.blockingConflictPaths) !==
-      JSON.stringify(preflight.blockingConflictPaths)
-  ) {
+  if (!isDeepStrictEqual(confirmedPreflight, preflight)) {
     throw new ConcurrentWorkspacePathError(
       "Gateway workspace changed while cloud reconciliation was being prepared",
     );

@@ -8,12 +8,6 @@ export function createDirectCompactionDiagId(): string {
   return `cmp-${Date.now().toString(36)}-${generateSecureToken(4)}`;
 }
 
-export function normalizeObservedTokenCount(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
-}
-
 function getMessageTextChars(msg: AgentMessage): number {
   const content = (msg as { content?: unknown }).content;
   if (typeof content === "string") {

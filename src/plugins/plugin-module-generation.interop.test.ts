@@ -729,6 +729,7 @@ describe("native plugin generation interop", () => {
             export const readNamed = () => answer;
             export const required = require("./${filename}");
             export const cached = require.cache[require.resolve("./${filename}")].exports;
+            export const readNamespace = () => namespace;
             export const lazy = () => import("./${filename}");`,
           "lazy.cjs": `exports.load = () => import("./${filename}");`,
         });
@@ -748,6 +749,7 @@ describe("native plugin generation interop", () => {
           answer: number;
           hidden: number;
           readNamed(): number;
+          readNamespace(): Namespace;
           lazy(): Promise<Namespace>;
         };
         const importedValue =
@@ -761,9 +763,11 @@ describe("native plugin generation interop", () => {
         expect(managed.load(filename)).toBe(entry.required);
         expect(entry.reexported).toBe(importedValue);
         expect(entry.namespace.default).toBe(importedValue);
-        expect(await entry.lazy()).toBe(entry.namespace);
+        // Method results expose native namespaces; exported members are instance-bound views.
+        const namespace = entry.readNamespace();
+        expect(await entry.lazy()).toBe(namespace);
         if (first) {
-          expect(first).toBe(entry.namespace);
+          expect(first).toBe(namespace);
         }
         expect(entry.required.getterReads).toBe(process.versions.bun ? 1 : 0);
         entry.required.answer = 43;
@@ -841,6 +845,7 @@ describe("native plugin generation interop", () => {
         export * from "./${filename}";
         export { namespace };
         export const read = () => current;
+        export const readNamespace = () => namespace;
         export const lazy = () => import("./${filename}");`,
         [emptyFilename]: "",
         "empty.cjs": `exports.load = () => import("./${emptyFilename}");`,
@@ -848,18 +853,19 @@ describe("native plugin generation interop", () => {
       const entry = host(root).load("entry.mjs") as {
         current: number;
         value: number;
-        namespace: { default: number; value: number };
         read(): number;
+        readNamespace(): { default: number; value: number };
         update(): void;
         lazy(): Promise<unknown>;
       };
+      const namespace = entry.readNamespace();
       expect(entry.read()).toBe(1);
       entry.update();
       expect(entry.read()).toBe(2);
       expect(entry.current).toBe(2);
       expect(entry.value).toBe(2);
-      expect(entry.namespace.default).toBe(2);
-      expect(await entry.lazy()).toBe(entry.namespace);
+      expect(namespace.default).toBe(2);
+      expect(await entry.lazy()).toBe(namespace);
       const empty = await (host(root).load("empty.cjs") as { load(): Promise<object> }).load();
       expect(Object.hasOwn(empty, "default")).toBe(false);
     },
@@ -895,6 +901,8 @@ describe("native plugin generation interop", () => {
         export const shadowed = shadow({ exports: 2 }, { value: 3 });
         export const required = require("conditional-dependency");
         export const createdRequire = createRequire(import.meta.url)("conditional-dependency");
+        export const readImported = () => imported;
+        export const readRequired = () => required;
         export const lazy = () => import("conditional-dependency");
         export const lazyModule = () => import("./lazy.ts");`,
       "lazy.ts": `import { value, token } from "conditional-dependency";
@@ -918,9 +926,13 @@ describe("native plugin generation interop", () => {
       reexported: string;
       namespace: Dependency;
       shadowed: number;
+      readImported(): Dependency;
+      readRequired(): Dependency;
       lazy: () => Promise<Dependency>;
       lazyModule: () => Promise<Dependency & { required: Dependency }>;
     };
+    const imported = entry.readImported();
+    const required = entry.readRequired();
     expect(entry.imported.value).toBe("require");
     expect(entry.shadowed).toBe(5);
     expect(entry.reexported).toBe("require");
@@ -934,14 +946,14 @@ describe("native plugin generation interop", () => {
     }
     const lazy = await entry.lazy();
     expect(lazy.value).toBe("import");
-    expect(lazy.token).not.toBe(entry.imported.token);
+    expect(lazy.token).not.toBe(imported.token);
     const lazyModule = await entry.lazyModule();
     expect(lazyModule.token).toBe(lazy.token);
     if (process.versions.bun) {
-      expect(lazyModule.required).toEqual(entry.required);
-      expect(lazyModule.required.token).toBe(entry.required.token);
+      expect(lazyModule.required).toEqual(required);
+      expect(lazyModule.required.token).toBe(required.token);
     } else {
-      expect(lazyModule.required).toBe(entry.required);
+      expect(lazyModule.required).toBe(required);
     }
   });
 });

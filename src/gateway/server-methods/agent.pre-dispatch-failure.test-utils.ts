@@ -242,7 +242,7 @@ export function registerAgentPreDispatchFailureTests() {
       ),
     ).rejects.toThrow("owner release write failed");
     await expect(
-      runExclusiveSessionLifecycleMutation({
+      runExclusiveSessionLifecycleMutation("patch", {
         scope: storePath,
         identities: [sessionKey, sessionId],
         signal: AbortSignal.timeout(100),

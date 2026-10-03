@@ -248,7 +248,10 @@ function formatTuiAssistantContent(message: unknown, contentText: string): strin
     const code = attachment?.code;
     const kind = attachment?.kind;
     if (
-      (code === "file-not-found" || code === "unsupported-format" || code === "delivery-failed") &&
+      (code === "file-not-found" ||
+        code === "unsupported-format" ||
+        code === "delivery-failed" ||
+        code === "invalid-reference") &&
       (kind === "image" || kind === "audio" || kind === "video" || kind === "document")
     ) {
       // Assistant attachment labels can contain private paths or capability URLs.

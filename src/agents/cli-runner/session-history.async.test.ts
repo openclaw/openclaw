@@ -200,37 +200,55 @@ it.each(["run", "read-resource"] as const)(
   },
 );
 
-it("refuses quarantined runtime history through both async manager entries and CLI", async () => {
-  await withOpenClawTestState({ label: "cli-history-quarantine" }, async (state) => {
-    const target = targetIn(state.stateDir);
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-    SessionManager.open(target).appendMessage({
-      role: "user",
-      content: "retained bytes",
-      timestamp: 1,
-    });
-    await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
-    expect(
-      recordOpenClawDatabaseQuarantine({
-        env: state.env,
-        kind: "agent",
-        path: target.storePath,
-        reason: "synthetic quarantine",
-      }),
-    ).toBe(true);
-    try {
-      for (const read of [
-        () => SessionManager.openAsync(target),
-        () => SessionManager.openBoundedAsync(target, { maxBytes: 4096, maxEvents: 5 }),
-        () => loadCliSessionContextEngineMessages({ sessionTarget: target }),
-      ]) {
-        await expect(read()).rejects.toThrow("synthetic quarantine");
+it.each(["persisted", "process-local"] as const)(
+  "refuses %s quarantine through async manager entries and CLI",
+  async (kind) => {
+    await withOpenClawTestState({ label: `cli-history-quarantine-${kind}` }, async (state) => {
+      const target = targetIn(state.stateDir);
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const reason = "synthetic quarantine";
+      if (kind === "persisted") {
+        SessionManager.open(target).appendMessage({
+          role: "user",
+          content: "retained bytes",
+          timestamp: 1,
+        });
+        await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
+        expect(
+          recordOpenClawDatabaseQuarantine({
+            env: state.env,
+            kind: "agent",
+            path: target.storePath,
+            reason,
+          }),
+        ).toBe(true);
+      } else {
+        expect(recordOpenClawAgentDatabaseOpenFailure(target.storePath, new Error(reason))).toBe(
+          true,
+        );
+        await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
       }
-    } finally {
-      clearOpenClawDatabaseQuarantine(target.storePath, { env: state.env });
-    }
-  });
-});
+      try {
+        const readers = [
+          () => SessionManager.openBoundedAsync(target, { maxBytes: 4096, maxEvents: 5 }),
+          () => loadCliSessionContextEngineMessages({ sessionTarget: target }),
+        ];
+        if (kind === "persisted") {
+          await expect(SessionManager.openAsync(target)).rejects.toThrow(reason);
+        }
+        for (const read of readers) {
+          await expect(read()).rejects.toThrow(reason);
+        }
+      } finally {
+        if (kind === "persisted") {
+          clearOpenClawDatabaseQuarantine(target.storePath, { env: state.env });
+        } else {
+          clearOpenClawAgentDatabaseOpenFailure(target.storePath, { env: state.env });
+        }
+      }
+    });
+  },
+);
 
 it("refuses an admitted transcript whose database disappeared", async () => {
   await withOpenClawTestState({ label: "cli-history-admitted-missing" }, async ({ stateDir }) => {
@@ -308,26 +326,6 @@ it.each(["main", "worker"] as const)(
     });
   },
 );
-
-it("refuses process-local quarantine even when no persisted quarantine row exists", async () => {
-  await withOpenClawTestState({ label: "cli-history-terminal-quarantine" }, async (state) => {
-    const target = targetIn(state.stateDir);
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const failure = new Error("synthetic process-local quarantine");
-    expect(recordOpenClawAgentDatabaseOpenFailure(target.storePath, failure)).toBe(true);
-    await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
-    try {
-      await expect(
-        SessionManager.openBoundedAsync(target, { maxBytes: 4096, maxEvents: 5 }),
-      ).rejects.toThrow(failure.message);
-      await expect(loadCliSessionContextEngineMessages({ sessionTarget: target })).rejects.toThrow(
-        failure.message,
-      );
-    } finally {
-      clearOpenClawAgentDatabaseOpenFailure(target.storePath, { env: state.env });
-    }
-  });
-});
 
 it.each(["full", "bounded", "cli"] as const)(
   "preserves required-table unavailability and its SQLite cause through the %s worker caller",

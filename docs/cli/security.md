@@ -126,6 +126,8 @@ With `--fix --json`, output includes both fix actions and the final report:
 openclaw security audit --fix --json | jq '{fix: .fix.ok, summary: .report.summary}'
 ```
 
+If remediation fails unexpectedly, the command exits with status 1 before running the audit. With `--json`, it emits the standard [CLI JSON failure envelope](/cli#json-failures). Run `openclaw security audit` separately to inspect the current state.
+
 ## What `--fix` changes
 
 Applies safe, deterministic remediations:

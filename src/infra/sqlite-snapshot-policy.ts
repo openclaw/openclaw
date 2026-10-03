@@ -9,7 +9,7 @@ const SNAPSHOT_RETRY_BASE_MS = 10;
 const SNAPSHOT_RETRY_MAX_MS = 80;
 
 type SnapshotOperation = "online-backup" | "raw-copy";
-type SnapshotOutcome = "changed" | "error" | "success";
+type SnapshotOutcome = "error" | "success";
 
 export function sqliteSnapshotSourceFileSize(pathname: string): number {
   try {
@@ -51,15 +51,11 @@ export function emitSqliteSnapshotTelemetry(
   }
 }
 
-function snapshotRetryDelayMs(attempt: number): number {
-  if (attempt + 1 >= MAX_SNAPSHOT_ATTEMPTS) {
-    return 0;
-  }
-  return Math.min(SNAPSHOT_RETRY_MAX_MS, SNAPSHOT_RETRY_BASE_MS * 2 ** attempt);
-}
-
 export function waitForSnapshotRetrySync(attempt: number): void {
-  const delayMs = snapshotRetryDelayMs(attempt);
+  if (attempt + 1 >= MAX_SNAPSHOT_ATTEMPTS) {
+    return;
+  }
+  const delayMs = Math.min(SNAPSHOT_RETRY_MAX_MS, SNAPSHOT_RETRY_BASE_MS * 2 ** attempt);
   if (delayMs > 0) {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
   }
@@ -67,19 +63,18 @@ export function waitForSnapshotRetrySync(attempt: number): void {
 
 export function createSnapshotAttemptReporter(
   pathname: string,
-  attempt: number,
-  started: number,
 ): (
   operation: SnapshotOperation,
   outcome: SnapshotOutcome,
   prepared?: PreparedSqliteReadOnlyLocation,
   error?: unknown,
 ) => void {
+  const started = performance.now();
   return (operation, outcome, prepared, error) => {
     try {
       emitSqliteSnapshotTelemetry(
         {
-          attempt: attempt + 1,
+          attempt: 1,
           copiedBytes: prepared ? fs.statSync(prepared.location).size : 0,
           durationMs: Math.max(0, performance.now() - started),
           operation,

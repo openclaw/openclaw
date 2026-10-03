@@ -117,7 +117,7 @@ describe("worker session placement gate", () => {
           target: { kind: "gateway" },
         });
       } else {
-        store.startDrain({ ...binding, expectedGeneration: active.generation });
+        await store.startDrain({ ...binding, expectedGeneration: active.generation });
       }
       if (turn) {
         await store.markWorkspaceResultPending(turn);
@@ -149,7 +149,7 @@ describe("worker session placement gate", () => {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
       };
-      store.startDrain({ ...binding, expectedGeneration: active.generation });
+      await store.startDrain({ ...binding, expectedGeneration: active.generation });
       const claim = await store.claimReclaimWorkspaceResult({
         ...SESSION,
         claimId: "reclaim-refresh",
@@ -377,7 +377,7 @@ describe("worker session placement gate", () => {
     if (active?.state !== "active") {
       throw new Error("expected active placement");
     }
-    store.startDrain({
+    await store.startDrain({
       sessionId: SESSION.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
@@ -463,21 +463,21 @@ describe("worker session placement gate", () => {
         requestDigest: "digest-reconcile-send",
       }),
     ).toMatchObject({ kind: "execute" });
-    const draining = store.startDrain({
+    const draining = await store.startDrain({
       sessionId: claim.sessionId,
       environmentId: ENVIRONMENT_ID,
       ownerEpoch: OWNER_EPOCH,
       expectedGeneration: claim.placementGeneration,
     });
 
-    expect(() =>
+    await expect(
       store.startReconcile({
         sessionId: claim.sessionId,
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
         expectedGeneration: draining.generation,
       }),
-    ).toThrow("running worker session operation");
+    ).rejects.toThrow("running worker session operation");
     expect(store.get(claim.sessionId)).toMatchObject({
       state: "draining",
       turnClaim: { claimId: claim.claimId },
@@ -493,7 +493,7 @@ describe("worker session placement gate", () => {
       }),
     ).toBe(true);
     expect(
-      store.startReconcile({
+      await store.startReconcile({
         sessionId: claim.sessionId,
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,

@@ -21,7 +21,7 @@ import {
 } from "./providers/shared/session-observer-registry.js";
 import type { QaThinkingLevel } from "./qa-thinking.js";
 import type { QaTransportGatewayConfig } from "./qa-transport.js";
-import type { RuntimeId } from "./runtime-id.js";
+import type { QaRuntimeSelection, RuntimeId } from "./runtime-id.js";
 
 export { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-thinking.js";
 
@@ -73,6 +73,7 @@ export function buildQaGatewayConfig(params: {
   fastMode?: boolean;
   thinkingDefault?: QaThinkingLevel;
   forcedRuntime?: RuntimeId;
+  runtimeSelection?: QaRuntimeSelection;
 }): OpenClawConfig {
   const providerBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";
   const mockSessionObserverUrl =
@@ -171,6 +172,9 @@ export function buildQaGatewayConfig(params: {
     // Codex owns its app-server transport. OpenClaw provider params would make
     // the forced parity cell an authored route that Codex correctly rejects.
     if (params.forcedRuntime === "codex") {
+      if (params.runtimeSelection === "configured") {
+        return { agentRuntime: { id: "codex" as const } };
+      }
       return {};
     }
     return {

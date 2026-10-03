@@ -362,7 +362,7 @@ it.each(["provider", "work-key", "work-id", "lifecycle-key", "lifecycle-id", "an
       } else {
         const identity = protection.endsWith("-key") ? protectedKey : protectedId;
         if (protection.startsWith("lifecycle")) {
-          await runExclusiveSessionLifecycleMutation({
+          await runExclusiveSessionLifecycleMutation("archive", {
             scope: storePath,
             identities: [identity],
             run,

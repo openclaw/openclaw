@@ -178,10 +178,23 @@ export function chunkByParagraph(
   }
   const splitLongParagraphs = opts?.splitLongParagraphs !== false;
 
-  // U+2029 PARAGRAPH SEPARATOR maps to a blank-line boundary; U+2028 LINE
-  // SEPARATOR and CR/CRLF map to a single newline.
-  // Normalize in two steps so consecutive U+2028\u2029 also produces a blank line.
-  const normalized = text.replace(/\u2029/g, "\n\n").replace(/\r\n?|\u2028/g, "\n");
+  // Unicode separators delimit prose but remain literal content inside code.
+  // CR/CRLF retain their existing single-newline normalization.
+  let normalizationCodeRegions: ReturnType<typeof findCodeRegions> | undefined;
+  const paragraphNormalized = text.replace(/\u2029/g, (separator: string, index: number) =>
+    isInsideCode(index, (normalizationCodeRegions ??= findCodeRegions(text))) ? separator : "\n\n",
+  );
+  if (paragraphNormalized !== text) {
+    normalizationCodeRegions = undefined;
+  }
+  const normalized = paragraphNormalized.replace(
+    /\r\n?|\u2028/g,
+    (separator: string, index: number) =>
+      separator === "\u2028" &&
+      isInsideCode(index, (normalizationCodeRegions ??= findCodeRegions(paragraphNormalized)))
+        ? separator
+        : "\n",
+  );
 
   // Fast-path: if there are no blank-line paragraph separators, do not split.
   // (We *do not* early-return based on `limit` — newline mode is about paragraph
@@ -194,7 +207,10 @@ export function chunkByParagraph(
     return chunkText(normalized, limit);
   }
 
-  const codeRegions = findCodeRegions(normalized);
+  const codeRegions =
+    normalized === paragraphNormalized && normalizationCodeRegions
+      ? normalizationCodeRegions
+      : findCodeRegions(normalized);
 
   const parts: string[] = [];
   const separators: string[] = [];

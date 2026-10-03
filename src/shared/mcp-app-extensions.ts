@@ -22,7 +22,7 @@ export type McpAppToolExtensions = {
   preferredModelDisplayMode?: "inline" | "fullscreen";
 };
 export type McpAppSettingsCapability = { readTool: string; updateTool: string };
-export type McpAppSettingSchema = { title: string; description?: string } & (
+type McpAppSettingSchema = { title: string; description?: string } & (
   | { type: "boolean" }
   | { type: "string"; enum?: string[]; minLength?: number; maxLength?: number; pattern?: string }
   | { type: "number" | "integer"; minimum?: number; maximum?: number; multipleOf?: number }

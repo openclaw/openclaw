@@ -194,7 +194,7 @@ async function createBuildRecoveryHarness(
     resolveMoveDestination: async () => undefined,
     runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
     runReclaimBarrier: async ({ begin, reclaim }) =>
-      await reclaim({ kind: "local", path: root }, begin()),
+      await reclaim({ kind: "local", path: root }, await begin()),
     runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
     workspaceOperations,
     ...createWorkerWorkspaceRecoveryFixture({

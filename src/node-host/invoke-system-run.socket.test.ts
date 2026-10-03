@@ -101,9 +101,6 @@ describe.runIf(process.platform !== "win32")("enforced exec host transport bound
             await handleSystemRunInvoke({
               params: { command, cwd: dir, sessionKey: "agent:main:proof" },
               skillBins: { current: async () => [] },
-              execHostEnforced: true,
-              // Production defaults this preference to true; enforcement still forbids replay.
-              execHostFallbackAllowed: true,
               preferMacAppExecHost: true,
               getRuntimeConfig: () => ({}),
               runCommand,

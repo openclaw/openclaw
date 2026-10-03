@@ -14,6 +14,7 @@ import { assertPreparedSkillLibrarySelection } from "../../skills/library/select
 import { AGENT_SESSION_RESET_COMMAND_RE } from "../agent-command-policy.js";
 import { setGatewayDedupeEntries } from "../agent-turn/agent-dedupe.js";
 import { ADMIN_SCOPE, hasGatewayAdminScope } from "../operator-scopes.js";
+import { resolveAgentRunSessionCreation } from "../session-creation-provenance.js";
 import { performGatewaySessionReset } from "../session-reset-service.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { formatForLog } from "../ws-log.js";
@@ -24,7 +25,6 @@ import {
   resolveBareSessionResetResult,
 } from "./agent-session-reset.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import { resolveAgentRunSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export type CommittedResetCompletion = {
@@ -96,7 +96,7 @@ export async function runAgentResetPhase(params: {
   params.assertAdmissionCurrent?.();
   let resetResult: Awaited<ReturnType<typeof performGatewaySessionReset>>;
   try {
-    const creation = prepareSkillLibrarySessionCreation(
+    const creation = await prepareSkillLibrarySessionCreation(
       params.client,
       params.context.getRuntimeConfig,
       resolveAgentRunSessionCreation(params.client),

@@ -53,6 +53,7 @@ import { renderUpdateRunSummary } from "../infra/update-run-notice.js";
 import { updateRunReportInputFromSentinel } from "../infra/update-run-report.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
   mergeDeliveryContext,
@@ -696,25 +697,21 @@ export async function refreshLatestUpdateRestartSentinel(
   env: NodeJS.ProcessEnv = captureDeliveryQueueStateContext().workerContext.environment,
 ): Promise<RestartSentinelPayload | null> {
   const current = await readRestartSentinel(env);
-  if (
-    current?.payload.kind === "update" &&
-    isPendingControlPlaneUpdateRestartSentinel(current.payload)
-  ) {
-    latestUpdateRestartSentinel = structuredClone(current.payload);
-    return structuredClone(latestUpdateRestartSentinel);
-  }
-  const finalized = await finalizeUpdateRestartSentinelRunningVersion(undefined, env);
-  const sentinel = finalized ?? current;
+  const sentinel =
+    current && isPendingControlPlaneUpdateRestartSentinel(current.payload)
+      ? current
+      : ((await finalizeUpdateRestartSentinelRunningVersion(undefined, env)) ?? current);
   if (sentinel?.payload.kind === "update") {
-    latestUpdateRestartSentinel = structuredClone(sentinel.payload);
+    latestUpdateRestartSentinel = freezeJsonSnapshot(sentinel.payload);
   }
-  return structuredClone(latestUpdateRestartSentinel);
+  return latestUpdateRestartSentinel;
 }
 
+/** Readers share an immutable snapshot; publication preserves previously returned generations. */
 export function getLatestUpdateRestartSentinel(): RestartSentinelPayload | null {
-  return structuredClone(latestUpdateRestartSentinel);
+  return latestUpdateRestartSentinel;
 }
 
 export function recordLatestUpdateRestartSentinel(payload: RestartSentinelPayload): void {
-  latestUpdateRestartSentinel = structuredClone(payload);
+  latestUpdateRestartSentinel = freezeJsonSnapshot(structuredClone(payload));
 }

@@ -21,35 +21,41 @@ const egressHeaders = () => new Headers(fetchWithSsrFGuardMock.mock.lastCall?.[0
 describe("buildGuardedModelFetch headers", () => {
   installProviderTransportFetchTestHooks();
 
-  it("resolves Request header sentinels only at egress while preserving the request body", async () => {
-    const sentinel = mintSecretSentinel("request-form-secret", { label: "request-form" });
-    const request = new Request(url, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${sentinel}` },
-      body: '{"stream":true}',
-    });
-    await (await buildGuardedModelFetch(model)(request)).text();
-    expect(egressHeaders().get("authorization")).toBe("Bearer request-form-secret");
-    expect(
-      new Headers(ensureModelProviderLocalServiceMock.mock.lastCall?.[1]).get("authorization"),
-    ).toBe(`Bearer ${sentinel}`);
-    expect(request.headers.get("authorization")).toBe(`Bearer ${sentinel}`);
-    const init = fetchWithSsrFGuardMock.mock.lastCall?.[0]?.init;
-    expect(init.method).toBe("POST");
-    await expect(new Response(init.body).text()).resolves.toBe('{"stream":true}');
-  });
-
-  it("normalizes custom header iterators without mutating the caller's headers", async () => {
-    const sentinel = mintSecretSentinel("iterable-header-secret", { label: "iterable-header" });
-    const headers = new Headers({ "x-api-key": "original-value" });
-    headers[Symbol.iterator] = function* () {
-      yield ["x-api-key", sentinel];
-      return undefined;
-    };
-    await (await buildGuardedModelFetch(model)(url, { headers })).text();
-    expect(egressHeaders().get("x-api-key")).toBe("iterable-header-secret");
-    expect(headers.get("x-api-key")).toBe("original-value");
-  });
+  it.each(["Request", "custom iterator"] as const)(
+    "resolves %s header sentinels only at egress without mutating the caller",
+    async (form) => {
+      const secret = form === "Request" ? "request-form-secret" : "iterable-header-secret";
+      const sentinel = mintSecretSentinel(secret, { label: "header-form" });
+      const header = form === "Request" ? "authorization" : "x-api-key";
+      const prefix = form === "Request" ? "Bearer " : "";
+      const original = form === "Request" ? `${prefix}${sentinel}` : "original-value";
+      const headers = new Headers({ [header]: original });
+      if (form === "custom iterator") {
+        headers[Symbol.iterator] = function* () {
+          yield [header, sentinel];
+          return undefined;
+        };
+      }
+      const request =
+        form === "Request"
+          ? new Request(url, { method: "POST", headers, body: '{"stream":true}' })
+          : undefined;
+      await (
+        await buildGuardedModelFetch(model)(request ?? url, request ? undefined : { headers })
+      ).text();
+      expect(egressHeaders().get(header)).toBe(`${prefix}${secret}`);
+      expect(headers.get(header)).toBe(original);
+      if (request) {
+        expect(
+          new Headers(ensureModelProviderLocalServiceMock.mock.lastCall?.[1]).get(header),
+        ).toBe(original);
+        expect(request.headers.get(header)).toBe(original);
+        const init = fetchWithSsrFGuardMock.mock.lastCall?.[0]?.init;
+        expect(init.method).toBe("POST");
+        await expect(new Response(init.body).text()).resolves.toBe('{"stream":true}');
+      }
+    },
+  );
 
   it("escapes resolved query credentials without changing URL structure", async () => {
     const sentinel = mintSecretSentinel("gemini&scope=two+#%", { label: "gemini-query" });

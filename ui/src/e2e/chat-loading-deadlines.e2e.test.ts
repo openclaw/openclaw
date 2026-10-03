@@ -11,6 +11,52 @@ const draft = "Keep this draft until I choose to send it.";
 const readyText = "The conversation is ready.";
 
 suite.define(() => {
+  it("presents pending agent database inspection as retryable startup", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
+      async ({ page }) => {
+        await page.clock.install();
+        const diagnostic =
+          "Agent main has not completed startup inspection and preparation. Run Doctor if inspection cannot complete.";
+        const gateway = await installMockGateway(page, {
+          awaitInitialRoster: false,
+          sessionKey: "agent:main:main",
+          methodResponses: {
+            "chat.startup": {
+              __mockError: {
+                code: "UNAVAILABLE",
+                message: diagnostic,
+                details: {
+                  agentId: "main",
+                  paths: ["/private/state/agents/main/openclaw-agent.sqlite"],
+                  code: "agent-database-inspection-pending",
+                  reason: "Agent main has not completed startup inspection and preparation.",
+                  repairHint: "Run Doctor if inspection cannot complete.",
+                },
+                retryable: true,
+                retryAfterMs: 250,
+              },
+            },
+          },
+        });
+        await page.goto(new URL("/chat/main", suite.server.baseUrl).href);
+        await gateway.waitForRequest("chat.startup");
+        await pauseVirtualClock(page);
+        await page.clock.runFor(60_001);
+
+        const notice = page.locator(".chat-history-error");
+        await notice.waitFor();
+        expect(await notice.textContent()).toContain(
+          "This agent is still starting. Retry in a moment.",
+        );
+        expect(await notice.textContent()).not.toContain(diagnostic);
+        expect(await page.getByRole("button", { name: "Retry", exact: true }).isEnabled()).toBe(
+          true,
+        );
+      },
+    );
+  });
+
   it.each(["chat.startup", "models.list"] as const)(
     "settles a silent %s read and preserves the draft through recovery",
     async (method) => {

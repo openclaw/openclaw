@@ -6,6 +6,7 @@ import {
   recheckGatewayRunBootstrap,
 } from "../cli/gateway-cli/pre-bootstrap.js";
 import * as healthState from "../config/io.health-state.js";
+import { recordGatewayBootStart } from "../infra/gateway-boot-lifecycle.js";
 import * as checkpoint from "../infra/startup-migration-checkpoint.js";
 import { ExitError } from "../runtime.js";
 import {
@@ -15,13 +16,83 @@ import {
 import { withEnvAsync } from "../test-utils/env.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
-import { runStartupConfigPreflight } from "./startup-config-preflight.js";
+import {
+  runStartupConfigPreflight,
+  type StartupConfigPreflightOptions,
+} from "./startup-config-preflight.js";
 
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
 });
+
+it.each(["current", "backup", "webhook-repair"] as const)(
+  "preserves authored config during startup from %s",
+  async (source) => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      const stateDir = path.join(home, ".openclaw");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const original = JSON.stringify({
+        gateway: { mode: "local" },
+        ...(source === "webhook-repair"
+          ? { channels: { "nextcloud-talk": { enabled: true } } }
+          : { plugins: { enabled: false } }),
+      });
+      await fs.mkdir(stateDir, { recursive: true });
+      openOpenClawStateDatabase({ path: path.join(stateDir, "state", "openclaw.sqlite") });
+      closeOpenClawStateDatabaseForTest();
+      if (source === "webhook-repair") {
+        recordGatewayBootStart(process.env, 1_800_000_000_000);
+      }
+      await fs.writeFile(configPath, original);
+      if (source === "backup") {
+        await fs.writeFile(`${configPath}.bak`, original);
+        await fs.writeFile(configPath, '{"update":{"channel":"stable"}}');
+      }
+      const runtime = {
+        log() {},
+        error() {},
+        exit(code: number): never {
+          throw new ExitError(code);
+        },
+      };
+      expect(await prepareGatewayRunBootstrap({ opts: {}, runtime })).toBe(true);
+      const replacement = JSON.stringify({
+        gateway: { mode: "local", port: 19002 },
+        plugins: { enabled: false },
+      });
+      const options: StartupConfigPreflightOptions = {
+        gateway: true,
+        beforeStatePreparation: (snapshot) =>
+          recheckGatewayRunBootstrap({ opts: {}, runtime, snapshot }),
+      };
+      if (source === "webhook-repair") {
+        await expect(runStartupConfigPreflight(options)).rejects.toMatchObject({
+          code: 78,
+          message: expect.stringContaining("openclaw doctor --fix"),
+        });
+        expect(await fs.readFile(configPath, "utf8")).toBe(original);
+        await expect(fs.stat(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        const ready = await runStartupConfigPreflight(options);
+        expect(ready.snapshot.valid).toBe(true);
+        expect(await fs.readFile(configPath, "utf8")).toBe(original);
+        if (source === "backup") {
+          expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
+        } else {
+          await expect(fs.stat(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        expect((await runStartupConfigPreflight(options)).snapshot.valid).toBe(true);
+        expect(await fs.readFile(configPath, "utf8")).toBe(original);
+        await fs.writeFile(configPath, replacement);
+        await expect(runStartupConfigPreflight(options)).rejects.toMatchObject({ code: 1 });
+        expect(await fs.readFile(configPath, "utf8")).toBe(replacement);
+      }
+      expect(checkpoint.hasActiveStartupMigrationLease()).toBe(false);
+    });
+  },
+);
 
 it.each([
   ["localhost", "loopback"],
@@ -70,7 +141,11 @@ it("skips recovery health reads without a backup and admits a later backup", asy
   await withDoctorConfigPreflightHome(async (home) => {
     const stateDir = path.join(home, ".openclaw");
     const configPath = path.join(stateDir, "openclaw.json");
-    const raw = JSON.stringify({ gateway: { mode: "local" }, plugins: { enabled: false } });
+    const raw = JSON.stringify({
+      gateway: { mode: "local" },
+      plugins: { enabled: false },
+      meta: { migrations: { webhookListeners: true } },
+    });
     await fs.mkdir(stateDir, { recursive: true });
     await fs.writeFile(configPath, raw);
     openOpenClawStateDatabase({ path: path.join(stateDir, "state", "openclaw.sqlite") });
@@ -118,7 +193,11 @@ it("restores the admitted backup after database readiness exceeds the lease TTL"
     const stateDir = path.join(home, ".openclaw");
     const configPath = path.join(stateDir, "openclaw.json");
     await fs.mkdir(stateDir, { recursive: true });
-    const backup = { gateway: { mode: "local" }, plugins: { enabled: false } };
+    const backup = {
+      gateway: { mode: "local" },
+      plugins: { enabled: false },
+      meta: { migrations: { webhookListeners: true } },
+    };
     await fs.writeFile(configPath, '{"update":{"channel":"stable"}}\n');
     await fs.writeFile(`${configPath}.bak`, JSON.stringify(backup));
     openOpenClawStateDatabase({ path: path.join(stateDir, "state", "openclaw.sqlite") });
@@ -174,7 +253,11 @@ it.each(["backup", "active config"] as const)(
       const stateDir = path.join(home, ".openclaw");
       const configPath = path.join(stateDir, "openclaw.json");
       await fs.mkdir(stateDir, { recursive: true });
-      const backup = { gateway: { mode: "local" }, plugins: { enabled: false } };
+      const backup = {
+        gateway: { mode: "local" },
+        plugins: { enabled: false },
+        meta: { migrations: { webhookListeners: true } },
+      };
       const original =
         kind === "backup" ? '{"update":{"channel":"stable"}}\n' : JSON.stringify(backup);
       const replacement = JSON.stringify(
@@ -246,7 +329,11 @@ it.each(["expired", "reassigned"] as const)(
       await fs.writeFile(configPath, original);
       await fs.writeFile(
         `${configPath}.bak`,
-        JSON.stringify({ gateway: { mode: "local" }, plugins: { enabled: false } }),
+        JSON.stringify({
+          gateway: { mode: "local" },
+          plugins: { enabled: false },
+          meta: { migrations: { webhookListeners: true } },
+        }),
       );
       openOpenClawStateDatabase({ path: path.join(stateDir, "state", "openclaw.sqlite") });
       closeOpenClawStateDatabaseForTest();

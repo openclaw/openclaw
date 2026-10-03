@@ -205,6 +205,7 @@ export function makePersistedCall(
     providerCallId: `prov-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     provider: "plivo",
     direction: "outbound",
+    agentId: "main",
     state: "answered",
     from: "+15550000000",
     to: "+15550000001",

@@ -277,6 +277,7 @@ exclusive hardlink, syncs it before removing the old name, and can recover an
 interrupted source/claim pair without replacing another file. This preserves the
 source inode and exact bytes. The filesystem must support same-directory hardlinks
 and directory synchronization when native no-replace rename is unavailable.
+SQLite backup verification rechecks snapshot bytes when FUSE modification or change timestamps drift, while still rejecting changed contents or file identities.
 
 Readiness remains false while the default or system agent database is refused,
 and the readiness response includes the admission reason. A refused optional

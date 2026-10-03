@@ -608,7 +608,7 @@ describe("update readiness generation", () => {
       });
       expect(result).toMatchObject(
         startup === "stable"
-          ? { stopReason: "gateway-readiness-pending" }
+          ? { stopReason: "still-starting" }
           : { ok: false, summary: "generation-changed" },
       );
       if (startup !== "stable") {

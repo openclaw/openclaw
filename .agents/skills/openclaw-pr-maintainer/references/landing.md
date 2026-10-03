@@ -98,6 +98,18 @@ FOR /prepare-pr`. After every push, rerun `review-init`; checkout alone does not
 refresh the guard. Validate from PR-head mode. Do not fabricate passing evidence
 or erase a failing review condition.
 
+After the [test-failure investigation](../../openclaw-testing/SKILL.md#test-failure-policy),
+a local failure whose cause or safe fix remains unresolved can retain
+`tests.result: "fail"` with `tests.investigatedLocalFailures`. Bind `head` to the
+exact reviewed SHA and record every original `failure`, actual
+`reproductionAttempts`, `evidence`, and `remainingUncertainty` in its nonempty
+`failures` array. Attempts and evidence are nonempty string arrays; failure and
+uncertainty are nonempty strings. Keep that evidence in the PR and never claim a
+passing replay proves a fix. The structured disposition permits READY review
+under the existing policy; it does not waive substantive findings, behavioral
+review, required CI, security, or enforced reviews. Failed CI still uses its
+separate admission policy below.
+
 Select one gate mode per invocation; older shells or installed instructions may
 still set `OPENCLAW_TESTBOX=1`. The command above clears it only for that process.
 An unsupported or conflicting mode fails before PR reads, operation locks, or

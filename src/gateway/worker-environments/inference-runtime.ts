@@ -300,9 +300,9 @@ async function resolveApprovedModel(params: {
       modelId: resolved.ref.model,
       agentDir,
       modelIdSource: "selected",
-      ...(selectedProfileId ? { profileId: selectedProfileId } : {}),
-      ...(selectedProfileId ? { preferredProfile: selectedProfileId } : {}),
-      ...(selectedProfileId ? { bindAuthOwner: true } : {}),
+      ...(selectedProfileId
+        ? { profileId: selectedProfileId, preferredProfile: selectedProfileId, bindAuthOwner: true }
+        : {}),
       allowMissingApiKeyModes: ["aws-sdk"],
       allowBundledStaticCatalogFallback: true,
       signal,

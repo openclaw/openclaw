@@ -2,7 +2,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
 import { typeCheckSources } from "../../test/helpers/typescript.js";
-import { createMcpApiVirtualFiles } from "./code-mode-mcp-api.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   createCodeModeHarness,
@@ -44,6 +43,7 @@ it("supports root MCP API and multiple server declarations", async () => {
             headers: [typeof root.header, typeof a.header, typeof b.header],
             rootDeclaration: rootFile.content.includes(root.header),
             indexDeclaration: indexFile?.content.includes("declare namespace MCP.index"),
+            files: [rootFile, indexFile, await API.read("mcp/alpha.d.ts"), await API.read("mcp/beta.d.ts")],
           };
         `,
     }),
@@ -59,6 +59,13 @@ it("supports root MCP API and multiple server declarations", async () => {
   for (const target of targets) {
     expect(target.execute).toHaveBeenCalledOnce();
   }
+  const { files } = result.value as { files: Array<{ path: string; content: string }> };
+  expect(
+    typeCheckSources({
+      ...Object.fromEntries(files.map((file) => ["/" + file.path, file.content])),
+      "/consumer.ts": "MCP.$api(); MCP.alpha.$api(); MCP.beta.$api(); MCP.index.$api();",
+    }),
+  ).toEqual([]);
 });
 
 it("allows omitted native empty inputs but preserves required fields", async () => {
@@ -121,17 +128,4 @@ it("keeps an explicit tool error's text when its details carry no message", asyn
     { error: true, message: "Visitor store is locked." },
     { status: "failed", error: "structured" },
   ]);
-});
-
-it("merges actual root and multiple server files without skipping declaration errors", () => {
-  const files = createMcpApiVirtualFiles(
-    ["alpha", "beta", "index"].map((identifier) => ({
-      identifier,
-      serverName: identifier,
-      tools: [],
-    })),
-  );
-  const texts = new Map(files.map((file) => ["/" + file.path, file.content]));
-  texts.set("/consumer.ts", "MCP.$api(); MCP.alpha.$api(); MCP.beta.$api(); MCP.index.$api();");
-  expect(typeCheckSources(Object.fromEntries(texts))).toEqual([]);
 });

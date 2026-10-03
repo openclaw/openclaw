@@ -76,6 +76,14 @@ export class SubagentSessionCleanupRevocationChangedError extends SubagentRegist
 // so ordinary live settles keep their existing latency and concurrency.
 const RESTORED_REQUESTER_SETTLE_WAKE_CONCURRENCY = 2;
 
+const COMPLETION_SETTLING_ERROR = "Subagent completion is still settling; retry the session reset.";
+
+/** Terminal rows still carrying session effects must revoke them before a reset. */
+const ownsSessionEffects = (entry: SubagentRunRecord): boolean =>
+  entry.execution.status === "terminal" &&
+  entry.pauseReason !== "sessions_yield" &&
+  entry.execution.suppressSessionEffects !== true;
+
 function terminalPublication(entry: SubagentRunRecord): readonly unknown[] {
   const execution = entry.execution;
   const outcome = execution.outcome;
@@ -203,37 +211,37 @@ export class SubagentLifecycleController {
     }
   }
 
+  private liveRow(entry: SubagentRunRecord): SubagentRunRecord | undefined {
+    return (
+      this.options.runs.get(entry.runId) ?? getCurrentSubagentRunOwner(this.options.runs, entry)
+    );
+  }
+
+  private sessionEffectsSuppressed(entry: SubagentRunRecord): boolean {
+    const current = this.liveRow(entry);
+    return (
+      (current !== undefined && !isSameSubagentRunOwner(current, entry)) ||
+      this.newerGenerationOwnsSession(entry) ||
+      shouldSuppressSubagentRecoverySessionEffects(current ?? entry)
+    );
+  }
+
   async shouldSuppressSessionEffects(
     entry: SubagentRunRecord,
     prospectiveEffects?: SubagentSessionEffects,
   ): Promise<boolean> {
     const boundEffects = this.terminalSessionEffects.get(getSubagentRunRuntimeKey(entry));
     const effects = prospectiveEffects ?? boundEffects;
-    const isSuppressed = () => {
-      const current =
-        this.options.runs.get(entry.runId) ?? getCurrentSubagentRunOwner(this.options.runs, entry);
-      return (
-        (current !== undefined && !isSameSubagentRunOwner(current, entry)) ||
-        this.newerGenerationOwnsSession(entry) ||
-        shouldSuppressSubagentRecoverySessionEffects(current ?? entry)
-      );
-    };
     return (
-      isSuppressed() ||
+      this.sessionEffectsSuppressed(entry) ||
       (await effects?.isCurrent()) === false ||
       this.terminalSessionEffects.get(getSubagentRunRuntimeKey(entry)) !== boundEffects ||
-      isSuppressed()
+      this.sessionEffectsSuppressed(entry)
     );
   }
 
   sessionEffectsHostCurrent(entry: SubagentRunRecord): boolean {
-    const current =
-      this.options.runs.get(entry.runId) ?? getCurrentSubagentRunOwner(this.options.runs, entry);
-    if (
-      (current !== undefined && !isSameSubagentRunOwner(current, entry)) ||
-      this.newerGenerationOwnsSession(entry) ||
-      shouldSuppressSubagentRecoverySessionEffects(current ?? entry)
-    ) {
+    if (this.sessionEffectsSuppressed(entry)) {
       return false;
     }
     try {
@@ -286,14 +294,8 @@ export class SubagentLifecycleController {
               "Subagent cleanup owner changed before reset",
             );
           }
-          if (this.terminalCompletionLocks.has(getSubagentRunRuntimeKey(entry))) {
-            throw new Error("Subagent completion is still settling; retry the session reset.");
-          }
-          if (
-            entry.execution.status === "terminal" &&
-            entry.pauseReason !== "sessions_yield" &&
-            entry.execution.suppressSessionEffects !== true
-          ) {
+          this.assertCompletionSettled(entry);
+          if (ownsSessionEffects(entry)) {
             postimages.set(runId, {
               ...entry,
               execution: { ...entry.execution, suppressSessionEffects: true },
@@ -306,16 +308,16 @@ export class SubagentLifecycleController {
     );
   }
 
+  private assertCompletionSettled(entry: SubagentRunRecord): void {
+    if (this.terminalCompletionLocks.has(getSubagentRunRuntimeKey(entry))) {
+      throw new Error(COMPLETION_SETTLING_ERROR);
+    }
+  }
+
   assertTerminalSessionEffectsRevoked(currentEntries: Iterable<SubagentRunRecord>): void {
     for (const entry of currentEntries) {
-      if (this.terminalCompletionLocks.has(getSubagentRunRuntimeKey(entry))) {
-        throw new Error("Subagent completion is still settling; retry the session reset.");
-      }
-      if (
-        entry.execution.status === "terminal" &&
-        entry.pauseReason !== "sessions_yield" &&
-        entry.execution.suppressSessionEffects !== true
-      ) {
+      this.assertCompletionSettled(entry);
+      if (ownsSessionEffects(entry)) {
         throw new SubagentSessionCleanupRevocationChangedError(
           "Subagent cleanup revocation changed before reset",
         );
@@ -379,8 +381,7 @@ export class SubagentLifecycleController {
     getCurrentSubagentRunOwner(this.options.runs, entry)?.cleanupHandled === true &&
     this.isCleanupGenerationCurrent(runId, entry, generation);
   isCleanupOwnerCurrent = (_runId: string, entry: SubagentRunRecord): boolean => {
-    const current =
-      this.options.runs.get(entry.runId) ?? getCurrentSubagentRunOwner(this.options.runs, entry);
+    const current = this.liveRow(entry);
     return (
       (current === undefined || isSameSubagentRunOwner(current, entry)) &&
       (current ?? entry).pauseReason !== "sessions_yield"
@@ -493,9 +494,8 @@ export class SubagentLifecycleController {
     }, "subagents:lifecycle-complete");
   };
 
-  completeCleanupBookkeeping = (params: CleanupBookkeepingParams) => {
-    return completeCleanupBookkeeping(this, params);
-  };
+  completeCleanupBookkeeping = (params: CleanupBookkeepingParams) =>
+    completeCleanupBookkeeping(this, params);
 
   resumeAncestorCleanup = (settledEntry: SubagentRunRecord): void =>
     resumeAncestorCleanup(this, settledEntry);

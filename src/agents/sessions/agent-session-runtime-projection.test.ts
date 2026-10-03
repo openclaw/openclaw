@@ -238,6 +238,7 @@ describe("AgentSession runtime and transcript projections", () => {
       cwd,
       tools: ["grep"],
       model: testModel,
+      thinkingLevel: "medium" as const,
       resourceLoader: createResourceLoader(),
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory(),

@@ -165,7 +165,7 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
           updatedAt: 1,
           visibility: "shared",
           createdActor: { type: "human", source: "profile", id: alice.id },
-          skillLibrarySelections: seedSkillLibrarySelection(authority),
+          skillLibrarySelections: await seedSkillLibrarySelection(authority),
         },
       );
       const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });

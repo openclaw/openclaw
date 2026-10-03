@@ -5,10 +5,169 @@ import type { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { readChatHistoryCliSessionImportSnapshot } from "./cli-session-history.js";
-import { requireGatewayRecord } from "./test-helpers.assertions.js";
+import {
+  readChatHistoryCliSessionImportSnapshot,
+  resolveChatHistoryWithCliSessionImports,
+} from "./cli-session-history.js";
+import {
+  boundEntry,
+  createClaudeTextHistoryLines,
+  withClaudeProjectsDir,
+} from "./cli-session-history.test-support.js";
+import { expectRecordFields, requireGatewayRecord } from "./test-helpers.assertions.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return requireGatewayRecord(value, "record");
+}
+
+it("refreshes changed Claude snapshots and singleflights concurrent reads", async () => {
+  await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+    const params = {
+      entry: boundEntry(sessionId),
+      provider: "claude-cli",
+      localMessages: [],
+      homeDir,
+    };
+    const read = async () =>
+      resolveChatHistoryWithCliSessionImports({
+        ...params,
+        preparedImportedMessages: await readChatHistoryCliSessionImportSnapshot(params),
+      });
+    const streamSpy = vi.spyOn(rawFs, "createReadStream");
+    const transcriptRedact = await import("../agents/transcript-redact.js");
+    const redactSpy = vi.spyOn(transcriptRedact, "redactTranscriptMessage");
+    const readdirSyncSpy = vi.spyOn(rawFs, "readdirSync");
+    const existsSyncSpy = vi.spyOn(rawFs, "existsSync");
+    const initial = await (async () => {
+      try {
+        const [first, second] = await Promise.all([
+          readChatHistoryCliSessionImportSnapshot(params),
+          readChatHistoryCliSessionImportSnapshot(params),
+        ]);
+        expect(second).toEqual(first);
+        const secondToolBlocks = readRecord(second.at(-1)).content;
+        if (!Array.isArray(secondToolBlocks)) {
+          throw new Error("Expected imported tool call and result blocks");
+        }
+        readRecord(readRecord(secondToolBlocks[0]).arguments).command = "mutated";
+        expect(first.at(-1)).toMatchObject({
+          content: [{ arguments: { command: "pwd" } }, { content: "/tmp/demo" }],
+        });
+        expect(await readChatHistoryCliSessionImportSnapshot(params)).toEqual(first);
+        expect(streamSpy).toHaveBeenCalledTimes(1);
+        expect(redactSpy).toHaveBeenCalledTimes(first.length);
+        // Scope this to transcript discovery; redaction may load unrelated config.
+        const projectsDir = path.dirname(path.dirname(filePath));
+        expect(
+          readdirSyncSpy.mock.calls.filter(([directory]) => directory === projectsDir),
+        ).toHaveLength(0);
+        expect(existsSyncSpy).not.toHaveBeenCalledWith(filePath);
+        return resolveChatHistoryWithCliSessionImports({
+          ...params,
+          preparedImportedMessages: first,
+        });
+      } finally {
+        streamSpy.mockRestore();
+        redactSpy.mockRestore();
+        readdirSyncSpy.mockRestore();
+        existsSyncSpy.mockRestore();
+      }
+    })();
+    expect(initial.messages).toHaveLength(3);
+
+    await fs.appendFile(
+      filePath,
+      `\n${createClaudeTextHistoryLines([
+        { role: "user", uuid: "appended-user", content: "appended" },
+      ])}`,
+      "utf8",
+    );
+    const appended = await read();
+    expect(appended.messages).toHaveLength(4);
+    expect(appended.messages.map((message) => readRecord(message)["__openclaw"])).toContainEqual(
+      expect.objectContaining({ externalId: "appended-user" }),
+    );
+
+    await fs.writeFile(
+      filePath,
+      createClaudeTextHistoryLines([
+        { role: "assistant", uuid: "replacement-assistant", content: "replacement" },
+      ]),
+      "utf8",
+    );
+    const replaced = await read();
+    expect(replaced.messages).toHaveLength(1);
+    expectRecordFields(readRecord(replaced.messages[0])["__openclaw"], "fields", {
+      externalId: "replacement-assistant",
+    });
+
+    const movedProjectDir = path.join(path.dirname(path.dirname(filePath)), "moved-workspace");
+    await fs.mkdir(movedProjectDir);
+    const movedFilePath = path.join(movedProjectDir, path.basename(filePath));
+    await fs.rename(filePath, movedFilePath);
+    expect(await read()).toEqual(replaced);
+
+    await fs.rm(movedFilePath);
+    const deleted = await read();
+    expect(deleted).toEqual({ messages: [], imported: false, expanded: false });
+  });
+});
+
+it("preserves project precedence when a later matching transcript is found first", async () => {
+  await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+    const projectsDir = path.dirname(path.dirname(filePath));
+    const otherProjectDir = path.join(projectsDir, "other-workspace");
+    await fs.mkdir(otherProjectDir);
+    await fs.writeFile(
+      path.join(otherProjectDir, path.basename(filePath)),
+      createClaudeTextHistoryLines([
+        { role: "user", uuid: "other-project-user", content: "other project" },
+      ]),
+    );
+    const [firstPath, secondPath] = (await fs.readdir(projectsDir)).map((project) =>
+      path.join(projectsDir, project, path.basename(filePath)),
+    );
+    await fs.writeFile(
+      filePath,
+      createClaudeTextHistoryLines([
+        { role: "user", uuid: "original-project-user", content: "original project" },
+      ]),
+    );
+    const releaseFirst = createDeferred();
+    const foundSecond = createDeferred();
+    const access = fs.access;
+    const accessSpy = vi
+      .spyOn(rawFs.promises, "access")
+      .mockImplementation(async (candidate, mode) => {
+        if (candidate === firstPath) {
+          await releaseFirst.promise;
+        }
+        await access(candidate, mode);
+        if (candidate === secondPath) {
+          foundSecond.resolve();
+        }
+      });
+    const pending = readChatHistoryCliSessionImportSnapshot({
+      entry: boundEntry(sessionId),
+      provider: "claude-cli",
+      localMessages: [],
+      homeDir,
+    });
+    try {
+      await Promise.race([foundSecond.promise, pending]);
+      releaseFirst.resolve();
+      expect(await pending).toMatchObject([
+        { content: firstPath === filePath ? "original project" : "other project" },
+      ]);
+    } finally {
+      releaseFirst.resolve();
+      await pending;
+      accessSpy.mockRestore();
+    }
+  });
+});
 
 it.each(["success", "failure"] as const)(
   "shares interleaved pending Claude reads and retires them after %s",

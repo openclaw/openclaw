@@ -52,21 +52,25 @@ describe("Discord request authority", () => {
   ] as const)(
     "retains queued $name authority on an injected shared client",
     async ({ source, companion }) => {
-      const firstResponse = createDeferred<Response>();
-      const fetch = vi
-        .fn()
-        .mockReturnValueOnce(firstResponse.promise)
-        .mockResolvedValue(Response.json({ id: "other" }));
+      const releaseWorkers = createDeferred<void>();
+      const fetch = vi.fn(async () => {
+        if (fetch.mock.calls.length <= 4) {
+          await releaseWorkers.promise;
+          return Response.json([]);
+        }
+        return Response.json({ id: "other" });
+      });
       const sharedClient = new RequestClient("synthetic-token", {
         fetch,
-        scheduler: { maxConcurrency: 1 },
       });
       const { rest: client } = createDiscordRestClient({
         cfg: {},
         token: "synthetic-token",
         rest: sharedClient,
       });
-      const first = sharedClient.get("/channels/100/messages");
+      const active = Array.from({ length: 4 }, (_, index) =>
+        sharedClient.get(`/channels/blocked-${index}/messages`),
+      );
       const caller = authority(source);
       const queued = withAuthority(companion, authority(companion).assert, () =>
         withAuthority(source, caller.assert, () => submitRequest(client, source)),
@@ -74,15 +78,15 @@ describe("Discord request authority", () => {
       const rejected = expect(queued).rejects.toThrow(`${source} authority revoked`);
       try {
         caller.revoke();
-        firstResponse.resolve(Response.json([]));
-        await first;
+        releaseWorkers.resolve();
+        await Promise.all(active);
         await rejected;
-        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(fetch).toHaveBeenCalledTimes(4);
         // The revoked caller must not poison ordinary traffic on the same client.
         await expect(client.put("/channels/100/pins/200")).resolves.toEqual({ id: "other" });
       } finally {
-        firstResponse.resolve(Response.json([]));
-        await Promise.allSettled([first, queued, rejected]);
+        releaseWorkers.resolve();
+        await Promise.allSettled([...active, queued, rejected]);
       }
     },
   );

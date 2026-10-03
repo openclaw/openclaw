@@ -97,49 +97,6 @@ const FALLBACK_TARGET_KIND_PREFIXES: Array<{ kind: ChatType; pattern: RegExp }> 
   { kind: "group", pattern: /^(group:|room:)/i },
 ];
 
-function normalizeInferredPeerKind(value: ChatType | undefined): ChatType | undefined {
-  return value === "direct" || value === "group" || value === "channel" ? value : undefined;
-}
-
-function inferPeerKindFromPlugin(params: {
-  plugin: ChannelPlugin | undefined;
-  targets: readonly string[];
-}): ChatType | undefined {
-  for (const target of params.targets) {
-    const inferred = normalizeInferredPeerKind(
-      params.plugin?.messaging?.inferTargetChatType?.({ to: target }),
-    );
-    if (inferred) {
-      return inferred;
-    }
-  }
-  return undefined;
-}
-
-function inferPeerKindFromFallbackPrefixes(targets: readonly string[]): ChatType | undefined {
-  for (const target of targets) {
-    for (const fallback of FALLBACK_TARGET_KIND_PREFIXES) {
-      if (fallback.pattern.test(target)) {
-        return fallback.kind;
-      }
-    }
-  }
-  return undefined;
-}
-
-function inferPeerKindFromCapabilities(plugin: ChannelPlugin | undefined): ChatType | undefined {
-  const chatTypes: ChatType[] = [];
-  for (const chatType of plugin?.capabilities?.chatTypes ?? []) {
-    if (
-      (chatType === "direct" || chatType === "group" || chatType === "channel") &&
-      !chatTypes.includes(chatType)
-    ) {
-      chatTypes.push(chatType);
-    }
-  }
-  return chatTypes.length === 1 ? chatTypes[0] : undefined;
-}
-
 function inferPeerKind(params: {
   channel: ChannelId;
   plugin?: ChannelPlugin;
@@ -166,12 +123,24 @@ function inferPeerKind(params: {
   const plugin = params.plugin ?? getChannelPlugin(params.channel);
   const strippedTarget = stripTargetProviderPrefix(params.target, params.channel);
   const targets = uniqueStrings([params.target, strippedTarget].filter(Boolean));
-  return (
-    inferPeerKindFromPlugin({ plugin, targets }) ??
-    inferPeerKindFromFallbackPrefixes(targets) ??
-    inferPeerKindFromCapabilities(plugin) ??
-    "direct"
+  for (const target of targets) {
+    const inferred = plugin?.messaging?.inferTargetChatType?.({ to: target });
+    if (inferred === "direct" || inferred === "group" || inferred === "channel") {
+      return inferred;
+    }
+  }
+  for (const target of targets) {
+    const fallback = FALLBACK_TARGET_KIND_PREFIXES.find(({ pattern }) => pattern.test(target));
+    if (fallback) {
+      return fallback.kind;
+    }
+  }
+  const chatTypes = new Set(
+    plugin?.capabilities?.chatTypes?.filter(
+      (kind) => kind === "direct" || kind === "group" || kind === "channel",
+    ),
   );
+  return chatTypes.size === 1 ? (chatTypes.values().next().value ?? "direct") : "direct";
 }
 
 function resolveFallbackSession(

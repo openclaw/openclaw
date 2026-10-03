@@ -221,6 +221,7 @@ describe("runtime tool fixture", () => {
         toolCoverage: {
           bucket: "openclaw-dynamic-integration",
           expectedLayer: "openclaw-dynamic",
+          capabilityLayer: "openclaw-dynamic-direct",
         },
       },
       {

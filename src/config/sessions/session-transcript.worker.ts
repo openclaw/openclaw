@@ -310,17 +310,10 @@ serveOwnedWorkerTasks(
         return readSessionEntryWorkerRequest(request);
       }
       if (request.kind === "session-entry-list") {
-        const { listSessionEntriesReadOnly } =
-          await import("./session-accessor.sqlite-entry-list.read.js");
+        const { readSessionEntryList } = await import("./session-entry-read.worker.js");
         return {
           kind: "session-entry-list" as const,
-          entries: listSessionEntriesReadOnly(
-            {
-              ...request.scope,
-              env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
-            },
-            { continuation: request.continuation },
-          ),
+          entries: readSessionEntryList(request),
         };
       }
       if (request.kind === "session-store-summary") {

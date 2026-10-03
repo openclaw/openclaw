@@ -305,6 +305,7 @@ export function registerRestartOutcomeTests(
           .mockRejectedValueOnce(new Error("later native refusal"));
       }
       mocks.health.mockResolvedValue({
+        outcome: "failed",
         healthy: false,
         staleGatewayPids:
           scenario === "retry refusal" || scenario === "writable retry health" ? [4242] : [],
@@ -314,6 +315,7 @@ export function registerRestartOutcomeTests(
       if (progressing) {
         const health = {
           ...readyRecoveryHealth(19305, true),
+          outcome: "starting" as const,
           healthy: false,
           waitOutcome: "still-starting" as const,
           elapsedMs: 300_000,

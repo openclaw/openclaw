@@ -11,6 +11,11 @@ it("retains synchronous placement and publication contracts from the released Ga
   >().toEqualTypeOf<Context>();
   type Placements = NonNullable<NonNullable<Context>["workerSessionPlacementService"]>;
   type Publications = NonNullable<NonNullable<Context>["githubPublicationService"]>;
+  type Dispatch = NonNullable<NonNullable<Context>["workerPlacementDispatchService"]>;
+  type ReclaimSourceCheck = NonNullable<Parameters<NonNullable<Dispatch["reclaim"]>>[2]>;
+  type ReleasedReclaimSourceCheck = (predecessor?: Parameters<ReclaimSourceCheck>[0]) => void;
+  expectTypeOf<ReleasedReclaimSourceCheck>().toExtend<ReclaimSourceCheck>();
+  expectTypeOf<ReturnType<ReclaimSourceCheck>>().toEqualTypeOf<void>();
   type PendingReader = NonNullable<Placements["listPendingWorkspaceResults"]>;
   type ReconciliationReader = NonNullable<Placements["getWorkspaceResultReconcilingSessionIds"]>;
 

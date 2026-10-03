@@ -76,7 +76,7 @@ export function createSessionRowProjectionArchive(params: {
           params.referenced,
         );
         if (
-          records.sameParents(current.parents, lineage.parents) &&
+          isDeepStrictEqual(current.parents, lineage.parents) &&
           isDeepStrictEqual(current.entry, lineage.entry)
         ) {
           continue;

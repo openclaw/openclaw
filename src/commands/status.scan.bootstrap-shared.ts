@@ -64,7 +64,6 @@ type StatusScanCoreBootstrapParams<TAgentStatus> = {
   env: NodeJS.ProcessEnv;
   hasConfiguredChannels: boolean;
   opts: StatusGatewayProbeBudget & { all?: boolean };
-  skipUpdateCheck?: boolean;
   fetchGitUpdate?: boolean;
   includeRegistryUpdate?: boolean;
   includeLocalStatusRpcFallback?: boolean;
@@ -94,9 +93,8 @@ export async function createStatusScanCoreBootstrap<TAgentStatus>(
             runExec(cmd, args, { timeoutMs: tailscaleTimeoutMs, maxBuffer: 200_000 }),
           )
           .catch(() => null);
-  const skipNetworkUpdate = skipColdStartNetworkChecks || params.skipUpdateCheck === true;
   // Update checks can hit git/registry, so cold-start status uses a synthetic unknown result.
-  const updatePromise = skipNetworkUpdate
+  const updatePromise = skipColdStartNetworkChecks
     ? Promise.resolve(buildColdStartUpdateResult())
     : params.getUpdateCheckResult({
         timeoutMs: statusTimeoutMs,

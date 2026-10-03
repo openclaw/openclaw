@@ -12,15 +12,10 @@ import {
 const reads = vi.hoisted(() => ({
   read: vi.fn(),
   write: vi.fn(),
-  compatibility: vi.fn(() => []),
 }));
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: reads.read,
   readConfigFileSnapshotForWrite: reads.write,
-}));
-vi.mock("../plugins/status.js", () => ({
-  buildPluginCompatibilitySnapshotNotices: reads.compatibility,
-  formatPluginCompatibilityNotice: () => "unexpected compatibility notice",
 }));
 
 const configPath = "/synthetic/openclaw.json";
@@ -98,15 +93,15 @@ describe("command invalid-config JSON", () => {
     rt.exit.mockImplementation(() => {
       order.push("exit");
     });
-    await expect(
-      withJsonOutput(() => requireValidConfig(rt, { includeCompatibilityAdvisory: true })),
-    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+    await expect(withJsonOutput(() => requireValidConfig(rt))).rejects.toMatchObject({
+      name: "ExitError",
+      code: 1,
+    });
     expect(rt.writeJson).toHaveBeenCalledExactlyOnceWith(expectedFailure(), 2);
     expect(order).toEqual(["json", "exit"]);
     expect(rt.exit).toHaveBeenCalledExactlyOnceWith(1);
     expect(rt.log).not.toHaveBeenCalled();
     expect(rt.error).not.toHaveBeenCalled();
-    expect(reads.compatibility).not.toHaveBeenCalled();
   });
 
   it("does not return a writable snapshot when asynchronous validation fails", async () => {
