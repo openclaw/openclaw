@@ -1,6 +1,16 @@
+import { randomUUID } from "node:crypto";
+import http from "node:http";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  ReadResourceRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
 import { Type } from "typebox";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { createSessionMcpRuntime } from "../../agents/agent-bundle-mcp-runtime.js";
 import type { McpToolCatalog, SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
 import {
   fetchMcpAppView,
@@ -27,6 +37,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import { prepareMcpAppExtensionRuntime } from "../mcp-app-extension-runtime.js";
 import * as approvalStore from "../operator-approval-store.js";
 import { createGatewayAuxHandlers } from "../server-aux-handlers.js";
@@ -40,12 +51,14 @@ import { createPluginApprovalHandlers } from "./plugin-approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
+  lookup: vi.fn(),
   loadConfig: vi.fn(),
   projection: vi.fn(),
   policy: vi.fn(),
   native: vi.fn(),
   registered: vi.fn(),
 }));
+vi.mock("node:dns/promises", () => ({ lookup: mocks.lookup }));
 vi.mock("../../agents/agent-bundle-mcp-runtime-config.js", () => ({
   loadSessionMcpConfig: mocks.loadConfig,
 }));
@@ -86,7 +99,7 @@ let aux: ReturnType<typeof createGatewayAuxHandlers>;
 let cfg: OpenClawConfig;
 let server: McpServerConfig;
 let entry: SessionEntry;
-let runtime: ReturnType<typeof createRuntime>;
+let runtime: SessionMcpRuntime;
 let context: GatewayRequestHandlerOptions["context"];
 let nextApproval = createDeferred<ApprovalEvent>();
 let approvals: ApprovalEvent[];
@@ -314,7 +327,12 @@ beforeEach(() => {
   approvals = [];
   pendingCalls = [];
   nextApproval = createDeferred<ApprovalEvent>();
-  mocks.loadConfig.mockImplementation(() => ({ loaded: { mcpServers: { parts: server } } }));
+  mocks.lookup.mockResolvedValue([{ address: "127.0.0.1", family: 4 }]);
+  mocks.loadConfig.mockImplementation(() => ({
+    loaded: { mcpServers: { parts: server }, diagnostics: [], prepareDataDirsByServer: {} },
+    fingerprint: "view-grant-fixture",
+    safeServerNamesByServer: new Map([[serverName, serverName]]),
+  }));
   const projection = {
     sharingTarget: () => ({ agentId: "main", canonicalKey: sessionKey, entry }),
   };
@@ -523,3 +541,123 @@ describe.each<Path>(["model-created", "extension-runtime"])(
     );
   },
 );
+
+it("revalidates a cached App grant after HTTP transport preparation before writing", async ({
+  signal,
+}) => {
+  const mcp = new Server(
+    { name: "parts", version: "1" },
+    { capabilities: { tools: {}, resources: {} } },
+  );
+  let toolCalls = 0;
+  let posts = 0;
+  mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: [
+      {
+        name: "search",
+        inputSchema: { type: "object", properties: {} },
+        _meta: { ui: { visibility: ["app"], resourceUri: "ui://parts/search" } },
+      },
+    ],
+  }));
+  mcp.setRequestHandler(ReadResourceRequestSchema, async ({ params }) => ({
+    contents: [
+      { uri: params.uri, mimeType: "text/html;profile=mcp-app", text: "<html>Parts search</html>" },
+    ],
+  }));
+  mcp.setRequestHandler(CallToolRequestSchema, async () => {
+    toolCalls += 1;
+    return { content: [{ type: "text", text: "search" }] };
+  });
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: randomUUID });
+  await mcp.connect(transport);
+  const listener = await reserveTestPortListener({
+    offsets: [0],
+    signal,
+    createListener: () =>
+      http.createServer((request, response) => {
+        posts += request.method === "POST" ? 1 : 0;
+        void transport.handleRequest(request, response).catch(() => {
+          if (!response.headersSent) {
+            response.writeHead(500).end();
+          }
+        });
+      }),
+  });
+  const preparing = createDeferred();
+  const resume = createDeferred();
+  try {
+    for (const name of [
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "all_proxy",
+    ]) {
+      vi.stubEnv(name, "");
+    }
+    server = {
+      url: `http://127.0.0.1:${listener.claim.port}/mcp`,
+      transport: "streamable-http",
+      codex: { defaultToolsApprovalMode: "prompt" },
+    };
+    cfg.mcp!.servers!.parts = server;
+    runtime = createSessionMcpRuntime({
+      sessionId: entry.sessionId,
+      sessionKey,
+      workspaceDir: state.workspaceDir,
+      cfg,
+    });
+    await runtime.getCatalog();
+    const viewId = await openView("model-created", { requesterId: "alice" });
+    await approvedCall(viewId, "allow-always");
+    const reused = call(viewId);
+    await awaitGateBeforeSettlement(reused, nextApproval.promise, "Cached grant prompted again");
+    expect(await reused).toHaveBeenCalledWith(true, expect.anything());
+    expect(toolCalls).toBe(2);
+    expect(approvals).toHaveLength(1);
+    const beforeDenied = posts;
+    expect(await call(viewId, "search", { requesterId: "bob" })).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("not authorized") }),
+    );
+    expect(posts).toBe(beforeDenied);
+
+    mocks.lookup.mockImplementationOnce(async () => {
+      preparing.resolve();
+      await resume.promise;
+      return [{ address: "127.0.0.1", family: 4 }];
+    });
+    const revoked = call(viewId);
+    await awaitGateBeforeSettlement(
+      preparing.promise,
+      revoked,
+      "Tool never reached HTTP preparation",
+    );
+    entry.toolOverrides = { mcpToolsDeny: { parts: ["search"] } };
+    resume.resolve();
+    const response = await revoked;
+    expect(posts).toBe(beforeDenied);
+    expect(toolCalls).toBe(2);
+    expect(response).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("denied") }),
+    );
+  } finally {
+    resume.resolve();
+    await Promise.allSettled(pendingCalls);
+    for (const viewId of views) {
+      releaseMcpAppView(viewId, runtime);
+    }
+    await runtime.dispose();
+    await runtime.joinCleanup?.();
+    await mcp.close();
+    listener.listener.closeAllConnections();
+    await listener.releaseListener();
+    await listener.claim.release();
+    vi.unstubAllEnvs();
+  }
+});
