@@ -107,6 +107,12 @@ setup explains the limitation and names CPU execution in the confirmation.
 For other acceleration backends, run a compatible server yourself and choose
 **Existing llama-server**.
 
+The verified macOS builds require macOS 13.3 or later, and setup stops before
+downloading on older releases. To keep managed chat and local embeddings there,
+build `llama-server` on that Mac and set
+`models.providers.llama-cpp.localService.command` to its absolute path; see
+[Local model services](/gateway/local-model-services).
+
 If no recommendation fits, setup explains whether to free memory, free disk
 space, or fix cache-directory permissions. Cancelling or failing guided
 verification leaves the previous default model selected. A setup candidate has
