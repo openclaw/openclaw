@@ -218,6 +218,10 @@ invalid JSON later in either store rolls back the media changes. Databases with
 no media repairs still receive a complete validation scan, including after imports
 or restores.
 
+If another connection commits before the media repair transaction starts, Doctor
+refuses that repair with `source changed before migration transaction`. Stop other
+OpenClaw processes using that database and rerun `openclaw doctor --fix`.
+
 Missing file copies of canonical SQLite transcript archives produce recoverable
 warnings with the total count and at most five example paths per database.
 Media and historical transcript migrations still complete, retain the canonical
