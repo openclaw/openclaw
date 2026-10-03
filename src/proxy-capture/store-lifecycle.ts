@@ -55,7 +55,8 @@ export function registerAsyncCaptureStoreFinalizer(
     callbacks = new Set();
     asyncFinalizers.set(store, callbacks);
   }
-  return registerListener(callbacks, finalize);
+  callbacks.add(finalize);
+  return () => callbacks.delete(finalize);
 }
 
 export function finalizeCaptureStoreAsync(
