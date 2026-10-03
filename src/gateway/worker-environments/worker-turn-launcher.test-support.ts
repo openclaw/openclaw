@@ -60,6 +60,9 @@ export type WorkerTurnLauncherOptions = Parameters<
 >[0];
 export type WorkerTurnEnvironmentService = WorkerTurnLauncherOptions["environments"];
 type WorkerTurnEnvironmentRecord = NonNullable<ReturnType<WorkerTurnEnvironmentService["get"]>>;
+const prepareGatewayTools: NonNullable<
+  WorkerTurnEnvironmentService["createGatewayTools"]
+> = async ({ prepareTools }) => prepareTools?.([]) ?? [];
 
 export const SESSION_ID = "session-worker-turn";
 export const SESSION_KEY = "agent:main:worker-turn";
@@ -282,7 +285,7 @@ export function createWorkerSessionTurnPlacementProvider(
     workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     ...options,
     environments: {
-      createGatewayTools: async ({ prepareTools }) => prepareTools?.([]) ?? [],
+      createGatewayTools: prepareGatewayTools,
       ...options.environments,
     },
   });
@@ -491,6 +494,7 @@ export function unusedEnvironments(): WorkerTurnEnvironmentService {
   const unexpected = () => new Error("unexpected worker environment call");
   return {
     get: vi.fn(() => undefined),
+    createGatewayTools: prepareGatewayTools,
     resolveSshIdentity: vi.fn(async () => {
       throw unexpected();
     }),
