@@ -34,6 +34,7 @@ const voiceOwners = [
 
 const lifecycleOwners = [
   /^apps\/ios\/Tests\/(?:CloudflareAccessClientTests|CloudflareAccessTransferTests|CloudflareAccessSessionStoreTests|CloudflareAccessTestTokens|ChatTypingFocusTests|ChatSendHydrationTests)\.swift$/u,
+  /^apps\/shared\/OpenClawKit\/Tests\/OpenClawKitTests\/ChatComposerTextViewIOSTests\.swift$/u,
 ];
 
 /** Select simulator execution only; the app and test products still compile. */

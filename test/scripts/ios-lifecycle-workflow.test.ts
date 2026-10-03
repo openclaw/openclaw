@@ -426,9 +426,13 @@ describe.skipIf(process.platform === "win32")("iOS voice cleanup workflow", () =
       if (phase === "smoke") {
         const sources = readdirSync("apps/ios/Tests", { recursive: true })
           .filter((file): file is string => typeof file === "string" && file.endsWith(".swift"))
+          .map((file) => `apps/ios/Tests/${file}`)
+          .concat([
+            "apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatComposerTextViewIOSTests.swift",
+          ])
           .map((file) => ({
-            file: `apps/ios/Tests/${file}`,
-            source: readFileSync(path.join("apps/ios/Tests", file), "utf8"),
+            file,
+            source: readFileSync(file, "utf8"),
           }));
         const testCommands = builds.filter(isTestCommand);
         for (const [index, group] of ["voice", "lifecycle"].entries()) {
@@ -479,6 +483,7 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
       ...authClasses.map((name) => `-only-testing:OpenClawTests/${name}`),
       "-only-testing:OpenClawTests/ChatTypingFocusTests",
       "-only-testing:OpenClawTests/ChatSendHydrationTests",
+      "-only-testing:OpenClawTests/ChatComposerTextViewIOSTests",
     ]);
     for (const name of authClasses) {
       expect(readFileSync(`apps/ios/Tests/${name}.swift`, "utf8")).toContain(`struct ${name}`);
@@ -501,6 +506,7 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
         ...authClasses.map((name) => `-only-testing:OpenClawTests/${name}`),
         "-only-testing:OpenClawTests/ChatTypingFocusTests",
         "-only-testing:OpenClawTests/ChatSendHydrationTests",
+        "-only-testing:OpenClawTests/ChatComposerTextViewIOSTests",
         "-only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests",
         "-only-testing:OpenClawTests/NodeAppModelInvokeTests",
         "-only-testing:OpenClawTests/OpenClawTypographyTests",
@@ -539,6 +545,11 @@ describe("iOS simulator owner selection", () => {
     ["apps/ios/Tests/Fixtures/managed-document-message.json", true, false],
     ["apps/ios/Tests/CloudflareAccessTestTokens.swift", false, true],
     ["apps/ios/Tests/ChatSendHydrationTests.swift", false, true],
+    [
+      "apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatComposerTextViewIOSTests.swift",
+      false,
+      true,
+    ],
     ["apps/ios/Tests/RootTabsNavigationTests.swift", false, false],
     ["apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatViewModelTests.swift", false, false],
     ["apps/shared/OpenClawKit/Sources/OpenClawNativeState/NativeState.swift", true, true],
@@ -632,6 +643,10 @@ describe.skipIf(process.platform === "win32")("iOS selected simulator workflow",
     { owner: "apps/ios/fastlane/Fastfile", groups: [] },
     { owner: "apps/ios/Tests/TalkModeConfigParsingTests.swift", groups: ["voice"] },
     { owner: "apps/ios/Tests/ChatSendHydrationTests.swift", groups: ["lifecycle"] },
+    {
+      owner: "apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatComposerTextViewIOSTests.swift",
+      groups: ["lifecycle"],
+    },
   ])("builds the app and runs only selected groups for $owner", ({ owner, groups }) => {
     const selection = resolveIosSimulatorTestSelection([owner]);
     const steps = admittedSimulatorSteps(selection);
@@ -661,6 +676,9 @@ describe.skipIf(process.platform === "win32")("iOS selected simulator workflow",
           ? "-only-testing:OpenClawTests/TalkRealtimeVoiceSessionCleanupTests"
           : "-only-testing:OpenClawTests/ChatTypingFocusTests",
       );
+      if (owner.endsWith("/ChatComposerTextViewIOSTests.swift")) {
+        expect(test.args).toContain("-only-testing:OpenClawTests/ChatComposerTextViewIOSTests");
+      }
     }
     if (!groups.length) {
       expect(commands.some(({ tool }) => ["installer", "simslim"].includes(tool))).toBe(false);
