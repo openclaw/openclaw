@@ -10,12 +10,7 @@ import { CONFIG_DIR_NAME } from "../package-metadata.js";
 import { canonicalizePath } from "../utils/paths.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
 import { createEventBus, type EventBus } from "./event-bus.js";
-import {
-  clearExtensionCache,
-  createExtensionRuntime,
-  loadExtensionFromFactory,
-  loadExtensionsCached,
-} from "./extensions/loader.js";
+import { createExtensionRuntime, loadExtensionFromFactory } from "./extensions/loader.js";
 import type {
   Extension,
   ExtensionFactory,
@@ -82,7 +77,6 @@ export class DefaultResourceLoader implements ResourceLoader {
   private extensionThemeSourceInfos = new Map<string, SourceInfo>();
   private lastPromptPaths: string[] = [];
   private lastThemePaths: string[] = [];
-  private loaded = false;
 
   constructor(options: DefaultResourceLoaderOptions) {
     this.cwd = options.cwd;
@@ -156,18 +150,16 @@ export class DefaultResourceLoader implements ResourceLoader {
   }
 
   async reload(): Promise<void> {
-    if (this.loaded) {
-      clearExtensionCache();
-    }
     await this.settingsManager.reload();
     this.extensionSkillSourceInfos = new Map();
     this.extensionPromptSourceInfos = new Map();
     this.extensionThemeSourceInfos = new Map();
 
-    const extensionsResult = await loadExtensionsCached([], this.cwd, this.eventBus);
-    const inlineExtensions = await this.loadExtensionFactories(extensionsResult.runtime);
-    extensionsResult.extensions.push(...inlineExtensions.extensions);
-    extensionsResult.errors.push(...inlineExtensions.errors);
+    const runtime = createExtensionRuntime();
+    const extensionsResult: LoadExtensionsResult = {
+      ...(await this.loadExtensionFactories(runtime)),
+      runtime,
+    };
 
     // Keep all extensions loaded. Conflicts are reported as diagnostics, and precedence is handled by load order.
     const conflicts = this.detectExtensionConflicts(extensionsResult.extensions);
@@ -185,7 +177,6 @@ export class DefaultResourceLoader implements ResourceLoader {
     this.updateThemesFromPaths([]);
     this.agentsFiles = this.agentsFilesOverride?.({ agentsFiles: [] }).agentsFiles ?? [];
     this.appendSystemPrompt = this.appendSystemPromptTransform?.([]) ?? [];
-    this.loaded = true;
   }
 
   private registerExtensionPaths(

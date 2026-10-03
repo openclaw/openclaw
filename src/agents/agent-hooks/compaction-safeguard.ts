@@ -138,22 +138,13 @@ function normalizeLegacySplitTurnSummary(summary: string | undefined): string | 
 }
 
 /**
- * Messages the model currently sees: the last reset/compaction boundary's kept
- * tail plus everything after it. Never the raw branch — that re-reads history
- * behind every boundary and turns one compaction into dozens of model calls.
- */
-function collectSessionContextMessages(sessionManager: unknown): AgentMessage[] {
-  return projectBranchEntries(readSessionBranch(sessionManager));
-}
-
-/**
  * The boundary-scoped range a preparation was meant to cover: everything the
  * current context holds before its kept tail, minus the prior summary message
  * (that is re-distilled separately). Bounded by construction — it can never
  * reach behind the last reset/compaction boundary.
  */
 function collectPreparationRangeMessages(
-  sessionManager: unknown,
+  sessionManager: ExtensionContext["sessionManager"],
   firstKeptEntryId: string,
 ): AgentMessage[] {
   const entries = readSessionBranch(sessionManager);
@@ -171,10 +162,11 @@ function collectPreparationRangeMessages(
   ).filter((message) => message.role !== "compactionSummary");
 }
 
-function readSessionBranch(sessionManager: unknown): CoreSessionTreeEntry[] {
+function readSessionBranch(
+  sessionManager: ExtensionContext["sessionManager"],
+): CoreSessionTreeEntry[] {
   try {
-    const entries: unknown = (sessionManager as { getBranch?: () => unknown })?.getBranch?.();
-    return Array.isArray(entries) ? (entries as CoreSessionTreeEntry[]) : [];
+    return sessionManager.getBranch() as CoreSessionTreeEntry[];
   } catch {
     return [];
   }
@@ -227,15 +219,7 @@ type CompactionSuffix = {
   contextRanges: Array<{ start: number; end: number; segmentStarts: number[] }>;
 };
 
-type SummaryQualityRetention = {
-  auditSummary?: string;
-  identifiers: string[];
-  latestAsk: string | null;
-  latestAskInRetainedTurn?: boolean;
-  latestUnresolvedUserRequest?: string;
-  requiredAskContext: string;
-  identifierPolicy: "strict" | "off" | "custom";
-};
+type SummaryQualityRetention = Parameters<typeof createSummaryQualityRetentionPlan>[2];
 
 function assembleSuffix(parts: {
   splitTurnSection?: ContextSection;
@@ -345,11 +329,7 @@ function buildCompactionSummaryHeaders(params: {
   };
 }
 
-function clampNonNegativeInt(
-  value: unknown,
-  fallback: number,
-  max = Number.POSITIVE_INFINITY,
-): number {
+function clampNonNegativeInt(value: unknown, fallback: number, max: number): number {
   const normalized = typeof value === "number" && Number.isFinite(value) ? value : fallback;
   return Math.min(max, Math.max(0, Math.floor(normalized)));
 }
@@ -777,13 +757,13 @@ function buildSplitTurnContextSection(messages: AgentMessage[]): ContextSection 
   });
 }
 
-function formatGeneratedSplitTurnSection(summary: string, onTruncated?: () => void): string {
+function formatGeneratedSplitTurnSection(summary: string, onTruncated: () => void): string {
   const heading = `${SPLIT_TURN_SECTION_HEADING}\n\n`;
   const summaryBudget = MAX_SPLIT_TURN_CONTEXT_CHARS - heading.length;
   const nestedSummary = nestMarkdownHeadings(summary);
   const cappedSummary = capCompactionSummary(nestedSummary, summaryBudget);
   if (cappedSummary.length < nestedSummary.length) {
-    onTruncated?.();
+    onTruncated();
   }
   return `${heading}${cappedSummary}`;
 }
@@ -918,7 +898,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     const hasRealConversation =
       containsRealConversation([...baseMessagesToSummarize, ...baseTurnPrefixMessages]) ||
       containsRealConversation(
-        stripRuntimeContextCustomMessages(collectSessionContextMessages(ctx.sessionManager)),
+        stripRuntimeContextCustomMessages(
+          // Project the current boundary; raw branch history would re-summarize
+          // messages hidden by earlier resets and compactions.
+          projectBranchEntries(readSessionBranch(ctx.sessionManager)),
+        ),
       );
     setCompactionSafeguardCancellation(ctx.sessionManager, undefined);
     const cancelCompaction = (reason: string, error?: unknown) => {
