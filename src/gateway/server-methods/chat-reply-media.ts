@@ -316,6 +316,7 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(
       allowHostWorkspace: !remote,
       accountId: params.accountId,
       ...resolveRequesterPolicyContext(params.requesterContext),
+      messageProvider: "webchat",
     });
     const normalized: ReplyPayload[] = [];
     for (const payload of params.payloads) {

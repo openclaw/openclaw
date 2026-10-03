@@ -3,6 +3,8 @@
 import {
   applyReplyPayloadTargetPolicy,
   copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
   formatBtwTextForExternalDelivery,
   isRenderablePayload,
   shouldSuppressReasoningPayload,
@@ -204,6 +206,14 @@ function normalizeRawOutboundPayload(
       audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
     }),
   );
+  const mediaFailures = [
+    ...(getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? []),
+    ...(parsed.mediaFailures ?? []),
+    ...(strippedParsed === parsed ? [] : (strippedParsed.mediaFailures ?? [])),
+  ];
+  if (mediaFailures.length > 0) {
+    setReplyPayloadMetadata(normalizedPayload, { assistantMediaFailures: mediaFailures });
+  }
   return suppressedText && !hasReplyPayloadContent(normalizedPayload) ? null : normalizedPayload;
 }
 

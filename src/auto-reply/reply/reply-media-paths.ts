@@ -23,7 +23,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
-import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import {
+  resolveOutboundMediaMaxBytes,
+  WEBCHAT_LOCAL_MEDIA_MAX_BYTES,
+} from "../../media/configured-max-bytes.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { HostReadMediaTypeError, LocalMediaAccessError } from "../../media/local-media-access.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
@@ -220,6 +223,9 @@ export function createReplyMediaSourcePreparer(params: {
       return await cached;
     }
     const persistPromise = resolveOutboundAttachmentFromUrl(media, maxBytes, {
+      ...(params.messageProvider === "webchat"
+        ? { localMediaMaxBytes: WEBCHAT_LOCAL_MEDIA_MAX_BYTES }
+        : {}),
       mediaAccess: resolveAgentScopedOutboundMediaAccess({
         cfg: params.cfg,
         agentId,

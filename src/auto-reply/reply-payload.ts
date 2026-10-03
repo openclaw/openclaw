@@ -22,7 +22,11 @@ export type {
   ReplyPayloadTtsSupplement,
 } from "../shared/reply-payload.types.js";
 
-export type ReplyMediaFailureCode = "file-not-found" | "unsupported-format" | "delivery-failed";
+export type ReplyMediaFailureCode =
+  | "file-not-found"
+  | "unsupported-format"
+  | "delivery-failed"
+  | "invalid-reference";
 
 /** Adds the BTW question banner for channels that only accept plain text bodies. */
 export function formatBtwTextForExternalDelivery(payload: ReplyPayload): string | undefined {
@@ -108,6 +112,8 @@ const REPLY_MEDIA_FAILURE_MESSAGES: Record<ReplyMediaFailureCode, string> = {
   "file-not-found": "File not found. Check the path and try again.",
   "unsupported-format": "Rejected by the local attachment allowlist. Send a supported file type.",
   "delivery-failed": "Delivery failed. Try sending this file again.",
+  "invalid-reference":
+    "Use a public HTTPS URL without credentials or attach a local file by a safe path.",
 };
 
 function formatReplyMediaFailures(failures: readonly ReplyMediaFailure[]): string {

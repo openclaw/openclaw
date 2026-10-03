@@ -1,4 +1,8 @@
-import { copyReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+} from "../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import {
   applyPreparedReplyMedia,
@@ -78,6 +82,14 @@ export async function prepareHarnessReplyMedia(params: {
       ...(directives.replyToCurrent ? { replyToCurrent: true } : {}),
     });
     const prepared = await prepare(resolveSendableOutboundReplyParts(payload).mediaUrls);
+    if (directives.mediaFailures?.length) {
+      setReplyPayloadMetadata(payload, {
+        assistantMediaFailures: [
+          ...(getReplyPayloadMetadata(request.payload)?.assistantMediaFailures ?? []),
+          ...directives.mediaFailures,
+        ],
+      });
+    }
     assertCurrent();
     return { kind: "payload", payload: applyPreparedReplyMedia(payload, prepared) };
   }

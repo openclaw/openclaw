@@ -459,6 +459,7 @@ export function splitMediaOutput(
 ): {
   text: string;
   mediaUrls?: string[];
+  rejectedMedia?: string[];
   audioAsVoice?: boolean; // true if [[audio_as_voice]] tag was found
   segments?: ParsedMediaOutputSegment[];
 } {
@@ -484,6 +485,7 @@ export function splitMediaOutput(
   }
 
   const media: string[] = [];
+  const rejectedMedia: string[] = [];
   let foundMediaToken = false;
   const segments: ParsedMediaOutputSegment[] = [];
   let lastTextSegment: Extract<ParsedMediaOutputSegment, { type: "text" }> | undefined;
@@ -607,6 +609,7 @@ export function splitMediaOutput(
     const payloadValue = unwrapped ?? payload;
     const parts = quotedList ?? (unwrapped ? [unwrapped] : splitMediaDirectiveParts(payload));
     const mediaStartIndex = media.length;
+    const rejectedStartIndex = rejectedMedia.length;
     const invalidParts: string[] = [];
     for (const part of parts) {
       // Quoted references preserve punctuation, including signed URL suffixes.
@@ -614,6 +617,9 @@ export function splitMediaOutput(
       const candidate = unwrapped ?? quotedPart ?? cleanCandidate(part);
       if (isValidMedia(candidate, { allowSpaces: true, allowBareFilename: quotedList !== null })) {
         media.push(candidate);
+      } else if (beginsIndependentMediaSource(candidate) || looksLikeLocalFilePath(candidate)) {
+        rejectedMedia.push(candidate);
+        foundMediaToken = true;
       } else if (!/\s/.test(part) || !hasTraversalOrUnsupportedHomeDirPrefix(candidate)) {
         invalidParts.push(part);
       }
@@ -655,8 +661,8 @@ export function splitMediaOutput(
         segments.push({ type: "media", url });
       }
       cleanedLine = cleanLineText(invalidParts.join(" "));
-    } else if (looksLikeLocalPath) {
-      // Invalid local references must not leak internal tool paths as visible text.
+    } else if (looksLikeLocalPath || rejectedMedia.length > rejectedStartIndex) {
+      // Rejected references can contain private paths or credentials; delivery owns their notice.
       foundMediaToken = true;
       cleanedLine = "";
     } else {
@@ -688,6 +694,7 @@ export function splitMediaOutput(
     const result: ReturnType<typeof splitMediaOutput> = {
       text: parsedText,
       segments: parsedText ? [{ type: "text", text: parsedText }] : [],
+      ...(rejectedMedia.length > 0 ? { rejectedMedia } : {}),
     };
     if (hasAudioAsVoice) {
       result.audioAsVoice = true;
@@ -698,6 +705,7 @@ export function splitMediaOutput(
   return {
     text: cleanedText,
     mediaUrls: media,
+    ...(rejectedMedia.length > 0 ? { rejectedMedia } : {}),
     segments: segments.length > 0 ? segments : [{ type: "text", text: cleanedText }],
     ...(hasAudioAsVoice ? { audioAsVoice: true } : {}),
   };

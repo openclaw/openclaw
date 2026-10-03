@@ -83,17 +83,26 @@ export function normalizeReplyPayloadDirectives(params: {
   const mediaUrls = params.payload.mediaUrls ?? parsed?.mediaUrls;
   const mediaUrl = params.payload.mediaUrl ?? parsed?.mediaUrls?.[0] ?? mediaUrls?.[0];
 
+  const payload = copyReplyPayloadMetadata(params.payload, {
+    ...params.payload,
+    text,
+    mediaUrls,
+    mediaUrl,
+    replyToId: params.payload.replyToId ?? parsed?.replyToId,
+    replyToTag: params.payload.replyToTag || parsed?.replyToTag,
+    replyToCurrent: params.payload.replyToCurrent || parsed?.replyToCurrent,
+    audioAsVoice: Boolean(params.payload.audioAsVoice || parsed?.audioAsVoice),
+  });
+  if (parsed?.mediaFailures?.length) {
+    setReplyPayloadMetadata(payload, {
+      assistantMediaFailures: [
+        ...(getReplyPayloadMetadata(params.payload)?.assistantMediaFailures ?? []),
+        ...parsed.mediaFailures,
+      ],
+    });
+  }
   return {
-    payload: copyReplyPayloadMetadata(params.payload, {
-      ...params.payload,
-      text,
-      mediaUrls,
-      mediaUrl,
-      replyToId: params.payload.replyToId ?? parsed?.replyToId,
-      replyToTag: params.payload.replyToTag || parsed?.replyToTag,
-      replyToCurrent: params.payload.replyToCurrent || parsed?.replyToCurrent,
-      audioAsVoice: Boolean(params.payload.audioAsVoice || parsed?.audioAsVoice),
-    }),
+    payload,
     isSilent: parsed?.isSilent ?? false,
   };
 }

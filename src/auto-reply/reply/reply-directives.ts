@@ -5,12 +5,14 @@ import {
   parseInlineDirectives,
   stripInlineDirectiveTagsForDelivery,
 } from "../../utils/directive-tags.js";
+import { appendReplyMediaFailures, type ReplyMediaFailure } from "../reply-payload.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../tokens.js";
 
 /** Parsed outbound reply directives and media extracted from model text. */
 export type ReplyDirectiveParseResult = {
   text: string;
   mediaUrls?: string[];
+  mediaFailures?: ReplyMediaFailure[];
   replyToId?: string;
   replyToCurrent?: boolean;
   replyToTag: boolean;
@@ -55,16 +57,22 @@ export function parseReplyDirectives(
 
   const silentToken = options.silentToken ?? SILENT_REPLY_TOKEN;
   const isSilent = isSilentReplyPayloadText(text, silentToken);
+  const mediaFailures = split.rejectedMedia?.map((): ReplyMediaFailure => ({
+    code: "invalid-reference",
+    kind: "document",
+    label: "Media not attached",
+  }));
 
   return {
     // Silent payloads must not leak the control token into channel delivery.
-    text: isSilent ? "" : text,
+    text: appendReplyMediaFailures(isSilent ? "" : text, mediaFailures ?? []) ?? "",
     // Keep native path conversion outside the browser-shared parser and before reply policy.
     mediaUrls: split.mediaUrls?.map((source) => trySafeFileURLToPath(source) ?? source),
+    ...(mediaFailures?.length ? { mediaFailures } : {}),
     replyToId: replyParsed?.replyToId,
     replyToCurrent: replyParsed?.replyToCurrent || undefined,
     replyToTag: replyParsed?.hasReplyTag ?? false,
     audioAsVoice: split.audioAsVoice,
-    isSilent,
+    isSilent: isSilent && !mediaFailures?.length,
   };
 }

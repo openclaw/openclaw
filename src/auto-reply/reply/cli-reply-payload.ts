@@ -15,6 +15,9 @@ export function prepareCliReplyPayload(
     ...(parsed.replyToTag ? { replyToTag: true } : {}),
     audioAsVoice: parsed.audioAsVoice,
   };
+  if (parsed.mediaFailures?.length) {
+    setReplyPayloadMetadata(reply, { assistantMediaFailures: parsed.mediaFailures });
+  }
   if (assistantMessageIndex !== undefined) {
     setReplyPayloadMetadata(reply, { assistantMessageIndex });
   }

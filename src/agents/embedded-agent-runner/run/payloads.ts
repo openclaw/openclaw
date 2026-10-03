@@ -293,6 +293,7 @@ export function buildEmbeddedRunPayloads(params: {
         const {
           text: cleanedText,
           mediaUrls,
+          mediaFailures,
           audioAsVoice,
           replyToId,
           replyToTag,
@@ -328,6 +329,9 @@ export function buildEmbeddedRunPayloads(params: {
             ? { replyToCurrent: delivery.replyToCurrent }
             : {}),
         };
+        if (mediaFailures?.length) {
+          setReplyPayloadMetadata(replyPayload, { assistantMediaFailures: mediaFailures });
+        }
         if (assistantMessageIndex !== undefined) {
           setReplyPayloadMetadata(replyPayload, { assistantMessageIndex });
         }

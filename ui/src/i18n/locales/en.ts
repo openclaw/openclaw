@@ -4136,6 +4136,8 @@ export const en: TranslationMap & {
       outsideAllowedFolders: "Outside allowed folders",
       unavailable: "Unavailable",
       failureDeliveryFailed: "Delivery failed. Try sending this file again.",
+      failureInvalidReference:
+        "Use a public HTTPS URL without credentials or attach a local file by a safe path.",
       failureFileNotFound: "File not found. Check the path and try again.",
       failureUnsupportedFormat:
         "Rejected by the local attachment allowlist. Send a supported file type.",
