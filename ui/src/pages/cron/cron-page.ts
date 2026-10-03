@@ -201,6 +201,7 @@ class CronPage extends OpenClawLightDomElement {
       connected,
     });
     cron.canRefresh = () => this.canRefreshCron(cron);
+    cron.onMutationSettled = () => this.requestCronUpdate(cron);
     this.cron = cron;
     const routeData = resolveCronRouteData(this.routeSearch);
     cron.cronSessionFilter = routeData.session;
@@ -681,6 +682,8 @@ class CronPage extends OpenClawLightDomElement {
             this.deliveryDirectory.error ??
             this.modelSuggestionsError,
           busy: this.cron.cronBusy,
+          pendingAction: this.cron.cronPendingAction,
+          pendingRunJobId: this.cron.cronPendingRunJobId,
           form: this.cron.cronForm,
           heartbeatScratch: canManage ? this.heartbeatScratch : "",
           channels: channels.channelsSnapshot?.channelMeta?.length

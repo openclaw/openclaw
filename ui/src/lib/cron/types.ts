@@ -19,6 +19,13 @@ import type {
 type CronDelivery = NonNullable<CronJob["delivery"]>;
 type CronFormAnnounceDelivery = Extract<CronDelivery, { mode: "announce" }>;
 
+/**
+ * Which cron mutation currently holds the mutation lock. The lock itself
+ * (`cronBusy`) only says that one of them is in flight; the view needs the
+ * identity to announce the right control instead of a generic saving label.
+ */
+export type CronPendingAction = "save" | "run" | "toggle" | "remove";
+
 export type CronFormState = {
   name: string;
   description: string;
@@ -92,6 +99,9 @@ export type CronJobsLastStatusFilter = "all" | CronRunStatus | "unknown";
 export type CronJobsState<Row = CronJob> = {
   // Read admission belongs to the page; accepted mutation chains remain independent.
   canRefresh?: () => boolean;
+  // Publishing a mutation's own settle belongs to the page too: a chain that keeps
+  // the lock for a slow follow-up read still has to repaint once its request lands.
+  onMutationSettled?: () => void;
   client: GatewayBrowserClient | null;
   connected: boolean;
   cronLoading: boolean;
@@ -145,4 +155,12 @@ export type CronState<Row = CronJob> = CronJobsState<Row> & {
   cronRunsQuery: string;
   cronRunsSortDir: CronSortDir;
   cronBusy: boolean;
+  /** Identity of the mutation holding the lock, or null when it is free. */
+  cronPendingAction: CronPendingAction | null;
+  /**
+   * The automation the pending run was started from. The lock is page-wide, so
+   * selecting another automation mid-request must not make that one look like
+   * its own run is starting.
+   */
+  cronPendingRunJobId: string | null;
 };
