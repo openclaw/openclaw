@@ -11,7 +11,10 @@ import { createDesktopSessionRegistry } from "../../gateway/desktop/session-regi
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { createWorkerComputerService } from "../../gateway/worker-environments/computer-service.js";
 import type { PreparedWorkerComputer } from "../../gateway/worker-environments/computer-transport.js";
-import { createHarness } from "../../gateway/worker-environments/computer-transport.test-support.js";
+import {
+  COMPUTER_USE,
+  createHarness,
+} from "../../gateway/worker-environments/computer-transport.test-support.js";
 import {
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
@@ -246,6 +249,11 @@ describe("createComputerTool node resolution", () => {
       expect(schema.properties).not.toHaveProperty(selector);
     }
 
+    await expect(tool.execute("invalid-click", { action: "left_click" })).rejects.toThrow(
+      "coordinate [x, y] required for left_click",
+    );
+    expect(resolveNode).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
     const screenshot = await tool.execute("observe", { action: "wait", duration: 0 });
     expect(sleepMock).toHaveBeenCalledWith(0, undefined);
     expect(screenshot.details).toMatchObject({ node: "session-desktop" });
@@ -478,12 +486,15 @@ describe("createComputerTool node resolution", () => {
   );
 
   it.each([
-    { nextAction: "type", closeFails: false },
-    { nextAction: "screenshot", closeFails: false },
-    { nextAction: "screenshot", closeFails: true },
+    { firstAction: "left_click", nextAction: "left_click", preparations: 2, closeFails: false },
+    { firstAction: "left_click", nextAction: "screenshot", preparations: 2, closeFails: false },
+    { firstAction: "left_click", nextAction: "screenshot", preparations: 2, closeFails: true },
+    { firstAction: "type", nextAction: "type", preparations: 0, closeFails: false },
+    { firstAction: "type", nextAction: "screenshot", preparations: 1, closeFails: false },
+    { firstAction: "screenshot", nextAction: "screenshot", preparations: 1, closeFails: false },
   ] as const)(
-    "releases every attached preparation after rejected input followed by $nextAction (discarded close fails=$closeFails)",
-    async ({ nextAction, closeFails }) => {
+    "prepares only valid input and releases each owner for $firstAction then $nextAction (close fails=$closeFails)",
+    async ({ firstAction, nextAction, preparations: expectedPreparations, closeFails }) => {
       const h = createHarness();
       h.releaseClaim();
       h.state.environment = { ...h.state.environment, state: "ready", attachedSessionIds: [] };
@@ -532,6 +543,15 @@ describe("createComputerTool node resolution", () => {
       h.privateInvoke.mockImplementation(async (invocation) => {
         const result = await originalInvoke(invocation);
         const input = parseNodeWorkerComputerInput(JSON.stringify(invocation.params));
+        if (result.ok && input.operation === "capabilities") {
+          return {
+            ...result,
+            payload: {
+              ...COMPUTER_USE,
+              actions: ["screenshot", "type", "left_click"],
+            },
+          };
+        }
         return result.ok && input.operation === "snapshot"
           ? { ...result, payload: screenshotPayload().payload }
           : result;
@@ -557,38 +577,48 @@ describe("createComputerTool node resolution", () => {
         if (!cleanup) {
           throw new Error("Computer execution did not register cleanup");
         }
-        const rejectedInput = {
-          action: "type",
-          text: "",
-          environmentId: attachment.environmentId,
-        };
-        await expect(tool.execute("invalid-first", rejectedInput)).rejects.toThrow(
-          "text required for type",
-        );
-        expect(preparations).toHaveLength(1);
-        expect(h.nativeExecutionIds).toEqual([]);
-
-        if (nextAction === "type") {
-          await expect(tool.execute("invalid-next", rejectedInput)).rejects.toThrow(
-            "text required for type",
-          );
-        } else {
-          const result = await tool.execute("recover", {
-            action: "screenshot",
+        const execute = async (action: "type" | "left_click" | "screenshot", callId: string) => {
+          const input = {
+            action,
             environmentId: attachment.environmentId,
-          });
+            ...(action === "type" ? { text: "" } : {}),
+            ...(action === "left_click" ? { coordinate: [0, 0] } : {}),
+          };
+          expect(Value.Check(tool.parameters, input)).toBe(true);
+          if (action !== "screenshot") {
+            await expect(tool.execute(callId, input)).rejects.toThrow(
+              action === "type" ? "text required for type" : "no screenshot of this computer",
+            );
+            return;
+          }
+          const result = await tool.execute(callId, input);
           expect(result.content.some((part) => part.type === "image")).toBe(true);
           expect(result.details).toMatchObject({
             node: h.state.node.nodeId,
             environmentId: attachment.environmentId,
           });
+        };
+        await execute(firstAction, "first");
+        if (firstAction !== "screenshot") {
+          expect(h.nativeExecutionIds).toEqual([]);
         }
+        await execute(nextAction, "next");
+        expect.soft(preparations).toHaveLength(expectedPreparations);
+        const probes = h.privateInvoke.mock.calls.filter(
+          ([invocation]) =>
+            parseNodeWorkerComputerInput(JSON.stringify(invocation.params)).operation ===
+            "capabilities",
+        );
+        expect.soft(probes).toHaveLength(expectedPreparations);
+        const expectedOperations = [firstAction, nextAction]
+          .filter((action) => action === "screenshot")
+          .map(() => "snapshot");
         const operations = () =>
           h.privateInvoke.mock.calls
             .map(([invocation]) => parseNodeWorkerComputerInput(JSON.stringify(invocation.params)))
             .map((input) => input.operation)
             .filter((operation) => operation !== "capabilities");
-        expect(operations()).toEqual(nextAction === "screenshot" ? ["snapshot"] : []);
+        expect(operations()).toEqual(expectedOperations);
         if (closeFails) {
           await expect.soft(cleanup("completed")).rejects.toMatchObject({
             message: "computer: session desktop cleanup failed",
@@ -601,13 +631,15 @@ describe("createComputerTool node resolution", () => {
 
         // Each preparation has its own service owner, even when target selection
         // keeps an earlier binding. Run cleanup must release all of those owners.
-        expect
-          .soft(closeAttempts.mock.calls.map(([index]) => index).toSorted((a, b) => a - b))
-          .toEqual(preparations.map((_prepared, index) => index));
-        expect(operations()).toEqual(nextAction === "screenshot" ? ["snapshot", "close"] : []);
-        if (nextAction === "screenshot") {
-          expect(h.nativeExecutionIds).toHaveLength(2);
-          expect(h.nativeExecutionIds[1]).toBe(h.nativeExecutionIds[0]);
+        expect(closeAttempts.mock.calls.map(([index]) => index).toSorted((a, b) => a - b)).toEqual(
+          preparations.map((_prepared, index) => index),
+        );
+        expect(operations()).toEqual(
+          expectedOperations.length ? [...expectedOperations, "close"] : [],
+        );
+        if (expectedOperations.length) {
+          expect(h.nativeExecutionIds).toHaveLength(expectedOperations.length + 1);
+          expect(new Set(h.nativeExecutionIds).size).toBe(1);
         }
         const closesBeforeEnvironmentStop = closeAttempts.mock.calls.length;
         await computers.closeEnvironment(attachment.environmentId, attachment.ownerEpoch);

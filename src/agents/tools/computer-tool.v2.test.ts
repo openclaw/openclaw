@@ -526,6 +526,30 @@ describe("createComputerTool v2 execution", () => {
       elementRef: "element-1",
       destinationElementRef: "element-2",
     });
+    // The drag's follow-up screenshot bound a desktop frame. CSS coordinates
+    // must still omit that frame token and the desktop screen metadata.
+    await tool.execute("drag-browser-coordinates", {
+      action: "browser_pointer",
+      browserRef: "browser-1",
+      pageRef: "page-1",
+      observationId: "browser-observation-1",
+      pointerAction: "drag",
+      inputRoute: "trusted",
+      coordinate: [12, 34],
+      destinationCoordinate: [56, 78],
+    });
+    expect(readLastComputerActParams()).toEqual({
+      action: "browser_pointer",
+      browserRef: "browser-1",
+      pageRef: "page-1",
+      observationId: "browser-observation-1",
+      pointerAction: "drag",
+      inputRoute: "trusted",
+      x: 12,
+      y: 34,
+      toX: 56,
+      toY: 78,
+    });
   });
 
   it("routes an observation-bound element click without requiring coordinates", async () => {

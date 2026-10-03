@@ -11,6 +11,7 @@ import type {
   ScreenSnapshotParams,
 } from "../../plugins/computer-use-contract.js";
 import {
+  COMPUTER_ACT_V1_ACTION_NAMES,
   COMPUTER_CONTRACT_MISMATCH,
   COMPUTER_STALE_OBSERVATION,
   parseComputerActResult,
@@ -587,6 +588,17 @@ export class ComputerToolSession {
     const invokeTimeoutMs = durationMs ? durationMs + 10_000 : undefined;
     params.signal?.throwIfAborted();
     const commandParams: Record<string, unknown> = { ...params.wireParams };
+    if (COMPUTER_ACT_V1_ACTION_NAMES.some((action) => action === params.wireParams.action)) {
+      commandParams.screenIndex = params.resolved.target.screenIndex;
+      // Desktop coordinates carry the resolved frame; browser CSS coordinates
+      // and element-only actions must not inherit a desktop display token.
+      if (
+        (commandParams.x !== undefined || commandParams.fromX !== undefined) &&
+        params.resolved.frame?.displayFrameId
+      ) {
+        commandParams.displayFrameId = params.resolved.frame.displayFrameId;
+      }
+    }
     const imageCoordinates =
       commandParams.windowRef &&
       commandParams.observationId === this.observationState?.observationId

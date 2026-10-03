@@ -199,6 +199,19 @@ export function createComputerTool(options?: {
         const action = readToolStringParam(params, "action", {
           required: true,
         }) as ComputerToolAction;
+        // Validate input before selecting a desktop: selection may allocate an
+        // attached transport and probe its capabilities even if input is rejected.
+        const wireParams = isComputerActAction(action)
+          ? buildComputerActParams({ action, input: params, executionId, refWidth: referenceWidth })
+          : undefined;
+        const waitSeconds =
+          action === "wait"
+            ? (readFiniteNumberParam(params, "duration", {
+                min: 0,
+                max: MAX_WAIT_SECONDS,
+                message: `duration must be 0-${MAX_WAIT_SECONDS} seconds for wait`,
+              }) ?? 1)
+            : undefined;
         const gatewayOpts = readGatewayCallOptions(params);
         const resolved = await session.resolveTarget({
           action,
@@ -234,15 +247,9 @@ export function createComputerTool(options?: {
               "Agent took control of this desktop; the operator can take control again.",
             );
           }
-          if (action === "wait") {
-            const seconds =
-              readFiniteNumberParam(params, "duration", {
-                min: 0,
-                max: MAX_WAIT_SECONDS,
-                message: `duration must be 0-${MAX_WAIT_SECONDS} seconds for wait`,
-              }) ?? 1;
-            await sleep(Math.round(seconds * 1000), signal);
-            noteLines.push(`waited ${seconds}s`);
+          if (waitSeconds !== undefined) {
+            await sleep(Math.round(waitSeconds * 1000), signal);
+            noteLines.push(`waited ${waitSeconds}s`);
           }
           return await captureAndDeliverScreenshot({
             noteLines,
@@ -253,17 +260,9 @@ export function createComputerTool(options?: {
           });
         }
 
-        if (!isComputerActAction(action)) {
+        if (!wireParams) {
           throw new Error(`Unknown action: ${action}`);
         }
-        const wireParams = buildComputerActParams({
-          action,
-          input: params,
-          executionId,
-          screenIndex: resolved.target.screenIndex,
-          displayFrameId: resolved.frame?.displayFrameId,
-          refWidth: referenceWidth,
-        });
         const actResult = await session.invokeComputerAct({
           resolved,
           wireParams,

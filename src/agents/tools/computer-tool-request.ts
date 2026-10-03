@@ -163,14 +163,11 @@ export function buildComputerActParams(params: {
   action: ComputerToolAction;
   input: Record<string, unknown>;
   executionId: string;
-  screenIndex: number;
-  displayFrameId?: string;
   refWidth?: number;
 }): ComputerActParams {
   const { action, input } = params;
   const wire: Record<string, unknown> = { action, executionId: params.executionId };
   if (POINTER_OR_KEYBOARD_ACTIONS.has(action)) {
-    wire.screenIndex = params.screenIndex;
     wire.refWidth = params.refWidth ?? COMPUTER_REF_WIDTH;
   }
   const elementRef = readToolStringParam(input, "elementRef");
@@ -190,9 +187,6 @@ export function buildComputerActParams(params: {
       wire.x = coordinate[0];
       wire.y = coordinate[1];
     }
-  }
-  if ((wire.x !== undefined || wire.fromX !== undefined) && params.displayFrameId) {
-    wire.displayFrameId = params.displayFrameId;
   }
   const modifiers =
     MODIFIER_TEXT_ACTIONS.has(action) && typeof input.text === "string" ? input.text.trim() : "";

@@ -7,12 +7,14 @@ import {
   type ComputerToolOptions,
   createVisionComputerTool,
   EFFECTIVE_REF_WIDTH,
+  gatewayComputerStatusMock,
   listNodesMock,
   macComputerNode,
   readFrameId,
   readLastComputerActParams,
   resetComputerToolMocks,
   screenshotPayload,
+  sleepMock,
   TINY_PNG_BASE64,
 } from "./computer-tool.test-helpers.js";
 
@@ -458,6 +460,8 @@ describe("createComputerTool v1 execution", () => {
   });
 
   it.each<InvalidCase>([
+    ["empty text", { action: "type", text: "" }, /text required for type/],
+    ["missing coordinate", { action: "left_click" }, /coordinate.*required/],
     invalidScrollCase("fractional scroll amount", 1.5),
     invalidScrollCase("zero scroll amount", 0),
     invalidScrollCase("negative scroll amount", -1),
@@ -468,9 +472,16 @@ describe("createComputerTool v1 execution", () => {
     invalidHoldCase("zero hold duration", 0),
     invalidHoldCase("oversized hold duration", 11),
     ["boolean wait duration", { action: "wait", duration: true }, /duration must be 0-100 seconds/],
-  ])("rejects invalid %s before invoking the node", async (_label, params, error) => {
-    await expect(createVisionComputerTool().execute("call", params)).rejects.toThrow(error);
+  ])("rejects invalid %s before desktop discovery", async (_label, params, error) => {
+    for (const target of [undefined, "node", "gateway"] as const) {
+      await expect(
+        createVisionComputerTool().execute("call", { ...params, target }),
+      ).rejects.toThrow(error);
+    }
+    expect(listNodesMock).not.toHaveBeenCalled();
+    expect(gatewayComputerStatusMock).not.toHaveBeenCalled();
     expect(callGatewayToolMock).not.toHaveBeenCalled();
+    expect(sleepMock).not.toHaveBeenCalled();
   });
 
   it("targets the last screenshot's display when a coordinate action omits screenIndex", async () => {
