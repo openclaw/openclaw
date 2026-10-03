@@ -11,8 +11,12 @@ import type {
 } from "./secret-store-write.js";
 
 export type { SecretStoreWriteEntry } from "./secret-store-write.js";
-export type SecretStoreWriteParams = KernelWriteParams & { assertCurrent?: () => void };
-export type SecretStoreBatchWriteParams = KernelBatchParams & { assertCurrent?: () => void };
+type WorkerWriteOptions = {
+  database?: Pick<NonNullable<KernelWriteParams["database"]>, "path" | "env">;
+  assertCurrent?: () => void;
+};
+export type SecretStoreWriteParams = Omit<KernelWriteParams, "database"> & WorkerWriteOptions;
+export type SecretStoreBatchWriteParams = Omit<KernelBatchParams, "database"> & WorkerWriteOptions;
 
 function admission(context: OpenClawStateWorkerContext, assertCallerCurrent?: () => void) {
   const assertCurrent = () => {
@@ -31,6 +35,7 @@ function write(params: SecretStoreBatchWriteParams, capturePrevious: boolean) {
   const context = captureOpenClawStateWorkerContext(params.database);
   const { database: _database, assertCurrent, ...input } = params;
   const captured = structuredClone(input);
+  const now = Date.now();
   for (const entry of captured.entries) {
     registerSecretValueForRedaction(entry.value);
     if (entry.expectedValue !== undefined) {
@@ -42,11 +47,11 @@ function write(params: SecretStoreBatchWriteParams, capturePrevious: boolean) {
     async (scope) => {
       const results = await scope.execute({
         type: "secrets.write",
-        input: { ...captured, capturePrevious },
+        input: { ...captured, capturePrevious, now },
       });
-      for (const result of results) {
-        if (result.previous) {
-          registerSecretValueForRedaction(result.previous.value);
+      for (const written of results) {
+        if (written.previous) {
+          registerSecretValueForRedaction(written.previous.value);
         }
       }
       return results;
@@ -80,12 +85,13 @@ export async function deleteSecretStoreEntry(
   params: Pick<SecretStoreWriteParams, "scope" | "name" | "database" | "assertCurrent">,
 ): Promise<void> {
   const context = captureOpenClawStateWorkerContext(params.database);
+  const input = { scope: { ...params.scope }, name: params.name, now: Date.now() };
   await runOpenClawStateWorkerOperation(
     context,
     (owner) =>
       owner.execute({
         type: "secrets.delete",
-        input: { scope: params.scope, name: params.name },
+        input,
       }),
     admission(context, params.assertCurrent),
   );
@@ -94,10 +100,11 @@ export async function deleteSecretStoreEntry(
 /** Compensation stays bound to the original physical store and exact writer. */
 export async function writeSecretStoreEntryWithRollback(params: SecretStoreWriteParams) {
   const { scope, database, updatedBy, inheritExistingKind, assertCurrent, ...entry } = params;
+  const capturedScope = { ...scope };
   const writer = `${updatedBy ?? "secret-store"}:${randomUUID()}`;
   const pending = write(
     {
-      scope,
+      scope: capturedScope,
       database,
       updatedBy: writer,
       inheritExistingKind,
@@ -113,16 +120,24 @@ export async function writeSecretStoreEntryWithRollback(params: SecretStoreWrite
   const previous: SecretStoreWriteSnapshot | undefined = result.previous;
   let rollback: Promise<boolean> | undefined;
   return {
-    rollback: () =>
-      (rollback ??= runOpenClawStateWorkerOperation(
+    rollback: () => {
+      const now = Date.now();
+      return (rollback ??= runOpenClawStateWorkerOperation(
         pending.context,
         (owner) =>
           owner.execute({
             type: "secrets.rollback",
-            input: { scope, name: entry.name, expectedUpdatedBy: writer, previous },
+            input: {
+              scope: capturedScope,
+              name: entry.name,
+              expectedUpdatedBy: writer,
+              previous,
+              now,
+            },
           }),
         // Exact-write compensation retains cleanup authority after the requester ends.
         admission(pending.context),
-      )),
+      ));
+    },
   };
 }

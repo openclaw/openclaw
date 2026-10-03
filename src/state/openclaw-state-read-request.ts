@@ -6,6 +6,9 @@ import type {
 } from "./openclaw-state-read.types.js";
 
 export function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
+  if (command.type === "secrets.metadata") {
+    return structuredClone(command);
+  }
   if (command.type === "sessionState.versions" || command.type === "sessionState.events") {
     return structuredClone(command);
   }

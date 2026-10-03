@@ -33,13 +33,14 @@ import {
 import { isKnownCoreSecretTargetId, isKnownSecretTargetId } from "../../secrets/target-registry.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 const teamScope = { kind: "team" } as const;
 
 function toProtocolStoreEntry(
-  entry: ReturnType<typeof listSecretStoreEntries>[number],
+  entry: Awaited<ReturnType<typeof listSecretStoreEntries>>[number],
 ): SecretStoreEntry {
   const metadata = {
     name: entry.name,
@@ -118,7 +119,7 @@ export function createSecretStoreWriteService(params: {
       // Registration precedes validation and SQLite so even write failures
       // cannot disclose the submitted credential through downstream logging.
       registerSecretValueForRedaction(input.value);
-      writeSecretStoreEntry({ scope: teamScope, ...input });
+      return writeSecretStoreEntry({ scope: teamScope, ...input });
     },
   };
 }
@@ -257,11 +258,16 @@ export function createSecretsHandlers(params: {
     "secrets.store.list": defineValidatedGatewayHandler(
       "secrets.store.list",
       validateSecretsStoreListParams,
-      ({ respond }) => {
+      async (options) => {
+        const { respond } = options;
+        const { assertCurrent } = readGatewayRequestMutationAuthority(options);
         try {
           const result = {
-            entries: listSecretStoreEntries({ scope: teamScope }).map(toProtocolStoreEntry),
+            entries: (await listSecretStoreEntries({ scope: teamScope, assertCurrent })).map(
+              toProtocolStoreEntry,
+            ),
           };
+          assertCurrent();
           if (!validateSecretsStoreListResult(result)) {
             throw new Error("secrets.store.list returned invalid payload.");
           }
@@ -279,11 +285,21 @@ export function createSecretsHandlers(params: {
     "secrets.store.set": defineValidatedGatewayHandler(
       "secrets.store.set",
       validateSecretsStoreSetParams,
-      async ({ params: requestParams, respond, client }) => {
+      async (options) => {
+        const { params: requestParams, respond, client, context } = options;
+        const authority = createAgentRuntimeAuthorityGuard(
+          client,
+          context,
+          respond,
+          readGatewayRequestMutationAuthority(options).assertCurrent,
+        );
         let saved = false;
         try {
+          if (!authority.ensureActive()) {
+            return;
+          }
           holdGatewayPolicyResponse(respond);
-          params.storeWriteService.write({
+          await params.storeWriteService.write({
             name: requestParams.name,
             value: requestParams.value,
             kind: requestParams.kind,
@@ -291,8 +307,10 @@ export function createSecretsHandlers(params: {
               ? { allowedHosts: requestParams.allowedHosts }
               : {}),
             updatedBy: params.storeWriteService.resolveUpdatedBy(client),
+            assertCurrent: authority.commitGuard,
           });
           saved = true;
+          authority.commitGuard?.();
           const reload = await params.storeWriteService.reloadReference(requestParams.name);
           const result = {
             ok: true as const,
@@ -324,19 +342,31 @@ export function createSecretsHandlers(params: {
     "secrets.store.delete": defineValidatedGatewayHandler(
       "secrets.store.delete",
       validateSecretsStoreDeleteParams,
-      async ({ params: requestParams, respond, client, context }) => {
+      async (options) => {
+        const { params: requestParams, respond, client, context } = options;
+        const authority = createAgentRuntimeAuthorityGuard(
+          client,
+          context,
+          respond,
+          readGatewayRequestMutationAuthority(options).assertCurrent,
+        );
         let deleted = false;
         try {
           const agentId = client?.internal?.agentRuntimeIdentity?.agentId;
           if (agentId) {
             params.log?.debug?.(`secrets.store.delete requested by agent:${agentId}`);
           }
-          if (!createAgentRuntimeAuthorityGuard(client, context, respond).ensureActive()) {
+          if (!authority.ensureActive()) {
             return;
           }
           holdGatewayPolicyResponse(respond);
-          deleteSecretStoreEntry({ scope: teamScope, name: requestParams.name });
+          await deleteSecretStoreEntry({
+            scope: teamScope,
+            name: requestParams.name,
+            assertCurrent: authority.commitGuard,
+          });
           deleted = true;
+          authority.commitGuard?.();
           const reload = await params.storeWriteService.reloadReference(requestParams.name);
           const result = {
             ok: true as const,

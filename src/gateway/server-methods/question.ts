@@ -25,11 +25,7 @@ import {
 } from "../../secrets/store/secret-store.js";
 import { authorizeGatewaySessionCreation, hasOperatorBoundary } from "../operator-role-policy.js";
 import { canSelectQuestion, usesOwnRunQuestionAccess } from "../question-access.js";
-import {
-  QuestionManager,
-  QuestionManagerError,
-  type QuestionObservation,
-} from "../question-manager.js";
+import { QuestionManager, type QuestionObservation } from "../question-manager.js";
 import {
   withQuestionSessionAccess,
   withPreparedQuestionSessions,
@@ -44,26 +40,13 @@ import { questionShapeError } from "../question-validation.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { isGatewayAdmin } from "../session-sharing.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
+import { managerError, QuestionRequestValidationError } from "./question.errors.js";
 import type { SecretStoreWriteService } from "./secrets.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const DEFAULT_QUESTION_TIMEOUT_MS = 15 * 60 * 1_000;
-
-class QuestionRequestValidationError extends Error {}
-
-function managerError(error: unknown, respond: RespondFn): boolean {
-  if (!(error instanceof QuestionManagerError)) {
-    return false;
-  }
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, error.message, { details: { reason: error.code } }),
-  );
-  return true;
-}
 
 async function normalizeQuestions(
   params: QuestionRequestParams,
@@ -602,9 +585,10 @@ export function createQuestionHandlers(
                     },
                   },
                 );
+                currentAuthority.assertCurrent();
                 reload = { name: binding.name, result };
               } catch (error) {
-                if (managerError(error, respond)) {
+                if (!saved && managerError(error, respond)) {
                   return;
                 }
                 respond(

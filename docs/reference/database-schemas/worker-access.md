@@ -1369,8 +1369,16 @@ shutdown stops scheduling and joins accepted cleanup. An OpenClaw chat that save
 a key for a config path writes its store entry in the same worker: one
 transaction mints a random entry name, inserts a new row without touching
 existing ones, and admits the write through the requester's live
-authority at transaction and commit. Other secret-store set/delete operations
-remain separate synchronous migration debt.
+authority at transaction and commit. Ordinary settings set, batch import, delete,
+and exact-writer rollback now use that same writer, and metadata listings use the
+existing reader. Store-bound questions retain authority through persistence and
+publish only an acknowledged safe answer. Reset hides their public entries
+immediately while accepted work settles privately. Runtime refresh follows the
+commit; failed refresh never invites replay of a saved answer. The released
+synchronous question SDK methods retain their contracts. Runtime value and exec
+environment reads, hidden GitHub operations, and the CLI allowed-host setter
+remain with their existing owners. Schemas, retention, stored bytes, and update
+behavior are unchanged.
 
 Placement change reporting reads its before/after snapshots in the shared-state
 read worker using the placement store's row codec. It transfers only session

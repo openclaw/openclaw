@@ -573,7 +573,7 @@ export async function prepareQuestionCommitAuthority(
   const authorization = prepareQuestionAuthorization(options, observation, id, "mutate");
   authorization.assertCurrent();
   const cfg = options.context.getRuntimeConfig();
-  const target = authorization.target;
+  const target: QuestionTarget = authorization.target;
   const resolved = target.sessionKey
     ? resolveRequestedSessionAgentId(cfg, target.sessionKey, target.agentId)
     : undefined;

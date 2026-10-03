@@ -1,4 +1,5 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { isRedactedSecretValue } from "../../config/redact-sentinel.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -15,7 +16,6 @@ import {
 import { ensureSecretStoreSchema } from "../../state/openclaw-state-db-schema-additive.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
-  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
@@ -33,7 +33,6 @@ import {
   classifyHiddenGitHubStoreName,
   GITHUB_SETUP_HANDOFF_MAX_AGE_MS,
 } from "./secret-store-hidden-github.js";
-import type { SecretStoreListInput, SecretStoreRow } from "./secret-store-metadata.kernel.js";
 import { isMissingSecretStoreTableError } from "./secret-store-sqlite.js";
 import { SecretStoreValidationError } from "./secret-store-validation-error.js";
 import {
@@ -45,6 +44,7 @@ import {
   type SecretStoreKind,
   type SecretStoreScope,
 } from "./secret-store-validation.js";
+import type { SecretStoreListInput, SecretStoreRow } from "./secret-store.types.js";
 
 export {
   assertSecretStoreValue,
@@ -126,7 +126,7 @@ function toMetadata(row: SecretStoreRow): SecretStoreEntryMetadata {
 
 export async function listSecretStoreEntries(
   params: SecretStoreListInput & {
-    database?: OpenClawStateDatabaseOptions;
+    database?: Pick<OpenClawStateDatabaseOptions, "path" | "env">;
     assertCurrent?: () => void;
   },
 ): Promise<SecretStoreEntryMetadata[]> {
@@ -136,9 +136,11 @@ export async function listSecretStoreEntries(
     { path: context.admission.databasePath, env: context.environment },
     {
       type: "secrets.metadata",
-      scope: params.scope,
-      includeDeleted: params.includeDeleted,
-      redactedOnly: params.redactedOnly,
+      input: {
+        scope: { ...params.scope },
+        includeDeleted: params.includeDeleted,
+        redactedOnly: params.redactedOnly,
+      },
     },
     { context, current: true },
   );

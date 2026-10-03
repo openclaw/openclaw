@@ -1,24 +1,16 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { Selectable } from "kysely";
 import { isRedactedSecretValue } from "../../config/redact-sentinel.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
+import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
 import { classifyHiddenGitHubStoreName } from "./secret-store-hidden-github.js";
 import { isMissingSecretStoreTableError } from "./secret-store-sqlite.js";
-import { normalizeScope, type SecretStoreScope } from "./secret-store-validation.js";
+import { normalizeScope } from "./secret-store-validation.js";
+import type { SecretStoreListInput, SecretStoreRow } from "./secret-store.types.js";
 
 type SecretStoreDatabase = Pick<DB, "secret_store_entries">;
-export type SecretStoreRow = Selectable<DB["secret_store_entries"]>;
-export type SecretStoreListInput = {
-  scope: SecretStoreScope;
-  includeDeleted?: boolean;
-  redactedOnly?: boolean;
-};
 
-export function listSecretStoreRows(
-  sqlite: DatabaseSync,
-  params: SecretStoreListInput,
-): SecretStoreRow[] {
+function listSecretStoreRows(sqlite: DatabaseSync, params: SecretStoreListInput): SecretStoreRow[] {
   const { scopeKind, scopeId } = normalizeScope(params.scope);
   try {
     const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
@@ -43,3 +35,10 @@ export function listSecretStoreRows(
     throw error;
   }
 }
+
+export const secretStoreReadOperations = {
+  "secrets.metadata": (input: SecretStoreListInput, db) => ({
+    type: "secrets.metadata" as const,
+    rows: listSecretStoreRows(db, input),
+  }),
+} satisfies WorkerOperationHandlers<DatabaseSync>;

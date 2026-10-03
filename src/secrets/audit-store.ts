@@ -37,13 +37,15 @@ export async function findSecretStoreRedactedValueFindings(params: {
 export async function findSecretStorePlaintextResidueFindings(params: {
   assignments: PlaintextAssignment[];
   database: OpenClawStateDatabaseOptions;
-}): Promise<Array<{
-  code: "STORE_PLAINTEXT_RESIDUE";
-  severity: "warn";
-  file: string;
-  jsonPath: string;
-  message: string;
-}>> {
+}): Promise<
+  Array<{
+    code: "STORE_PLAINTEXT_RESIDUE";
+    severity: "warn";
+    file: string;
+    jsonPath: string;
+    message: string;
+  }>
+> {
   const entries = await listSecretStoreEntries({
     scope: { kind: "team" },
     database: params.database,

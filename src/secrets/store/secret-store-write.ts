@@ -64,7 +64,7 @@ export type SecretStoreWriteResult = {
 };
 
 export function writeSecretStoreEntriesInDatabase(
-  params: SecretStoreBatchWriteParams,
+  params: SecretStoreBatchWriteParams & { now: number },
   capturePrevious: boolean,
   admit: (stage: "transaction" | "commit") => void,
 ): SecretStoreWriteResult[] {
@@ -76,7 +76,7 @@ export function writeSecretStoreEntriesInDatabase(
     }
   }
   const { scopeKind, scopeId } = normalizeScope(params.scope);
-  const now = Date.now();
+  const { now } = params;
   return runOpenClawStateWriteTransaction(
     ({ db: sqlite }) => {
       admit("transaction");
@@ -189,13 +189,14 @@ export function rollbackSecretStoreEntryWriteInDatabase(
     name: string;
     expectedUpdatedBy: string;
     previous: SecretStoreWriteSnapshot | undefined;
+    now: number;
     database?: OpenClawStateDatabaseOptions;
   },
   admit: (stage: "transaction" | "commit") => void,
 ): boolean {
   assertSecretStoreMutationName(params.name);
   const { scopeKind, scopeId } = normalizeScope(params.scope);
-  const now = Date.now();
+  const { now } = params;
   try {
     return runOpenClawStateWriteTransaction(
       ({ db: sqlite }) => {
@@ -245,6 +246,7 @@ export function deleteSecretStoreEntryInDatabase(
   params: {
     scope: SecretStoreScope;
     name: string;
+    now: number;
     database?: OpenClawStateDatabaseOptions;
   },
   admit: (stage: "transaction" | "commit") => void,
@@ -252,7 +254,7 @@ export function deleteSecretStoreEntryInDatabase(
   assertSecretStoreMutationName(params.name);
   const { scopeKind, scopeId } = normalizeScope(params.scope);
   const state = openOpenClawStateDatabase(params.database);
-  const now = Date.now();
+  const { now } = params;
   try {
     runOpenClawStateWriteTransaction(
       ({ db: sqlite }) => {

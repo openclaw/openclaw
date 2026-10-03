@@ -79,7 +79,6 @@ import {
   pluginBlobLookupInDatabase,
   pluginBlobEntriesInDatabase,
 } from "../plugin-state/plugin-blob-store.sqlite.js";
-import { listSecretStoreRows } from "../secrets/store/secret-store-metadata.kernel.js";
 import {
   selectSkillLibraryRevisionMetadataBatch,
   selectSkillLibraryRevisionManifestsBatch,
@@ -317,9 +316,6 @@ serveOwnedWorkerTasks(
                 type: command.type,
                 value: listMcpOAuthStoreKeysInDatabase(db, command.input),
               };
-            }
-            if (command.type === "secrets.metadata") {
-              return { type: command.type, rows: listSecretStoreRows(db, command) };
             }
             if (command.type === "mcpOAuth.pending") {
               return {

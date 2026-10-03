@@ -361,7 +361,7 @@ export class QuestionManager {
       answers: canonical,
       ...(resolvedBy ? { resolvedBy } : {}),
     };
-    this.finish(entry);
+    void this.finish(entry);
     return { status: "answered", answers: canonical };
   }
 
@@ -430,7 +430,7 @@ export class QuestionManager {
       status: "cancelled",
       ...(resolvedBy ? { resolvedBy } : {}),
     };
-    this.finish(entry);
+    void this.finish(entry);
     return { status: "cancelled" };
   }
 
@@ -447,11 +447,11 @@ export class QuestionManager {
   /** Reusable on open owners (v2026.8.1 SDK context); never reopens a closed owner. */
   reset(): void {
     const entries = [...this.entries.values()];
+    this.entries.clear();
     for (const entry of entries) {
       if (entry.committing) {
         entry.retired = true;
-      } else {
-        this.entries.delete(entry.record.id);
+        entry.job.cancel();
       }
     }
     for (const entry of entries) {
@@ -571,7 +571,7 @@ export class QuestionManager {
       return;
     }
     entry.record = { ...entry.record, status: "expired" };
-    this.finish(entry);
+    void this.finish(entry);
   }
 
   private finish(entry: QuestionEntry): Promise<void> {

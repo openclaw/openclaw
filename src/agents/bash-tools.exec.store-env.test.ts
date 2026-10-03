@@ -4,7 +4,7 @@ import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withInstallationTarget } from "../infra/installation-target-context.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
 import { writeSecretStoreEntry } from "../secrets/store/secret-store.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { createRunExit } from "./bash-tools.exec-runtime.test-support.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -132,9 +132,9 @@ const EGRESS_ENV = {
 } as const;
 
 const tempDirs = createTempDirTracker();
-function writeEntries(entries: StoreEntry[]) {
+async function writeEntries(entries: StoreEntry[]) {
   for (const entry of entries) {
-    writeSecretStoreEntry({ scope: { kind: "team" }, ...entry, updatedBy: "test" });
+    await writeSecretStoreEntry({ scope: { kind: "team" }, ...entry, updatedBy: "test" });
   }
 }
 
@@ -220,8 +220,8 @@ describe("exec store environment", () => {
       }
     },
   );
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     vi.unstubAllEnvs();
     tempDirs.cleanup();
   });
@@ -241,7 +241,7 @@ describe("exec store environment", () => {
   });
 
   it("applies store env on every call to a lazy exec instance", async () => {
-    writeEntries([
+    await writeEntries([
       { name: "AWS_REGION", value: "us-west-2", kind: "env" },
       { name: "INTERNAL_VALUE", value: "not-for-subprocesses", kind: "secret" },
     ]);
@@ -261,7 +261,7 @@ describe("exec store environment", () => {
     vi.stubEnv("PATH", "/inherited/bin");
     vi.stubEnv("HTTPS_PROXY", "http://inherited-proxy.test:8080");
     vi.stubEnv("NODE_EXTRA_CA_CERTS", "/inherited/ca.pem");
-    writeEntries([
+    await writeEntries([
       { name: "PATH", value: "/store/bin", kind: "env" },
       { name: "HTTPS_PROXY", value: "http://store-proxy.test:8080", kind: "env" },
       { name: "NODE_EXTRA_CA_CERTS", value: "/store/ca.pem", kind: "env" },
@@ -289,7 +289,7 @@ describe("exec store environment", () => {
     "applies enabled secret egress only to gateway exec (%s)",
     async (host) => {
       vi.stubEnv("OPENCLAW_SECRET_SENTINELS", "false");
-      writeEntries([
+      await writeEntries([
         { name: "AWS_REGION", value: "us-west-2", kind: "env" },
         {
           name: "SERVICE_API_KEY",

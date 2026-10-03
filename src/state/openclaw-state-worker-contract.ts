@@ -155,6 +155,7 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
     "secrets.write": {
       input: Omit<secretWrites.SecretStoreBatchWriteParams, "database"> & {
         capturePrevious: boolean;
+        now: number;
       };
       output: secretWrites.SecretStoreWriteResult[];
     };

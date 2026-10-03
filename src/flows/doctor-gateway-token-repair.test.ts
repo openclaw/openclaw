@@ -15,7 +15,7 @@ import {
   writeSecretStoreEntry,
 } from "../secrets/store/secret-store.js";
 import {
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -30,14 +30,14 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const tokenRef = { source: "store", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" } as const;
 
-function createFixture(
+async function createFixture(
   value = REDACTED_SENTINEL,
   options: DoctorOptions = {},
   kind: "secret" | "env" = "secret",
 ) {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("doctor-gateway-token-repair-") };
   const entry = { scope: { kind: "team" as const }, name: tokenRef.id, database: { env } };
-  writeSecretStoreEntry({
+  await writeSecretStoreEntry({
     ...entry,
     value: "synthetic-original-token",
     kind,
@@ -80,16 +80,16 @@ async function runGatewayAuth(ctx: ReturnType<typeof createDoctorHealthFlowConte
 }
 
 beforeEach(() => vi.mocked(note).mockClear());
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
-  closeOpenClawStateDatabaseForTest();
+  await closeOpenClawStateDatabaseAsync();
 });
 
 describe("Doctor Gateway token store repair", () => {
   it.each(["config", "environment"])(
     "records a warning for a redacted optional proxy password from %s",
     async (source) => {
-      const fixture = createFixture("synthetic-healthy-token", {
+      const fixture = await createFixture("synthetic-healthy-token", {
         repair: true,
         generateGatewayToken: true,
       });
@@ -125,7 +125,7 @@ describe("Doctor Gateway token store repair", () => {
   );
 
   it("names a redacted store entry and its remedy without mutating diagnostic state", async () => {
-    const fixture = createFixture();
+    const fixture = await createFixture();
     expect(await detectGatewayAuthHealth(fixture.ctx)).toEqual([
       expect.objectContaining({
         severity: "error",
@@ -148,13 +148,13 @@ describe("Doctor Gateway token store repair", () => {
   ] as const)(
     "repairs redacted $kind state with $options while preserving the reference and verified backup",
     async ({ kind, options }) => {
-      const fixture = createFixture(REDACTED_SENTINEL, options, kind);
+      const fixture = await createFixture(REDACTED_SENTINEL, options, kind);
       await runGatewayAuth(fixture.ctx);
       const repaired = readSecretStoreValue(fixture.entry);
       expect(repaired).toEqual({ ok: true, value: expect.stringMatching(/^[a-f0-9]{48}$/u) });
       expect(fixture.ctx.cfg.gateway?.auth?.token).toEqual(tokenRef);
       expect(await detectGatewayAuthHealth(fixture.ctx)).toEqual([]);
-      expect(listSecretStoreEntries(fixture.entry)).toEqual([
+      expect(await listSecretStoreEntries(fixture.entry)).toEqual([
         expect.objectContaining({
           kind,
           ...(kind === "secret" ? { allowedHosts: ["gateway.example.test"] } : {}),
@@ -179,7 +179,7 @@ describe("Doctor Gateway token store repair", () => {
   );
 
   it("explains why explicit generation leaves a usable SecretRef unchanged", async () => {
-    const fixture = createFixture("synthetic-healthy-token", { generateGatewayToken: true });
+    const fixture = await createFixture("synthetic-healthy-token", { generateGatewayToken: true });
     await runGatewayAuth(fixture.ctx);
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining(
@@ -195,7 +195,7 @@ describe("Doctor Gateway token store repair", () => {
   });
 
   it("records backup failure as a warning and leaves the original row intact", async () => {
-    const fixture = createFixture(REDACTED_SENTINEL, { repair: true });
+    const fixture = await createFixture(REDACTED_SENTINEL, { repair: true });
     vi.spyOn(sqliteSnapshot, "createVerifiedSqliteSnapshot").mockRejectedValueOnce(
       new Error("synthetic disk full"),
     );
@@ -208,12 +208,12 @@ describe("Doctor Gateway token store repair", () => {
   });
 
   it("preserves a replacement made while the backup was running", async () => {
-    const fixture = createFixture(REDACTED_SENTINEL, { repair: true });
+    const fixture = await createFixture(REDACTED_SENTINEL, { repair: true });
     const snapshot = sqliteSnapshot.createVerifiedSqliteSnapshot;
     vi.spyOn(sqliteSnapshot, "createVerifiedSqliteSnapshot").mockImplementationOnce(
       async (options) => {
         const result = await snapshot(options);
-        writeSecretStoreEntry({
+        await writeSecretStoreEntry({
           ...fixture.entry,
           kind: "secret",
           value: "synthetic-concurrent-replacement",
@@ -231,7 +231,7 @@ describe("Doctor Gateway token store repair", () => {
   });
 
   it("preserves a kind change made while the backup was running", async () => {
-    const fixture = createFixture(REDACTED_SENTINEL, { repair: true });
+    const fixture = await createFixture(REDACTED_SENTINEL, { repair: true });
     const snapshot = sqliteSnapshot.createVerifiedSqliteSnapshot;
     vi.spyOn(sqliteSnapshot, "createVerifiedSqliteSnapshot").mockImplementationOnce(
       async (options) => {

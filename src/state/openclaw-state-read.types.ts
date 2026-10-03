@@ -91,10 +91,6 @@ import type {
   PluginBlobReadCommand,
   PluginBlobReadReply,
 } from "../plugin-state/plugin-blob-worker-contract.js";
-import type {
-  SecretStoreListInput,
-  SecretStoreRow,
-} from "../secrets/store/secret-store-metadata.kernel.js";
 import type { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { SkillLibraryReadOnlyOperations } from "../skills/library/selection-read.kernel.js";
 import type { TuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
@@ -153,7 +149,6 @@ export type OpenClawStateReadAuthority = {
 };
 
 export type OpenClawStateReadCommand =
-  | ({ type: "secrets.metadata" } & SecretStoreListInput)
   | RegisteredStateReadCommand
   | { type: "backup.runs" }
   | TuiLastSessionReadCommand
@@ -283,7 +278,6 @@ export type OpenClawStateReadRequest = {
 type ReadResult<Reply> = Reply extends { ok: true } ? Omit<Reply, "ok" | "sourceAdmitted"> : never;
 
 export type OpenClawStateReadResult =
-  | { type: "secrets.metadata"; rows: SecretStoreRow[] }
   | RegisteredStateReadResult
   | { type: "backup.runs"; runs: BackupRunRecord[] }
   | { type: "doctor.gatewayOwnerLease.read"; lease: GatewayOwnerLeaseIdentity | undefined }

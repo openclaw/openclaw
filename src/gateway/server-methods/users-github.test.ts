@@ -455,7 +455,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       await state.writeConfig(config);
       if (kind === "pat") {
         const secretName = "github-setup-11111111111111111111111111111111";
-        writeSecretStoreEntry({
+        await writeSecretStoreEntry({
           scope: { kind: "team" },
           name: secretName,
           value: tokens.accessToken,
@@ -845,7 +845,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     });
     expect(dir).toContain(path.join("credentials", "github", "personal"));
     expect((await fs.stat(dir)).mode & 0o077).toBe(0);
-    expect(listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
+    expect(await listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
     expect(readSecretStoreExecEnvironment({ includeSecretSentinels: true })).toEqual({});
     expect(listGitHubOAuthRecords()).toEqual([]);
     expect(listGitHubDeviceAuthorizationRecords()).toEqual([]);

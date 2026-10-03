@@ -323,7 +323,7 @@ async function stageProviderAuthProfilesForPersistence(params: {
   let rollbackPromise: Promise<void> | undefined;
   let releasePromise: Promise<void> | undefined;
   const release = () => {
-    releasePromise ??= releaseProviderAuthLocks(locks).catch((error) => {
+    releasePromise ??= releaseProviderAuthLocks(locks).catch((error: unknown) => {
       throw toErrorObject(error, "Provider auth persistence lock release failed");
     });
     return releasePromise;
