@@ -42,6 +42,11 @@ vi.mock("../secrets/target-registry-data.js", async (importOriginal) => {
   };
 });
 
+const emptyCatalogMigration = vi.hoisted(() => () => ({
+  detected: 0,
+  migrated: 0,
+  warnings: [] as string[],
+}));
 const mocks = vi.hoisted(() => ({
   isDefaultInstallIdentity: vi.fn(() => true),
   isContainerEnvironment: vi.fn(() => false),
@@ -61,16 +66,8 @@ const mocks = vi.hoisted(() => ({
     changes: [],
     warnings: [],
   })),
-  maybeMigrateLegacyPluginModelCatalogs: vi.fn().mockResolvedValue({
-    detected: 0,
-    migrated: 0,
-    warnings: [],
-  }),
-  maybeMigrateModelCatalogCredentials: vi.fn(async () => ({
-    detected: 0,
-    migrated: 0,
-    warnings: [],
-  })),
+  maybeMigrateLegacyPluginModelCatalogs: vi.fn().mockResolvedValue(emptyCatalogMigration()),
+  maybeMigrateModelCatalogCredentials: vi.fn(async () => emptyCatalogMigration()),
   maybeRepairGatewayDaemon: vi.fn().mockResolvedValue(undefined),
   maybeRepairLegacyOAuthProfileIds: vi.fn(async (cfg: unknown) => ({
     config: cfg,
@@ -116,6 +113,7 @@ const mocks = vi.hoisted(() => ({
   noteMacDisabledGatewayLaunchAgent: vi.fn(),
   noteMacLaunchctlGatewayEnvOverrides: vi.fn(),
   noteMacStaleOpenClawUpdateLaunchdJobs: vi.fn(),
+  maybeRepairMacGatewayServiceEnvQuotes: vi.fn(),
   gatewaySecretInputPathCanWin: vi.fn(),
   readGatewaySecretInputValue: vi.fn((..._args: unknown[]) => undefined as string | undefined),
   checkGatewayHealth: vi.fn(async () => ({
@@ -415,6 +413,7 @@ vi.mock("../commands/doctor-platform-notes.js", () => ({
   noteMacDisabledGatewayLaunchAgent: mocks.noteMacDisabledGatewayLaunchAgent,
   noteMacLaunchctlGatewayEnvOverrides: mocks.noteMacLaunchctlGatewayEnvOverrides,
   noteMacStaleOpenClawUpdateLaunchdJobs: mocks.noteMacStaleOpenClawUpdateLaunchdJobs,
+  maybeRepairMacGatewayServiceEnvQuotes: mocks.maybeRepairMacGatewayServiceEnvQuotes,
 }));
 
 vi.mock("../commands/doctor-foreign-launchd-jobs.js", () => ({
