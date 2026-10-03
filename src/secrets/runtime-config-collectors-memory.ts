@@ -64,12 +64,20 @@ function resolveMemoryEmbeddingProviderContract(params: {
       candidateId,
     );
     if (providerConfig) {
+      // Managed local services authenticate with a provider-owned synthetic marker.
+      // Authored remote credentials are irrelevant for that transport and must not
+      // make the memory capability unavailable when their SecretRefs cannot resolve.
+      const managedLocalService = providerConfig.localService !== undefined;
       providerConfigs.set(candidateId, {
         baseUrl: providerConfig.baseUrl,
-        apiKey: providerConfig.apiKey,
-        auth: providerConfig.auth,
-        authHeader: providerConfig.authHeader,
-        headers: providerConfig.headers,
+        ...(managedLocalService
+          ? {}
+          : {
+              apiKey: providerConfig.apiKey,
+              auth: providerConfig.auth,
+              authHeader: providerConfig.authHeader,
+              headers: providerConfig.headers,
+            }),
         request: providerConfig.request,
         params: providerConfig.params,
         region: providerConfig.region,
