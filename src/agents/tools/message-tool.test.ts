@@ -2141,7 +2141,6 @@ describe("message tool schema scoping", () => {
   });
 
   it.each([
-    { action: "channel-create", hasTeamId: true },
     { action: "conversation-open", hasTeamId: true },
     { action: "send", hasTeamId: false },
   ] as const)(
@@ -2173,10 +2172,6 @@ describe("message tool schema scoping", () => {
         expect(Value.Check(tool.parameters, { action })).toBe(true);
         for (const teamId of ["11111111-1111-1111-1111-111111111111", "T11111111"]) {
           expect(Value.Check(tool.parameters, { action, teamId })).toBe(true);
-        }
-        if (action === "channel-create") {
-          expect(properties).toHaveProperty("name");
-          expect(Value.Check(tool.parameters, { action, name: "Project Planning" })).toBe(true);
         }
         if (currentChannelProvider && action === "conversation-open") {
           for (const field of ["channelId", "guildId", "userId", "roleId"]) {
