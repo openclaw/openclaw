@@ -46,6 +46,8 @@ type CompactionReason = "manual" | "threshold" | "overflow";
 type CompactionRequestState = "unresolved";
 // "deterministic" makes no model call: the host commits compactWithoutSummary after a failed summary.
 type SummaryOutputPolicy = "none" | "retry-invalid-once" | "deterministic";
+// onSummaryReady marks the end of summary generation; later waits are persistence, not summary.
+type AutomaticCompactionOptions = CompactionRequestConstraints & { onSummaryReady?: () => void };
 type CompactionWorkOutcome =
   | { status: "completed"; result: CompactionResult; tokensAfter: number }
   | { status: "aborted" }
@@ -98,7 +100,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     customInstructions?: string,
     requestState?: CompactionRequestState,
     summaryOutputPolicy: SummaryOutputPolicy = "retry-invalid-once",
-    constraints?: CompactionRequestConstraints,
+    constraints?: AutomaticCompactionOptions,
   ): Promise<SettledCompactionWorkOutcome> {
     return await this.runWithSessionWriteSettlement(() =>
       this.compactWithSessionWriteSettlement(
@@ -114,7 +116,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     customInstructions?: string,
     summaryOutputPolicy: SummaryOutputPolicy = "none",
     requestState?: CompactionRequestState,
-    constraints?: CompactionRequestConstraints,
+    constraints?: AutomaticCompactionOptions,
   ): Promise<SettledCompactionWorkOutcome> {
     this.disconnectFromAgent();
     await this.abort();
@@ -201,6 +203,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     summaryOutputPolicy: SummaryOutputPolicy;
     requestBudget?: CompactionRequestBudget;
     pendingUserEntryId?: string;
+    onSummaryReady?: () => void;
   }): Promise<CompactionWorkOutcome> {
     const isManual = options.mode === "manual";
     const assertContextReplacementActive = this.assertContextReplacementActive;
@@ -393,6 +396,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       }
       compactionResult = unwrapCoreResult(result);
     }
+    options.onSummaryReady?.();
 
     if (options.signal.aborted) {
       return { status: "aborted" };

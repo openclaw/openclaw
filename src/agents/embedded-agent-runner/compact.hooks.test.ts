@@ -31,6 +31,7 @@ import type { AgentHarness } from "../harness/types.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { getModelProviderLocalServiceReconciler } from "../provider-local-service-reconcile.js";
 import { createSessionMaintenanceOwner } from "../session-maintenance/coordinator.js";
+import { agentSessionAutomaticCompaction } from "../sessions/agent-session-compaction.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -521,6 +522,45 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     await expect(pending).resolves.toMatchObject({ ok: true, compacted: true });
     expect(createAgentSessionMock).toHaveBeenCalledTimes(2);
     expect(compactionTimeoutReset).toHaveBeenCalledTimes(6);
+  });
+
+  it("keeps a timeout after summary generation as a failure instead of discarding it", async () => {
+    const createAgentSession = createAgentSessionMock.getMockImplementation();
+    if (!createAgentSession) {
+      throw new Error("Expected a create-agent-session implementation");
+    }
+    const policies: unknown[] = [];
+    const entered = createDeferred();
+    createAgentSessionMock.mockImplementation(async (...args) => {
+      const created = await createAgentSession(...args);
+      // The summary is ready; persistence then outlives the watchdog.
+      created.session[agentSessionAutomaticCompaction] = vi.fn(
+        async (_instructions, _state, policy, options?: { onSummaryReady?: () => void }) => {
+          policies.push(policy);
+          options?.onSummaryReady?.();
+          entered.resolve(undefined);
+          return await createDeferred<never>().promise;
+        },
+      );
+      return created;
+    });
+    vi.useFakeTimers();
+    try {
+      const pending = compactEmbeddedAgentSessionDirect(
+        wrappedCompactionArgs({ trigger: "budget" }),
+      );
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(181_000);
+
+      await expect(pending).resolves.toMatchObject({
+        ok: false,
+        compacted: false,
+        reason: expect.stringContaining("timed out"),
+      });
+      expect(policies).toEqual([undefined]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("fails closed before generic compaction for a model-locked native session", async () => {

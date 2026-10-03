@@ -479,6 +479,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         const activeSession = session;
         let clientResult: Awaited<ReturnType<typeof activeSession.compact>> | undefined;
         let summaryTimedOut = false;
+        // A timeout after generation is persistence; recovery would discard a real summary.
+        let summaryReady = false;
         if (!serverResult) {
           const compactClient = (summaryOutputPolicy: "none" | "deterministic" | undefined) =>
             compactWithSafetyTimeout(
@@ -501,6 +503,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                   {
                     requestBudget: accountingRecorder?.requestBudget,
                     pendingUserEntryId: accountingRecorder?.pendingUserEntryId,
+                    onSummaryReady: () => {
+                      summaryReady = true;
+                    },
                   },
                 );
               },
@@ -518,7 +523,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             ).catch(async (error: unknown) => {
               // Caller Stop, run timeout, and the outer host deadline abort params.abortSignal
               // (#133260, #159105, #130993); manual /compact reports its own failure.
-              if (trigger === "manual" || params.abortSignal?.aborted) {
+              if (trigger === "manual" || params.abortSignal?.aborted || summaryReady) {
                 throw error;
               }
               const failure = resolveCompactionFailure({
