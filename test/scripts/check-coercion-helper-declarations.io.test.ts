@@ -8,23 +8,21 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const parseError = vi.hoisted(() => new Error("first source parse failed"));
 
-vi.mock("../../scripts/lib/native-typescript.mts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../scripts/lib/native-typescript.mts")>();
+vi.mock("typescript/unstable/sync", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("typescript/unstable/sync")>();
   return {
     ...actual,
-    createNativeTypeScriptParser: (
-      ...args: Parameters<typeof actual.createNativeTypeScriptParser>
-    ) => {
-      const parser = actual.createNativeTypeScriptParser(...args);
-      return {
-        ...parser,
-        parseSourceFile(fileName: string, content: string) {
+    API: class extends actual.API {
+      constructor(...args: ConstructorParameters<typeof actual.API>) {
+        super(...args);
+        const createSourceFile = this.createSourceFile;
+        vi.spyOn(this, "createSourceFile").mockImplementation((fileName, content, options) => {
           if (fileName === "a-parse.ts") {
             throw parseError;
           }
-          return parser.parseSourceFile(fileName, content);
-        },
-      };
+          return createSourceFile(fileName, content, options);
+        });
+      }
     },
   };
 });
