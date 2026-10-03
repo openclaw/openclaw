@@ -458,14 +458,14 @@ export function registerShutdownCompletionTests({
   });
 
   it.each([true, false])(
-    "bounds abandoned cleanup after an exhausted deferral and managed parking (restore commit=%s)",
+    "bounds abandoned cleanup after a zero-drain request and managed parking (restore commit=%s)",
     async (restoreCommitted) => {
       vi.clearAllMocks();
       process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
       setPlatform("linux");
       consumeGatewayRestartIntent.mockReturnValueOnce({
         force: true,
-        drainBudgetExhausted: true,
+        waitMs: 0,
         reason: "update.run",
         successorOwner: managedUpdateSuccessorOwner,
       });
@@ -507,7 +507,7 @@ export function registerShutdownCompletionTests({
   it("retains external supervisor recovery when timeout prevents a restart handoff", async () => {
     vi.clearAllMocks();
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-    consumeGatewayRestartIntent.mockReturnValueOnce({ force: true, drainBudgetExhausted: true });
+    consumeGatewayRestartIntent.mockReturnValueOnce({ force: true, waitMs: 0 });
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { close, runtime } = await createSignaledLoopHarness();
       close.mockReturnValue(new Promise<void>(() => {}));
@@ -558,7 +558,7 @@ export function registerShutdownCompletionTests({
   it("retains the restart deadline when a managed update arrives after final cleanup fails", async () => {
     vi.clearAllMocks();
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-    consumeGatewayRestartIntent.mockReturnValueOnce({ force: true, drainBudgetExhausted: true });
+    consumeGatewayRestartIntent.mockReturnValueOnce({ force: true, waitMs: 0 });
     restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "supervised" });
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { close, start, runtime, exited } = await createSignaledLoopHarness(undefined, true);

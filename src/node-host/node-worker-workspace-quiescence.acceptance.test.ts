@@ -8,7 +8,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { REMOTE_WORKSPACE_RESUME_JS } from "../gateway/worker-environments/workspace-quiescence-scripts.js";
 import { createWorkerWorkspaceQuiescence } from "../gateway/worker-environments/workspace-quiescence.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
@@ -164,6 +163,7 @@ describe.runIf(process.platform === "linux")("native watchdog lifecycle", () => 
     });
     expect(f.runtime.processes.hasActiveWork()).toBe(false);
     expect(f.runtime.quiescence.hasActiveWork()).toBe(true);
+    const controlSpawns = spawned.mock.calls.length;
     await f.command(renew);
     expect(f.readLease().watchdog).toEqual(lease.watchdog);
     expect(processIdentity.requireNodeWorkerProcessIdentity(lease.watchdog.pid)).toEqual(exact);
@@ -172,6 +172,7 @@ describe.runIf(process.platform === "linux")("native watchdog lifecycle", () => 
     const done = once(helper, "close");
     await f.command(release);
     await done;
+    expect(spawned).toHaveBeenCalledTimes(controlSpawns);
     expect(processIdentity.inspectNodeWorkerProcessIdentity(exact)).not.toBe("live");
     expect(f.runtime.quiescence.hasActiveWork()).toBe(false);
     expect(fs.existsSync(f.leasePath)).toBe(false);
@@ -254,36 +255,62 @@ describe.runIf(process.platform === "linux")("native watchdog lifecycle", () => 
     expect(fs.existsSync(f.workspaceDir)).toBe(false);
   });
 
-  it("joins an in-flight renewal before closing the native lease and releases its hold", async () => {
-    const f = fixture();
-    await f.command(acquire);
-    const supervisor = getProcessSupervisor();
-    const original = supervisor.spawn.bind(supervisor);
-    const entered = createDeferred();
-    const unblock = createDeferred();
-    const spy = vi.spyOn(supervisor, "spawn").mockImplementationOnce(async (input) => {
-      entered.resolve();
-      await unblock.promise;
-      return original(input);
-    });
-    const renewal = f.command(renew);
-    await entered.promise;
-    const closing = f.runtime.quiescence.close();
-    const observedRenewal = expect(renewal).rejects.toThrow(/closed|identity changed/);
-    try {
-      expect(f.runtime.quiescence.hasActiveWork()).toBe(true);
-      expect(fs.existsSync(f.leasePath)).toBe(true);
-    } finally {
-      // A failed assertion must not leave teardown waiting on this test-owned gate.
-      unblock.resolve();
-      await Promise.all([observedRenewal, closing]);
-    }
-    expect(spy).toHaveBeenCalledTimes(2);
-    expect(f.runtime.quiescence.hasActiveWork()).toBe(false);
-    expect(fs.existsSync(f.leasePath)).toBe(false);
-    await f.collect(1);
-    expect(fs.existsSync(f.workspaceDir)).toBe(false);
-  });
+  it.each([false, true])(
+    "joins an accepted renewal before releasing custody (caller cancelled: %s)",
+    async (cancelled) => {
+      const f = fixture();
+      const preload = path.join(path.dirname(f.workspaceDir), "hold-renewal.cjs");
+      fs.writeFileSync(
+        preload,
+        `const send = process.send.bind(process);
+let reply;
+process.send = (message, ...args) => {
+  if (message?.type === "workspace-quiescence-result" && message.action === "renew") {
+    reply = () => send(message, ...args);
+    return send({ type: "acceptance-renewal-held" });
+  }
+  return send(message, ...args);
+};
+process.on("message", (message) => {
+  if (message?.type === "acceptance-renewal-release") { const publish = reply; reply = undefined; publish?.(); }
+});`,
+      );
+      const original = childProcess.spawn;
+      const entered = createDeferred<childProcess.ChildProcess>();
+      spyOnSpawn().mockImplementationOnce((...args: Parameters<typeof childProcess.spawn>) => {
+        const [command, argv, options] = args;
+        const child = original(command, ["--require", preload, ...argv], options);
+        child.on("message", (message: unknown) => {
+          if (isRecord(message) && message.type === "acceptance-renewal-held") {
+            entered.resolve(child);
+          }
+        });
+        return child;
+      });
+      await f.command(acquire);
+      const caller = new AbortController();
+      const renewal = f.command(renew, caller.signal);
+      const helper = await entered.promise;
+      if (cancelled) {
+        caller.abort();
+      }
+      const observedRenewal = expect(renewal).rejects.toThrow(
+        cancelled ? /aborted/i : /closed|identity changed/,
+      );
+      const closing = f.runtime.quiescence.close();
+      try {
+        expect(f.runtime.quiescence.hasActiveWork()).toBe(true);
+        expect(fs.existsSync(f.leasePath)).toBe(true);
+      } finally {
+        helper.send({ type: "acceptance-renewal-release" });
+        await Promise.all([observedRenewal, closing]);
+      }
+      expect(f.runtime.quiescence.hasActiveWork()).toBe(false);
+      expect(fs.existsSync(f.leasePath)).toBe(false);
+      await f.collect(1);
+      expect(fs.existsSync(f.workspaceDir)).toBe(false);
+    },
+  );
 
   it("joins startup before close removes the lease and retained child", async () => {
     const f = fixture();
@@ -322,7 +349,8 @@ process.on("message", (message) => {
 });`,
       );
       const original = childProcess.spawn;
-      const spawned = spyOnSpawn().mockImplementation(
+      // Only the watchdog owns this clock; release controls must keep their real timers.
+      const spawned = spyOnSpawn().mockImplementationOnce(
         (...args: Parameters<typeof childProcess.spawn>) => {
           const [command, argv, options] = args;
           return original(command, ["--require", preload, ...argv], options);
@@ -422,7 +450,7 @@ process.on("message", (message) => {
     const acquiring = f.runtime.exec({ ...f.input(acquire), timeoutMs: 37_000 }, caller.signal);
     const acquisition = acquiring.catch((error: unknown) => error);
     let closing: Promise<void> | undefined;
-    let unblockRecovery: (() => void) | undefined;
+    let restoreLease: (() => void) | undefined;
     try {
       await held.promise;
       caller.abort();
@@ -448,24 +476,25 @@ process.on("message", (message) => {
         }
       }
       if (mode === "recovery-error") {
-        const failed = createDeferred<never>();
-        void failed.promise.catch(() => undefined);
-        const failure = new Error("recovery failed");
-        unblockRecovery = () => failed.reject(failure);
-        const recovering = vi
-          .spyOn(getProcessSupervisor(), "spawn")
-          .mockImplementationOnce(() => failed.promise);
+        const raw = fs.readFileSync(f.leasePath, "utf8");
+        restoreLease = () => fs.writeFileSync(f.leasePath, raw);
+        const lease = f.readLease();
+        lease.watchdog.start = "replaced watchdog";
+        fs.writeFileSync(f.leasePath, JSON.stringify(lease));
         const readyPublished = once(helper!, "message");
         helper!.send({ type: "acceptance-ready-release" });
         await readyPublished;
-        expect(recovering).toHaveBeenCalledOnce();
-        closing = expect(f.runtime.quiescence.close()).rejects.toMatchObject({ errors: [failure] });
-        failed.reject(failure);
+        closing = expect(f.runtime.quiescence.close()).rejects.toMatchObject({
+          errors: [
+            expect.objectContaining({
+              message: "native quiescence lease changed its process scope",
+            }),
+          ],
+        });
         await closing;
         expect(f.runtime.quiescence.hasActiveWork()).toBe(true);
         expect(fs.existsSync(f.leasePath)).toBe(true);
         expect(processIdentity.inspectNodeWorkerProcessIdentity(exact)).toBe("live");
-        // Finally retries the failed exact-lease recovery, not a replacement PID.
         return;
       }
       if (mode === "retry") {
@@ -478,23 +507,9 @@ process.on("message", (message) => {
         const retired = once(helper!, "close");
         helper!.send({ type: "acceptance-ready-release" });
         await readyPublished;
-        // The startup event resumes the owner's cleanup before this observer.
-        // No close, release request or retry is allowed to initiate recovery.
-        expect(recovering).toHaveBeenCalledOnce();
-        expect(recovering).toHaveBeenCalledWith(
-          expect.objectContaining({
-            mode: "child",
-            argv: [
-              process.execPath,
-              "-e",
-              REMOTE_WORKSPACE_RESUME_JS,
-              f.workspaceDir,
-              nonce,
-              "owned",
-            ],
-          }),
-        );
+        // Abandoned startup is settled by its retained helper, without a control child.
         await retired;
+        expect(recovering).not.toHaveBeenCalled();
         expect(processIdentity.inspectNodeWorkerProcessIdentity(exact)).not.toBe("live");
         expect(fs.existsSync(f.leasePath)).toBe(false);
         await expect(f.command({ ...acquire, nonce: nextNonce })).resolves.toMatchObject({
@@ -527,7 +542,7 @@ process.on("message", (message) => {
       expect(processIdentity.inspectNodeWorkerProcessIdentity(exact)).toBe("live");
     } finally {
       vi.useRealTimers();
-      unblockRecovery?.();
+      restoreLease?.();
       caller.abort();
       if (helper?.connected) {
         helper.send({ type: "acceptance-ready-release" });

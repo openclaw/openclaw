@@ -83,7 +83,7 @@ export function createNodeRunnerStatePublisher(
     return Boolean(
       node &&
       node.client.invalidated !== true &&
-      resolveNodeWorkerSupervisorProof(node, runnerInventoryByConn),
+      resolveNodeWorkerSupervisorState(node, runnerInventoryByConn),
     );
   };
   return {
@@ -184,7 +184,7 @@ export function collectNodeRunnerCatalogState(params: {
     if (!state || !current || current.connId !== node.connId) {
       continue;
     }
-    const proof = resolveNodeWorkerSupervisorProof(current, state.runnerInventoryByConn);
+    const proof = resolveNodeWorkerSupervisorState(current, state.runnerInventoryByConn);
     if (proof && proof.pairingGeneration === node.pairingGeneration) {
       sessionHostNodeIds.add(node.nodeId);
     }
@@ -208,6 +208,21 @@ export function collectNodeRunnerCatalogState(params: {
 }
 
 export function resolveNodeWorkerSupervisorProof(
+  node: NodeRunnerRegistrySession,
+  runnerInventoryByConn: ReadonlyMap<string, NodeRunnerInventoryRecord>,
+): NodeWorkerSupervisorNodeProof | undefined {
+  const current = resolveNodeWorkerSupervisorState(node, runnerInventoryByConn);
+  return current
+    ? {
+        ...current,
+        workerHost: structuredClone(current.workerHost),
+        commands: [...current.commands],
+      }
+    : undefined;
+}
+
+// Synchronous registry reads borrow admitted facts; only escaping proofs need a snapshot.
+function resolveNodeWorkerSupervisorState(
   node: NodeRunnerRegistrySession,
   runnerInventoryByConn: ReadonlyMap<string, NodeRunnerInventoryRecord>,
 ): NodeWorkerSupervisorNodeProof | undefined {
@@ -236,8 +251,8 @@ export function resolveNodeWorkerSupervisorProof(
     clientId: node.clientId,
     clientMode: "node",
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-    workerHost: structuredClone(declaration.workerHost),
-    commands: [...node.commands],
+    workerHost: declaration.workerHost,
+    commands: node.commands,
   };
 }
 
@@ -286,7 +301,7 @@ export function isNodeWorkerSupervisorProofCurrent(
   if (!node || node.client.invalidated === true || node.connId !== proof.connId) {
     return false;
   }
-  const current = resolveNodeWorkerSupervisorProof(node, runnerInventoryByConn);
+  const current = resolveNodeWorkerSupervisorState(node, runnerInventoryByConn);
   return (
     current?.pairingIdentity === proof.pairingIdentity &&
     current.pairingGeneration === proof.pairingGeneration &&

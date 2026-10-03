@@ -451,13 +451,13 @@ describe("worker turn execution", () => {
       );
       const committed = (await openSessionManager()).getPersistedEntries();
       const committedRows = readWorkerTurnTranscriptStorageRows();
-      expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
       abort.abort(new Error("cancel after terminal acknowledgement"));
       release.resolve();
       expect(await operation).toMatchObject({ payloads: [{ text: "Committed reply 🦞" }] });
       expect((await openSessionManager()).getPersistedEntries()).toEqual(committed);
       expect(readWorkerTurnTranscriptStorageRows()).toEqual(committedRows);
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
       expect(launchTurn).toHaveBeenCalledOnce();
       expect(runLocal).not.toHaveBeenCalled();

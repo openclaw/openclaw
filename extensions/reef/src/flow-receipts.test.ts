@@ -1,3 +1,7 @@
+import {
+  createTestGatewayScheduler,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   canonicalBytes,
@@ -24,8 +28,13 @@ import { processReefInboxEntriesInOrder, ReefReceiptNotifier } from "./owner-not
 import type { ReefTransportClient } from "./transport.js";
 import type { InboxEntry } from "./types.js";
 
+const schedulers: ReturnType<typeof createTestPluginServiceScheduler>[] = [];
+
 beforeEach(resetFlowStoresForTests);
-afterEach(resetFlowStoresForTests);
+afterEach(async () => {
+  await Promise.all(schedulers.splice(0).map((scheduler) => scheduler.stop()));
+  await resetFlowStoresForTests();
+});
 
 type FlowOptions = ConstructorParameters<typeof ReefMessageFlow>[0];
 type TrustedReef = ReturnType<typeof trust>;
@@ -67,21 +76,27 @@ function createReceiptNotifier(
   trusted: TrustedReef,
   notify: ConstructorParameters<typeof ReefReceiptNotifier>[0],
 ): ReefReceiptNotifier {
-  return new ReefReceiptNotifier(notify, {
-    loadState: (peer) => trusted.store.rejectionNoticeState(peer),
-    reserve: (rejection, noticeState) =>
-      trusted.store.reserveOutboundRejectionNotice(
-        rejection.peer,
-        rejection.id,
-        rejection.recipient,
-        noticeState,
-      ),
-    complete: (rejection, noticeState) => {
-      if (!trusted.store.completeOutboundRejection(rejection.peer, rejection.id, noticeState)) {
-        throw new Error(`missing rejection ${rejection.id}`);
-      }
+  const scheduler = createTestPluginServiceScheduler(createTestGatewayScheduler());
+  schedulers.push(scheduler);
+  return new ReefReceiptNotifier(
+    notify,
+    {
+      loadState: (peer) => trusted.store.rejectionNoticeState(peer),
+      reserve: (rejection, noticeState) =>
+        trusted.store.reserveOutboundRejectionNotice(
+          rejection.peer,
+          rejection.id,
+          rejection.recipient,
+          noticeState,
+        ),
+      complete: (rejection, noticeState) => {
+        if (!trusted.store.completeOutboundRejection(rejection.peer, rejection.id, noticeState)) {
+          throw new Error(`missing rejection ${rejection.id}`);
+        }
+      },
     },
-  });
+    { scheduler },
+  );
 }
 
 describe("ReefMessageFlow delivery receipts", () => {

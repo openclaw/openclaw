@@ -63,20 +63,19 @@ export function withDurableDeliveryRuntime<T>(
     !isDeepStrictEqual(cfg.channels?.defaults, input.cfg.channels?.defaults) ||
     !channel ||
     !retainedChannel ||
-    !prepareRuntimeHandoff ||
     !isDeepStrictEqual(
       cfg.plugins?.entries?.[channel.pluginId],
       input.cfg.plugins?.entries?.[channel.pluginId],
     )
   ) {
-    return reject(
-      "The reply channel changed or cannot preserve its sender; delivery was not started.",
-    );
+    return reject("The reply channel changed; delivery was not started.");
   }
   // Drop both inherited generation selectors, but retain the exact authenticated caller.
+  // The retained registration and unchanged settings keep the admitted sender. Channels whose
+  // credential can change outside config (env, files, SecretRefs) pin it through the callback.
   return runOutsidePluginRuntimeGenerationScope(() =>
     withPluginRuntimeRegistryScope(current, () => {
-      const preparedCfg = prepareRuntimeHandoff(cfg);
+      const preparedCfg = prepareRuntimeHandoff ? prepareRuntimeHandoff(cfg) : cfg;
       assertCurrent();
       return deliver(preparedCfg, assertCurrent);
     }),

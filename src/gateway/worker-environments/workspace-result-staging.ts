@@ -338,12 +338,11 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
 }) {
   const stagedResult = params.request.stagedResult;
   const candidateRef = preparedWorkerWorkspaceResultRef(stagedResult.ref);
-  const active = activeWorkspaceHashContext();
-  const hashMemo = active?.memo ?? new Map();
-  const metrics = active?.metrics;
+  const { memo: hashMemo = new Map(), metrics } = activeWorkspaceHashContext() ?? {};
   let appliedWorkspaceResult: WorkerWorkspaceApplyResult | undefined;
-  await stageWorkerWorkspaceResult({
-    root: params.request.localPath,
+  const root = await fs.realpath(params.request.localPath);
+  const commit = await stageWorkerWorkspaceResult({
+    root,
     stagingRoot: params.stagingRoot,
     stagedResultRef: candidateRef,
     baseManifestRef: params.request.baseManifestRef,
@@ -361,10 +360,6 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
       appliedWorkspaceResult = unchanged;
       return;
     }
-    const root = await ensureWorkerWorkspaceResultRepository(
-      params.request.localPath,
-      params.request.assertCurrent,
-    );
     appliedWorkspaceResult = await withWorkspaceHashMemo(
       hashMemo,
       async () =>
@@ -391,11 +386,6 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
       await local.verifyLocalStable();
     },
     publishStagedResult: async () => {
-      const root = await ensureWorkerWorkspaceResultRepository(
-        params.request.localPath,
-        params.request.assertCurrent,
-      );
-      const commit = await requireGit(root, ["rev-parse", `${candidateRef}^{commit}`]);
       await updateWorkspaceResultRefs(
         root,
         [{ ref: stagedResult.ref, objectId: commit }, { ref: candidateRef }],

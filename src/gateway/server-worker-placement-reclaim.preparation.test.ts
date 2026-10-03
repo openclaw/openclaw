@@ -1004,7 +1004,7 @@ it.each([
         expect(f.harness.environments.destroy).toHaveBeenCalledOnce();
         expect.soft(f.placements.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
         expect(f.placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
-        expect(f.placements.listPendingWorkspaceResults()).toEqual([]);
+        expect(await f.placements.listPendingWorkspaceResultsAsync()).toEqual([]);
         expect(f.harness.environments.createWithRequest).toHaveBeenCalledOnce();
         expect(f.harness.log.filter((event) => event === "placement:requested")).toHaveLength(1);
       }

@@ -90,8 +90,11 @@ export async function prepareInProcessAgentExecution(input: PrepareInProcessAgen
     assertCurrent,
     async authorize() {
       assertLifetime();
-      const { authorizeGatewayRequestPreDispatch, createRequestGatewayMethodRegistry } =
-        await import("./server-methods.js");
+      const [{ authorizeGatewayRequestPreDispatch }, { createRequestGatewayMethodRegistry }] =
+        await Promise.all([
+          import("./server-methods/request-authorization.js"),
+          import("./server-methods.js"),
+        ]);
       assertLifetime();
       const { error } = await authorizeGatewayRequestPreDispatch({
         method: "agent",
@@ -196,8 +199,11 @@ export function withInProcessGatewayRead<T>(
           throw new Error(params.callerAuthorityError);
         }
       };
-      const { authorizeGatewayRequestPreDispatch, createRequestGatewayMethodRegistry } =
-        await import("./server-methods.js");
+      const [{ authorizeGatewayRequestPreDispatch }, { createRequestGatewayMethodRegistry }] =
+        await Promise.all([
+          import("./server-methods/request-authorization.js"),
+          import("./server-methods.js"),
+        ]);
       assertLifetime();
       const authorization = await authorizeGatewayRequestPreDispatch({
         method,
@@ -241,8 +247,11 @@ export async function runWithInProcessGatewaySessionMutation<T>(
     requestParams,
     { forceSyntheticClient: true, syntheticScopeMode: "minimum" },
     async (resolved) => {
-      const { authorizeGatewayRequestPreDispatch, createRequestGatewayMethodRegistry } =
-        await import("./server-methods.js");
+      const [{ authorizeGatewayRequestPreDispatch }, { createRequestGatewayMethodRegistry }] =
+        await Promise.all([
+          import("./server-methods/request-authorization.js"),
+          import("./server-methods.js"),
+        ]);
       const assertInvocationCurrent = () => {
         assertCallerCurrent?.(method);
         resolved.assertContextCurrent();

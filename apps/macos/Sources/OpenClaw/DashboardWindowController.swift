@@ -95,18 +95,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     var onBackgroundSessionOpen: ((DashboardBackgroundSessionCompletion, URL) -> Void)?
-    var tlsParams: GatewayTLSParams? {
-        self.documentHost.tlsParams
-    }
-
-    var browserSession: GatewayBrowserSession? {
-        self.documentHost.browserSession
-    }
-
-    var hasCurrentBrowserSession: Bool {
-        self.documentHost.hasCurrentBrowserSession
-    }
-
     private let dashboardFrameAutosaveName: String
     let updater: UpdaterProviding?
     private var updateBridgeEnabled: Bool
@@ -340,7 +328,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         case let .openTab(url):
             self.nativeBrowser.openNewWindow(url, opener: webView)
         case let .openExternal(url):
-            self.openExternal(url)
+            ControlUIDocumentHost.openExternal(url)
         case .ignore:
             break
         }
@@ -531,11 +519,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.requestBrowserProfileImportOfferIfNeeded()
     }
 
-    private func openExternal(_ url: URL) {
-        guard ControlUIDocumentHost.isExternalURL(url) || ControlUIDocumentHost.isEditorURL(url) else { return }
-        AppActivation.shared.open(url)
-    }
-
     fileprivate func receiveMessage(_ message: WKScriptMessage) {
         switch message.name {
         case Self.linkMessageHandlerName: self.receiveLinkMessage(message)
@@ -550,25 +533,20 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private func receiveLinkMessage(_ message: WKScriptMessage) {
         // The page-world handler is privileged. Accept only the main frame of
         // the current Control UI path; reading tabs never receive it.
-        guard message.name == Self.linkMessageHandlerName,
-              message.webView === self.webView,
+        guard message.webView === self.webView,
               message.frameInfo.isMainFrame,
               ControlUIDocumentHost.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL),
-              let request = Self.linkRequest(from: message.body)
+              let url = Self.linkRequest(from: message.body)
         else {
             return
         }
 
-        switch request.target {
-        case .inline, .external:
-            // Older Control UI bundles still post inline; Mac tabs now use openclawBrowser.
-            self.openExternal(request.url)
-        }
+        // Older Control UI bundles still post inline; Mac tabs now use openclawBrowser.
+        ControlUIDocumentHost.openExternal(url)
     }
 
     private func receiveUpdateMessage(_ message: WKScriptMessage) {
-        guard message.name == Self.updateMessageHandlerName,
-              message.webView === self.webView,
+        guard message.webView === self.webView,
               message.frameInfo.isMainFrame,
               ControlUIDocumentHost.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL),
               Self.isStartUpdateRequest(message.body),
@@ -595,23 +573,24 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         return payload["type"] as? String == "start-update"
     }
 
-    static func linkRequest(from body: Any) -> DashboardLinkRequest? {
+    static func linkRequest(from body: Any) -> URL? {
         guard let payload = body as? [String: Any],
               payload["type"] as? String == "open-link",
               let rawURL = payload["url"] as? String,
               let url = URL(string: rawURL),
-              let rawTarget = payload["target"] as? String,
-              let target = DashboardLinkTarget(rawValue: rawTarget)
+              let target = payload["target"] as? String
         else {
             return nil
         }
         switch target {
-        case .inline:
+        case "inline":
             guard ControlUIDocumentHost.isHTTPURL(url) else { return nil }
-        case .external:
+        case "external":
             guard ControlUIDocumentHost.isExternalURL(url) else { return nil }
+        default:
+            return nil
         }
-        return DashboardLinkRequest(url: url, target: target)
+        return url
     }
 
     func refreshNativeScripts() {
@@ -841,7 +820,7 @@ extension DashboardWindowController {
               self.auth.usesBrowserIdentity,
               let url = self.webView.url, ControlUIDocumentHost.isTrustedLinkSource(url, dashboardURL: self.currentURL)
         else { return }
-        guard self.browserSession != nil else {
+        guard self.documentHost.browserSession != nil else {
             // Chrome and WebKit have separate cookies. Identity redirects must
             // return to this WebKit store, retaining the requested chat route.
             self.load(url)
@@ -874,7 +853,7 @@ extension DashboardWindowController {
 
     func browserSignInReturnURL(session: GatewayBrowserSession?, dashboardURL: URL) -> URL? {
         guard let route = self.browserSignInRoute,
-              let previous = self.browserSession, let session,
+              let previous = self.documentHost.browserSession, let session,
               previous.browserDataPrincipal == session.browserDataPrincipal,
               DashboardManager.notificationRoute(route.baseURL) == DashboardManager.notificationRoute(dashboardURL),
               ControlUIDocumentHost.isTrustedLinkSource(route.url, dashboardURL: dashboardURL)
@@ -999,8 +978,7 @@ extension DashboardWindowController {
     }
 
     private func receiveCommandsMessage(_ message: WKScriptMessage) {
-        guard message.name == Self.commandsMessageHandlerName,
-              message.webView === self.webView, message.frameInfo.isMainFrame,
+        guard message.webView === self.webView, message.frameInfo.isMainFrame,
               ControlUIDocumentHost.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL)
         else { return }
         self.refreshNativeCommandReadiness()
@@ -1025,7 +1003,7 @@ extension DashboardWindowController {
 
     func refreshGatewayHealth() {
         self.gatewayHealthReadRevision &+= 1
-        guard self.documentHost.hasLiveContent, self.hasRetainedWindow, self.hasCurrentBrowserSession,
+        guard self.documentHost.hasLiveContent, self.hasRetainedWindow, self.documentHost.hasCurrentBrowserSession,
               !self.isShowingFailurePage, !self.webView.isLoading, self.isTrustedDashboardDocument,
               let window else { return }
         let revision = self.gatewayHealthReadRevision
@@ -1040,7 +1018,7 @@ extension DashboardWindowController {
             guard let self, let window, self.window === window,
                   self.gatewayHealthReadRevision == revision, self.notificationSourceID == sourceID,
                   self.windowLifetimeRevision == lifetime, self.currentURL == sourceURL,
-                  self.documentHost.hasLiveContent, self.hasRetainedWindow, self.hasCurrentBrowserSession,
+                  self.documentHost.hasLiveContent, self.hasRetainedWindow, self.documentHost.hasCurrentBrowserSession,
                   !self.isShowingFailurePage, !self.webView.isLoading, self.isTrustedDashboardDocument
             else { return }
             // The web connection can change independently of the native picker.
@@ -1273,7 +1251,7 @@ extension DashboardWindowController {
         guard message.name == DashboardAppLinkMessageHandler.name,
               message.world === DashboardAppLinkMessageHandler.world,
               message.webView === self.webView, message.frameInfo.isMainFrame,
-              self.isWindowOpen, self.canDispatchNativeCommands, self.hasCurrentBrowserSession,
+              self.isWindowOpen, self.canDispatchNativeCommands, self.documentHost.hasCurrentBrowserSession,
               ControlUIDocumentHost.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL),
               let rawURL = message.body as? String, let url = URL(string: rawURL),
               url.scheme?.lowercased() == "openclaw", DeepLinkParser.parse(url) != nil else { return }
@@ -1283,7 +1261,7 @@ extension DashboardWindowController {
     private func handleAppLinkNavigation(_ action: WKNavigationAction) -> Bool {
         guard let url = action.request.url,
               action.targetFrame == nil || action.targetFrame?.isMainFrame == true,
-              self.isWindowOpen, self.canDispatchNativeCommands, self.hasCurrentBrowserSession,
+              self.isWindowOpen, self.canDispatchNativeCommands, self.documentHost.hasCurrentBrowserSession,
               ControlUIDocumentHost.shouldHandleAppLinkNavigation(
                   url,
                   navigationType: action.navigationType,
@@ -1302,7 +1280,7 @@ extension DashboardWindowController {
         let lifetime = self.windowLifetimeRevision
         let sourceID = self.notificationSourceID
         Task { @MainActor [weak self] in
-            guard let self, self.isWindowOpen, self.hasCurrentBrowserSession,
+            guard let self, self.isWindowOpen, self.documentHost.hasCurrentBrowserSession,
                   self.windowLifetimeRevision == lifetime, self.notificationSourceID == sourceID,
                   self.navigationFallbackIsCurrent(generation: generation, sourceURL: sourceURL)
             else { return }
@@ -1341,7 +1319,7 @@ extension DashboardWindowController {
                     navigationType: navigationAction.navigationType,
                     buttonNumber: navigationAction.buttonNumber)
                 {
-                    self.openExternal(url)
+                    ControlUIDocumentHost.openExternal(url)
                 }
                 decisionHandler(.cancel)
                 return
@@ -1480,7 +1458,7 @@ extension DashboardWindowController {
         case .allow:
             decisionHandler(.allow)
         case let .openExternal(url):
-            self.openExternal(url)
+            ControlUIDocumentHost.openExternal(url)
             decisionHandler(.cancel)
         case .cancel:
             decisionHandler(.cancel)

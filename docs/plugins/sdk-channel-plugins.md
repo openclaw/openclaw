@@ -426,8 +426,10 @@ and JavaScript, keep their existing contract.
       plugin reload. The channel must reject a changed admitted sender and return
       a config that pins the verified credential for all parts of that delivery.
       Core requires the exact retained channel registration and unchanged channel,
-      shared-default, and owning-plugin settings; channels without this callback
-      cannot transfer a final reply to a successor registry. The callback must not
+      shared-default, and owning-plugin settings for every successor handoff.
+      Channels without this callback deliver with the successor's unchanged
+      config; add the callback when the sender credential can change outside
+      config (environment, token files, SecretRef values). The callback must not
       persist credentials or change unrelated settings.
       Existing raw callbacks remain supported. An older adapter receives the
       payload through its original callback; it must adopt the prepared operation

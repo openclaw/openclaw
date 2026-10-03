@@ -73,7 +73,12 @@ export type CronRuntimeMutationContracts = {
     input: CronRuntimeMutationInputs["cron.mutateJobs"];
     facts: { deletionBlocked: boolean };
     preparation: { nowMs: number };
-    outcome: { store: CronStoreFile; jobsFingerprint: string; runtimeFingerprint: string };
+    outcome: {
+      store: CronStoreFile;
+      names: Map<string, string | undefined>;
+      jobsFingerprint: string;
+      runtimeFingerprint: string;
+    };
   };
   "cron.reserveRuns": {
     input: CronRuntimeMutationInputs["cron.reserveRuns"];

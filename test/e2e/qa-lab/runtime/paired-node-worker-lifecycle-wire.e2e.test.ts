@@ -601,6 +601,10 @@ describe("paired node worker lifecycle wire", () => {
         });
         const offline = await waitForTurn(operator, offlineRunId);
         expect(offline.status).toBe("error");
+        expect(offline).toMatchObject({
+          error:
+            "⚠️ The device runner is offline. Reconnect it, retry later, or bring the session back to this gateway.",
+        });
         expect(launchFrameForRun(workerNode, offlineRunId)).toBeUndefined();
         expect(await describePlacement(gateway, repairedKey)).toMatchObject({ state: "active" });
         await expectSuccessfulTurn({ operator, key: localKey, marker: "WIRE-LOCAL-AFTER-OFFLINE" });

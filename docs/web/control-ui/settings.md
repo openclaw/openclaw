@@ -235,7 +235,10 @@ shows the searchable local inventory. Select a plugin to open its overview.
 
 Opening a plugin shows its description, publisher when available, skills, tools,
 MCP servers, and full README on one overview. Select a tool to read its full
-description. The metadata rail shows available release details, categories, repository, and
+description. Expand an MCP server to see its published endpoint, transport,
+authentication method, requested permissions, and setup notes when available.
+These describe the connection; account connection status is shown separately.
+Plugins can bundle multiple MCP servers. The metadata rail shows available release details, categories, repository, and
 documentation. Security audits link to ClawHub.
 
 Installed, disabled plugins put **Enable** first as the primary action, followed

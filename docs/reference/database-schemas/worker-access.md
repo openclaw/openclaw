@@ -602,6 +602,17 @@ Commit receipts
 invalidate pending-result read observations without revoking separate turn
 claims; uncertain writes retain recovery custody and are not replayed.
 
+Workspace-result claim continuation, acceptance, cancellation, recovery handoff,
+and completion use the same placement writer. Pending-result listings use the
+existing shared-state reader. The placement authority owner prepares exact result
+facts and publishes acknowledged postimages before observers; synchronous
+filesystem guards consume those revocable facts. Acceptance still records the
+accepted result and removes its applied journal atomically. Lost replies retain
+known committed receipts, while unknown outcomes block further effects without
+authorizing inverse file changes or replay. Provider shutdown joins handoff before
+revoking the original environment. Schemas, retention, durability, and update
+behavior are unchanged.
+
 Workspace reconciliation journal reads use the shared-state reader, and journal
 creation, cleanup, orphan pruning, and manifest acceptance use the existing
 shared-state writer. Callers await durable journal creation before applying files
@@ -943,6 +954,15 @@ before returning the result. Cold archives retain their existing restoration
 owner. Native transaction callbacks and process-held incognito transcripts retain
 their synchronous reader; worker failures never fall back to host disk reads.
 
+Awaited full-transcript event reads use the same history worker's hydration stream.
+Compaction preflight, reset hooks, BTW context, exports, and the asynchronous SDK
+reader retain raw event order, read fences, and byte limits. The host captures the
+physical store before discovery yields and keeps its read custody through cold
+restoration and transfer cleanup. Incognito and the released synchronous SDK
+reader retain their native owners. Transaction-held scans for rewind, forks, and
+reset boundaries, plus session-memory capture, remain separate migration work.
+This changes no schema, stored bytes, retention, or update behavior.
+
 The asynchronous transcript-search facade similarly moves durable FTS reads for
 all four Gateway/tool callers through the existing worker lifecycle. Each caller
 rechecks current scope and authorization after awaiting. Warm `sessions.list`
@@ -1252,6 +1272,20 @@ ordinary discovery reads retain committed-state isolation. This avoids preparing
 a child-process snapshot while holding the shared-state write transaction. Agent
 database admission refusals remain with their in-memory admission owner. Schemas,
 retention, configuration, and update behavior are unchanged.
+
+Cron display names are prepared through the existing shared-state and history workers.
+Live resolvers retain their physical database generation; cron's mutation owner
+invalidates them on commit or uncertain settlement and publishes acknowledged
+name postimages before notifications. History, message lookup, and live streams
+refresh names at their existing asynchronous preparation boundaries; RPC history
+prepares names inside its admitted worker before encoding transferred response bytes. Default
+partition selection follows the captured request environment when a worker is reused. Deleted jobs
+use the existing “Automation” label. Unprepared or invalidated lookups fail with a
+refresh instruction instead of reading SQLite or showing an old name. The native
+name query remains only inside worker commands and Doctor's existing one-shot
+transaction hooks. Schemas, stored bytes, retention, and update behavior are unchanged.
+Read-only legacy state without a cron table retains the same fallback, using recorded
+schema facts without repairing the source database.
 
 Cron reservation creation, activation, exact reservation cleanup, and stale-family removal use typed
 commands through the existing worker mutation owner. The host retains the

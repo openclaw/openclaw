@@ -48,6 +48,7 @@ import {
 import { readWorkerPlacementChangeSnapshotInDatabase } from "../gateway/worker-environments/placement-row-codec.js";
 import { readWorkspaceJournalInDatabase } from "../gateway/worker-environments/placement-workspace-journal.js";
 import { isWorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.types.js";
+import { listPendingWorkerWorkspaceResultsInDatabase } from "../gateway/worker-environments/placement-workspace-result.js";
 import {
   readWorkerEnvironmentFacts,
   readWorkerEnvironmentPrunePage,
@@ -655,6 +656,12 @@ serveOwnedWorkerTasks(
               return {
                 type: command.type,
                 candidates: readWorkerPlacementRecoveryCandidatesInDatabase(db),
+              };
+            }
+            if (command.type === "workers.placementPendingResults") {
+              return {
+                type: command.type,
+                pendingResults: listPendingWorkerWorkspaceResultsInDatabase(db, command.sessionId),
               };
             }
             if (command.type === "workers.placementProjection") {

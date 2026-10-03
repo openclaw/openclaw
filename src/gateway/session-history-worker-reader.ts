@@ -1,3 +1,4 @@
+import { toUSVString } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
@@ -5,7 +6,9 @@ import type {
   SessionHistoryWorkerRequest,
   SessionHistoryWorkerResult,
 } from "../config/sessions/session-history-types.js";
-import { createCronJobNameResolver } from "../cron/store/job-name.js";
+import { readCronJobNamesInDatabase } from "../cron/store/job-name.kernel.js";
+import { resolveCronJobsStorePath } from "../cron/store/paths.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { getUserProfileDisplays } from "../state/user-profile-list.js";
 import { createCurrentUserProfileMessageProjector } from "./chat-display-projection.core.js";
 import {
@@ -202,15 +205,22 @@ export async function readSessionHistoryRequest(
       "RPC history requires its captured shared-state owner",
     );
     const state = { path, env };
+    const jobIds = [...new Set(readForwardedCronJobIds(messages).map(toUSVString))];
+    const names = jobIds.length
+      ? withExistingOpenClawStateDatabaseReadOnly(
+          ({ db }) =>
+            readCronJobNamesInDatabase(db, jobIds, resolveCronJobsStorePath(undefined, env)),
+          state,
+        )
+      : undefined;
     let profiles: ReturnType<typeof getUserProfileDisplays> | undefined;
     const project = createCurrentUserProfileMessageProjector((id) =>
       resolveCurrentUserProfileDisplay(id, (senderId) =>
         (profiles ??= getUserProfileDisplays(profileIds, state)).get(senderId),
       ),
     );
-    page.messages = projectForwardedMessages(
-      messages,
-      createCronJobNameResolver(readForwardedCronJobIds(messages), state),
+    page.messages = projectForwardedMessages(messages, (jobId) =>
+      names?.get(toUSVString(jobId)),
     ).map(project);
     return {
       kind: "rpc",

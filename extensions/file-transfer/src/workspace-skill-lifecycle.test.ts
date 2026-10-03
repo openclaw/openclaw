@@ -3,10 +3,12 @@ import path from "node:path";
 import { getAgentWorkspaceAccess } from "openclaw/plugin-sdk/agent-workspace-runtime";
 import type {
   OpenClawPluginApi,
-  OpenClawPluginService,
   OpenClawPluginServiceContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { registerNodeWorkspaces } from "./workspace-service.js";
@@ -35,7 +37,8 @@ vi.mock("openclaw/plugin-sdk/agent-workspace-runtime", async (importOriginal) =>
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let local: string;
 let remote: string;
-let service: OpenClawPluginService;
+let service: Parameters<OpenClawPluginApi["registerService"]>[0];
+let scheduler: ReturnType<typeof createTestPluginServiceScheduler>;
 let api: OpenClawPluginApi;
 let nodePolicy: {
   allowReadPaths: string[];
@@ -55,9 +58,11 @@ function context() {
     stateDir: local,
     invokeNode: invoke,
     openNodeDuplex: openDuplex,
+    scheduler,
   };
 }
 beforeEach(async () => {
+  scheduler = createTestPluginServiceScheduler();
   const parent = await fs.realpath(tempDirs.make("node-skill-lifecycle-"));
   local = path.join(parent, "gateway");
   remote = path.join(parent, "harness");
@@ -89,7 +94,12 @@ beforeEach(async () => {
   registerNodeWorkspaces(api);
 });
 afterEach(async () => {
-  await service.stop?.(context());
+  scheduler.beginClose();
+  try {
+    await service.stop?.(context());
+  } finally {
+    await scheduler.stop();
+  }
 });
 function skillRequest() {
   return {

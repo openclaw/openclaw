@@ -438,7 +438,17 @@ describe("ClawHub plugin catalog client", () => {
             configFields: [
               { name: "apiKey", description: "Service API key", required: true, sensitive: true },
             ],
-            mcpServers: [{ name: "memory" }],
+            mcpServers: [
+              {
+                name: "memory",
+                url: "https://mcp.example.com/memory?mode=read",
+                transport: "streamable-http",
+                auth: "oauth",
+                scope: "memory:read",
+                setup: "Connect your account.",
+              },
+              { name: "legacy" },
+            ],
             contracts: { tools: ["memory_recall"], videoGenerationProviders: ["presenter"] },
             providers: ["memory-model"],
             channels: ["memory-chat"],
@@ -525,7 +535,18 @@ describe("ClawHub plugin catalog client", () => {
       configFields: [
         { name: "apiKey", description: "Service API key", required: true, sensitive: true },
       ],
-      mcpServers: ["memory"],
+      mcpServers: ["memory", "legacy"],
+      mcpServerDetails: [
+        {
+          name: "memory",
+          url: "https://mcp.example.com/memory?mode=read",
+          transport: "streamable-http",
+          auth: "oauth",
+          scope: "memory:read",
+          setup: "Connect your account.",
+        },
+        { name: "legacy" },
+      ],
       contracts: { tools: ["memory_recall"], videoGenerationProviders: ["presenter"] },
       providers: ["memory-model"],
       channels: ["memory-chat"],
@@ -560,6 +581,83 @@ describe("ClawHub plugin catalog client", () => {
       channels: ["memory-chat"],
     });
     expect(joined.detail.uiCapabilities).toEqual(expected);
+    expect(joined.detail.mcpServers).toEqual(["memory", "legacy"]);
+    expect(joined.detail.mcpServerDetails).toEqual(detail.mcpServerDetails);
+    expect(Value.Check(PluginDiscoveryDetailSchema, joined.detail)).toBe(true);
+  });
+
+  it("withholds unsafe MCP endpoints and only projects bounded public metadata", async () => {
+    const credentialEndpoint = new URL("https://example.invalid/mcp");
+    credentialEndpoint.username = "test-user";
+    credentialEndpoint.password = "test-password";
+    const unsafeUrls = [
+      "not a URL",
+      "javascript:alert(1)",
+      "http://mcp.example.com/insecure",
+      credentialEndpoint.href,
+      "https://mcp.example.com/mcp?token=private-token",
+      "https://mcp.example.com/mcp?callback=https%3A%2F%2Fexample.com%2F%3Fkey%3Dprivate-key",
+      "https://mcp.example.com/mcp#private-fragment",
+      "https://127.0.0.1/mcp",
+      "https://[::1]/mcp",
+      "https://tools.internal/mcp",
+      "https://mcp.example.com:8443/mcp",
+    ];
+    const detail = await fetchClawHubPluginDetail({
+      packageName: "memory-plus",
+      skipAuth: true,
+      fetchImpl: mockResponse({
+        package: remotePlugin,
+        version: {
+          version: "1.2.3",
+          createdAt: 100,
+          pluginManifestSummary: {
+            configFields: [],
+            bundledSkills: [],
+            mcpServers: [
+              ...unsafeUrls.map((url, index) => ({
+                name: `unsafe-${index}`,
+                url,
+                auth: "api-key",
+              })),
+              { name: "withheld", url: "https://mcp.example.com/mcp", endpointRedacted: true },
+              {
+                name: "local-process",
+                transport: "stdio",
+                command: "private-command",
+                args: ["private-argument"],
+                env: { TOKEN: "private-env" },
+                headers: { Authorization: "private-header" },
+                scope: "s".repeat(1001),
+                setup: "d".repeat(2001),
+              },
+              { name: "unknown", transport: "custom", auth: "custom" },
+            ],
+          },
+        },
+        versions: { items: [] },
+      }),
+    });
+    expect(detail.mcpServerDetails).toEqual([
+      ...unsafeUrls.map((_, index) => ({
+        name: `unsafe-${index}`,
+        auth: "api-key",
+        endpointRedacted: true,
+      })),
+      { name: "withheld", endpointRedacted: true },
+      {
+        name: "local-process",
+        transport: "stdio",
+        scope: "s".repeat(1000),
+        setup: "d".repeat(2000),
+      },
+      { name: "unknown" },
+    ]);
+    expect(JSON.stringify(detail)).not.toContain("private-");
+    const joined = joinClawHubPluginDetail({
+      remote: detail,
+      local: { plugins: [], diagnostics: [], mutationAllowed: true },
+    });
     expect(Value.Check(PluginDiscoveryDetailSchema, joined.detail)).toBe(true);
   });
 

@@ -100,6 +100,7 @@ const DIRECT_SESSION_READ_METHODS = new Set([
   "sessions.companion.state",
   "sessions.diff",
   "sessions.files.get",
+  "sessions.files.assets",
   "sessions.files.list",
   "sessions.files.reveal",
   "sessions.github.options",

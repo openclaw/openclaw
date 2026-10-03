@@ -132,7 +132,14 @@ function createMaintenanceRuntime(params: {
         return [];
       },
       listWorkspaceReconciliationOwners: async () => [],
-      listPendingWorkspaceResults: () => [],
+      listPendingWorkspaceResultsAsync: async () => [],
+      prepareRuntimeRefresh: async (sessionId: string) => ({
+        placement: params.placements.find((placement) => placement.sessionId === sessionId),
+        move: undefined,
+        pendingResult: undefined,
+        assertCurrent: () => {},
+        release: () => {},
+      }),
     } as never,
     environments: environments as never,
     gatewayNamespace: "gateway-test",

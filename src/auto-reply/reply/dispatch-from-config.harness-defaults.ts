@@ -276,7 +276,7 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
         agentHarnessId: resolveSessionPinnedHarnessId(params.entry),
         agentHarnessRuntimeOverride,
       });
-      return defaults?.visibleReplies;
+      return defaults?.visibleReplies ?? defaults?.sourceVisibleReplies;
     };
     const selectedModelCandidate =
       turnModelCandidate ?? storedModelCandidate ?? channelModelCandidate;

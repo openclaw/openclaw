@@ -21,7 +21,11 @@ export function renderInterSessionActivity(
     Boolean(opts.searchResult) || (opts.isToolMessageExpanded?.(disclosureId) ?? false);
   const count = group.messages.reduce((total, message) => total + (message.duplicateCount ?? 1), 0);
   return html`
-    <div class="chat-group tool chat-group--turn-block" data-chat-row-key=${group.key}>
+    <div
+      class="chat-group tool chat-group--turn-block"
+      data-chat-row-key=${group.key}
+      data-file-session-key=${group.senderSession?.sessionKey ?? nothing}
+    >
       <div class="chat-group-messages">
         <details
           class="chat-session-activity"

@@ -284,7 +284,7 @@ export async function prepareVisitorPublicationFixture(f: {
     { createEmptyPluginRegistry },
   ] = await Promise.all([
     import("../plugins/loader.js"),
-    import("../plugins/services.js"),
+    import("../plugins/services.test-support.js"),
     import("../plugins/runtime.js"),
     import("../plugins/registry-empty.js"),
   ]);

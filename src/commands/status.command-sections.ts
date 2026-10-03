@@ -26,8 +26,9 @@ import { formatDeliveryQueueHealthLine, formatHealthChannelLines } from "./healt
 import type { HealthSummary } from "./health.js";
 import { formatSqliteWalHealthWarning } from "./sqlite-wal-health.js";
 import type { AgentLocalStatus } from "./status.agent-local.js";
-import { formatPromptCacheCompact, formatTokensCompact, shortenText } from "./status.format.js";
+import { formatPromptCacheCompact, formatTokensCompact } from "./status.format.js";
 import type { MemoryStatusSnapshot } from "./status.scan.shared.js";
+import { shortenText } from "./text-format.js";
 
 type AgentStatusLike = {
   defaultId?: string | null;

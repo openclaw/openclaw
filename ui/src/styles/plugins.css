@@ -973,14 +973,14 @@ openclaw-plugins-page
 .plugin-catalog-detail__content {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 196px;
-  grid-template-areas: "panel sidebar" "readme sidebar";
+  grid-template-areas: "main sidebar";
   align-items: start;
   gap: 32px;
 }
 
 .plugin-catalog-detail--no-sidebar .plugin-catalog-detail__content {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-areas: "panel" "readme";
+  grid-template-areas: "main";
 }
 
 .plugin-catalog-detail__back {
@@ -1260,6 +1260,7 @@ openclaw-plugins-page
   border-bottom: 1px solid var(--border);
 }
 .plugin-capability > button,
+.plugin-capability__disclosure > summary,
 .plugin-capability__static {
   display: flex;
   align-items: center;
@@ -1273,15 +1274,51 @@ openclaw-plugins-page
   text-align: left;
   font: inherit;
 }
-.plugin-capability > button {
+.plugin-capability > button,
+.plugin-capability__disclosure > summary {
   cursor: var(--cursor-action);
 }
-.plugin-capability > button:hover {
+.plugin-capability > button:hover,
+.plugin-capability__disclosure > summary:hover {
   background: var(--bg-elevated);
 }
-.plugin-capability > button:focus-visible {
+.plugin-capability > button:focus-visible,
+.plugin-capability__disclosure > summary:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
+}
+.plugin-capability__disclosure > summary {
+  list-style: none;
+}
+.plugin-capability__disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+.plugin-capability__chevron {
+  display: inline-flex;
+}
+.plugin-capability__disclosure[open] .plugin-capability__chevron {
+  transform: rotate(90deg);
+}
+.plugin-capability__details {
+  padding: 0 12px 12px;
+  overflow-wrap: anywhere;
+  font-size: var(--control-ui-text-sm);
+}
+.plugin-capability__details p {
+  margin: 12px 0 0;
+  color: var(--muted);
+}
+.plugin-mcp-details {
+  display: grid;
+  grid-template-columns: minmax(112px, 1fr) minmax(0, 3fr);
+  gap: 8px 16px;
+  margin: 12px 0 0;
+}
+.plugin-mcp-details dt {
+  color: var(--muted);
+}
+.plugin-mcp-details dd {
+  margin: 0;
 }
 .plugin-capability__icon {
   display: grid;
@@ -1318,7 +1355,6 @@ openclaw-plugins-page
   line-height: 1.5;
 }
 .plugin-catalog-detail__readme-section {
-  grid-area: readme;
   min-width: 0;
 }
 .plugin-tool-dialog {
@@ -1388,7 +1424,7 @@ openclaw-plugins-page
 @container (max-width: 768px) {
   .plugin-catalog-detail__content {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: "panel" "sidebar" "readme";
+    grid-template-areas: "main" "sidebar";
     gap: 24px;
   }
   .plugin-catalog-detail__hero {
@@ -1439,9 +1475,23 @@ openclaw-plugins-page
   margin-bottom: 12px;
 }
 
-.plugin-catalog-detail__panel {
-  grid-area: panel;
+.plugin-catalog-detail__main {
+  grid-area: main;
+  display: grid;
+  gap: 28px;
   min-width: 0;
+}
+
+.plugin-catalog-detail__panel {
+  min-width: 0;
+}
+
+.plugin-catalog-detail__panel:empty {
+  display: none;
+}
+
+.plugin-catalog-detail__panel > .plugin-capabilities:last-child {
+  margin-bottom: 0;
 }
 
 .plugin-catalog-detail__readme {

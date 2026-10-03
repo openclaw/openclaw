@@ -2839,12 +2839,12 @@ jobs:
             # Use the manifest's inventory for both Node receipts and this fallback.
             startup_files_text="$(node -p 'JSON.parse(process.env.OPENCLAW_CI_STARTUP_CORPUS_TEST_FILES_JSON).join(" ")')"
             read -r -a startup_files <<< "$startup_files_text"
-            startup_workers="$(node -p 'Math.min(4, require("node:os").availableParallelism())')"
+            startup_workers="$(node -p 'String(Math.min(4, require("node:os").availableParallelism()))')"
             run_startup_corpus --maxWorkers="$startup_workers" "${startup_files[@]}"
             exit 0
           elif [[ -f test/vitest/vitest.startup-corpus-paths.mjs ]]; then
             # Runner labels can advertise more CPUs than this process can use.
-            startup_workers="$(node -p 'Math.min(4, require("node:os").availableParallelism())')"
+            startup_workers="$(node -p 'String(Math.min(4, require("node:os").availableParallelism()))')"
             run_startup_corpus --maxWorkers="$startup_workers" src/config/config-startup-corpus.test.ts \
               src/config/state-startup-corpus*.test.ts
             exit 0
@@ -2853,7 +2853,7 @@ jobs:
             exit 1
           fi
           # Frozen targets before the file split retain their complete legacy matrix.
-          cores="$(node -p 'require("node:os").availableParallelism()')"
+          cores="$(node -p 'String(require("node:os").availableParallelism())')"
           # Worker compilation also uses CPU: reserve four cores per invocation.
           # The 4-vCPU ratchets label can deliver only two usable CPUs.
           concurrency=$((cores / 4))
@@ -3364,7 +3364,7 @@ jobs:
             logicalCpuCount: host.cpuCount,
             totalMemoryBytes: host.totalMemoryBytes,
           });
-          console.log(constrained ? process.env.CI_LEGACY_WORKERS : resolveLocalVitestScheduling(process.env, host).maxWorkers);
+          console.log(String(constrained ? process.env.CI_LEGACY_WORKERS : resolveLocalVitestScheduling(process.env, host).maxWorkers));
           JS
             )"
           fi

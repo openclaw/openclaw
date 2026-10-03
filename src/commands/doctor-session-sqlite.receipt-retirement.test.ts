@@ -14,6 +14,7 @@ import {
   hasDeferredPluginSessionImport,
   readDeferredPluginSessionImport,
 } from "../infra/deferred-plugin-session-sources.js";
+import { databaseIdentity } from "../infra/deferred-plugin-session-verification.js";
 import * as directoryDurability from "../infra/directory-durability.js";
 import * as migrationRun from "../infra/session-sqlite-migration-manifest.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
@@ -136,8 +137,7 @@ describe("deferred plugin session receipt retirement", () => {
       await closeOpenClawAgentDatabasesAsync();
       fs.copyFileSync(target.sqlitePath, `${target.sqlitePath}.replacement`);
       fs.renameSync(`${target.sqlitePath}.replacement`, target.sqlitePath);
-      const database = fs.statSync(target.sqlitePath, { bigint: true });
-      expect(`${database.dev}:${database.ino}`).not.toBe(receipt.databaseIdentity);
+      expect(databaseIdentity(target.sqlitePath)).not.toBe(receipt.databaseIdentity);
 
       const laterEvents = [
         {

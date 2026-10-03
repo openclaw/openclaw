@@ -723,10 +723,6 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     executeComputer,
     startInference,
     cancelInference,
-    cancelInferenceForSession: (params: { sessionId: string; runId?: string }): Promise<string[]> =>
-      inference.cancelSession(params.sessionId, params.runId),
-    hasInferenceForSession: (sessionId: string, runId?: string): boolean =>
-      inference.hasSession(sessionId, runId),
     clear: () => {
       observedAckCursors.clear();
       pendingTerminalTurnFences.clear();

@@ -46,6 +46,7 @@ export type WorkboardKeyedStore<T = PersistedWorkboardCard> = {
 };
 
 export type WorkboardSessionPlacementWrite = WorkboardSessionPlacement & {
+  source: "operator";
   /** Undefined requires an absent row; otherwise compare the last observed revision. */
   expectedUpdatedAt?: number;
 };
@@ -54,9 +55,10 @@ export type WorkboardSessionsBoardStore = {
   get(boardId: string): Promise<WorkboardSessionsBoard>;
   update(boardId: string, patch: unknown): Promise<WorkboardSessionsBoard>;
   listPlacements(boardId: string): Promise<WorkboardSessionPlacement[]>;
-  writePlacements(
+  repairPlacements(): Promise<{ placements: number; boards: number }>;
+  writePlacement(
     boardId: string,
-    placements: WorkboardSessionPlacementWrite[],
+    placement: WorkboardSessionPlacementWrite,
     expectedSpec: WorkboardSessionsBoardSpec,
   ): Promise<boolean>;
 };

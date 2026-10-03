@@ -368,7 +368,7 @@ export function registerDefaultAuthTokenSuite(): void {
       ws.close();
     });
 
-    test("retains authenticated previous-protocol node-host maintenance commands", async () => {
+    test("auto-approves authenticated previous-protocol local node-host maintenance commands", async () => {
       const nodeWs = await openWs(port);
       const operatorWs = await openWs(port);
       try {
@@ -386,6 +386,7 @@ export function registerDefaultAuthTokenSuite(): void {
         const operatorRes = await connectReq(operatorWs);
         expect(operatorRes.ok).toBe(true);
         type LegacyNodeStatus = {
+          approvalState?: string;
           commands?: string[];
           connected?: boolean;
           deviceFamily?: string;
@@ -394,18 +395,21 @@ export function registerDefaultAuthTokenSuite(): void {
           platform?: string;
           version?: string;
         };
-        const pendingList = await rpcReq<{
+        const nodeList = await rpcReq<{
           nodes?: LegacyNodeStatus[];
         }>(operatorWs, "node.list", {});
-        const pendingNode = pendingList.payload?.nodes?.find(
+        expect(nodeList.ok).toBe(true);
+        const legacyNode = nodeList.payload?.nodes?.find(
           (node) => node.connected === true && node.version === legacyVersion,
         );
-        expect(pendingNode).toMatchObject({
+        expect(legacyNode).toMatchObject({
+          approvalState: "approved",
+          commands: ["system.which"],
           deviceFamily: "Linux",
-          pendingDeclaredCommands: ["system.which"],
           platform: "linux",
         });
-        expect(pendingNode?.pendingRequestId).toBeTypeOf("string");
+        expect(legacyNode?.pendingDeclaredCommands).toBeUndefined();
+        expect(legacyNode?.pendingRequestId).toBeUndefined();
       } finally {
         nodeWs.close();
         operatorWs.close();

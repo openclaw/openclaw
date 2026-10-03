@@ -1,11 +1,12 @@
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import type { PluginDiscoveryEntry } from "../../lib/plugins/index.ts";
 import { renderPluginCatalogResults, type PluginCatalogResultsProps } from "./catalog-results.ts";
 import { renderArtTile } from "./consent-dialog.ts";
 import { renderPluginDetailShell } from "./detail-shell.ts";
 import type { PluginInstallProgress } from "./install-progress.ts";
+import { renderPluginMcpServers } from "./overview.ts";
 import baseStyles from "../../styles/base.css?inline";
 import componentStyles from "../../styles/components.css?inline";
 import pluginStyles from "../../styles/plugins.css?inline";
@@ -223,3 +224,67 @@ it("fills the remaining viewport with card-sized placeholders across resizes", a
     window.removeEventListener("error", onError);
   }
 });
+
+it.each([390, 768, 1366, 1440])(
+  "keeps the README close to expandable MCP servers beside a tall sidebar at %ipx",
+  async (width) => {
+    await page.viewport(width, 900);
+    render(
+      renderPluginDetailShell({
+        id: "mcp",
+        name: "Workspace integrations",
+        backHref: "/plugins",
+        backLabel: "Plugins",
+        onBack: vi.fn(),
+        identity: nothing,
+        panel: renderPluginMcpServers(
+          ["workspace", "local"],
+          [
+            {
+              name: "workspace",
+              url: "https://mcp.example.com/" + "long-path/".repeat(35),
+              transport: "streamable-http",
+              auth: "oauth",
+              scope: "documents.read documents.write",
+              setup: "Connect your workspace in OpenClaw.",
+            },
+          ],
+        ),
+        sidebar: html`<div style="min-height: 900px">Release and security metadata</div>`,
+        readme: html`<p>Use the workspace integration to read your documents.</p>`,
+      }),
+      container,
+    );
+    const readme = container.querySelector<HTMLElement>(".plugin-catalog-detail__readme-section")!;
+    const capabilities = container.querySelector<HTMLElement>(".plugin-capabilities")!;
+    const gap = () =>
+      readme.getBoundingClientRect().top - capabilities.getBoundingClientRect().bottom;
+    expect(gap()).toBeGreaterThanOrEqual(20);
+    expect(gap()).toBeLessThanOrEqual(32);
+    await expect
+      .element(page.getByRole("heading", { name: /MCP Servers\s*2/, exact: true }))
+      .toBeVisible();
+    const server = page.getByText("workspace", { exact: true });
+    await server.click();
+    await expect.element(page.getByText("OAuth", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("Connect your workspace in OpenClaw.")).toBeVisible();
+    expect(gap()).toBeLessThanOrEqual(32);
+    const authLabel = [...container.querySelectorAll("dt")].find(
+      (label) => label.textContent === "Authentication",
+    )!;
+    expect(authLabel.getBoundingClientRect().height).toBeLessThanOrEqual(
+      Number.parseFloat(getComputedStyle(authLabel).lineHeight) + 1,
+    );
+    expect(container.scrollWidth).toBeLessThanOrEqual(width);
+    const summary = container.querySelector<HTMLElement>("summary")!;
+    summary.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(container.querySelector("details")?.open).toBe(false);
+    await page.getByText("local", { exact: true }).click();
+    await expect
+      .element(
+        page.getByText("Connection details are not included in this plugin’s catalog metadata."),
+      )
+      .toBeVisible();
+  },
+);

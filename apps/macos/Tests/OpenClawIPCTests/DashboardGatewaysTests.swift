@@ -211,7 +211,7 @@ struct DashboardGatewaysBridgeTests {
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
 
-        #expect(controller.tlsParams == params)
+        #expect(controller.documentHost.tlsParams == params)
         #expect(ControlUIDocumentHost.isExpectedTLSAuthority(
             host: "gateway.example",
             port: 0,
@@ -1032,7 +1032,7 @@ struct DashboardManagerGatewayTargetTests {
         try controller.nativeBrowser.open(
             tabId: "reading", url: #require(URL(string: "about:blank")), sessionKey: "fixture")
         let tab = try #require(controller.nativeBrowser.webView(for: "reading"))
-        #expect(controller.hasCurrentBrowserSession)
+        #expect(controller.documentHost.hasCurrentBrowserSession)
 
         if entry == "dock" {
             try await manager.show()

@@ -424,6 +424,9 @@ const rootEntries = [
   "scripts/bench-cron-session-reaper.ts!",
   "scripts/bench-codex-catalog-pages.ts!",
   "scripts/bench-redaction-hot-paths.ts!",
+  // The manual heap-retention CLI launches its private IPC preload by path.
+  "scripts/bench-gateway-heap-retention.ts!",
+  "scripts/lib/gateway-heap-retention-preload.mjs!",
   // docs/reference/test/performance.md invokes this standalone comparison harness.
   "scripts/bench-workspace-computation.ts!",
   // Docker/manual E2E executables and their nested assertion/probe entrypoints.

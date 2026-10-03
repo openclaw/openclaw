@@ -102,3 +102,42 @@ it("collects superseded resident rows and their materializations after metadata 
     }
   });
 });
+
+it("does not retain a superseded child entry through a held parent display row", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    setRuntimeConfigSnapshot(cfg);
+    const parent = "agent:main:compact-parent";
+    const child = "agent:main:compact-child";
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: parent },
+      { sessionId: "compact-parent", updatedAt: 1 },
+    );
+    const writeChild = (updatedAt: number) =>
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: child },
+        { sessionId: "compact-child", updatedAt, parentSessionKey: parent },
+      );
+    writeChild(1);
+    const release = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      await projection.ensureMaterialized();
+      const heldParent = projection.describe({ agentId: "main", key: parent })!;
+      const retiredChild = new WeakRef(projection.describe({ agentId: "main", key: child })!.entry);
+      writeChild(2);
+      await projection.ensureMaterialized();
+      await nextTurn();
+      queryObjects(WeakRef);
+      expect(retiredChild.deref()).toBeUndefined();
+      // Retained consumers may still hold the old parent; it needs only child display facts.
+      expect(heldParent.materialized.source.childLinks?.[0]?.entry.sessionId).toBe("compact-child");
+      expect(
+        projection.snapshot({ agentId: "main", key: parent }, { now: 2 }).row?.childSessions,
+      ).toEqual([child]);
+    } finally {
+      projection.dispose();
+      release();
+    }
+  });
+});
