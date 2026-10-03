@@ -212,7 +212,8 @@ enum GatewayLaunchAgentManager {
             return error.localizedDescription
         }
         if enabled {
-            self.logger.info("launchd enable requested via CLI port=\(port)")
+            let label = AppProfile.current.gatewayLaunchAgentLabel
+            self.logger.info("launchd enable requested via CLI for \(label) port=\(port)")
             let existing = self.launchdConfigSnapshot()
             let existed = FileManager.default.fileExists(atPath: self.plistURL.path)
             var installedCLI: InstalledServiceCLI?
@@ -273,7 +274,14 @@ enum GatewayLaunchAgentManager {
         do { try await checkCurrent?() } catch { return error.localizedDescription }
         if let error = custody.currentError() { return error }
         guard !self.isLaunchAgentWriteDisabled() else { return "Gateway service changes are disabled" }
-        self.logger.info("launchd disable requested via CLI")
+        let label = custody.plist.deletingPathExtension().lastPathComponent
+        // Stop runs on every remote/unconfigured launch. Without this profile's plist there is
+        // nothing to boot out, but the CLI would still take shared service-update locks.
+        guard custody.definition.plist != nil else {
+            self.logger.info("launchd disable skipped: no LaunchAgent installed for \(label)")
+            return nil
+        }
+        self.logger.info("launchd disable requested via CLI for \(label)")
         return await self.runDaemonCommand(
             ["uninstall"], expectedServiceAuthority: custody, checkCurrent: checkCurrent)
     }
