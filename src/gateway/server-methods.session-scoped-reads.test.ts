@@ -1,8 +1,13 @@
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import { registerAgentWorkspaceAccess } from "../agents/workspace-access.js";
 import * as sessions from "../config/sessions/session-accessor.js";
+import * as sessionDiffRuntime from "../sessions/session-diff.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
@@ -11,6 +16,7 @@ import { handleGatewayRequest } from "./server-methods.js";
 import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
 import { createHistoryReadContext } from "./server-methods/chat-history.test-helpers.js";
 import { createLazyCoreHandlers } from "./server-methods/lazy-core-handlers.js";
+import { sessionsDiffHandlers } from "./server-methods/sessions-diff.js";
 import { sessionsFilesHandlers } from "./server-methods/sessions-files.js";
 import { sessionReadHandlers } from "./server-methods/sessions-read.js";
 import { sessionRewindHandlers } from "./server-methods/sessions-rewind.js";
@@ -681,6 +687,344 @@ describe("narrow session read owners", () => {
         expect(respond.mock.calls[0]?.[0]).toBe(true);
       }
       expect(io).toHaveBeenCalledTimes(2);
+    });
+  });
+});
+
+const diffKey = "agent:main:scoped-diff";
+const diffMethods = ["sessions.diff", "sessions.files.list"] as const;
+
+function prepareDiff(beforeReturn: () => Promise<void>) {
+  return vi.spyOn(sessionDiffRuntime, "loadCheckoutDiff").mockImplementation(async (params) => {
+    await beforeReturn();
+    return { sessionKey: params.sessionKey, files: [], additions: 0, deletions: 0 };
+  });
+}
+
+/** Mirrors the parameterized sessions.files.* cases: an operator boundary exists. */
+const gitAvailable = (() => {
+  try {
+    execFileSync("git", ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+/** A real checkout with one committed file and one uncommitted edit, as sessions.diff reads it. */
+function createCheckoutRepo(root: string): void {
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", root, ...args], { encoding: "utf8" });
+  fs.mkdirSync(root, { recursive: true });
+  git("init", "-q");
+  git("config", "user.email", "test@openclaw.test");
+  git("config", "user.name", "Test");
+  git("config", "commit.gpgsign", "false");
+  fs.writeFileSync(path.join(root, "note.txt"), "committed\n");
+  git("add", "note.txt");
+  git("commit", "-qm", "init");
+  fs.writeFileSync(path.join(root, "note.txt"), "committed\nuncommitted\n");
+}
+
+function diffRoleConfig() {
+  const cfg = rolePolicyConfig();
+  cfg.gateway!.roles!.definitions.view!.scopes.push("operator.admin");
+  return cfg;
+}
+
+function diffReader(label: string, scopes: readonly string[]) {
+  const reader = roleClient("view", label);
+  reader.connect.scopes = [...scopes];
+  return reader;
+}
+
+function seedDiffSession(visibility: "draft" | "shared", ownerProfileId: string, label?: string) {
+  return sessions.upsertSessionEntryCore(
+    { agentId: "main", sessionKey: diffKey },
+    {
+      sessionId: "scoped-diff",
+      updatedAt: 1,
+      visibility,
+      ...(label ? { label } : {}),
+      createdActor: { type: "human", source: "profile", id: ownerProfileId },
+    },
+  );
+}
+
+type DiffRequestOptions = Parameters<typeof handleGatewayRequest>[0];
+
+function requestSessionRead(options: {
+  method: (typeof diffMethods)[number];
+  client: DiffRequestOptions["client"];
+  context: DiffRequestOptions["context"];
+  respond: DiffRequestOptions["respond"];
+  id: string;
+  hasCurrentClientAuthority?: () => boolean;
+}) {
+  return handleGatewayRequest({
+    req: {
+      type: "req",
+      id: options.id,
+      method: options.method,
+      params: { sessionKey: diffKey, agentId: "main" },
+    },
+    client: options.client,
+    context: options.context,
+    respond: options.respond,
+    isWebchatConnect: () => false,
+    ...(options.hasCurrentClientAuthority
+      ? { hasCurrentClientAuthority: options.hasCurrentClientAuthority }
+      : {}),
+    extraHandlers: { ...sessionsDiffHandlers, ...sessionsFilesHandlers },
+  });
+}
+
+function expectHiddenSession(respond: ReturnType<typeof vi.fn>) {
+  expect(respond.mock.calls[0]?.[1]).toBeUndefined();
+  expect(respond.mock.calls[0]?.[2]).toEqual(
+    expect.objectContaining({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("was not found"),
+    }),
+  );
+}
+
+describe("sessions.diff retained read boundary", () => {
+  it("hides a foreign draft from a broad operator reader", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const reader = diffReader("diff-broad-reader", ["operator.read"]);
+      const owner = roleClient("view", "diff-broad-owner");
+      const context = createDirectChatContext({ getRuntimeConfig: diffRoleConfig });
+      const io = prepareDiff(async () => {});
+      await seedDiffSession("draft", owner.authenticatedUserProfile!.profileId);
+      const respond = vi.fn();
+      await requestSessionRead({
+        method: "sessions.diff",
+        client: reader,
+        context,
+        respond,
+        id: "diff-broad-draft",
+      });
+      expect(io).not.toHaveBeenCalled();
+      expect(respond.mock.calls[0]?.[0]).toBe(false);
+      expectHiddenSession(respond);
+    });
+  });
+
+  it.each(["visibility", "reassignment", "authority"] as const)(
+    "refuses the final response when %s changes while the diff loads",
+    async (change) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const reader = diffReader("diff-inflight-reader", ["operator.read"]);
+        const owner = roleClient("view", "diff-inflight-owner");
+        const context = createDirectChatContext({ getRuntimeConfig: diffRoleConfig });
+        await seedDiffSession("shared", owner.authenticatedUserProfile!.profileId);
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        const io = prepareDiff(async () => {
+          entered.resolve();
+          await release.promise;
+        });
+        let current = true;
+        const respond = vi.fn();
+        const request = requestSessionRead({
+          method: "sessions.diff",
+          client: reader,
+          context,
+          respond,
+          id: `diff-inflight-${change}`,
+          hasCurrentClientAuthority: () => current,
+        });
+        const outcome = Promise.allSettled([request]);
+        try {
+          await Promise.race([entered.promise, request]);
+          // Nothing may reach the caller while the read is still open.
+          expect(io).toHaveBeenCalledOnce();
+          expect(respond).not.toHaveBeenCalled();
+          if (change === "authority") {
+            current = false;
+          } else if (change === "reassignment") {
+            // Same key, new session identity: the retained read must not survive it.
+            await sessions.upsertSessionEntryCore(
+              { agentId: "main", sessionKey: diffKey },
+              {
+                sessionId: "reassigned-diff",
+                lifecycleRevision: "reassigned",
+                updatedAt: 2,
+                visibility: "shared",
+                createdActor: {
+                  type: "human",
+                  source: "profile",
+                  id: owner.authenticatedUserProfile!.profileId,
+                },
+              },
+            );
+          } else {
+            await seedDiffSession("draft", owner.authenticatedUserProfile!.profileId);
+          }
+        } finally {
+          release.resolve();
+          await outcome;
+        }
+        if (change === "authority") {
+          // The transport refuses to answer at all once requester authority is gone.
+          expect(await outcome).toMatchObject([
+            {
+              status: "rejected",
+              reason: { message: "Gateway requester authority changed" },
+            },
+          ]);
+          expect(respond).not.toHaveBeenCalled();
+          return;
+        }
+        expect(respond).toHaveBeenCalledOnce();
+        expect(respond.mock.calls[0]?.[0]).toBe(false);
+        expectHiddenSession(respond);
+      });
+    },
+  );
+
+  it("keeps serving a diff loaded while a label update lands", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const reader = diffReader("diff-metadata-reader", ["operator.read"]);
+      const owner = roleClient("view", "diff-metadata-owner");
+      const context = createDirectChatContext({ getRuntimeConfig: diffRoleConfig });
+      await seedDiffSession("shared", owner.authenticatedUserProfile!.profileId);
+      const io = prepareDiff(async () => {
+        await seedDiffSession("shared", owner.authenticatedUserProfile!.profileId, "Renamed");
+      });
+      const respond = vi.fn();
+      await requestSessionRead({
+        method: "sessions.diff",
+        client: reader,
+        context,
+        respond,
+        id: "diff-metadata",
+      });
+      expect(io).toHaveBeenCalledOnce();
+      expect(respond.mock.calls[0]?.[0]).toBe(true);
+      expect(respond.mock.calls[0]?.[1]).toEqual({
+        sessionKey: diffKey,
+        files: [],
+        additions: 0,
+        deletions: 0,
+      });
+    });
+  });
+
+  it("keeps the missing-row contract, which has no workspace to retain", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const reader = diffReader("diff-missing-reader", ["operator.read"]);
+      const respond = vi.fn();
+      await requestSessionRead({
+        method: "sessions.diff",
+        client: reader,
+        context: createDirectChatContext({ getRuntimeConfig: diffRoleConfig }),
+        respond,
+        id: "diff-missing",
+      });
+      expect(respond.mock.calls[0]?.[0]).toBe(true);
+      expect(respond.mock.calls[0]?.[1]).toEqual(
+        expect.objectContaining({ sessionKey: diffKey, unavailableReason: "unknown_session" }),
+      );
+    });
+  });
+
+  it.skipIf(!gitAvailable)(
+    "reads the real checkout for a visible session and refuses the foreign draft instead",
+    async () => {
+      // Kept outside the test state root, like the sibling checkout fixtures.
+      const checkout = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-diff-scoped-")),
+      );
+      try {
+        await withOpenClawTestState({ scenario: "minimal" }, async () => {
+          const reader = diffReader("diff-real-reader", ["operator.read"]);
+          const owner = roleClient("view", "diff-real-owner");
+          const context = createDirectChatContext({ getRuntimeConfig: diffRoleConfig });
+          createCheckoutRepo(checkout);
+          let visible: unknown;
+          for (const visibility of ["shared", "draft"] as const) {
+            await sessions.upsertSessionEntryCore(
+              { agentId: "main", sessionKey: diffKey },
+              {
+                sessionId: "scoped-diff",
+                updatedAt: 1,
+                visibility,
+                spawnedCwd: checkout,
+                createdActor: {
+                  type: "human",
+                  source: "profile",
+                  id: owner.authenticatedUserProfile!.profileId,
+                },
+              },
+            );
+            const respond = vi.fn();
+            await requestSessionRead({
+              method: "sessions.diff",
+              client: reader,
+              context,
+              respond,
+              id: `diff-real-${visibility}`,
+            });
+            if (visibility === "shared") {
+              expect(respond.mock.calls[0]?.[0]).toBe(true);
+              visible = respond.mock.calls[0]?.[1];
+            } else {
+              // Assert the payload before the flag so a leak reports the diff it returned.
+              // The same checkout produced a diff one case earlier, so the refusal is the
+              // boundary rather than a checkout that could not be read.
+              expectHiddenSession(respond);
+              expect(respond.mock.calls[0]?.[0]).toBe(false);
+            }
+          }
+          expect(visible).toEqual(
+            expect.objectContaining({
+              files: [expect.objectContaining({ path: "note.txt", additions: 1, deletions: 0 })],
+            }),
+          );
+        });
+      } finally {
+        fs.rmSync(checkout, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("keeps a caller without an operator boundary on its existing access", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const reader = sharingPolicyClient({ user: "role-less-diff", scopes: ["operator.read"] });
+      const owner = roleClient("view", "role-less-diff-owner");
+      const context = createDirectChatContext();
+      const io = prepareDiff(async () => {});
+      vi.spyOn(workspace, "listSessionWorkspaceFiles").mockImplementation(async () => ({
+        files: [],
+      }));
+      for (const visibility of ["draft", "shared"] as const) {
+        await seedDiffSession(visibility, owner.authenticatedUserProfile!.profileId);
+        for (const method of diffMethods) {
+          io.mockClear();
+          const respond = vi.fn();
+          await requestSessionRead({
+            method,
+            client: reader,
+            context,
+            respond,
+            id: `${method}-${visibility}`,
+          });
+          // sessions.files.list already hides a draft from this caller class; sessions.diff
+          // keeps its long-standing access because no operator boundary applies here.
+          const refused = method === "sessions.files.list" && visibility === "draft";
+          expect(respond.mock.calls[0]?.[0]).toBe(!refused);
+          if (refused) {
+            expectHiddenSession(respond);
+          } else if (method === "sessions.diff") {
+            expect(io).toHaveBeenCalledOnce();
+            expect(respond.mock.calls[0]?.[1]).toEqual(
+              expect.objectContaining({ sessionKey: diffKey }),
+            );
+          }
+        }
+      }
     });
   });
 });
