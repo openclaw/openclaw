@@ -501,6 +501,29 @@ describe("removePathWithinRoot", () => {
     }
   });
 
+  it("rejects symlink and junction targets", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    const realDir = path.join(root, "real");
+    const aliasDir = path.join(root, "alias");
+    await fs.mkdir(realDir, { recursive: true });
+    await fs.writeFile(path.join(realDir, "target.txt"), "hello");
+    await createRebindableDirectoryAlias({
+      aliasPath: aliasDir,
+      targetPath: realDir,
+    });
+
+    await expectRejectCode(
+      removePathWithinRoot({
+        rootDir: root,
+        relativePath: "alias",
+        recursive: true,
+        force: true,
+      }),
+      "symlink",
+    );
+    await expect(fs.readFile(path.join(realDir, "target.txt"), "utf8")).resolves.toBe("hello");
+  });
+
   it("unlinks package symlink and junction leaves without traversing their targets", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
     const outside = await tempDirs.make("openclaw-fs-safe-outside-");

@@ -543,6 +543,56 @@ describe("exec approval forwarder", () => {
     },
   );
 
+  it("attaches shared presentation approval buttons in forwarded fallback payloads", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({
+      cfg: makeTargetsCfg([{ channel: "telegram", to: "123" }]),
+    });
+
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          turnSourceChannel: "discord",
+          turnSourceTo: "channel:123",
+        },
+      }),
+    ).resolves.toBe(true);
+
+    expect(deliver).toHaveBeenCalledTimes(1);
+    const delivery = requireFirstCallArg(deliver, "delivery params");
+    expect(delivery.channel).toBe("telegram");
+    expect(delivery.to).toBe("123");
+    const payload = requireFirstPayload(deliver);
+    expect(payload.channelData?.execApproval).toEqual({ approvalId: "req-1" });
+    expect(payload.presentation).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Allow Once",
+              value: "/approve req-1 allow-once",
+              style: "success",
+            },
+            {
+              label: "Allow Always",
+              value: "/approve req-1 allow-always",
+              style: "primary",
+            },
+            {
+              label: "Deny",
+              value: "/approve req-1 deny",
+              style: "danger",
+            },
+          ],
+        },
+      ],
+    });
+    expect(payload.interactive).toBeUndefined();
+  });
+
   it.each<{ request: Partial<ExecApprovalRequest["request"]>; expectedText: string }>([
     { request: {}, expectedText: "Command: `echo hello`" },
     { request: { ask: "always" }, expectedText: "Reply with: /approve req-1 allow-once|deny" },

@@ -158,28 +158,38 @@ describe("artifact transfer response settlement", () => {
     expect(onProgress).toHaveBeenCalled();
   });
 
-  it("serves exactly the bytes from the requested offset", async () => {
-    const offset = 4;
-    const { res, body } = await serve({ range: `bytes=${offset}-` });
-    expect(res.statusCode).toBe(206);
-    expect(res.getHeader("content-range")).toBe(
-      `bytes ${offset}-${artifact.tarballBytes - 1}/${artifact.tarballBytes}`,
-    );
-    expect(res.getHeader("content-length")).toBe(String(artifact.tarballBytes - offset));
-    expect(res.getHeader("x-openclaw-content-sha256")).toBe(artifact.tarballSha256);
-    expect(res.getHeader("accept-ranges")).toBe("bytes");
-    expect(body).toBe(contents.slice(offset));
-  });
-
-  it.each(["bytes=0-,4-", "bytes=9007199254740992-", `bytes=${contents.length}-`])(
-    "rejects unsupported or unsatisfiable range %j",
-    async (range) => {
-      const { res, body } = await serve({ range });
-      expect(res.statusCode).toBe(416);
-      expect(res.getHeader("content-range")).toBe(`bytes */${artifact.tarballBytes}`);
-      expect(JSON.parse(body)).toEqual({ error: "range_not_satisfiable" });
+  it.each([0, 4, contents.length - 1])(
+    "serves exactly the bytes from offset %i",
+    async (offset) => {
+      const { res, body } = await serve({ range: `bytes=${offset}-` });
+      expect(res.statusCode).toBe(206);
+      expect(res.getHeader("content-range")).toBe(
+        `bytes ${offset}-${artifact.tarballBytes - 1}/${artifact.tarballBytes}`,
+      );
+      expect(res.getHeader("content-length")).toBe(String(artifact.tarballBytes - offset));
+      expect(res.getHeader("x-openclaw-content-sha256")).toBe(artifact.tarballSha256);
+      expect(res.getHeader("accept-ranges")).toBe("bytes");
+      expect(body).toBe(contents.slice(offset));
     },
   );
+
+  it.each([
+    "bytes=0-,4-",
+    "bytes=-4",
+    "bytes=0-4",
+    "bytes=-1-",
+    "bytes=1.5-",
+    "bytes=9007199254740992-",
+    `bytes=${contents.length}-`,
+    `bytes=${contents.length + 1}-`,
+    "items=0-",
+    "",
+  ])("rejects unsupported or unsatisfiable range %j", async (range) => {
+    const { res, body } = await serve({ range });
+    expect(res.statusCode).toBe(416);
+    expect(res.getHeader("content-range")).toBe(`bytes */${artifact.tarballBytes}`);
+    expect(JSON.parse(body)).toEqual({ error: "range_not_satisfiable" });
+  });
 
   it("terminates a ranged response when its capability is revoked mid-stream", async () => {
     await prepareArtifact(Buffer.alloc(256 * 1024, "x"));
@@ -486,8 +496,6 @@ describe("artifact transfer interruption observations", () => {
         h.expire();
       } else if (closure === "owner cancelled") {
         h.owner.abort(new Error("private cancellation detail"));
-        h.service.revoke(h.prepared.token);
-        h.service.closeAll();
       } else if (closure === "authorization lost" || closure === "throwing authorization") {
         h.loseAuthority(
           closure === "throwing authorization" ? new Error("private error") : undefined,
