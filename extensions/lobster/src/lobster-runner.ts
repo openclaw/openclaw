@@ -64,6 +64,7 @@ type EmbeddedLlmAdapter = {
 };
 
 type EmbeddedToolContext = {
+  registry?: LobsterRegistry;
   cwd?: string;
   env?: Record<string, string | undefined>;
   mode?: "tool" | "human" | "sdk";
@@ -91,6 +92,7 @@ type EmbeddedToolEnvelope = {
 };
 
 type EmbeddedToolRuntime = {
+  createDefaultRegistry?: () => LobsterRegistry;
   runToolRequest: (params: {
     pipeline?: string;
     filePath?: string;
@@ -231,50 +233,122 @@ async function loadEmbeddedToolRuntimeFromPackage(): Promise<EmbeddedToolRuntime
   return (await import(coreSpecifier)) as EmbeddedToolRuntime;
 }
 
+type LobsterCommand = {
+  name: string;
+  run: (params: {
+    input: AsyncIterable<unknown>;
+    args: Record<string, unknown>;
+    ctx: { env?: Record<string, string | undefined> } & Record<string, unknown>;
+  }) => Promise<{ output?: AsyncIterable<unknown> } & Record<string, unknown>>;
+} & Record<string, unknown>;
+
+type LobsterRegistry = {
+  get: (name: string) => LobsterCommand | undefined;
+  list: () => string[];
+};
+
+export type LobsterReplayRequest = { provider: string; command: string };
+
+const LLM_COMMANDS = new Set(["llm.invoke", "llm_task.invoke"]);
+
 /**
- * Lobster resolves a sole registered direct adapter before it consults its
- * environment auto-detect, so a workflow step that omits `--provider` would
- * move to the in-process `embedded` adapter on upgrade instead of the Gateway
- * HTTP route it used before. Pin the provider Lobster would have auto-detected
- * (`LOBSTER_PI_LLM_ADAPTER_URL`, then `OPENCLAW_URL`/`CLAWD_URL`, then
- * `LOBSTER_LLM_ADAPTER_URL`) whenever the workflow has not chosen a route of
- * its own. Lobster reads a step's `--provider` before `LOBSTER_LLM_PROVIDER`,
- * so naming `embedded` still selects the registered direct adapter.
+ * The route a stage would take, read from its FINAL environment (process, then
+ * workflow, then step blocks, which Lobster merges before the command runs).
+ * Lobster itself would pick a sole registered direct adapter before its
+ * environment auto-detect, which would move a provider-omitted step onto the
+ * in-process embedded route on upgrade; the embedded route is opt-in, so it is
+ * never inferred here.
  */
-function resolveEmbeddedEnv(
-  base: NodeJS.ProcessEnv,
-  llmAdapters?: Record<string, EmbeddedLlmAdapter>,
-): Record<string, string | undefined> {
-  const env: Record<string, string | undefined> = { ...base };
-  if (!llmAdapters) {
-    return env;
+function resolveStageProvider(
+  command: string,
+  args: Record<string, unknown>,
+  env: Record<string, string | undefined>,
+): string {
+  const named = String(args.provider ?? env.LOBSTER_LLM_PROVIDER ?? "")
+    .trim()
+    .toLowerCase();
+  if (named) {
+    return named;
   }
-  // The embedded route spends the gateway's model authority through the host
-  // completion API, and Lobster's run-state and persistent-cache branches return a
-  // saved result before the adapter is consulted, so a replay would authorize
-  // nothing. Reuse cannot be scoped to the embedded provider with the controls
-  // Lobster exposes, so every run this plugin supplies the adapter to executes its
-  // LLM stages rather than replaying them.
-  env.LOBSTER_LLM_FORCE_REFRESH = "1";
-  if ((env.LOBSTER_LLM_PROVIDER ?? "").trim()) {
-    return env;
+  if (command === "llm_task.invoke") {
+    return "openclaw";
   }
-  const detected = (env.LOBSTER_PI_LLM_ADAPTER_URL ?? "").trim()
-    ? "pi"
-    : (env.OPENCLAW_URL ?? env.CLAWD_URL ?? "").trim()
-      ? "openclaw"
-      : (env.LOBSTER_LLM_ADAPTER_URL ?? "").trim()
-        ? "http"
-        : "";
-  if (detected) {
-    env.LOBSTER_LLM_PROVIDER = detected;
+  if ((env.LOBSTER_PI_LLM_ADAPTER_URL ?? "").trim()) {
+    return "pi";
   }
-  return env;
+  if ((env.OPENCLAW_URL ?? env.CLAWD_URL ?? "").trim()) {
+    return "openclaw";
+  }
+  if ((env.LOBSTER_LLM_ADAPTER_URL ?? "").trim()) {
+    return "http";
+  }
+  throw new Error(
+    "lobster llm.invoke has no route: the embedded provider is opt-in, so pass --provider embedded or set LOBSTER_LLM_PROVIDER=embedded",
+  );
+}
+
+async function* replayItems(items: unknown[]): AsyncIterable<unknown> {
+  yield* items;
+}
+
+/**
+ * Wrap Lobster's LLM commands at the one point every stage passes through,
+ * inline, workflow and resumed alike, after the stage environment is merged:
+ *
+ * - Embedded stages spend the caller's own model authority, so their saved
+ *   store is hidden entirely: nothing is read from or written to the persistent
+ *   cache or run state, and every embedded stage executes under a fresh host
+ *   authorization. These are command arguments, which a workflow, a step
+ *   environment or a `--refresh false` flag cannot override.
+ * - Other routes keep their cache, but a saved answer is shown only after the
+ *   caller is re-authorized. A fresh call is not gated here, because the remote
+ *   provider applies its own credentials.
+ */
+function wrapLlmCommands(
+  base: LobsterRegistry,
+  authorizeReplay: (request: LobsterReplayRequest) => Promise<void>,
+): LobsterRegistry {
+  return {
+    list: () => base.list(),
+    get(name) {
+      const command = base.get(name);
+      if (!command || !LLM_COMMANDS.has(name)) {
+        return command;
+      }
+      return {
+        ...command,
+        async run({ input, args, ctx }) {
+          const provider = resolveStageProvider(name, args, ctx.env ?? {});
+          const hidden =
+            provider === "embedded"
+              ? { refresh: true, "disable-cache": true, "state-key": "" }
+              : {};
+          const result = await command.run({ input, ctx, args: { ...args, provider, ...hidden } });
+          const items: unknown[] = [];
+          for await (const item of result.output ?? replayItems([])) {
+            items.push(item);
+          }
+          const replayed = items.some(
+            (item) =>
+              Boolean(item) &&
+              typeof item === "object" &&
+              (item as { replayed?: unknown }).replayed === true,
+          );
+          if (replayed) {
+            await authorizeReplay({ provider, command: name });
+          }
+          return { ...result, output: replayItems(items) };
+        },
+      };
+    },
+  };
 }
 
 export function createEmbeddedLobsterRunner(options?: {
   loadRuntime?: () => Promise<EmbeddedToolRuntime>;
   llmAdapters?: Record<string, EmbeddedLlmAdapter>;
+  /** Re-authorizes the caller before a saved non-embedded answer is shown. Required with llmAdapters. */
+  authorizeReplay?: (request: LobsterReplayRequest) => Promise<void>;
 }): LobsterRunner {
   const loadRuntime = options?.loadRuntime ?? loadEmbeddedToolRuntimeFromPackage;
   let runtimePromise: Promise<EmbeddedToolRuntime> | undefined;
@@ -282,11 +356,21 @@ export function createEmbeddedLobsterRunner(options?: {
     async run(params) {
       runtimePromise ??= loadRuntime();
       const runtime = await runtimePromise;
+      let registry: LobsterRegistry | undefined;
+      if (options?.llmAdapters) {
+        if (!runtime.createDefaultRegistry || !options.authorizeReplay) {
+          throw new Error(
+            "lobster embedded route requires the Lobster command registry and a replay authorizer",
+          );
+        }
+        registry = wrapLlmCommands(runtime.createDefaultRegistry(), options.authorizeReplay);
+      }
       return await withTimeout(params.timeoutMs, async (signal) => {
         const maxStdoutBytes = Math.max(1024, params.maxStdoutBytes);
         const ctx: EmbeddedToolContext = {
           cwd: params.cwd,
-          env: resolveEmbeddedEnv(process.env, options?.llmAdapters),
+          env: { ...process.env },
+          ...(registry ? { registry } : {}),
           mode: "tool",
           stdin: Readable.from([]),
           stdout: createLimitedSink(maxStdoutBytes, "stdout"),

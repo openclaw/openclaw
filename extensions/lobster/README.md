@@ -76,6 +76,17 @@ Notes:
 - If `tools.allow` is omitted or empty, it behaves like "allow everything (except denied)". For a real allowlist, set a **non-empty** `allow`.
 - Tool names depend on which plugins you have installed/enabled.
 
+## Embedded LLM stages
+
+Use `llm.invoke --provider embedded --prompt 'Return a JSON object'` to request a tool-free completion through the host, without putting Gateway credentials in the workflow. This route requires a Gateway request and the calling agent supplied by the tool factory.
+
+- No model specified: use the calling agent's configured primary and fallback models.
+- Model specified: request a host-authorized override, pinned without fallbacks. A caller without override permission is refused before inference.
+- Existing `openclaw`, `pi` and `http` routes remain remote routes. Provider auto-detection uses the final merged workflow and step environment; it never infers `embedded`.
+- Embedded stages do not read or write persistent LLM cache/run-state answers. Refresh flags and step environment settings cannot enable reuse. Re-executing an embedded stage, including after an approval checkpoint, spends a new completion.
+- Other routes retain their existing cache. Before returning a replay, the plugin requires a host authority checker, revalidates the current Gateway caller and refuses cancellation or revoked authority. This is Gateway authorization, not a new check against a remote provider's credential or model policy.
+- The host background-completion API returns text only. The Lobster result does not report the actual selected model or token usage. This route does not expose per-stage sampling or output-token controls.
+
 ## Security
 
 - Runs Lobster in process via the published `@clawdbot/lobster/core` runtime.
