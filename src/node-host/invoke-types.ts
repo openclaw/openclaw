@@ -1,5 +1,4 @@
 import type { SystemRunExecutionContext } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
-/** Shared node-host request, result, event, and approval-bin provider contracts. */
 import type { SkillBinTrustEntry, SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 
 export type NodeInvokeRequestPayload = {

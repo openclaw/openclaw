@@ -161,7 +161,12 @@ describe("node execution target resolution", () => {
       /multiple.*mac-a.*mac-b/i,
     );
     expect(callGatewayToolMock).toHaveBeenCalledTimes(1);
-    expect(callGatewayToolMock).toHaveBeenCalledWith("node.list", {}, {}, { signal: undefined });
+    expect(callGatewayToolMock).toHaveBeenCalledWith(
+      "node.list",
+      {},
+      {},
+      expect.objectContaining({ signal: undefined }),
+    );
   });
 
   it.each([

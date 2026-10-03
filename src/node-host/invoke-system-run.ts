@@ -1,4 +1,3 @@
-/** Policy and execution pipeline for approved node-host system.run requests. */
 import crypto from "node:crypto";
 import path from "node:path";
 import {
@@ -165,7 +164,6 @@ function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeni
   }
 }
 
-/** Resolves the effective exec security/ask policy for one system.run request. */
 export async function resolveEffectiveSystemRunExecPolicy(params: {
   cfg: OpenClawConfig;
   agentId: string | undefined;

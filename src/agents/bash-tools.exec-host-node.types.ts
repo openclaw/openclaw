@@ -3,7 +3,6 @@ import type { ExecAsk, ExecSecurity } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { ExecElevatedDefaults } from "./bash-tools.exec-types.js";
 
-/** Full parameter bundle for Node-hosted exec command execution. */
 export type ExecuteNodeHostCommandParams = {
   command: string;
   toolCallId?: string;

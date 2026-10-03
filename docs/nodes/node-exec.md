@@ -69,6 +69,11 @@ markers to bypass that rejection. An unsupported context request is rejected
 before dispatch; reconnecting a node without the capability does not silently
 downgrade a prepared request. No protocol-version or configuration change is needed.
 
+For `openclaw agent --local` connected to a remote Gateway, the CLI also checks the
+Gateway's advertised capability. An older Gateway selects the existing `env`
+transport even with an updated node. A Gateway downgrade after discovery rejects
+the typed request before dispatch rather than dropping its context.
+
 ## Invoking commands
 
 Low-level (raw RPC):

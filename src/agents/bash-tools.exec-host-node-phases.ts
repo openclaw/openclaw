@@ -167,7 +167,6 @@ function hasNodeAllowAlwaysCommandApproval(params: {
   return expectedPatterns.every((pattern) => matchingEntries.has(pattern));
 }
 
-/** Formats a raw `node.invoke system.run` response as an exec tool result. */
 function formatNodeRunToolResult(params: {
   raw: unknown;
   startedAt: number;
@@ -213,7 +212,6 @@ function formatNodeRunToolResult(params: {
   };
 }
 
-/** Resolves the node id, platform, argv, env, and timeout for a node-host exec. */
 export async function resolveNodeExecutionTarget(
   params: ExecuteNodeHostCommandParams,
 ): Promise<NodeExecutionTarget> {
@@ -286,7 +284,6 @@ export async function resolveNodeExecutionTarget(
   };
 }
 
-/** Builds the `node.invoke` payload for `system.run`. */
 export function buildNodeSystemRunInvoke(params: {
   target: NodeExecutionTarget;
   command: string[];
@@ -339,7 +336,6 @@ export function buildNodeSystemRunInvoke(params: {
   };
 }
 
-/** Dispatches an authorized run and renders its transport or execution outcome. */
 export async function dispatchNodeSystemRun(params: {
   request: ExecuteNodeHostCommandParams;
   target: NodeExecutionTarget;
@@ -373,7 +369,6 @@ export async function dispatchNodeSystemRun(params: {
   });
 }
 
-/** Prepares a node-host system run using remote prepare support or local fallback. */
 export async function prepareNodeSystemRun(params: {
   request: ExecuteNodeHostCommandParams;
   target: NodeExecutionTarget;
@@ -419,7 +414,6 @@ export async function prepareNodeSystemRun(params: {
   };
 }
 
-/** Analyzes whether a prepared node run satisfies node/caller approval policy. */
 export async function analyzeNodeApprovalRequirement(params: {
   request: ExecuteNodeHostCommandParams;
   target: NodeExecutionTarget;
