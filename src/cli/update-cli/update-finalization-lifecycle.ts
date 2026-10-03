@@ -36,6 +36,8 @@ import {
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { redactSupportDiagnosticLine } from "../../logging/diagnostic-support-redaction.js";
+import { formatConsoleDiagnosticLine } from "../../logging/json-console-line.js";
+import { getLogger } from "../../logging/logger.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { resolveCommandProcessSignal, withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -173,7 +175,15 @@ export class UpdateFinalizationLifecycle {
         : {}),
       ...(status === "in_progress" ? { startedAtMs: at } : { endedAtMs: at }),
     };
-    defaultRuntime.error(`[update finalize] ${JSON.stringify(step)}`);
+    const message = `[update finalize] ${JSON.stringify(step)}`;
+    if (status === "failed") {
+      defaultRuntime.error(message);
+    } else if (name.startsWith("warning:")) {
+      console.warn(message);
+    } else {
+      getLogger().info(message);
+      process.stderr.write(`${formatConsoleDiagnosticLine({ level: "info", message })}\n`);
+    }
     if (this.runId) {
       try {
         recordUpdateRunStep(this.runId, step, this.ledgerOptions);

@@ -34,7 +34,7 @@ it("serves active model and chat metadata throughout an admitted plugin call dra
       model: { primary: "openai/gpt-reader-fixture" },
       models: { "openai/gpt-reader-fixture": {} },
     },
-    entries: { main: { default: true } },
+    entries: { main: {} },
   };
   config.models = {
     providers: {

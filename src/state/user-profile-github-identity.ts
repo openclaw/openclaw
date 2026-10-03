@@ -162,11 +162,16 @@ export function selectProfileAccessEntries(
   }
   const identities = selectStoredGitHubIdentities(db, profileIds);
   return rows.map(([id, row]) => {
-    const accounts = identities.get(id)?.accounts;
+    const identity = identities.get(id);
+    const accounts = identity?.accounts;
     return [
       id,
       accounts?.length
-        ? { ...row, githubAccountIds: accounts.map(({ accountId }) => accountId) }
+        ? {
+            ...row,
+            githubAccountIds: accounts.map(({ accountId }) => accountId),
+            githubLogin: identity?.primary?.login ?? null,
+          }
         : row,
     ];
   });

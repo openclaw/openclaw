@@ -382,6 +382,10 @@ describe("config cli integration", () => {
       expect(model).not.toHaveProperty("contextTokens");
       for (const [field, prefix, remedy] of [
         ["contextWindow", "Config path is valid but unset", "openclaw config set"],
+        ["params.custom.nested", "Config path is valid but unset", "openclaw config set"],
+        ["params.items[0].name", "Config path is valid but unset", "openclaw config set"],
+        ["headers.X-Future", "Config path is valid but unset", "openclaw config set"],
+        ["headers.X-Future.nested", "Unknown config path", "openclaw config schema"],
         ["notAConfigField", "Unknown config path", "openclaw config schema"],
       ]) {
         const getterPath = `${modelPath}.${field}`;

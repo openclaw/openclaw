@@ -113,6 +113,96 @@ describe("captured model decisions", () => {
     expect(load).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps response tiers account-bound without completing discovery and revokes stale observers", async () => {
+    const retirement = new AbortController();
+    const owner = createPreparedAccountCatalogAccess(() => true, retirement.signal);
+    const credential = { type: "api_key", provider: "openai", key: "synthetic-key" } as const;
+    const account = { profileId: "openai:account", credential };
+    const observation = {
+      modelId: "fixture-model",
+      runtimeId: "openclaw",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1/",
+      serviceTiers: ["priority"],
+    };
+    const route = { ...observation, profileId: account.profileId };
+    const record = owner.prepareServiceTierObserver(account);
+    expect(record(observation)).toBe(true);
+    expect(record({ ...observation, baseUrl: "https://api.openai.com/v1" })).toBe(false);
+    expect(owner.readServiceTiers(route)).toEqual(["priority"]);
+    for (const mismatch of [
+      { profileId: "openai:other" },
+      { modelId: "other-model" },
+      { runtimeId: "codex" },
+      { api: "openai-chatgpt-responses" },
+      { baseUrl: "https://other.example/v1" },
+    ]) {
+      expect(owner.readServiceTiers({ ...route, ...mismatch })).toBeUndefined();
+    }
+    const outcomes = [
+      { provider: "openai", profileId: account.profileId, status: "ready" as const },
+    ];
+    const load = vi.fn(async () => outcomes);
+    const request = { ...account, load, allowDiscovery: true };
+    expect((await owner.acquire({ ...request, allowDiscovery: false })).outcomes).toEqual([]);
+    expect(load).not.toHaveBeenCalled();
+    const catalogFailure = new Error("catalog unavailable");
+    await expect(
+      owner.acquire({
+        ...request,
+        load: async () => {
+          throw catalogFailure;
+        },
+      }),
+    ).rejects.toBe(catalogFailure);
+    expect(owner.readServiceTiers(route)).toEqual(["priority"]);
+    expect((await owner.acquire(request)).outcomes).toEqual(outcomes);
+    expect(owner.readServiceTiers(route)).toEqual(["priority"]);
+    expect(load).toHaveBeenCalledOnce();
+
+    await owner.acquire({ ...request, refresh: true });
+    expect(owner.readServiceTiers(route)).toBeUndefined();
+    expect(record(observation)).toBe(false);
+    const refreshed = owner.prepareServiceTierObserver(account);
+    expect(refreshed(observation)).toBe(true);
+    const replaced = owner.prepareServiceTierObserver({
+      ...account,
+      credential: { ...credential, key: "synthetic-replacement-key" },
+    });
+    expect(owner.readServiceTiers(route)).toBeUndefined();
+    expect(refreshed(observation)).toBe(false);
+    expect(replaced(observation)).toBe(true);
+    retirement.abort();
+    expect(owner.readServiceTiers(route)).toBeUndefined();
+    expect(replaced(observation)).toBe(false);
+    expect(owner.prepareServiceTierObserver(account)(observation)).toBe(false);
+  });
+
+  it("bounds response tier observations per account and rejects a superseded owner", () => {
+    let current = true;
+    const owner = createPreparedAccountCatalogAccess(() => current);
+    const account = {
+      profileId: "openai:account",
+      credential: { type: "api_key", provider: "openai", key: "synthetic-key" } as const,
+    };
+    const route = {
+      profileId: account.profileId,
+      modelId: "model-0",
+      runtimeId: "openclaw",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    };
+    const record = owner.prepareServiceTierObserver(account);
+    for (let index = 0; index <= 128; index++) {
+      record({ ...route, modelId: `model-${index}`, serviceTiers: ["priority"] });
+    }
+    expect(owner.readServiceTiers(route)).toBeUndefined();
+    expect(owner.readServiceTiers({ ...route, modelId: "model-128" })).toEqual(["priority"]);
+    current = false;
+    expect(owner.readServiceTiers({ ...route, modelId: "model-128" })).toBeUndefined();
+    expect(record({ ...route, serviceTiers: ["priority"] })).toBe(false);
+  });
+
   it("prepares only the selected account through the existing catalog hook", async () => {
     const pluginRegistry = harnessRegistry("codex");
     const catalog = vi.fn(

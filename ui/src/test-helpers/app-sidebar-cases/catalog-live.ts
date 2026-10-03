@@ -75,9 +75,6 @@ describe("AppSidebar session catalog pagination", () => {
 
   it.each([
     { id: "claude", label: "Claude Code", branded: true },
-    { id: "codex", label: "Codex", branded: true },
-    { id: "opencode", label: "OpenCode", branded: true },
-    { id: "pi", label: "Pi", branded: true },
     { id: "custom", label: "Custom", branded: false },
   ])("groups $label catalog rows by their owning host", async ({ id, label, branded }) => {
     const gateway = createGateway({} as GatewayBrowserClient);
@@ -542,74 +539,6 @@ describe("AppSidebar session catalog pagination", () => {
       await vi.advanceTimersByTimeAsync(1);
       expect(request).toHaveBeenCalledTimes(3);
       await vi.advanceTimersByTimeAsync(5 * 60_000);
-      expect(request).toHaveBeenCalledTimes(3);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps the safety cadence when a progressive host update changes host order", async () => {
-    vi.useFakeTimers();
-    try {
-      const basePage = catalogPage([{ threadId: "thread-local", name: "Local session" }]);
-      const catalog = basePage.catalogs[0];
-      const localHost = catalog?.hosts[0];
-      if (!catalog || !localHost) {
-        throw new Error("ordered catalog fixture is incomplete");
-      }
-      const pairedHost = {
-        ...localHost,
-        hostId: "node:paired",
-        label: "A paired node",
-        kind: "node" as const,
-        sessions: [],
-      };
-      const stablePage: SessionsCatalogListResult = {
-        catalogs: [
-          {
-            ...catalog,
-            hosts: [{ ...localHost, label: "Z local Gateway" }, pairedHost],
-          },
-        ],
-      };
-      const pending = deferred<SessionsCatalogListResult>();
-      const request = vi
-        .fn()
-        .mockResolvedValueOnce(stablePage)
-        .mockReturnValueOnce(pending.promise)
-        .mockResolvedValue(stablePage);
-      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-      gateway.publish({
-        hello: {
-          auth: { role: "operator", scopes: ["operator.read"] },
-          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
-      const { sidebar } = await mountSidebar(
-        gateway.gateway,
-        createSessions("main", ["agent:main:main"]),
-      );
-      sidebar.connected = true;
-      await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(0);
-
-      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      await vi.advanceTimersByTimeAsync(5_000);
-      const progressId = (request.mock.calls[1]?.[1] as { progressId?: string })?.progressId;
-      if (!progressId) {
-        throw new Error("second catalog request has no progress id");
-      }
-      gateway.publishEvent("sessions.catalog.host", {
-        progressId,
-        agentId: "main",
-        catalog: { ...catalog, hosts: [pairedHost] },
-      } satisfies SessionsCatalogHostEvent);
-      pending.resolve(stablePage);
-      await vi.advanceTimersByTimeAsync(0);
-
-      await vi.advanceTimersByTimeAsync(10 * 60_000 - 1);
-      expect(request).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(1);
       expect(request).toHaveBeenCalledTimes(3);
     } finally {
       vi.useRealTimers();

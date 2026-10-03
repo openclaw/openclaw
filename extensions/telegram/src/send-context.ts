@@ -25,7 +25,12 @@ import {
 } from "./request-authority.js";
 import type { TelegramRichMessageContextParams } from "./rich-message.js";
 import { maybePersistResolvedTelegramTarget } from "./target-writeback.js";
-import { normalizeTelegramChatId, normalizeTelegramLookupTarget } from "./targets.js";
+import {
+  hasRejectedTelegramTopic,
+  normalizeTelegramChatId,
+  normalizeTelegramLookupTarget,
+  TELEGRAM_INVALID_TOPIC_ID_MESSAGE,
+} from "./targets.js";
 
 export type TelegramApi = Bot["api"];
 export type TelegramApiOverride = Partial<TelegramApi>;
@@ -288,7 +293,11 @@ async function resolveChatId(
   const lookupTarget = normalizeTelegramLookupTarget(to);
   const getChat = params.api.getChat;
   if (!lookupTarget || typeof getChat !== "function") {
-    throw new Error("Telegram recipient must be a numeric chat ID");
+    throw new Error(
+      hasRejectedTelegramTopic(to)
+        ? TELEGRAM_INVALID_TOPIC_ID_MESSAGE
+        : "Telegram recipient must be a numeric chat ID",
+    );
   }
   try {
     const chat = await getChat.call(params.api, lookupTarget);

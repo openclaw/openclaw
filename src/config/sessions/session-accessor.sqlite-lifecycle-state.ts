@@ -8,10 +8,10 @@ import {
   iterateSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
-import {
-  isIncognitoOpenClawAgentDatabase,
-  type OpenClawAgentDatabase,
-  type OpenClawAgentDatabaseOptions,
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import type {
+  OpenClawAgentDatabase,
+  OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { persistSessionTranscriptArchive } from "./session-accessor.sqlite-archive-store-kernel.js";
@@ -57,6 +57,7 @@ import {
   readSessionColdTranscript,
 } from "./session-cold-storage-state.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import type { SessionEntry } from "./types.js";
 
 // Transcript-state reclamation owner. Planning stays async-free; transactions revalidate before delete.
@@ -229,7 +230,7 @@ export function readReferencedSessionIdsAfterTargetMutation(
 export function planSessionStateDeleteIfUnreferenced(params: {
   archiveTranscript?: boolean;
   archiveDirectory: string;
-  database: OpenClawAgentDatabase;
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">;
   reason?: "deleted" | "reset";
   referencedSessionIds: ReadonlySet<string>;
   sessionId: string;
@@ -244,7 +245,8 @@ export function planSessionStateDeleteIfUnreferenced(params: {
     agentId: params.database.agentId,
     archiveDirectory: params.archiveDirectory,
     archiveTranscript:
-      params.archiveTranscript !== false && !isIncognitoOpenClawAgentDatabase(params.database),
+      params.archiveTranscript !== false &&
+      typeof readOpenClawAgentDatabaseIdentity(params.database).identity === "string",
     databasePath: params.database.path,
     reason: params.reason ?? "deleted",
     sessionId: params.sessionId,
@@ -525,16 +527,13 @@ export async function projectSessionEntryLifecycleMutation(
       !hasPreparedNativeSessionDeletion() &&
       params.removals.length === 0 &&
       supportsOpenClawAgentDatabaseExecution(databaseOptions)
-        ? await import("./session-transcript-worker-runtime.js").then(
-            ({ withSessionHistoryWorkerDatabase }) =>
-              withSessionHistoryWorkerDatabase(databaseOptions, (reader) =>
-                reader.readExactEntries({
-                  projection: "lifecycle",
-                  includeAuthorization: true,
-                  sessionKeys,
-                  env: { ...(databaseOptions.env ?? process.env) },
-                }),
-              ),
+        ? await withSessionHistoryWorkerDatabase(databaseOptions, (reader) =>
+            reader.readExactEntries({
+              projection: "lifecycle",
+              includeAuthorization: true,
+              sessionKeys,
+              env: { ...(databaseOptions.env ?? process.env) },
+            }),
           )
         : undefined;
     const store = snapshot
@@ -616,7 +615,7 @@ export async function projectSessionEntryLifecycleMutation(
 // Projected deletes must preserve raw session_nodes.current_session_id references for
 // remaining rows whose entry_json cannot be parsed into a SessionEntry.
 export function collectProjectedReferencedSessionIds(params: {
-  database: OpenClawAgentDatabase;
+  database: Pick<OpenClawAgentDatabase, "db">;
   excludedSessionKeys: Iterable<string>;
   projectedStore: Record<string, SessionEntry>;
   candidateSessionIds?: readonly string[];

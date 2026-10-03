@@ -1,5 +1,8 @@
-import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect, it, vi } from "vitest";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
@@ -50,7 +53,7 @@ it("bounds six Gateway connections and filters the shared refresh at each delive
       },
     },
   });
-  let service: OpenClawPluginService | undefined;
+  let service: Parameters<OpenClawPluginApi["registerService"]>[0] | undefined;
   const api = createTestPluginApi({
     runtime,
     registerService: (registered) => {
@@ -61,7 +64,8 @@ it("bounds six Gateway connections and filters the shared refresh at each delive
     },
   });
   sessionSharePlugin.register(api);
-  const context = { config, logger: api.logger, stateDir: "/unused", invokeNode };
+  const scheduler = createTestPluginServiceScheduler();
+  const context = { config, logger: api.logger, stateDir: "/unused", invokeNode, scheduler };
   await service?.start(context);
   bindPluginRegistryRuntime(hoisted.activeRegistry as PluginRegistry, runtime);
   hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
@@ -129,7 +133,12 @@ it("bounds six Gateway connections and filters the shared refresh at each delive
     );
   } finally {
     await vi.runAllTimersAsync();
-    await service?.stop?.(context);
+    scheduler.beginClose();
+    try {
+      await service?.stop?.(context);
+    } finally {
+      await scheduler.stop();
+    }
     vi.useRealTimers();
   }
 });

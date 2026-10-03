@@ -1,3 +1,5 @@
+import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
+
 type ComparableSubagentRun = {
   runId: string;
   createdAt: number;
@@ -6,6 +8,7 @@ type ComparableSubagentRun = {
 
 type GenerationalSubagentRun = ComparableSubagentRun & {
   childSessionKey?: string;
+  childAgentId?: string;
 };
 
 export type SubagentRunIdentity = GenerationalSubagentRun & {
@@ -173,10 +176,11 @@ export function latestSubagentRun<T extends ComparableSubagentRun>(
 export function nextSubagentRunGeneration(
   runs: Iterable<GenerationalSubagentRun>,
   childSessionKey: string,
+  childAgentId?: string,
 ): number {
   let generation = 0;
   for (const entry of runs) {
-    if (entry.childSessionKey === childSessionKey) {
+    if (matchesSubagentChildSessionOwner(entry, childSessionKey, childAgentId)) {
       generation = Math.max(generation, normalizeGeneration(entry));
     }
   }

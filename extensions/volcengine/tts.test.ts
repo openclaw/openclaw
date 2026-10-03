@@ -1,3 +1,4 @@
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildVolcengineSpeechProvider } from "./speech-provider.js";
 import { volcengineTTS } from "./tts.js";

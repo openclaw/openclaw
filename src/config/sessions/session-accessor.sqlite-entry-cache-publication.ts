@@ -5,6 +5,7 @@ import {
   type SessionRowChange,
   type SessionRowFacts,
 } from "../../sessions/session-row-changes.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -44,6 +45,7 @@ import {
   publishIncognitoSessionEntryChange,
   stageIncognitoSharingPublication,
 } from "./session-accessor.sqlite-incognito-sharing.js";
+import { publishSessionEntryMaintenanceAgeChanges } from "./session-accessor.sqlite-maintenance-age.js";
 import {
   publishRetainedSessionGeneration,
   updateSessionSharingField,
@@ -117,6 +119,15 @@ export function emitPreparedSessionSharingChange(
   sessionChanges.emit(change, database.db);
 }
 
+function invalidateSessionEntryCaches(databaseIdentity: string): void {
+  invalidateOpenClawAgentWritableProjections(databaseIdentity, (database) =>
+    sessionEntryCaches.delete(database),
+  );
+  invalidateOpenClawAgentReadOnlyProjections(databaseIdentity, (database) =>
+    sessionEntryCaches.delete(database),
+  );
+}
+
 /** A committed metadata-only worker write invalidates caches without changing retained identity. */
 export function publishSessionEntryWorkerMetadataInvalidation(params: {
   agentId: string;
@@ -124,12 +135,7 @@ export function publishSessionEntryWorkerMetadataInvalidation(params: {
   databaseIdentity: string;
   sessionKey: string;
 }): void {
-  invalidateOpenClawAgentWritableProjections(params.databaseIdentity, (database) =>
-    sessionEntryCaches.delete(database),
-  );
-  invalidateOpenClawAgentReadOnlyProjections(params.databaseIdentity, (database) =>
-    sessionEntryCaches.delete(database),
-  );
+  invalidateSessionEntryCaches(params.databaseIdentity);
   const change: SessionRowChange = {
     agentId: params.agentId,
     storePath: params.storePath,
@@ -460,12 +466,7 @@ export function publishSessionEntryWorkerInvalidations(
     changes.push(change);
   }
   if (keys.length > 0) {
-    invalidateOpenClawAgentWritableProjections(params.databaseIdentity, (database) =>
-      sessionEntryCaches.delete(database),
-    );
-    invalidateOpenClawAgentReadOnlyProjections(params.databaseIdentity, (database) =>
-      sessionEntryCaches.delete(database),
-    );
+    invalidateSessionEntryCaches(params.databaseIdentity);
   }
   sessionChanges.emitBatch(changes, undefined, beforePublicNotifications);
 }
@@ -477,6 +478,7 @@ export function retainSessionEntryWorkerPublication(params: {
   databaseIdentity: string;
 }) {
   const creation = preparedSharingChanges.current.getStore();
+  const completion = createDeferredCore();
   const owner: PendingSessionEntryPublication = {
     superseded: new Map(),
     metadataSuperseded: new Set(),
@@ -484,6 +486,7 @@ export function retainSessionEntryWorkerPublication(params: {
     membershipInvalidated: new Set(),
     sharingUnchanged: new Set(),
     settled: false,
+    completion: completion.promise,
   };
   let keys: string[] = [];
   const identityKey = `file:${params.databaseIdentity}`;
@@ -573,12 +576,7 @@ export function retainSessionEntryWorkerPublication(params: {
         ]),
       ];
       if (changed.length) {
-        invalidateOpenClawAgentWritableProjections(params.databaseIdentity, (database) =>
-          sessionEntryCaches.delete(database),
-        );
-        invalidateOpenClawAgentReadOnlyProjections(params.databaseIdentity, (database) =>
-          sessionEntryCaches.delete(database),
-        );
+        invalidateSessionEntryCaches(params.databaseIdentity);
       }
       const changes: SessionRowChange[] = [];
       const sharingUnchanged = new Set(replacement?.sharingUnchangedKeys);
@@ -671,6 +669,14 @@ export function retainSessionEntryWorkerPublication(params: {
       }
       owner.settled = true;
       try {
+        if (replacement) {
+          publishSessionEntryMaintenanceAgeChanges(
+            params.databaseIdentity,
+            replacement.ageChanges.filter(
+              ({ sessionKey }) => current(sessionKey) && !owner.metadataSuperseded.has(sessionKey),
+            ),
+          );
+        }
         sessionChanges.emitBatch(changes);
         return replacement
           ? {
@@ -689,6 +695,7 @@ export function retainSessionEntryWorkerPublication(params: {
           }
         }
         pending = false;
+        completion.resolve();
       }
     },
   };

@@ -23,8 +23,7 @@ import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
-import { immutableSubagentRun } from "./subagent-registry-persistence.js";
+import { immutableSubagentRun, subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type RegistryTestApi = {

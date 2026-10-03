@@ -11,6 +11,8 @@ import type {
 } from "../../sessions/user-turn-transcript.types.js";
 import { buildCurrentInboundSteeringPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import {
+  isOpenClawSystemUpdateMessage,
+  orderSystemUpdateMessages,
   resolvePendingRuntimeContextReplay,
   type CurrentInboundPromptContext,
 } from "../internal-runtime-context.js";
@@ -46,9 +48,29 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
   private logicalPromptActive = false;
   private promptPreparation?: () => Promise<void | (() => void)>;
 
-  [agentSessionQueuePromptContext](message: CustomMessage): () => void {
-    // The carrier belongs immediately after its user, ahead of queued extension context.
-    this.pendingNextTurnMessages.unshift(message);
+  [agentSessionQueuePromptContext](message: CustomMessage): () => void;
+  [agentSessionQueuePromptContext](
+    message: CustomMessage,
+    options: { delivery: "current-request" },
+  ): Promise<void>;
+  [agentSessionQueuePromptContext](
+    message: CustomMessage,
+    options?: { delivery: "current-request" },
+  ): (() => void) | Promise<void> {
+    if (options?.delivery === "current-request") {
+      return this.persistCustomMessage(message);
+    }
+    if (this.logicalPromptActive && isOpenClawSystemUpdateMessage(message)) {
+      this.agent.steer(message);
+      return () => {
+        this.agent.cancelSteeringMessage((pending) => pending === message);
+      };
+    }
+    if (isOpenClawSystemUpdateMessage(message)) {
+      this.pendingNextTurnMessages.push(message);
+    } else {
+      this.pendingNextTurnMessages.unshift(message);
+    }
     return () => {
       this.pendingNextTurnMessages = this.pendingNextTurnMessages.filter(
         (pending) => pending !== message,
@@ -340,7 +362,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     }
 
     preflightResult?.(true);
-    await this.runAgentPrompt(messages);
+    await this.runAgentPrompt(orderSystemUpdateMessages(messages));
   }
 
   /**
@@ -548,18 +570,22 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     } else if (options?.triggerTurn) {
       await this.runAgentPrompt(appMessage);
     } else {
-      await withSessionManagerWrite(this.sessionManager, async () => {
-        await this.sessionManager.appendCustomMessageEntryAsync(
-          appMessage.customType,
-          appMessage.content,
-          appMessage.display,
-          appMessage.details,
-        );
-        this.agent.state.messages.push(appMessage);
-      });
-      this.emit({ type: "message_start", message: appMessage });
-      this.emit({ type: "message_end", message: appMessage });
+      await this.persistCustomMessage(appMessage);
     }
+  }
+
+  private async persistCustomMessage(message: CustomMessage): Promise<void> {
+    await withSessionManagerWrite(this.sessionManager, async () => {
+      await this.sessionManager.appendCustomMessageEntryAsync(
+        message.customType,
+        message.content,
+        message.display,
+        message.details,
+      );
+      this.agent.state.messages.push(message);
+    });
+    this.emit({ type: "message_start", message });
+    this.emit({ type: "message_end", message });
   }
 
   /**

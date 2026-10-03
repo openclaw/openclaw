@@ -16,8 +16,7 @@ import {
 } from "./shared-client.js";
 import type { createClientHarness } from "./test-support.js";
 import type { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
-
-type StartParams = Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">;
+import type { CodexAttemptThreadInput as StartParams } from "./thread-lifecycle.test-fixtures.js";
 
 type PolicyRefreshFixtures = {
   createParams: (sessionFile: string, workspaceDir: string) => StartParams["params"];

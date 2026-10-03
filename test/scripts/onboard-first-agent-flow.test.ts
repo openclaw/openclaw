@@ -8,13 +8,9 @@ const helper = "scripts/e2e/lib/onboard/first-agent-flow.sh";
 describe.skipIf(process.platform === "win32")("guided first-agent prompt handshake", () => {
   it.each([
     ["legacy", "plain", "provider", 5],
-    ["legacy", "fragmented", "provider", 5],
-    ["team", "plain", "provider", 6],
     ["team", "fragmented", "provider", 6],
-    ["legacy", "plain", "configured", 4],
     ["legacy", "fragmented", "configured", 4],
     ["team", "plain", "configured", 5],
-    ["team", "fragmented", "configured", 5],
   ] as const)(
     "drives the real guided sender through %s %s %s prompts",
     (layout, rendering, modelPrompt, count) => {

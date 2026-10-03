@@ -28,7 +28,11 @@ import {
 import { isSystemAgentInferenceUnavailableError } from "../../system-agent/inference-error.js";
 import { buildNewAgentWelcome } from "../../system-agent/new-agent-welcome.js";
 import { buildOnboardingWelcome } from "../../system-agent/onboarding-welcome.js";
-import { appendTranscriptReset, readTranscriptTail } from "../../system-agent/transcript-store.js";
+import {
+  appendTranscriptReset,
+  readTranscriptTail,
+  readTranscriptTailAsync,
+} from "../../system-agent/transcript-store.js";
 import { resolveUserPath } from "../../utils.js";
 import { WizardSession } from "../../wizard/session.js";
 import {
@@ -126,12 +130,15 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
   "openclaw.chat.history": defineValidatedGatewayHandler(
     "openclaw.chat.history",
     validateSystemAgentChatHistoryParams,
-    ({ params, respond }) => {
-      respond(
-        true,
-        { turns: readTranscriptTail(params.limit ?? DEFAULT_SYSTEM_AGENT_HISTORY_LIMIT) },
-        undefined,
+    async (options) => {
+      const { params, respond } = options;
+      const authority = readGatewayRequestMutationAuthority(options);
+      authority.assertCurrent();
+      const turns = await readTranscriptTailAsync(
+        params.limit ?? DEFAULT_SYSTEM_AGENT_HISTORY_LIMIT,
       );
+      authority.assertCurrent();
+      respond(true, { turns }, undefined);
     },
   ),
   /** Structured onboarding: list reusable AI access on this host. */

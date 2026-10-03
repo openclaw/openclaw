@@ -16,11 +16,11 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import { prepareSessionControlTarget } from "./sessions-control-authority.js";
 import {
   hasSessionControlAuthority,
-  prepareSessionControlTarget,
   readSessionControlAuthority,
-} from "./sessions-control-authority.js";
+} from "./sessions-operator-authority.js";
 import { createSessionsTool } from "./sessions-tool.js";
 
 function issueAuthority(profileId: string, scopes: readonly string[] = ["operator.write"]) {

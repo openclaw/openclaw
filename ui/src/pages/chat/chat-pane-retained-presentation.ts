@@ -14,6 +14,7 @@ import {
   areUiSessionKeysEquivalent,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
+import { showToast } from "../../lib/toast.ts";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
 import { loadChatBranches, retireChatBranchRequests } from "./chat-history-branches.ts";
 import {
@@ -25,7 +26,7 @@ import {
 } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-sessions.ts";
-import type { ChatPaneActiveResources } from "./chat-pane-active-resources.ts";
+import { ChatPaneActiveResources } from "./chat-pane-active-resources.ts";
 import { ChatPaneBoard } from "./chat-pane-board.ts";
 import type { PaneSessionHandoff } from "./chat-pane-handoff-lifecycle.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
@@ -53,7 +54,7 @@ const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
 
 /** Owns foreground resources and composer state that follow one retained presentation. */
 export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
-  protected abstract readonly activeSessionResources: ChatPaneActiveResources;
+  protected readonly activeSessionResources = new ChatPaneActiveResources();
 
   protected captureProgressCardRefreshAction(): SessionProgressCardRefreshAction | undefined {
     const state = this.state;
@@ -156,6 +157,11 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
 
   private progressPresentationSessionKey: string | undefined;
   private progressPresentationReady = false;
+  private hiddenProgressCardScope: object | undefined;
+  private readonly hiddenProgressCards = new Map<
+    string,
+    { lifetime: object | undefined; revision: number }
+  >();
   private retainedProgressCard:
     | {
         gatewayScope: object;
@@ -186,6 +192,10 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       return null;
     }
     const gatewayScope = gatewayPresentationScope(this.context.gateway);
+    if (this.hiddenProgressCardScope !== gatewayScope) {
+      this.hiddenProgressCardScope = gatewayScope;
+      this.hiddenProgressCards.clear();
+    }
     const agentId = resolveUiSelectedSessionAgentId(state);
     const previous = this.retainedProgressCard;
     if (
@@ -216,8 +226,44 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     } else if (!this.progressCard.loading) {
       this.retainedProgressCard = undefined;
     }
-    // Reconnect retires read admission, not the mounted card's disclosure state.
-    return this.retainedProgressCard ?? null;
+    // The X only hides this presentation. The Gateway card remains available to
+    // other clients and read-only surfaces; a new card lifetime restores this view.
+    const presented = this.retainedProgressCard;
+    if (!presented) {
+      return null;
+    }
+    const hidden = this.hiddenProgressCards.get(presented.identity);
+    if (!hidden) {
+      return presented;
+    }
+    if (
+      hidden.lifetime
+        ? hidden.lifetime === presented.lifetime
+        : hidden.revision === presented.card.revision
+    ) {
+      return null;
+    }
+    this.hiddenProgressCards.delete(presented.identity);
+    return presented;
+  }
+
+  protected readonly clearSavedProgressCard = (card: ProgressCard): void => {
+    void this.progressCard
+      .dismiss(card)
+      .catch(() => showToast({ message: t("sessionProgressCard.clearFailed") }));
+  };
+
+  protected hideProgressCard(card: ProgressCard): void {
+    const presented = this.progressCardPresentation;
+    if (!presented || presented.card !== card) {
+      return;
+    }
+    this.hiddenProgressCards.delete(presented.identity);
+    this.hiddenProgressCards.set(presented.identity, {
+      lifetime: presented.lifetime,
+      revision: card.revision,
+    });
+    this.requestUpdate();
   }
 
   protected override initialProgressCardTarget() {

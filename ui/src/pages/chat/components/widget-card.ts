@@ -7,6 +7,7 @@ import { icons } from "../../../components/icons.ts";
 import { dispatchWidgetPrompt } from "../../../components/mcp-app-security.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerMcpAppEnglish } from "../../../i18n/locales/en-mcp-app.ts";
 import {
   canvasWidgetNameForDocument,
   mcpAppWidgetNameForViewId,
@@ -24,6 +25,8 @@ import { showToast } from "../../../lib/toast.ts";
 import { installWidgetThemeObserver, postWidgetTheme } from "../../../lib/widget-theme.ts";
 import { exportWidget } from "./widget-export.ts";
 import "./browser-tab-card.ts";
+
+registerMcpAppEnglish();
 
 type WidgetCardOptions = {
   rawText?: string | null;

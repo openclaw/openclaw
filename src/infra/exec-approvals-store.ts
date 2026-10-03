@@ -225,10 +225,10 @@ function updateExecApprovalsInTransaction(
       if (current.exists && current.raw === raw) {
         return current;
       }
-      writeExecApprovalsConfigRow({ db, file: next, raw });
+      const persistedRaw = writeExecApprovalsConfigRow({ db, file: next });
       return snapshotFromExecApprovalsRow({
         path: current.path,
-        row: { raw_json: raw },
+        row: { raw_json: persistedRaw },
       });
     },
     options,

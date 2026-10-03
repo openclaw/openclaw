@@ -46,16 +46,13 @@ export class MockProvider implements VoiceCallProvider {
     try {
       const payload = JSON.parse(ctx.rawBody);
       const events: NormalizedEvent[] = [];
-
-      if (Array.isArray(payload.events)) {
-        for (const evt of payload.events) {
-          const normalized = this.normalizeEvent(evt);
-          if (normalized) {
-            events.push(normalized);
-          }
-        }
-      } else if (payload.event) {
-        const normalized = this.normalizeEvent(payload.event);
+      const candidates = Array.isArray(payload.events)
+        ? payload.events
+        : payload.event
+          ? [payload.event]
+          : [];
+      for (const evt of candidates) {
+        const normalized = this.normalizeEvent(evt);
         if (normalized) {
           events.push(normalized);
         }

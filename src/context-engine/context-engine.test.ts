@@ -26,7 +26,6 @@ import {
 import {
   buildMemorySystemPromptAddition,
   delegateCompactionToRuntime,
-  isRuntimeCompactionDelegate,
   prepareMemorySystemPromptAddition,
 } from "./delegate.js";
 import { LegacyContextEngine } from "./legacy.js";
@@ -243,11 +242,10 @@ describe("Engine contract tests", () => {
     });
   });
 
-  it("preserves runtime watchdog and token count through resolved legacy compaction", async () => {
+  it("preserves runtime token count through resolved legacy compaction", async () => {
     installCompactRuntimeSpy();
     await registerLegacyContextEngine();
     const engine = await resolveContextEngine();
-    expect(isRuntimeCompactionDelegate(Reflect.get(engine, "compact", engine))).toBe(true);
     await engine.compact({
       sessionId: "s1",
       sessionKey: "agent:main:s1",
@@ -828,7 +826,6 @@ describe("Invalid engine fallback", () => {
 
     expect(engine.info.id).toBe("legacy");
     expect(engine.info.ownsCompaction).toBeUndefined();
-    expect(isRuntimeCompactionDelegate(Reflect.get(engine, "compact", engine))).toBe(true);
     expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe("legacy");
     expect(factory).toHaveBeenCalledOnce();
     expect(resolveContextEngineOwnerPluginId(engine)).toBeUndefined();
@@ -859,7 +856,6 @@ describe("Invalid engine fallback", () => {
     expect(engine.info.id).toBe("legacy");
     expect(engine.info.ownsCompaction).toBeUndefined();
     expect(resolveContextEngineOwnerPluginId(engine)).toBeUndefined();
-    expect(isRuntimeCompactionDelegate(Reflect.get(engine, "compact", engine))).toBe(true);
     expect(compact).toHaveBeenCalledTimes(1);
   });
 

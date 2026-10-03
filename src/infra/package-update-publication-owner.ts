@@ -69,8 +69,8 @@ export function createPublicationOwner(
     "previous.candidate",
     "launchers",
     "previous-launchers",
-  ];
-  const assertInventory = (allowed = artifactNames) => {
+  ] as const;
+  const assertInventory = (allowed: readonly string[] = artifactNames) => {
     let entries: string[];
     try {
       entries = fs.readdirSync(custodyPath("anchor"));
@@ -164,7 +164,9 @@ export function createPublicationOwner(
     if (!contents) {
       return true;
     }
-    const observed = await createPackageIntegrityReader().tree(file, logical);
+    // A prepared descriptor carries its in-process observation, so settled unchanged
+    // files are not re-read. A recovery process parses one without and re-reads all.
+    const observed = await createPackageIntegrityReader().tree(file, logical, expected);
     if (!isDeepStrictEqual(observed, expected)) {
       throw new PackageIntegrityMismatchError(
         `Package publication object changed: ${file}`,
@@ -353,7 +355,7 @@ export function createPublicationOwner(
       await persistPackageSelection("displaced");
     }
     if (observed.selected !== "candidate") {
-      // Displacement/capture can yield to writers; hash the candidate at publication.
+      // Displacement/capture can yield to writers; re-verify the candidate at publication.
       await inspect("staged");
       assertCurrent();
       transition("publishing", { kind: "publish" });
@@ -471,13 +473,7 @@ export function createPublicationOwner(
           : record.publications;
       transition("retiring", { kind: "retire", selected }, publications);
     }
-    for (const name of [
-      "previous",
-      "candidate",
-      "previous.candidate",
-      "launchers",
-      "previous-launchers",
-    ] as const) {
+    for (const name of artifactNames) {
       const target = root(name);
       if (!(await packagePathEntryExists(target))) {
         assertCurrent();

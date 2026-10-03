@@ -1,5 +1,4 @@
 import { expect, it, vi } from "vitest";
-import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   runSubagentAnnounceDispatch,
@@ -316,7 +315,7 @@ export function registerLifecycleDeliveryReceiptCases({
     expect(readLifecycleRun(entry).delivery?.nextAttemptAt).toBeUndefined();
   });
 
-  it("keeps a late superseded-delivery retirement root-admitted", async () => {
+  it("keeps a delivered receipt when a late failure arrives after the next turn starts", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: true, generation: 1 });
     const runs = new Map([[entry.runId, entry]]);
     let onDeliveryResult: Parameters<
@@ -328,13 +327,7 @@ export function registerLifecycleDeliveryReceiptCases({
         return "delivered" as const;
       },
     );
-    let releaseRetirement = () => {};
-    const retirementPending = new Promise<void>((resolve) => {
-      releaseRetirement = resolve;
-    });
-    const retireSupersededRun = vi.fn(async () => {
-      await retirementPending;
-    });
+    const retireSupersededRun = vi.fn(async () => {});
     const controller = createLifecycleController({
       entry,
       runs,
@@ -342,8 +335,9 @@ export function registerLifecycleDeliveryReceiptCases({
       runSubagentAnnounceFlow,
     });
 
-    await completeRun(controller, entry, { triggerCleanup: true });
-    await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await completeAndJoinCleanup(controller, entry, { triggerCleanup: true });
+    const delivered = readLifecycleRun(entry).delivery;
+    expect(delivered?.status).toBe("delivered");
     const newer = createRunEntry({
       runId: "run-2",
       childSessionKey: entry.childSessionKey,
@@ -353,15 +347,9 @@ export function registerLifecycleDeliveryReceiptCases({
 
     await onDeliveryResult?.({ delivered: false, path: "none" });
 
-    await waitForLifecycleState(() =>
-      expect(retireSupersededRun).toHaveBeenCalledWith(
-        entry.runId,
-        expect.objectContaining({ runId: entry.runId, childSessionKey: entry.childSessionKey }),
-      ),
-    );
-    expect(getActiveGatewayRootWorkCount()).toBe(1);
-    releaseRetirement();
-    await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    expect(readLifecycleRun(entry).delivery).toEqual(delivered);
+    expect(retireSupersededRun).not.toHaveBeenCalled();
+    expect(runs.get(newer.runId)).toBe(newer);
   });
 
   it("finalizes terminal visible-send failures without scheduling completion retry", async () => {

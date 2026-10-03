@@ -114,14 +114,18 @@ export async function countPendingDescendantRuns(
   return count;
 }
 
-export function resolveRequesterForChildSession(childSessionKey: string): {
+export function resolveRequesterForChildSession(
+  childSessionKey: string,
+  childAgentId?: string,
+): {
   requesterSessionKey: string;
   requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
 } | null {
   const resolved = resolveRequesterForChildSessionFromRuns(
-    getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey),
+    getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey, childAgentId),
     childSessionKey,
+    childAgentId,
   );
   if (!resolved) {
     return null;
@@ -133,18 +137,30 @@ export function resolveRequesterForChildSession(childSessionKey: string): {
   };
 }
 
-export function shouldIgnorePostCompletionAnnounceForSession(childSessionKey: string): boolean {
+export function shouldIgnorePostCompletionAnnounceForSession(
+  childSessionKey: string,
+  childAgentId?: string,
+): boolean {
   return shouldIgnorePostCompletionAnnounceForSessionFromRuns(
-    getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey),
+    getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey, childAgentId),
     childSessionKey,
+    childAgentId,
   );
 }
 
 /** True when the process-local registry still owns an active run for the child session. */
-export function isSubagentSessionRunActive(childSessionKey: string): boolean {
+export function isSubagentSessionRunActive(
+  childSessionKey: string,
+  childAgentId?: string,
+): boolean {
   // Liveness is mutation ownership, so a persisted snapshot must not outvote the raw live map.
   return isSubagentRunLive(
-    getLatestSubagentRunByChildSessionKeyFromRuns(subagentRuns, childSessionKey),
+    getLatestSubagentRunByChildSessionKeyFromRuns(
+      subagentRuns,
+      childSessionKey,
+      undefined,
+      childAgentId,
+    ),
   );
 }
 
@@ -156,20 +172,27 @@ export function listSubagentRunsForRequester(
   return listRunsForRequesterFromRuns(subagentRuns, requesterSessionKey, options);
 }
 
-export function getSubagentRunByChildSessionKey(childSessionKey: string): SubagentRunRecord | null {
+export function getSubagentRunByChildSessionKey(
+  childSessionKey: string,
+  childAgentId?: string,
+): SubagentRunRecord | null {
   return getSubagentRunByChildSessionKeyFromRuns(
-    getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey),
+    getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey, childAgentId),
     childSessionKey,
+    childAgentId,
   );
 }
 
 export function getLatestSubagentRunByChildSessionKey(
   childSessionKey: string,
+  childAgentId?: string,
 ): SubagentRunRecord | null {
   return (
     getLatestSubagentRunByChildSessionKeyFromRuns(
-      getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey),
+      getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey, childAgentId),
       childSessionKey,
+      undefined,
+      childAgentId,
     ) ?? null
   );
 }
@@ -183,14 +206,16 @@ export function getLatestSubagentRunByChildSessionKey(
 export function getLatestLiveSubagentRunByChildSessionKey(
   childSessionKey: string,
   matches?: (entry: SubagentRunRecord) => boolean,
+  childAgentId?: string,
 ): SubagentRunRecord | null {
   const key = childSessionKey.trim();
   // Mutation ownership is process-local; persisted rows can be stale after a replacement.
   return (
     getLatestSubagentRunByChildSessionKeyFromRuns(
-      getSubagentRunsForChildSession(key),
+      getSubagentRunsForChildSession(key, childAgentId),
       key,
       matches,
+      childAgentId,
     ) ?? null
   );
 }

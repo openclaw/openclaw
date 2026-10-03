@@ -2,7 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { WorkerProviderError } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
-import { commandResult } from "./crabbox-worker-provider.test-support.js";
+import { commandResult, nodeEnrollmentFixture } from "./crabbox-worker-provider.test-support.js";
 import { CRABBOX_LIFECYCLE_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 import {
   createWarmProvider,
@@ -98,11 +98,6 @@ describe("Crabbox desktop provisioning", () => {
       config: { aws: { instanceProfile: "" }, coordinator: "", brokerMode: "managed" },
     },
     {
-      name: "direct Azure",
-      providerId: "azure",
-      config: { coordinator: "", brokerMode: "managed" },
-    },
-    {
       name: "coordinator-backed Hetzner",
       providerId: "hetzner",
       config: {
@@ -138,15 +133,7 @@ describe("Crabbox desktop provisioning", () => {
       {
         beginNodeEnrollment: async () => {
           setupOrder.push("enrollment");
-          return {
-            mode: "connect" as const,
-            setupCode: "secret-setup-value",
-            setupId: "setup-id",
-            openclawVersion: "2026.8.1",
-            nodeBootstrap: createNodeBootstrapFixture(),
-            displayName: "Cloud worker test",
-            waitForDeviceId: async () => "device-1",
-          };
+          return nodeEnrollmentFixture("secret-setup-value", "Cloud worker test");
         },
       },
     ).finally(() => {

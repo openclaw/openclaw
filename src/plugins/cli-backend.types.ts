@@ -283,6 +283,8 @@ export type CliBackendResolveExecutionArgsContext = {
   fastMode?: boolean;
   executionMode?: CliBackendExecutionMode;
   toolAvailability?: CliBackendToolAvailability;
+  /** Canonical tools routed through OpenClaw; disable equivalent native tools. */
+  hostOwnedTools?: readonly string[];
   useResume: boolean;
   baseArgs: readonly string[];
 };
@@ -561,6 +563,11 @@ type CliBackendPluginBase = {
    * `toolAvailabilityEnforcement`; `always-on` backends fail closed.
    */
   nativeToolMode?: CliBackendNativeToolMode;
+  /** Default local coding tools owned by OpenClaw instead of the native CLI.
+   * Applies only with bundled loopback MCP, outside exact or node runs.
+   * The execution-args adapter must disable the equivalent native tools.
+   */
+  hostOwnedTools?: readonly string[];
   /**
    * Side-question native tool behavior.
    *

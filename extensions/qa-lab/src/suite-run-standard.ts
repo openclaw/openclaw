@@ -411,14 +411,11 @@ export async function runQaFlowSuiteStandard(
       const finishedAt = new Date();
       const result = await completeQaSuiteRun(
         {
-          repoRoot,
           outputDir,
           startedAt,
           finishedAt,
           scenarios,
           metrics,
-          scenarioDefinitions: selectedScenarios,
-          evidenceMode: params?.evidenceMode,
           recordedEvidence: recording.snapshot(),
           transport,
           providerMode,

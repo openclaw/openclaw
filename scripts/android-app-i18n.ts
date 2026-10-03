@@ -5,6 +5,10 @@ import { fileURLToPath } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.ts";
 import { compareAscii as compareText } from "./lib/canonical-json.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import {
+  type NativeI18nInventoryEntry,
+  parseNativeI18nInventory,
+} from "./native-i18n-inventory.ts";
 import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -84,13 +88,6 @@ const THIRD_PARTY_GENERATED_RESOURCE_RE =
 const WEAR_STRINGS_REPO_PATH = "apps/android/wear/src/main/res/values/strings.xml";
 const WEAR_GENERATED_RESOURCE_RE =
   /^apps\/android\/wear\/src\/main\/res\/values-[^/]+\/strings\.xml$/;
-
-type NativeInventoryEntry = {
-  id: string;
-  source: string;
-  sites: Array<{ kind: string; path: string }>;
-  surface: "android" | "apple";
-};
 
 type NativeTranslations = Record<string, string>;
 
@@ -1026,11 +1023,10 @@ export function selectDeterministicTranslation(source: string, values: readonly 
   );
 }
 
-async function readInventory(): Promise<NativeInventoryEntry[]> {
-  const parsed = JSON.parse(await readFile(INVENTORY_PATH, "utf8")) as {
-    entries?: NativeInventoryEntry[];
-  };
-  return (parsed.entries ?? []).filter((entry) => entry.surface === "android");
+async function readInventory(): Promise<NativeI18nInventoryEntry[]> {
+  return parseNativeI18nInventory(await readFile(INVENTORY_PATH, "utf8")).filter(
+    (entry) => entry.surface === "android",
+  );
 }
 
 async function readArtifacts(): Promise<Map<string, NativeTranslations>> {
@@ -1047,7 +1043,7 @@ async function readArtifacts(): Promise<Map<string, NativeTranslations>> {
 }
 
 function translationsBySource(
-  inventory: readonly NativeInventoryEntry[],
+  inventory: readonly NativeI18nInventoryEntry[],
   translationsById: Readonly<NativeTranslations>,
 ): Map<string, string[]> {
   const translations = new Map<string, string[]>();
@@ -1062,7 +1058,7 @@ function translationsBySource(
 
 function localizeManualStrings(
   base: ReadonlyMap<string, ResourceString>,
-  inventoryBySource: ReadonlyMap<string, NativeInventoryEntry>,
+  inventoryBySource: ReadonlyMap<string, NativeI18nInventoryEntry>,
   translations: Readonly<NativeTranslations>,
   surface: string,
 ): ResourceString[] {

@@ -1,18 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { deserialize } from "node:v8";
-import { Worker } from "node:worker_threads";
 import {
   collectNestedErrorCandidates,
   extractErrorCode,
 } from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import type { SqliteWorkerRequest } from "../sqlite-worker-contract.js";
 import { createQueuedDeliveryOwner } from "./deliver-queue-state.js";
 import { failPendingDelivery } from "./delivery-queue-ack.js";
 import {
@@ -20,6 +18,7 @@ import {
   enqueueDelivery,
   loadPendingDelivery,
 } from "./delivery-queue-storage.js";
+import { holdDeliveryQueueReply } from "./delivery-queue-worker-reply.test-support.js";
 import {
   installDeliveryQueueTmpDirHooks,
   setQueuedEntryState,
@@ -143,73 +142,31 @@ describe("pending delivery failure worker", () => {
   it("does not replay or unlink when the committed worker reply is lost", async () => {
     const { stateDir, artifact, id } = await fixture();
     const owner = createQueuedDeliveryOwner({ queueId: id, stateDir });
-    let requestId: number | undefined;
-    let threadId: number | undefined;
-    let stopped: Promise<number> | undefined;
-    let attempts = 0;
-    let dropped = false;
-    // oxlint-disable-next-line typescript/unbound-method -- call restores the worker receiver.
-    const originalPost = Worker.prototype.postMessage;
-    // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply restores the worker receiver.
-    const originalEmit = Worker.prototype.emit;
-    const post = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-      this: Worker,
-      request: SqliteWorkerRequest,
-      transferList,
-    ) {
-      if (request.type === "execute") {
-        const command: unknown = deserialize(request.input);
-        if (
-          command &&
-          typeof command === "object" &&
-          "type" in command &&
-          command.type === "deliveryQueue.failPending"
-        ) {
-          requestId = request.id;
-          threadId = this.threadId;
-          attempts++;
-        }
-      }
-      return originalPost.call(this, request, transferList);
-    });
-    const emit = vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
-      this: Worker,
-      event: string | symbol,
-      ...args: unknown[]
-    ) {
-      const reply = args[0];
-      if (
-        !dropped &&
-        this.threadId === threadId &&
-        event === "message" &&
-        reply &&
-        typeof reply === "object" &&
-        "id" in reply &&
-        reply.id === requestId &&
-        "ok" in reply &&
-        reply.ok === true
-      ) {
-        dropped = true;
-        stopped = this.terminate();
-        return false;
-      }
-      return Reflect.apply(originalEmit, this, [event, ...args]);
-    });
+    const reply = holdDeliveryQueueReply("deliveryQueue.failPending", id, (value) =>
+      isRecord(value) ? value : undefined,
+    );
+    const outcome = owner.retire().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
     try {
-      const outcomes = await Promise.allSettled([owner.retire()]);
-      expect(outcomes[0]?.status).toBe("rejected");
-      if (outcomes[0]?.status === "rejected") {
-        expect(collectNestedErrorCandidates(outcomes[0].reason).map(extractErrorCode)).toContain(
-          "outcome-unknown",
-        );
-      }
+      await Promise.race([
+        reply.held,
+        outcome.then((error) => {
+          throw new Error("Retirement settled before its committed worker reply", { cause: error });
+        }),
+      ]);
+      await reply.lose();
+      const failure = await outcome;
+      expect(collectNestedErrorCandidates(failure).map(extractErrorCode)).toContain(
+        "outcome-unknown",
+      );
+      expect(reply.attempts()).toBe(1);
     } finally {
-      post.mockRestore();
-      emit.mockRestore();
-      await stopped;
+      reply.restore();
+      reply.release();
+      await outcome;
     }
-    expect(dropped).toBe(true);
-    expect(attempts).toBe(1);
     expect(owner.custody).toBe("held");
     await closeOpenClawStateDatabaseAsync();
     expect(await loadPendingDelivery(id, stateDir)).toBeNull();

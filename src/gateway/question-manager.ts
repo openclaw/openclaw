@@ -14,6 +14,7 @@ import type {
   QuestionWaitAnswerResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import { bindMcpFormQuestionRecord } from "../agents/mcp-form-resource-context.js";
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import {
   retainGatewayRootWorkAdmissionContinuationScope,
@@ -102,6 +103,19 @@ function waitResult(entry: QuestionEntry, includeResolutionId: boolean): Questio
   };
 }
 
+function canonicalizeQuestionAnswer(question: Question, value: string): string {
+  if (question.options.some((option) => option.value !== undefined && option.value === value)) {
+    return value;
+  }
+  const preserveBytes = question.isSecret || question.presentation === "form";
+  const candidate = preserveBytes ? value : value.trim();
+  const matches = question.options.filter(
+    (option) => (preserveBytes ? option.label : option.label.trim()) === candidate,
+  );
+  const matched = matches.length === 1 ? matches[0] : undefined;
+  return matched ? (matched.value ?? matched.label) : candidate;
+}
+
 /** Process-local lifecycle owner for pending questions. */
 export class QuestionManager {
   private readonly entries = new Map<string, QuestionEntry>();
@@ -177,6 +191,13 @@ export class QuestionManager {
       admissionContinuation: retainGatewayRootWorkAdmissionContinuationScope(),
     };
     this.entries.set(record.id, entry);
+    bindMcpFormQuestionRecord(
+      record,
+      () =>
+        this.entries.get(record.id) === entry &&
+        entry.record === record &&
+        entry.record.status === "pending",
+    );
     entry.releaseHumanInputWait = params.registerHumanInputWait?.(
       () => this.get(id)?.status === "pending" && this.entries.get(id) === entry,
     );
@@ -421,28 +442,33 @@ export class QuestionManager {
         ? answers.answers[question.questionId]
         : undefined;
       if (!values || values.length === 0) {
+        if (question.allowEmpty) {
+          canonical.answers[question.questionId] = [];
+          continue;
+        }
         throw this.invalidAnswer(question.questionId, "requires an answer");
       }
-      if (values.some((value) => (question.isSecret ? value.length === 0 : !value.trim()))) {
+      if (
+        values.some((value) =>
+          question.isSecret || question.presentation === "form"
+            ? value.length === 0
+            : !value.trim(),
+        )
+      ) {
         throw this.invalidAnswer(question.questionId, "contains an empty answer");
       }
       if (!question.multiSelect && values.length > 1) {
         throw this.invalidAnswer(question.questionId, "does not allow multiple answers");
       }
-      // Store the declared option label when a value matches trim-insensitively;
-      // downstream renderers compare answers to option labels exactly.
-      const canonicalValues = values.map((value) => {
-        // Masked free-text answers preserve exact bytes, including whitespace.
-        if (question.isSecret) {
-          return value;
-        }
-        const matched = question.options.find((option) => option.label.trim() === value.trim());
-        return matched ? matched.label : value.trim();
-      });
+      // Store the option's canonical value (value ?? label) so installed clients
+      // sending labels and clients sending values converge on the same answer.
+      const canonicalValues = values.map((value) => canonicalizeQuestionAnswer(question, value));
       if (
         question.options.length > 0 &&
         !question.isOther &&
-        canonicalValues.some((value) => !question.options.some((option) => option.label === value))
+        canonicalValues.some(
+          (value) => !question.options.some((option) => (option.value ?? option.label) === value),
+        )
       ) {
         throw this.invalidAnswer(question.questionId, "contains an unknown option");
       }

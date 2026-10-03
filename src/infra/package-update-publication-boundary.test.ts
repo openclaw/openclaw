@@ -22,9 +22,11 @@ import { packageActivationRuntimeForTest } from "./package-update-activation-run
 import { assertNoPendingPackageActivation } from "./package-update-activation.js";
 import * as packageFilesystem from "./package-update-filesystem.js";
 import { createNpmTarget, writePackageRoot } from "./package-update-steps.test-support.js";
-import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
+import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import * as snapshot from "./sqlite-snapshot.js";
+import { resolveUpdateInstallRoot } from "./update-install-root.js";
 import { withRetainedUpdateRuntime } from "./update-retained-runtime.js";
 
 const fixtures = createPackageActivationLifetimeFixture();
@@ -46,7 +48,7 @@ afterEach(async () => {
 });
 
 it.skipIf(process.platform === "win32")(
-  "accepts an npm root reached through a canonical directory alias",
+  "accepts present and temporarily missing npm roots through a canonical directory alias",
   () =>
     fixtures.lifetime.run(async () => {
       const f = await createPackageSwapFixture(root);
@@ -55,6 +57,15 @@ it.skipIf(process.platform === "win32")(
       fs.symlinkSync(path.join(root, "live"), aliasPrefix, "dir");
       const aliasGlobalRoot = path.join(aliasPrefix, "lib", "node_modules");
       const aliasPackageRoot = path.join(aliasGlobalRoot, "openclaw");
+      const absentAliasPackageRoot = path.join(aliasGlobalRoot, "absent-openclaw");
+      expect(resolveUpdateInstallRoot(absentAliasPackageRoot)).toBe(
+        path.join(fs.realpathSync.native(aliasGlobalRoot), "absent-openclaw"),
+      );
+      const danglingAliasPackageRoot = path.join(aliasGlobalRoot, "dangling-openclaw");
+      fs.symlinkSync(path.join(root, "missing-target"), danglingAliasPackageRoot, "dir");
+      expect(resolveUpdateInstallRoot(danglingAliasPackageRoot)).toBe(
+        path.resolve(danglingAliasPackageRoot),
+      );
       const installTarget = createNpmTarget(aliasGlobalRoot);
       await withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const fence = await executor.enter(aliasPackageRoot);

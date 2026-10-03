@@ -31,7 +31,10 @@ import type { EmbeddedRunTrigger } from "./run-trigger.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import type { SessionManager } from "./sessions/index.js";
-import type { CompactionAppendPersistence } from "./sessions/session-compaction-persistence.js";
+import type {
+  CompactionAppendPersistence,
+  CompactionAppendPersistenceAsync,
+} from "./sessions/session-compaction-persistence.js";
 import { setSessionToolTextPreparer } from "./sessions/session-tool-result-redaction.js";
 import {
   copyCodeModeSourceAppend,
@@ -44,6 +47,8 @@ type GuardedSessionManager = SessionManager & {
   hasPendingToolResults?: () => boolean;
   /** Flush any synthetic tool results for pending tool calls. Idempotent. */
   flushPendingToolResults?: () => void;
+  /** Await committed synthetic tool results for pending tool calls. Idempotent. */
+  flushPendingToolResultsAsync?: () => Promise<void>;
   /** Clear pending tool calls without persisting synthetic tool results. Idempotent. */
   clearPendingToolResults?: () => void;
   /** Persist the next user message when an earlier canonical entry was removed. */
@@ -100,6 +105,7 @@ export function guardSessionManager(
     onUserMessageBlocked?: (message: Extract<AgentMessage, { role: "user" }>) => void;
     onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
     withCompactionPersistence?: CompactionAppendPersistence;
+    withCompactionPersistenceAsync?: CompactionAppendPersistenceAsync;
   },
 ): GuardedSessionManager {
   const guardedSessionManager: GuardedSessionManager = sessionManager;
@@ -113,7 +119,7 @@ export function guardSessionManager(
     pendingPreparedUserTurnMessage?.idempotencyKey
       ? pendingPreparedUserTurnMessage?.idempotencyKey
       : undefined;
-  if (typeof guardedSessionManager.flushPendingToolResults === "function") {
+  if (typeof guardedSessionManager.flushPendingToolResultsAsync === "function") {
     guardedSessionManager.setTranscriptRunContext?.(
       opts?.runId,
       prepareAssistantTranscriptMessage,
@@ -303,6 +309,7 @@ export function guardSessionManager(
     assistantErrorTranscript: opts?.assistantErrorTranscript,
     onMessagePersisted: opts?.onMessagePersisted,
     withCompactionPersistence: opts?.withCompactionPersistence,
+    withCompactionPersistenceAsync: opts?.withCompactionPersistenceAsync,
     onUserMessagePersisted: async (message, persistence) => {
       const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);
       runtimeUserMessageByPersistedMessage.delete(message);
@@ -324,6 +331,7 @@ export function guardSessionManager(
   );
   guardedSessionManager.hasPendingToolResults = guard.hasPendingToolResults;
   guardedSessionManager.flushPendingToolResults = guard.flushPendingToolResults;
+  guardedSessionManager.flushPendingToolResultsAsync = guard.flushPendingToolResultsAsync;
   guardedSessionManager.clearPendingToolResults = guard.clearPendingToolResults;
   guardedSessionManager.clearNextUserMessagePersistenceSuppression =
     guard.clearNextUserMessagePersistenceSuppression;

@@ -230,15 +230,20 @@ regardless of where they are loaded from.
 ```json5
 {
   agents: {
+    ownership: "explicit",
     defaults: {
       skills: ["github", "weather"], // shared baseline
+      heartbeat: { agentId: "writer" },
+      systemAgent: { agentId: "writer" },
+      authInheritance: { agentId: "writer" },
     },
     entries: {
-      writer: { default: true }, // inherits github, weather
+      writer: { workspace: "~/.openclaw/workspace" }, // inherits github, weather
       docs: { skills: ["docs-search"] }, // replaces defaults entirely
       "locked-down": { skills: [] }, // no skills
     },
   },
+  talk: { agentId: "writer" },
 }
 ```
 
@@ -361,6 +366,12 @@ publish and sync.
     directory or repository name. Use `--as <slug>` to override.
     `openclaw skills update` tracks ClawHub installs only — reinstall Git or
     local sources to refresh them.
+
+    ClawHub tracking uses `.clawhub/lock.json` in the workspace and
+    `.clawhub/origin.json` in each installed skill. The pre-July 2026
+    `.clawdhub` directory is no longer read. For older installs, rename those
+    metadata directories to `.clawhub` before updating or verifying skills;
+    preserve and reconcile any existing `.clawhub` metadata instead of overwriting it.
 
   </Accordion>
   <Accordion title="Verification and security scanning">
@@ -767,8 +778,9 @@ skills through the existing snapshot preparation. Restart the Gateway after
 restoring watch capacity to enable native watching again.
 
 When native events are unavailable, skills polling runs every 30 seconds by
-default. This is also the minimum interval for explicitly requested polling;
-larger `CHOKIDAR_INTERVAL` values remain supported. Native event hints still
+default. A valid `CHOKIDAR_INTERVAL` overrides this default for automatic fallback
+and explicitly requested polling, with a 20 ms minimum. Shorter intervals increase
+background scanning cost, especially for large skill trees. Native event hints still
 trigger prompt refreshes with the normal debounce. Each watcher logs one warning
 when automatic selection falls back to polling, including the reported reason
 when available.

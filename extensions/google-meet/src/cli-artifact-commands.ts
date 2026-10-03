@@ -4,11 +4,9 @@ import {
 } from "./cli-command-context.js";
 import {
   exportGoogleMeetBundle,
-  renderArtifactsMarkdown,
-  renderArtifactsSummary,
+  renderArtifacts,
   renderAttendanceCsv,
-  renderAttendanceMarkdown,
-  renderAttendanceSummary,
+  renderAttendance,
 } from "./cli-export.js";
 import {
   type MeetArtifactOptions,
@@ -68,9 +66,9 @@ export function registerGoogleMeetArtifactCommands(context: GoogleMeetCliCommand
           2,
         );
       } else if (options.format === "markdown") {
-        text = renderArtifactsMarkdown(result);
+        text = renderArtifacts(result, "markdown");
       } else if (!options.format || options.format === "summary") {
-        text = `${renderArtifactsSummary(result)}token source: ${tokenSource}\n`;
+        text = `${renderArtifacts(result, "summary")}token source: ${tokenSource}\n`;
       } else {
         throw new Error("Unsupported format. Expected summary or markdown.");
       }
@@ -101,11 +99,11 @@ export function registerGoogleMeetArtifactCommands(context: GoogleMeetCliCommand
           2,
         );
       } else if (options.format === "markdown") {
-        text = renderAttendanceMarkdown(result);
+        text = renderAttendance(result, "markdown");
       } else if (options.format === "csv") {
         text = renderAttendanceCsv(result);
       } else if (!options.format || options.format === "summary") {
-        text = `${renderAttendanceSummary(result)}token source: ${tokenSource}\n`;
+        text = `${renderAttendance(result, "summary")}token source: ${tokenSource}\n`;
       } else {
         throw new Error("Unsupported format. Expected summary, markdown, or csv.");
       }

@@ -57,7 +57,7 @@ describe("dashboard turns retain external conversation identity", () => {
       );
     await initSessionState({ cfg, ctx: externalContext(), commandAuthorized: true });
     const originalEntry = loadSessionEntry({ ...scope, sessionKey });
-    const originalConversations = listConversations(scope, { channel });
+    const originalConversations = await listConversations(scope, { channel });
     expect(originalConversations).toHaveLength(1);
     expect(originalConversations[0]).toMatchObject({ kind, role: "primary", sessionKey });
 
@@ -76,7 +76,7 @@ describe("dashboard turns retain external conversation identity", () => {
       chatType: kind,
       delivery: originalEntry?.delivery,
     });
-    expect(listConversations(scope, { channel })).toEqual([
+    expect(await listConversations(scope, { channel })).toEqual([
       expect.objectContaining({
         conversationRef: originalConversations[0]?.conversationRef,
         kind,
@@ -86,7 +86,7 @@ describe("dashboard turns retain external conversation identity", () => {
     ]);
 
     await initSessionState({ cfg, ctx: externalContext(), commandAuthorized: true });
-    expect(listConversations(scope, { channel })).toEqual([
+    expect(await listConversations(scope, { channel })).toEqual([
       expect.objectContaining({
         conversationRef: originalConversations[0]?.conversationRef,
         kind,
@@ -110,6 +110,6 @@ describe("dashboard turns retain external conversation identity", () => {
       chatType: "direct",
       delivery: { kind: "internal" },
     });
-    expect(listConversations({ agentId: "main", storePath })).toEqual([]);
+    expect(await listConversations({ agentId: "main", storePath })).toEqual([]);
   });
 });

@@ -328,7 +328,9 @@ function createConfig(pluginDir: string, providerBaseUrl: string) {
       slots: { memory: "none" },
     },
     agents: {
+      ownership: "explicit",
       defaults: {
+        systemAgent: { agentId: "owner" },
         model: { primary: OWNER_MODEL_REF, fallbacks: [] },
         models: {
           [OWNER_MODEL_REF]: { agentRuntime: { id: "openclaw" } },
@@ -340,10 +342,10 @@ function createConfig(pluginDir: string, providerBaseUrl: string) {
         sandbox: { mode: "off" },
         timeoutSeconds: 60,
       },
-      list: [
-        { id: "owner", default: true, model: OWNER_MODEL_REF },
-        { id: "peer", model: PEER_MODEL_REF },
-      ],
+      entries: {
+        owner: { model: OWNER_MODEL_REF },
+        peer: { model: PEER_MODEL_REF },
+      },
     },
     tools: { profile: "minimal" },
     models: {

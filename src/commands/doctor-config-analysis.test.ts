@@ -58,7 +58,9 @@ describe("doctor config analysis helpers", () => {
   it("requires a durable default designation despite retained migration provenance", () => {
     noteMock.mockClear();
     const cfg = retainLegacyDefaultAgentId(
-      { agents: { ownership: "explicit", entries: { ops: {}, research: {} } } },
+      {
+        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      } satisfies OpenClawConfig,
       "ops",
     );
 

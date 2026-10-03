@@ -164,7 +164,10 @@ export async function preserveSubagentRunForRestart(params: {
 
 export type SubagentManagerOptions = {
   runs: Map<string, SubagentRunRecord>;
-  getRunsForChildSession: (childSessionKey: string) => Iterable<SubagentRunRecord>;
+  getRunsForChildSession: (
+    childSessionKey: string,
+    childAgentId?: string,
+  ) => Iterable<SubagentRunRecord>;
   resumedRuns: Set<object>;
   acquireTerminalCompletionLock: (runId: string) => Promise<() => void>;
   callGateway: typeof callGateway;
@@ -189,19 +192,15 @@ export type SubagentManagerOptions = {
 export class SubagentWaitManager {
   constructor(protected readonly options: SubagentManagerOptions) {}
 
-  protected shouldDeleteAttachments(entry: SubagentRunRecord): boolean {
-    return entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
-  }
-
   protected currentRunOwnsSession(entry: SubagentRunRecord): boolean {
     const current = this.options.runs.get(entry.runId);
     return (
       current !== undefined &&
       isSameSubagentRunOwner(current, entry) &&
       current.killReconciliation?.supersededAt === undefined &&
-      !Array.from(this.options.getRunsForChildSession(current.childSessionKey)).some(
-        (candidate) => compareSubagentRunGeneration(candidate, current) > 0,
-      )
+      !Array.from(
+        this.options.getRunsForChildSession(current.childSessionKey, current.childAgentId),
+      ).some((candidate) => compareSubagentRunGeneration(candidate, current) > 0)
     );
   }
 

@@ -79,6 +79,12 @@ For direct worker fixtures, pair `resolveRuntimeWorkerUrl` from `process-runtime
 with `resolveRuntimeWorkerThreadExecArgv` from `test-env`. This keeps source and
 built workers on the runtime owner's startup arguments.
 
+When a test or hook lazily loads a compiled-subprocess declaration, preload it
+at collection with `import "openclaw/plugin-sdk/compiled-subprocess-testing";`.
+This repo-local, non-production subpath has no exports and keeps worker
+preparation outside test deadlines without binding the subject before its mocks
+or module resets. Use it only in tests that already load a declaration.
+
 ### Available exports
 
 | Export                                                                    | Purpose                                                                                                                                     |

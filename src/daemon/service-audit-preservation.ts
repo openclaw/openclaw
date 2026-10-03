@@ -1,5 +1,4 @@
-import fs from "node:fs";
-import path from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { parseNodeOptionsEnvVar } from "../infra/node-options.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
 import { readServiceHeapExecArgv, resolveGatewayHeapNodeOptions } from "./gateway-heap.js";
@@ -96,43 +95,19 @@ function retains(
   return index === current.length;
 }
 
-function isLegacyDarwinInstallerPath(command: NonNullable<GatewayServiceCommand>): boolean {
-  const home = command.environment?.HOME;
-  const runtime = command.programArguments[0];
-  if (
-    command.environmentValueSources?.PATH !== "file" ||
-    !home ||
-    !path.posix.isAbsolute(home) ||
-    !runtime ||
-    !path.posix.isAbsolute(runtime)
-  ) {
-    return false;
+function describeEnvironmentValue(key: string, value: string | undefined): string {
+  if (value === undefined) {
+    return "<absent>";
   }
-  // v2026.4.29's default template, before 85ce75c005a canonicalized Darwin
-  // PATH. The generated-file header alone cannot establish an unedited value.
-  const optionalDirectories = [
-    ".volta/bin",
-    ".asdf/shims",
-    ".bun/bin",
-    "Library/Application Support/fnm/aliases/default/bin",
-    ".fnm/aliases/default/bin",
-    "Library/pnpm",
-    ".local/share/pnpm",
-  ].map((directory) => `${home}/${directory}`);
-  const legacy = [
-    path.posix.dirname(runtime),
-    `${home}/.local/bin`,
-    `${home}/.npm-global/bin`,
-    `${home}/bin`,
-    ...optionalDirectories.slice(0, 3).filter((directory) => fs.existsSync(directory)),
-    `${home}/.nix-profile/bin`,
-    ...optionalDirectories.slice(3).filter((directory) => fs.existsSync(directory)),
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    "/usr/bin",
-    "/bin",
-  ];
-  return command.environment?.PATH === [...new Set(legacy)].join(":");
+  // Arbitrary operator environment values may be credentials, regardless of key name.
+  if (
+    key !== "PATH" &&
+    !(key === "OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS" && /^\d+$/u.test(value))
+  ) {
+    return "<redacted>";
+  }
+  const display = JSON.stringify(value);
+  return display.length > 240 ? `${truncateUtf16Safe(display, 240)}…` : display;
 }
 
 /** Compare prepared installer output; reporting-only audit never constructs a rewrite plan. */
@@ -146,11 +121,11 @@ export function auditGatewayInstallPreservation(
   if (!current) {
     return;
   }
-  const unknown = (key: string) =>
+  const unknown = (key: string, detail = "") =>
     findings.push(
       serviceDefinitionUnknown(
         key,
-        "The installer would discard or change an operator setting.",
+        `The installer would discard or change an operator setting.${detail}`,
         command?.sourcePath,
       ),
     );
@@ -192,9 +167,6 @@ export function auditGatewayInstallPreservation(
       continue;
     }
     if (upper === "PATH" && replacement !== undefined) {
-      if (platform === "darwin" && isLegacyDarwinInstallerPath(current)) {
-        continue;
-      }
       const paths = (text: string) =>
         text
           .split(platform === "win32" ? ";" : ":")
@@ -214,6 +186,29 @@ export function auditGatewayInstallPreservation(
         continue;
       }
     }
-    unknown(`Environment.${key}`);
+    unknown(
+      `Environment.${key}`,
+      ` Current: ${describeEnvironmentValue(key, value)}; installer: ${describeEnvironmentValue(key, replacement)}.`,
+    );
+  }
+  const expectedManaged = readManagedServiceEnvKeysFromEnvironment(expected.environment);
+  const effective = new Set(Object.keys(command?.environment ?? {}).map(normalize));
+  for (const [key, value] of Object.entries(expected.environment ?? {})) {
+    if (
+      value === undefined ||
+      !expectedManaged.has(key.toUpperCase()) ||
+      effective.has(normalize(key))
+    ) {
+      continue;
+    }
+    const installer = describeEnvironmentValue(key, value);
+    findings.push({
+      kind: "outdated",
+      key: `Environment.${key}`,
+      current: null,
+      expected: installer,
+      sourcePath: command?.sourcePath,
+      message: `Gateway service Environment.${key} is missing. Current: <absent>; installer: ${installer}.`,
+    });
   }
 }

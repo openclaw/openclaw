@@ -227,8 +227,8 @@ describe("worker session placement moves", () => {
       claimId: "pending-claim",
       runId: "pending-run",
     });
-    store.markWorkspaceResultPending(claim);
-    expect(store.listPendingWorkspaceResults()).toHaveLength(1);
+    await store.markWorkspaceResultPending(claim);
+    expect(await store.listPendingWorkspaceResultsAsync()).toHaveLength(1);
 
     const source = {
       generation: active.generation,

@@ -1,6 +1,6 @@
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isRuntimeCompactionDelegate } from "../../context-engine/delegate.js";
+import { compactionWatchdogResets } from "../../context-engine/compaction-watchdog.js";
 import type { CompactResult, ContextEngine } from "../../context-engine/types.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { runAbortableTimeout } from "../../node-host/with-timeout.js";
@@ -101,8 +101,9 @@ export async function compactWithSafetyTimeout<T>(
 type ContextEngineCompactParams = Parameters<ContextEngine["compact"]>[0];
 
 /**
- * Only the built-in delegate can refresh the watchdog on progress. Every engine
- * stays host-bounded and receives the composed timeout/caller cancellation signal.
+ * Every engine is bounded by one host window and receives the composed
+ * timeout/caller cancellation signal. Only the built-in runtime delegate, reached
+ * with that signal, refreshes the window as its native stages make progress.
  */
 export function compactContextEngineWithSafetyTimeout(
   contextEngine: Pick<ContextEngine, "compact" | "info">,
@@ -110,23 +111,13 @@ export function compactContextEngineWithSafetyTimeout(
   timeoutMs: number = EMBEDDED_COMPACTION_TIMEOUT_MS,
   abortSignal?: AbortSignal,
 ): Promise<CompactResult> {
-  const delegated = isRuntimeCompactionDelegate(contextEngine.compact);
   return compactWithSafetyTimeout(
     (compactionAbortSignal, resetTimeout) => {
-      const compactParams = compactionAbortSignal
-        ? { ...params, abortSignal: compactionAbortSignal }
-        : params;
-      return contextEngine.compact(
-        delegated
-          ? {
-              ...compactParams,
-              runtimeContext: {
-                ...params.runtimeContext,
-                compactionTimeoutReset: resetTimeout,
-              },
-            }
-          : compactParams,
-      );
+      if (!compactionAbortSignal) {
+        return contextEngine.compact(params);
+      }
+      compactionWatchdogResets.set(compactionAbortSignal, resetTimeout);
+      return contextEngine.compact({ ...params, abortSignal: compactionAbortSignal });
     },
     timeoutMs,
     abortSignal ? { abortSignal } : undefined,

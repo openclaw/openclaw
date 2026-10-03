@@ -143,7 +143,7 @@ export abstract class AgentSessionExtensions extends AgentSessionCompaction {
       return [...extensionCommands, ...templates, ...skills];
     };
 
-    runner.bindCore(
+    runner.bindCoreAsync(
       {
         sendMessage: (message, options) => {
           this.sendCustomMessage(message, options).catch((err: unknown) => {
@@ -163,17 +163,24 @@ export abstract class AgentSessionExtensions extends AgentSessionCompaction {
             });
           });
         },
+        // Retained third-party synchronous persistence adapters.
         appendEntry: (customType, data) => {
           this.sessionManager.appendCustomEntry(customType, data);
         },
+        appendEntryAsync: (customType, data) =>
+          this.sessionManager.appendCustomEntryAsync(customType, data),
         setSessionName: (name) => {
           this.setSessionName(name);
         },
+        setSessionNameAsync: (name) => this.setSessionNameAsync(name),
         getSessionName: () => {
           return this.sessionManager.getSessionName();
         },
         setLabel: (entryId, label) => {
           this.sessionManager.appendLabelChange(entryId, label);
+        },
+        setLabelAsync: async (entryId, label) => {
+          await this.sessionManager.appendLabelChangeAsync(entryId, label);
         },
         getActiveTools: () => this.getActiveToolNames(),
         getAllTools: () => this.getAllTools(),

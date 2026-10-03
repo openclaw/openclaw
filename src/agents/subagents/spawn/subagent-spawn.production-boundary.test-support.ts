@@ -242,10 +242,13 @@ export function createBoundSpawnInvocation(
     completionTarget?: "parent";
   },
   requesterModel?: { provider: string; model: string },
+  senderIsOwner?: boolean,
 ) {
   const { parentSessionKey, parentRunId } = bound;
   const source = createSessionsSpawnTool({
     config: bound.cfg,
+    senderIsOwner,
+    expectedParentSessionId: "parent-session",
     agentSessionKey: parentSessionKey,
     requesterRunId: parentRunId,
     requesterTurnRunId: parentRunId,
@@ -280,7 +283,7 @@ export function createBoundSpawnInvocation(
     agentId: "main",
     sessionKey: parentSessionKey,
   });
-  return () =>
+  return (toolCallId = "spawn-production-boundary") =>
     withPluginRuntimeGatewayRequestScope(
       {
         context: bound.context as unknown as GatewayRequestContext,
@@ -288,7 +291,7 @@ export function createBoundSpawnInvocation(
       },
       () =>
         withGatewayToolCallerIdentity(caller, () =>
-          tool.execute!("spawn-production-boundary", { task: "bounded child", ...request }),
+          tool.execute!(toolCallId, { task: "bounded child", ...request }),
         ),
     );
 }

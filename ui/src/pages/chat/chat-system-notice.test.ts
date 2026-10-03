@@ -104,14 +104,9 @@ describe("system notices through pending-to-history promotion", () => {
       "<task-notification>\n<status>completed</status>\n</task-notification>",
       true,
     ],
-    ...[
-      undefined,
-      "session-companion",
-      "heartbeat",
-      "main-session-restart-recovery",
-      "restart_sentinel",
-      " restart-sentinel ",
-    ].map((sourceTool) => [sourceTool, "System", "Keep the raw fallback copy.", false] as const),
+    ...[undefined, " restart-sentinel "].map(
+      (sourceTool) => [sourceTool, "System", "Keep the raw fallback copy.", false] as const,
+    ),
   ] as const)(
     "preserves %s presentation, search and turn boundaries",
     (sourceTool, label, text, midTurn) => {

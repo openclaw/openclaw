@@ -1,4 +1,5 @@
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { readOpenClawAgentDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
 import { assertAgentDatabaseTerminalOpenAllowed } from "../../state/openclaw-agent-db-terminal.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
@@ -16,6 +17,8 @@ import {
   type ResolvedTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import type { SessionTranscriptMaintenanceRead } from "./session-transcript-hydration.types.js";
+import { readSessionTranscriptMaintenance } from "./session-transcript-maintenance-read.js";
 import {
   resolveSessionTranscriptReadFence,
   runWithSessionTranscriptReadFence,
@@ -114,6 +117,20 @@ export function prepareSessionTranscriptHydration(
         owner.readCurrentTurnEntry({ ...request, target, resolvedScope, admission }, signal),
     );
   };
+  const readMaintenance = (request: SessionTranscriptMaintenanceRead) =>
+    readInOwner(
+      () => {
+        assertCurrent();
+        if (!incognitoOwner) {
+          throw new Error("Session transcript is unavailable for maintenance planning");
+        }
+        return readOpenClawAgentDatabase(incognitoOwner, (database) =>
+          readSessionTranscriptMaintenance(database, target, request),
+        ).value;
+      },
+      (owner, resolvedScope) =>
+        owner.readMaintenance({ target, resolvedScope, admission, request }, signal),
+    );
   const readRecentActiveEvents = (maxEvents: number) =>
     readInOwner(
       () => readRecentSessionTranscriptActiveEvents(target, maxEvents, { readOnly: true }),
@@ -130,6 +147,7 @@ export function prepareSessionTranscriptHydration(
     target,
     read,
     readCurrentTurnEntry,
+    readMaintenance,
     readRecentActiveEvents,
     readLatestActiveMessage,
     assertCurrent,

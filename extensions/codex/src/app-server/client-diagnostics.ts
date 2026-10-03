@@ -78,6 +78,19 @@ export function logCodexAppServerParseFailure(
   });
 }
 
+export function isCodexAppServerBrokenPipeError(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current = error;
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    if ("code" in current && current.code === "EPIPE") {
+      return true;
+    }
+    current = "cause" in current ? current.cause : undefined;
+  }
+  return false;
+}
+
 function formatExitValue(value: unknown): string {
   if (value === null || value === undefined) {
     return "null";

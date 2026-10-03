@@ -761,6 +761,7 @@ describe("legacy sandbox config migrate", () => {
   it("disables the default sandbox browser network without granting inherited egress", () => {
     const raw = {
       agents: {
+        ownership: "explicit",
         defaults: {
           sandbox: {
             browser: {
@@ -772,7 +773,6 @@ describe("legacy sandbox config migrate", () => {
         },
         entries: {
           main: {
-            default: true,
             sandbox: { browser: { enabled: true, network: "none", headless: true } },
           },
           inherited: {

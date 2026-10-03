@@ -53,8 +53,8 @@ const mocks = vi.hoisted(() => ({
     stop: vi.fn(async () => {}),
   })),
   stopQaGatewayChild: vi.fn<QaGatewayChildLifecycle["stop"]>(),
-  writeQaSuiteArtifacts: vi.fn<typeof writeQaSuiteArtifacts>(async () => ({
-    evidence: undefined,
+  writeQaSuiteArtifacts: vi.fn<typeof writeQaSuiteArtifacts>(async (params) => ({
+    evidence: params.recordedEvidence,
     evidencePath: "/qa-output/qa-evidence.json",
     report: "",
     reportPath: "/qa-output/qa-suite-report.md",

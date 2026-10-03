@@ -3,7 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 // Channel selection chooses a deliverable message channel from explicit input,
 // tool context fallback, or configured plugin accounts.
 import { resolveChannelAccount } from "../../channels/account-resolution.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {

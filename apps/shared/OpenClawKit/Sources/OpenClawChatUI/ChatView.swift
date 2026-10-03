@@ -1304,12 +1304,7 @@ extension OpenClawChatView {
             Button {
                 ChatPasteboard.copy(text)
             } label: {
-                Label {
-                    Text("Copy Message")
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "doc.on.doc")
-                }
+                chatActionLabel(Text("Copy Message"), systemImage: "doc.on.doc")
             }
         }
     }
@@ -1321,11 +1316,7 @@ extension OpenClawChatView {
             Button {
                 self.selectTextMessage = message
             } label: {
-                Label {
-                    Text("Select Text").font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "text.cursor")
-                }
+                chatActionLabel(Text("Select Text"), systemImage: "text.cursor")
             }
         }
     }
@@ -1344,12 +1335,7 @@ extension OpenClawChatView {
                     viewModel: self.viewModel,
                     messageID: messageID)
             } label: {
-                Label {
-                    Text("Open Full Message")
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "doc.text.magnifyingglass")
-                }
+                chatActionLabel(Text("Open Full Message"), systemImage: "doc.text.magnifyingglass")
             }
         }
     }
@@ -1363,24 +1349,14 @@ extension OpenClawChatView {
             Button {
                 Task { await self.viewModel.rewindToMessage(message) }
             } label: {
-                Label {
-                    Text("Rewind to Here")
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "arrow.uturn.backward")
-                }
+                chatActionLabel(Text("Rewind to Here"), systemImage: "arrow.uturn.backward")
             }
             .disabled(!self.viewModel.canPerformMessageSessionAction)
 
             Button {
                 Task { await self.viewModel.forkAtMessage(message) }
             } label: {
-                Label {
-                    Text("Fork from Here")
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "arrow.triangle.branch")
-                }
+                chatActionLabel(Text("Fork from Here"), systemImage: "arrow.triangle.branch")
             }
             .disabled(!self.viewModel.canPerformMessageSessionAction)
         }
@@ -1397,12 +1373,7 @@ extension OpenClawChatView {
                     text: text,
                     senderLabel: self.replySenderLabel(forRole: role))
             } label: {
-                Label {
-                    Text(String(localized: "Reply"))
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "arrowshape.turn.up.left")
-                }
+                chatActionLabel(Text(String(localized: "Reply")), systemImage: "arrowshape.turn.up.left")
             }
         }
     }

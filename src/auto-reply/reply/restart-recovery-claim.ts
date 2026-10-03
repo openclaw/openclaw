@@ -493,11 +493,13 @@ export function createReplyRestartRecoveryClaimController(params: {
       {
         // Restart recovery can reuse this run id. Validate after async patch preparation,
         // inside the synchronous commit, so old cleanup cannot retire its successor's route.
-        assertCommitAllowed: () => {
-          assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-          if (params.isRestartAbort()) {
-            throw createAgentRunStaleLifecycleError();
-          }
+        workerGuard: {
+          assertCurrent: () => {
+            assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+            if (params.isRestartAbort()) {
+              throw createAgentRunStaleLifecycleError();
+            }
+          },
         },
       },
     );

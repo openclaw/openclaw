@@ -13,7 +13,7 @@ import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js
 import { normalizeAgentId } from "../routing/session-key.js";
 import { isSessionStoreTopologyChange, sessionChanges } from "../sessions/session-row-changes.js";
 import { hasPreJournalStateSchema } from "./agent-deletion-journal-history.js";
-import { readAgentDeletionRecoveryHolds } from "./agent-deletion-journal-recovery.js";
+import { readAgentDeletionRecoveryHolds } from "./agent-deletion-journal-recovery.kernel.js";
 import type {
   AgentDatabaseDeletionSnapshot,
   AgentDeletionJournalAuthority,

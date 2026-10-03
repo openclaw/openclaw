@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { finalizeEvent, getPublicKey, Relay, type Event, type Filter } from "nostr-tools";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const relayMocks = vi.hoisted(() => ({
@@ -166,6 +167,7 @@ function seedOfflineBacklog(count: number, createdAt: (index: number) => number)
 
 function startHistoryBus(overrides: Partial<Parameters<typeof startBuzzBus>[0]> = {}) {
   return startBuzzBus({
+    scheduler: createTestPluginServiceScheduler(),
     accountId: ACCOUNT_ID,
     relayUrl: "wss://buzz.example.com",
     privateKey: PRIVATE_KEY,

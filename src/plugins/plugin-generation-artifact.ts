@@ -48,6 +48,7 @@ export function capturePluginGenerationArtifact(
   execute?: <T>(run: () => T) => T,
   moduleSource?: (filename: string) => string,
   nativeRecovery?: PluginNativeRecovery,
+  dependencyLookupBoundary?: Parameters<typeof createPluginDependencyResolver>[0],
 ) {
   const sourceCapture = createPluginSourceCapture(execute);
   const directory = sourceCapture.directory;
@@ -83,7 +84,7 @@ export function capturePluginGenerationArtifact(
     return acquired;
   };
   const moduleCaptures = new Map<string, PluginModuleCapture>();
-  const resolveDependency = createPluginDependencyResolver();
+  const resolveDependency = createPluginDependencyResolver(dependencyLookupBoundary);
   // Callers canonicalize roots; already-captured packages survive removal of their original files.
   const copyPackage = (
     root: string,
@@ -116,17 +117,16 @@ export function capturePluginGenerationArtifact(
       parentName.startsWith("@") ? parentName : "",
       path.basename(boundary),
     );
-    const capturedBoundary = destination;
     sourceAliases[root] = destination;
     receipt.marker(`${packageId}\0`);
     const owner: PluginPackageCapture = {
       destination,
-      capturedRoot: capturedBoundary,
+      capturedRoot: destination,
       sourceRoot: boundary,
       links: new Set<string>(),
       state: "metadata",
       captureTarget(filename) {
-        const source = path.join(boundary, path.relative(capturedBoundary, filename));
+        const source = path.join(boundary, path.relative(destination, filename));
         if (
           !capturedPaths.has(source) &&
           !packageMap.hasMissingTarget(source) &&
@@ -198,10 +198,10 @@ export function capturePluginGenerationArtifact(
       // Preserve real nested installs; synthetic per-file node_modules confuse native addon roots.
       // Installed peers also need sibling paths for native assets read directly from disk.
       const lookupDirectory = inPackage(boundary, dependency.lookupDirectory)
-        ? path.join(capturedBoundary, path.relative(boundary, dependency.lookupDirectory))
+        ? path.join(destination, path.relative(boundary, dependency.lookupDirectory))
         : path.join(dependency.lookupDirectory, "node_modules") === sourceModuleRoot
           ? path.dirname(moduleRoot)
-          : capturedBoundary;
+          : destination;
       const link = path.join(lookupDirectory, "node_modules", name);
       packages.get(dependency.root)!.links.add(link);
       if (!fs.existsSync(link)) {
@@ -495,8 +495,8 @@ export function capturePluginGenerationArtifact(
           if (!filename) {
             return undefined;
           }
-          if (inPackage(capturedBoundary, filename)) {
-            const original = path.join(boundary, path.relative(capturedBoundary, filename));
+          if (inPackage(destination, filename)) {
+            const original = path.join(boundary, path.relative(destination, filename));
             if (packageMap.hasMissingTarget(original)) {
               return undefined;
             }

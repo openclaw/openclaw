@@ -103,6 +103,11 @@ export async function persistSubagentSessionTiming(
     assertCommitAllowed?: () => void;
     assertCurrentEntry?: (entry: SessionEntryCurrentFacts | undefined) => void;
     sessionEntryCurrent?: SessionEntryCurrentCheck;
+    settledQueuedCancellation?: {
+      storePath: string;
+      sessionId: string;
+      lifecycleRevision?: string;
+    };
   },
 ) {
   const childSessionKey = entry.childSessionKey?.trim();
@@ -115,6 +120,7 @@ export async function persistSubagentSessionTiming(
   const storePath =
     options?.sessionEntryCurrent?.source.path ??
     options?.session?.storePath ??
+    options?.settledQueuedCancellation?.storePath ??
     resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const refused = new Error("Subagent timing owner changed before commit");
   const assertGenerationCurrent = () => {
@@ -135,6 +141,25 @@ export async function persistSubagentSessionTiming(
     ? resolveSessionRunError(entry.execution.outcome ?? {}, status)
     : undefined;
   const update = (sessionEntry: InternalSessionEntry) => {
+    const settled = options?.settledQueuedCancellation;
+    if (
+      settled &&
+      (entry.collect !== true ||
+        entry.execution.status !== "terminal" ||
+        entry.execution.startedAt !== undefined ||
+        sessionEntry.startedAt !== undefined ||
+        entry.endedReason !== SUBAGENT_ENDED_REASON_KILLED ||
+        !entry.killReconciliation ||
+        storePath !== settled.storePath ||
+        sessionEntry.sessionId !== settled.sessionId ||
+        sessionEntry.lifecycleRevision !== settled.lifecycleRevision ||
+        sessionEntry.activeWriterRunId !== undefined ||
+        sessionEntry.lifecycleRunId !== undefined ||
+        (sessionEntry.lastRunId !== undefined &&
+          sessionEntry.lastRunId !== (entry.swarmRunId ?? entry.runId)))
+    ) {
+      return null;
+    }
     if (status === "killed") {
       const existingCompletion = resolveCompletionFromSessionEntry(sessionEntry, Date.now(), {
         notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
@@ -152,6 +177,11 @@ export async function persistSubagentSessionTiming(
       }
     }
     const next = { ...sessionEntry };
+    if (settled) {
+      // Exact queued withdrawal and successful resource cleanup qualify identity,
+      // without fabricating an agent start or execution.
+      next.lastRunId = entry.swarmRunId ?? entry.runId;
+    }
 
     for (const [key, value] of [
       ["startedAt", startedAt],
@@ -277,6 +307,14 @@ export async function persistSubagentSessionTiming(
       throw error;
     }
   }
+}
+
+/** Kept sessions may retain their attachments; every other cleanup removes them with the run. */
+export function shouldRemoveSubagentAttachments(
+  entry: SubagentRunRecord,
+  cleanup: SubagentRunRecord["cleanup"] = entry.cleanup,
+): boolean {
+  return cleanup === "delete" || !entry.retainAttachmentsOnKeep;
 }
 
 export async function safeRemoveAttachmentsDir(

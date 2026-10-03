@@ -1,14 +1,7 @@
-/**
- * Browser output file writer.
- *
- * Validates caller-provided output paths against a root before writing
- * screenshots, PDFs, downloads, or traces to disk.
- */
 import path from "node:path";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { ensureOutputDirectory } from "./output-directories.js";
 
-/** Write a browser output file within a caller-selected output root. */
 export async function writeExternalFileWithinOutputRoot(params: {
   rootDir?: string;
   path: string;

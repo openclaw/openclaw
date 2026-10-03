@@ -123,8 +123,14 @@ export async function resolvePluginLifecycleGateway(): Promise<PluginLifecycleGa
         const { plugin, ...inspection } = await request<PluginsInspectResult>("plugins.inspect", {
           pluginId: consent.pluginId,
         });
+        if (!inspection.reviewToken) {
+          throw new Error(`Gateway did not return a capability-consent token for "${plugin.id}".`, {
+            cause: error,
+          });
+        }
         const acknowledgeCapabilities = await onCapabilityConsent({
           ...inspection,
+          reviewToken: inspection.reviewToken,
           pluginId: plugin.id,
           name: plugin.name,
           ...(plugin.version ? { version: plugin.version } : {}),

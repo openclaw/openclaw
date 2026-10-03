@@ -82,7 +82,11 @@ function resolveGatewayErrorText(
 ): string {
   const errorText = payload.errorMessage?.trim();
   if (errorText) {
-    if (payload.state === "error" && payload.errorKind === "state_contention") {
+    if (
+      payload.state === "error" &&
+      (payload.errorKind === "state_contention" ||
+        payload.stopReason === "aborted-partial-persistence-failed")
+    ) {
       return errorText;
     }
     const summary =
@@ -126,9 +130,11 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
   const errorKind =
     payload.state === "error" && payload.errorKind === "state_contention"
       ? "state_contention"
-      : payload.errorDetail?.providerRuntimeFailureKind === "auth_refresh"
-        ? "auth_refresh"
-        : undefined;
+      : payload.state === "error" && payload.stopReason === "aborted-partial-persistence-failed"
+        ? "stop"
+        : payload.errorDetail?.providerRuntimeFailureKind === "auth_refresh"
+          ? "auth_refresh"
+          : undefined;
   const normalizedFinalMessage =
     payload.state === "final" ? normalizeFinalAssistantMessage(payload.message) : null;
   const hadActiveRunBeforeEvent = state.chatRunId !== null;

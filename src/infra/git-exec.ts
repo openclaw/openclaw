@@ -12,6 +12,7 @@ import {
   type BufferedCommandResult,
   type CommandOptions,
 } from "../process/exec.js";
+import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { retryableGitNetworkOperation, withGitNetworkRetry } from "./git-network-retry.js";
@@ -115,6 +116,7 @@ export type GitCommandOptions = Pick<
   | "maxOutputBytes"
   | "terminateOnOutputLimit"
 > & {
+  operation?: GitProcessOperation;
   /** An admitted destructive operation must settle without the generic Git deadline. */
   waitForExit?: boolean;
   /** Recheck caller authority immediately before each attempt. */
@@ -127,7 +129,9 @@ export async function executeGitCommand(
   args: string[],
   options: GitCommandOptions = {},
 ): Promise<GitCommandResult> {
-  return executeGitCommandWithOutput(runCommandWithTimeout, cwd, args, options);
+  return withGitProcessOperation(options.operation, () =>
+    executeGitCommandWithOutput(runCommandWithTimeout, cwd, args, options),
+  );
 }
 
 /** The same command/timeout contract, with output bytes owned by a worker consumer. */
@@ -136,7 +140,9 @@ export async function executeGitCommandBytes(
   args: string[],
   options: GitCommandOptions = {},
 ): Promise<GitCommandBytesResult> {
-  return executeGitCommandWithOutput(runCommandBuffersWithTimeout, cwd, args, options);
+  return withGitProcessOperation(options.operation, () =>
+    executeGitCommandWithOutput(runCommandBuffersWithTimeout, cwd, args, options),
+  );
 }
 
 async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSpawnResult>(
@@ -167,20 +173,27 @@ async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSp
   return { ...result, timeoutMs };
 }
 
+export type GitBufferedCommandOptions = BufferedCommandOptions & {
+  beforeRun?: () => void;
+  operation?: GitProcessOperation;
+};
+
 export async function executeGitCommandBuffered(
   cwd: string,
   args: string[],
-  options: BufferedCommandOptions & { beforeRun?: () => void } = {},
+  options: GitBufferedCommandOptions = {},
 ): Promise<BufferedCommandResult> {
   const argv = ["git", "-C", cwd, ...args];
-  return await withGitNetworkRetry(
-    retryableGitNetworkOperation(args),
-    { ...options, timeoutMs: options.timeoutMs ?? GIT_TIMEOUT_MS },
-    (timeoutMs) =>
-      runCommandBuffered(
-        options.killProcessTree === false ? argv : withForegroundGitMaintenance(argv),
-        { ...options, timeoutMs },
-      ),
+  return await withGitProcessOperation(options.operation, () =>
+    withGitNetworkRetry(
+      retryableGitNetworkOperation(args),
+      { ...options, timeoutMs: options.timeoutMs ?? GIT_TIMEOUT_MS },
+      (timeoutMs) =>
+        runCommandBuffered(
+          options.killProcessTree === false ? argv : withForegroundGitMaintenance(argv),
+          { ...options, timeoutMs },
+        ),
+    ),
   );
 }
 
@@ -202,7 +215,7 @@ export function createGitCommandError(
 export async function requireGitCommand(
   cwd: string,
   args: string[],
-  options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array; timeoutMs?: number } = {},
+  options: Pick<GitCommandOptions, "env" | "input" | "timeoutMs" | "operation"> = {},
 ): Promise<string> {
   return requireGitCommandOutput(
     `git ${args.join(" ")}`,

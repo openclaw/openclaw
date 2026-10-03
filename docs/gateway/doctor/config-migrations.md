@@ -31,8 +31,10 @@ untouched so Doctor can report and persist the repair.
 ## Retention policy
 
 OpenClaw supports migrations from formats written by shipped releases on or after
-July 1, 2026. Retain a transform whenever a release in that window can still write
-its input format. A supported release that preserves a legacy
+July 1, 2026. The publication date controls this cutoff: an older version number
+published later, including an extended-stable release, still counts. Retain a
+transform whenever a release in that window can still write its input format.
+A supported release that preserves a legacy
 format when rewriting existing data also counts as a writer. A format last
 written before the cutoff may be retired only with a clear refusal naming an
 intermediate release to upgrade through before retrying. Retirement must never
@@ -41,6 +43,13 @@ silently discard persisted data.
 Legacy normalization belongs to Doctor and migration owners, with the existing
 backup and verification flow. Runtime readers consume canonical state.
 
+Unreleased per-agent SQLite session layouts below schema 8 and their pre-landing
+transcript search caches are retired. Doctor refuses those layouts without
+repairing their tables. Shipped schema-1
+memory/auth/cache databases remain supported; see [agent schema
+history](/reference/database-schemas/agent-schema-history) for the supported
+layouts and recovery route.
+
 Old `openclaw.extension.json` npm declaration stubs are ignored by discovery and
 Doctor. They are not plugin manifests, and their files remain unchanged. Reinstall
 the package with `openclaw plugins install npm:<package>` and update any explicit
@@ -48,11 +57,62 @@ the package with `openclaw plugins install npm:<package>` and update any explici
 stub repair, run `openclaw doctor --fix` on `2026.9.7` before upgrading. Current
 `openclaw.plugin.json` manifests and npm package installation remain supported.
 
+Discord `voice.tts.<provider>` blocks and guild-channel `allow` and `agentId`
+settings are also retired, including account overrides. Doctor preserves the
+original config and names the affected path. Install `2026.9.7`, run
+`openclaw doctor --fix`, then upgrade again. The repaired forms are
+`voice.tts.providers.<provider>`, guild-channel `enabled`, and top-level `bindings`.
+
+Device Pair `device-pair-notify.json` is retired. Upgrade through `2026.9.5` and
+run `openclaw doctor --fix` to import subscribers. Verify the imported state
+before updating. If the intermediate release retains the original file for
+rollback or cannot interpret an empty or invalid source, preserve a backup and
+move that file out of the active state directory before retrying. Current Doctor
+refuses the retired source without deleting or rewriting it.
+
+Discord model preferences and thread bindings stored in JSON, plus iMessage
+reply-cache, sent-echo, and catchup files, are also retired. Upgrade through
+`2026.9.5`, run `openclaw doctor --fix`, and verify the imported SQLite state.
+Preserve a backup and move any retained original files out of the active state
+directory before updating; current Doctor refuses these sources without
+modifying their bytes. Discord's July-era command deployment cache migration
+remains supported and rebuilds its disposable hashes.
+
+Voice Call JSONL call logs are retired pre-July state. Upgrade through
+`2026.9.7` and run `openclaw doctor --fix` to import them before updating.
+Current Doctor preserves remaining JSONL sources and reports that intermediate
+upgrade. SQLite schema repair remains supported.
+
+Voice Call config migration remains supported for `provider: "log"`,
+`twilio.from`, flat streaming provider settings, and
+`realtime.agentContext.includeSystemPrompt`. Published `2026.9.7` can preserve
+and rewrite these settings while plugin repair is deferred. Doctor owns their
+normalization, preserves canonical values, and backs up config before writing;
+runtime parsing accepts only the canonical shape.
+
 OpenClaw `v2026.9.7` can still write ownerless and mode-less cron jobs, and its
 migration/import writers can preserve null, `deliver`, or mixed-case delivery
-modes. Those cron repairs remain supported; this change retires no cron format.
+modes. Those cron repairs remain supported. JSON quarantine files also remain supported:
+`v2026.7.35` still writes them.
 
-Doctor refuses these retired inputs:
+Cron JSON job stores (`jobs.json`), split runtime state (`jobs-state.json`), and
+per-job `runs/*.jsonl` history were last written by stable `v2026.5.28`; the
+May 30 SQLite cutover removed those writers. Doctor refuses these files before
+repairing cron or changing config, preserving their original bytes and any
+supported quarantine sidecar. Install `2026.9.7`, run `openclaw doctor --fix`, then
+upgrade to the latest version. Candidate update admission checks the original
+live files and reports the upgrade requirement before activation, including when
+a published updater omits those files from its later rehearsal snapshot. Existing SQLite cron stores,
+including their owner and delivery repairs, keep their normal update path.
+
+Doctor refuses pre-July JSON delivery queue files and leaves them unchanged.
+Upgrade through `2026.9.7` and run its `openclaw doctor --fix` before retrying.
+Current SQLite queues remain supported. Updates driven by `2026.9.7` check these
+original files before stopping the running Gateway. The same early check reports
+the existing recovery guidance for a retired `plugins/installs.json` index. See
+[state migration recovery](/gateway/doctor/state-and-sessions).
+
+Doctor also refuses these retired config inputs:
 
 - `agents.defaults.llm`, agent `embeddedPi`, `embeddedHarness`, whole-agent
   `agentRuntime`, `systemPromptOverride`, and `sandbox.perSession`.
@@ -72,6 +132,9 @@ Doctor refuses these retired inputs:
 - Telegram `dm`, `direct.*.threadReplies`, native draft preview settings, and scalar
   or flat streaming settings (`streamMode`, `chunkMode`, `blockStreaming`,
   `blockStreamingCoalesce`, and `draftChunk`), including account overrides.
+- Matrix `dm.policy: "trusted"`, flat `allowPrivateNetwork`, and `allow` in
+  `groups.<room>` or `rooms.<room>`, including account overrides.
+- Slack `channels.<id>.allow`, including account overrides.
 
 Configs containing these keys must be repaired before current validation can
 succeed. Doctor preserves the config and stops with recovery guidance instead
@@ -88,11 +151,10 @@ unchanged. Doctor saves a verified SQLite backup and rechecks the stored owner
 and definition before committing. If ownership cannot be repaired, it preserves
 the roster marker and reports the condition to resolve.
 
-When legacy import or delivery normalization precedes ownership repair, each
-stage saves its own verified snapshot. The earliest backup preserves the original
-persisted cron definitions, ownership, and runtime state; the later backup also
-includes imported jobs before their owners are pinned. Archived legacy JSON keeps
-its original bytes.
+When delivery normalization precedes ownership repair, each stage saves its own
+verified snapshot. The earliest backup preserves the original persisted cron
+definitions, ownership, and runtime state. Archived supported quarantine JSON
+keeps its original bytes.
 
 An owner recorded only in the SQLite owner column is copied into the job's
 canonical definition by Doctor. Its agent identity and runtime state stay the
@@ -109,11 +171,11 @@ default marker. Explicit creator and agent-qualified session ownership keep thei
 existing sharing checks. Deleting another agent leaves unresolved rows intact.
 The normal `openclaw update` Doctor phase performs this repair before saving
 the migrated config, including its early preflight and include-recovery writes.
-During the earlier update rehearsal, Doctor can import and normalize cron rows in
-the private database copy. It preserves uncopied legacy files, including linked
-state, quarantine, and run-log files, and reports their deferred archival. The
-live Doctor phase imports those sources and archives them after package installation. This
-also protects updates started by supported older releases.
+During the earlier update rehearsal, Doctor can import quarantine rows and
+normalize cron definitions in the private database copy. It preserves uncopied
+quarantine files, including linked files, and reports their deferred archival.
+The live Doctor phase imports those sources and archives them after package
+installation. This also protects updates started by supported older releases.
 
 ## Legacy cron delivery settings
 
@@ -133,6 +195,44 @@ Gateway `cron.add` and `cron.update` requests still accept the deprecated
 `delivery.mode: "deliver"` spelling and persist `announce`. Clients should send
 `announce`. This request adapter does not repair stored `deliver` values; those
 still require Doctor.
+
+## Exec approval policy
+
+Doctor normalizes legacy exec approval policy already stored in SQLite as well
+as imported JSON files. Before rewriting a SQLite row, it preserves a verified,
+private database snapshot named `openclaw.sqlite.pre-exec-approvals-migration-*.bak`.
+It moves the historical `default` agent policy into `main`, retaining explicit
+`main` values and merging allowlist entries and MCP grants. String allowlist
+entries become objects with stable IDs. Obsolete `commandText` and unrecognized
+source labels remain in the backup; current command-use metadata, socket
+credentials, and the row's update timestamp are preserved.
+
+Runtime readers require canonical policy and report `openclaw doctor --fix`
+guidance for a legacy row without replacing it. The update-time Doctor pass
+runs the same migration. Repeating Doctor leaves the normalized row and its IDs
+unchanged. Published SDK and operator input normalization remain available at
+the input boundary.
+
+## Channel account routing during an update
+
+Doctor preserves existing channel account maps and their implicit default route.
+Shared root policy never creates an extra `accounts.default` beside named accounts.
+An empty account map can still receive migrated single-account fields; plugins
+such as WhatsApp keep their supported shared policy at the root.
+
+When a policy-only, unlinked WhatsApp `accounts.default` sits beside named
+accounts, Doctor warns that it may be left over from an earlier promotion or may
+be an intentional account awaiting login. It names the account currently selected
+for unqualified operations and leaves the account map, shared policy, and routing
+unchanged. Doctor cannot infer who created an account from this config shape.
+
+To explicitly select an existing named account while retaining all accounts and
+shared policy, run `openclaw config set channels.whatsapp.defaultAccount '"work"' --strict-json`
+(replace `work` with the desired account ID). If you decide the default account is
+unwanted, first preserve any shared policy inherited from it, then run
+`openclaw channels remove --channel whatsapp --account default --delete`.
+Doctor's warning provides the command for a configured named account. It does not
+perform either action, including during updates or repeated `doctor --fix` runs.
 
 ## Channel ownership during an update
 
@@ -163,6 +263,37 @@ original values in the normal config backup before saving the repair.
 Runtime config requires typed sender keys or `"*"`. After replacing the binary
 directly, run `openclaw doctor --fix` before starting the Gateway. Explicit
 `id:@user:server` policies and incoming sender-ID matching remain supported.
+
+## Agent roster migration
+
+Ordinary config reads require canonical keyed `agents.entries`; they do not
+convert a populated `agents.list` or remove legacy `default` markers. Run
+`openclaw doctor --fix` before starting a directly replaced binary with those
+inputs. The normal `openclaw update` flow invokes the candidate Doctor. Fresh
+configs without a roster still receive the in-memory `main` default.
+
+Doctor retains the original roster order and historical owner while migrating
+config and persisted state, including ownerless cron jobs. It preserves the
+legacy workspace and materializes the required per-surface owners before
+retiring the marker. Explicit system-agent, auth-inheritance, and other role
+owners remain independent: choosing a different system agent does not change
+which agent owns existing legacy data. Keep the original markers until Doctor
+has completed both the config and state repairs.
+
+Doctor follows the existing [include write constraints](/gateway/config-secrets-env).
+A root-level `$include`, or a repair spanning an included roster and root-owned
+roles, can require manual preparation; repeating `doctor --fix` alone does not
+remove that ownership constraint. Preserve backups of the root config, included
+files, and persisted state. Temporarily consolidate the original include-resolved
+legacy config into one `openclaw.json`, retaining list order, default markers,
+authored environment and secret references, and the meaning of configured paths.
+Do not substitute an already normalized runtime view or remove the legacy marker
+by hand: Doctor still needs that provenance to migrate data ownership.
+
+Run `openclaw doctor --fix` or retry the update with that single-file config.
+After repair completes and `openclaw config validate` succeeds, split the
+canonical config back into includes if desired, then validate it again. Keep
+the backups until the repaired config and migrated state have been verified.
 
 ## Channel webhook listeners
 
@@ -470,7 +601,7 @@ against the current SQLite owners before the import can rename profiles.
     If this is a git checkout and Doctor is running interactively, it offers to update before running its checks. Accepting uses the normal `openclaw update` lifecycle for that checkout, including validation, recovery, and Gateway restart. The source update keeps your saved update channel unchanged. Externally managed installs continue Doctor without offering self-update; update them through their deployment owner.
   </Accordion>
   <Accordion title="1. Config normalization">
-    GitHub Copilot now requires explicit provider config, a saved Copilot auth profile, or `COPILOT_GITHUB_TOKEN`. Generic `GH_TOKEN` and `GITHUB_TOKEN` no longer activate it. Doctor reports this change once when only a generic GitHub token is present. The retired `plugins.entries.github-copilot.config.discovery.enabled` setting is ignored during config loading, including malformed values, and removed when Doctor saves the config.
+    GitHub Copilot now requires explicit provider config, a saved Copilot auth profile, or `COPILOT_GITHUB_TOKEN`. Generic `GH_TOKEN` and `GITHUB_TOKEN` no longer activate it. Doctor reports this change once when only a generic GitHub token is present. Doctor removes the retired `plugins.entries.github-copilot.config.discovery.enabled` setting, including malformed values, before validating and saving the config. Ordinary config reads require the repaired config.
 
     Doctor normalizes legacy value shapes into the current schema. Current Talk speech config is `talk.provider` + `talk.providers.<provider>`, with realtime voice config under `talk.realtime.*`. Doctor rewrites old `talk.voiceId` / `talk.voiceAliases` / `talk.modelId` / `talk.outputFormat` / `talk.apiKey` shapes into the provider map, and rewrites legacy top-level realtime selectors (`talk.mode`, `talk.transport`, `talk.brain`, `talk.model`, `talk.voice`) into `talk.realtime`.
 
@@ -504,7 +635,7 @@ against the current SQLite owners before the import can rename profiles.
 
     Per-agent migrations apply to both keyed `agents.entries` and legacy `agents.list` rosters, including rosters that already set `agents.ownership: "explicit"`. For example, Doctor preserves an agent's legacy `memorySearch` settings under `memory.search`. Existing values at the current config paths take precedence.
 
-    For legacy rosters with multiple agents and no resolvable ambient owner, Doctor seeds `agents.defaults.systemAgent.agentId` from a uniquely marked `default: true` agent, or `main` when present. Sole-agent rosters and legacy default markers already honored by the runtime need no owner repair and produce no missing-owner advice. Explicit fleet ownership disables the legacy default-marker fallback, so those rosters may still need repair. Doctor also pins `agents.defaults.heartbeat.agentId` only when heartbeat enrollment would otherwise be unresolved; existing heartbeat owners, shared defaults, and per-agent enrollment are preserved. These changes are reported and saved by `doctor --fix`, including the update-time doctor pass. If no default can be identified, configure the system-agent owner explicitly.
+    For legacy rosters with multiple agents and no resolvable ambient owner, Doctor seeds `agents.defaults.systemAgent.agentId` from a uniquely marked `default: true` agent, or `main` when present. Sole-agent rosters need no owner repair. Doctor converts valid legacy default markers into explicit per-surface owners before runtime admission. Explicit fleet ownership disables the legacy default-marker fallback, so those rosters may still need repair. Doctor also pins `agents.defaults.heartbeat.agentId` only when heartbeat enrollment would otherwise be unresolved; existing heartbeat owners, shared defaults, and per-agent enrollment are preserved. These changes are reported and saved by `doctor --fix`, including the update-time doctor pass. If no default can be identified, configure the system-agent owner explicitly.
 
     <Note>
       Migration retention follows the July 2026 cutoff in the
@@ -533,7 +664,7 @@ against the current SQLite owners before the import can rename profiles.
     | `meta.lastTouchedAt`, hook installs, cron store, bundled discovery, global TTS prefs path            | shared SQLite state                                                       |
     | TTS speaker fields `voice`/`voiceName`/`voiceId`                                                 | `speakerVoice`/`speakerVoiceId`                                              |
     | `channels.<id>.tts.<provider>` / `channels.<id>.accounts.<accountId>.tts.<provider>` (all channels except Discord)                                          | `...tts.providers.<provider>`                                                |
-    | `channels.<id>.voice.tts.<provider>` / `channels.<id>.accounts.<accountId>.voice.tts.<provider>` (all channels, including Discord)                          | `...voice.tts.providers.<provider>`                                          |
+    | `channels.<id>.voice.tts.<provider>` / `channels.<id>.accounts.<accountId>.voice.tts.<provider>` (all channels except Discord)                          | `...voice.tts.providers.<provider>`                                          |
     | `plugins.entries.voice-call.config.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`)     | `plugins.entries.voice-call.config.tts.providers.<provider>`                |
     | `plugins.entries.voice-call.config.tts.provider: "edge"` / `...tts.providers.edge`                | `provider: "microsoft"` / `...tts.providers.microsoft`                      |
     | `plugins.entries.voice-call.config.provider: "log"`                                              | `"mock"`                                                                      |

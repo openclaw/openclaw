@@ -4,8 +4,8 @@ import {
   managedGitHubIdentityEnvironment,
   removeManagedGitHubProfile,
   writeManagedGitHubProfileFiles,
-  type PreparedGitHubToolEnvironment,
 } from "../agents/github-tool-identity.js";
+import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identity.types.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { executeGitCommand } from "../infra/git-exec.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";

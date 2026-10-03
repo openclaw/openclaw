@@ -240,6 +240,18 @@ export function createCodexAppServerAgentHarness(
     },
     readModelCatalogReadiness: (params) =>
       modelCatalog?.read(params, resolveAttemptPluginConfig(params.config)),
+    acquireMcpAppRuntime: async (params) => {
+      const { acquireCodexMcpAppRuntime } =
+        await import("./src/app-server/effective-mcp-catalog.js");
+      if (disposed) {
+        return undefined;
+      }
+      params.assertCurrent();
+      return await acquireCodexMcpAppRuntime(params, {
+        bindingStore: options.bindingStore,
+        pluginConfig: resolveAttemptPluginConfig(params.config),
+      });
+    },
     loadMcpToolCatalog: async (params) => {
       const { loadCodexEffectiveMcpCatalog } =
         await import("./src/app-server/effective-mcp-catalog.js");

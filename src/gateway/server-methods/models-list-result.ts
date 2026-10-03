@@ -123,6 +123,7 @@ function createPublicModelsListProjector(params: {
   thinkingCatalog: ModelCatalogEntry[];
   fastMode: ReturnType<typeof createModelFastModeResolver>;
   snapshot: ModelCatalogSnapshot;
+  accountCatalog?: ModelCatalogDecisionParams["accountCatalog"];
   isCurrent: () => boolean;
   cfg: OpenClawConfig;
   agentId: string;
@@ -216,7 +217,8 @@ function createPublicModelsListProjector(params: {
       snapshot: params.snapshot,
       entry,
       evaluation,
-      runtimeId: preparedEntry.agentRuntime?.id,
+      runtimeId: preparedEntry.agentRuntime?.id ?? "openclaw",
+      accountCatalog: params.accountCatalog,
       isCurrent: params.isCurrent,
     });
     return Object.assign(
@@ -562,6 +564,7 @@ export async function prepareModelsListResult(
       pluginRegistry: preparedPluginRegistry,
       thinkingCatalog: catalog,
       snapshot: inventoryProjector.snapshot,
+      accountCatalog: preparedProjectionOwner?.accountCatalog,
       isCurrent,
       fastMode: createModelFastModeResolver({
         cfg,
@@ -597,6 +600,7 @@ export async function prepareModelsListResult(
     pluginRegistry: preparedPluginRegistry,
     thinkingCatalog: catalog,
     snapshot: projector.snapshot,
+    accountCatalog: preparedProjectionOwner?.accountCatalog,
     isCurrent: () => isCurrent() && projector.isCurrent(),
     fastMode: createModelFastModeResolver({
       cfg,

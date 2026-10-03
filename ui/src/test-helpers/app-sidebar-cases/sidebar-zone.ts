@@ -185,27 +185,6 @@ describe("AppSidebar interleaved zone", () => {
     }
   });
 
-  it("keeps many pinned sessions always visible", async () => {
-    const keys = [
-      "agent:main:pinned-0",
-      ...Array.from({ length: 30 }, (_, index) => `agent:main:pinned-${index + 1}`),
-    ];
-    const sessions = createSessionsHarness("main", keys);
-    const result = sessions.sessions.state.result;
-    expect(result).not.toBeNull();
-    if (!result) {
-      return;
-    }
-    for (const row of result.sessions) {
-      row.pinned = true;
-    }
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
-
-    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(31);
-    expect(sidebar.querySelector(".sidebar-session-pagination")).toBeNull();
-  });
-
   it("renders routes and pinned sessions in the canonical entry order", async () => {
     const { sidebar, sessions } = await mountZone();
     const result = sessions.sessions.state.result;

@@ -150,7 +150,6 @@
     "!dist/plugin-sdk/memory-core-host-status.d.ts",
     "!dist/plugin-sdk/memory-host-events.d.ts",
     "!dist/plugin-sdk/memory-host-markdown.d.ts",
-    "!dist/plugin-sdk/memory-host-search.d.ts",
     "!dist/plugin-sdk/message-tool-delivery-hints.d.ts",
     "!dist/plugin-sdk/migration.d.ts",
     "!dist/plugin-sdk/migration-runtime.d.ts",
@@ -450,7 +449,10 @@
     "!dist/plugin-sdk/text-grapheme.d.ts",
     "!dist/plugin-sdk/agent-harness-session-runtime.d.ts",
     "!dist/plugin-sdk/agent-harness-attempt-runtime.d.ts",
-    "!dist/plugin-sdk/secret-egress-runtime.d.ts"
+    "!dist/plugin-sdk/secret-egress-runtime.d.ts",
+    "!dist/plugin-sdk/compiled-subprocess-testing.d.ts",
+    "!dist/plugin-sdk/compiled-subprocess-testing.js",
+    "!dist/plugin-sdk/memory-host-search.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -1036,10 +1038,6 @@
     "./plugin-sdk/dangerous-name-runtime": {
       "default": "./dist/plugin-sdk/dangerous-name-runtime.js"
     },
-    "./plugin-sdk/command-auth": {
-      "types": "./dist/plugin-sdk/command-auth.d.ts",
-      "default": "./dist/plugin-sdk/command-auth.js"
-    },
     "./plugin-sdk/command-auth-native": {
       "types": "./dist/plugin-sdk/command-auth-native.d.ts",
       "default": "./dist/plugin-sdk/command-auth-native.js"
@@ -1068,10 +1066,6 @@
     },
     "./plugin-sdk/direct-dm-guard-policy": {
       "default": "./dist/plugin-sdk/direct-dm-guard-policy.js"
-    },
-    "./plugin-sdk/discord": {
-      "types": "./dist/plugin-sdk/discord.d.ts",
-      "default": "./dist/plugin-sdk/discord.js"
     },
     "./plugin-sdk/device-bootstrap": {
       "types": "./dist/plugin-sdk/device-bootstrap.d.ts",
@@ -1582,10 +1576,6 @@
     },
     "./plugin-sdk/target-resolver-runtime": {
       "default": "./dist/plugin-sdk/target-resolver-runtime.js"
-    },
-    "./plugin-sdk/telegram-account": {
-      "types": "./dist/plugin-sdk/telegram-account.d.ts",
-      "default": "./dist/plugin-sdk/telegram-account.js"
     },
     "./plugin-sdk/text-autolink-runtime": {
       "default": "./dist/plugin-sdk/text-autolink-runtime.js"
@@ -2265,7 +2255,7 @@
     "@modelcontextprotocol/sdk": "1.30.1",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.22.0",
+    "@openclaw/fs-safe": "0.23.0",
     "@openclaw/proxyline": "0.3.12",
     "@silvia-odwyer/photon-node": "0.3.4",
     "@trycua/cua-driver": "0.28.2",

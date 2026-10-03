@@ -37,7 +37,7 @@ import {
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import type { OpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import type { OpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution-contract.js";
 import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,

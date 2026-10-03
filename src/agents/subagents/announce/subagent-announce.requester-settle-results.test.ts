@@ -21,7 +21,15 @@ const { maybeWakeRequesterAfterAllChildrenSettled } =
 
 describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
   it("wakes the requester once with a batch-stable idempotency key when the fan-out drains", async () => {
+    const quietChild = makeSettledChild({
+      runId: "run-quiet",
+      requesterTurnRunId: "quiet-cancellation-owner",
+      expectsCompletionMessage: false,
+      completion: { required: false },
+      delivery: { status: "not_required" },
+    });
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
+      quietChild,
       makeSettledChild({
         runId: "run-b",
         completion: { required: true, resultText: "network findings" },
@@ -32,7 +40,9 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
       }),
     ]);
 
-    const woke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
+    const woke = await maybeWakeRequesterAfterAllChildrenSettled(
+      wakeParams({ settledEntry: quietChild }),
+    );
 
     expect(woke).toBe(true);
     expect(deliverSpy).toHaveBeenCalledTimes(1);
@@ -42,7 +52,8 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
     expect(call.expectsCompletionMessage).toBe(false);
     expect(call.requireDirectDelivery).toBe(true);
     expect(call.requireVisibleReply).toBeUndefined();
-    expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-a,run-b"));
+    expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-a,run-b,run-quiet"));
+    expect(quietChild.requesterTurnRunId).toBe("quiet-cancellation-owner");
     const message = String(call.triggerMessage);
     expect(message).toContain("settled");
     expect(message).toContain("social findings");

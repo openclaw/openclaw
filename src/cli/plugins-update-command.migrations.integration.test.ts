@@ -550,7 +550,7 @@ describe("installed plugin update config migration", () => {
         const auditFailure = new Error("fixture accepted audit fingerprint failed");
         if (acceptedFailure) {
           const auditBaseline = { plugins: {} };
-          configJournal.upsertConfigSnapshotAuditRecord({
+          await configJournal.upsertConfigSnapshotAuditRecordAsync({
             env: state.env,
             configPath: state.configPath,
             rawHash: hashConfigRaw(JSON.stringify(auditBaseline)),

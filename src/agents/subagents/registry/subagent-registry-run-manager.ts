@@ -4,7 +4,6 @@ import {
 } from "../../../infra/agent-events.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import { clearGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
@@ -22,9 +21,11 @@ import {
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { resolveKilledSubagentTaskEndedAt } from "./subagent-registry-completion.js";
+import { retireSubagentGatewayBinding } from "./subagent-registry-execution-cleanup.js";
 import {
   persistSubagentSessionTiming,
   safeRemoveAttachmentsDir,
+  shouldRemoveSubagentAttachments,
   updateSubagentArchiveAtMs,
 } from "./subagent-registry-helpers.js";
 import {
@@ -61,14 +62,14 @@ class SubagentRunManager extends SubagentLaunchManager {
       return;
     }
     this.options.clearPendingLifecycleError(runId);
-    clearGatewayContextResolver(entry);
-    if (this.shouldDeleteAttachments(entry)) {
+    retireSubagentGatewayBinding(entry);
+    if (shouldRemoveSubagentAttachments(entry)) {
       void safeRemoveAttachmentsDir(entry);
     }
     const releasedSessionStillUnowned = () =>
-      !Array.from(this.options.getRunsForChildSession(entry.childSessionKey)).some(
-        (candidate) => !isSameSubagentRunOwner(candidate, entry),
-      );
+      !Array.from(
+        this.options.getRunsForChildSession(entry.childSessionKey, entry.childAgentId),
+      ).some((candidate) => !isSameSubagentRunOwner(candidate, entry));
     void this.options.notifyContextEngineSubagentEnded(
       {
         childSessionKey: entry.childSessionKey,
@@ -175,6 +176,7 @@ class SubagentRunManager extends SubagentLaunchManager {
   readonly markSubagentRunTerminated = async (markParams: {
     runId?: string;
     childSessionKey?: string;
+    childAgentId?: string;
     reason?: string;
     suppressTaskDelivery?: boolean;
     session?: SubagentKillSession;
@@ -191,7 +193,10 @@ class SubagentRunManager extends SubagentLaunchManager {
     }
     const childSessionKey = markParams.childSessionKey?.trim();
     if (childSessionKey) {
-      for (const entry of this.options.getRunsForChildSession(childSessionKey)) {
+      for (const entry of this.options.getRunsForChildSession(
+        childSessionKey,
+        markParams.childAgentId ?? markParams.session?.agentId,
+      )) {
         runIds.add(entry.runId);
       }
     }
@@ -460,7 +465,7 @@ class SubagentRunManager extends SubagentLaunchManager {
                 childSessionKey: entry.childSessionKey,
               });
             }),
-            this.shouldDeleteAttachments(entry)
+            shouldRemoveSubagentAttachments(entry)
               ? safeRemoveAttachmentsDir(entry)
               : Promise.resolve(),
           ]);

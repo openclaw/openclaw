@@ -8,9 +8,10 @@ import { runPackageUpdateDoctor } from "../cli/update-cli/update-command-package
 import * as processExec from "../process/exec.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errno.js";
+import { resolveExecutableFromPathEnv } from "./executable-path.js";
 import {
   advanceFixtureRemote,
-  assertCandidateCommandEnvironment,
+  createGitFixtureCheckout,
   expectNoGitRuntimeStagingPaths,
   expectRuntime,
   prepareDeletedTrackedRuntimeAsset,
@@ -19,6 +20,7 @@ import {
   runFixtureGit as git,
   resolveCandidateNodeRuntimeForTest,
   runtimeImports,
+  writeGitFixtureManifest,
   writeRuntime,
   type VirtualStoreLayout,
 } from "./update-runner-git-candidate.test-support.js";
@@ -27,6 +29,7 @@ import { updateGitCheckout } from "./update-runner-git.js";
 import type { CommandRunner, UpdateRunnerOptions } from "./update-runner-types.js";
 
 describe("Git candidate activation", () => {
+  const packageMetadata = { openclaw: { schemaVersions: { state: 5, agent: 14 } } };
   let directory: string;
   let root: string;
   let remote: string;
@@ -39,50 +42,10 @@ describe("Git candidate activation", () => {
   let inspectionRoots: string[];
 
   beforeEach(async () => {
-    // Keep fixture-local identity authoritative during candidate rebases.
-    vi.stubEnv("GIT_CONFIG_COUNT", "0");
-    for (const key of [
-      "GIT_AUTHOR_NAME",
-      "GIT_AUTHOR_EMAIL",
-      "GIT_COMMITTER_NAME",
-      "GIT_COMMITTER_EMAIL",
-    ]) {
-      vi.stubEnv(key, undefined);
-    }
     directory = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-candidate-")),
     );
-    root = path.join(directory, "checkout");
-    remote = path.join(directory, "remote");
-    await fs.mkdir(remote);
-    await git(remote, "init", "--initial-branch=main");
-    await git(remote, "config", "user.name", "OpenClaw Test");
-    await git(remote, "config", "user.email", "openclaw@example.com");
-    await fs.writeFile(
-      path.join(remote, "package.json"),
-      JSON.stringify({
-        name: "openclaw",
-        version: "2026.9.1",
-        packageManager: "pnpm@12.0.0",
-        openclaw: { schemaVersions: { state: 5, agent: 14 } },
-      }),
-    );
-    await fs.writeFile(path.join(remote, "openclaw.mjs"), "export {};\n");
-    await fs.mkdir(path.join(remote, "packages", "runtime"), { recursive: true });
-    await fs.writeFile(
-      path.join(remote, "packages", "runtime", "index.js"),
-      "module.exports = require('./node_modules/nested.cjs');",
-    );
-    await fs.writeFile(
-      path.join(remote, ".gitignore"),
-      "node_modules/\ndist/\ndist-runtime/\n.artifacts\n.pnpm\ncache/\n",
-    );
-    await git(remote, "add", ".");
-    await git(remote, "commit", "-m", "base");
-    beforeSha = await git(remote, "rev-parse", "HEAD");
-    await git(directory, "clone", "--quiet", remote, root);
-    await git(root, "config", "user.name", "OpenClaw Test");
-    await git(root, "config", "user.email", "openclaw@example.com");
+    ({ root, remote, beforeSha } = await createGitFixtureCheckout(directory, packageMetadata));
     virtualStoreLayout = "node_modules/.pnpm";
     await writeRuntime(root, beforeSha, path.join(directory, "shared-store"), virtualStoreLayout);
     events = [];
@@ -349,16 +312,46 @@ describe("Git candidate activation", () => {
   );
 
   it("keeps build and exposure source selection in the admitted candidate", async () => {
-    await assertCandidateCommandEnvironment({
-      root,
-      directory,
-      advanceRemote,
-      runCommand,
-      update,
-      setRunCommand: (command) => {
-        runCommand = command;
+    vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", root);
+    const otherTools = path.join(directory, "other-tools");
+    const inheritedPath = `${otherTools}${path.delimiter}${process.env.PATH ?? ""}`;
+    vi.stubEnv("PATH", inheritedPath);
+    const nodeRuntime = await resolveCandidateNodeRuntimeForTest();
+    await advanceRemote();
+    let built = false;
+    let exposed = false;
+    const command = runCommand;
+    runCommand = async (argv, options) => {
+      if (argv[0] === "pnpm" && argv[1] === "build") {
+        built = true;
+        expect(options.env?.OPENCLAW_DEV_SOURCE_ROOT).toBe(options.cwd);
+        expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(otherTools);
+        const selectedNode = await runCommandWithTimeout(["node", "-p", "process.execPath"], {
+          cwd: options.cwd,
+          env: options.env,
+          timeoutMs: 5000,
+        });
+        expect(selectedNode.code, selectedNode.stderr).toBe(0);
+        expect(selectedNode.stdout.trim()).toBe(await fs.realpath(nodeRuntime.path));
+      }
+      return command(argv, options);
+    };
+    const result = await update({
+      prepareGitExposure: async (candidateRoot, _sha, env) => {
+        exposed = true;
+        expect(env?.OPENCLAW_DEV_SOURCE_ROOT).toBe(candidateRoot);
+        expect(
+          resolveExecutableFromPathEnv("node", env?.PATH ?? "", env, {
+            cwd: candidateRoot,
+            useCache: false,
+          }),
+        ).toBe(nodeRuntime.path);
       },
     });
+    expect(result.status).toBe("ok");
+    expect(built && exposed).toBe(true);
+    expect(process.env.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
+    expect(process.env.PATH).toBe(inheritedPath);
   });
 
   it("falls back when only the latest dev candidate requires an incompatible Node runtime", async () => {
@@ -366,16 +359,10 @@ describe("Git candidate activation", () => {
     const requiredMajor = Number.parseInt(nodeRuntime.version.split(".")[0]!, 10) + 1;
     const requiredEngine = `>=${requiredMajor}.0.0`;
     const olderCandidate = await advanceRemote();
-    await fs.writeFile(
-      path.join(remote, "package.json"),
-      JSON.stringify({
-        name: "openclaw",
-        version: "2026.9.1",
-        packageManager: "pnpm@12.0.0",
-        engines: { node: requiredEngine },
-        openclaw: { schemaVersions: { state: 5, agent: 14 } },
-      }),
-    );
+    await writeGitFixtureManifest(remote, {
+      engines: { node: requiredEngine },
+      ...packageMetadata,
+    });
     await git(remote, "add", "package.json");
     await git(remote, "commit", "-m", "require newer node");
     const incompatibleCandidate = await git(remote, "rev-parse", "HEAD");
@@ -418,16 +405,7 @@ describe("Git candidate activation", () => {
     const nodeRuntime = await resolveCandidateNodeRuntimeForTest();
     const requiredMajor = Number.parseInt(nodeRuntime.version.split(".")[0]!, 10) + 1;
     const requiredEngine = `>=${requiredMajor}.0.0`;
-    await fs.writeFile(
-      path.join(root, "package.json"),
-      JSON.stringify({
-        name: "openclaw",
-        version: "2026.9.1",
-        packageManager: "pnpm@12.0.0",
-        engines: { node: requiredEngine },
-        openclaw: { schemaVersions: { state: 5, agent: 14 } },
-      }),
-    );
+    await writeGitFixtureManifest(root, { engines: { node: requiredEngine }, ...packageMetadata });
     await git(root, "add", "package.json");
     await git(root, "commit", "-m", "local change");
     beforeSha = await git(root, "rev-parse", "HEAD");
@@ -566,15 +544,10 @@ describe("Git candidate activation", () => {
       if (workspaceTarget !== workspaceFile) {
         await fs.symlink(workspaceTarget, workspaceFile);
       }
-      await fs.writeFile(
-        path.join(remote, "package.json"),
-        JSON.stringify({
-          name: "openclaw",
-          version: "2026.9.1",
-          packageManager: `pnpm@${version}`,
-          openclaw: { schemaVersions: { state: 5, agent: 14 } },
-        }),
-      );
+      await writeGitFixtureManifest(remote, {
+        packageManager: `pnpm@${version}`,
+        ...packageMetadata,
+      });
       await git(remote, "add", ".");
       await git(remote, "commit", "-m", "operator store");
       await git(root, "fetch", "origin");

@@ -124,6 +124,11 @@ turns, so a result adjacent to a repeated call stays with that occurrence. A dis
 result is moved only when exactly one unresolved occurrence can own it; ambiguous
 extras are dropped and missing occurrences receive synthetic error results.
 
+Synthetic missing results tell the model that the outcome is unknown: retry only
+read-only or idempotent operations, and verify current state before repeating an
+operation that may have had side effects. Responses-family transports retain
+their `aborted` placeholder. Neither placeholder proves that the tool did not run.
+
 Implementation: `sanitizeToolUseResultPairing` in
 `src/agents/session-transcript-repair.ts`
 

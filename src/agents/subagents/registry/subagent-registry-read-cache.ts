@@ -125,7 +125,7 @@ function applySubagentRunChanges<T extends SubagentRunReadRecord>(
 /** Selecting a read must not consume another database owner's publication. */
 export function selectSubagentCacheStateForRead<T extends SubagentRunReadRecord>(
   state: SubagentRunsCacheState<T>,
-  context?: OpenClawStateReadContext,
+  context?: Pick<OpenClawStateReadContext, "admission">,
 ): SubagentRunsCacheState<T> {
   const identity = state.retiredPublicationIdentity ?? state.admission?.identity;
   const matches = context

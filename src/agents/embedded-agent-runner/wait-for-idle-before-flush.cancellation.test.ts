@@ -15,7 +15,7 @@ function createManager() {
     getSessionTarget: () => undefined,
     getSessionId: () => "detached-session",
     hasPendingToolResults: () => true,
-    flushPendingToolResults: vi.fn(),
+    flushPendingToolResultsAsync: vi.fn(async () => undefined),
   };
 }
 
@@ -32,7 +32,7 @@ it("skips idle waiting for an already canceled run but still flushes pending res
   idle.resolve();
   await flushing;
   expect(startedIdleWait).toBe(0);
-  expect(sessionManager.flushPendingToolResults).toHaveBeenCalledOnce();
+  expect(sessionManager.flushPendingToolResultsAsync).toHaveBeenCalledOnce();
   expect(vi.getTimerCount()).toBe(0);
 });
 
@@ -56,7 +56,7 @@ it.each(["cancel", "cancel-on-entry", "idle", "timeout", "failure"] as const)(
     };
     const flushing = flushPendingToolResultsAfterIdle(options);
     expect(waitForIdle).toHaveBeenCalledOnce();
-    expect(sessionManager.flushPendingToolResults).not.toHaveBeenCalled();
+    expect(sessionManager.flushPendingToolResultsAsync).not.toHaveBeenCalled();
     if (outcome === "cancel") {
       controller.abort();
     } else if (outcome === "idle") {
@@ -67,7 +67,7 @@ it.each(["cancel", "cancel-on-entry", "idle", "timeout", "failure"] as const)(
       await vi.advanceTimersByTimeAsync(100);
     }
     await vi.advanceTimersByTimeAsync(0);
-    const flushed = sessionManager.flushPendingToolResults.mock.calls.length;
+    const flushed = sessionManager.flushPendingToolResultsAsync.mock.calls.length;
     // A provider may reject its old idle promise after cancellation won the wait.
     if (outcome === "cancel" || outcome === "cancel-on-entry") {
       idle.reject(new Error("late idle failure"));
@@ -76,7 +76,7 @@ it.each(["cancel", "cancel-on-entry", "idle", "timeout", "failure"] as const)(
     }
     await flushing;
     expect(flushed).toBe(1);
-    expect(sessionManager.flushPendingToolResults).toHaveBeenCalledOnce();
+    expect(sessionManager.flushPendingToolResultsAsync).toHaveBeenCalledOnce();
     expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
     expect(vi.getTimerCount()).toBe(0);
   },

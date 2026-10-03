@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
 import { runOutsideCommandProcessScope } from "../../process/exec-spawn.js";
+import { withGitProcessOperation } from "../../process/spawn-diagnostics.js";
 import { withWorktreeAllocationLease } from "./allocation.js";
 import { requireWorktreeDiskSpace } from "./capacity.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
@@ -28,7 +29,7 @@ import { resolveRepository } from "./service-preparation.js";
 const preserved = (reason: string) =>
   new Error(`${reason}; remaining source and original snapshot preserved`);
 
-/** CLI-only recovery: reconstitute a clean checkout without replacing any surviving file,
+/** Explicit recovery: reconstitute a clean checkout without replacing any surviving file,
  * then let native non-force Git removal own deletion. Dirty/exact-state captures keep their
  * existing recovery owners; neither their index nor their snapshots can be reconstructed here.
  */
@@ -36,8 +37,10 @@ export async function recoverManagedWorktreeRemoval(
   params: { id: string; snapshot: string; signal?: AbortSignal; commitGuard?: () => void },
   context: { env: NodeJS.ProcessEnv; now: () => number },
 ) {
-  return await withWorktreeAllocationLease({ ...params, env: context.env }, async (guard) =>
-    recoverRemovalWithAllocation({ ...params, ...guard, ...context }),
+  return await withGitProcessOperation("worktree.recovery", () =>
+    withWorktreeAllocationLease({ ...params, env: context.env }, async (guard) =>
+      recoverRemovalWithAllocation({ ...params, ...guard, ...context }),
+    ),
   );
 }
 

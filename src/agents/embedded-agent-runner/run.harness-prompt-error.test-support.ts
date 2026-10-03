@@ -80,13 +80,13 @@ describe("harness prompt failure presentation", () => {
         preflight
           ? userMessage
           : known
-            ? "selected model is unavailable from the provider"
+            ? "This model was not found."
             : "couldn't generate a response",
       );
       expect(text).not.toContain(error.message);
       if (known) {
         expect(text).toContain(
-          "Select an available model or update the model configuration, then try again.",
+          "Choose another model in the Control UI or run `openclaw configure`.",
         );
       }
       if (hadPotentialSideEffects) {

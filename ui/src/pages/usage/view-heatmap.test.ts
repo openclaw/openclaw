@@ -2,25 +2,8 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
-import type { CostDailyEntry } from "./types.ts";
+import { dailyEntry } from "./usage-chart.test-support.ts";
 import { renderUsageHeatmap } from "./view-heatmap.ts";
-
-function dailyEntry(date: string, totalTokens: number): CostDailyEntry {
-  return {
-    date,
-    input: totalTokens,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens,
-    totalCost: 0,
-    inputCost: 0,
-    outputCost: 0,
-    cacheReadCost: 0,
-    cacheWriteCost: 0,
-    missingCostEntries: 0,
-  };
-}
 
 afterEach(() => {
   document.body.replaceChildren();

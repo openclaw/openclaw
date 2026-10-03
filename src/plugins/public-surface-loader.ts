@@ -57,14 +57,14 @@ export function loadPluginPublicArtifactModuleSync<T extends object>(params: {
   pluginId?: string;
 }): T {
   const modulePath = resolvePluginRootPublicSurfacePath(params);
-  const location = modulePath ? { modulePath, boundaryRoot: params.pluginRoot } : null;
-  if (!location) {
+  if (!modulePath) {
     throw new MissingPublicSurfaceError(
       `Unable to resolve plugin public surface ${params.pluginRoot}/${params.artifactBasename}`,
     );
   }
   return loadValidatedPublicSurfaceModule({
-    ...location,
+    modulePath,
+    boundaryRoot: params.pluginRoot,
     surfaceLabel: `plugin public surface ${params.artifactBasename}`,
     origin: params.origin ?? "global",
     pluginId: params.pluginId,

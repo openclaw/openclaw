@@ -47,9 +47,18 @@ suite.define(() => {
 
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
-      await page
-        .getByText(`Runner failed: ${session.placement.recoveryError}`, { exact: true })
+      const failure = page
+        .locator(".chat-error")
+        .filter({ hasText: session.placement.recoveryError });
+      await failure
+        .locator("summary strong")
+        .getByText("Couldn't finish this reply. Check the conversation before trying again.")
         .waitFor();
+      await failure.locator("summary").click();
+      await failure.getByLabel("Error details", { exact: true }).waitFor();
+      expect(await failure.getByLabel("Error details", { exact: true }).textContent()).toBe(
+        `Runner failed: ${session.placement.recoveryError}`,
+      );
       const composer = page.getByRole("textbox", { name: "Chat composer" });
       if (proofDir) {
         await page.screenshot({ path: path.join(proofDir, "failed-worker-composer.png") });
@@ -116,10 +125,18 @@ suite.define(() => {
 
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
-      const error = page.getByText(`Runner failed: ${session.placement.recoveryError}`, {
-        exact: true,
-      });
-      await error.waitFor();
+      const error = page
+        .locator(".chat-error")
+        .filter({ hasText: session.placement.recoveryError });
+      await error
+        .locator("summary strong")
+        .getByText("Couldn't finish this reply. Check the conversation before trying again.")
+        .waitFor();
+      await error.locator("summary").click();
+      await error.getByLabel("Error details", { exact: true }).waitFor();
+      expect(await error.getByLabel("Error details", { exact: true }).textContent()).toBe(
+        `Runner failed: ${session.placement.recoveryError}`,
+      );
       await page.getByRole("button", { name: "Restart session…", exact: true }).click();
       const local = page.locator('[data-value="gateway"]');
       await local.waitFor();

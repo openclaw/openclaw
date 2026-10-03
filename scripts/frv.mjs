@@ -16,7 +16,6 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { promisify, stripVTControlCharacters } from "node:util";
 import { validateArtifactProducerRun } from "./full-release-artifacts.mjs";
-import { loadFlakeClassifications } from "./full-release-flake-classification.mjs";
 import {
   publicationAdmissionContract,
   publicationSourceContract,
@@ -28,7 +27,6 @@ import {
   composeReleaseChildAttemptEvidence,
   isReleaseGhArtifactMissingError,
   MAX_RELEASE_ARTIFACT_BYTES,
-  WINDOWS_NODE_CI_ADVISORY,
   planReleaseChildRerun,
   releaseChildSpec,
   releaseChildSpecs,
@@ -808,17 +806,6 @@ export async function inspectContinuation(plan, client, options = {}) {
         runId: child.runId,
         status: run.status,
       };
-      if (!active && child.key === "normalCi" && run.conclusion !== "success") {
-        Object.assign(
-          policyChild,
-          await client.loadFlakeClassifications({
-            child: policyChild,
-            parentRunId: plan.parentRunId,
-            parentRunAttempt: plan.parentRunAttempt,
-            targetSha: plan.targetSha,
-          }),
-        );
-      }
       const passed = !active && terminalPolicyPass(policyChild);
       return {
         compositeJobsSha256: evidence.compositeJobsSha256,
@@ -907,9 +894,6 @@ export function createClient(repository, dependencies = {}) {
   };
   return {
     repository,
-    loadFlakeClassifications(request) {
-      return loadFlakeClassifications({ ...request, repo: repository });
-    },
     getReleaseEvidenceClient() {
       releaseEvidenceClient ??= createReleaseEvidenceClient(repository);
       return releaseEvidenceClient;
@@ -940,7 +924,6 @@ export function createClient(repository, dependencies = {}) {
       }
     },
     rerunFailed: (runId) => rerun(runId, "rerun-failed-jobs"),
-    cancelRun: (runId) => rerun(runId, "cancel"),
     rerunRun: (runId) => rerun(runId, "rerun"),
     listRuns: (query) => listReleasePriorityRuns(query, apiJson, apiText),
     async getVariable(name) {
@@ -2420,14 +2403,9 @@ function failedJobEvent(owner, job, attempt) {
   }
   const labels = Array.isArray(job.labels) && job.labels.length > 0 ? job.labels.join(",") : "none";
   const runner = job.runner_name ? ` / ${job.runner_name}` : "";
-  const advisory =
-    owner === WINDOWS_NODE_CI_ADVISORY.child &&
-    WINDOWS_NODE_CI_ADVISORY.jobNamePattern.test(job.name)
-      ? ` [advisory ${WINDOWS_NODE_CI_ADVISORY.id}]`
-      : "";
   return [
     `job:${job.id}`,
-    `${owner} job "${job.name}" ${job.conclusion}${advisory} (attempt ${job.run_attempt ?? attempt}; runner ${labels}${runner})`,
+    `${owner} job "${job.name}" ${job.conclusion} (attempt ${job.run_attempt ?? attempt}; runner ${labels}${runner})`,
     job.html_url,
   ];
 }

@@ -24,6 +24,10 @@ can affect bundled plugins and third-party plugins.
 
 - Host loads plugins; plugins should not reach through the SDK into arbitrary
   host internals.
+- Follow the [plugin value boundary](../../docs/plugins/sdk-runtime.md#plugin-value-boundary):
+  admit plugins at load/registration; all loaded plugins pass values by reference.
+  Plugins must not mutate values after handing them to the host. Keep invocation
+  scope and lifecycle ownership without per-value copying or deep validation.
 - Prefer a small versioned host/kernel seam plus narrow documented SDK
   entrypoints over broad convenience barrels.
 - Prefer narrow, purpose-built subpaths over broad convenience re-exports.

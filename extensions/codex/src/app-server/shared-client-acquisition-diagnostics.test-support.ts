@@ -152,6 +152,10 @@ export function registerSharedClientAcquisitionDiagnosticsTests({
     vi.spyOn(embeddedAgentLog, "isEnabled").mockReturnValue(true);
     vi.mocked(embeddedAgentLog.warn).mockClear();
     const harness = createClientHarness();
+    vi.spyOn(harness.client, "getRegisteredTransportIdentity").mockReturnValue({
+      pid: 500002,
+      startedAt: "fixture-boot:12345",
+    });
     vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
     vi.spyOn(sharedClient, "getLeasedSharedCodexAppServerClient").mockImplementation((options) =>
       getLeasedSharedCodexAppServerClient({ ...options, timeoutMs: 5 }),
@@ -184,6 +188,10 @@ export function registerSharedClientAcquisitionDiagnosticsTests({
     const attributes = vi
       .mocked(embeddedAgentLog.warn)
       .mock.calls.find(([message]) => message === "codex app-server scope timed out")?.[1];
+    expect(JSON.parse(String(attributes?.lastStartedTransportIdentity))).toEqual({
+      pid: 500002,
+      startedAt: "fixture-boot:12345",
+    });
     expect(JSON.parse(String(attributes?.initializeBeforeCleanup))).toMatchObject({
       outcome: "pending",
       wireOutcome: "retained-pending",

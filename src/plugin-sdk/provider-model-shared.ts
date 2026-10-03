@@ -9,6 +9,7 @@ import {
   buildStrictAnthropicReplayPolicy,
   resolveTaggedReasoningOutputMode,
   sanitizeGoogleGeminiReplayHistory,
+  sanitizeGoogleGeminiReplayHistoryAsync,
 } from "../plugins/provider-replay-helpers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { definePluginEntry } from "./plugin-entry.js";
@@ -17,6 +18,7 @@ import type {
   ProviderReplayPolicyContext,
   ProviderRuntimeModel,
   ProviderSanitizeReplayHistoryContext,
+  ProviderSanitizeReplayHistoryContextV2,
 } from "./plugin-entry.js";
 
 export { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
@@ -204,6 +206,7 @@ export {
   buildPassthroughGeminiSanitizingReplayPolicy,
   resolveTaggedReasoningOutputMode,
   sanitizeGoogleGeminiReplayHistory,
+  sanitizeGoogleGeminiReplayHistoryAsync,
   buildStrictAnthropicReplayPolicy,
 };
 
@@ -307,7 +310,10 @@ export type ProviderReplayFamily =
 
 type ProviderReplayFamilyHooks = Pick<
   ProviderPlugin,
-  "buildReplayPolicy" | "sanitizeReplayHistory" | "resolveReasoningOutputMode"
+  | "buildReplayPolicy"
+  | "sanitizeReplayHistory"
+  | "sanitizeReplayHistoryAsync"
+  | "resolveReasoningOutputMode"
 >;
 
 type BuildProviderReplayFamilyHooksOptions =
@@ -366,20 +372,27 @@ export function buildProviderReplayFamilyHooks(
       };
     }
     case "anthropic-by-model":
+    case "native-anthropic-by-model": {
+      const buildPolicy =
+        options.family === "native-anthropic-by-model"
+          ? buildNativeAnthropicReplayPolicyForModel
+          : buildAnthropicReplayPolicyForModel;
       return {
-        buildReplayPolicy: ({ modelId, model }: ProviderReplayPolicyContext) =>
-          buildAnthropicReplayPolicyForModel(modelId, model),
+        buildReplayPolicy: ({
+          modelId,
+          model,
+          inHistorySystemUpdates,
+        }: ProviderReplayPolicyContext) => buildPolicy(modelId, model, inHistorySystemUpdates),
       };
-    case "native-anthropic-by-model":
-      return {
-        buildReplayPolicy: ({ modelId, model }: ProviderReplayPolicyContext) =>
-          buildNativeAnthropicReplayPolicyForModel(modelId, model),
-      };
+    }
     case "google-gemini":
       return {
         buildReplayPolicy: () => buildGoogleGeminiReplayPolicy(),
+        // Retained adapter for third-party callers of the legacy family hook.
         sanitizeReplayHistory: (ctx: ProviderSanitizeReplayHistoryContext) =>
           sanitizeGoogleGeminiReplayHistory(ctx),
+        sanitizeReplayHistoryAsync: (ctx: ProviderSanitizeReplayHistoryContextV2) =>
+          sanitizeGoogleGeminiReplayHistoryAsync(ctx),
         resolveReasoningOutputMode: (_ctx: ProviderReasoningOutputModeContext) =>
           resolveTaggedReasoningOutputMode(),
       };
@@ -398,16 +411,6 @@ export function buildProviderReplayFamilyHooks(
   }
   throw new Error("Unsupported provider replay family");
 }
-
-/** @deprecated Provider-owned replay hook shortcut; use local provider hooks instead. */
-export const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "openai-compatible",
-});
-
-/** @deprecated Anthropic provider-owned replay hook shortcut; use local provider hooks instead. */
-export const ANTHROPIC_BY_MODEL_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "anthropic-by-model",
-});
 
 /** @deprecated Anthropic provider-owned replay hook shortcut; use local provider hooks instead. */
 export const NATIVE_ANTHROPIC_REPLAY_HOOKS = buildProviderReplayFamilyHooks({

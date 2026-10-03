@@ -41,11 +41,7 @@ import { createMcpProbeFixture } from "./agent-bundle-mcp-probe.test-support.js"
 import { runWithSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import { startRequesterScopedMcpProofServer } from "./agent-bundle-mcp-requester.test-support.js";
 import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shared.js";
-import {
-  createBundleMcpJsonSchemaValidator,
-  createSessionMcpRuntime,
-  testing,
-} from "./agent-bundle-mcp-runtime.js";
+import { createSessionMcpRuntime, testing } from "./agent-bundle-mcp-runtime.js";
 import {
   createBundleMcpToolRuntime,
   materializeBundleMcpToolsForRun,
@@ -55,7 +51,7 @@ import {
 } from "./agent-bundle-mcp-tools.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
-import { updateMcpAppModelContext } from "./mcp-app-model-context.js";
+import { getMcpAppModelContext, updateMcpAppModelContext } from "./mcp-app-model-context.js";
 import { createMcpProofPluginRegistry } from "./mcp-connection-resolver.test-fixtures.js";
 import { fetchMcpAppView, getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
@@ -655,7 +651,13 @@ describe("session MCP runtime", () => {
         {
           name: "canonical",
           inputSchema: { type: "object" },
-          _meta: { ui: { resourceUri: "ui://demo/app", visibility: ["app"] } },
+          _meta: {
+            ui: { resourceUri: "ui://demo/app", visibility: ["app"] },
+            "openai/ui": {
+              entrypoints: [{ type: "global" }, { type: "settings", searchTerms: ["account"] }],
+            },
+            "openai/extensions": { "mentions/search": {} },
+          },
         },
         {
           name: "deprecated",
@@ -689,6 +691,10 @@ describe("session MCP runtime", () => {
             toolName: "canonical",
             uiResourceUri: "ui://demo/app",
             uiVisibility: ["app"],
+            appExtensions: {
+              entrypoints: [{ type: "global" }, { type: "settings", searchTerms: ["account"] }],
+              mentionSearch: true,
+            },
           }),
           expect.objectContaining({
             toolName: "deprecated",
@@ -701,63 +707,6 @@ describe("session MCP runtime", () => {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
-  });
-
-  it("reports malformed annotation formats at their original schema path", () => {
-    expect(() =>
-      createBundleMcpJsonSchemaValidator().getValidator({
-        $schema: "https://json-schema.org/draft/2020-12/schema",
-        type: "object",
-        properties: {
-          node: {
-            type: ["object", "null"],
-            // Deliberately malformed external schema must reach runtime shape validation.
-            $defs: { Leaf: { type: "string", format: 42 as never } },
-          },
-        },
-      }),
-    ).toThrow(
-      expect.objectContaining({
-        message: expect.stringContaining("<schema>.properties.node.$defs.Leaf.format"),
-        cause: expect.any(Error),
-      }),
-    );
-  });
-
-  it("attributes draft-2020-12 compiler failures to the MCP schema", () => {
-    let thrown: unknown;
-    try {
-      createBundleMcpJsonSchemaValidator().getValidator({
-        $schema: "https://json-schema.org/draft/2020-12/schema",
-        type: "object",
-        properties: {
-          value: { type: "string", pattern: "[" },
-        },
-      });
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toMatchObject({
-      message: expect.stringContaining(
-        "Invalid MCP draft-2020-12 JSON Schema: Invalid regular expression",
-      ),
-      cause: expect.any(Error),
-    });
-  });
-
-  it("compiles draft-2020-12 patterns with redundant unicode-invalid escapes", () => {
-    const validator = createBundleMcpJsonSchemaValidator().getValidator({
-      $schema: "https://json-schema.org/draft/2020-12/schema",
-      type: "object",
-      properties: {
-        url: { type: "string", pattern: "^https\\:\\/\\/" },
-      },
-      required: ["url"],
-      additionalProperties: false,
-    });
-
-    expect(validator({ url: "https://example.com/path" }).valid).toBe(true);
-    expect(validator({ url: "http://example.com" }).valid).toBe(false);
   });
 
   it.each([
@@ -2096,13 +2045,10 @@ describe("session MCP runtime", () => {
       cfg: unopenedMcpConfig,
     });
     const release = runtime.acquireLease?.();
-    updateMcpAppModelContext(
-      runtime,
-      {},
-      {
-        content: [{ type: "text", text: "clear on reset" }],
-      },
-    );
+    const contextOwner = {};
+    updateMcpAppModelContext(runtime, contextOwner, {
+      content: [{ type: "text", text: "clear on reset" }],
+    });
 
     await expect(
       retireSessionMcpRuntime({
@@ -2113,7 +2059,7 @@ describe("session MCP runtime", () => {
       }),
     ).resolves.toBe(true);
     expect(testing.getCachedSessionIds()).toContain("session-view-reset");
-    expect(runtime.pendingMcpAppModelContext).toBeUndefined();
+    expect(getMcpAppModelContext(runtime, contextOwner)).toBeNull();
     expect(() =>
       updateMcpAppModelContext(
         runtime,

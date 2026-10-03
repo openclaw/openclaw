@@ -6,6 +6,9 @@ import type {
 } from "./openclaw-state-read.types.js";
 
 export function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
+  if (command.type === "sessionState.versions" || command.type === "sessionState.events") {
+    return structuredClone(command);
+  }
   if (isWorkspaceJournalReadCommand(command)) {
     return command.type === "placementJournals.owners"
       ? { ...command }
@@ -124,6 +127,7 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
   }
   if (
     command.type === "operatorApprovals.history" ||
+    command.type === "diagnostic.latest" ||
     command.type === "operatorApprovals.listCronGrants"
   ) {
     return structuredClone(command);
@@ -201,10 +205,16 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
 }
 
 function commandBytes(command: OpenClawStateReadRequest["command"]): number {
+  if (command.type === "sessionState.versions" || command.type === "sessionState.events") {
+    return Buffer.byteLength(JSON.stringify(command), "utf8");
+  }
   if (isWorkspaceJournalReadCommand(command)) {
     return Buffer.byteLength(JSON.stringify(command), "utf8");
   }
   let bytes = Buffer.byteLength(command.type, "utf8");
+  if (command.type === "diagnostic.latest") {
+    return bytes + Buffer.byteLength(command.input.scope, "utf8") + 16;
+  }
   if (command.type === "cron.activeReceiptOwners") {
     return bytes + Buffer.byteLength(command.agentId, "utf8");
   }
@@ -501,7 +511,10 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       (input.executionLimit === undefined ? 0 : 8)
     );
   }
-  if (command.type === "workers.placementProjection") {
+  if (
+    command.type === "workers.placementProjection" ||
+    command.type === "workers.placementPendingResults"
+  ) {
     return Buffer.byteLength(JSON.stringify(command), "utf8");
   }
   if (command.type === "workerEnvironments.pruneCandidates") {

@@ -221,7 +221,7 @@ it.each([
     );
     expect(result.details).toMatchObject({ status: "error", error });
     proof.expectUnadopted();
-    expect(listSessionPendingInputs(proof.scope)).toEqual({ items: [], total: 0 });
+    expect(await listSessionPendingInputs(proof.scope)).toEqual({ items: [], total: 0 });
     expect(listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual([]);
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(announce).not.toHaveBeenCalled();
@@ -255,7 +255,7 @@ it("rejects parent authority revoked while durable input preparation awaits", as
     sending = proof.send(proof.parent, parentAuthority.signal);
     await prepared.promise;
     expect(preparation).toHaveBeenCalledTimes(1);
-    expect(listSessionPendingInputs(proof.scope)).toMatchObject({
+    expect(await listSessionPendingInputs(proof.scope)).toMatchObject({
       total: 1,
       items: [{ runId: proof.runId, state: "queued" }],
     });
@@ -268,7 +268,7 @@ it("rejects parent authority revoked while durable input preparation awaits", as
       error: expect.stringContaining("agent tool caller authority is no longer active"),
     });
     proof.expectUnadopted();
-    expect(listSessionPendingInputs(proof.scope)).toMatchObject({
+    expect(await listSessionPendingInputs(proof.scope)).toMatchObject({
       total: 1,
       items: [{ runId: proof.runId, state: "cancelled" }],
     });
@@ -330,7 +330,7 @@ it("fences a cancelled successor after adoption before queued input consumption"
     await adopted.promise;
     expect(subagentRuns.has(proof.previousRunId)).toBe(false);
     expect(subagentRuns.get(proof.runId)).toMatchObject({ taskRunId: proof.previousRunId });
-    expect(listSessionPendingInputs(proof.scope)).toMatchObject({
+    expect(await listSessionPendingInputs(proof.scope)).toMatchObject({
       total: 1,
       items: [{ runId: proof.runId, state: "queued" }],
     });
@@ -356,7 +356,7 @@ it("fences a cancelled successor after adoption before queued input consumption"
       expect.anything(),
     );
     // Custody remains unconsumed even though execution cleanup records interruption.
-    expect(listSessionPendingInputs(proof.scope)).toMatchObject({
+    expect(await listSessionPendingInputs(proof.scope)).toMatchObject({
       total: 1,
       items: [{ runId: proof.runId, state: "interrupted" }],
     });

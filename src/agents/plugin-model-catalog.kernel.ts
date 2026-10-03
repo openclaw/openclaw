@@ -1,12 +1,59 @@
 import type { DatabaseSync } from "node:sqlite";
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { OpenClawAgentDatabaseReadOnlyScope } from "../state/openclaw-agent-db-readonly-scope.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { stripPluginModelCatalogCredentials } from "./plugin-model-catalog-repair.js";
+import {
+  createPluginModelCatalogReadOperations,
+  type PersistedPluginModelCatalog,
+} from "./plugin-model-catalog.read-operation.js";
+
+export type { PersistedPluginModelCatalog } from "./plugin-model-catalog.read-operation.js";
 
 export const PLUGIN_MODEL_CATALOG_CACHE_SCOPE = "plugin-model-catalog-v1";
 export const PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE = "plugin-model-catalog-migration-v1";
 
 type PluginModelCatalogDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
+
+export function readPluginModelCatalogEntries(
+  options: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
+  scope: string,
+  pluginIds?: readonly string[],
+): PersistedPluginModelCatalog[] {
+  if (pluginIds?.length === 0) {
+    return [];
+  }
+  const allowed = pluginIds && new Set(pluginIds);
+  const result = withOpenClawAgentDatabaseReadOnly(({ db }) => {
+    const query = getNodeSqliteKysely<PluginModelCatalogDatabase>(db)
+      .selectFrom("cache_entries")
+      .select(["key", "value_json"])
+      .where("scope", "=", scope)
+      .orderBy("key");
+    return executeSqliteQuerySync(db, query).rows.flatMap((row) =>
+      row.value_json === null || (allowed && !allowed.has(row.key))
+        ? []
+        : [{ pluginId: row.key, contents: row.value_json }],
+    );
+  }, options);
+  return result.found ? result.value : [];
+}
+
+export const pluginModelCatalogReadOperations = createPluginModelCatalogReadOperations(
+  (input, context) => {
+    const scope = new OpenClawAgentDatabaseReadOnlyScope();
+    const options = { ...context, agentId: normalizeAgentId(input.agentId) };
+    try {
+      return scope.run(options, () =>
+        readPluginModelCatalogEntries(options, PLUGIN_MODEL_CATALOG_CACHE_SCOPE, input.pluginIds),
+      );
+    } finally {
+      scope.close();
+    }
+  },
+);
 
 /** The admitted worker or Doctor transaction owns the connection and commit. */
 export function replacePluginModelCatalogEntriesInDatabase(params: {

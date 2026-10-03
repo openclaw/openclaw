@@ -24,7 +24,6 @@ import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/s
 import { isSecretEgressProxyActive } from "../secrets/egress-proxy/registry.js";
 import type { SecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
@@ -36,7 +35,7 @@ import {
   createExecRequestPreparation,
   type ExecToolArgs,
   resolveExecPreparedRunEnvironment,
-  resolveNotifyOnExitEmptySuccess,
+  resolveExecNotificationDefaults,
   resolvePreparedExecEnvironment,
 } from "./bash-tools.exec-request-preparation.js";
 import {
@@ -59,7 +58,6 @@ import {
   attachExecApprovalReview,
   buildExecForegroundResult,
   createExecHostResolver,
-  createExecProcessSettlement,
   resolveExecElevatedMode,
   resolveExecReviewerDefaults,
 } from "./bash-tools.exec-support.js";
@@ -139,20 +137,19 @@ export function createExecTool(
       `exec: interpreter/runtime binaries in safeBins (${unprofiledInterpreterSafeBins.join(", ")}) are unsafe without explicit hardened profiles; prefer allowlist entries`,
     );
   }
-  const notifyOnExit = defaults?.notifyOnExit !== false;
-  const backgroundFollowUp = notifyOnExit
-    ? BACKGROUND_EXEC_FOLLOW_UP
-    : `${BACKGROUND_EXEC_FOLLOW_UP} ${EXEC_MANUAL_COLLECTION_FOLLOW_UP}`;
-  const notifyOnExitEmptySuccess = resolveNotifyOnExitEmptySuccess(defaults);
-  const notifySessionKey = normalizeOptionalString(
-    defaults?.notifySessionKey ?? defaults?.runSessionKey ?? defaults?.sessionKey,
-  );
-  const notifyDeliveryContext = normalizeDeliveryContext({
-    channel: defaults?.messageProvider,
-    to: defaults?.currentChannelId,
-    accountId: defaults?.accountId,
-    threadId: defaults?.currentThreadTs,
-  });
+  const {
+    notifyOnExit,
+    notifyOnExitEmptySuccess,
+    notifySessionKey,
+    resolveSubagentSession,
+    notifyDeliveryContext,
+  } = resolveExecNotificationDefaults(defaults);
+  const backgroundFollowUp =
+    notifyOnExit && notifyOnExitEmptySuccess
+      ? `Completion will wake this conversation automatically. If only waiting remains, report that the job is running and end this turn; do not keep polling. ${BACKGROUND_EXEC_FOLLOW_UP}`
+      : notifyOnExit
+        ? `${BACKGROUND_EXEC_FOLLOW_UP} Completion wakes this conversation on output or failure; empty successful jobs are silent (tools.exec.notifyOnExitEmptySuccess=false). Arrange continuation or collect the result before ending the turn if empty success matters.`
+        : `${BACKGROUND_EXEC_FOLLOW_UP} ${EXEC_MANUAL_COLLECTION_FOLLOW_UP}`;
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
@@ -405,7 +402,7 @@ export function createExecTool(
         });
       }
       let run: ExecProcessHandle;
-      const settlement = createExecProcessSettlement();
+      let settled = false;
       let effectiveTimeout: number;
       try {
         if (elevatedRequested) {
@@ -577,6 +574,9 @@ export function createExecTool(
           });
         }
 
+        const subagentSession =
+          notifyOnExit && allowBackground ? await resolveSubagentSession() : false;
+        assertSourceActive();
         run = await runExecProcess({
           command: params.command,
           execCommand: execCommandOverride,
@@ -593,6 +593,7 @@ export function createExecTool(
           pendingMaxOutput: DEFAULT_PENDING_MAX_OUTPUT,
           cleanupMs,
           notifyOnExit,
+          subagentSession,
           notifyOnExitEmptySuccess,
           scopeKey: defaults?.scopeKey,
           sessionKey: notifySessionKey,
@@ -605,7 +606,9 @@ export function createExecTool(
           onUpdate,
           beforeSpawn: gatewayApproval?.revalidateBeforeExecution,
           assertCurrent: gatewayApproval?.assertCurrent,
-          onSettledBeforeNotify: settlement.settle,
+          onSettledBeforeNotify: () => {
+            settled = true;
+          },
         });
         discardPreparedSandboxWorkdir = null;
       } catch (error) {
@@ -670,7 +673,7 @@ export function createExecTool(
         ]),
       );
       const onYieldNow = () => {
-        if (yielded || toolAborted || run.session.finalizing || settlement.outcome) {
+        if (yielded || toolAborted || run.session.finalizing || settled) {
           return;
         }
         yielded = true;

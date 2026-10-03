@@ -12,7 +12,6 @@ import {
 } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { writeRestartSentinel } from "../infra/restart-sentinel.js";
 import { currentUpdateCheckLifecycle } from "../infra/update-check-lifecycle.js";
 import type { PluginHookGatewayContext } from "../plugins/hook-gateway.types.js";
 import type { PluginHookHandlerMap } from "../plugins/hook-types.js";
@@ -252,7 +251,6 @@ const {
   startGatewayPostAttachRuntime: startGatewayPostAttachRuntimeImpl,
   startGatewaySidecars: startGatewaySidecarsImpl,
 } = await import("./server-startup-post-attach.js");
-const sentinelStartup = await import("./server-startup-restart-sentinel.js");
 const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } = await import("./methods/core-method-policy.js");
 
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntimeImpl>[0];
@@ -1110,19 +1108,6 @@ describe("startGatewayPostAttachRuntime", () => {
     });
   });
 
-  it("refreshes only an existing restart sentinel", async () => {
-    await expect(sentinelStartup.refreshLatestUpdateRestartSentinelIfPresent()).resolves.toBeNull();
-    expect(hoisted.refreshLatestUpdateRestartSentinel).not.toHaveBeenCalled();
-
-    const sentinel = { kind: "update", status: "ok", ts: 1 } as const;
-    await writeRestartSentinel(sentinel, testState.env);
-    hoisted.refreshLatestUpdateRestartSentinel.mockResolvedValue(sentinel);
-    await expect(sentinelStartup.refreshLatestUpdateRestartSentinelIfPresent()).resolves.toBe(
-      sentinel,
-    );
-    expect(hoisted.refreshLatestUpdateRestartSentinel).toHaveBeenCalledOnce();
-  });
-
   it("publishes Control UI cleanup before pending plugin startup", async () => {
     const { promise: pluginStartup, resolve: finishPluginStartup } = createDeferred();
     const buildController = new AbortController();
@@ -1390,7 +1375,11 @@ describe("startGatewayPostAttachRuntime", () => {
         expect.any(Object),
       );
     expect(log.info).toHaveBeenCalledWith("http server listening (1 plugin: replacement)");
-    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.warn.mock.calls).toEqual([
+      [
+        "Older local CLI/SDK versions can bypass Gateway state mutation routing. Use matching CLI/SDK and Gateway versions; legacy direct writers remain supported.",
+      ],
+    ]);
   });
 
   it("keeps transcripts auto-start alive when Gmail post-ready sidecars stop", async () => {
@@ -1947,9 +1936,10 @@ describe("startGatewayPostAttachRuntime", () => {
       const registry = createEmptyPluginRegistry();
       const service = { id: "admission", start: vi.fn(), stop: vi.fn() };
       registry.services.push(createServiceRegistration(service, { pluginId: "admission" }));
+      const scheduler = createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined);
       const replacementHandle =
         transition === "commit" || transition === "recovery"
-          ? await actualServices.startPluginServices({ registry, config: {} })
+          ? await actualServices.startPluginServices({ registry, config: {}, scheduler })
           : null;
       hoisted.startPluginServices.mockImplementationOnce(actualServices.startPluginServices);
       const owner = createPluginServicesOwner();
@@ -1963,6 +1953,7 @@ describe("startGatewayPostAttachRuntime", () => {
       const trace = createStartupTraceRecorder();
       const runtime = await startGatewayPostAttachRuntime(
         createPostAttachParams({
+          scheduler,
           sidecarStartup: "defer",
           pluginRegistry: registry,
           pluginRuntimeClaim: startupClaim,
@@ -2013,9 +2004,7 @@ describe("startGatewayPostAttachRuntime", () => {
       } finally {
         reservation?.reject();
         await runtime.startupSettled;
-        await owner.currentServices()?.stop();
-        await replacementHandle?.stop();
-        for (const [handle] of onPluginServices.mock.calls) {
+        for (const handle of new Set([replacementHandle, ...onPluginServices.mock.calls.flat()])) {
           await handle?.stop();
         }
       }

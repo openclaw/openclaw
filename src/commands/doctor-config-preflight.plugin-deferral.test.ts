@@ -635,7 +635,7 @@ describe("configured plugin migration deferral", () => {
             { legacyBinding: source },
             entry === "stale-candidate" ? [pluginRoot] : undefined,
           ),
-          agents: { ownership: "explicit", list: [{ id: "alpha" }, { id: "beta" }] },
+          agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
           ...(entry === "stale-candidate" ? { legacyFixture: source } : {}),
         };
         if (entry === "stale-candidate") {

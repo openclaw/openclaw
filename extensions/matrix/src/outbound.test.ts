@@ -96,6 +96,10 @@ describe("matrixOutbound cfg threading", () => {
     expect(chunkTextForOutbound("😀😀", 1.5)).toEqual(["😀", "😀"]);
   });
 
+  it.each([0, -1])("keeps text intact when chunking is disabled with limit %s", (limit) => {
+    expect(chunkTextForOutbound("hello world  ", limit)).toEqual(["hello world  "]);
+  });
+
   it("preserves Matrix compatibility behavior", () => {
     expect(chunkTextForOutbound("", 5)).toEqual([""]);
     expect(chunkTextForOutbound("", 0.5)).toEqual([""]);

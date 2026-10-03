@@ -5,6 +5,8 @@ import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunOwner,
 } from "../../agents/embedded-agent-runner/runs.js";
+import { resolveSessionPlacementTurnSettlementAssertion } from "../../agents/session-placement-forced-terminal-settlement.js";
+import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { isReplyRunEvidenceStale } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -278,12 +280,30 @@ describe("cloud worker run ownership", () => {
         owner: { kind: "worker" as const, environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
       };
       const firstClaim = await placements.claimTurn({ ...claimInput, claimId: "first-claim" });
-      const first = await createWorkerTurnRunOwner({
-        placements,
-        claim: firstClaim,
-        turn: turn(runId),
-        sessionKey: SESSION_KEY,
-      });
+      let assertSettlementCurrent: (() => void) | undefined;
+      const first = await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: SESSION_KEY,
+          embeddedRunToolAuthorityBinding: () => {
+            assertSettlementCurrent = resolveSessionPlacementTurnSettlementAssertion();
+            return {
+              source: "reply",
+              project: () => "worker-turn-authority",
+              assertActive: () => {},
+            };
+          },
+        },
+        () =>
+          createWorkerTurnRunOwner({
+            placements,
+            claim: firstClaim,
+            turn: turn(runId),
+            sessionKey: SESSION_KEY,
+          }),
+      );
+      expect(assertSettlementCurrent).toBeTypeOf("function");
+      assertSettlementCurrent?.();
       const identity: WorkerConnectionIdentity = {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
@@ -327,6 +347,7 @@ describe("cloud worker run ownership", () => {
           expect(captureWorkerTurnLiveEventOwner(identity)).not.toBe(eventOwner);
         } else {
           await placements.releaseTurn(firstClaim);
+          expect(() => assertSettlementCurrent?.()).toThrow("settlement is closed");
           if (closure === "same-claim readmission") {
             await placements.claimTurn({ ...claimInput, claimId: firstClaim.claimId });
           } else if (closure === "replacement") {

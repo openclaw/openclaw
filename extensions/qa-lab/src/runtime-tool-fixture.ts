@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QaSuiteInfraError, QaSuiteScenarioSkipError } from "./errors.js";
 import { resolveQaLiveTurnTimeoutMs as liveTurnTimeoutMs } from "./live-timeout.js";
+import { readQaNativeWorkspaceBehaviorId } from "./native-workspace-behavior.js";
 import {
   qaMockRequestCursorUrl,
   qaMockRequestsAfterUrl,
@@ -25,6 +26,10 @@ import {
   type QaRuntimeToolCoverageMetadata,
   readRuntimeToolCoverageMetadata,
 } from "./runtime-tool-metadata.js";
+import {
+  formatCodexNativeWorkspaceDetails,
+  runCodexNativeWorkspaceFixture,
+} from "./runtime-tool-native-workspace.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
@@ -453,28 +458,6 @@ function formatExpectedUnavailableDetails(toolName: string, tools: Set<string>) 
   ].join("\n");
 }
 
-function formatCodexNativeWorkspaceDetails(params: {
-  toolName: string;
-  tools: Set<string>;
-  reason?: string;
-  happyRequest?: QaRuntimeToolFixtureRequest;
-  failureRequest?: QaRuntimeToolFixtureRequest;
-}) {
-  return [
-    `codex-native-workspace ${params.toolName}: OpenClaw dynamic exposure is intentionally omitted because Codex owns this workspace operation natively`,
-    params.reason ? `reason: ${params.reason}` : undefined,
-    `available OpenClaw dynamic tools: ${[...params.tools].toSorted().join(", ")}`,
-    params.happyRequest
-      ? `${params.toolName} mock provider happy planned args (diagnostic only): ${formatPlannedToolArgs(params.happyRequest.plannedToolArgs)}`
-      : undefined,
-    params.failureRequest
-      ? `${params.toolName} mock provider failure planned args (diagnostic only): ${formatPlannedToolArgs(params.failureRequest.plannedToolArgs)}`
-      : undefined,
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
 function formatReportOnlyMockDetails(params: {
   toolName: string;
   happyRequest: QaRuntimeToolFixtureRequest;
@@ -527,21 +510,32 @@ export async function runRuntimeToolFixture(
   if (config.ensureImageGeneration === true) {
     await deps.ensureImageGenerationConfigured(env);
   }
+  const metadata = readRuntimeToolCoverageMetadata({ config });
+  const forcedCodexNativeWorkspace =
+    env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME === "codex" &&
+    metadata.expectedLayer === "codex-native-workspace";
+
+  const nativeWorkspaceBehaviorId = forcedCodexNativeWorkspace
+    ? readQaNativeWorkspaceBehaviorId(config.nativeWorkspaceBehavior)
+    : undefined;
   await fs.writeFile(
     path.join(env.gateway.workspaceDir, "runtime-tool-fixture-edit.txt"),
     "before edit\n",
     "utf8",
   );
 
+  const stableSessionKeyPrefix = nativeWorkspaceBehaviorId
+    ? undefined
+    : `agent:qa:runtime-tool:${toolName}`;
   const happySessionKey = await deps.createSession(
     env,
     `Runtime tool fixture: ${toolName} happy`,
-    `agent:qa:runtime-tool:${toolName}:happy`,
+    stableSessionKeyPrefix ? `${stableSessionKeyPrefix}:happy` : undefined,
   );
   const failureSessionKey = await deps.createSession(
     env,
     `Runtime tool fixture: ${toolName} failure`,
-    `agent:qa:runtime-tool:${toolName}:failure`,
+    stableSessionKeyPrefix ? `${stableSessionKeyPrefix}:failure` : undefined,
   );
   const sessionKeys = [happySessionKey, failureSessionKey] as const;
   const withSessionDetails = (details: string) =>
@@ -564,12 +558,23 @@ export async function runRuntimeToolFixture(
     }
   };
   const tools = await runFixtureOperation(() => deps.readEffectiveTools(env, happySessionKey));
-  const metadata = readRuntimeToolCoverageMetadata({
-    config,
-  });
-  const forcedCodexNativeWorkspace =
-    env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME === "codex" &&
-    metadata.expectedLayer === "codex-native-workspace";
+  if (forcedCodexNativeWorkspace) {
+    const nativeDetails = await runCodexNativeWorkspaceFixture({
+      env,
+      behaviorId: nativeWorkspaceBehaviorId,
+      required: metadata.required,
+      happySessionKey,
+      failureSessionKey,
+      runAgentPrompt: deps.runAgentPrompt,
+      readEvidence: (sessionKey, nativeToolName) =>
+        readLiveToolEvidence({ env, sessionKey, toolName: nativeToolName }),
+      fixtureError,
+      failFixture,
+    });
+    if (nativeDetails) {
+      return withSessionDetails(nativeDetails);
+    }
+  }
   // Effective tool discovery may advertise the native name. The forced
   // runtime and scenario owner, not inventory absence, decide who executes it.
   const dynamicExposureIntentionallyExcluded = forcedCodexNativeWorkspace && !tools.has(toolName);

@@ -14,14 +14,13 @@ import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-loc
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { committedConfigFiles } from "../commands/committed-config.test-support.js";
 import { createConfigIO as createRealConfigIO } from "../config/io.factory.js";
-import { coerceConfig } from "../config/io.read-helpers.js";
 import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { materializeRuntimeConfig } from "../config/materialize.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { WizardCancelledError, type WizardPrompter, type WizardSelectParams } from "./prompts.js";
 import { runSetupWizard } from "./setup.js";
 import {
@@ -468,7 +467,7 @@ describe("runSetupWizard", () => {
   }
 
   function configSnapshot(config: OpenClawConfig, exists = true): ConfigFileSnapshot {
-    const sourceConfig = coerceConfig(migratePersistedImplicitMainRoster(config).config);
+    const sourceConfig = createCanonicalAgentConfigFixture(config).config;
     return createConfigFileSnapshot({
       path: "/tmp/.openclaw/openclaw.json",
       exists,

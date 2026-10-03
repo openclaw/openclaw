@@ -437,6 +437,7 @@ type PromptAssemblyContext = {
 export async function prepareEmbeddedAttemptPromptContext(input: {
   sessionVersion?: number;
   appendOnlyRuntimeContext?: boolean;
+  inHistorySystemUpdates?: boolean;
   attempt: PromptContextAttempt;
   capabilityToolNames: ReadonlySet<string>;
   boundaryTimezone?: string;
@@ -575,6 +576,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   const runtimeContextMessageForCurrentTurn = buildRuntimeContextCustomMessage(
     runtimeContextForHook,
     contextFragments,
+    input.inHistorySystemUpdates,
   );
   const messagesForCurrentPrompt = runtimeContextMessageForCurrentTurn
     ? [...sessionMessages, runtimeContextMessageForCurrentTurn]
@@ -582,6 +584,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   const boundaryInput = {
     sessionVersion: input.isRawModelRun ? undefined : input.sessionVersion,
     appendOnlyRuntimeContext: input.appendOnlyRuntimeContext,
+    inHistorySystemUpdates: input.inHistorySystemUpdates,
     prompt: promptForModel,
     ...(input.boundaryTimezone ? { timezone: input.boundaryTimezone } : {}),
     ...(input.includeBoundaryTimestamp ? {} : { includeTimestamp: false }),

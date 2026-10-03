@@ -226,10 +226,6 @@ vi.mock("../../../runtime.js", () => ({
   },
 }));
 
-vi.mock("../../../utils/delivery-context.shared.js", () => ({
-  normalizeDeliveryContext: (origin: unknown) => origin ?? "agent",
-}));
-
 vi.mock("../announce/subagent-announce.js", () => ({
   captureSubagentCompletionReply: vi.fn(async () => undefined),
   runSubagentAnnounceFlow: vi.fn(async () => "retryable" as const),
@@ -251,6 +247,8 @@ vi.mock("./subagent-registry-helpers.js", () => ({
   resolveAnnounceRetryDelayMs: (retryCount: number) =>
     Math.min(1_000 * 2 ** Math.max(0, retryCount - 1), 8_000),
   safeRemoveAttachmentsDir: helperMocks.safeRemoveAttachmentsDir,
+  shouldRemoveSubagentAttachments: (entry: SubagentRunRecord, cleanup = entry.cleanup) =>
+    cleanup === "delete" || !entry.retainAttachmentsOnKeep,
   updateSubagentArchiveAtMs: () => false,
 }));
 
@@ -3346,7 +3344,7 @@ describe("subagent registry lifecycle hardening", () => {
     expect(finalPostimage?.delivery?.announcedAt).toBeUndefined();
   });
 
-  it("retires a stale cleanup before deleting a newer session generation", async () => {
+  it("finishes old cleanup without deleting a newer session generation", async () => {
     const entry = createRunEntry({
       cleanup: "delete",
       expectsCompletionMessage: false,
@@ -3354,11 +3352,10 @@ describe("subagent registry lifecycle hardening", () => {
       generation: 1,
     });
     const runs = new Map([[entry.runId, entry]]);
-    const retireSupersededRun = vi.fn(async (runId: string) => {
-      runs.delete(runId);
-    });
+    const retireSupersededRun = vi.fn(async () => {});
     const controller = createLifecycleController({ entry, runs, retireSupersededRun });
 
+    const join = observeRootWork();
     expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
     const newer = createRunEntry({
       runId: "run-2",
@@ -3368,12 +3365,12 @@ describe("subagent registry lifecycle hardening", () => {
     });
     runs.set(newer.runId, newer);
 
-    await waitForLifecycleState(() =>
-      expect(retireSupersededRun).toHaveBeenCalledWith(
-        entry.runId,
-        expect.objectContaining({ runId: entry.runId, childSessionKey: entry.childSessionKey }),
-      ),
-    );
+    await join();
+    expect(retireSupersededRun).not.toHaveBeenCalled();
+    expect(readLifecycleRun(entry)).toMatchObject({
+      cleanupCompletedAt: expect.any(Number),
+      execution: { suppressSessionEffects: true },
+    });
     expect(runs.get(newer.runId)).toBe(newer);
     expect(gatewayMocks.callGateway).not.toHaveBeenCalledWith(
       expect.objectContaining({ method: "sessions.delete" }),

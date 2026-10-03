@@ -1,17 +1,17 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationGateway } from "../../app/gateway.ts";
+import { readSystemInfo } from "../../lib/system-info.ts";
 
 export async function discoverGatewayName(
-  client: GatewayBrowserClient | null,
-  methodAdvertised: boolean,
+  gateway: ApplicationGateway | null,
+  available: boolean,
   signal: AbortSignal,
 ): Promise<string> {
-  if (!client || !methodAdvertised) {
+  if (!gateway || !available) {
     return "";
   }
   try {
-    const result = await client.request<SystemInfoResult>("system.info", {}, { signal });
+    const { value: result } = await readSystemInfo(gateway, signal, { fresh: true });
     return (
       normalizeOptionalString(result.machineName) ??
       normalizeOptionalString(result.hostname)?.split(".", 1)[0] ??

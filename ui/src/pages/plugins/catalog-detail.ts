@@ -17,6 +17,7 @@ import {
   renderPluginCapabilitySection,
   renderPluginDeclaredCapabilities,
   renderPluginMetadata,
+  renderPluginMcpServers,
   renderPluginPublisher,
   renderPluginAskAction,
 } from "./overview.ts";
@@ -106,11 +107,7 @@ function renderDetail(result: PluginDiscoveryDetailResult, props: PluginCatalogD
       (detail.contracts?.tools ?? []).map((name) => ({ name })),
       icons.wrench,
     )}
-    ${renderPluginCapabilitySection(
-      t("pluginsPage.detailMcpServers"),
-      detail.mcpServers.map((name) => ({ name })),
-      icons.plug,
-    )}`,
+    ${renderPluginMcpServers(detail.mcpServers, detail.mcpServerDetails)}`,
     readme: detail.readme ? renderPluginReadme(detail.readme) : undefined,
   });
 }
@@ -142,7 +139,7 @@ export function renderPluginCatalogDetail(props: PluginCatalogDetailProps): Temp
                 </div>
               </div>
               <div class="plugin-catalog-detail__content">
-                <div class="plugin-catalog-detail__panel" aria-hidden="true">
+                <div class="plugin-catalog-detail__main" aria-hidden="true">
                   <div class="plugin-catalog-detail__loading-card skeleton"></div>
                   <div class="plugin-catalog-detail__loading-card skeleton"></div>
                 </div>

@@ -285,7 +285,7 @@ export async function admitSubagentCompletionDelivery(params: {
     (rows) => {
       const current = currentCompletionOwner(rows, expected);
       if (
-        [...getSubagentRunsForChildSession(current.childSessionKey)].some(
+        [...getSubagentRunsForChildSession(current.childSessionKey, current.childAgentId)].some(
           (candidate) => compareSubagentRunGeneration(candidate, current) > 0,
         )
       ) {
@@ -585,7 +585,7 @@ export async function reconcileRetiredSubagentCancellation(
       const current = currentCompletionOwner(rows, expected);
       if (
         retiredCancellationEndedAt(current, now) !== endedAt ||
-        [...getSubagentRunsForChildSession(current.childSessionKey)].some(
+        [...getSubagentRunsForChildSession(current.childSessionKey, current.childAgentId)].some(
           (candidate) => compareSubagentRunGeneration(candidate, current) > 0,
         )
       ) {

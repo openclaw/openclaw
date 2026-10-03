@@ -56,6 +56,8 @@ const MISSING_TOOL_RESULT_ERROR =
   "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.";
 const NATIVE_PATCH_REJECTION_RE =
   /^\s*patch rejected:\s*writing outside of the project;\s*rejected by user approval settings\s*$/iu;
+const NATIVE_COMMAND_WORKSPACE_REJECTION_RE =
+  /^\s*command rejected:\s*writing outside of the project;\s*rejected by user approval settings\s*$/iu;
 const CODE_MODE_RESULT_RE =
   /^\s*Script (completed|failed)\s*\r?\nWall time\s+\d+(?:\.\d+)?\s+seconds\s*\r?\nOutput:\s*([\s\S]*?)\s*$/iu;
 const MAX_TOOL_APPROVAL_REVIEWS = 16;
@@ -318,15 +320,35 @@ export class CodexToolTranscriptProjection {
     );
     if (!result) {
       if (!this.namesById.has(callId) && rawCall) {
-        // Code-mode calls can have no matching command item. Keep the outer
-        // response under its own call ID, never under a nested process ID.
-        this.recordToolCall(rawCall);
+        const isCommandFallback =
+          type === "function_call_output" && rawCall.name === "exec_command";
+        const name = isCommandFallback ? "bash" : rawCall.name;
+        let args = rawCall.arguments;
+        if (isCommandFallback && isJsonObject(args) && typeof args.arguments === "string") {
+          try {
+            const parsed: unknown = JSON.parse(args.arguments);
+            if (isJsonObject(parsed)) {
+              const cwd = readString(parsed, "workdir") ?? readString(parsed, "cwd");
+              args = {
+                command: readString(parsed, "cmd") ?? readString(parsed, "command"),
+                ...(cwd !== undefined ? { cwd } : {}),
+              };
+            }
+          } catch {
+            // Retain malformed arguments as evidence in the fallback transcript.
+          }
+        }
+        const commandWorkspaceRejected =
+          isCommandFallback && NATIVE_COMMAND_WORKSPACE_REJECTION_RE.test(text);
+        // Calls can fail before a native item exists. Keep the response under
+        // its own call ID, never under a nested code-mode process ID.
+        this.recordToolCall({ ...rawCall, name, arguments: args });
         this.recordToolResult({
           id: callId,
-          name: rawCall.name,
+          name,
           text,
-          isError: execution?.[1]?.toLowerCase() === "failed",
-          ...(!execution ? { outcomeUnknown: true } : {}),
+          isError: commandWorkspaceRejected || execution?.[1]?.toLowerCase() === "failed",
+          ...(!execution && !commandWorkspaceRejected ? { outcomeUnknown: true } : {}),
         });
       } else if (
         this.namesById.get(callId) === "apply_patch" &&

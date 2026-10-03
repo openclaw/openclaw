@@ -5,6 +5,7 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
+import { saveCronJobsStore } from "../cron/store.js";
 import { cronStoreKey } from "../cron/store/key.js";
 import { loadCronRows } from "../cron/store/row-codec.js";
 import {
@@ -266,11 +267,7 @@ describe("Doctor workspace persistence", () => {
             });
             const before = await readConfigFileSnapshot();
             expect(before.valid).toBe(false);
-            if (legacyId === "main") {
-              expect(resolveAgentWorkspaceDir(before.sourceConfig, "main")).toBe(workspace);
-            } else {
-              expect(before.sourceConfig.agents?.list?.[0]?.id).toBe(legacyId);
-            }
+            expect(before.sourceConfig.agents?.list?.[0]?.id).toBe(legacyId);
 
             const ctx = await prepareDoctorContext(configPath);
             await runInitialConfigWriteHealth(ctx);
@@ -369,24 +366,26 @@ describe("Doctor workspace persistence", () => {
             plugins: { enabled: false },
           });
           const storePath = path.join(stateDir, "cron", "jobs.json");
-          await fs.mkdir(path.dirname(storePath), { recursive: true });
-          await fs.writeFile(
-            storePath,
-            JSON.stringify({
-              version: 1,
-              jobs: [
-                makeCronJob({
-                  id: "retained-owner",
-                  enabled: false,
-                  payload: {
-                    kind: "agentTurn",
-                    message: "Do not run this disabled job",
-                    model: "codex/gpt-5.6-sol",
-                  },
-                }),
-              ],
-            }),
-          );
+          await saveCronJobsStore(storePath, {
+            version: 1,
+            jobs: [
+              makeCronJob({
+                id: "retained-owner",
+                enabled: false,
+                payload: {
+                  kind: "agentTurn",
+                  message: "Do not run this disabled job",
+                  model: "codex/gpt-5.6-sol",
+                },
+              }),
+            ],
+          });
+          const seededRows = loadCronRows(openOpenClawStateDatabase().db, cronStoreKey(storePath));
+          expect(seededRows).toHaveLength(1);
+          expect(seededRows[0]?.agent_id).toBeNull();
+          const seededJob: unknown = JSON.parse(seededRows[0]!.job_json);
+          expect(seededJob).not.toHaveProperty("agentId");
+          expect(seededJob).toMatchObject({ payload: { model: "codex/gpt-5.6-sol" } });
 
           let firstPolicies: unknown;
           let firstRows: unknown;

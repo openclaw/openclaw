@@ -2,8 +2,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
-import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 
 const hoisted = vi.hoisted(() => ({
   listSessionEntriesMock: vi.fn<
@@ -331,7 +331,7 @@ describe("resolveSessionKeyForRequest", () => {
       main: { sessionId: "legacy-main-session", updatedAt: 10 },
     } satisfies Record<string, SessionEntry>;
     mockSessionStores({ "/stores/shared.sqlite": sharedStore });
-    const migrated = migratePersistedImplicitMainRoster({
+    const migrated = createCanonicalAgentConfigFixture({
       session: { store: "/stores/shared.sqlite" },
       agents: { entries: { main: { default: true }, research: {} } },
     }).config as OpenClawConfig;
@@ -539,7 +539,7 @@ describe("resolveSessionKeyForRequest", () => {
             ...(ownership === "explicit"
               ? { ownership, defaults: { systemAgent: { agentId: "research" } } }
               : {}),
-            entries: { ops: {}, research: {} },
+            entries: { ops: ownership === "explicit" ? {} : { default: true }, research: {} },
           },
         },
         "ops",

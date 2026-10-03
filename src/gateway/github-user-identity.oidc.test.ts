@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { getUserPreferences, setUserPreferences } from "../state/user-preferences.js";
+import { getUserPreferences, setUserPreferences } from "../state/user-preferences.test-support.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { resolveUserProfileGitHubAttribution } from "../state/user-profile-github-identity.js";
 import {

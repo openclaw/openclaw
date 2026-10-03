@@ -343,7 +343,7 @@ it("delivers nested event rows identical to the full list for each viewer and cl
       }
     } finally {
       detach();
-      connection.mentionInbox.dispose();
+      await connection.mentionInbox.dispose();
       projection.dispose();
       subagentRuns.delete("row-parity-child");
     }

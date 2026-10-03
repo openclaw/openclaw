@@ -13,6 +13,7 @@ import {
   selectDeterministicTranslation,
   verifyAndroidAppI18n,
 } from "../../scripts/android-app-i18n.ts";
+import { parseNativeI18nInventory } from "../../scripts/native-i18n-inventory.ts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
 
 const { generatedOverrides } = vi.hoisted(() => ({
@@ -61,8 +62,9 @@ describe("Android app i18n resources", () => {
     const key = `native_${createHash("sha256").update(source).digest("hex").slice(0, 16)}`;
     const artifactPath = path.resolve("apps/.i18n/native/de.json");
     const artifact = JSON.parse(await readFile(artifactPath, "utf8"));
-    const inventory = JSON.parse(await readFile("apps/.i18n/native-source.json", "utf8"));
-    expect(inventory.entries).toContainEqual(
+    const inventoryRaw = await readFile("apps/.i18n/native-source.json", "utf8");
+    const inventory = parseNativeI18nInventory(inventoryRaw);
+    expect(inventory).toContainEqual(
       expect.objectContaining({
         id,
         source,
@@ -84,10 +86,11 @@ describe("Android app i18n resources", () => {
         `<string name="${key}" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Lesen &amp; \\"prüfen\\""</string>`,
       );
 
-      inventory.entries.reverse();
+      const reorderedInventory = JSON.parse(inventoryRaw);
+      reorderedInventory.sites.reverse();
       generatedOverrides.set(
         path.resolve("apps/.i18n/native-source.json"),
-        JSON.stringify(inventory),
+        JSON.stringify(reorderedInventory),
       );
       const reordered = await buildAndroidAppI18nCatalog();
       expect(reordered.kotlin).toBe(catalog.kotlin);
@@ -111,11 +114,11 @@ describe("Android app i18n resources", () => {
   });
 
   it("routes compact token suffixes through generated resources", async () => {
-    const inventory = JSON.parse(await readFile("apps/.i18n/native-source.json", "utf8")) as {
-      entries: Array<{ sites: Array<{ kind: string; path: string }>; source: string }>;
-    };
+    const inventory = parseNativeI18nInventory(
+      await readFile("apps/.i18n/native-source.json", "utf8"),
+    );
     const sources = new Set(["${decimal(count / 1_000_000.0)}M", "${thousands}k"]);
-    const entries = inventory.entries
+    const entries = inventory
       .flatMap((entry) => entry.sites.map((site) => ({ ...site, source: entry.source })))
       .filter(
         (entry) => entry.path.endsWith("/ui/chat/ChatTurnRecap.kt") && sources.has(entry.source),

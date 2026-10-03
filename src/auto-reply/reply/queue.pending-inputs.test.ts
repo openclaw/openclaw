@@ -143,7 +143,7 @@ describe("followup queue durable input consumption", () => {
       expect.objectContaining({ content: "first approved", idempotencyKey: "first:user" }),
       expect.objectContaining({ content: "second approved", idempotencyKey: "second:user" }),
     ]);
-    expect(listSessionPendingInputs(scope()).items).toEqual([]);
+    expect((await listSessionPendingInputs(scope())).items).toEqual([]);
     expect(first.beforeMessageWrite).toHaveBeenCalledOnce();
     expect(second.beforeMessageWrite).toHaveBeenCalledOnce();
   });
@@ -204,7 +204,7 @@ describe("followup queue durable input consumption", () => {
         const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
         const typing = createTypingController({});
         try {
-          pendingTotals.push(listSessionPendingInputs(scope()).total);
+          pendingTotals.push((await listSessionPendingInputs(scope())).total);
           await admitFollowupRunLifecycle(run);
           if (abortDuringPreparation) {
             const recorder = second.run.userTurnTranscriptRecorder!;
@@ -234,7 +234,7 @@ describe("followup queue durable input consumption", () => {
             onToolResult: async () => {},
             onCompactionNoticePayload: async () => {},
           });
-          pendingTotals.push(listSessionPendingInputs(scope()).total);
+          pendingTotals.push((await listSessionPendingInputs(scope())).total);
         } catch (error) {
           failures.push(error);
         } finally {
@@ -262,7 +262,7 @@ describe("followup queue durable input consumption", () => {
       if (!abortDuringPreparation) {
         expect(messages[0]?.message).toMatchObject({ role: "user", content: expected });
       }
-      expect(listSessionPendingInputs(scope()).total).toBe(abortDuringPreparation ? 2 : 0);
+      expect((await listSessionPendingInputs(scope())).total).toBe(abortDuringPreparation ? 2 : 0);
       expect(first.beforeMessageWrite).toHaveBeenCalledOnce();
       expect(second.beforeMessageWrite).toHaveBeenCalledOnce();
     },
@@ -291,7 +291,9 @@ describe("followup queue durable input consumption", () => {
       try {
         await admitFollowupRunLifecycle(run);
         await persistQueuedRun(run);
-        pendingRunIds.push(listSessionPendingInputs(scope()).items.map((input) => input.runId));
+        pendingRunIds.push(
+          (await listSessionPendingInputs(scope())).items.map((input) => input.runId),
+        );
       } catch (error) {
         failures.push(error);
       }

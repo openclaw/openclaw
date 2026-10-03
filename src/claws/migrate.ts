@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 import { listAgentEntries, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
@@ -9,7 +8,7 @@ import { isAvatarDataUrl } from "../shared/avatar-policy.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { openExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
-import { digestClawValue } from "./digest.js";
+import { digestClawBytes, digestClawValue } from "./digest.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { ClawMigrationError } from "./migrate-errors.js";
 import {
@@ -102,10 +101,6 @@ type BuiltMigration = {
   ownershipFiles: PersistedClawWorkspaceFile[];
 };
 
-function sha256(value: Uint8Array): string {
-  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
-}
-
 async function readOwnership(options: OpenClawStateDatabaseOptions, agentId: string) {
   const database = await openExistingOpenClawStateDatabaseReadOnly(options);
   if (!database) {
@@ -156,7 +151,7 @@ function sanitizeAgentPreview(agent: ClawManifest["agent"]): ClawManifest["agent
     ...agent,
     identity: {
       ...agent.identity,
-      avatar: `image data URL (${Buffer.byteLength(avatar, "utf8")} bytes; ${sha256(Buffer.from(avatar))})`,
+      avatar: `image data URL (${Buffer.byteLength(avatar, "utf8")} bytes; ${digestClawBytes(Buffer.from(avatar))})`,
     },
   };
 }
@@ -169,9 +164,29 @@ function buildPlanIntegrity(
     schemaVersion: CLAW_MIGRATION_PLAN_SCHEMA_VERSION,
     addPlan,
     packageFiles: [...packageFiles.entries()]
-      .map(([path, content]) => ({ path, digest: sha256(content), byteLength: content.byteLength }))
+      .map(([path, content]) => ({
+        path,
+        digest: digestClawBytes(content),
+        byteLength: content.byteLength,
+      }))
       .toSorted((left, right) => left.path.localeCompare(right.path)),
     retained: MIGRATION_RETAINED_PATHS,
+  });
+}
+
+function adoptMigrationActions(plan: BuiltMigration["addPlan"]): void {
+  plan.actions = plan.actions.map((action) => {
+    if (action.kind !== "workspaceFile" && action.kind !== "agent" && action.kind !== "workspace") {
+      return action;
+    }
+    return {
+      ...action,
+      action: "reuse",
+      details: {
+        ...action.details,
+        expectedState: action.kind === "workspaceFile" ? "present-matching" : "present",
+      },
+    };
   });
 }
 
@@ -366,22 +381,7 @@ export async function buildClawMigrationPlan(params: {
         );
       }
     }
-    addPlan.actions = addPlan.actions.map((action) => ({
-      ...action,
-      action:
-        action.kind === "workspaceFile" || action.kind === "agent" || action.kind === "workspace"
-          ? "reuse"
-          : action.action,
-      ...(action.kind === "agent"
-        ? { details: { ...action.details, expectedState: "present" } }
-        : {}),
-      ...(action.kind === "workspace"
-        ? { details: { ...action.details, expectedState: "present" } }
-        : {}),
-      ...(action.kind === "workspaceFile"
-        ? { details: { ...action.details, expectedState: "present-matching" } }
-        : {}),
-    }));
+    adoptMigrationActions(addPlan);
     const planIntegrity = buildPlanIntegrity(addPlan, projected.packageFiles);
     addPlan.planIntegrity = planIntegrity;
     const plan: ClawMigrationPlan = {
@@ -399,7 +399,7 @@ export async function buildClawMigrationPlan(params: {
         .map(([path, content]) => ({
           path,
           byteLength: content.byteLength,
-          digest: sha256(content),
+          digest: digestClawBytes(content),
         }))
         .toSorted((left, right) => left.path.localeCompare(right.path)),
       workspaceFiles: selectedFiles.map(({ name, content, digest }) => ({
@@ -547,22 +547,7 @@ export async function applyClawMigrationPlan(params: {
         );
       }
     }
-    finalPlan.actions = finalPlan.actions.map((action) => ({
-      ...action,
-      action:
-        action.kind === "workspaceFile" || action.kind === "agent" || action.kind === "workspace"
-          ? "reuse"
-          : action.action,
-      ...(action.kind === "agent"
-        ? { details: { ...action.details, expectedState: "present" } }
-        : {}),
-      ...(action.kind === "workspace"
-        ? { details: { ...action.details, expectedState: "present" } }
-        : {}),
-      ...(action.kind === "workspaceFile"
-        ? { details: { ...action.details, expectedState: "present-matching" } }
-        : {}),
-    }));
+    adoptMigrationActions(finalPlan);
     const finalIntegrity = buildPlanIntegrity(finalPlan, params.migration.packageFiles);
     if (finalIntegrity !== params.migration.plan.planIntegrity) {
       throw new ClawMigrationError(

@@ -6,7 +6,7 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
   it.each(["completed", "timed out", "none"])(
     "records cache continuity after compaction: %s",
     async (compaction) => {
-      const sessionManager = { appendCustomEntryAsync: vi.fn(async () => {}) };
+      const sessionManager = { appendCustomEntryAsync: vi.fn(async () => undefined) };
       const appended = await appendAttemptCacheTtlIfNeeded({
         sessionManager,
         toolResultPromptProjectionState: createToolResultPromptProjectionState(),

@@ -76,7 +76,7 @@ const { getSessionProviderArtifactMocks, resetSessionProviderArtifacts } =
   await import("./session-utils-provider.test-support.js");
 const providerArtifactMocks = getSessionProviderArtifactMocks();
 
-test("resolves fixed-store and auth compatibility owners", () => {
+test("resolves fixed-store and auth owners independently of retained Doctor ownership", () => {
   const cfg = retainLegacyDefaultAgentId(
     {
       agents: {
@@ -88,7 +88,7 @@ test("resolves fixed-store and auth compatibility owners", () => {
         entries: { ops: {}, research: {} },
       },
       session: { mainKey: "work", store: "/tmp/openclaw-fixed-sessions.json" },
-    },
+    } satisfies OpenClawConfig,
     "ops",
   );
   expect(resolveSessionStoreKey({ cfg, sessionKey: "incident-42" })).toBe("agent:ops:incident-42");
@@ -106,7 +106,7 @@ test("resolves fixed-store and auth compatibility owners", () => {
     }),
   ).toBe("saved");
   expect(resolveLegacyInheritedAuthAgentId(explicit)).toBe("main");
-  expect(resolveLegacyInheritedAuthAgentId(retainLegacyDefaultAgentId(explicit, "a"))).toBe("a");
+  expect(resolveLegacyInheritedAuthAgentId(retainLegacyDefaultAgentId(explicit, "a"))).toBe("main");
   expect(resolveLegacyInheritedAuthAgentId({ agents: { entries: { solo: {} } } })).toBe("solo");
 });
 
@@ -2325,7 +2325,7 @@ describe("gateway session utils", () => {
     fs.writeFileSync(path.join(workspace, "avatar-link.png"), "avatar");
     const cfg = createSingleAgentAvatarConfig(workspace);
     if (kind === "data") {
-      cfg.agents!.list![0]!.identity!.avatar = dataUrl;
+      cfg.agents!.entries!.main!.identity!.avatar = dataUrl;
     }
     const browser = await listAgentsForGateway(cfg, undefined, { httpAvatarBasePath: "/control" });
     expect(browser.agents[0]?.identity?.avatarUrl).toMatch(

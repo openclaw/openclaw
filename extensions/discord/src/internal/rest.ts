@@ -335,13 +335,10 @@ function normalizeSchedulerLanes(
   maxQueueSize: number,
   lanes?: RequestSchedulerOptions["lanes"],
 ): Record<RequestPriority, { maxQueueSize: number; staleAfterMs?: number; weight: number }> {
-  const fallbackMaxQueueSize = normalizeIntegerOption(maxQueueSize, defaultOptions.maxQueueSize, {
-    min: 1,
-  });
   return {
-    critical: normalizeSchedulerLane("critical", fallbackMaxQueueSize, lanes?.critical),
-    standard: normalizeSchedulerLane("standard", fallbackMaxQueueSize, lanes?.standard),
-    background: normalizeSchedulerLane("background", fallbackMaxQueueSize, lanes?.background),
+    critical: normalizeSchedulerLane("critical", maxQueueSize, lanes?.critical),
+    standard: normalizeSchedulerLane("standard", maxQueueSize, lanes?.standard),
+    background: normalizeSchedulerLane("background", maxQueueSize, lanes?.background),
   };
 }
 
@@ -356,15 +353,9 @@ function normalizeSchedulerLane(
       ? normalizeIntegerOption(options.staleAfterMs, defaults.staleAfterMs ?? 0, { min: 0 })
       : defaults.staleAfterMs;
   return {
-    maxQueueSize:
-      options?.maxQueueSize !== undefined
-        ? normalizeIntegerOption(options.maxQueueSize, maxQueueSize, { min: 1 })
-        : maxQueueSize,
+    maxQueueSize: normalizeIntegerOption(options?.maxQueueSize, maxQueueSize, { min: 1 }),
     ...(staleAfterMs !== undefined ? { staleAfterMs } : {}),
-    weight:
-      options?.weight !== undefined
-        ? normalizeIntegerOption(options.weight, defaults.weight, { min: 1 })
-        : defaults.weight,
+    weight: normalizeIntegerOption(options?.weight, defaults.weight, { min: 1 }),
   };
 }
 

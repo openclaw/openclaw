@@ -8,13 +8,11 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { persistBrowserControlCredential } from "./config-mutations.js";
 
-/** Auth material accepted by browser-control HTTP middleware and clients. */
 export type BrowserControlAuth = {
   token?: string;
   password?: string;
 };
 
-/** Resolve browser-control auth material from config and environment. */
 export function resolveBrowserControlAuth(
   cfg?: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
@@ -39,32 +37,13 @@ export function resolveBrowserControlAuth(
   }
 }
 
-/** Return true when startup may auto-generate browser-control auth. */
 export function shouldAutoGenerateBrowserAuth(env: NodeJS.ProcessEnv): boolean {
   const nodeEnv = normalizeLowercaseStringOrEmpty(env.NODE_ENV);
   if (nodeEnv === "test") {
     return false;
   }
   const vitest = normalizeLowercaseStringOrEmpty(env.VITEST);
-  if (vitest && vitest !== "0" && vitest !== "false" && vitest !== "off") {
-    return false;
-  }
-  return true;
-}
-
-function hasExplicitNonStringGatewayCredentialForMode(params: {
-  cfg?: OpenClawConfig;
-  mode: "none" | "trusted-proxy";
-}): boolean {
-  const { cfg, mode } = params;
-  const auth = cfg?.gateway?.auth;
-  if (!auth) {
-    return false;
-  }
-  if (mode === "none") {
-    return auth.token != null && typeof auth.token !== "string";
-  }
-  return auth.password != null && typeof auth.password !== "string";
+  return !vitest || ["0", "false", "off"].includes(vitest);
 }
 
 async function generateAndPersistBrowserControlCredential(params: {
@@ -89,7 +68,6 @@ async function generateAndPersistBrowserControlCredential(params: {
   return { auth: { [params.kind]: credential }, generatedToken: credential };
 }
 
-/** Ensure browser-control auth exists, generating and persisting it when allowed. */
 export async function ensureBrowserControlAuth(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -122,19 +100,16 @@ export async function ensureBrowserControlAuth(params: {
   }
   const latestMode = latestCfg.gateway?.auth?.mode;
   if (latestMode === "none" || latestMode === "trusted-proxy") {
-    if (
-      hasExplicitNonStringGatewayCredentialForMode({
-        cfg: latestCfg,
-        mode: latestMode,
-      })
-    ) {
+    const kind = latestMode === "trusted-proxy" ? "password" : "token";
+    const credential = latestCfg.gateway?.auth?.[kind];
+    if (credential != null && typeof credential !== "string") {
       // Avoid silently overwriting SecretRef-style gateway auth inputs with generated plaintext.
       // Startup will fail closed if no resolved browser auth is available.
       return { auth: latestAuth };
     }
     // trusted-proxy must use a browser-only password, never a gateway auth token.
     return await generateAndPersistBrowserControlCredential({
-      kind: latestMode === "trusted-proxy" ? "password" : "token",
+      kind,
       env,
     });
   }

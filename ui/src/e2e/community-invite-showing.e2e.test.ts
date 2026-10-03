@@ -149,7 +149,7 @@ suite.define(() => {
     const artworkRequest = new Promise<void>((resolve) => {
       artworkRequested = resolve;
     });
-    await page.route("**/community-art/community-invite.webp*", async (route) => {
+    await page.route("**/community-art/community-invite-*.webp*", async (route) => {
       artworkRequested();
       await artworkReady;
       await route.continue();
@@ -335,6 +335,12 @@ suite.define(() => {
               }
             }
             await card.waitFor({ state: "visible" });
+            const targetHeights = await card
+              .locator(".invite__cta")
+              .evaluateAll((links) => links.map((link) => link.getBoundingClientRect().height));
+            for (const height of targetHeights) {
+              expect(height).toBeGreaterThanOrEqual(interaction === "touch" ? 44 : 40);
+            }
             if (interaction === "touch") {
               await row.locator("[data-sidebar-session-menu]").tap();
             } else {
@@ -464,7 +470,10 @@ suite.define(() => {
 
       expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBeNull();
 
-      const cta = page.getByRole("link", { name: "Discord", exact: true });
+      const cta = page.getByRole("link", {
+        name: "Join the OpenClaw community on Discord",
+        exact: true,
+      });
       expect(await cta.getAttribute("href")).toBe("https://discord.gg/clawd");
       expect(await cta.getAttribute("target")).toBe("_blank");
       expect((await cta.getAttribute("rel"))?.split(/\s+/u)).toEqual(

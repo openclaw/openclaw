@@ -23,7 +23,7 @@ vi.mock("./src/browser/config.js", async (importOriginal) => {
   runtime.coldImports.push("browser-config-resolution");
   return await importOriginal();
 });
-vi.mock("./src/browser/client.js", async () => {
+vi.mock("./src/browser/client-tab-close.runtime.js", async () => {
   runtime.loaded.push("client");
   await runtime.onClientLoad?.();
   return { browserCloseTabByRawTargetId: runtime.closeVolatile };

@@ -149,7 +149,10 @@ alongside valid captures, with its directory and no sealed manifest reference.
 Keep current data and inspect the originals before attempting restoration.
 Older installed updaters may not preserve or forward an original capture; a
 newer Doctor reports that limitation instead of treating current bytes as the
-pre-update state. Take a [verified backup](/install/updating#before-updating-create-a-verified-backup)
+pre-update state. If capture discovery cannot verify an older driver's history,
+Doctor warns and continues repairs under its existing maintenance and update
+ownership. Required migration backups still apply.
+Take a [verified backup](/install/updating#before-updating-create-a-verified-backup)
 before an upgrade when you need a complete recovery copy.
 
 ### Retained updater runtime

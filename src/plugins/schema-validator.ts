@@ -4,6 +4,7 @@ import {
   type TypeBoxValidationError,
 } from "@openclaw/normalization-core/json-schema";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 // Compiles plugin manifest schemas for validation without runtime loading.
 import { Format } from "typebox/format";
 import { Compile, Pointer, type Validator as TypeBoxValidator } from "typebox/schema";
@@ -61,13 +62,9 @@ function schemaHasDefaults(schema: unknown): boolean {
     return false;
   }
   if (Array.isArray(schema)) {
-    return schema.some((item) => schemaHasDefaults(item));
+    return schema.some(schemaHasDefaults);
   }
-  const record = schema as Record<string, unknown>;
-  if (Object.hasOwn(record, "default")) {
-    return true;
-  }
-  return Object.values(record).some((value) => schemaHasDefaults(value));
+  return Object.hasOwn(schema, "default") || Object.values(schema).some(schemaHasDefaults);
 }
 
 // Transfer only defaults selected by the source; re-evaluating branches on resolved
@@ -211,19 +208,6 @@ function appendPathSegment(path: string, segment: string): string {
   return `${path}.${trimmed}`;
 }
 
-function firstStringParam(value: unknown): string | null {
-  if (typeof value === "string" && value.trim()) {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    const first = value.find(
-      (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
-    );
-    return first ?? null;
-  }
-  return null;
-}
-
 function resolveMissingProperties(error: TypeBoxValidationError): string[] {
   const properties =
     error.keyword === "required"
@@ -262,7 +246,10 @@ function resolveAdditionalProperty(error: TypeBoxValidationError): string | unde
   if (error.keyword !== "additionalProperties") {
     return undefined;
   }
-  return firstStringParam(error.params?.additionalProperty) ?? undefined;
+  const value = error.params?.additionalProperty;
+  return Array.isArray(value)
+    ? value.find((entry): entry is string => readNonBlankString(entry) !== undefined)
+    : readNonBlankString(value);
 }
 
 function resolveAdditionalProperties(error: TypeBoxValidationError): string[] {

@@ -24,6 +24,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../../../src/plugins/runtime.js";
+import { createCanonicalAgentConfigFixture } from "../../../../src/test-utils/config-roster.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -113,7 +114,7 @@ describe("Canvas agent tool over a paired macOS node", () => {
       // Released here until the started Gateway owns the claim.
       let unstartedPortClaim: typeof portClaim | undefined = portClaim;
       const gatewayToken = "qa-canvas-agent-node-token";
-      const config: OpenClawConfig = {
+      const config: OpenClawConfig = createCanonicalAgentConfigFixture({
         gateway: {
           mode: "local",
           port,
@@ -129,7 +130,7 @@ describe("Canvas agent tool over a paired macOS node", () => {
           allow: ["canvas"],
           entries: { canvas: { enabled: true } },
         },
-      };
+      }).config;
       await state.writeConfig(config);
 
       const invocations: CapturedInvocation[] = [];
@@ -228,7 +229,6 @@ describe("Canvas agent tool over a paired macOS node", () => {
             });
           },
         });
-        await approveCanvasNodeCommands(operatorClient, nodeId);
         await waitForCanvasNode(operatorClient, nodeId);
 
         const toolRegistration = registry.registry.tools.find(
@@ -311,21 +311,6 @@ describe("Canvas agent tool over a paired macOS node", () => {
     },
   );
 });
-
-async function approveCanvasNodeCommands(operator: GatewayClient, nodeId: string): Promise<void> {
-  await vi.waitFor(
-    async () => {
-      const result = await operator.request<{
-        pending?: Array<{ requestId?: string; nodeId?: string; commands?: string[] }>;
-      }>("node.pair.list", {});
-      const pending = result.pending?.find((entry) => entry.nodeId === nodeId);
-      expect(pending?.commands).toEqual([...CANVAS_NODE_COMMANDS]);
-      expect(pending?.requestId).toEqual(expect.any(String));
-      await operator.request("node.pair.approve", { requestId: pending?.requestId });
-    },
-    { timeout: 15_000, interval: 100 },
-  );
-}
 
 async function waitForCanvasNode(operator: GatewayClient, nodeId: string): Promise<void> {
   await vi.waitFor(

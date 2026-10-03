@@ -320,6 +320,25 @@ class OwnedGroupTest(unittest.TestCase):
             self.assertEqual(instance.client.members, {123, 42})
 
 
+class PrivateStateTest(unittest.TestCase):
+    def test_load_config_keeps_later_tdlib_files_private(self):
+        previous = driver.os.umask(0o022)
+        try:
+            with tempfile.TemporaryDirectory() as root:
+                state = Path(root) / "user-driver"
+                with patch.object(driver, "STATE_DIR", state), \
+                     patch.object(driver, "CONFIG_PATH", state / "config.local.json"), \
+                     patch.object(driver, "BOT_CREDENTIALS_PATH", Path(root) / "credentials.local.json"):
+                    driver.load_config()
+                # Stand-in for TDLib's own database writes after authorization starts.
+                (state / "db").mkdir()
+                (state / "db" / "db_test.sqlite").write_bytes(b"synthetic")
+                self.assertEqual((state / "db").stat().st_mode & 0o777, 0o700)
+                self.assertEqual((state / "db" / "db_test.sqlite").stat().st_mode & 0o777, 0o600)
+        finally:
+            driver.os.umask(previous)
+
+
 class ForwardBurstTest(unittest.TestCase):
     def make_driver(self, responses):
         instance = driver.UserDriver.__new__(driver.UserDriver)

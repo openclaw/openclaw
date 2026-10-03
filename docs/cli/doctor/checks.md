@@ -21,6 +21,20 @@ postures and maintenance modes documented on the other pages.
 
 ## Config writes and backups
 
+Update-history inspection and reconciliation are best-effort maintenance. A failure
+prints a warning and allows independent Doctor repairs and plugin registry mutations
+to continue. Writable passes also try to save the warning on the latest existing
+SQLite update run, without changing its outcome or activity timestamps or creating
+a new run. Read-only passes do not write history. Database integrity, migration,
+and unsettled process cleanup checks still protect mutations.
+
+Snapshot workers use the runtime executing the CLI. Native workers inherit an
+unchanged working directory, avoiding a redundant directory change that can fail
+after `sudo -u` switches users. A spawn refusal names the runtime and working
+directory; check executable permissions and directory access for the service user.
+Disk-space or `XDG_CACHE_HOME` guidance applies to snapshot storage failures, not
+runtime launch permissions.
+
 After its checks finish, `doctor --fix` settles its own inspection workers while retaining maintenance ownership, then checks whether abandoned updater runtimes can be removed. Independent OpenClaw processes, Worker threads, and shared-broker work still prevent removal. Doctor reports the holder PIDs and asks you to let their work finish before rerunning `openclaw doctor --fix`.
 
 - On npm global installs, Doctor reports retained `.openclaw.package-backup-*.databases` directories (and `.openclaw-package-backup-*.databases`, the name a failed cleanup retires them under) beside the installed package, with their total regular-file size in bytes and human-readable units and a quoted removal command for each directory. The scan is bounded; incomplete sizes are lower bounds. If inspection is incomplete before any snapshot is found, Doctor warns and asks you to list the npm global root manually, including hidden entries. A missing global root produces no warning. This is warning-only, including with `--fix`: confirm no update is in progress and no recovery needs the snapshots before removing them manually. Updater-driven Doctor passes defer this check so they do not report the active update's snapshots; run standalone Doctor after the update settles.

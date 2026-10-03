@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { recordSkillFileHost } from "../skills/loading/skill-file-host.js";
+import { recordSkillFileHost } from "../skills/skill-file-host.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import { findSkillUsageMatch } from "./agent-tools.before-tool-call.diagnostics.js";
 

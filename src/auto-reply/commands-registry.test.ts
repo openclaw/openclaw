@@ -5,11 +5,9 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createCommandTurnContext } from "./command-turn-context.js";
 import {
-  buildCommandText,
   buildCommandTextFromArgs,
   findCommandByNativeName,
   formatCommandArgMenuTitle,
-  getCommandDetection,
   isActiveRunSafeCommandTurn,
   listChatCommands,
   listChatCommandsForConfig,
@@ -184,8 +182,10 @@ function requireCommandArgMenu(
 
 describe("commands registry", () => {
   it("builds command text with args", () => {
-    expect(buildCommandText("status")).toBe("/status");
-    expect(buildCommandText("model", "gpt-5")).toBe("/model gpt-5");
+    expect(buildCommandTextFromArgs(requireChatCommand("status"))).toBe("/status");
+    expect(buildCommandTextFromArgs(requireChatCommand("model"), { raw: "gpt-5" })).toBe(
+      "/model gpt-5",
+    );
   });
 
   it("registers /login natively for Discord, Slack, and Telegram", () => {
@@ -542,23 +542,21 @@ describe("commands registry", () => {
   });
 
   it("detects known text commands", () => {
-    const detection = getCommandDetection();
     for (const command of listChatCommands()) {
       for (const alias of command.textAliases) {
-        expect(detection.exact.has(alias.toLowerCase())).toBe(true);
-        expect(detection.regex.test(alias)).toBe(true);
-        expect(detection.regex.test(`${alias}:`)).toBe(true);
+        expect(resolveTextCommand(alias)?.command.key).toBe(command.key);
+        expect(resolveTextCommand(`${alias}:`)?.command.key).toBe(command.key);
 
         if (command.acceptsArgs) {
-          expect(detection.regex.test(`${alias} list`)).toBe(true);
-          expect(detection.regex.test(`${alias}: list`)).toBe(true);
+          expect(resolveTextCommand(`${alias} list`)?.command.key).toBe(command.key);
+          expect(resolveTextCommand(`${alias}: list`)?.command.key).toBe(command.key);
         } else {
-          expect(detection.regex.test(`${alias} list`)).toBe(false);
-          expect(detection.regex.test(`${alias}: list`)).toBe(false);
+          expect(resolveTextCommand(`${alias} list`)).toBeNull();
+          expect(resolveTextCommand(`${alias}: list`)).toBeNull();
         }
       }
     }
-    expect(detection.regex.test("try /status")).toBe(false);
+    expect(resolveTextCommand("try /status")).toBeNull();
   });
 
   it("respects text command gating", () => {

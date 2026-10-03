@@ -5,6 +5,7 @@ import { defaultRuntime } from "../../../runtime.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.runtime.js";
+import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
 import {
   ensureDeliveryState,
   getDeliveryLastError,
@@ -63,15 +64,26 @@ export const resumeAncestorCleanup = (
 ) => {
   const params = context.options;
   const now = Date.now();
-  const visited = new Set([settledEntry.childSessionKey]);
+  const visited = [settledEntry];
   let requesterSessionKey = settledEntry.requesterSessionKey;
-  while (requesterSessionKey && !visited.has(requesterSessionKey)) {
-    visited.add(requesterSessionKey);
-    const entry = params.getLatestRunForChildSession(requesterSessionKey);
+  let requesterAgentId = settledEntry.requesterAgentId;
+  while (
+    requesterSessionKey &&
+    !visited.some((entry) =>
+      matchesSubagentChildSessionOwner(entry, requesterSessionKey, requesterAgentId),
+    )
+  ) {
+    const entry = params.getLatestRunForChildSession(
+      requesterSessionKey,
+      undefined,
+      requesterAgentId,
+    );
     if (!entry || params.runs.get(entry.runId) !== entry) {
       break;
     }
+    visited.push(entry);
     requesterSessionKey = entry.requesterSessionKey;
+    requesterAgentId = entry.requesterAgentId;
     const { runId } = entry;
     // A failed cleanup belongs to its retry timer or exhausted process-local
     // budget; even descendant settlement must not reopen that attempt early.
@@ -453,11 +465,13 @@ export const startSubagentAnnounceCleanupFlow = (
     prepareChildSessionEffects,
     isCompletionDeliveryAllowed: () => {
       assertPersistenceCurrent();
-      return isSubagentCompletionDeliveryAllowed(
-        context,
-        entry,
-        cleanupGeneration,
-        committedDeliveryOwner,
+      return (
+        isSubagentCompletionDeliveryAllowed(
+          context,
+          entry,
+          cleanupGeneration,
+          committedDeliveryOwner,
+        ) && subagentRuns.runWithCompletionAuthority(entry, () => true)
       );
     },
     isCompletionOwnedByRequesterYield: requesterOwnsCompletion,
@@ -596,6 +610,7 @@ export const startSubagentAnnounceCleanupFlow = (
         announceOutcome = await subagentRuns.runWithCompletionAuthority(entry, () =>
           params.runSubagentAnnounceFlow({
             ...announceParams,
+            childAgentId: entry.childAgentId,
             signal: deadline.signal,
           }),
         );

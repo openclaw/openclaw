@@ -174,9 +174,16 @@ export async function createTestSession(
   return { ...result, modelRegistry, settingsManager, sessionManager };
 }
 
-export function appendHistory(sessionManager: SessionManager, assistant: AssistantMessage): void {
-  sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: Date.now() - 2 });
-  sessionManager.appendMessage({ ...assistant, timestamp: Date.now() - 1 });
+export async function appendHistory(
+  sessionManager: SessionManager,
+  assistant: AssistantMessage,
+): Promise<void> {
+  await sessionManager.appendMessageAsync({
+    role: "user",
+    content: "old prompt",
+    timestamp: Date.now() - 2,
+  });
+  await sessionManager.appendMessageAsync({ ...assistant, timestamp: Date.now() - 1 });
 }
 
 export function registerAgentSessionLoopTestLifecycle(): void {

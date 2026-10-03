@@ -42,7 +42,11 @@ export function createStateDatabaseRetainer(
 ) {
   const admit = (pathname: string, ownership?: "cached-read") => {
     const scope = getOpenClawDatabaseMaintenanceScope();
-    scope?.assertAdmission();
+    if (ownership === "cached-read") {
+      scope?.assertReadAdmission();
+    } else {
+      scope?.assertAdmission();
+    }
     operations.assertOpen(pathname, ownership);
     return scope;
   };

@@ -25,7 +25,10 @@ import {
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../sessions/input-provenance.js";
 import { isSubagentSessionKey } from "../../sessions/session-key-utils.js";
-import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
+import {
+  createAgentDatabaseAdmissionErrorShape,
+  readAgentDatabaseAdmissionRefusal,
+} from "../../state/agent-database-admission.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import {
   resolveExpectedExistingSessionConstraint,
@@ -95,16 +98,10 @@ export function prepareAgentRequestPreflight(params: {
     tryResolveLegacyCompatibilityAgentId(cfg);
   const refusal = selectedAgentId ? readAgentDatabaseAdmissionRefusal(selectedAgentId) : undefined;
   if (refusal) {
-    params.io.emitAcceptance([
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, `${refusal.reason}\n${refusal.repairHint}`, {
-        details: refusal,
-      }),
-    ]);
+    params.io.emitAcceptance([false, undefined, createAgentDatabaseAdmissionErrorShape(refusal)]);
     return undefined;
   }
-  const collectorSession = findSwarmCollectorSession(requestSessionKey);
+  const collectorSession = findSwarmCollectorSession(requestSessionKey, selectedAgentId);
   let swarmExecutionLane: CommandLaneConfiguration | undefined;
   // Collector children always use subagent session keys, so ordinary traffic
   // must never pay the persisted-store read. The store fallback only covers a
@@ -135,6 +132,7 @@ export function prepareAgentRequestPreflight(params: {
     }
     const registeredCollector = findAuthorizedSwarmCollectorRequest({
       childSessionKey: request.sessionKey,
+      childAgentId: selectedAgentId,
       idempotencyKey: request.idempotencyKey,
       outputSchema: request.swarmOutputSchema,
     });

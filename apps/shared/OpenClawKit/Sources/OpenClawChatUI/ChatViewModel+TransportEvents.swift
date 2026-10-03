@@ -1,9 +1,6 @@
 import Foundation
 import OpenClawKit
 import OpenClawProtocol
-import OSLog
-
-private let transportEventsLogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatUI")
 
 @MainActor
 private final class PendingRunOwnerReference {
@@ -78,12 +75,8 @@ extension OpenClawChatViewModel {
             self.handleSessionReactionEvent(event)
         case let .progressCardChanged(event):
             self.handleProgressCardChanged(event)
-        case let .questionRequested(question):
-            self.upsertQuestion(question)
-            self.reconcileQuestionsAfterEvent()
-        case let .questionResolved(resolved):
-            self.resolveQuestionEvent(resolved)
-            self.reconcileQuestionsAfterEvent()
+        case .questionRequested, .questionResolved:
+            self.handleQuestionEvent(evt)
         case .routeChanged, .reconnected, .seqGap:
             self.resetSessionReactions()
             self.invalidateSessionMetadataReadiness()
@@ -838,15 +831,12 @@ extension OpenClawChatViewModel {
         if aborted {
             return "Run aborted"
         }
-        if let message = evt.data["error"]?.value as? String,
-           !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        {
-            return message
-        }
-        if let message = evt.data["message"]?.value as? String,
-           !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        {
-            return message
+        for key in ["error", "message"] {
+            if let message = evt.data[key]?.value as? String,
+               !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                return message
+            }
         }
         return "Chat failed"
     }
@@ -994,17 +984,10 @@ extension OpenClawChatViewModel {
         else {
             return nil
         }
-        guard let refreshKey = userRefreshIdentityKey(for: messages[userIndex]) else {
-            return LatestUserTurn(
-                idempotencyKey: ChatPayloadDecoding.trimmedNonEmptyString(messages[userIndex].idempotencyKey),
-                refreshKey: nil,
-                occurrence: 0,
-                timestamp: messages[userIndex].timestamp)
-        }
-        let occurrence = messages[...userIndex].reduce(into: 0) { count, message in
-            guard self.userRefreshIdentityKey(for: message) == refreshKey else { return }
-            count += 1
-        }
+        let refreshKey = self.userRefreshIdentityKey(for: messages[userIndex])
+        let occurrence = refreshKey.map { key in
+            messages[...userIndex].count { self.userRefreshIdentityKey(for: $0) == key }
+        } ?? 0
         return LatestUserTurn(
             idempotencyKey: ChatPayloadDecoding.trimmedNonEmptyString(messages[userIndex].idempotencyKey),
             refreshKey: refreshKey,
@@ -1170,7 +1153,7 @@ extension OpenClawChatViewModel {
                 hasInFlightRun: hasInFlightRun,
                 sessionHasActiveRun: sessionHasActiveRun)
         } catch {
-            transportEventsLogger.error("refresh history failed \(error.localizedDescription, privacy: .public)")
+            chatUILogger.error("refresh history failed \(error.localizedDescription, privacy: .public)")
             var failure = RunHistoryRefreshResult.failed
             if let response = error as? GatewayResponseError,
                response.method == "chat.history", response.code == "UNAVAILABLE",

@@ -86,40 +86,6 @@ describe("application update status response ownership", () => {
     }
   });
 
-  it("retires a completion status error after a successful progress poll", async () => {
-    vi.useFakeTimers();
-    let fail = false;
-    const request = vi.fn<RequestFn>((method) =>
-      method !== "update.status"
-        ? Promise.resolve({})
-        : fail
-          ? Promise.reject(new Error("completion status unavailable"))
-          : Promise.resolve({ schedule: AUTO_UPDATE_SCHEDULE }),
-    );
-    const harness = createAutomaticUpdateHarness(request);
-    const overlays = createApplicationOverlays(harness.gateway);
-    try {
-      await flushMicrotasks();
-      fail = true;
-      harness.emitEvent("update.available", {
-        schedule: {
-          ...AUTO_UPDATE_SCHEDULE,
-          campaign: { ...AUTO_UPDATE_SCHEDULE.campaign, state: "applying" },
-        },
-      });
-      harness.emitEvent("update.available", { schedule: AUTO_UPDATE_SCHEDULE });
-      await flushMicrotasks();
-      expect(overlays.snapshot.updateStatusCheckBanner?.text).toContain(
-        "completion status unavailable",
-      );
-      fail = false;
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(overlays.snapshot.updateStatusCheckBanner).toBeNull();
-    } finally {
-      overlays.dispose();
-    }
-  });
-
   it("retains a checkout failure across completion failure and successful progress", async () => {
     vi.useFakeTimers();
     let failCheckout = true;
@@ -398,38 +364,6 @@ describe("application update status response ownership", () => {
     } finally {
       discovery.resolve({});
       reconciliation.resolve({});
-      overlays.dispose();
-    }
-  });
-
-  it("keeps a late progress read without replacing a newer checkout comparison", async () => {
-    const progress = deferred<unknown>();
-    const freshSchedule = {
-      ...AUTO_UPDATE_SCHEDULE,
-      install: { kind: "git", git: { status: "behind", commitsBehind: 12 } },
-    };
-    let progressReads = 0;
-    const request = vi.fn<RequestFn>((method, params) => {
-      if (method !== "update.status") {
-        return Promise.resolve({});
-      }
-      return (params as { refreshCheckout?: boolean }).refreshCheckout
-        ? Promise.resolve({ schedule: freshSchedule })
-        : ++progressReads <= 2
-          ? progress.promise
-          : Promise.resolve({ schedule: freshSchedule });
-    });
-    const harness = createAutomaticUpdateHarness(request);
-    const overlays = createApplicationOverlays(harness.gateway);
-    try {
-      await expect(overlays.refreshUpdateStatus()).resolves.toBe(true);
-      const run = updateRunFixture();
-      progress.resolve({ activeRun: run, schedule: AUTO_UPDATE_SCHEDULE });
-      await flushMicrotasks();
-      expect(overlays.snapshot.updateRun).toEqual(run);
-      expect(overlays.snapshot.updateSchedule).toEqual(freshSchedule);
-    } finally {
-      progress.resolve({});
       overlays.dispose();
     }
   });

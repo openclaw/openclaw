@@ -172,6 +172,7 @@ export function ensureTranscriptSessionRoot(
         .select("entry_json")
         .where("session_key", "in", lookupKeys),
     ).rows;
+    let retainedRoot = false;
     for (const candidate of candidates) {
       const entry = parseSessionEntryJson(candidate, "list");
       if (!entry) {
@@ -191,6 +192,7 @@ export function ensureTranscriptSessionRoot(
             `invalid persisted session row requires repair for ${candidate.session_key}`,
           );
         }
+        retainedRoot ||= candidate.session_key === scope.sessionKey;
         continue;
       }
       if (
@@ -204,23 +206,10 @@ export function ensureTranscriptSessionRoot(
     }
     const existing = candidates.find((candidate) => candidate.session_key === scope.sessionKey);
     nodeExists = existing !== undefined;
-    if (existing && existing.entry_valid !== 1) {
-      const retainedWindow =
-        existing.entry_json === "{}"
-          ? executeSqliteQueryTakeFirstSync(
-              database.db,
-              db
-                .selectFrom("session_windows")
-                .select("session_id")
-                .where("session_id", "=", existing.current_session_id)
-                .where("session_key", "=", scope.sessionKey),
-            )
-          : undefined;
-      if (!retainedWindow) {
-        throw canonicalSessionKeyMigrationRequiredError(
-          `invalid persisted session row requires repair for ${scope.sessionKey}`,
-        );
-      }
+    if (existing && existing.entry_valid !== 1 && !retainedRoot) {
+      throw canonicalSessionKeyMigrationRequiredError(
+        `invalid persisted session row requires repair for ${scope.sessionKey}`,
+      );
     }
   }
   if (!nodeExists) {

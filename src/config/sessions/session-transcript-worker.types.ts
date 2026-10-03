@@ -23,19 +23,25 @@ import type {
 } from "./activity-summary-source.types.js";
 import type { ConversationDeliveryRecord } from "./conversation-delivery-store.types.js";
 import type {
+  ConversationRowsWorkerInput,
+  ConversationRecord,
+} from "./conversation-registry.types.js";
+import type {
   ArchivedSessionEvictionBatch,
   ArchivedSessionEvictionQuery,
 } from "./disk-budget.types.js";
 import type { SessionGoalOperationLookupResult } from "./goals-operations.types.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
-import type { SessionTranscriptBoundedActiveContext } from "./session-accessor.sqlite-active-context.js";
-import type { SessionTranscriptMessageEvent } from "./session-accessor.sqlite-active-events.js";
+import type {
+  SessionPendingArchivesWorkerInput,
+  SessionArchivePruningWorkerInput,
+} from "./session-accessor.sqlite-archive-types.js";
 import type {
   SessionBranchSummaryReadRequest,
   SessionBranchSummaryReadResult,
 } from "./session-accessor.sqlite-branches.js";
 import type {
-  SessionTranscriptContextVersion,
+  SessionEntryStatusSelection,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import type {
@@ -43,11 +49,15 @@ import type {
   SessionIdentityEvidenceResult,
 } from "./session-accessor.sqlite-entry-availability.js";
 import type {
+  LifecycleArtifactCleanupRequest,
+  LifecycleArtifactCleanupWorkerResult,
+} from "./session-accessor.sqlite-lifecycle-types.js";
+import type {
   readSessionTranscriptModelContext,
   SessionModelContextLimits,
 } from "./session-accessor.sqlite-model-context.js";
 import type { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
-import type { loadTranscriptReadSnapshotSync } from "./session-accessor.sqlite-read.js";
+import type { SessionTranscriptMessageEvent } from "./session-accessor.sqlite-projection-read.js";
 import type {
   SessionEntryReplacementSelection,
   SessionEntryReplacementState,
@@ -68,17 +78,24 @@ import type {
   SessionEntryCurrentSource,
 } from "./session-entry-current.types.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
-import type {
-  PublishedSessionTranscriptArchive,
-  SessionArchivePruningRead,
-} from "./session-history-archive-pruning.types.js";
+import type { PublishedSessionTranscriptArchive } from "./session-history-archive-pruning.types.js";
 import type {
   SessionHistoryWorkerRequest,
   SessionHistoryWorkerResult,
   SessionHistoryDelta,
 } from "./session-history-types.js";
 import type { SessionMembershipFacts } from "./session-membership-facts.types.js";
+import type {
+  PendingInputHistoryWorkerInput,
+  PendingInputHistorySnapshot,
+} from "./session-pending-input-history.types.js";
+import type {
+  SessionMembersWorkerInput,
+  SessionMembershipFactsWorkerInput,
+  SessionSuggestionsWorkerInput,
+} from "./session-sharing-read.types.js";
 import type { SessionMember } from "./session-sharing-store.kernel.js";
+import type { StoredSessionSuggestion } from "./session-sharing-store.types.js";
 import type { ResolvedSqliteStoreTarget } from "./session-sqlite-target.js";
 import type {
   SessionStoreTargetInventoryRequest,
@@ -87,10 +104,15 @@ import type {
   SessionStoreTargetReadResult,
 } from "./session-store-target-inventory.js";
 import type {
+  PreparedSessionTranscriptHydration,
+  SessionTranscriptCurrentTurnEntryRead,
+  SessionTranscriptHydrationWorkerResult,
   SessionTranscriptHydrationWorkerInput,
   SessionTranscriptCurrentTurnEntryWorkerInput,
   SessionTranscriptRecentActiveEventsWorkerInput,
   SessionTranscriptLatestActiveMessageWorkerInput,
+  SessionTranscriptMaintenanceWorkerInput,
+  SessionTranscriptMaintenanceFacts,
 } from "./session-transcript-hydration.types.js";
 import type {
   SessionTranscriptInventoryWorkerInput,
@@ -109,7 +131,13 @@ import type {
 } from "./session-transcript-worker-receipts.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
-export type { SessionTranscriptCurrentTurnEntryRequest } from "./session-transcript-hydration.types.js";
+export type {
+  PreparedSessionTranscriptHydration,
+  SessionTranscriptCurrentTurnEntryRead,
+  SessionTranscriptCurrentTurnEntryRequest,
+  SessionTranscriptHydrationChunk,
+  SessionTranscriptHydrationWorkerResult,
+} from "./session-transcript-hydration.types.js";
 
 type SessionTranscriptMatchWorkerInput = {
   kind: "transcript-match";
@@ -121,31 +149,6 @@ type SessionTranscriptSearchWorkerInput = {
   kind: "transcript-search";
   database: { agentId: string; path: string };
   params: SessionTranscriptSearchParams;
-};
-
-export type PreparedSessionTranscriptHydration =
-  | { kind: "full"; snapshot: ReturnType<typeof loadTranscriptReadSnapshotSync> }
-  | { kind: "bounded"; snapshot: SessionTranscriptBoundedActiveContext };
-
-export type SessionTranscriptHydrationWorkerResult =
-  | {
-      kind: "full";
-      version: ReturnType<typeof loadTranscriptReadSnapshotSync>["version"];
-      eventCount: number;
-    }
-  | Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>;
-
-export type SessionTranscriptHydrationChunk = {
-  kind: "transcript-hydration-chunk";
-  encoding: string;
-  frames: Array<{ data: Uint8Array; endOfEvent: boolean }>;
-};
-
-export type SessionTranscriptCurrentTurnEntryRead = {
-  kind: "current-turn-entry";
-  version: SessionTranscriptContextVersion;
-  anchor?: TranscriptEntryAnchor;
-  event?: TranscriptEvent;
 };
 
 export type SessionModelContextWorkerInput = {
@@ -268,21 +271,6 @@ type SessionProjectionStatusWorkerInput = {
   sessionId?: string;
 };
 
-type SessionMembersWorkerInput = {
-  kind: "session-members";
-  database: { agentId: string; path: string };
-  sessionKey: string;
-  env: NodeJS.ProcessEnv;
-};
-
-type SessionMembershipFactsWorkerInput = {
-  kind: "session-membership-facts";
-  database: { agentId: string; path: string };
-  sessionKeys?: readonly string[];
-  env: NodeJS.ProcessEnv;
-  continuation?: CanonicalSessionReaderContinuation;
-};
-
 type SessionProgressCardWorkerInput = {
   kind: "session-progress-card";
   database: { agentId: string; path: string };
@@ -369,6 +357,7 @@ export type SessionExactEntriesWorkerSelection =
 
 type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelection & {
   env: NodeJS.ProcessEnv;
+  statusSelection?: SessionEntryStatusSelection;
   lifecycleSessionKey?: string;
   includeMembers?: boolean;
   includeParticipantRecords?: boolean;
@@ -383,6 +372,7 @@ export type SessionExactEntriesWorkerResult = {
   entries: SessionEntrySummary[];
   lifecycleTimestamps: SessionLifecycleTimestamps;
   pendingArchives?: boolean;
+  statusFound?: boolean;
   databaseIdentity?: {
     identity: string;
     incarnation: string;
@@ -450,16 +440,6 @@ export type SessionBranchSummaryWorkerInput = {
   request: SessionBranchSummaryReadRequest;
 };
 
-type SessionPendingArchivesWorkerInput = {
-  kind: "session-pending-archives";
-  database: { agentId: string; path: string };
-  env: NodeJS.ProcessEnv;
-};
-
-type SessionArchivePruningWorkerInput = SessionArchivePruningRead & {
-  kind: "session-archive-pruning";
-};
-
 type SessionHistoricalEvictionCandidatesWorkerInput = {
   kind: "historical-eviction-candidates";
   database: { agentId: string; path: string };
@@ -474,6 +454,7 @@ type SessionArchivedEvictionCandidatesWorkerInput = Omit<
 > & { archived: ArchivedSessionEvictionQuery };
 
 export type SessionHistoryWorkerInput =
+  | LifecycleArtifactCleanupRequest
   | { kind: "prewarm"; database: { agentId: string; path: string }; env: NodeJS.ProcessEnv }
   | SessionHistoricalEvictionCandidatesWorkerInput
   | SessionArchivedEvictionCandidatesWorkerInput
@@ -483,6 +464,7 @@ export type SessionHistoryWorkerInput =
   | SessionColdMetadataWorkerInput
   | SessionColdStorageInventoryWorkerInput
   | SessionTranscriptHydrationWorkerInput
+  | SessionTranscriptMaintenanceWorkerInput
   | SessionTranscriptCurrentTurnEntryWorkerInput
   | SessionTranscriptRecentActiveEventsWorkerInput
   | SessionTranscriptLatestActiveMessageWorkerInput
@@ -495,10 +477,13 @@ export type SessionHistoryWorkerInput =
   | SessionRowPresenceWorkerInput
   | SessionProjectionStatusWorkerInput
   | SessionMembersWorkerInput
+  | SessionSuggestionsWorkerInput
   | SessionMembershipFactsWorkerInput
   | SessionProgressCardWorkerInput
+  | PendingInputHistoryWorkerInput
   | SessionPendingInputReceiptsWorkerInput
   | SessionGoalOperationReceiptWorkerInput
+  | ConversationRowsWorkerInput
   | ConversationDeliveryWorkerInput
   | SessionEntryListWorkerInput
   | SessionEntryReadWorkerInput
@@ -529,9 +514,11 @@ export type SessionHistoryWorkerPreparedInput =
   PreparedHistoryInput<SessionHistoryDatabaseWorkerInput>;
 
 export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValues & {
+  "conversation-rows": { kind: "conversation-rows"; rows: ConversationRecord[] };
   "conversation-delivery": { kind: "conversation-delivery"; record?: ConversationDeliveryRecord };
   prewarm: { kind: "prewarm" };
   "session-pending-archives": { kind: "session-pending-archives"; pending: boolean };
+  "lifecycle-artifact-plan": LifecycleArtifactCleanupWorkerResult;
   "historical-eviction-candidates": { kind: "historical-eviction-candidates" } & (
     | { sessionIds: string[] }
     | { batch: ArchivedSessionEvictionBatch }
@@ -550,6 +537,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     embeddedArchiveBytes: number;
   };
   "transcript-hydration": SessionTranscriptHydrationWorkerResult;
+  "transcript-maintenance": SessionTranscriptMaintenanceFacts;
   "current-turn-entry": SessionTranscriptCurrentTurnEntryRead;
   "recent-active-events": { kind: "recent-active-events"; events: TranscriptEvent[] };
   "latest-active-message": {
@@ -570,11 +558,16 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
   "session-row-presence": boolean;
   "projection-status": boolean;
   "session-members": SessionMember[];
+  "session-suggestions": { kind: "session-suggestions"; suggestions: StoredSessionSuggestion[] };
   "session-membership-facts": SessionMembershipFacts;
   "session-progress-card": { kind: "session-progress-card"; card: ProgressCard | null };
   "goal-operation-receipt": {
     kind: "goal-operation-receipt";
     result: SessionGoalOperationLookupResult;
+  };
+  "session-pending-input-history": {
+    kind: "session-pending-input-history";
+    snapshot: PendingInputHistorySnapshot;
   };
   "session-pending-input-receipts": {
     kind: "session-pending-input-receipts";
@@ -646,8 +639,10 @@ type CancellableSessionHistoryReader<
 > = (input: Omit<Input, "kind" | "database">, signal?: AbortSignal) => Promise<Value>;
 
 export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
+  readConversations: SessionHistoryReader<ConversationRowsWorkerInput, ConversationRecord[]>;
   prewarm: (input: { env: NodeJS.ProcessEnv }) => Promise<void>;
   readPendingArchives: CancellableSessionHistoryReader<SessionPendingArchivesWorkerInput, boolean>;
+  readLifecycleArtifactPlan: CancellableSessionHistoryReader<LifecycleArtifactCleanupRequest>;
   findTranscriptEvent: (
     request: SessionTranscriptMatchWorkerInput["request"],
   ) => Promise<{ event: TranscriptEvent } | undefined>;
@@ -698,6 +693,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
     PreparedSessionTranscriptHydration
   >;
   readCurrentTurnEntry: CancellableSessionHistoryReader<SessionTranscriptCurrentTurnEntryWorkerInput>;
+  readMaintenance: CancellableSessionHistoryReader<SessionTranscriptMaintenanceWorkerInput>;
   readRecentActiveEvents: CancellableSessionHistoryReader<
     SessionTranscriptRecentActiveEventsWorkerInput,
     TranscriptEvent[]
@@ -732,6 +728,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
   >;
   readDiagnosticText: SessionHistoryReader<SessionDiagnosticTextWorkerInput, string | undefined>;
   readMembers: SessionHistoryReader<SessionMembersWorkerInput>;
+  readSuggestions: SessionHistoryReader<SessionSuggestionsWorkerInput, StoredSessionSuggestion[]>;
   readMembershipFacts: SessionHistoryReader<SessionMembershipFactsWorkerInput>;
   readProgressCard: SessionHistoryReader<SessionProgressCardWorkerInput, ProgressCard | null>;
   readConversationDelivery: SessionHistoryReader<
@@ -741,6 +738,10 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
   readGoalOperationReceipt: SessionHistoryReader<
     SessionGoalOperationReceiptWorkerInput,
     SessionGoalOperationLookupResult
+  >;
+  readPendingInputHistory: SessionHistoryReader<
+    PendingInputHistoryWorkerInput,
+    PendingInputHistorySnapshot
   >;
   readPendingInputReceipts: SessionHistoryReader<
     SessionPendingInputReceiptsWorkerInput,

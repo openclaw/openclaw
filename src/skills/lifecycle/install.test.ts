@@ -18,7 +18,6 @@ import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { buildWorkspaceSkillStatus } from "../discovery/status.js";
 import { hasBinary } from "../loading/config.js";
-import { recordSkillFileHost } from "../loading/skill-file-host.js";
 import {
   loadWorkspaceSkills,
   prepareWorkspaceSkills,
@@ -27,6 +26,7 @@ import {
 import { resolveWorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
 import { closeSkillsWatchers } from "../runtime/refresh.js";
 import { readSkillResourceFiles } from "../runtime/resources.js";
+import { recordSkillFileHost } from "../skill-file-host.js";
 import { runCommandWithTimeoutMock } from "../test-support/install-test-mocks.js";
 import type { SkillEntry, SkillInstallSpec } from "../types.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";

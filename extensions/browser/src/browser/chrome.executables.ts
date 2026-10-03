@@ -1,4 +1,3 @@
-/** Chromium-family executable discovery across supported platforms. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,7 +9,6 @@ import {
 import { execBrowserProbe, WINDOWS_VERSION_DIR_RE } from "./chrome.executable-probe.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 
-/** Browser executable candidate with product metadata and filesystem path. */
 export type BrowserExecutable = {
   kind: "brave" | "canary" | "chromium" | "chrome" | "custom" | "edge";
   path: string;
@@ -580,7 +578,6 @@ function chromeExecutableCandidates(platform: NodeJS.Platform): BrowserExecutabl
   }
 }
 
-/** Resolve the Google Chrome executable for a named platform when available. */
 export function resolveGoogleChromeExecutableForPlatform(
   platform: NodeJS.Platform,
 ): BrowserExecutable | null {
@@ -600,7 +597,6 @@ export function resolveGoogleChromeExecutableForPlatform(
   return findFirstChromeExecutable(candidates, platform);
 }
 
-/** Resolve the preferred Chromium-family executable for a platform. */
 export function resolveBrowserExecutableForPlatform(
   resolved: ResolvedBrowserConfig,
   platform: NodeJS.Platform,

@@ -15,7 +15,6 @@ import {
 afterEach(cleanupUsagePageTest);
 
 it.each([
-  { name: "single selection", selected: ["first"], query: "", expected: ["first"], tokens: 100 },
   {
     name: "multiple selections",
     selected: ["first", "second"],

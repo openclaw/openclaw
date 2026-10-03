@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { detectPackageManager } from "./detect-package-manager.js";
+import { isMissingPathError } from "./errno.js";
 import { createGitCommandError, executeGitCommand } from "./git-exec.js";
 import { readInstallOwner, type InstallOwner } from "./install-owner.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
@@ -249,10 +250,21 @@ async function resolveUpdateInstallOwnership(
   if (installOwner) {
     return { installKind: "host", installOwner };
   }
-  const result = await runUpdateGitCommand(root, ["rev-parse", "--show-toplevel"], {
-    ...options,
-    timeoutMs: options.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS,
-  });
+  // An exact checkout root needs a marker unless Git ownership is supplied
+  // explicitly. Avoid spawning Git for packages nested inside another checkout.
+  const probeGit =
+    process.env.GIT_DIR ||
+    process.env.GIT_WORK_TREE ||
+    (await fs.lstat(path.join(root, ".git")).then(
+      () => true,
+      (error: unknown) => !isMissingPathError(error),
+    ));
+  const result = probeGit
+    ? await runUpdateGitCommand(root, ["rev-parse", "--show-toplevel"], {
+        ...options,
+        timeoutMs: options.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS,
+      })
+    : null;
   options.signal?.throwIfAborted();
   if (result?.termination === "timeout") {
     // An expired probe does not establish that this root is a package installation.

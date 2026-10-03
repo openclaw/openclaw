@@ -20,7 +20,7 @@ import {
   tempDirs,
 } from "./suite-run-isolated.test-support.js";
 import { runQaFlowSuiteFromRuntime } from "./suite-run.runtime.js";
-import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
+import { makeQaSuiteTestScenario, recordQaSuiteTestResults } from "./suite-test-helpers.js";
 import type { QaSuiteRunner, QaSuiteScenarioRunner, QaSuiteScenarioResult } from "./suite-types.js";
 import * as suite from "./suite.js";
 
@@ -170,16 +170,20 @@ describe("isolated QA suite transport cleanup", () => {
           throw publicationError;
         }
       });
-      const runChild = vi.fn<QaSuiteRunner>().mockResolvedValue({
+      const runChild = vi.fn<QaSuiteRunner>().mockImplementation(async (params) => ({
         outputDir: "/qa-child",
         evidencePath: "/qa-child/qa-evidence.json",
         reportPath: "/qa-child/qa-suite-report.md",
         summaryPath: "/qa-child/qa-suite-summary.json",
         report: "",
-        scenarios: [{ name: "worker result", status: "pass", steps: [] }],
+        ...recordQaSuiteTestResults(
+          params,
+          [makeQaSuiteTestScenario("leased-channel-scenario")],
+          [{ name: "worker result", status: "pass", steps: [] }],
+        ),
         startedScenarioIds: ["leased-channel-scenario"],
         watchUrl: lab.baseUrl,
-      });
+      }));
       if (status === "fail") {
         runChild.mockRejectedValueOnce(new Error("worker failed"));
       }
@@ -238,20 +242,19 @@ describe("isolated QA suite transport cleanup", () => {
         };
       });
       const artifacts = {
-        evidence: undefined,
         evidencePath: "/qa-output/qa-evidence.json",
         report: "",
         reportPath: "/qa-output/qa-suite-report.md",
         summaryPath: "/qa-output/qa-suite-summary.json",
       };
-      mocks.writeQaSuiteArtifacts.mockImplementationOnce(async () => {
+      mocks.writeQaSuiteArtifacts.mockImplementationOnce(async (params) => {
         partialStarted.resolve();
         await partialWrite.promise;
         order.push("partial write settled");
         if (partialOutcome !== "success") {
           throw writeError;
         }
-        return artifacts;
+        return { ...artifacts, evidence: params.recordedEvidence };
       });
       let progressFailureReported = false;
       const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
@@ -286,7 +289,11 @@ describe("isolated QA suite transport cleanup", () => {
         return {
           ...artifacts,
           outputDir: params!.outputDir!,
-          scenarios: [{ name: id, status: "pass", steps: [] }],
+          ...recordQaSuiteTestResults(
+            params,
+            [makeQaSuiteTestScenario(id)],
+            [{ name: id, status: "pass", steps: [] }],
+          ),
           startedScenarioIds: [id],
           watchUrl: lab.baseUrl,
         };
@@ -433,15 +440,14 @@ describe("isolated QA suite transport cleanup", () => {
     });
     const partialWrite = createDeferred<void>();
     const artifacts = {
-      evidence: undefined,
       evidencePath: "/qa-output/qa-evidence.json",
       report: "",
       reportPath: "/qa-output/qa-suite-report.md",
       summaryPath: "/qa-output/qa-suite-summary.json",
     };
-    mocks.writeQaSuiteArtifacts.mockImplementationOnce(async () => {
+    mocks.writeQaSuiteArtifacts.mockImplementationOnce(async (params) => {
       await partialWrite.promise;
-      return artifacts;
+      return { ...artifacts, evidence: params.recordedEvidence };
     });
     mocks.disposeRegisteredAgentHarnesses.mockImplementationOnce(async () => {
       expect(mocks.writeQaSuiteArtifacts).toHaveBeenCalledTimes(2);
@@ -468,7 +474,11 @@ describe("isolated QA suite transport cleanup", () => {
       workers[index]!.resolve({
         ...artifacts,
         outputDir: "/qa-child",
-        scenarios: [results[index]!],
+        ...recordQaSuiteTestResults(
+          runChild.mock.calls[index]![0],
+          [context.selectedScenarios[index]!],
+          [results[index]!],
+        ),
         startedScenarioIds: [context.selectedScenarios[index]!.id],
         watchUrl: lab.baseUrl,
       });
@@ -602,16 +612,20 @@ describe("isolated QA suite transport cleanup", () => {
     const cleanupError = new Error("agent harness disposal failed");
     mocks.disposeRegisteredAgentHarnesses.mockRejectedValueOnce(cleanupError);
     const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    const runChild = vi.fn<QaSuiteRunner>().mockResolvedValue({
+    const runChild = vi.fn<QaSuiteRunner>().mockImplementation(async (params) => ({
       outputDir: "/qa-child",
       evidencePath: "/qa-child/qa-evidence.json",
       reportPath: "/qa-child/qa-suite-report.md",
       summaryPath: "/qa-child/qa-suite-summary.json",
       report: "",
-      scenarios: [{ name: "leased-channel-scenario", status: "pass", steps: [] }],
+      ...recordQaSuiteTestResults(
+        params,
+        [makeQaSuiteTestScenario("leased-channel-scenario")],
+        [{ name: "leased-channel-scenario", status: "pass", steps: [] }],
+      ),
       startedScenarioIds: ["leased-channel-scenario"],
       watchUrl: lab.baseUrl,
-    });
+    }));
     const context = createCleanupTestContext();
     context.progressEnabled = true;
 

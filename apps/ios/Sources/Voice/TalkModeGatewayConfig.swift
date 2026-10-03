@@ -1,12 +1,6 @@
 import Foundation
 import OpenClawKit
 
-enum TalkModeExecutionMode: Equatable {
-    case native
-    case realtimeWebRTC
-    case realtimeRelay
-}
-
 struct TalkRuntimeIssue: Equatable {
     enum Code: String {
         case audioInputUnavailable = "audio_input_unavailable"
@@ -78,9 +72,9 @@ enum TalkVoiceModeDescriptorBuilder {
         isRealtime: Bool) -> TalkVoiceModeDescriptor
     {
         let normalizedProvider = providerId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let trimmedModel = Self.trimmed(modelId)
-        let trimmedVoice = Self.trimmed(voiceId)
-        let trimmedTransport = Self.trimmed(transport)
+        let trimmedModel = modelId?.trimmedNonEmpty
+        let trimmedVoice = voiceId?.trimmedNonEmpty
+        let trimmedTransport = transport?.trimmedNonEmpty
         let title = if isRealtime, normalizedProvider == "openai", trimmedModel == "gpt-realtime-2" {
             "GPT Realtime 2.0"
         } else if isRealtime, normalizedProvider == "openai" {
@@ -110,11 +104,6 @@ enum TalkVoiceModeDescriptorBuilder {
         return TalkVoiceModeDescriptor(
             title: title,
             subtitle: details.isEmpty ? nil : details.joined(separator: " • "))
-    }
-
-    private static func trimmed(_ value: String?) -> String? {
-        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 
     private static func voiceLabel(_ voice: String) -> String {
@@ -165,47 +154,9 @@ enum TalkModeRuntimeRoute: Equatable {
     }
 }
 
-struct TalkModeResolvedRouting: Equatable {
-    let activeProvider: String
-    let realtimeProvider: String?
-    let realtimeModelId: String?
-    let route: TalkModeRuntimeRoute
-}
-
-enum TalkModeRoutingResolver {
-    static func resolve(
-        parsed: TalkModeGatewayConfigState,
-        defaultProvider: String) -> TalkModeResolvedRouting
-    {
-        let route: TalkModeRuntimeRoute
-            // Only explicit Gateway realtime config selects a realtime transport. Other
-            // speech providers synthesize through talk.speak, except the shipped local ElevenLabs path.
-            = if parsed.executionMode == .realtimeWebRTC
-        {
-            .realtimeWebRTC
-        } else if parsed.executionMode == .realtimeRelay {
-            .realtimeRelay
-        } else if Self.normalized(parsed.snapshot.activeProvider) == Self.normalized(defaultProvider) {
-            .localElevenLabs
-        } else {
-            .gatewayTalkSpeak
-        }
-
-        return TalkModeResolvedRouting(
-            activeProvider: parsed.snapshot.activeProvider,
-            realtimeProvider: parsed.snapshot.realtime.provider,
-            realtimeModelId: parsed.realtimeModelId,
-            route: route)
-    }
-
-    private static func normalized(_ value: String) -> String {
-        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    }
-}
-
 struct TalkModeGatewayConfigState {
     let snapshot: TalkConfigSnapshot
-    let executionMode: TalkModeExecutionMode
+    let route: TalkModeRuntimeRoute
     let defaultVoiceId: String?
     let configuredModelId: String?
     let defaultModelId: String
@@ -241,21 +192,11 @@ enum TalkModeGatewayConfigParser {
         let realtimeModelId = gatewayOwnsRealtimeModel
             ? realtime.modelId
             : (realtime.modelId ?? defaultRealtimeModelIdFallback)
-        // Direct provider WebRTC can answer before consulting the agent, so this explicit
-        // policy must stay on the relay that enforces final-transcript consultations.
-        let requiresForcedAgentConsultRelay = realtime.consultRouting == "force-agent-consult"
-        let requiresGatewayRealtimeTransport = requiresForcedAgentConsultRelay
-            || realtime.transport == "gateway-relay"
-            || realtime.transport == "provider-websocket"
-            || Self.usesAzureOpenAI(provider: realtime.provider, config: realtime.providerConfig)
-        let executionMode = Self.resolvedExecutionMode(
-            realtime,
-            requiresGatewayRealtimeTransport: requiresGatewayRealtimeTransport)
         let rawConfigApiKey = activeConfig?["apiKey"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         return TalkModeGatewayConfigState(
             snapshot: snapshot,
-            executionMode: executionMode,
+            route: self.runtimeRoute(snapshot: snapshot, defaultProvider: defaultProvider),
             defaultVoiceId: defaultVoiceId,
             configuredModelId: model,
             defaultModelId: defaultModelId,
@@ -264,28 +205,34 @@ enum TalkModeGatewayConfigParser {
             rawConfigApiKey: rawConfigApiKey)
     }
 
-    private static func resolvedExecutionMode(
-        _ realtime: TalkRealtimeConfigSnapshot,
-        requiresGatewayRealtimeTransport: Bool) -> TalkModeExecutionMode
+    private static func runtimeRoute(
+        snapshot: TalkConfigSnapshot,
+        defaultProvider: String) -> TalkModeRuntimeRoute
     {
-        guard realtime.mode == "realtime" else { return .native }
-        if realtime.brain != nil, realtime.brain != "agent-consult" {
-            return .native
-        }
-        if requiresGatewayRealtimeTransport {
+        let nativeRoute: TalkModeRuntimeRoute = snapshot.activeProvider
+            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == defaultProvider
+            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            ? .localElevenLabs : .gatewayTalkSpeak
+        let realtime = snapshot.realtime
+        guard realtime.mode == "realtime",
+              realtime.brain == nil || realtime.brain == "agent-consult"
+        else { return nativeRoute }
+        // Forced consultation must use the relay that enforces final-transcript consultations.
+        if realtime.consultRouting == "force-agent-consult"
+            || realtime.transport == "gateway-relay"
+            || realtime.transport == "provider-websocket"
+            || self.usesAzureOpenAI(provider: realtime.provider, config: realtime.providerConfig)
+        {
             return .realtimeRelay
         }
         switch realtime.transport {
         case "managed-room":
-            return .native
+            return nativeRoute
         case "webrtc", nil:
-            if realtime.provider?.lowercased() != "openai" {
-                return .realtimeRelay
-            }
+            return realtime.provider?.lowercased() == "openai" ? .realtimeWebRTC : .realtimeRelay
         default:
             return .realtimeRelay
         }
-        return .realtimeWebRTC
     }
 
     private static func usesAzureOpenAI(

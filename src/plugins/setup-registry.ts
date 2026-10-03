@@ -105,8 +105,6 @@ type SetupAutoEnableReason = {
   reason: string;
 };
 
-type PluginApiBuildParams = Parameters<typeof buildPluginApi>[0];
-
 const NOOP_LOGGER: PluginLogger = {
   info() {},
   warn() {},
@@ -272,27 +270,6 @@ function resolveSetupRegistration(
     },
     initialize: moduleLoader.initialize,
   };
-}
-
-function buildSetupPluginApi(params: {
-  record: PluginManifestRecord;
-  setupSource: string;
-  handlers: PluginApiBuildParams["handlers"];
-}): ReturnType<typeof buildPluginApi> {
-  return buildPluginApi({
-    id: params.record.id,
-    name: params.record.name ?? params.record.id,
-    version: params.record.version,
-    description: params.record.description,
-    source: params.setupSource,
-    rootDir: params.record.rootDir,
-    registrationMode: "setup-only",
-    config: {} as OpenClawConfig,
-    runtime: createUnavailableRuntime("setup-only", params.record.id),
-    logger: NOOP_LOGGER,
-    resolvePath: (input) => input,
-    handlers: params.handlers,
-  });
 }
 
 function matchesProvider(provider: ProviderPlugin, providerId: string): boolean {
@@ -598,9 +575,18 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
     const recordCliBackends = new Map<string, SetupCliBackendEntry>();
     const recordConfigMigrations: SetupConfigMigrationEntry[] = [];
     const recordAutoEnableProbes: SetupAutoEnableProbeEntry[] = [];
-    const api = buildSetupPluginApi({
-      record,
-      setupSource: setupRegistration.setupSource,
+    const api = buildPluginApi({
+      id: record.id,
+      name: record.name ?? record.id,
+      version: record.version,
+      description: record.description,
+      source: setupRegistration.setupSource,
+      rootDir: record.rootDir,
+      registrationMode: "setup-only",
+      config: {},
+      runtime: createUnavailableRuntime("setup-only", record.id),
+      logger: NOOP_LOGGER,
+      resolvePath: (input) => input,
       handlers: {
         registerProvider(provider) {
           const key = `${record.id}:${normalizeProviderId(provider.id)}`;
@@ -773,13 +759,7 @@ export const resolvePluginSetupAutoEnableReasons = withPluginSetupCache(function
   const reasons: SetupAutoEnableReason[] = [];
   const seen = new Set<string>();
 
-  for (const entry of resolvePluginSetupRegistry({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env,
-    pluginIds: params.pluginIds,
-    manifestRegistry: params.manifestRegistry,
-  }).autoEnableProbes) {
+  for (const entry of resolvePluginSetupRegistry(params).autoEnableProbes) {
     const raw = entry.probe({
       config: params.config,
       env,

@@ -53,7 +53,7 @@ session to confirm the effective tool list.
 - **Fast mode:** with swarm enabled, native sub-agents inherit the requester's setting only when the resolved child provider and model match the requester's active model. A different child model uses its own defaults. Explicit `sessions_spawn.fastMode` values (`true`, `false`, or `"auto"`) take precedence; aliases resolving to the same model preserve inheritance.
 - **Run timeout:** pass `runTimeoutSeconds` to set a timeout for a specific native, ACP, or visible sub-agent run. When omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` if configured; otherwise it falls back to `0` (no timeout). An explicit `0` disables the timeout for that run.
 - **Process lifetime:** a detached OpenClaw sub-agent has its own run lifecycle. A background task created inside an external CLI backend is different: it shares the parent CLI subprocess and stops if that parent reaches `agents.defaults.timeoutSeconds`.
-- **Task delivery:** hidden and visible native sub-agents receive their delegated task in a `[Subagent Task]` message appended after any forked history. The message identifies the current child assignment and treats inherited conversation as background context. The hidden sub-agent system prompt carries runtime rules and routing context, not a duplicate of the task.
+- **Task delivery:** hidden and visible native sub-agents receive their delegated task in a user message appended after any forked history. Model-only runtime context identifies the current child assignment and treats inherited conversation as background context; the Control UI displays only the task text. The hidden sub-agent system prompt carries runtime rules and routing context, not a duplicate of the task.
 
 Guests with `operator.sessions.write` can launch hidden native children for their
 own sandboxed work and receive private parent completions. The child keeps the
@@ -151,7 +151,6 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
     },
     entries: {
       coordinator: {
-        default: true,
         subagents: { delegationMode: "prefer" },
       },
     },
@@ -327,7 +326,10 @@ presented as child-provided data using the same escaping as completion results. 
 notice is distinct from a completion and uses the requester's existing message
 queue policy if it is already running. It does not resume the child: send the
 continuation with `sessions_send` to the named child session. Yielding again in
-the requester does not repeat an already delivered pause notice.
+the requester does not repeat an already delivered pause notice. A default
+follow-up already admitted on the child's session while the child was still
+yielding continues it instead, so no notice is sent. A follow-up with its own
+requester stays a separate sibling and leaves the notice in place.
 
 A plugin can then continue that same run
 by calling `api.runtime.subagent.run` with the paused `sessionKey`, instead of

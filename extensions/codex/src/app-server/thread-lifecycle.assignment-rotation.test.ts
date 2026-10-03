@@ -71,7 +71,7 @@ async function fixture() {
   onTestFinished(async () => {
     await wire.client.closeAndWait();
   });
-  const options: CodexStartOrResumeThreadParams = {
+  const options = {
     client: wire.client,
     bindingStore: store,
     params,
@@ -83,7 +83,7 @@ async function fixture() {
     mcpServersFingerprint: "mcp-before",
     mcpServersFingerprintEvaluated: true,
     appServerRuntimeFingerprint: "connection-A",
-  };
+  } satisfies CodexStartOrResumeThreadParams;
   const parent = await startOrResumeThread(options);
   const releasePredecessor = vi.fn(async (threadId: string) => {
     await wire.client.request("thread/unsubscribe", { threadId });

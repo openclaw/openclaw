@@ -265,13 +265,13 @@ describe("Goal chat admission and continuation", () => {
     const request = freshGoalStart("Review the sample backlog", sessionId);
     let entryAtAck: SessionEntry | undefined;
     let messagesAtAck: ReturnType<typeof userMessages> = [];
-    const creationEvents = () =>
-      listSessionStateEventsSince(sessionKey, "main", 0).events.filter(
+    const creationEvents = async () =>
+      (await listSessionStateEventsSince(sessionKey, "main", 0)).events.filter(
         (event) =>
           event.sessionId === entryAtAck?.sessionId &&
           (event.kind === "created" || event.kind === "goal_changed"),
       );
-    let eventsAtAck: ReturnType<typeof creationEvents> = [];
+    let eventsAtAck: ReturnType<typeof creationEvents> = Promise.resolve([]);
     await withHeldModel(async () => {
       const started = await rpc(
         "chat.send",
@@ -285,6 +285,7 @@ describe("Goal chat admission and continuation", () => {
         },
         requestClient,
       );
+      const acknowledgedEvents = await eventsAtAck;
       expect(started.mock.calls).toEqual([
         [
           true,
@@ -300,14 +301,14 @@ describe("Goal chat admission and continuation", () => {
       });
       expect(entryAtAck?.sessionId).not.toBe(request.idempotencyKey);
       expect(messagesAtAck).toEqual([expect.objectContaining({ content: request.message })]);
-      expect(eventsAtAck.map((event) => event.kind)).toEqual(["created", "goal_changed"]);
+      expect(acknowledgedEvents.map((event) => event.kind)).toEqual(["created", "goal_changed"]);
       await waitForModelRun();
       context.dedupe.clear();
       const replay = await rpc("chat.send", request, undefined, requestClient);
       expect(replay.mock.calls[0]?.[1]).toMatchObject({ replayed: true, runId: sessionId });
       expect(userMessages()).toHaveLength(1);
       expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-      expect(creationEvents()).toEqual(eventsAtAck);
+      expect(await creationEvents()).toEqual(acknowledgedEvents);
       expect(acpDispatch).not.toHaveBeenCalled();
     });
   });

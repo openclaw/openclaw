@@ -155,8 +155,6 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +1: bounded structured-input compiler/executor for native harness protocol adapters.
   "agent-harness": 2,
   "agent-harness-runtime": 10,
-  "command-auth": 78,
-  discord: 47,
   // +4: deprecated media projection type, builder, and turn aliases.
   "channel-inbound": 18,
   // +2: Slack progress-draft render bridge (function + mode type).
@@ -172,34 +170,36 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +2: shipped Slack and Discord setup helpers retained through their package migration window.
   "setup-runtime": 2,
   "reply-history": 6,
-  "provider-auth": 19,
-  "telegram-account": 3,
+  "provider-auth": 15,
 } satisfies Record<string, number>);
 
 export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env) {
   const budgets = {
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
-      154,
+      151,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
       // +1: createChannelSecretContract consolidates seven channel secret contracts (approved by Peter, 2026-10-01).
       // +1: createSessionHeaderLink shares plugin-owned conversation navigation (PR #158742).
-      3759,
+      // +4: owner-approved replay V2 types on core and plugin-entry (2026-10-01).
+      // +11: ten service-lifetime type exports and the owner-bound scheduler resolver.
+      3642,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
       // +1: createChannelSecretContract consolidates seven channel secret contracts (approved by Peter, 2026-10-01).
       // +1: createSessionHeaderLink shares plugin-owned conversation navigation (PR #158742).
-      2188,
+      // +1: resolvePluginServiceScheduler borrows an existing service/account/CLI owner.
+      2108,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      269,
+      137,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

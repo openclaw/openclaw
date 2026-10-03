@@ -315,7 +315,6 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     preparedSyntheticAuthComplete:
       params.preparedSyntheticAuthComplete ?? isPreparedModelCatalogFull(params.snapshot),
     workspaceDir,
-    skipSetupProviderFallback: true,
     syntheticAuthProviderRefs: listEnabledSyntheticAuthProviderRefs(metadataSnapshot, params.cfg),
     externalCliProviderIds: resolveExternalCliAuthScopeFromConfig(params.cfg)?.providerIds ?? [],
     preparedRuntimeAuthStore: authStore,

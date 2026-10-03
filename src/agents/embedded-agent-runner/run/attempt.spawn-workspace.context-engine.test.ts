@@ -244,7 +244,7 @@ function expectOrphanReply(messages: unknown, latestPrompt: string) {
     "final assistant",
   );
   expect(assistant.content).toBe(`stub-provider-target=${latestPrompt}`);
-  expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
+  expect(hoisted.sessionManager.branchAsync).toHaveBeenCalledWith("parent-leaf");
 }
 
 function expectFields(actual: Record<string, unknown>, expected: Record<string, unknown>) {
@@ -722,13 +722,13 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       replayedEntries.push(`model:${String(provider)}/${String(modelId)}`);
       return "replayed-model";
     });
-    hoisted.sessionManager.appendCustomEntry.mockImplementation((...args: unknown[]) => {
+    hoisted.sessionManager.appendCustomEntryAsync.mockImplementation((...args: unknown[]) => {
       if (args[0] === "model-snapshot") {
         replayedEntries.push(`custom:${args[0]}:${JSON.stringify(args[1])}`);
       }
       return "replayed-custom";
     });
-    hoisted.sessionManager.appendLabelChange.mockImplementation((...args: unknown[]) => {
+    hoisted.sessionManager.appendLabelChangeAsync.mockImplementation((...args: unknown[]) => {
       replayedEntries.push(`label:${String(args[0])}/${String(args[1])}`);
       return "replayed-label";
     });
@@ -764,7 +764,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     };
     installOrphanMetadata(olderPrompt, [labelEntry]);
     hoisted.sessionManager.appendThinkingLevelChange.mockResolvedValue("replayed-thinking");
-    hoisted.sessionManager.appendLabelChange.mockImplementation((targetId: unknown) => {
+    hoisted.sessionManager.appendLabelChangeAsync.mockImplementation((targetId: unknown) => {
       throw new Error(`Entry ${String(targetId)} not found`);
     });
     const { seen, sessionPrompt } = captureOrphanPrompt(olderPrompt);
@@ -779,7 +779,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(result.finalPromptText).toBe(`${orphanMarker}\n${olderPrompt}\n\n${latestPrompt}`);
     expect(seen.modelInputPrompt).toBe(result.finalPromptText);
     expectOrphanReply(result.messagesSnapshot, latestPrompt);
-    expect(hoisted.sessionManager.appendLabelChange).not.toHaveBeenCalled();
+    expect(hoisted.sessionManager.appendLabelChangeAsync).not.toHaveBeenCalled();
   });
 
   it("removes the repaired orphan from assembled history when the context engine appends the active prompt", async () => {
@@ -826,7 +826,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(JSON.stringify(seen.assembledMessages)).not.toContain(olderPrompt);
     expect(JSON.stringify(seen.messages)).not.toContain(olderPrompt);
     expect(JSON.stringify(seen.messages)).toContain(latestPrompt);
-    expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
+    expect(hoisted.sessionManager.branchAsync).toHaveBeenCalledWith("parent-leaf");
   });
 
   it("keeps bootstrap truncation warnings out of WebChat runtime context", async () => {
@@ -1081,7 +1081,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(runtimeContext.content).toContain("internal heartbeat event");
     expect(contextCompiled?.data?.systemPrompt).not.toContain("internal heartbeat event");
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("internal heartbeat event");
-    expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
+    expect(hoisted.sessionManager.branchAsync).toHaveBeenCalledWith("parent-leaf");
   });
 
   it("skips blank visible prompts with replay history before provider submission", async () => {

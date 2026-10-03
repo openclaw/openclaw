@@ -791,7 +791,16 @@ describe("node worker bundle installer", () => {
       const coordinator = createNodeWorkspaceRetainCoordinator({
         gatewayNamespace: fixture.input.gatewayNamespace,
         environments: { list: () => [environment] },
-        placements: { list: () => [], listPendingWorkspaceResults: () => [] },
+        placements: {
+          list: () => [],
+          prepareRuntimeRefresh: async () => ({
+            placement: undefined,
+            move: undefined,
+            pendingResult: undefined,
+            assertCurrent: () => {},
+            release: () => {},
+          }),
+        },
         bundleRetention: {
           isEnvironmentOwnedNode: () => true,
           currentBuild: async () => fixture.input.build,

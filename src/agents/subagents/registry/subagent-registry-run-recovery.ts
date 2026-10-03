@@ -1,4 +1,5 @@
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
+import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
@@ -12,12 +13,16 @@ import { runWithGatewayDetachedWorkContinuation } from "../../../process/gateway
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import { replaceRequesterCronAuthorityEntry } from "../requester-cron-authority.js";
+import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
 import {
   clearDeliveryState,
   normalizeSubagentRunState,
   resetRequesterSettleWakeRetry,
 } from "./subagent-delivery-state.js";
-import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
+import {
+  safeRemoveAttachmentsDir,
+  shouldRemoveSubagentAttachments,
+} from "./subagent-registry-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
@@ -47,7 +52,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     const postimages = new Map<string, SubagentRunRecord | null>();
     for (const current of rows.values()) {
       if (
-        current.childSessionKey !== next.childSessionKey ||
+        !matchesSubagentChildSessionOwner(current, next.childSessionKey, next.childAgentId) ||
         current.runId === next.runId ||
         compareSubagentRunGeneration(current, next) >= 0 ||
         !current.killReconciliation
@@ -81,6 +86,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
    */
   readonly adoptPausedSubagentRunForFollowUp = async (params: {
     childSessionKey: string;
+    childAgentId?: string;
     runId: string;
     task: string;
     /** Exact paused owner captured by explicit task-resume admission. */
@@ -94,14 +100,16 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     if (!childSessionKey || !runId) {
       return false;
     }
+    const childAgentId = params.childAgentId ?? params.expected?.childAgentId;
     // Select the newest paused row rather than the newest row overall: a
     // requester-bound follow-up stays a sibling at a higher generation, and
     // matching on generation alone would let that sibling hide the paused owner
     // and park its requester for good.
     const paused = getLatestSubagentRunByChildSessionKeyFromRuns(
-      this.options.getRunsForChildSession(childSessionKey),
+      this.options.getRunsForChildSession(childSessionKey, childAgentId),
       childSessionKey,
       (entry) => entry.pauseReason === "sessions_yield",
+      childAgentId,
     );
     if (!paused || (params.expected && !isSameSubagentRunOwner(paused, params.expected))) {
       return false;
@@ -136,6 +144,8 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     expected?: SubagentRunRecord;
     runTimeoutSeconds?: number;
     allowEndedSource?: boolean;
+    /** Ordinary next turns retain the completed execution's independent delivery. */
+    preserveCompletedRun?: boolean;
     preserveFrozenResultFallback?: boolean;
     // A follow-up that continues a paused run inherits the original requester's
     // wake credential. An operator steer intentionally drops it: the operator is
@@ -172,11 +182,16 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     if (!selected) {
       return false;
     }
+    const preserveCompletedRun = replaceParams.preserveCompletedRun === true;
+    const authority = preserveCompletedRun
+      ? await captureOperatorToolGatewayContinuationContext()
+      : undefined;
+    let custodyTransferred = false;
     const runIds = new Set([
       previousRunId,
       nextRunId,
       ...Array.from(
-        this.options.getRunsForChildSession(selected.childSessionKey),
+        this.options.getRunsForChildSession(selected.childSessionKey, selected.childAgentId),
         (row) => row.runId,
       ),
       ...(selected.requesterSettleWake?.batchRunIds ?? []),
@@ -191,6 +206,10 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
           if (
             !source ||
             !isSameSubagentRunOwner(source, selected) ||
+            (preserveCompletedRun &&
+              (source.execution.status !== "terminal" ||
+                source.pauseReason === "sessions_yield" ||
+                previousRunId === nextRunId)) ||
             (replaceParams.expected && !isSameSubagentRunOwner(source, replaceParams.expected)) ||
             (replaceParams.expected &&
               ((typeof source.execution.endedAt === "number" && !replaceParams.allowEndedSource) ||
@@ -205,7 +224,9 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
               "Replacement subagent id already exists",
             );
           }
-          const siblings = [...this.options.getRunsForChildSession(source.childSessionKey)];
+          const siblings = [
+            ...this.options.getRunsForChildSession(source.childSessionKey, source.childAgentId),
+          ];
           if (
             siblings.some((row) => !runIds.has(row.runId)) ||
             (source.requesterSettleWake?.batchRunIds ?? []).some((id) => !runIds.has(id))
@@ -214,8 +235,9 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
           }
           const now = Date.now();
           const generation = nextSubagentRunGeneration(
-            [...this.options.getRunsForChildSession(source.childSessionKey), source],
+            [...siblings, source],
             source.childSessionKey,
+            source.childAgentId,
           );
           const spawnMode = source.spawnMode === "session" ? "session" : "run";
           const runTimeoutSeconds =
@@ -256,9 +278,13 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
           const next: SubagentRunRecord = normalizeSubagentRunState({
             ...source,
             runId: nextRunId,
-            // Materialize the legacy run-id fallback so later replacements keep the
-            // same canonical task owner after this source row is retired.
-            taskRunId: source.taskRunId ?? source.runId,
+            // Completed follow-ups start a new task; steer retains its task's lineage.
+            taskRunId: preserveCompletedRun ? nextRunId : (source.taskRunId ?? source.runId),
+            requesterTurnRunId: preserveCompletedRun ? undefined : source.requesterTurnRunId,
+            requesterTurnYielded: preserveCompletedRun ? undefined : source.requesterTurnYielded,
+            retireAfterRequesterTurn: preserveCompletedRun
+              ? undefined
+              : source.retireAfterRequesterTurn,
             task: nextTask,
             generation,
             createdAt: now,
@@ -322,14 +348,22 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             });
           }
           postimages.set(nextRunId, next);
-          if (previousRunId !== nextRunId) {
+          if (preserveCompletedRun) {
+            postimages.set(previousRunId, {
+              ...source,
+              execution: { ...source.execution, suppressSessionEffects: true },
+            });
+          } else if (previousRunId !== nextRunId) {
             postimages.set(previousRunId, null);
           }
           return { value: { source, next }, postimages };
         },
         {
           runs: this.options.runs,
-          assertCurrent,
+          assertCurrent: () => {
+            assertCurrent();
+            authority?.assertCurrent();
+          },
           onPublished: (postimages, value) => {
             const next = postimages.get(nextRunId);
             if (!value || !next) {
@@ -340,7 +374,14 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
               next,
               replaceParams.gatewayContextResolver ?? getGatewayContextResolver(value.source),
             );
-            subagentRuns.transferCompletionAuthority(value.source, next);
+            if (preserveCompletedRun) {
+              if (authority?.operatorAuthority) {
+                subagentRuns.bindCompletionAuthority(next, authority);
+                custodyTransferred = true;
+              }
+            } else {
+              subagentRuns.transferCompletionAuthority(value.source, next);
+            }
             subagentRuns.commitOwnership(next);
             replaceParams.onPublished?.(next);
           },
@@ -356,6 +397,10 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
         return false;
       }
       throw error;
+    } finally {
+      if (!custodyTransferred) {
+        authority?.release();
+      }
     }
     if (!replacement) {
       return false;
@@ -365,15 +410,20 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     if (!isSameSubagentRunOwner(this.options.runs.get(nextRunId), next)) {
       return true;
     }
-    replaceRequesterCronAuthorityEntry({
-      previous: source,
-      next,
-      preserve: replaceParams.preserveRequesterSettleWake === true,
-    });
-    if (previousRunId !== nextRunId) {
+    if (!preserveCompletedRun) {
+      replaceRequesterCronAuthorityEntry({
+        previous: source,
+        next,
+        preserve: replaceParams.preserveRequesterSettleWake === true,
+      });
+    }
+    if (preserveCompletedRun && !source.cleanupHandled) {
+      this.options.resumedRuns.delete(getSubagentRunRuntimeKey(source));
+      this.options.resumeSubagentRun(previousRunId);
+    } else if (!preserveCompletedRun && previousRunId !== nextRunId) {
       this.options.clearPendingLifecycleError(previousRunId);
       this.options.resumedRuns.delete(getSubagentRunRuntimeKey(source));
-      if (this.shouldDeleteAttachments(source)) {
+      if (shouldRemoveSubagentAttachments(source)) {
         void safeRemoveAttachmentsDir(source);
       }
       if (

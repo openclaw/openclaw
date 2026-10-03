@@ -8,6 +8,7 @@ export type UpdateCheckLifecycle = {
   scheduler: GatewayScheduler;
   signal: AbortSignal;
   campaign?: UpdateCampaignController;
+  installStatus?: Awaited<ReturnType<typeof resolveStartupInstallStatus>>;
   isCurrent: () => boolean;
   refreshes: WeakMap<OpenClawConfig, Promise<void>>;
   run: <T>(work: (signal: AbortSignal) => Promise<T>) => Promise<T>;
@@ -33,11 +34,17 @@ export function createGatewayUpdateLifecycle(scheduler: GatewayScheduler): Updat
     });
   const initialize = async () => {
     signal.throwIfAborted();
+    if (lifecycle.installStatus) {
+      return lifecycle.installStatus;
+    }
     if (!initialization) {
       const task = run(async () => {
         const { resolveStartupInstallStatus } = await import("./update-install-status.js");
         signal.throwIfAborted();
-        return resolveStartupInstallStatus(false, signal);
+        const result = await resolveStartupInstallStatus(false, signal);
+        signal.throwIfAborted();
+        lifecycle.installStatus = result;
+        return result;
       });
       initialization = task;
       void task.catch(() => {

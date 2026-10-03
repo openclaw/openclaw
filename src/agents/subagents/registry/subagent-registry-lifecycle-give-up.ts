@@ -11,7 +11,11 @@ import {
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import { shouldSuspendPendingFinalDelivery } from "./subagent-registry-cleanup.js";
-import { logAnnounceGiveUp, safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
+import {
+  logAnnounceGiveUp,
+  safeRemoveAttachmentsDir,
+  shouldRemoveSubagentAttachments,
+} from "./subagent-registry-helpers.js";
 import { retireSupersededCleanupIfNeeded } from "./subagent-registry-lifecycle-attempt.js";
 import { suspendPendingFinalDelivery } from "./subagent-registry-lifecycle-cleanup.js";
 import type { SubagentLifecycleAnnounceCleanupContext } from "./subagent-registry-lifecycle-context.js";
@@ -132,8 +136,9 @@ export async function finishSubagentCleanup(
   const { cleanup, cleanupGeneration, stateContext, isCurrent } = args;
   let entry = args.entry;
   let runId = entry.runId;
-  if (cleanup === "delete" || !entry.retainAttachmentsOnKeep) {
-    await safeRemoveAttachmentsDir(entry, isCurrent);
+  const sessionEffectsCurrent = () => isCurrent() && context.sessionEffectsHostCurrent(entry);
+  if (shouldRemoveSubagentAttachments(entry, cleanup) && sessionEffectsCurrent()) {
+    await safeRemoveAttachmentsDir(entry, sessionEffectsCurrent);
   }
   if (!isCurrent()) {
     if (cleanupGeneration !== undefined) {
@@ -151,7 +156,7 @@ export async function finishSubagentCleanup(
   }
   const cleanupOwnerCurrent = () =>
     (cleanupGeneration === undefined || context.isCleanupGeneration(entry, cleanupGeneration)) &&
-    context.isEndedHookOwnerCurrent(runId, entry);
+    context.isCleanupOwnerCurrent(runId, entry);
   // Hook loading is best-effort; durable delivery and cleanup must already
   // be terminal before plugin code can fail or stall.
   await context.completeCleanupBookkeeping({

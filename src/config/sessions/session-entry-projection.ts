@@ -38,16 +38,6 @@ const PRIVATE_SESSION_ENTRY_KEYS = [
   "transcriptByteCompactionLatch",
 ] as const satisfies readonly (keyof InternalSessionEntry)[];
 
-function projectPublicModelFallback(
-  fallback: RetiredSessionMetadata["modelFallback"],
-): AgentPatchedSessionModelFallback | undefined {
-  if (!fallback) {
-    return undefined;
-  }
-  const { prevThinkingLevelSelection: _privateSelection, ...publicFallback } = fallback;
-  return publicFallback;
-}
-
 function stripPrivateSessionEntryFields(entry: InternalSessionEntry): SessionEntry;
 function stripPrivateSessionEntryFields(
   entry: Partial<InternalSessionEntry>,
@@ -61,8 +51,8 @@ function stripPrivateSessionEntryFields(
   }
   delete projected.thinkingLevelSelection;
   delete projected.compactionCheckpoints;
-  const modelFallback = projectPublicModelFallback(entry.modelFallback);
-  if (modelFallback) {
+  if (entry.modelFallback) {
+    const { prevThinkingLevelSelection: _privateSelection, ...modelFallback } = entry.modelFallback;
     projected.modelFallback = modelFallback;
   } else {
     delete projected.modelFallback;

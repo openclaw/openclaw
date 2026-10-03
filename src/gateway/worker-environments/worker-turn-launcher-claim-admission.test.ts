@@ -164,7 +164,7 @@ describe("worker turn launcher claim admission", () => {
         ownerEpoch: active.activeOwnerEpoch,
       },
     });
-    placements.markWorkspaceResultPending(priorClaim);
+    await placements.markWorkspaceResultPending(priorClaim);
     const waitForRelease = vi.spyOn(placements, "waitForTurnClaimRelease");
     const provider = createWorkerSessionTurnPlacementProvider({
       environments: unusedEnvironments(),
@@ -201,8 +201,8 @@ describe("worker turn launcher claim admission", () => {
     expect(placements.get(SESSION_ID)?.turnClaim?.runId).toBe(priorClaim.runId);
 
     await placements.updateWorkspaceBaseManifest({ claim: priorClaim, manifestRef: MANIFEST_REF });
-    placements.acceptWorkspaceResult(priorClaim);
-    placements.completeWorkspaceResultAndReleaseTurn(priorClaim);
+    await placements.acceptWorkspaceResult(priorClaim);
+    await placements.completeWorkspaceResultAndReleaseTurn(priorClaim);
     await expect(replacement).rejects.toThrow(
       "Active worker placement does not match its attached environment",
     );
@@ -218,13 +218,13 @@ describe("worker turn launcher claim admission", () => {
         runId: "restart-result-run",
         owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
       });
-      placements.markWorkspaceResultPending(priorClaim);
+      await placements.markWorkspaceResultPending(priorClaim);
       await placements.recordStagedWorkspaceResult(
         priorClaim,
         "refs/openclaw/worker-results/missing",
       );
       placements.clearLocalTurnClaimsAfterRestart();
-      const pending = placements.listPendingWorkspaceResults();
+      const pending = await placements.listPendingWorkspaceResultsAsync();
       expect(pending).toMatchObject([
         { stagedResultRef: "refs/openclaw/worker-results/missing", workspaceAcceptedAtMs: null },
       ]);
@@ -246,7 +246,7 @@ describe("worker turn launcher claim admission", () => {
         setImmediate(resolve);
       });
       expect(runLocal).not.toHaveBeenCalled();
-      expect(placements.listPendingWorkspaceResults()).toEqual(pending);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual(pending);
       expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
     },
   );
@@ -270,7 +270,7 @@ describe("worker turn launcher claim admission", () => {
       },
     });
     const claimOps = createPlacementTurnClaimFixtureOps(database);
-    vi.spyOn(placements, "listPendingWorkspaceResults").mockImplementationOnce(() => {
+    vi.spyOn(placements, "listPendingWorkspaceResultsAsync").mockImplementationOnce(async () => {
       claimOps.releaseTurn(priorClaim);
       return [];
     });
@@ -307,9 +307,12 @@ describe("worker turn launcher claim admission", () => {
       runId: "remote-result-run",
       owner: placementTurnOwner(active),
     });
-    placements.markWorkspaceResultPending(priorClaim);
-    const listPendingWorkspaceResults = vi.spyOn(placements, "listPendingWorkspaceResults");
-    listPendingWorkspaceResults.mockReturnValueOnce([]);
+    await placements.markWorkspaceResultPending(priorClaim);
+    const listPendingWorkspaceResultsAsync = vi.spyOn(
+      placements,
+      "listPendingWorkspaceResultsAsync",
+    );
+    listPendingWorkspaceResultsAsync.mockResolvedValueOnce([]);
     const waitForRelease = vi.spyOn(placements, "waitForTurnClaimRelease");
     const provider = createWorkerSessionTurnPlacementProvider({
       environments: unusedEnvironments(),
@@ -332,8 +335,8 @@ describe("worker turn launcher claim admission", () => {
     expect(placements.get(SESSION_ID)?.turnClaim?.runId).toBe(priorClaim.runId);
 
     await placements.updateWorkspaceBaseManifest({ claim: priorClaim, manifestRef: MANIFEST_REF });
-    placements.acceptWorkspaceResult(priorClaim);
-    placements.completeWorkspaceResultAndReleaseTurn(priorClaim);
+    await placements.acceptWorkspaceResult(priorClaim);
+    await placements.completeWorkspaceResultAndReleaseTurn(priorClaim);
     await expect(replacement).rejects.toThrow(
       "Active remote-exec placement does not match its attached environment",
     );
@@ -357,15 +360,15 @@ describe("worker turn launcher claim admission", () => {
         ownerEpoch: active.activeOwnerEpoch,
       },
     });
-    placements.markWorkspaceResultPending(priorClaim);
-    placements.startWorkspaceResultDrain(priorClaim);
+    await placements.markWorkspaceResultPending(priorClaim);
+    await placements.startWorkspaceResultDrain(priorClaim);
     vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementationOnce(async () => {
       await placements.updateWorkspaceBaseManifest({
         claim: priorClaim,
         manifestRef: MANIFEST_REF,
       });
-      placements.acceptWorkspaceResult(priorClaim);
-      completeReclaimedWorkspaceTeardown({
+      await placements.acceptWorkspaceResult(priorClaim);
+      await completeReclaimedWorkspaceTeardown({
         placements,
         turnClaim: priorClaim,
         environmentId: active.environmentId,
@@ -420,8 +423,8 @@ describe("worker turn launcher claim admission", () => {
           termination: "exit",
         };
       }
-      const completed = openSessionManager();
-      const leafId = completed.appendMessage(
+      const completed = await openSessionManager();
+      const leafId = await completed.appendMessageAsync(
         makeAgentAssistantMessage({
           content: [{ type: "text", text: "Recovered after cancellation" }],
           timestamp: 41,
@@ -601,8 +604,8 @@ describe("worker turn launcher claim admission", () => {
           );
           expect(launchTurn).toHaveBeenCalledOnce();
 
-          const completed = openSessionManager();
-          const leafId = completed.appendMessage(
+          const completed = await openSessionManager();
+          const leafId = await completed.appendMessageAsync(
             makeAgentAssistantMessage({
               content: [{ type: "text", text: "Only worker reply" }],
               timestamp: 31,
@@ -697,8 +700,8 @@ describe("worker turn launcher claim admission", () => {
             });
             turnIds.push(descriptor.assignment.turnId);
             if (launchCount === 1) {
-              const completed = openSessionManager();
-              const leafId = completed.appendMessage(
+              const completed = await openSessionManager();
+              const leafId = await completed.appendMessageAsync(
                 makeAgentAssistantMessage({
                   content: [{ type: "text", text: "Remote model failed" }],
                   stopReason: "error",
@@ -725,8 +728,8 @@ describe("worker turn launcher claim admission", () => {
                 termination: "exit",
               };
             }
-            const completed = openSessionManager();
-            const leafId = completed.appendMessage(
+            const completed = await openSessionManager();
+            const leafId = await completed.appendMessageAsync(
               makeAgentAssistantMessage({
                 content: [{ type: "text", text: "Recovered worker reply" }],
                 timestamp: 41,
@@ -755,7 +758,7 @@ describe("worker turn launcher claim admission", () => {
       ),
     ).rejects.toThrow("Cloud worker turn failed");
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
-    expect(placements.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
 
     await expect(
       provider.executeTurn(

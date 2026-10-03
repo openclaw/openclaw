@@ -10,7 +10,7 @@ import {
   redactChannelStatusSummaryBaseUrl,
 } from "./account-snapshot-fields.js";
 import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
-import type { ChannelPlugin } from "./plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "./plugins/types.plugin.js";
 import { applyChannelAccountState, resolveChannelAccountState } from "./status/account-state.js";
 
 /** Projects an admitted lifetime without resolving its potentially stale account configuration. */

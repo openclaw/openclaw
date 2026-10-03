@@ -22,22 +22,19 @@ extension ChatSessionSidebarModel {
         var returnToGroups = false
         // ui/src/components/app-sidebar-session-tree.ts:102: archived parents never expose descendants, even in All.
         let byKey = Dictionary(rows.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
+        let curatedKeys = Set(byKey.values.filter {
+            $0.pinned == true || ChatPayloadDecoding.trimmedNonEmptyString($0.category) != nil
+        }.map(\.key))
         var hidden = Set<String>()
         var pending = rows.filter(\.isArchived).flatMap { $0.childSessions ?? [] }
         while let key = pending.popLast() {
-            if let row = byKey[key],
-               row.pinned == true || ChatPayloadDecoding.trimmedNonEmptyString(row.category) != nil
-            {
-                continue
-            }
-            if hidden.insert(key).inserted { pending += byKey[key]?.childSessions ?? [] }
+            guard !curatedKeys.contains(key), hidden.insert(key).inserted else { continue }
+            pending += byKey[key]?.childSessions ?? []
         }
         let eligible = rows.filter { !hidden.contains($0.key) }.map { row in
             var row = row
             // ui/src/components/app-sidebar-session-tree.ts:92,105: curated children own root placement.
-            row.childSessions = row.childSessions?.filter {
-                byKey[$0]?.pinned != true && ChatPayloadDecoding.trimmedNonEmptyString(byKey[$0]?.category) == nil
-            }
+            row.childSessions = row.childSessions?.filter { !curatedKeys.contains($0) }
             return row
         }
         for node in self.nodes(self.tree(from: eligible), matchingOwner: options.ownerID) {

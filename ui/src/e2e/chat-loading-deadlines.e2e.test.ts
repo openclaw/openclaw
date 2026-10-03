@@ -201,10 +201,15 @@ suite.define(() => {
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           await alert.waitFor();
           await alert
-            .locator(".chat-error__content > strong")
-            .getByText(renderedDiagnostic)
+            .locator("summary strong")
+            .getByText("Couldn't finish this reply. Check the conversation before trying again.")
             .waitFor();
-          expect(await alert.locator("details").count()).toBe(0);
+          expect(await alert.locator("details").getAttribute("open")).toBeNull();
+          await alert.locator("summary").click();
+          await alert.getByLabel("Error details", { exact: true }).waitFor();
+          expect(await alert.getByLabel("Error details", { exact: true }).textContent()).toContain(
+            renderedDiagnostic,
+          );
           await sendButton.click();
         }
         const send = await gateway.waitForRequest("chat.send");

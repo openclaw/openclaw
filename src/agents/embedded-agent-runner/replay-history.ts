@@ -15,13 +15,9 @@ import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/t
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
-  sanitizeProviderReplayHistoryWithPlugin,
+  sanitizeProviderReplayHistoryWithPluginAsync,
   validateProviderReplayTurnsWithPlugin,
 } from "../../plugins/provider-runtime.js";
-import type {
-  ProviderReplaySessionEntry,
-  ProviderReplaySessionState,
-} from "../../plugins/types.js";
 import {
   annotateInterSessionPromptText,
   normalizeInputProvenance,
@@ -57,8 +53,8 @@ import {
   extractToolResultId,
   sanitizeToolCallIdsForCloudCodeAssist,
 } from "../tool-call-id.js";
-import type { TranscriptPolicy } from "../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
+import type { TranscriptPolicy } from "../transcript-policy.types.js";
 import {
   hasNonzeroUsage,
   makeZeroUsageSnapshot,
@@ -67,6 +63,7 @@ import {
   type UsageLike,
 } from "../usage.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "./empty-assistant-turn.js";
+import { createProviderReplaySessionState } from "./replay-session-state.js";
 import {
   dropReasoningFromHistory,
   dropThinkingBlocks,
@@ -461,34 +458,6 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
   return touched ? out : messages;
 }
 
-function createProviderReplaySessionState(
-  sessionManager: SessionManager,
-): ProviderReplaySessionState {
-  return {
-    getCustomEntries() {
-      try {
-        return sessionManager.getEntries().flatMap((entry): ProviderReplaySessionEntry[] => {
-          const candidate = entry as CustomEntryLike;
-          if (candidate?.type !== "custom" || typeof candidate.customType !== "string") {
-            return [];
-          }
-          const customType = candidate.customType.trim();
-          return customType ? [{ customType, data: candidate.data }] : [];
-        });
-      } catch {
-        return [];
-      }
-    },
-    appendCustomEntry(customType: string, data: unknown) {
-      try {
-        sessionManager.appendCustomEntry(customType, data);
-      } catch {
-        // ignore persistence failures
-      }
-    },
-  };
-}
-
 function readModelSnapshotState(sessionManager: SessionManager): ModelSnapshotState {
   let lastSnapshot: ModelSnapshotEntry | null = null;
   let latestSwitchTimestamp: number | null = null;
@@ -733,17 +702,22 @@ export async function sanitizeSessionHistory(
   let providerSanitized: AgentMessage[] | undefined;
   if (provider && provider.length > 0) {
     const pluginParams = createProviderReplayPluginParams({ ...params, provider });
-    const providerResult = await sanitizeProviderReplayHistoryWithPlugin({
-      ...pluginParams,
-      context: {
-        ...pluginParams.context,
-        sessionId: params.sessionId ?? "",
-        messages: sanitizedCompactionUsage,
-        allowedToolNames: params.allowedToolNames,
-        sessionState: createProviderReplaySessionState(params.sessionManager),
-      },
-    });
-    providerSanitized = providerResult ?? undefined;
+    const replaySession = createProviderReplaySessionState(params.sessionManager);
+    try {
+      const providerResult = await sanitizeProviderReplayHistoryWithPluginAsync({
+        ...pluginParams,
+        context: {
+          ...pluginParams.context,
+          sessionId: params.sessionId ?? "",
+          messages: sanitizedCompactionUsage,
+          allowedToolNames: params.allowedToolNames,
+          sessionState: replaySession.state,
+        },
+      });
+      providerSanitized = providerResult ?? undefined;
+    } finally {
+      replaySession.close();
+    }
   }
   const sanitizedWithProvider = providerSanitized ?? sanitizedCompactionUsage;
   // Provider replay hooks may rewrite history, so reassert the same pairing policy afterward.

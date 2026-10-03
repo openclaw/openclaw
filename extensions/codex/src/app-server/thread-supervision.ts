@@ -1,9 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
-import {
-  embeddedAgentLog,
-  formatErrorMessage,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessSessionRuntimeParamsV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   CodexAppServerUnsafeSubscriptionError,
@@ -58,7 +55,7 @@ type PendingSupervisionMaterializationParams = Omit<
   binding: CodexAppServerThreadBinding & {
     pendingSupervisionBranch: CodexAppServerPendingSupervisionBranch;
   };
-  attempt: EmbeddedRunAttemptParams;
+  attempt: AgentHarnessSessionRuntimeParamsV1;
   cwd: string;
   dynamicTools: CodexDynamicToolSpec[];
   hostSystemAgentActive: boolean;

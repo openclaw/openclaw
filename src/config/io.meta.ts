@@ -14,7 +14,6 @@ export const AUTO_MANAGED_CONFIG_META_PATHS = [
 
 export function stampConfigWriteMetadata(
   cfg: OpenClawConfig,
-  _now: string = new Date().toISOString(),
   version: string = VERSION,
   previousConfig?: unknown,
 ): OpenClawConfig {

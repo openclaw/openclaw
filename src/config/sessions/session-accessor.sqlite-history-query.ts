@@ -1,6 +1,9 @@
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { sql } from "kysely";
-import type { TranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
+import type {
+  SessionTranscriptDisplayDeltaResult,
+  SessionTranscriptMessageByIdOptions,
+} from "../../gateway/session-transcript-read.types.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { hasSqlitePostCommitScope } from "../../infra/sqlite-post-commit.js";
@@ -14,7 +17,6 @@ import type { TranscriptReadWindowOptions } from "../../sessions/transcript-read
 import { isVisibleTranscriptRecord } from "../../sessions/transcript-visible-record.js";
 import type {
   SessionTranscriptRawDeltaLimits,
-  SessionTranscriptRawDeltaResult,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import { positionTranscriptDisplayEvents } from "./session-accessor.sqlite-display-position.js";
@@ -66,6 +68,41 @@ const recentHistoryWindows = new Map<
   }
 >();
 
+/** Reads physical event rows in this snapshot: selected seqs, or every off-active-path row. */
+function readSnapshotEventRows(
+  projection: CurrentTranscriptProjection,
+  selection: { eventSeqs: readonly number[] } | "off-active-path",
+) {
+  const sessionId = projection.resolved.sessionId;
+  const query = getActiveTranscriptKysely(projection.database)
+    .selectFrom("transcript_events as event")
+    .select(["event.seq", transcriptEventJsonSql(projection.database.db, "event").as("event_json")])
+    .where("event.session_id", "=", sessionId);
+  return executeSqliteQuerySync(
+    projection.database.db,
+    selection === "off-active-path"
+      ? query
+          .where((eb) =>
+            eb.not(
+              eb.exists(
+                eb
+                  .selectFrom("session_transcript_active_events as active")
+                  .select("active.event_seq")
+                  .where("active.session_id", "=", sessionId)
+                  .whereRef("active.event_seq", "=", "event.seq"),
+              ),
+            ),
+          )
+          .orderBy("event.seq", "asc")
+      : query.where(
+          "event.seq",
+          "in",
+          /* kysely-allow-raw: boundaries were selected in this snapshot; bind their physical rows once. */
+          sql<number>`(SELECT value FROM json_each(${JSON.stringify(selection.eventSeqs)}))`,
+        ),
+  ).rows;
+}
+
 function readBoundaryEvents(
   projection: CurrentTranscriptProjection,
   boundaries: Iterable<VisibleHistoryBoundary>,
@@ -74,24 +111,11 @@ function readBoundaryEvents(
   if (eventSeqs.length === 0) {
     return new Map();
   }
-  const db = getActiveTranscriptKysely(projection.database);
   return new Map(
-    executeSqliteQuerySync(
-      projection.database.db,
-      db
-        .selectFrom("transcript_events as event")
-        .select([
-          "event.seq",
-          transcriptEventJsonSql(projection.database.db, "event").as("event_json"),
-        ])
-        .where("event.session_id", "=", projection.resolved.sessionId)
-        .where(
-          "event.seq",
-          "in",
-          /* kysely-allow-raw: boundaries were selected in this snapshot; bind their physical rows once. */
-          sql<number>`(SELECT value FROM json_each(${JSON.stringify(eventSeqs)}))`,
-        ),
-    ).rows.map((row) => [row.seq, parseStoredTranscriptEvent(row.event_json)]),
+    readSnapshotEventRows(projection, { eventSeqs }).map((row) => [
+      row.seq,
+      parseStoredTranscriptEvent(row.event_json),
+    ]),
   );
 }
 
@@ -99,7 +123,7 @@ function readVisibleHistoryRange(
   projection: CurrentTranscriptProjection,
   start: number,
   endExclusive: number,
-  history = resolveVisibleHistoryProjection(projection),
+  history: VisibleHistoryProjection,
 ): SessionTranscriptMessageEvent[] {
   const range = resolveVisibleHistoryRange(history, start, endExclusive);
   if (range.boundedEnd <= range.boundedStart) {
@@ -205,14 +229,12 @@ type SessionTranscriptMessageById = SessionTranscriptMessageEvent & {
 type HistoryEventById =
   | SessionTranscriptMessageById
   | { historical: NonNullable<ReturnType<typeof readDisplayableActiveEventById>> };
-export type SessionTranscriptMessageByIdOptions =
-  | { currentOnly?: false; maxBytes?: never }
-  | { currentOnly: true; maxBytes: number };
+export type { SessionTranscriptMessageByIdOptions } from "../../gateway/session-transcript-read.types.js";
 
 function resolveHistoryEventById(
   projection: CurrentTranscriptProjection,
   eventId: string,
-  history = resolveVisibleHistoryProjection(projection),
+  history: VisibleHistoryProjection,
   maxBytes?: number,
 ): HistoryEventById | undefined {
   const boundary = history.boundaries.find((candidate) => candidate.eventId === eventId);
@@ -254,19 +276,7 @@ function resolveHistoryEventById(
       };
 }
 
-type SessionTranscriptRawDeltaPage = Extract<SessionTranscriptRawDeltaResult, { kind: "page" }>;
-
-export type SessionTranscriptDisplayDeltaResult =
-  | (Omit<SessionTranscriptRawDeltaPage, "events"> & {
-      activeLeafEntryId: string | null;
-      events: Array<
-        SessionTranscriptRawDeltaPage["events"][number] & {
-          messageSeq?: number;
-          displayPosition?: TranscriptDisplayPosition;
-        }
-      >;
-    })
-  | Exclude<SessionTranscriptRawDeltaResult, { kind: "page" }>;
+export type { SessionTranscriptDisplayDeltaResult } from "../../gateway/session-transcript-read.types.js";
 
 /** Raw cursor progress carries the same reset-relative ordinals as pages and live messages. */
 export function readTranscriptDisplayDeltaFromProjection(
@@ -325,6 +335,20 @@ export function readSessionTranscriptHistoryEventsFromProjection(
   return readVisibleHistoryRange(projection, 0, history.total, history);
 }
 
+/**
+ * Events outside the active path, such as branches left by rewind or switch. They stay
+ * switchable, so retention owners must see them; retired active ancestors stay excluded.
+ */
+export function readOffPathSessionTranscriptEventsFromProjection(
+  projection: CurrentTranscriptProjection,
+): SessionTranscriptMessageEvent[] {
+  return readSnapshotEventRows(projection, "off-active-path").map((row) => ({
+    event: parseStoredTranscriptEvent(row.event_json),
+    eventSeq: row.seq,
+    seq: row.seq + 1,
+  }));
+}
+
 function readRecentHistoryInSnapshot(
   projection: CurrentTranscriptProjection,
   history: VisibleHistoryProjection,
@@ -351,27 +375,18 @@ function readRecentHistoryInSnapshot(
     max: MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
   });
   const maxLines = resolveIntegerOption(options.maxLines, 0, { min: 0 });
-  if (maxMessages === 0 || maxLines === 0) {
-    return {
-      activeLeafEntryId: projection.state.leafEventId,
-      ...(deltaCursor ? { deltaCursor } : {}),
-      events: [],
-      displaySource: history.displaySource,
-      totalMessages: history.total,
-      ...(captureReadWindow ? { readWindow: captureHistoryReadWindow(history, []) } : {}),
-      ...(windowChange ? { windowReset: true } : {}),
-    };
-  }
-  const maxBytes = resolveIntegerOption(options.maxBytes, 8 * 1024 * 1024, { min: 1024 });
-  const { start: selectedStart, bytes } = resolveRecentHistoryStart(
-    projection,
-    Math.max(0, history.total - maxLines),
-    history.total,
-    history,
-    maxBytes,
-    maxMessages,
-  );
-  const events = readVisibleHistoryRange(projection, selectedStart, history.total, history);
+  const empty = maxMessages === 0 || maxLines === 0;
+  const { start, bytes } = empty
+    ? { start: history.total, bytes: 0 }
+    : resolveRecentHistoryStart(
+        projection,
+        Math.max(0, history.total - maxLines),
+        history.total,
+        history,
+        resolveIntegerOption(options.maxBytes, 8 * 1024 * 1024, { min: 1024 }),
+        maxMessages,
+      );
+  const events = empty ? [] : readVisibleHistoryRange(projection, start, history.total, history);
   const page: SessionTranscriptMessageEventPage = {
     activeLeafEntryId: projection.state.leafEventId,
     ...(deltaCursor ? { deltaCursor } : {}),
@@ -381,7 +396,9 @@ function readRecentHistoryInSnapshot(
     ...(captureReadWindow ? { readWindow: captureHistoryReadWindow(history, events) } : {}),
     ...(windowChange ? { windowReset: true } : {}),
   };
-  remember?.(page, bytes);
+  if (!empty) {
+    remember?.(page, bytes);
+  }
   return page;
 }
 

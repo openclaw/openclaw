@@ -12,7 +12,7 @@ import { appendSessionTranscriptNote } from "../../sessions/session-manager-writ
 import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
 import type { AcceptedCompactionSuccessor } from "../compaction-successor.js";
 import { log } from "../logger.js";
-import type { PreparedEmbeddedRunInput } from "./execution-context.js";
+import type { RunEmbeddedAgentParamsWithSessionFile } from "./internal-params.js";
 import {
   buildContextEngineCompactionSessionTarget,
   prepareInitialSessionWriter,
@@ -28,10 +28,10 @@ type ActivePrompt = {
 };
 
 export async function createEmbeddedRunSessionPromptState(input: {
-  runParams: PreparedEmbeddedRunInput["runParams"];
+  runParams: RunEmbeddedAgentParamsWithSessionFile;
   sessionAgentId: string;
   resolvedSessionKey: string;
-  lifecycleGeneration: PreparedEmbeddedRunInput["lifecycleGeneration"];
+  lifecycleGeneration: NonNullable<RunEmbeddedAgentParamsWithSessionFile["lifecycleGeneration"]>;
   onInterrupt: (reason: Error) => void;
 }) {
   const { runParams: params, sessionAgentId, resolvedSessionKey, lifecycleGeneration } = input;
@@ -126,7 +126,7 @@ export async function createEmbeddedRunSessionPromptState(input: {
   };
   const clearCompactionContinuation = () => (compactionContinuationInstruction = undefined);
   const onUserMessagePersisted: NonNullable<
-    PreparedEmbeddedRunInput["runParams"]["onUserMessagePersisted"]
+    RunEmbeddedAgentParamsWithSessionFile["onUserMessagePersisted"]
   > = (message) => {
     const messageMetadata = message as {
       __openclaw?: { beforeAgentRunBlocked?: unknown };

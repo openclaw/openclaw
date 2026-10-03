@@ -26,7 +26,7 @@ import {
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { acceptCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import type { ModelFallbackAttemptProvenance } from "../../agents/model-fallback.types.js";
-import { withSessionCompactionPersistence } from "../../agents/sessions/session-compaction-persistence.js";
+import { withSessionCompactionPersistenceAsync } from "../../agents/sessions/session-compaction-persistence.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
 import { ZERO_USAGE_FIXTURE } from "../../agents/test-helpers/usage-fixtures.js";
@@ -2038,12 +2038,8 @@ describe("runMemoryFlushIfNeeded", () => {
       compactionCount: 0,
       activeWriterRunId: "preflight",
     });
-    const manager = SessionManager.open(scope, rootDir);
-    manager.appendMessage({
-      role: "user",
-      content: "Earlier discussion. ".repeat(100),
-      timestamp: 1,
-    });
+    const manager = await SessionManager.openAsync(scope, rootDir);
+    await manager.appendMessageAsync(makeUserMessage("Earlier discussion. ".repeat(100), 1));
     const entry = loadSessionEntry(scope)!;
     incrementCompactionCountMock.mockImplementation(incrementCompactionCount);
     compactEmbeddedAgentSessionMock.mockImplementationOnce(async (_params, host) => {
@@ -2082,8 +2078,8 @@ describe("runMemoryFlushIfNeeded", () => {
     const scope = sessionScope("agent:main:main", "sqlite-codex-held-accounting.json");
     const { sessionKey, storePath } = scope;
     await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
-    const manager = SessionManager.open(scope, rootDir);
-    manager.appendMessage({ role: "user", content: "x".repeat(256), timestamp: 1 });
+    const manager = await SessionManager.openAsync(scope, rootDir);
+    await manager.appendMessageAsync(makeUserMessage("x".repeat(256), 1));
     const activeBytes = readActiveTranscriptStats(scope).sizeBytes;
     const sessionEntry: SessionEntry = createFlushSessionEntry({
       totalTokens: 10,
@@ -2098,8 +2094,10 @@ describe("runMemoryFlushIfNeeded", () => {
     compactEmbeddedAgentSessionMock.mockImplementationOnce(async (_params, host) => {
       const firstKeptEntryId = manager.getLeafId();
       expect(firstKeptEntryId).toBeTruthy();
-      withSessionCompactionPersistence(manager, host?.withCompactionPersistence, () =>
-        manager.appendCompaction("summary", firstKeptEntryId!, 100),
+      await withSessionCompactionPersistenceAsync(
+        manager,
+        host?.withCompactionPersistenceAsync,
+        () => manager.appendCompactionAsync("summary", firstKeptEntryId!, 100),
       );
       expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
         compactionCount: 1,

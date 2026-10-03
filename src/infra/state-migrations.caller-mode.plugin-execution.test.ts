@@ -313,7 +313,7 @@ module.exports = { stateMigrations: [{
 `,
     );
     const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       plugins: {
         load: { paths: [pluginRoot] },
         entries: { [pluginId]: { enabled: true } },
@@ -522,7 +522,7 @@ module.exports = { stateMigrations: [{
         }] };\n`,
       );
       const cfg: OpenClawConfig = {
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
         plugins: { entries: { [pluginId]: { enabled: true } } },
       };
       fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
@@ -782,6 +782,64 @@ module.exports = { stateMigrations: [{
     expect(targetDiscovery).not.toHaveBeenCalled();
     expect(fs.readFileSync(sourcePath, "utf8")).toBe("{invalid");
   });
+
+  it.each(["delivery-queue/pending.json", "session-delivery-queue/pending.json"])(
+    "refuses retired %s before planning, schema repair, or live discovery",
+    async (relativePath) => {
+      const fixture = await makeFixture();
+      fixture.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+      const sourcePath = path.join(fixture.stateDir, relativePath);
+      fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+      fs.writeFileSync(sourcePath, "{invalid");
+      const cfg: OpenClawConfig = { plugins: { enabled: false } };
+      fs.writeFileSync(fixture.configPath, JSON.stringify(cfg));
+      const databasePath = resolveOpenClawStateSqlitePath(fixture.env);
+      fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+      const database = new DatabaseSync(databasePath);
+      try {
+        database.exec(
+          fs.readFileSync(
+            new URL("../../test/fixtures/sqlite/openclaw-state-schema-v1.sql", import.meta.url),
+            "utf8",
+          ),
+        );
+        database.exec(
+          "PRAGMA user_version = 1; INSERT INTO schema_meta VALUES ('primary', 'global', 1, NULL, '2026.7.35', 1, 1)",
+        );
+      } finally {
+        database.close();
+      }
+      const databaseBytes = fs.readFileSync(databasePath);
+      await expect(
+        planLegacyStateMigrationsReadOnly({
+          mode: "doctor",
+          candidate: { root: fixture.root, version: "test" },
+          snapshot: {
+            homeDir: fixture.homeDir,
+            stateDir: fixture.stateDir,
+            configPath: fixture.configPath,
+          },
+          env: fixture.env,
+        }),
+      ).rejects.toThrow("OpenClaw 2026.9.7");
+      const targetDiscovery = vi.fn(() => {
+        throw new Error("target discovery after refusal");
+      });
+      await expect(
+        autoMigrateLegacyState({
+          cfg: Object.defineProperty({ ...cfg }, "session", { get: targetDiscovery }),
+          pluginDoctorConfig: cfg,
+          doctorOnlyStateMigrations: true,
+          env: fixture.env,
+          homedir: () => fixture.homeDir,
+          legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+        }),
+      ).rejects.toThrow("OpenClaw 2026.9.7");
+      expect(targetDiscovery).not.toHaveBeenCalled();
+      expect(fs.readFileSync(sourcePath, "utf8")).toBe("{invalid");
+      expect(fs.readFileSync(databasePath)).toEqual(databaseBytes);
+    },
+  );
 
   it("defers a dynamic bundled session-store owner without loading its contract in copied planning", async () => {
     const fixture = await makeFixture();

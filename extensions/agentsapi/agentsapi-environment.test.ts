@@ -106,7 +106,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
 vi.mock("openclaw/plugin-sdk/agent-sessions", () => ({
   AuthStorage: { inMemory: () => ({}) },
   ModelRegistry: { inMemory: () => ({}) },
-  SessionManager: { open: () => ({ buildSessionContext: () => ({ messages: [] }) }) },
+  SessionManager: { openAsync: async () => ({ buildSessionContext: () => ({ messages: [] }) }) },
 }));
 vi.mock("openclaw/plugin-sdk/llm", () => ({
   resolveOpenAIModelReasoningEfforts: vi.fn(),

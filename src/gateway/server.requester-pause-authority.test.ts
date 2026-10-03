@@ -389,7 +389,7 @@ describe("requester pause authority at the Gateway effect", () => {
             expect(failure).toBeInstanceOf(Error);
             expect(failure).toHaveProperty("message", expect.stringContaining(expectedDenial));
           }
-          expect(listSessionPendingInputs(scope).total).toBe(0);
+          expect((await listSessionPendingInputs(scope)).total).toBe(0);
         } finally {
           resume.resolve();
           await Promise.allSettled([continuation, ...trackedRequests()]);

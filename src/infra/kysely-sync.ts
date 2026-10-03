@@ -1,4 +1,3 @@
-// Adapts node:sqlite sync database calls for Kysely-style query execution.
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
@@ -26,9 +25,6 @@ const supportsRepreparedAll =
   ((nodeVersion?.major === 24 &&
     isNodeVersionAtLeast(nodeVersion, { major: 24, minor: 20, patch: 0 })) ||
     isNodeVersionAtLeast(nodeVersion, { major: 26, minor: 6, patch: 0 }));
-
-// Sync query helpers execute compiled Kysely SQL against node:sqlite without
-// going through Kysely's async driver path.
 
 export {
   clearNodeSqliteKyselyCacheForDatabase,

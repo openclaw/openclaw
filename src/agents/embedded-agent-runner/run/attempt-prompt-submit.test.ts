@@ -7,6 +7,7 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import type { Context, ImageContent, Model } from "../../../llm/types.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import { withEnvAsync } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { readBtwTranscriptMessages } from "../../btw-transcript.js";
@@ -355,7 +356,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
       await prepareEmbeddedAttemptSessionBoundary({
         activeSession: session,
         appendOnlyRuntimeContext: retryContext !== "transient",
-        attempt: { prompt: user.content, userTurnTranscriptRecorder: recorder },
+        attempt: { sessionId, prompt: user.content, userTurnTranscriptRecorder: recorder },
         getUserTranscriptContexts: () => undefined,
         isRawModelRun: false,
         preparedUserTurnMessage: user,
@@ -874,7 +875,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
     ).toEqual([{ type: "text", text: oversized }]);
   });
 
-  it("records aggregate truncation on a provider-bound cache break", async () => {
+  it("declares new pruning once and records aggregate truncation on a provider-bound cache break", async () => {
     const { activeSession } = createSession();
     const input = createBaseInput();
     const promptCacheKey = `${sessionId}:aggregate-truncation`;
@@ -888,13 +889,6 @@ describe("submitEmbeddedAttemptPrompt", () => {
       systemPrompt: input.systemPrompt,
       tools: [],
     } as const;
-    beginPromptCacheObservation(observation);
-    completePromptCacheObservation({
-      sessionId,
-      promptCacheKey,
-      usage: { cacheRead: 8_000 },
-    });
-    beginPromptCacheObservation(observation);
     activeSession.agent.state.messages = [
       { role: "user", content: "call tools", timestamp: 1 },
       {
@@ -917,21 +911,34 @@ describe("submitEmbeddedAttemptPrompt", () => {
       { role: "assistant", content: [{ type: "text", text: "results processed" }], timestamp: 4 },
       { role: "user", content: "continue", timestamp: 5 },
     ] as AgentMessage[];
-    activeSession.agent.streamFn = (() => undefined as never) as StreamFn;
-
-    await submitEmbeddedAttemptPrompt({
-      ...input,
-      attempt: { sessionId, promptCacheKey },
-      activeSession,
-      toolResultAggregateMaxChars: 6_000,
-      promptActiveSession: async () => {
-        await activeSession.agent.streamFn(
-          {} as never,
-          { messages: activeSession.messages } as never,
-          {} as never,
-        );
-      },
+    beginPromptCacheObservation({
+      ...observation,
+      messages: activeSession.messages as Context["messages"],
     });
+    completePromptCacheObservation({ sessionId, promptCacheKey, usage: { cacheRead: 8_000 } });
+    const changes: ReturnType<typeof beginPromptCacheObservation>["changes"][] = [];
+    activeSession.agent.streamFn = (_model, context) => {
+      changes.push(
+        beginPromptCacheObservation({ ...observation, messages: context.messages }).changes,
+      );
+      return undefined as never;
+    };
+
+    const submit = () =>
+      submitEmbeddedAttemptPrompt({
+        ...input,
+        attempt: { sessionId, promptCacheKey },
+        activeSession,
+        toolResultAggregateMaxChars: 6_000,
+        promptActiveSession: async () => {
+          await activeSession.agent.streamFn(
+            {} as never,
+            { messages: activeSession.messages } as never,
+            {} as never,
+          );
+        },
+      });
+    await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, submit);
 
     expect(
       completePromptCacheObservation({
@@ -947,7 +954,16 @@ describe("submitEmbeddedAttemptPrompt", () => {
           code: "aggregateToolResultTruncation",
           detail: "aggregate tool-result truncation changed provider prompt",
         },
+        { code: "pruning", detail: "pruning changed provider history" },
       ],
     });
+    await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, submit);
+    expect(changes).toEqual([
+      [
+        expect.objectContaining({ code: "aggregateToolResultTruncation" }),
+        expect.objectContaining({ code: "pruning" }),
+      ],
+      null,
+    ]);
   });
 });

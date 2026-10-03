@@ -71,18 +71,9 @@ export type PollStartContent = {
   "org.matrix.msc1767.text"?: string;
 };
 
-type PollSummary = {
-  eventId: string;
-  roomId: string;
-  sender: string;
-  senderName: string;
+type PollResultsSummary = {
   question: string;
-  answers: string[];
   kind: PollKind;
-  maxSelections: number;
-};
-
-type PollResultsSummary = PollSummary & {
   entries: Array<{
     id: string;
     text: string;
@@ -212,11 +203,8 @@ function parsePollResponseAnswerIds(content: unknown): string[] | null {
 }
 
 export function buildPollResultsSummary(params: {
-  pollEventId: string;
-  roomId: string;
   sender: string;
-  senderName: string;
-  content: PollStartContent;
+  poll: ParsedPollStart;
   relationEvents: Array<{
     event_id?: string;
     sender?: string;
@@ -227,11 +215,8 @@ export function buildPollResultsSummary(params: {
       redacted_because?: unknown;
     };
   }>;
-}): PollResultsSummary | null {
-  const parsed = parsePollStart(params.content);
-  if (!parsed) {
-    return null;
-  }
+}): PollResultsSummary {
+  const parsed = params.poll;
 
   let pollClosedAt = Number.POSITIVE_INFINITY;
   for (const event of params.relationEvents) {
@@ -304,14 +289,8 @@ export function buildPollResultsSummary(params: {
   }
 
   return {
-    eventId: params.pollEventId,
-    roomId: params.roomId,
-    sender: params.sender,
-    senderName: params.senderName,
     question: parsed.question,
-    answers: parsed.answers.map((answer) => answer.text),
     kind: parsed.kind,
-    maxSelections: parsed.maxSelections,
     entries: parsed.answers.map((answer) => ({
       id: answer.id,
       text: answer.text,
@@ -363,10 +342,7 @@ export function buildPollStartContent(poll: PollInput): PollStartContent {
   }));
 
   const isMultiple = normalized.maxSelections > 1;
-  const fallbackText = buildPollFallbackText(
-    normalized.question,
-    answers.map((answer) => getTextContent(answer)),
-  );
+  const fallbackText = buildPollFallbackText(normalized.question, normalized.options);
 
   return {
     [M_POLL_START]: {

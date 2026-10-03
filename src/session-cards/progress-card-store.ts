@@ -12,6 +12,7 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { ensureOpenClawAgentProgressCardSchemaInTransaction } from "../state/openclaw-agent-progress-card-schema.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 
 type ProgressCardDatabase = Pick<OpenClawAgentKyselyDatabase, "session_progress_cards">;
 type ProgressCardDatabaseInput = string | DatabaseSync;
@@ -39,16 +40,6 @@ function withProgressCardDatabase<T>(
     clearNodeSqliteKyselyCacheForDatabase(db);
     db.close();
   }
-}
-
-function progressCardTablePresent(db: DatabaseSync): boolean {
-  return Boolean(
-    db // sqlite-allow-raw -- Catalog probe before Kysely table access on a read-only connection.
-      .prepare(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_progress_cards'",
-      )
-      .get(),
-  );
 }
 
 function selectProgressCard(db: DatabaseSync, sessionKey: string): StoredProgressCardRow | null {
@@ -125,7 +116,7 @@ export function readSessionProgressCard(
     return null;
   }
   return withProgressCardDatabase(dbPathOrDb, true, (db) => {
-    if (!progressCardTablePresent(db)) {
+    if (!tableExists(db, "session_progress_cards")) {
       return null;
     }
     const row = selectProgressCard(db, sessionKey);
@@ -135,7 +126,7 @@ export function readSessionProgressCard(
 
 /** Retain revision tombstones, but keep never-used lazy storage dormant during reset. */
 export function clearSessionProgressCardForReset(db: DatabaseSync, sessionKey: string): boolean {
-  if (!progressCardTablePresent(db) || !selectProgressCardMetadata(db, sessionKey)) {
+  if (!tableExists(db, "session_progress_cards") || !selectProgressCardMetadata(db, sessionKey)) {
     return false;
   }
   writeSessionProgressCard(db, sessionKey, {});

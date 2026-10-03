@@ -569,7 +569,6 @@ struct OpenClawChatComposer: View {
                 if let voiceNoteControl, !voiceNoteControl.isTalkActive {
                     OpenClawVoiceNoteButton(
                         control: voiceNoteControl,
-                        compact: false,
                         isComposerEnabled: self.isComposerEnabled,
                         isAttachmentInputEnabled: self.isAttachmentInputEnabled)
                 }

@@ -32,7 +32,7 @@ async function withSyntheticReader(
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const config: OpenClawConfig = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       gateway: {
         roles: {
           default: "blocked",

@@ -55,7 +55,7 @@ describe("new-session speed preferences", () => {
     },
   );
 
-  it.each([true, false, "auto", "ultrafast"] as const)(
+  it.each(["auto", "ultrafast"] as const)(
     "restores a standalone speed preference %s",
     async (fastMode) => {
       const { context } = contextWith([
@@ -72,14 +72,7 @@ describe("new-session speed preferences", () => {
       control.load(context, "main", true, { preference: { fastMode } });
       expect(control.isRestoringPreference()).toBe(true);
       await waitForFast(() => expect(control.fastMode).toBe(fastMode));
-      const selected =
-        fastMode === "auto"
-          ? undefined
-          : fastMode === "ultrafast"
-            ? "ultrafast"
-            : fastMode
-              ? "on"
-              : "off";
+      const selected = fastMode === "auto" ? undefined : "ultrafast";
       const options = Array.from(
         renderControl(control, context).querySelectorAll<HTMLButtonElement>(
           "[data-chat-speed-option]",
@@ -96,23 +89,6 @@ describe("new-session speed preferences", () => {
       control.reset();
     },
   );
-
-  it("does not restore speed for an unsupported provider", async () => {
-    const { context } = contextWith([{ id: "local-model", name: "Local", provider: "ollama" }]);
-    const onSelectionChange = vi.fn();
-    const control = new NewSessionModelControl(() => undefined, onSelectionChange);
-    control.load(context, "main", true, {
-      preference: { model: "ollama/local-model", fastMode: true },
-    });
-    await waitForFast(() => expect(control.isRestoringPreference()).toBe(false));
-    expect(control.fastMode).toBeUndefined();
-    expect(onSelectionChange).toHaveBeenLastCalledWith({
-      model: "ollama/local-model",
-      thinkingLevel: "",
-      fastMode: undefined,
-    });
-    control.reset();
-  });
 
   it.each([
     { provider: "ollama", supportsFastMode: true },

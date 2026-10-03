@@ -675,6 +675,8 @@ export function deferGatewayRestartUntilIdle(
     typeof opts.maxWaitMs === "number" && Number.isFinite(opts.maxWaitMs) && opts.maxWaitMs > 0
       ? Math.max(pollMs, Math.floor(opts.maxWaitMs))
       : undefined;
+  // Idle deferral leaves admission open; only the run loop spends the drain budget.
+  const timeoutIntent = { waitMs: resolveGatewayRestartDeferralTimeoutMs(), ...opts.timeoutIntent };
 
   type EmissionAttempt = {
     controller: AbortController;
@@ -697,13 +699,6 @@ export function deferGatewayRestartUntilIdle(
     // Retire admission waiters as well as a fence already acquired by preparation.
     attempt?.controller.abort();
     attempt?.rollbackFence?.();
-  };
-  const handle = {
-    cancel: () => {
-      cancelled = true;
-      cancelAttempt();
-      stopPoll();
-    },
   };
   const startedAt = monotonicNow();
   let nextStillPendingAt = startedAt + DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS;
@@ -732,7 +727,7 @@ export function deferGatewayRestartUntilIdle(
     void emitPreparedGatewayRestart(
       opts.emitHooks,
       opts.reason,
-      timedOut ? { ...opts.timeoutIntent, drainBudgetExhausted: true } : undefined,
+      timedOut ? timeoutIntent : undefined,
       {
         finalIdleCheck: timedOut
           ? undefined
@@ -812,7 +807,13 @@ export function deferGatewayRestartUntilIdle(
   if (pending !== undefined && pending <= 0) {
     attemptEmission(false);
   }
-  return handle;
+  return {
+    cancel: () => {
+      cancelled = true;
+      cancelAttempt();
+      stopPoll();
+    },
+  };
 }
 
 export function triggerOpenClawRestart(): RestartAttempt {

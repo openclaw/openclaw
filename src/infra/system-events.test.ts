@@ -33,6 +33,57 @@ import {
   type SystemEvent,
 } from "./system-events.js";
 
+describe("delivery-owned system event selection", () => {
+  beforeEach(() => resetSystemEventsForTest());
+  afterEach(() => resetSystemEventsForTest());
+
+  it("formats retained occurrences in captured order and leaves late arrivals untouched", async () => {
+    const sessionKey = "agent:main:deferred-order-proof";
+    enqueueSystemEvent("Restart first", { sessionKey, contextKey: "task:restart-sentinel:first" });
+    enqueueSystemEvent("Newer instruction second", { sessionKey });
+    const captured = peekSystemEventEntries(sessionKey);
+    const retainedId = expectDefined(captured[0]?.id, "captured restart occurrence ID");
+    enqueueSystemEvent("Late arrival third", { sessionKey });
+    const text = await drainFormattedSystemEvents({
+      cfg: {},
+      agentId: "main",
+      sessionKey,
+      isMainSession: false,
+      isNewSession: false,
+      events: captured,
+      deferredEventIds: [retainedId],
+    });
+    expect(text?.indexOf("Restart first")).toBeLessThan(text!.indexOf("Newer instruction second"));
+    expect(text).not.toContain("Late arrival third");
+    expect(peekSystemEvents(sessionKey)).toEqual(["Restart first", "Late arrival third"]);
+    consumeSelectedSystemEventEntries(sessionKey, [captured[0]!]);
+    expect(peekSystemEvents(sessionKey)).toEqual(["Late arrival third"]);
+  });
+
+  it("does not re-admit a captured retained occurrence consumed by another turn", async () => {
+    const sessionKey = "agent:main:deferred-membership-proof";
+    enqueueSystemEvent("Already handled restart", {
+      sessionKey,
+      contextKey: "task:restart-sentinel:handled",
+    });
+    const captured = peekSystemEventEntries(sessionKey);
+    const retainedId = expectDefined(captured[0]?.id, "captured restart occurrence ID");
+    consumeSelectedSystemEventEntries(sessionKey, captured);
+    enqueueSystemEvent("Replacement arrival", { sessionKey });
+    const text = await drainFormattedSystemEvents({
+      cfg: {},
+      agentId: "main",
+      sessionKey,
+      isMainSession: false,
+      isNewSession: false,
+      events: captured,
+      deferredEventIds: [retainedId],
+    });
+    expect(text).toBeUndefined();
+    expect(peekSystemEvents(sessionKey)).toEqual(["Replacement arrival"]);
+  });
+});
+
 type SystemEventsModule = typeof import("./system-events.js");
 
 const systemEventsModuleUrl = new URL("./system-events.ts", import.meta.url).href;

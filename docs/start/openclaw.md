@@ -129,7 +129,6 @@ Example:
     },
     entries: {
       main: {
-        default: true,
         groupChat: {
           mentionPatterns: ["@openclaw", "openclaw"],
         },

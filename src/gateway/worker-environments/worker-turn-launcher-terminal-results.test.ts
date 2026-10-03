@@ -114,6 +114,12 @@ describe("worker turn launcher terminal results", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
 
+  const completedWorkerMessage = () =>
+    makeAgentAssistantMessage({
+      content: [{ type: "text", text: "Remote work completed" }],
+      timestamp: 21,
+    });
+
   it.each<{
     stopReason: "stop" | "error";
     reconciliationFails: boolean;
@@ -206,7 +212,9 @@ describe("worker turn launcher terminal results", () => {
             // The second launch is the assertion boundary; do not replay its live-event stream.
             throw new WorkerTurnExecutionError("Unexpected second worker execution");
           }
-          const leafId = openSessionManager().appendMessage(
+          const leafId = await (
+            await openSessionManager()
+          ).appendMessageAsync(
             makeAgentAssistantMessage({
               content: providerFailure ? [] : [{ type: "text", text: "Remote answer" }],
               stopReason,
@@ -248,7 +256,7 @@ describe("worker turn launcher terminal results", () => {
             ok: true,
             result: { ackedSeq: 0 },
           });
-          expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
           await expect(
             service.pushLiveEvent(identity, {
               ...finishing,
@@ -269,7 +277,7 @@ describe("worker turn launcher terminal results", () => {
               event: { kind: "lifecycle", payload: { phase: "start", startedAt: 1 } },
             }),
           ).resolves.toEqual({ ok: true, result: { ackedSeq: 2 } });
-          expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
           return {
             stdout: JSON.stringify({
               status: "failed",
@@ -316,7 +324,7 @@ describe("worker turn launcher terminal results", () => {
         destroy: vi.fn(async () => environment),
       };
       const reconcileActivePlacement = vi.fn(async () => {
-        const [pending] = placements.listPendingWorkspaceResults();
+        const [pending] = await placements.listPendingWorkspaceResultsAsync();
         if (!pending) {
           throw new Error("expected pending workspace result");
         }
@@ -407,7 +415,7 @@ describe("worker turn launcher terminal results", () => {
           expect(candidateFailures[0]).toBeInstanceOf(WorkerTurnExecutionError);
           expect(candidateFailures[0]).toMatchObject({ message: failure });
           expect(tunnel.reconcileWorkspace).toHaveBeenCalledOnce();
-          expect(openSessionManager().getLeafEntry()).toMatchObject({
+          expect((await openSessionManager()).getLeafEntry()).toMatchObject({
             type: "message",
             message: {
               role: "assistant",
@@ -416,7 +424,7 @@ describe("worker turn launcher terminal results", () => {
             },
           });
           expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
-          expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
           expect(environments.destroy).not.toHaveBeenCalled();
           if (providerFailure) {
             expect(launchedModels).toEqual(["gpt-test", "gpt-test-next"]);
@@ -453,7 +461,7 @@ describe("worker turn launcher terminal results", () => {
           state: reconciliationFails ? "failed" : "active",
           turnClaim: null,
         });
-        expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
+        expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
         expect(environments.destroy).not.toHaveBeenCalled();
         await expect(
           service.pushLiveEvent(identity!, {
@@ -489,7 +497,7 @@ describe("worker turn launcher terminal results", () => {
       "workspace-transfer-failed: gateway TLS fingerprint mismatch",
     );
     const targetRecovery = vi.fn(async () => {
-      const [pending] = placements.listPendingWorkspaceResults();
+      const [pending] = await placements.listPendingWorkspaceResultsAsync();
       if (!pending) {
         throw new Error("expected pending workspace result");
       }
@@ -500,7 +508,7 @@ describe("worker turn launcher terminal results", () => {
       sessionId: SESSION_ID,
       sessionKey: SESSION_KEY,
     }));
-    const waitForClaim = placements.waitForTurnClaimRelease.bind(placements);
+    const waitForClaim = placements.waitForTurnClaimRelease;
     vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementation((sessionId, options) => {
       const pending = waitForClaim(sessionId, { ...options, signal: claimWaitCleanup.signal });
       claimWaitEntered.resolve();
@@ -548,13 +556,8 @@ describe("worker turn launcher terminal results", () => {
     const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
       launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
         request.onDispatchReady?.();
-        const completed = openSessionManager();
-        const leafId = completed.appendMessage(
-          makeAgentAssistantMessage({
-            content: [{ type: "text", text: "Remote work completed" }],
-            timestamp: 21,
-          }),
-        );
+        const completed = await openSessionManager();
+        const leafId = await completed.appendMessageAsync(completedWorkerMessage());
         return acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
       }),
       reconcileWorkspace: vi.fn(async () => {
@@ -624,7 +627,7 @@ describe("worker turn launcher terminal results", () => {
 
     expect(reconcileActivePlacement).toHaveBeenCalledWith(ENVIRONMENT_ID);
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "failed", turnClaim: null });
-    expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
     expect(destroy).not.toHaveBeenCalled();
   });
 
@@ -727,13 +730,8 @@ describe("worker turn launcher terminal results", () => {
         // A prior Move can fail its admission drain before terminal ACK. Its exact retry
         // joins the durable intent, while the admitted worker retains its original claim.
         placements.beginPlacementMove(request);
-        const completed = openSessionManager();
-        const leafId = completed.appendMessage(
-          makeAgentAssistantMessage({
-            content: [{ type: "text", text: "Remote work completed" }],
-            timestamp: 21,
-          }),
-        );
+        const completed = await openSessionManager();
+        const leafId = await completed.appendMessageAsync(completedWorkerMessage());
         return acknowledgeCompletedWorkerTurn(launchRequest.turnClaim, leafId);
       }),
       reconcileWorkspace: vi
@@ -788,7 +786,7 @@ describe("worker turn launcher terminal results", () => {
       .catch((error: unknown) => error);
     await transferEntered.promise;
     expect(placements.get(SESSION_ID)?.state).toBe("draining");
-    expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
     const moving = dispatch.move(request).catch((error: unknown) => error);
     try {
       await barrierEntered.promise;
@@ -833,7 +831,7 @@ describe("worker turn launcher terminal results", () => {
 
     expect(reconcileActivePlacement).toHaveBeenCalledWith(ENVIRONMENT_ID);
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "draining", turnClaim: null });
-    expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
     expect(tunnel.reconcileWorkspace).toHaveBeenCalledTimes(2);
     expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
     expect(harness.reportWorkspaceResultRecoveryFailure).not.toHaveBeenCalled();
@@ -916,8 +914,8 @@ describe("worker turn launcher terminal results", () => {
           createWorkerTurnTunnel({
             launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
               request.onDispatchReady?.();
-              const completed = openSessionManager();
-              completed.appendMessage(
+              const completed = await openSessionManager();
+              await completed.appendMessageAsync(
                 makeAgentAssistantMessage({
                   content: [{ type: "toolCall", id: "call-usage", name: "read", arguments: {} }],
                   provider: "openai",
@@ -934,10 +932,10 @@ describe("worker turn launcher terminal results", () => {
                   },
                 }),
               );
-              completed.appendMessage(
+              await completed.appendMessageAsync(
                 makeTextToolResult("call-usage", "read", "usage result", false, 22),
               );
-              const leafId = completed.appendMessage(
+              const leafId = await completed.appendMessageAsync(
                 makeAgentAssistantMessage({
                   content,
                   provider: "anthropic",

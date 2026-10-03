@@ -210,8 +210,10 @@ function libraryHandler<P extends Record<string, unknown>>(
     options: GatewayRequestHandlerOptions,
   ) => unknown,
 ): GatewayRequestHandlers[string] {
-  return defineValidatedGatewayHandler(name, validate, async (options) => {
-    try {
+  return defineValidatedGatewayHandler(
+    name,
+    validate,
+    async (options) => {
       options.respond(
         true,
         await run(
@@ -229,28 +231,24 @@ function libraryHandler<P extends Record<string, unknown>>(
         ),
         undefined,
       );
-    } catch (error) {
+    },
+    (error) => {
       if (error instanceof SessionMutationAuthorizationChangedError) {
-        options.respond(false, undefined, error.error);
-        return;
+        return error.error;
       }
-      options.respond(
-        false,
-        undefined,
-        error instanceof SkillLibraryError
-          ? errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
-              details: {
-                code: `SKILL_LIBRARY_${error.code}`,
-                ...(error.currentRevision ? { currentRevision: error.currentRevision } : {}),
-              },
-            })
-          : errorShape(
-              ErrorCodes.UNAVAILABLE,
-              "Unable to complete the skill library operation. Review the bundle or retry the request.",
-            ),
-      );
-    }
-  });
+      return error instanceof SkillLibraryError
+        ? errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
+            details: {
+              code: `SKILL_LIBRARY_${error.code}`,
+              ...(error.currentRevision ? { currentRevision: error.currentRevision } : {}),
+            },
+          })
+        : errorShape(
+            ErrorCodes.UNAVAILABLE,
+            "Unable to complete the skill library operation. Review the bundle or retry the request.",
+          );
+    },
+  );
 }
 
 export const skillsLibraryHandlers: GatewayRequestHandlers = {

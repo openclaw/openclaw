@@ -25,6 +25,15 @@ the remote's full ref inventory. Local upstreams need no fetch; an unknown upstr
 stays unknown. The selected upstream's own missing history may still be downloaded.
 Ahead/behind counts remain unavailable when shallow history has no merge base.
 
+The Gateway initializes local update facts after post-ready startup work settles.
+Local Git discovery uses the managed Gateway startup allowance (45 seconds, or
+90 seconds on Windows) per command and retries once after a one-second backoff on
+timeout. If both attempts time out, it logs one
+initialization warning and the `update.status` RPC reports
+`schedule.install.git.status: "unavailable"` with reason `"git-unavailable"`.
+Status reads reuse that result; an explicit Dev checkout refresh can recover it.
+Package directories without Git metadata skip the Git discovery subprocess.
+
 For a clean source checkout configured with `update.channel: "stable"` or `"beta"`, `update status --json` can include `update.git.preferredTarget` with `channel`, `tag`, and the exact commit `sha`.
 This uses the updater's release selector and fetches into a temporary private Git repository, preserving the installed refs and checkout.
 The selected tag must still resolve to that commit at the release remote; retained local-only tags do not count as fresh targets.
@@ -313,6 +322,16 @@ version is not proof of the version currently serving requests. Optional Doctor
 diagnostic failures remain warnings, while refused config writes and incomplete
 required migrations remain errors. Historical runs cannot recover facts that
 their updater never recorded.
+
+If a candidate check exits by signal, its failed step retains `termination`,
+`signal`, and a redacted `stderrTail` (up to 80 lines, 512 characters per line,
+and 8,192 characters total, reserving the fatal header when present). The report names the check, including **Checking
+data migrations** for Doctor, and shows the native diagnostics ahead of adjacent
+plugin warnings. The terminal and local Markdown report retain the excerpt;
+the short status report can truncate it. JSON history keeps the bounded excerpt,
+and reviewed public reports retain the termination class and recognized signal. This capture
+requires the updated updater; a candidate cannot restore diagnostics that an
+older installed driver discarded.
 
 Current updaters record their process identities and refresh the ledger
 every 30 seconds during long build, install, and finalization phases. Those

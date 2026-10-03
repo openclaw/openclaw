@@ -66,6 +66,8 @@ export function isGatewayUploadRequest(method: string, params: unknown): boolean
     return false;
   }
   switch (method) {
+    case "mcp.app.formResource":
+      return params.action === "upload";
     case "chat.send":
     case "agent":
     case "sessions.create":

@@ -55,7 +55,11 @@ import type {
   PreparedAgentRunDispatch,
 } from "./agent-run-admission-types.js";
 import { admitAgentRestartRecovery } from "./agent-run-recovery-admission.js";
-import { prepareGatewaySubagentRun, settleUnstartedGatewayFollowup } from "./agent-run-subagent.js";
+import {
+  prepareGatewaySubagentRun,
+  resolveRegisteredSubagentTimeoutSeconds,
+  settleUnstartedGatewayFollowup,
+} from "./agent-run-subagent.js";
 import {
   prepareAgentRunUserTurn,
   recordAgentRunUserTurnParticipant,
@@ -132,23 +136,14 @@ export async function prepareAgentRunDispatch(
       // Close may finish its cancellation sweep while session acquisition waits.
       // Reject before publishing a controller that the closing Gateway cannot cancel.
       params.context.requestEntryLifetime?.signal.throwIfAborted();
-      const registeredRun =
-        params.request.timeout === undefined &&
-        !params.isOneShotModelRun &&
-        params.resolvedSessionKey
-          ? getLatestLiveSubagentRunByChildSessionKey(params.resolvedSessionKey)
-          : undefined;
-      const registeredSession = registeredRun?.childSessionIdentity;
-      // Admission may adopt a replacement; retained rows must match its final identity.
-      const inheritsRegisteredTimeout =
-        registeredRun &&
-        !registeredRun.execution.suppressSessionEffects &&
-        registeredSession?.sessionId === params.getAdmittedSessionId() &&
-        registeredSession.sessionId === admittedSessionEntry?.sessionId &&
-        registeredSession.lifecycleRevision === admittedSessionEntry.lifecycleRevision;
       timeoutSeconds =
         params.request.timeout ??
-        (inheritsRegisteredTimeout ? (registeredRun.runTimeoutSeconds ?? 0) : undefined);
+        resolveRegisteredSubagentTimeoutSeconds({
+          sessionKey: params.isOneShotModelRun ? undefined : params.resolvedSessionKey,
+          agentId: params.activeSessionAgentId,
+          admittedSessionId: params.getAdmittedSessionId(),
+          admittedSessionEntry,
+        });
       const timeoutMs = resolveAgentTimeoutMs({
         cfg: params.cfgForAgent ?? params.cfg,
         overrideSeconds: timeoutSeconds,
@@ -274,7 +269,11 @@ export async function prepareAgentRunDispatch(
           const runtime = await import("../../agents/subagents/registry/subagent-registry.js");
           const ownsAdoption = () =>
             isSameSubagentRunOwner(
-              getLatestLiveSubagentRunByChildSessionKey(adopted.childSessionKey),
+              getLatestLiveSubagentRunByChildSessionKey(
+                adopted.childSessionKey,
+                undefined,
+                adopted.childAgentId,
+              ),
               adopted,
             );
           if (!ownsAdoption()) {

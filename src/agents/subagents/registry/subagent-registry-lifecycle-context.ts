@@ -27,6 +27,7 @@ export type SubagentLifecycleOptions = {
   getLatestRunForChildSession(
     childSessionKey: string,
     matches?: (entry: SubagentRunRecord) => boolean,
+    childAgentId?: string,
   ): SubagentRunRecord | null;
   suppressAnnounceForSteerRestart(entry?: SubagentRunRecord): boolean;
   shouldEmitEndedHookForRun: ContextCleanup["shouldEmitEndedHookForRun"];
@@ -76,7 +77,7 @@ export interface SubagentLifecycleCleanupContext extends SubagentLifecycleCommon
   isCleanupAttemptCurrent(runId: string, entry: SubagentRunRecord, generation: number): boolean;
   isCleanupGeneration(entry: SubagentRunRecord, generation: number): boolean;
   isCleanupGenerationCurrent(runId: string, entry: SubagentRunRecord, generation: number): boolean;
-  isEndedHookOwnerCurrent(runId: string, entry: SubagentRunRecord): boolean;
+  isCleanupOwnerCurrent(runId: string, entry: SubagentRunRecord): boolean;
   startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecord): boolean;
 }
 

@@ -2,6 +2,7 @@ import pMap, { pMapSkip } from "p-map";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { GatewaySchedulerScope } from "../../infra/gateway-scheduler.js";
 import { formatTimestamp } from "../../logging/timestamps.js";
 import {
   beginGatewayRootWorkAdmissionWhenOpen,
@@ -39,7 +40,7 @@ import {
   runPostPersistCronNotifications,
 } from "./store.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
-import { createCronCapacityRecheckTracker } from "./timer-capacity-recheck.js";
+import { createCronCapacityRecheckGate } from "./timer-capacity-recheck.js";
 import {
   MAX_CRON_TIMER_DELAY_MS,
   MIN_REFIRE_GAP_MS,
@@ -115,51 +116,56 @@ export function stopTimer(state: CronServiceState) {
 }
 
 function setCronTimer(state: CronServiceState, delayMs: number): void {
-  state.timer = state.deps.scheduler.schedule({
+  const scheduler = state.schedulerScope;
+  state.timer = scheduler.schedule({
     id: `cron:${state.deps.storePath}:due`,
     delayMs,
     run: () => {
       state.timer = null;
-      return runInDetachedAsyncContext(() => onTimer(state)).catch((err: unknown) => {
+      return runInDetachedAsyncContext(() => onTimer(state, scheduler)).catch((err: unknown) => {
         state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
       });
     },
   });
 }
 
-/** Consume a released slot without routing overdue work through the refire floor. */
-function requestImmediateCronRecheck(state: CronServiceState): Promise<void> | undefined {
-  if (state.stopped || state.schedulingPaused || !state.deps.cronEnabled) {
-    return undefined;
+/** Capacity wakes have their own scoped registration, independent of the current batch. */
+function requestImmediateCronRecheck(
+  state: CronServiceState,
+  scheduler: GatewaySchedulerScope,
+): void {
+  if (
+    state.stopped ||
+    state.schedulingPaused ||
+    !state.deps.cronEnabled ||
+    scheduler !== state.schedulerScope ||
+    scheduler.signal.aborted
+  ) {
+    return;
   }
-  stopTimer(state);
-  return onTimer(state).catch((err: unknown) => {
-    state.deps.log.error({ err: String(err) }, "cron: immediate capacity recheck failed");
+  scheduler.schedule({
+    id: `cron:${state.deps.storePath}:capacity`,
+    delayMs: 0,
+    run: () =>
+      runInDetachedAsyncContext(() => onTimer(state, scheduler)).catch((err: unknown) => {
+        state.deps.log.error({ err: String(err) }, "cron: immediate capacity recheck failed");
+      }),
   });
 }
 
-function requestIndependentImmediateCronRecheck(
-  state: CronServiceState,
-): Promise<void> | undefined {
-  return runInDetachedAsyncContext(() => requestImmediateCronRecheck(state));
-}
-
 /** Handles one cron timer tick under the process-wide root work admission. */
-export async function onTimer(state: CronServiceState) {
+export async function onTimer(state: CronServiceState, scheduler = state.schedulerScope) {
+  if (scheduler !== state.schedulerScope || scheduler.signal.aborted) {
+    return;
+  }
   const lifecycleGeneration = state.lifecycleGeneration;
   let admission;
   try {
     // A restart signal can be rejected after temporarily closing admission.
     // Wait for that decision so the consumed timer is not silently lost.
-    admission = await beginGatewayRootWorkAdmissionWhenOpen(
-      "cron:timer-tick",
-      state.deps.scheduler.signal,
-    );
+    admission = await beginGatewayRootWorkAdmissionWhenOpen("cron:timer-tick", scheduler.signal);
   } catch (err) {
-    if (
-      err instanceof GatewayDrainingError ||
-      (state.deps.scheduler.signal.aborted && isAbortError(err))
-    ) {
+    if (err instanceof GatewayDrainingError || (scheduler.signal.aborted && isAbortError(err))) {
       return;
     }
     throw err;
@@ -167,7 +173,7 @@ export async function onTimer(state: CronServiceState) {
   try {
     // Reopening admission cannot transfer a retired tick to a restarted scheduler.
     if (state.lifecycleGeneration === lifecycleGeneration) {
-      const run = () => onAdmittedTimer(state);
+      const run = () => onAdmittedTimer(state, scheduler);
       await admission.run(() =>
         state.deps.runSchedulerOwned ? state.deps.runSchedulerOwned(run) : run(),
       );
@@ -178,7 +184,7 @@ export async function onTimer(state: CronServiceState) {
 }
 
 /** Loads due jobs, reserves them, executes, persists, and re-arms. */
-async function onAdmittedTimer(state: CronServiceState) {
+async function onAdmittedTimer(state: CronServiceState, scheduler: GatewaySchedulerScope) {
   if (state.stopped || state.schedulingPaused || state.startupCatchup) {
     return;
   }
@@ -189,9 +195,8 @@ async function onAdmittedTimer(state: CronServiceState) {
   // Keep a watchdog timer armed while a tick is executing. If execution hangs
   // (for example in a provider call), the scheduler still wakes to re-check.
   armRunningRecheckTimer(state);
-  const capacityRechecks = createCronCapacityRecheckTracker(
-    () => requestImmediateCronRecheck(state),
-    () => requestIndependentImmediateCronRecheck(state),
+  const capacityRechecks = createCronCapacityRecheckGate(() =>
+    requestImmediateCronRecheck(state, scheduler),
   );
   let allowEmptyCapacityRecheck = false;
   try {
@@ -276,7 +281,7 @@ async function onAdmittedTimer(state: CronServiceState) {
             ? () => capacityRechecks.request()
             : () =>
                 // A zero-admission tick returns before this wake and cannot drain it.
-                void requestIndependentImmediateCronRecheck(state),
+                requestImmediateCronRecheck(state, scheduler),
         );
         allowEmptyCapacityRecheck = admittedDue.length > 0;
       }
@@ -540,7 +545,6 @@ async function onAdmittedTimer(state: CronServiceState) {
     }
   } finally {
     capacityRechecks.abort();
-    await capacityRechecks.drain();
     try {
       // Reaper discovery is maintenance: failure must never strand the timer
       // or leave the scheduler's execution slot permanently occupied.

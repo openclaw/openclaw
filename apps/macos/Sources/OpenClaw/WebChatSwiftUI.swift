@@ -652,10 +652,16 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
             throw OpenClawChatTransportSendError.notDispatched
         }
         try await self.requireCurrentOutboxGateway()
-        return try await MacChatMessageSpeechClient.synthesize(
-            text: text,
-            serverLease: serverLease,
-            connection: self.connection)
+        let encoded = try JSONEncoder().encode(TtsSpeakParams(text: text))
+        guard let params = try JSONSerialization.jsonObject(with: encoded) as? [String: Any] else {
+            throw MacChatMessageSpeechError.invalidRequest
+        }
+        let responseData = try await self.connection.request(
+            method: "tts.speak",
+            params: params.mapValues(AnyCodable.init),
+            timeoutMs: 60000,
+            ifCurrentServerLease: serverLease)
+        return try OpenClawChatGatewayPayloadCodec.decodeSpeechClip(responseData)
     }
 
     func loadSourceContext() async -> OpenClawChatSourceContext? {
@@ -685,10 +691,6 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
             kind: kind,
             playback: playback,
             ifCurrentServerLease: serverLease)
-    }
-
-    var supportsSlashCommandCatalog: Bool {
-        true
     }
 
     func createSession(
@@ -842,27 +844,6 @@ private enum MacChatMessageSpeechError: LocalizedError {
         case .unsupportedTransport:
             "Gateway TTS is unavailable for this chat transport"
         }
-    }
-}
-
-private enum MacChatMessageSpeechClient {
-    private static let requestTimeoutMs: Double = 60000
-
-    static func synthesize(
-        text: String,
-        serverLease: GatewayConnection.ServerLease,
-        connection: GatewayConnection) async throws -> OpenClawChatSpeechClip
-    {
-        let encoded = try JSONEncoder().encode(TtsSpeakParams(text: text))
-        guard let params = try JSONSerialization.jsonObject(with: encoded) as? [String: Any] else {
-            throw MacChatMessageSpeechError.invalidRequest
-        }
-        let responseData = try await connection.request(
-            method: "tts.speak",
-            params: params.mapValues(AnyCodable.init),
-            timeoutMs: self.requestTimeoutMs,
-            ifCurrentServerLease: serverLease)
-        return try OpenClawChatGatewayPayloadCodec.decodeSpeechClip(responseData)
     }
 }
 
@@ -1047,8 +1028,6 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
     private let conversationController: NativeConversationController?
     private let viewModel: OpenClawChatViewModel
     private let contentController: NSViewController
-    private let speech: OpenClawChatSpeechController
-    private let voiceNoteRecorder: OpenClawVoiceNoteRecorder
     private var routingIdentityTask: Task<Void, Never>?
     private var window: ExperienceWindow?
     var onBecameKey: (() -> Void)?
@@ -1145,14 +1124,12 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         voiceNoteRecorder.setCaptureAdmissionHandler {
             !AppStateStore.shared.talkEnabled
         }
-        self.voiceNoteRecorder = voiceNoteRecorder
         let speech = OpenClawChatSpeechController { text in
             guard let transport = transport as? MacGatewayChatTransport else {
                 throw MacChatMessageSpeechError.unsupportedTransport
             }
             return try await transport.synthesizeSpeech(text: text)
         }
-        self.speech = speech
         let sessionKeyRelay = WebChatSessionKeyRelay()
         let conversationOwner: OpenClawWebConversation? = gatewayTarget != nil &&
             !AppDefaults.standard.bool(forKey: nativeConversationForcedKey) ? OpenClawWebConversation() : nil
@@ -1326,9 +1303,9 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         self.ensureWindowSize()
         window.isHiddenForExperience = false
         window.isExcludedFromWindowsMenu = false
-        if window.isMiniaturized { window.deminiaturize(nil) }
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        if window.isMiniaturized { AppActivation.shared.deminiaturize(window: window) }
+        AppActivation.shared.makeKeyAndOrderFront(window: window)
+        AppActivation.shared.activate()
         self.onBecameKey?()
         self.onVisibilityChanged?(true)
         self.conversationController?.present(visible: true, active: window.isKeyWindow)
@@ -1338,7 +1315,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         guard let window else { return }
         window.isHiddenForExperience = true
         window.isExcludedFromWindowsMenu = true
-        if window.isMiniaturized { window.deminiaturize(nil) }
+        if window.isMiniaturized { AppActivation.shared.deminiaturize(window: window) }
         window.orderOut(nil)
         self.onVisibilityChanged?(false)
         self.conversationController?.present(visible: false, active: false)

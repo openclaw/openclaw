@@ -2101,21 +2101,25 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 .chat-controls__permission-picker::part(menu) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 16px;
+  align-items: start;
   width: min(340px, calc(100vw - 24px));
   padding: 8px;
   overflow: hidden;
 }
 
 .chat-controls__permission-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 0 0 9px;
+  padding: 0 0 9px 16px;
 }
 
 .chat-controls__permission-learn-more {
+  padding: 0 0 9px;
+  background: transparent;
   color: var(--muted);
+  font-size: 10px;
+  line-height: 1.32;
   font-weight: 500;
   letter-spacing: normal;
   text-transform: none;
@@ -2126,6 +2130,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 .chat-controls__permission-option {
+  grid-column: 1 / -1;
   display: flex;
   align-items: center;
   gap: var(--chat-composer-menu-row-gap);

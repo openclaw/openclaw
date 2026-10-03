@@ -28,12 +28,14 @@ import { createEventBus, type EventBus } from "../event-bus.js";
 import type { ExecOptions } from "../exec.js";
 import { execCommand } from "../exec.js";
 import * as bundledAgentSessions from "../extension-sdk.js";
+import { warnSessionPersistenceDeprecation } from "../session-persistence-deprecation.js";
 import { createSyntheticSourceInfo } from "../source-info.js";
 import type {
   Extension,
   ExtensionAPI,
   ExtensionFactory,
   ExtensionRuntime,
+  ExtensionRuntimeV2,
   ExtensionShortcut,
   LoadExtensionsResult,
   MessageRenderer,
@@ -163,13 +165,16 @@ export function createExtensionRuntime(): ExtensionRuntime {
     }
   };
 
-  const runtime: ExtensionRuntime = {
+  const runtime: ExtensionRuntimeV2 = {
     sendMessage: notInitialized,
     sendUserMessage: notInitialized,
     appendEntry: notInitialized,
+    appendEntryAsync: notInitialized,
     setSessionName: notInitialized,
+    setSessionNameAsync: notInitialized,
     getSessionName: notInitialized,
     setLabel: notInitialized,
+    setLabelAsync: notInitialized,
     getActiveTools: notInitialized,
     getAllTools: notInitialized,
     setActiveTools: notInitialized,
@@ -286,15 +291,44 @@ function createExtensionAPI(
     sendUserMessage: (content, options) => {
       activeRuntime().sendUserMessage(content, options);
     },
+    // Retained synchronous adapters for third-party extensions until the next SDK major.
     appendEntry: (customType, data) => {
+      warnSessionPersistenceDeprecation("ExtensionAPI.appendEntry", "appendEntryAsync");
       activeRuntime().appendEntry(customType, data);
     },
+    appendEntryAsync: async (customType, data) => {
+      const owner = activeRuntime();
+      if (!owner.appendEntryAsync) {
+        throw new Error("Extension host must bind worker persistence with bindCoreAsync");
+      }
+      const id = await owner.appendEntryAsync(customType, data);
+      owner.assertActive();
+      return id;
+    },
     setSessionName: (name) => {
+      warnSessionPersistenceDeprecation("ExtensionAPI.setSessionName", "setSessionNameAsync");
       activeRuntime().setSessionName(name);
+    },
+    setSessionNameAsync: async (name) => {
+      const owner = activeRuntime();
+      if (!owner.setSessionNameAsync) {
+        throw new Error("Extension host must bind worker persistence with bindCoreAsync");
+      }
+      await owner.setSessionNameAsync(name);
+      owner.assertActive();
     },
     getSessionName: () => activeRuntime().getSessionName(),
     setLabel: (entryId, label) => {
+      warnSessionPersistenceDeprecation("ExtensionAPI.setLabel", "setLabelAsync");
       activeRuntime().setLabel(entryId, label);
+    },
+    setLabelAsync: async (entryId, label) => {
+      const owner = activeRuntime();
+      if (!owner.setLabelAsync) {
+        throw new Error("Extension host must bind worker persistence with bindCoreAsync");
+      }
+      await owner.setLabelAsync(entryId, label);
+      owner.assertActive();
     },
     exec(command: string, args: string[], options?: ExecOptions) {
       runtime.assertActive();

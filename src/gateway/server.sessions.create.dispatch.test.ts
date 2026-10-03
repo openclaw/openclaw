@@ -83,13 +83,13 @@ test("chat.send fences dashboard title persistence from concurrent session delet
   let deletionCleanup: Promise<unknown> | undefined;
   let dispatchAdmissionsReleased: Promise<void> | undefined;
   const scheduleTitle = await actualDashboardTitleScheduler();
-  dashboardTitleScheduleMocks.schedule.mockImplementationOnce((params, ready) => {
+  dashboardTitleScheduleMocks.schedule.mockImplementationOnce((params, turn) => {
     // Capture chat custody before the independent title admission is created.
     dispatchAdmissionsReleased = getSessionWorkAdmissionRelease({
       scope: params.storePath,
       identities: [params.sessionKey, params.admittedSessionId],
     });
-    scheduleTitle(params, ready);
+    scheduleTitle(params, turn);
   });
   const dispatchStarted = createDeferredCore();
   const { promise: dispatchFinished, resolve: finishDispatch } = createDeferredCore();
@@ -272,6 +272,81 @@ test.each(["assistant", "item", "tool", "thinking", "approval", "empty", "error"
   },
 );
 
+test("chat.send retries a title that failed during its turn once that turn settles", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const { ws } = await openClient();
+  const sessionKey = "agent:main:dashboard:title-retry-after-turn";
+  let dispatchFinished = false;
+  let stopTitleObserver = () => {};
+  const dispatchStarted = createDeferredCore();
+  const firstLabelFailed = createDeferredCore();
+  const titlePersisted = createDeferredCore();
+  const { promise: dispatchPending, resolve: finishDispatch } = createDeferredCore();
+  const retriedAfterTurn: boolean[] = [];
+  dashboardTitleGenerationMocks.generate
+    .mockImplementationOnce(async () => {
+      // A one-request-at-a-time model holds the label behind the running reply until it times out.
+      firstLabelFailed.resolve();
+      throw new Error("conversation label generation failed (primary fallback)");
+    })
+    .mockImplementationOnce(async () => {
+      retriedAfterTurn.push(dispatchFinished);
+      return "Generated Dashboard Title";
+    });
+  dispatchInboundMessageMock.mockImplementationOnce(async ({ replyOptions }) => {
+    const runId = requireNonEmptyString(replyOptions?.runId, "reply run id");
+    replyOptions?.onAgentRunStart?.(runId);
+    emitAgentEvent({ runId, stream: "assistant", data: { text: "Planning the release" } });
+    dispatchStarted.resolve();
+    await dispatchPending;
+    dispatchFinished = true;
+    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+    return {
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    };
+  });
+  try {
+    const created = await rpcReq<{ key: string }>(ws, "sessions.create", {
+      agentId: "main",
+      key: sessionKey,
+    });
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    stopTitleObserver = sessionChanges.subscribe((change) => {
+      if (
+        "sessionKey" in change &&
+        change.sessionKey === sessionKey &&
+        loadSessionEntry({ agentId: "main", sessionKey, storePath })?.displayName
+      ) {
+        titlePersisted.resolve();
+      }
+    });
+
+    const sent = await rpcReq(ws, "chat.send", {
+      sessionKey,
+      message: "Help me plan the release",
+      idempotencyKey: "dashboard-title-retry-after-turn",
+    });
+    expect(sent.ok, JSON.stringify(sent.error)).toBe(true);
+    await Promise.all([dispatchStarted.promise, firstLabelFailed.promise]);
+    finishDispatch();
+    await titlePersisted.promise;
+    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
+      displayName: "Generated Dashboard Title",
+    });
+    expect(retriedAfterTurn).toEqual([true]);
+  } finally {
+    stopTitleObserver();
+    const released = getSessionWorkAdmissionRelease({
+      scope: storePath,
+      identities: [sessionKey],
+    });
+    finishDispatch();
+    await released;
+    ws.close();
+  }
+});
+
 test("sessions.create can start the first agent turn from an initial task", async () => {
   const { storePath } = await createSessionStoreDir();
   // Register "ops" so the deleted-agent guard added in #65986 does not
@@ -378,7 +453,7 @@ test.each(mentionCreationOwners)(
         expect(inbox.list(sender)).toMatchObject({ ok: true, value: { items: [] } });
       } finally {
         await waitForCreatedSessionRun(context, storePath, key);
-        inbox.dispose();
+        await inbox.dispose();
       }
     }),
 );

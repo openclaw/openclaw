@@ -198,14 +198,58 @@ function storageShapes(db: DatabaseSync, cacheTable: string) {
 }
 
 function assertBinaryEmbeddings(db: DatabaseSync, table: string): void {
-  if (
-    db
-      .prepare(
-        `SELECT 1 FROM ${table} WHERE openclaw_memory_embedding_blob_valid(embedding) = 0 LIMIT 1`,
-      )
-      .get()
-  ) {
-    throw new Error(`Memory storage migration found invalid binary embeddings in ${table}`);
+  const rows = db.prepare(
+    `SELECT openclaw_memory_embedding_blob_valid(embedding) AS valid FROM ${table}`,
+  );
+  for (const row of rows.iterate()) {
+    if (row.valid === 0) {
+      throw new Error(`Memory storage migration found invalid binary embeddings in ${table}`);
+    }
+  }
+}
+
+function copyMemoryStorageRows(db: DatabaseSync, table: string, sql: string): void {
+  const rows = db.prepare(`SELECT rowid AS storage_rowid FROM ${table}`);
+  rows.setReadBigInts(true);
+  const copy = db.prepare(sql);
+  copy.setReadBigInts(true);
+  // node:sqlite retains UDF argument handles until its native call returns.
+  // Copy one row per call, keeping other persisted fields inside SQLite.
+  for (const row of rows.iterate()) {
+    if (typeof row.storage_rowid !== "bigint") {
+      throw new Error("Invalid memory storage identity during migration");
+    }
+    copy.run(row.storage_rowid);
+  }
+}
+
+function markInvalidMemoryEmbeddings(db: DatabaseSync, sql: string): void {
+  const rows = db.prepare(sql);
+  rows.setReadBigInts(true);
+  const dirtySource = db.prepare(`
+    UPDATE main.memory_index_sources SET hash = ''
+    WHERE (path, source) IN (
+      SELECT path, source FROM main.memory_index_chunks WHERE rowid = ?
+    )`);
+  dirtySource.setReadBigInts(true);
+  let invalid = false;
+  // Project validity instead of filtering on the UDF: each native step must
+  // return even when every embedding is valid.
+  for (const row of rows.iterate()) {
+    if (row.valid === 0) {
+      if (typeof row.storage_rowid !== "bigint") {
+        throw new Error("Invalid memory storage identity during migration");
+      }
+      dirtySource.run(row.storage_rowid);
+      invalid = true;
+    }
+  }
+  if (invalid) {
+    db.exec(`
+      INSERT INTO main.memory_index_meta (key, value)
+      VALUES ('memory_vector_rebuild_v1', '1')
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+    `);
   }
 }
 
@@ -272,19 +316,16 @@ export function markInvalidImportedMemoryEmbeddings(db: DatabaseSync, schema: st
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(schema)) {
     throw new Error("Invalid legacy memory schema identifier");
   }
-  const invalidChunks = `
-    SELECT chunk.path, chunk.source
+  markInvalidMemoryEmbeddings(
+    db,
+    `
+    SELECT chunk.rowid AS storage_rowid,
+           openclaw_memory_embedding_json_valid(legacy.embedding) AS valid
     FROM ${schema}.chunks AS legacy
     JOIN main.memory_index_chunks AS chunk ON chunk.id = legacy.id
-    WHERE openclaw_memory_embedding_json_valid(legacy.embedding) = 0
-      AND length(chunk.embedding) = 0`;
-  db.exec(`
-    UPDATE main.memory_index_sources SET hash = ''
-    WHERE (path, source) IN (${invalidChunks});
-    INSERT INTO main.memory_index_meta (key, value)
-    SELECT 'memory_vector_rebuild_v1', '1' WHERE EXISTS (${invalidChunks})
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value;
-  `);
+    WHERE length(chunk.embedding) = 0
+  `,
+  );
 }
 
 function columns(db: DatabaseSync, table: string): Map<string, string> {
@@ -341,20 +382,14 @@ export function migrateMemoryIndexStorage(
         ensureMemoryRecallMetadataSchema(db);
         // Keep text and provenance searchable, but never invent a vector from
         // malformed legacy JSON. Source sync owns regeneration of these rows.
-        db.exec(`
-          UPDATE memory_index_sources SET hash = ''
-          WHERE (path, source) IN (
-            SELECT path, source FROM memory_index_chunks
-            WHERE openclaw_memory_embedding_json_valid(embedding) = 0
-          );
-          INSERT INTO memory_index_meta (key, value)
-          SELECT 'memory_vector_rebuild_v1', '1'
-          WHERE EXISTS (
-            SELECT 1 FROM memory_index_chunks
-            WHERE openclaw_memory_embedding_json_valid(embedding) = 0
-          )
-          ON CONFLICT(key) DO UPDATE SET value = excluded.value;
-        `);
+        markInvalidMemoryEmbeddings(
+          db,
+          `
+          SELECT rowid AS storage_rowid,
+                 openclaw_memory_embedding_json_valid(embedding) AS valid
+          FROM memory_index_chunks
+        `,
+        );
         dropMemoryChunkFtsTriggers(db);
         db.exec(
           MEMORY_INDEX_CHUNKS_SCHEMA_SQL.replace(
@@ -362,13 +397,19 @@ export function migrateMemoryIndexStorage(
             "CREATE TABLE",
           ).replace("memory_index_chunks", "memory_index_chunks_storage_migration"),
         );
-        db.exec(`
+        copyMemoryStorageRows(
+          db,
+          "memory_index_chunks",
+          `
           INSERT INTO memory_index_chunks_storage_migration (
             chunk_rowid, id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
           )
           SELECT rowid, id, path, source, start_line, end_line, hash, model, text,
                  openclaw_memory_embedding_from_json(embedding), updated_at
-          FROM memory_index_chunks;
+          FROM memory_index_chunks WHERE rowid = ?
+        `,
+        );
+        db.exec(`
           DROP TABLE memory_index_chunks;
           ALTER TABLE memory_index_chunks_storage_migration RENAME TO memory_index_chunks;
         `);
@@ -394,11 +435,17 @@ export function migrateMemoryIndexStorage(
         );
         // Empty vectors retain a cache miss for malformed entries. Provider
         // identity, age, and rowid eviction order survive the conversion.
-        db.exec(`
+        copyMemoryStorageRows(
+          db,
+          cacheTable,
+          `
           INSERT INTO ${replacement} (rowid, provider, model, provider_key, hash, embedding, dims, updated_at)
           SELECT rowid, provider, model, provider_key, hash,
                  openclaw_memory_embedding_from_json(embedding), dims, updated_at
-          FROM ${cacheTable};
+          FROM ${cacheTable} WHERE rowid = ?
+        `,
+        );
+        db.exec(`
           DROP TABLE ${cacheTable};
           ALTER TABLE ${replacement} RENAME TO ${cacheTable};
         `);

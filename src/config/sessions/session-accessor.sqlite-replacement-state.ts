@@ -15,6 +15,7 @@ import {
   readExactSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
+import { captureSessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
 import {
   applySessionEntryMaintenanceInDatabase,
   emptySessionEntryMaintenancePlan,
@@ -60,6 +61,13 @@ export function prepareSessionEntryReplacementPublication(
       ]),
     ),
     current,
+    ageChanges: [...current].map(([sessionKey, entry]) =>
+      captureSessionEntryMaintenanceAgeChange({
+        sessionKey,
+        entry,
+        previousEntry: result.previous.get(sessionKey),
+      }),
+    ),
     ...(getAdmittedSqliteSchemaFacts(database.db)
       ? {
           source: {

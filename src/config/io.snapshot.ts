@@ -14,6 +14,7 @@ import {
 } from "./agent-roster-provenance.js";
 import { captureConfigReadEnvMutation, cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
 import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
+import { applyImplicitAgentRosterDefaults } from "./implicit-agent-roster.js";
 import { ConfigIncludeError, ConfigIncludeReadError } from "./includes.js";
 import { createConfigIoContext, type ConfigIoContext } from "./io.context.js";
 import {
@@ -62,7 +63,7 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
 import { warnIfConfigFromFuture } from "./io.warnings.js";
-import { findLegacyConfigIssues, migratePersistedImplicitMainRoster } from "./legacy.js";
+import { findLegacyConfigIssues } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { captureManagedConfigSnapshotPreparation } from "./runtime-snapshot.js";
@@ -158,8 +159,7 @@ async function readConfigSnapshotWithPreparation(
       () => sourceRaw ?? readConfigFileIfPresent(deps, configPath),
     );
     if (raw === undefined) {
-      const migrated = migratePersistedImplicitMainRoster({});
-      const config = coerceConfig(migrated.config);
+      const config = coerceConfig(applyImplicitAgentRosterDefaults({}));
       const metadata = context.createValidationPluginMetadataSnapshotLoader({
         env: deps.env,
         allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
@@ -267,14 +267,7 @@ async function readConfigSnapshotWithPreparation(
       path: warning.configPath,
       message: `Missing env var "${warning.varName}" - feature using this value will be unavailable`,
     }));
-    const rosterMigration = migratePersistedImplicitMainRoster(readResolution.resolvedConfigRaw, {
-      env: deps.env,
-      homedir: deps.homedir,
-    });
-    envVarWarnings.push(
-      ...rosterMigration.diagnostics.map((message) => ({ path: "agents.entries", message })),
-    );
-    const effectiveConfigRaw = rosterMigration.config;
+    const effectiveConfigRaw = applyImplicitAgentRosterDefaults(readResolution.resolvedConfigRaw);
     // The write revision covers every authored input, without hashing runtime defaults or env.
     const snapshotHash = hashConfigRevision(
       raw,

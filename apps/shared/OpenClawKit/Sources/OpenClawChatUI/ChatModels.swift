@@ -967,12 +967,23 @@ public struct OpenClawSessionsPreviewPayload: Codable, Sendable {
 public struct OpenClawChatSendResponse: Codable, Sendable {
     public let runId: String
     public let status: String
+
+    public init(runId: String, status: String) {
+        self.runId = runId
+        self.status = status
+    }
 }
 
 public struct OpenClawChatCreateSessionResponse: Codable, Sendable {
     public let ok: Bool?
     public let key: String
     public let sessionId: String?
+
+    public init(ok: Bool?, key: String, sessionId: String?) {
+        self.ok = ok
+        self.key = key
+        self.sessionId = sessionId
+    }
 }
 
 public struct OpenClawChatEditorAttachment: Codable, Sendable {

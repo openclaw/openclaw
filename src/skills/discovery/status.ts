@@ -15,7 +15,6 @@ import {
   resolveSkillsInstallPreferences,
 } from "../loading/config.js";
 import { resolveSkillKey } from "../loading/frontmatter.js";
-import { resolveSkillFileHost } from "../loading/skill-file-host.js";
 import { resolveSkillSource } from "../loading/source.js";
 import {
   loadWorkspaceSkills,
@@ -23,6 +22,7 @@ import {
 } from "../loading/workspace-skill-loader.js";
 import type { WorkspaceSkillSources } from "../loading/workspace-skill-sources.js";
 import { mergeRemoteNodeSkillEntries } from "../runtime/remote-skills.js";
+import { resolveSkillFileHost } from "../skill-file-host.js";
 import type {
   SkillEntry,
   SkillEligibilityContext,

@@ -499,7 +499,7 @@ describe("worker placement move destination", () => {
             retireSessionPlacement: vi.fn(),
             pruneOrphanedWorkspaceReconciliations: async () => [],
             listWorkspaceReconciliationOwners: async () => [],
-            listPendingWorkspaceResults: () => [],
+            listPendingWorkspaceResultsAsync: async () => [],
           } as never,
           environments: {} as never,
           gatewayNamespace: "gateway-test",

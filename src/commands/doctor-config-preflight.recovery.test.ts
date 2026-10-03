@@ -144,7 +144,7 @@ it.each(["env", "include"] as const)(
 );
 
 it.each([false, true])(
-  "normal and Doctor recovery preserve list roster ownership (legacy default: %s)",
+  "Doctor recovers list roster ownership after runtime recovery refuses it (legacy default: %s)",
   async (legacyDefault) => {
     await withDoctorConfigPreflightHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
@@ -153,7 +153,6 @@ it.each([false, true])(
       const entries = {
         alpha: {
           workspace: path.join(home, "workspace-alpha"),
-          ...(legacyDefault ? { default: true } : {}),
         },
         beta: { workspace: path.join(home, "workspace-beta") },
         gamma: { workspace: path.join(home, "workspace-gamma") },
@@ -163,7 +162,9 @@ it.each([false, true])(
         gateway: { mode: "local" },
         plugins: { enabled: false },
         agents: {
-          list: Object.entries(entries).map(([id, config]) => Object.assign({ id }, config)),
+          list: Object.entries(entries).map(([id, config]) =>
+            Object.assign({ id }, config, legacyDefault && id === "alpha" ? { default: true } : {}),
+          ),
         },
         bindings,
       });
@@ -174,7 +175,7 @@ it.each([false, true])(
         parsed: JSON.parse(backup),
         stat: await fs.stat(lastGoodPath),
       });
-      // This promotion predates the ownership requirement; today's validator rejects markerless rosters.
+      // This promotion predates canonical rosters; runtime recovery must not normalize the backup.
       patchConfigHealthEntryToStore(
         { env: process.env, homedir: () => home, logger: { warn() {} } },
         configPath,
@@ -193,22 +194,18 @@ it.each([false, true])(
         snapshot: await io.readConfigFileSnapshot(),
         reason: "doctor-invalid-config",
       });
-      expect(restored).toBe(legacyDefault);
-      expect(await fs.readFile(configPath, "utf8")).toBe(legacyDefault ? backup : original);
+      expect(restored).toBe(false);
+      expect(await fs.readFile(configPath, "utf8")).toBe(original);
       expect(await fs.readFile(lastGoodPath, "utf8")).toBe(backup);
-      if (!legacyDefault) {
-        expect(warn).toHaveBeenCalledWith(
-          expect.stringContaining("Config last-known-good recovery skipped"),
-        );
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining("agents.ownership"));
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining("run openclaw doctor"));
-        expect((await fs.readdir(stateDir)).filter((name) => name.includes(".clobbered."))).toEqual(
-          [],
-        );
-      }
-      const snapshot = legacyDefault
-        ? await io.readConfigFileSnapshot()
-        : (await runDoctorConfigPreflight(repairOptions)).snapshot;
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("Config last-known-good recovery skipped"),
+      );
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("agents.list"));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
+      expect((await fs.readdir(stateDir)).filter((name) => name.includes(".clobbered."))).toEqual(
+        [],
+      );
+      const snapshot = (await runDoctorConfigPreflight(repairOptions)).snapshot;
       expect(snapshot.valid).toBe(true);
       expect(snapshot.config.bindings).toEqual(bindings);
       if (legacyDefault) {
@@ -217,6 +214,7 @@ it.each([false, true])(
         const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
         expect(saved.agents).toEqual({ ownership: "explicit", entries });
       }
+      expect(snapshot.config.agents?.entries).toEqual(entries);
       expect(await fs.readFile(lastGoodPath, "utf8")).toBe(backup);
       const clobbered = (await fs.readdir(stateDir)).filter((name) => name.includes(".clobbered."));
       expect(clobbered).toHaveLength(1);
@@ -224,3 +222,28 @@ it.each([false, true])(
     });
   },
 );
+
+it("refuses retired cron files before repairing their custom locator or recovering config", async () => {
+  await withDoctorConfigPreflightHome(async (home) => {
+    const stateDir = path.join(home, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const storePath = path.join(home, "custom-cron", "jobs.json");
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    const original = JSON.stringify({ cron: { store: storePath }, update: { channel: "stable" } });
+    const backup = '{"gateway":{"mode":"local"},"plugins":{"enabled":false}}\n';
+    const retired = '{"version":1,"jobs":[{"id":"retained"}]}\n';
+    await fs.writeFile(configPath, original);
+    await fs.writeFile(`${configPath}.bak`, backup);
+    await fs.writeFile(storePath, retired);
+
+    await expect(runDoctorConfigPreflight(repairOptions)).rejects.toThrow(
+      /Upgrade through OpenClaw 2026\.9\.7/,
+    );
+
+    expect(await fs.readFile(configPath, "utf8")).toBe(original);
+    expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(backup);
+    expect(await fs.readFile(storePath, "utf8")).toBe(retired);
+    expect((await fs.readdir(stateDir)).filter((name) => name.includes(".clobbered."))).toEqual([]);
+  });
+});
