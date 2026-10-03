@@ -308,10 +308,9 @@ export async function createQaLabApp(root: HTMLDivElement) {
       if (state.selectedCaptureSessionIds.length === 0) {
         state.selectedCaptureSessionIds = sessions.sessions[0]?.id ? [sessions.sessions[0].id] : [];
       }
-      state.captureStartupStatus = await startupStatusPromise.then(
-        (payload) => payload.status,
-        () => null,
-      );
+      state.captureStartupStatus = (
+        await startupStatusPromise.catch(() => ({ status: null }))
+      ).status;
       if (state.selectedCaptureSessionIds.length > 0) {
         const eventsPromises = state.selectedCaptureSessionIds.map((sessionId) =>
           getJson<CaptureEventsEnvelope>(
