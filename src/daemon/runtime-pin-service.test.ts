@@ -1,17 +1,26 @@
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readLaunchAgentProgramArguments } from "./launchd.js";
 import { resolveNodeService } from "./node-service.js";
 import { readDaemonRuntimePin } from "./runtime-pin-state.js";
-import type { GatewayServiceCommandConfig, GatewayServiceInstallArgs } from "./service-types.js";
-import { resolveGatewayService } from "./service.js";
+import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
+import type {
+  GatewayServiceCommandConfig,
+  GatewayServiceControlArgs,
+  GatewayServiceInstallArgs,
+} from "./service-types.js";
+import { readGatewayServiceState, resolveGatewayService } from "./service.js";
 const native = vi.hoisted(() => ({
   command: null as GatewayServiceCommandConfig | null,
   install: vi.fn(),
   stage: vi.fn(),
   uninstall: vi.fn(),
+  loaded: vi.fn(),
+  runtime: vi.fn(),
+  stop: vi.fn(),
 }));
 vi.mock("./launchd.js", () => ({
   installLaunchAgent: native.install,
@@ -19,11 +28,11 @@ vi.mock("./launchd.js", () => ({
   uninstallLaunchAgent: native.uninstall,
   readLaunchAgentProgramArguments: vi.fn(async () => native.command),
   isLaunchAgentEnabled: vi.fn(),
-  isLaunchAgentLoaded: vi.fn(),
-  readLaunchAgentRuntime: vi.fn(),
+  isLaunchAgentLoaded: native.loaded,
+  readLaunchAgentRuntime: native.runtime,
   restartLaunchAgent: vi.fn(),
   startLaunchAgent: vi.fn(),
-  stopLaunchAgent: vi.fn(),
+  stopLaunchAgent: native.stop,
 }));
 vi.mock("../infra/tmp-openclaw-dir.js", () => ({
   resolvePreferredOpenClawTmpDir: () => {
@@ -43,6 +52,14 @@ vi.mock("../infra/gateway-supervision.js", () => ({
 beforeEach(() => {
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
   native.command = null;
+  native.loaded.mockReset().mockResolvedValue(true);
+  native.runtime.mockReset().mockResolvedValue({ status: "running" });
+  native.stop.mockReset().mockImplementation(async (args: GatewayServiceControlArgs) => {
+    native.runtime.mockResolvedValue({ status: "stopped" });
+    if (args.disable) {
+      native.loaded.mockResolvedValue(false);
+    }
+  });
   const write = async (args: GatewayServiceInstallArgs) => {
     native.command = {
       programArguments: args.programArguments,
@@ -246,4 +263,125 @@ describe("native service runtime pin persistence", () => {
       });
     },
   );
+
+  it.each([false, true])(
+    "preserves a stop before the guarded runtime writer acquires its lock (disable=%s)",
+    async (disable) => {
+      await withOpenClawTestState({ label: "pin-native-intervening-stop" }, async (state) => {
+        const scope = { kind: "gateway" as const, env: state.env };
+        const service = resolveGatewayService();
+        native.command = { programArguments: ["/original/node", "/app/openclaw.mjs", "gateway"] };
+        const original = native.command;
+        const observed = await readGatewayServiceState(service, { env: state.env });
+        expect(observed.running).toBe(true);
+        const expected = readDaemonRuntimePin(scope, observed.command);
+        const entered = createDeferred();
+        const release = createDeferred();
+        const stopping = withGatewayServiceOperationLock(state.env, async () => {
+          entered.resolve();
+          await release.promise;
+          await service.stop({ env: state.env, stdout: process.stdout, disable });
+        });
+        await entered.promise;
+        const install = service.install({
+          env: state.env,
+          stdout: process.stdout,
+          programArguments: ["/bundled/bun", "/app/openclaw.mjs", "gateway"],
+          runtimePinUpdate: {
+            expected,
+            pin: { runtime: "bun", path: "/bundled/bun" },
+            requireDefinitionMatch: true,
+            requireRunning: true,
+          },
+        });
+        const refused = expect(install).rejects.toThrow(
+          /Start it before choosing Use bundled runtime/,
+        );
+        release.resolve();
+        await Promise.all([stopping, refused]);
+        expect(native.stop).toHaveBeenCalledOnce();
+        expect(native.install).not.toHaveBeenCalled();
+        expect(native.command).toBe(original);
+        expect(readDaemonRuntimePin(scope, original)).toEqual(expected);
+      });
+    },
+  );
+
+  it.each(["stage", "install"] as const)(
+    "admits a running service to a guarded %s",
+    async (action) => {
+      await withOpenClawTestState({ label: "pin-native-running" }, async (state) => {
+        const scope = { kind: "gateway" as const, env: state.env };
+        const service = resolveGatewayService();
+        native.command = { programArguments: ["/original/node", "/app/openclaw.mjs", "gateway"] };
+        const pin = { runtime: "bun" as const, path: "/bundled/bun" };
+        await service[action]({
+          env: state.env,
+          stdout: process.stdout,
+          programArguments: [pin.path, "/app/openclaw.mjs", "gateway"],
+          runtimePinUpdate: {
+            expected: readDaemonRuntimePin(scope, native.command),
+            pin,
+            requireRunning: true,
+          },
+        });
+        expect(native[action]).toHaveBeenCalledOnce();
+        expect(readDaemonRuntimePin(scope, native.command).pin).toEqual(pin);
+      });
+    },
+  );
+
+  it.each(["unknown", "inspection-failed", "disabled"])(
+    "refuses a guarded runtime switch when native state is %s",
+    async (reason) => {
+      await withOpenClawTestState({ label: "pin-native-unknown-running" }, async (state) => {
+        const scope = { kind: "gateway" as const, env: state.env };
+        const service = resolveGatewayService();
+        native.command = { programArguments: ["/original/node", "/app/openclaw.mjs", "gateway"] };
+        const original = native.command;
+        const expected = readDaemonRuntimePin(scope, original);
+        if (reason === "inspection-failed") {
+          native.runtime.mockRejectedValue(new Error("native inspection failed"));
+        } else if (reason === "disabled") {
+          native.loaded.mockResolvedValue(false);
+        } else {
+          native.runtime.mockResolvedValue({ status: "unknown" });
+        }
+        await expect(
+          service.install({
+            env: state.env,
+            stdout: process.stdout,
+            programArguments: ["/bundled/bun", "/app/openclaw.mjs", "gateway"],
+            runtimePinUpdate: { expected, requireDefinitionMatch: true, requireRunning: true },
+          }),
+        ).rejects.toThrow(/Start it before choosing Use bundled runtime/);
+        expect(native.install).not.toHaveBeenCalled();
+        expect(native.command).toBe(original);
+        expect(readDaemonRuntimePin(scope, original)).toEqual(expected);
+      });
+    },
+  );
+
+  it("admits a guarded fresh install without requiring an existing running service", async () => {
+    await withOpenClawTestState({ label: "pin-native-fresh" }, async (state) => {
+      const scope = { kind: "gateway" as const, env: state.env };
+      const service = resolveGatewayService();
+      native.loaded.mockResolvedValue(false);
+      native.runtime.mockResolvedValue({ status: "stopped" });
+      const pin = { runtime: "bun" as const, path: "/bundled/bun" };
+      await service.install({
+        env: state.env,
+        stdout: process.stdout,
+        programArguments: [pin.path, "/app/openclaw.mjs", "gateway"],
+        runtimePinUpdate: {
+          expected: readDaemonRuntimePin(scope, null),
+          pin,
+          requireDefinitionMatch: true,
+        },
+      });
+      expect(native.install).toHaveBeenCalledOnce();
+      expect(native.runtime).not.toHaveBeenCalled();
+      expect(readDaemonRuntimePin(scope, native.command).pin).toEqual(pin);
+    });
+  });
 });

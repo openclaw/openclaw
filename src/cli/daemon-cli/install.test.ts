@@ -67,7 +67,12 @@ describe("runDaemonInstall", () => {
       expect(ensureConfigReadyMock).toHaveBeenCalledOnce();
       expect(service.install).toHaveBeenCalledWith(
         expect.objectContaining({
-          runtimePinUpdate: { expected: current, pin: undefined, requireDefinitionMatch: true },
+          runtimePinUpdate: {
+            expected: current,
+            pin: undefined,
+            requireDefinitionMatch: true,
+            ...(definition !== null ? { requireRunning: true } : {}),
+          },
         }),
       );
     },

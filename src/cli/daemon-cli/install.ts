@@ -500,7 +500,12 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       runtimePinUpdate: {
         expected: pinSnapshot,
         pin: pinnedRuntimePath ? { runtime, path: pinnedRuntimePath } : undefined,
-        ...(opts.expectedRuntimePin !== undefined ? { requireDefinitionMatch: true as const } : {}),
+        ...(opts.expectedRuntimePin !== undefined
+          ? {
+              requireDefinitionMatch: true as const,
+              ...(pinSnapshot.definition !== undefined ? { requireRunning: true as const } : {}),
+            }
+          : {}),
       },
       env: installEnv,
       stdout,

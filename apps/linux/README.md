@@ -379,8 +379,9 @@ another runtime, including Node, an older bundled Bun, or an operator-selected
 runtime. The action shows the current runtime and asks for confirmation. It
 passes that observation's service definition and runtime pin to the CLI's
 `--expected-runtime-pin` guard, which refuses an intervening service or pin
-change. A paused or stopped Gateway stays stopped; choose **Start Gateway**
-before switching runtimes.
+change. The CLI also rechecks that an existing service is running after acquiring
+its mutation lock. A paused or stopped Gateway stays stopped; choose **Start
+Gateway** before switching runtimes.
 
 After the install, the app checks Gateway health. A failed health check shows
 the error and a CLI command to return to the previous runtime; it does not
