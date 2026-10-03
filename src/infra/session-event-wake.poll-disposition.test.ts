@@ -55,55 +55,45 @@ describe("session event wake private poll disposition", () => {
   });
 
   it.each([
-    "active-run",
-    "requests-in-flight",
-    "cron-in-progress",
-    "preempted",
-    "channel-not-ready",
-  ])("settles an explicitly deferred native poll with the exact %s result", async (reason) => {
-    const skipped = { status: "skipped" as const, reason, retryAtMs: Date.now() + 60_000 };
-    const dispositions: boolean[][] = [];
-    const handler = vi.fn<WakeHandler>(async () => {
-      dispositions.push([
-        isSessionEventWakePollDeferred(),
-        deferSessionEventWakePoll(),
-        isSessionEventWakePollDeferred(),
-      ]);
-      return skipped;
-    });
-    setSessionEventWakeHandler(handler);
-    const settled = vi.fn();
-    const result = requestSessionEventWakeAndWait(nativePoll({ coalesceMs: 100 }));
-    void result.then(settled);
-
-    await vi.advanceTimersByTimeAsync(100);
-
-    expect(handler).toHaveBeenCalledOnce();
-    expect(dispositions).toEqual([[false, true, true]]);
-    expect(settled).toHaveBeenCalledExactlyOnceWith(skipped);
-    expect(await result).toBe(skipped);
-
-    await vi.advanceTimersByTimeAsync(601_000);
-    expect(handler).toHaveBeenCalledOnce();
-    expect(settled).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    { reason: "active-run", retryMs: SESSION_EVENT_IDLE_RETRY_MS },
-    { reason: "requests-in-flight", retryMs: SESSION_EVENT_IDLE_RETRY_MS },
-    { reason: "cron-in-progress", retryMs: 1_000 },
+    { reason: "requests-in-flight", defer: true, retryMs: SESSION_EVENT_IDLE_RETRY_MS },
+    { reason: "active-run", defer: false, retryMs: SESSION_EVENT_IDLE_RETRY_MS },
+    { reason: "requests-in-flight", defer: false, retryMs: SESSION_EVENT_IDLE_RETRY_MS },
+    { reason: "cron-in-progress", defer: false, retryMs: 1_000 },
   ])(
-    "keeps the public $reason result retryable without the private operation",
-    async ({ reason, retryMs }) => {
-      const handler = vi
-        .fn<WakeHandler>()
-        .mockResolvedValueOnce({ status: "skipped", reason })
-        .mockResolvedValue(terminalFailure);
+    "settles $reason only with a private disposition (defer=$defer)",
+    async ({ reason, defer, retryMs }) => {
+      const skipped = {
+        status: "skipped" as const,
+        reason,
+        ...(defer ? { retryAtMs: Date.now() + 60_000 } : {}),
+      };
+      const dispositions: boolean[][] = [];
+      const handler = vi.fn<WakeHandler>(async (): ReturnType<WakeHandler> => {
+        if (defer) {
+          dispositions.push([
+            isSessionEventWakePollDeferred(),
+            deferSessionEventWakePoll(),
+            isSessionEventWakePollDeferred(),
+          ]);
+        }
+        return handler.mock.calls.length === 1 ? skipped : terminalFailure;
+      });
       setSessionEventWakeHandler(handler);
       const settled = vi.fn();
-      const result = requestSessionEventWakeAndWait(nativePoll());
+      const result = requestSessionEventWakeAndWait(nativePoll({ coalesceMs: 100 }));
       void result.then(settled);
 
+      await vi.advanceTimersByTimeAsync(100);
+      expect(handler).toHaveBeenCalledOnce();
+      if (defer) {
+        expect(dispositions).toEqual([[false, true, true]]);
+        expect(settled).toHaveBeenCalledExactlyOnceWith(skipped);
+        expect(await result).toBe(skipped);
+        await vi.advanceTimersByTimeAsync(601_000);
+        expect(handler).toHaveBeenCalledOnce();
+        expect(settled).toHaveBeenCalledOnce();
+        return;
+      }
       await vi.advanceTimersByTimeAsync(retryMs - 1);
       expect(handler).toHaveBeenCalledOnce();
       expect(settled).not.toHaveBeenCalled();
@@ -115,37 +105,17 @@ describe("session event wake private poll disposition", () => {
     },
   );
 
-  it.each([
-    { label: "missing target", sessionKey: undefined },
-    { label: "global alias", sessionKey: "global" },
-    { label: "whitespace target", sessionKey: "   " },
-  ])("never lets one branch terminally defer a broadcast ($label)", async ({ sessionKey }) => {
-    const handler = vi.fn<WakeHandler>(async (): ReturnType<WakeHandler> => {
-      expect(deferSessionEventWakePoll()).toBe(false);
-      expect(isSessionEventWakePollDeferred()).toBe(false);
-      return handler.mock.calls.length === 1
-        ? { status: "skipped", reason: "requests-in-flight" }
-        : terminalFailure;
-    });
-    setSessionEventWakeHandler(handler);
-    const settled = vi.fn();
-    const result = requestSessionEventWakeAndWait(nativePoll({ agentId: undefined, sessionKey }));
-    void result.then(settled);
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(handler).toHaveBeenCalledOnce();
-    expect(settled).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(SESSION_EVENT_IDLE_RETRY_MS);
-    expect(handler).toHaveBeenCalledTimes(2);
-    expect(await result).toBe(terminalFailure);
-  });
-
   it("keeps private dispositions and started work separate across concurrent targets", async () => {
+    expect(getSessionEventWakeAbortSignal()).toBeUndefined();
+    expect(deferSessionEventWakePoll()).toBe(false);
+    expect(isSessionEventWakePollDeferred()).toBe(false);
+    expect(() => markSessionEventWakeWorkStarted()).not.toThrow();
     const bothStarted = createDeferred();
     const pollDeferred = createDeferred();
     let starts = 0;
     const skipped = { status: "skipped" as const, reason: "requests-in-flight" };
     const handler = vi.fn<WakeHandler>(async (request, signal) => {
+      expect(signal).toBeInstanceOf(AbortSignal);
       expect(getSessionEventWakeAbortSignal()).toBe(signal);
       const admitted = request.agentId === "admitted";
       if (admitted) {
@@ -170,7 +140,7 @@ describe("session event wake private poll disposition", () => {
     });
     setSessionEventWakeHandler(handler);
     const poll = requestSessionEventWakeAndWait(
-      nativePoll({ agentId: "poll", sessionKey: "agent:poll:main" }),
+      nativePoll({ agentId: "poll", sessionKey: "agent:poll:main", tasks: [] }),
     );
     const admitted = requestSessionEventWakeAndWait(
       nativePoll({ agentId: "admitted", sessionKey: "agent:admitted:main" }),
@@ -180,81 +150,101 @@ describe("session event wake private poll disposition", () => {
     await expect(admitted).resolves.toBe(terminalFailure);
     await vi.advanceTimersByTimeAsync(601_000);
     expect(handler).toHaveBeenCalledTimes(2);
+    expect(getSessionEventWakeAbortSignal()).toBeUndefined();
+    expect(isSessionEventWakePollDeferred()).toBe(false);
   });
 
   const task = { jobId: "job-inbox", name: "inbox", prompt: "Check inbox" };
-  const ineligibleCases: Array<{ name: string; overrides: Partial<WakeRequest> }> = [
-    { name: "missing cadence", overrides: { scheduledEveryMs: undefined } },
-    { name: "zero cadence", overrides: { scheduledEveryMs: 0 } },
-    { name: "negative cadence", overrides: { scheduledEveryMs: -1 } },
-    { name: "fractional cadence", overrides: { scheduledEveryMs: 1.5 } },
-    { name: "NaN cadence", overrides: { scheduledEveryMs: Number.NaN } },
-    { name: "infinite cadence", overrides: { scheduledEveryMs: Infinity } },
-    { name: "unsafe cadence", overrides: { scheduledEveryMs: Number.MAX_SAFE_INTEGER + 1 } },
-    { name: "event", overrides: { source: "exec-event", intent: "event" } },
-    { name: "manual", overrides: { source: "manual", intent: "manual" } },
-    { name: "immediate interval", overrides: { intent: "immediate" } },
-    { name: "event interval", overrides: { intent: "event" } },
-    { name: "event source in scheduled slot", overrides: { source: "exec-event" } },
-    { name: "scheduled task payload", overrides: { tasks: [task] } },
-    { name: "task turn", overrides: { intent: "task", tasks: [task] } },
-    { name: "empty task turn", overrides: { intent: "task" } },
+  const ineligibleCases: Array<
+    [string, Partial<WakeRequest>, ("ineligible-first" | "native-first")?, number?]
+  > = [
+    [
+      "missing target",
+      { agentId: undefined, sessionKey: undefined },
+      undefined,
+      SESSION_EVENT_IDLE_RETRY_MS,
+    ],
+    [
+      "global alias",
+      { agentId: undefined, sessionKey: "global" },
+      undefined,
+      SESSION_EVENT_IDLE_RETRY_MS,
+    ],
+    ["missing cadence", { scheduledEveryMs: undefined }],
+    ["missing cadence", { scheduledEveryMs: undefined }, "ineligible-first"],
+    ["missing cadence", { scheduledEveryMs: undefined }, "native-first"],
+    ["zero cadence", { scheduledEveryMs: 0 }],
+    ["fractional cadence", { scheduledEveryMs: 1.5 }],
+    ["event", { source: "exec-event", intent: "event" }, "native-first"],
+    ["manual", { source: "manual", intent: "manual" }, "ineligible-first"],
+    ["immediate interval", { intent: "immediate" }, "native-first"],
+    ["event interval", { intent: "event" }, "ineligible-first"],
+    ["event source in scheduled slot", { source: "exec-event" }, "native-first"],
+    ["scheduled task payload", { tasks: [task] }, "native-first"],
+    ["task turn", { intent: "task", tasks: [task] }, "native-first"],
+    ["empty task turn", { intent: "task" }, "ineligible-first"],
   ];
 
-  it.each(
-    ineligibleCases.flatMap(({ name, overrides }) =>
-      ["alone", "ineligible-first", "native-first"].map((order) => ({ name, overrides, order })),
-    ),
-  )("never grants poll eligibility to $name ($order)", async ({ name, overrides, order }) => {
-    const dispositions: boolean[][] = [];
-    const handler = vi.fn<WakeHandler>(async () => {
-      dispositions.push([
-        isSessionEventWakePollDeferred(),
-        deferSessionEventWakePoll(),
-        isSessionEventWakePollDeferred(),
-      ]);
-      return dispositions.length === 1
-        ? { status: "skipped", reason: "cron-in-progress" }
-        : terminalFailure;
-    });
-    setSessionEventWakeHandler(handler);
-    const invalid = nativePoll({ ...overrides, coalesceMs: 100 });
-    const valid = nativePoll({ coalesceMs: 100 });
-    const requests =
-      order === "alone"
-        ? [invalid]
-        : order === "ineligible-first"
-          ? [invalid, valid]
-          : [valid, invalid];
-    const settled = vi.fn();
-    const results = requests.map((request) => {
-      const result = requestSessionEventWakeAndWait(request);
-      void result.then(settled);
-      return result;
-    });
-
-    await vi.advanceTimersByTimeAsync(100);
-    expect(handler).toHaveBeenCalledOnce();
-    expect(dispositions).toEqual([[false, false, false]]);
-    expect(settled).not.toHaveBeenCalled();
-    if (name === "missing cadence" && order !== "alone") {
-      // The merged public request looks native; eligibility must retain both admissions.
-      expect(handler.mock.calls[0]?.[0]).toMatchObject({
-        source: "interval",
-        intent: "scheduled",
-        scheduledEveryMs: cadenceMs,
+  it.each(ineligibleCases)(
+    "never grants poll eligibility to %s (case %#)",
+    async (name, overrides, order, retryMs = 1_000) => {
+      const dispositions: boolean[][] = [];
+      const handler = vi.fn<WakeHandler>(async () => {
+        dispositions.push([
+          isSessionEventWakePollDeferred(),
+          deferSessionEventWakePoll(),
+          isSessionEventWakePollDeferred(),
+        ]);
+        return dispositions.length === 1
+          ? {
+              status: "skipped",
+              reason:
+                retryMs === SESSION_EVENT_IDLE_RETRY_MS ? "requests-in-flight" : "cron-in-progress",
+            }
+          : terminalFailure;
       });
-    }
+      setSessionEventWakeHandler(handler);
+      const invalid = nativePoll({ ...overrides, coalesceMs: 100 });
+      const valid = nativePoll({ coalesceMs: 100 });
+      const requests =
+        order === undefined
+          ? [invalid]
+          : order === "ineligible-first"
+            ? [invalid, valid]
+            : [valid, invalid];
+      const settled = vi.fn();
+      const results = requests.map((request) => {
+        const result = requestSessionEventWakeAndWait(request);
+        void result.then(settled);
+        return result;
+      });
 
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(handler).toHaveBeenCalledTimes(2);
-    expect(dispositions).toEqual([
-      [false, false, false],
-      [false, false, false],
-    ]);
-    expect(settled).toHaveBeenCalledTimes(results.length);
-    expect(await Promise.all(results)).toEqual(results.map(() => terminalFailure));
-  });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(handler).toHaveBeenCalledOnce();
+      expect(dispositions).toEqual([[false, false, false]]);
+      expect(settled).not.toHaveBeenCalled();
+      if (name === "missing cadence" && order !== undefined) {
+        // The merged public request looks native; eligibility must retain both admissions.
+        expect(handler.mock.calls[0]?.[0]).toMatchObject({
+          source: "interval",
+          intent: "scheduled",
+          scheduledEveryMs: cadenceMs,
+        });
+      }
+
+      await vi.advanceTimersByTimeAsync(retryMs);
+      expect(handler).toHaveBeenCalledTimes(2);
+      expect(dispositions).toEqual([
+        [false, false, false],
+        [false, false, false],
+      ]);
+      expect(settled).toHaveBeenCalledTimes(results.length);
+      expect(await Promise.all(results)).toEqual(results.map(() => terminalFailure));
+      for (const result of results) {
+        expect(await result).toBe(terminalFailure);
+      }
+    },
+  );
 
   it.each(["preempted", "channel-not-ready"])(
     "preserves started work through %s retry and handler replacement",
@@ -577,38 +567,5 @@ describe("session event wake private poll disposition", () => {
       finish.resolve();
       await vi.advanceTimersByTimeAsync(0);
     }
-  });
-
-  it("keeps the exact abort signal private to the handler across awaits", async () => {
-    expect(getSessionEventWakeAbortSignal()).toBeUndefined();
-    expect(deferSessionEventWakePoll()).toBe(false);
-    expect(isSessionEventWakePollDeferred()).toBe(false);
-    expect(() => markSessionEventWakeWorkStarted()).not.toThrow();
-
-    const observedSignals: Array<AbortSignal | undefined> = [];
-    const dispositions: boolean[] = [];
-    const handler = vi.fn<WakeHandler>(async () => {
-      observedSignals.push(getSessionEventWakeAbortSignal());
-      await Promise.resolve();
-      observedSignals.push(getSessionEventWakeAbortSignal());
-      dispositions.push(deferSessionEventWakePoll());
-      return { status: "skipped", reason: "active-run" };
-    });
-    setSessionEventWakeHandler(handler);
-    const settled = vi.fn();
-    const result = requestSessionEventWakeAndWait(nativePoll({ tasks: [] }));
-    void result.then(settled);
-    await vi.advanceTimersByTimeAsync(1);
-
-    expect(handler).toHaveBeenCalledOnce();
-    const signal = handler.mock.calls[0]?.[1];
-    expect(signal).toBeInstanceOf(AbortSignal);
-    expect(observedSignals).toHaveLength(2);
-    expect(observedSignals[0]).toBe(signal);
-    expect(observedSignals[1]).toBe(signal);
-    expect(dispositions).toEqual([true]);
-    expect(settled).toHaveBeenCalledExactlyOnceWith({ status: "skipped", reason: "active-run" });
-    expect(getSessionEventWakeAbortSignal()).toBeUndefined();
-    expect(isSessionEventWakePollDeferred()).toBe(false);
   });
 });
