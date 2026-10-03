@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { extractAgentRunTerminalError, extractAgentRunText } from "../agents/agent-run-result.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { CommandLane } from "../process/lanes.js";
 import {
@@ -137,6 +138,7 @@ async function runConfiguredSystemAgentText(params: {
   // inference keeps its verified runtime and uses the JSON prompt/parser contract.
   const responseFormat = expectedAgentHarnessRuntimeArtifact ? undefined : params.responseFormat;
   const tempDir = await (params.deps?.createTempDir ?? createTempPlannerDir)();
+  const workspaceDir = resolveAgentWorkspaceDir(route.runConfig, route.agentId) || tempDir;
   let text: string | undefined;
   let preparedRunAdmission: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
   try {
@@ -157,7 +159,7 @@ async function runConfiguredSystemAgentText(params: {
       trigger: "manual" as const,
       sessionFile: `in-memory:${runId}`,
       sessionManager: SessionManager.inMemory(tempDir),
-      workspaceDir: tempDir,
+      workspaceDir,
       cwd: tempDir,
       agentDir: route.agentDir,
       config: route.runConfig,
