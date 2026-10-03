@@ -12,8 +12,8 @@ describe("node workspace preparation", () => {
     "joins local recovery and remote upload before releasing a failed %s preparation",
     async (failedSide, { signal }) => {
       const journal = createDeferred<undefined>();
-      const upload = createDeferred<void>();
-      const uploadStarted = createDeferred<void>();
+      const upload = createDeferred();
+      const uploadStarted = createDeferred();
       let journalSettled = false;
       let uploadSettled = false;
       let current = true;
