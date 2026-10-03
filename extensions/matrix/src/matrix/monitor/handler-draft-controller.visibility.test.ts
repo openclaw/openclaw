@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const draftStream = vi.hoisted(() => ({
-  update: vi.fn(),
+  update: vi.fn<(text: string) => void>(),
   flush: vi.fn(async () => {}),
   stop: vi.fn(async () => undefined),
   discardPending: vi.fn(async () => {}),
@@ -36,6 +36,52 @@ describe("Matrix progress visibility", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("keeps the headline until the next preamble completes", async () => {
+    const controller = await createMatrixDraftController({
+      streaming: "progress",
+      previewToolProgressEnabled: true,
+      replyToMode: "off",
+      messageId: "$inbound",
+      cfg: {},
+      accountConfig: {
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: true, label: false, maxLines: 1 },
+        },
+      },
+      accountId: "default",
+      roomId: "!room:example.org",
+      client: {} as never,
+      logVerboseMessage: vi.fn(),
+    });
+    const options = controller.buildPreviewToolProgressReplyOptions();
+    draftStream.eventId.mockReturnValue("$draft");
+    try {
+      // Normal activity opens the gate; a headline alone must not.
+      await options.onItemEvent?.({ itemId: "work", progressText: "Inspecting files" });
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(draftStream.update).toHaveBeenCalledOnce();
+      draftStream.update.mockClear();
+
+      for (const [index, text] of ["Checking the source.", "Preparing the fix."].entries()) {
+        const preamble = { kind: "preamble", itemId: `preamble-${index}`, progressText: text };
+        await options.onItemEvent?.({ ...preamble, phase: "update" });
+        expect(draftStream.update).toHaveBeenCalledTimes(index);
+
+        expect(await options.onItemEvent?.({ ...preamble, phase: "end" })).toBe(true);
+        expect(draftStream.update).toHaveBeenCalledTimes(index + 1);
+        const rendered = draftStream.update.mock.lastCall?.[0];
+        expect(rendered?.startsWith(`\`${text}\``)).toBe(true);
+        expect(rendered?.split(text)).toHaveLength(2);
+        if (index === 1) {
+          expect(rendered).not.toContain("Checking the source.");
+        }
+      }
+    } finally {
+      controller.cancelProgressDraft();
+    }
   });
 
   it("retries identical progress until Matrix acknowledges a draft event", async () => {

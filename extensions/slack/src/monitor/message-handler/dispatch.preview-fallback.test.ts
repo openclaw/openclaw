@@ -25,7 +25,10 @@ import { slackSetupPlugin } from "../../channel.setup.js";
 import type { SlackSendResult } from "../../send.js";
 import { getSlackSessionRuns } from "../session-run-targets.js";
 import {
+  createDraftStreamStub,
+  draftUpdateTexts,
   emitCompactProgressScenario,
+  expectLastDraftUpdateText,
   type SlackReplyOptionEvent,
 } from "./dispatch.compact-progress.test-support.js";
 import type { PreparedSlackMessage } from "./types.js";
@@ -284,7 +287,6 @@ function ttsPayload(spokenText = "Spoken answer", visibleTextAlreadyDelivered?: 
   };
 }
 
-const noop = () => {};
 const noopAsync = async () => {};
 function createNativeStreamSession() {
   return {
@@ -296,45 +298,10 @@ function createNativeStreamSession() {
   };
 }
 
-function createDraftStreamStub() {
-  return {
-    update: vi.fn(),
-    flush: vi.fn(noopAsync),
-    clear: vi.fn(noopAsync),
-    discardPending: vi.fn(noopAsync),
-    seal: vi.fn(noopAsync),
-    stop: vi.fn(noop),
-    forceNewMessage: vi.fn(),
-    dropDetachedMessages: vi.fn(noopAsync),
-    finalizeMessage: vi.fn(async (_messageId: string, editFinal: () => Promise<void>) => {
-      await editFinal();
-      return true;
-    }),
-    messageId: (): string | undefined => "171234.567",
-    channelId: () => "C123",
-  };
-}
-
 function useDraftStream() {
   const draftStream = createDraftStreamStub();
   createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
   return draftStream;
-}
-
-function draftUpdateTexts(draftStream: ReturnType<typeof createDraftStreamStub>): string[] {
-  return draftStream.update.mock.calls.map(([update]) => {
-    if (typeof update === "string") {
-      return update;
-    }
-    return requireRecord(update, "draft update").text as string;
-  });
-}
-
-function expectLastDraftUpdateText(
-  draftStream: ReturnType<typeof createDraftStreamStub>,
-  expected: string,
-) {
-  expect(draftUpdateTexts(draftStream).at(-1)).toBe(expected);
 }
 
 function createPreparedSlackMessage(params?: {
@@ -2214,7 +2181,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       itemId: "queued-preamble",
       progressText: "Checking the followup",
     });
-    expectLastDraftUpdateText(draftStream, "_Checking the followup_");
+    expectLastDraftUpdateText(draftStream, "Checking the followup\n\n_Checking the followup_");
     const clearCallsBeforeSettlement = draftStream.clear.mock.calls.length;
 
     await capturedReplyOptions?.onQueuedFollowupSettled?.();
@@ -2359,79 +2326,89 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps complete preambles visible between streamed updates", async () => {
-    const checkpoints = vi.fn();
-    let postedMessageId: string | undefined;
-    const draftStream = {
-      ...createDraftStreamStub(),
-      messageId: () => postedMessageId,
-    };
-    draftStream.flush.mockImplementation(async () => {
-      if (draftStream.update.mock.calls.length > 0) {
-        postedMessageId = "171234.567";
-      }
-    });
-    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
-    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+  it.each([undefined, "compact"] as const)(
+    "keeps complete preambles visible between streamed updates (style=%s)",
+    async (style) => {
+      const checkpoints = vi.fn();
+      let postedMessageId: string | undefined;
+      const draftStream = {
+        ...createDraftStreamStub(),
+        messageId: () => postedMessageId,
+      };
+      draftStream.flush.mockImplementation(async () => {
+        if (draftStream.update.mock.calls.length > 0) {
+          postedMessageId = "171234.567";
+        }
+      });
+      createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+      finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
 
-    mockedReplyOptionEvents = [
-      preamble("I", "p1", "update"),
-      checkpoint(async () => {
-        // Even a timer/flush must not post the first token: Slack freezes
-        // its push notification at creation, then edits do not re-notify.
-        checkpoints();
-        await draftStream.flush();
-        expect(draftStream.update).not.toHaveBeenCalled();
-        expect(postedMessageId).toBeUndefined();
-      }),
-      preamble("I will check the result.", "p1", "update"),
-      checkpoint(async () => {
-        checkpoints();
-        expect(draftStream.update).not.toHaveBeenCalled();
-      }),
-      preamble("I will check the result.", "p1", "end"),
-      checkpoint(async () => {
-        checkpoints();
-        expect(postedMessageId).toBe("171234.567");
-        expect(draftUpdateTexts(draftStream)).toEqual(["_I will check the result._"]);
-      }),
-      preamble("The result", "p2", "update"),
-      checkpoint(async () => {
-        checkpoints();
-        // A human reply can rotate the preview at this point. Keeping the
-        // last complete preamble prevents an abandoned word fragment.
-        expectLastDraftUpdateText(draftStream, "_I will check the result._");
-        expect(draftUpdateTexts(draftStream)).toEqual(["_I will check the result._"]);
-        expect(draftStream.update.mock.calls.at(-1)?.[0]).toMatchObject({
-          allowNewMessage: true,
-        });
-      }),
-      preamble("The result is ready.", "p2", "end"),
-    ];
+      mockedReplyOptionEvents = [
+        preamble("I", "p1", "update"),
+        checkpoint(async () => {
+          // Even a timer/flush must not post the first token: Slack freezes
+          // its push notification at creation, then edits do not re-notify.
+          checkpoints();
+          await draftStream.flush();
+          expect(draftStream.update).not.toHaveBeenCalled();
+          expect(postedMessageId).toBeUndefined();
+        }),
+        preamble("I will check the result.", "p1", "update"),
+        checkpoint(async () => {
+          checkpoints();
+          expect(draftStream.update).not.toHaveBeenCalled();
+        }),
+        preamble("I will check the result.", "p1", "end"),
+        checkpoint(async () => {
+          checkpoints();
+          expect(postedMessageId).toBe("171234.567");
+          expect(draftUpdateTexts(draftStream)).toEqual([
+            "I will check the result.\n\n_I will check the result._",
+          ]);
+        }),
+        preamble("The result", "p2", "update"),
+        checkpoint(async () => {
+          checkpoints();
+          // A human reply can rotate the preview at this point. Keeping the
+          // last complete preamble prevents an abandoned word fragment.
+          expectLastDraftUpdateText(
+            draftStream,
+            "I will check the result.\n\n_I will check the result._",
+          );
+          expect(draftUpdateTexts(draftStream)).toEqual([
+            "I will check the result.\n\n_I will check the result._",
+          ]);
+          expect(draftStream.update.mock.calls.at(-1)?.[0]).toMatchObject({
+            allowNewMessage: true,
+          });
+        }),
+        preamble("The result is ready.", "p2", "end"),
+      ];
 
-    await dispatch({
-      accountConfig: progressAccount({
-        label: false,
-        commentary: true,
-        toolProgress: false,
-        maxLines: 1,
-      }),
-    });
+      await dispatch({
+        accountConfig: progressAccount({
+          label: false,
+          commentary: true,
+          toolProgress: false,
+          maxLines: 1,
+          style,
+        }),
+      });
 
-    // Assert the intermediate observations ran; the final text alone cannot
-    // prove that Slack never received a first-token notification.
-    expect(checkpoints).toHaveBeenCalledTimes(4);
-    expectLastDraftUpdateText(draftStream, "_The result is ready._");
-    expect(draftStream.update.mock.calls.at(-1)?.[0]).toMatchObject({
-      allowNewMessage: true,
-    });
-    expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
-    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
-  });
+      // Assert the intermediate observations ran; the final text alone cannot
+      // prove that Slack never received a first-token notification.
+      expect(checkpoints).toHaveBeenCalledTimes(4);
+      expectLastDraftUpdateText(draftStream, "The result is ready.\n\n_The result is ready._");
+      expect(draftStream.update.mock.calls.at(-1)?.[0]).toMatchObject({
+        allowNewMessage: true,
+      });
+      expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+      expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+    },
+  );
 
-  it("keeps only the latest Slack commentary when tool progress is disabled", async () => {
+  it("keeps the latest Slack commentary as both headline and bounded history", async () => {
     const draftStream = useDraftStream();
-
     mockedDispatchSequence = [];
     mockedReplyOptionEvents = [
       {
@@ -2458,7 +2435,10 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(capturedReplyOptions?.commentaryPayloadsEnabled).toBe(true);
     expect(capturedReplyOptions?.shouldDeliverCommentaryPayloads?.()).toBe(false);
     expect(capturedReplyOptions?.suppressDefaultToolProgressMessages).toBe(true);
-    expectLastDraftUpdateText(draftStream, "_Preparing the smallest fix_");
+    expectLastDraftUpdateText(
+      draftStream,
+      "Preparing the smallest fix\n\n_Preparing the smallest fix_",
+    );
     expect(draftUpdateTexts(draftStream).join("\n")).not.toContain("pnpm test");
 
     const updateCount = draftStream.update.mock.calls.length;
@@ -2496,7 +2476,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expectLastDraftUpdateText(
       draftStream,
-      "_checking &lt;@U123&gt; in &lt;#C123&gt; and &lt;!channel&gt; with urgent context `src/one.ts` &amp; Linux x86_64_",
+      "checking &lt;@U123&gt; in &lt;#C123&gt; and &lt;!channel&gt; with *urgent* _context_ `src/one.ts` &amp; Linux x86_64\n\n_checking &lt;@U123&gt; in &lt;#C123&gt; and &lt;!channel&gt; with urgent context `src/one.ts` &amp; Linux x86_64_",
     );
   });
 
@@ -2541,7 +2521,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       ).toBe(true);
       expect(draftUpdateTexts(draftStream)).toEqual(
         ["Checking the current Slack behavior.", "The fix is ready; I’m checking the result."].map(
-          (text) => (commentary ? `_${text}_` : text),
+          (text) => (commentary ? `${text}\n\n_${text}_` : text),
         ),
       );
       expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();

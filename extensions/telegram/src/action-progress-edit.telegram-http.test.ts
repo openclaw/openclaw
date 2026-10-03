@@ -115,9 +115,13 @@ it.each([
   });
 });
 
-it.each([false, true])(
-  "edits an adopted snapshot with the native checklist and command layout (rich: %s)",
-  async (richMessages) => {
+it.each(
+  [false, true].flatMap((richMessages) =>
+    [false, true].map((commentary) => ({ richMessages, commentary })),
+  ),
+)(
+  "edits an adopted snapshot with the native checklist and command layout (rich: $richMessages, commentary: $commentary)",
+  async ({ richMessages, commentary }) => {
     await withOpenClawTestState({ prefix: "telegram-progress-native-edit-" }, async () => {
       resetTelegramClientOptionsCacheForTests();
       requests.length = 0;
@@ -126,7 +130,7 @@ it.each([false, true])(
         label: "Working",
         statusHeadline: command,
         statusHeadlineFormat: "plain",
-        lines: ["Older activity must not displace the adopted checklist"],
+        lines: ["_Completed authored commentary_"],
         plan: [
           { step: "Inspect <source> & config", status: "completed" },
           { step: "Verify the result", status: "in_progress" },
@@ -148,7 +152,7 @@ it.each([false, true])(
                   richMessages,
                   streaming: {
                     mode: "progress",
-                    progress: { toolProgress: true, maxLines: 2, maxLineChars: 120 },
+                    progress: { commentary, toolProgress: true, maxLines: 3, maxLineChars: 120 },
                   },
                 },
               },
@@ -182,6 +186,14 @@ it.each([false, true])(
           blocks: [
             { type: "paragraph", text: { type: "bold", text: "Working" } },
             { type: "paragraph", text: { type: "code", text: command } },
+            ...(commentary
+              ? [
+                  {
+                    type: "paragraph",
+                    text: { type: "italic", text: "Completed authored commentary" },
+                  },
+                ]
+              : []),
             {
               type: "list",
               items: [
@@ -211,6 +223,11 @@ it.each([false, true])(
         );
         expect(fields.text).toContain("[x] Inspect &lt;source&gt; &amp; config");
         expect(fields.text).toContain("[ ] <b>Verify the result (in progress)</b>");
+        if (commentary) {
+          expect(fields.text).toContain("<i>Completed authored commentary</i>");
+        } else {
+          expect(fields.text).not.toContain("Completed authored commentary");
+        }
         expect(fields.text).not.toContain("&amp;lt;");
       }
     });

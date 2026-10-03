@@ -102,7 +102,9 @@ Set `progress.toolProgress: true` for the detailed Block Kit card: it adds recen
 
 Set `channels.slack.streaming.progress.style` to `"compact"` for one plain-text progress draft instead of either card surface. Explicitly setting `progress.toolProgress: false` also selects compact style when `style` is unset. Set `style: "card"` to keep a card with `toolProgress: false`, or to select a Block Kit card for top-level turns. Commentary appears as italic text, and authored reasoning and approval requests remain visible. Terminal task errors still use normal error delivery. The final response is posted as a new message, then the temporary preview is deleted after Slack confirms delivery. Older previews displaced by human replies are cleaned up with it; durable messages and videos stay in the conversation.
 
-For streamed preambles, Slack waits for the first complete preamble before creating the message, so its notification contains the full thought rather than a single token. Once that message exists, later preambles can stream as edits without another notification.
+Completed preambles can supply the status headline on either card surface. When commentary is enabled, they are also retained in the bounded narration history. Compact previews show the latest preamble in both positions; the Block Kit session card deduplicates identical narration/history text.
+
+For streamed preambles, Slack waits for a complete preamble before creating or updating the message, so its notification contains the full thought rather than a single token. While a later preamble is still streaming, the previous readable status remains visible.
 
 ```json5
 {

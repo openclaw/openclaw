@@ -1,4 +1,44 @@
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { expect, vi } from "vitest";
+
+const requireRecord = createRequireRecord("object", "label-not-object");
+const noopAsync = async () => {};
+
+export function createDraftStreamStub() {
+  return {
+    update: vi.fn(),
+    flush: vi.fn(noopAsync),
+    clear: vi.fn(noopAsync),
+    discardPending: vi.fn(noopAsync),
+    seal: vi.fn(noopAsync),
+    stop: vi.fn(() => {}),
+    forceNewMessage: vi.fn(),
+    dropDetachedMessages: vi.fn(noopAsync),
+    finalizeMessage: vi.fn(async (_messageId: string, editFinal: () => Promise<void>) => {
+      await editFinal();
+      return true;
+    }),
+    messageId: (): string | undefined => "171234.567",
+    channelId: () => "C123",
+  };
+}
+
+export function draftUpdateTexts(draftStream: ReturnType<typeof createDraftStreamStub>): string[] {
+  return draftStream.update.mock.calls.map(([update]) => {
+    if (typeof update === "string") {
+      return update;
+    }
+    return requireRecord(update, "draft update").text as string;
+  });
+}
+
+export function expectLastDraftUpdateText(
+  draftStream: ReturnType<typeof createDraftStreamStub>,
+  expected: string,
+) {
+  expect(draftUpdateTexts(draftStream).at(-1)).toBe(expected);
+}
 
 export type SlackReplyOptionEvent =
   | {

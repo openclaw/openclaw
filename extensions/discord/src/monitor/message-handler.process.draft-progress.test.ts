@@ -217,6 +217,65 @@ describe("processDiscordMessage draft streaming progress", () => {
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
 
+  it("keeps the latest commentary headline above the preserved commentary timeline", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await startToolProgress(params);
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-silent",
+        kind: "preamble",
+        progressText: "[[reply_to_current]] _NO_REPLY_ [[audio_as_voice]]",
+      });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "Checking the current weather source before summarizing.",
+      });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "Checking the current weather source before summarizing clearly.",
+      });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-2",
+        kind: "preamble",
+        progressText: "Checking route impacts.",
+      });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "tool-1",
+        kind: "tool",
+        name: "exec",
+        progressText: "curl weather api",
+      });
+      await params?.dispatcher.sendFinalReply({ text: "done" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticDraftContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: false,
+            toolProgress: false,
+            commentary: true,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      "Checking route impacts.\n\n💬 Checking the current weather source before summarizing clearly.\n💬 Checking route impacts.",
+      { complete: true },
+    );
+    const updates = draftStream.update.mock.calls.map((call) => call[0]).join("\n");
+    expect(updates).not.toContain("Exec");
+    expect(updates).not.toContain("curl weather api");
+    expectFinalAnswerText("done");
+  });
   it("retries an unacknowledged preamble and reports visibility after Discord accepts it", async () => {
     const draftStream = createMockDraftStreamForTest();
     draftStream.messageId.mockReturnValue(undefined);

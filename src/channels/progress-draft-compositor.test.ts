@@ -113,8 +113,6 @@ describe("channel progress draft compositor", () => {
       { toolProgress: true, label: "Shelling", commentary: true },
       { commentaryLinePrefix: "💬 " },
     );
-    expect(await progress.pushPreambleHeadline("Checking")).toBe(false);
-    expect(progress.hasStatusHeadline).toBe(false);
     await progress.pushCommentaryProgress("Checking");
     await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
     await progress.pushCommentaryProgress("Checking the workspace");

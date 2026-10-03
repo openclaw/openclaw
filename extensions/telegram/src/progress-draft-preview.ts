@@ -5,6 +5,7 @@ import {
   resolveChannelProgressDraftMaxLineChars,
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingPreviewToolProgress,
+  resolveChannelStreamingProgressCommentary,
   selectPlanChecklistSteps,
   type ChannelProgressDraftCompositorLine,
   type ChannelProgressDraftCompositorSnapshot,
@@ -86,11 +87,17 @@ function progressLineText(
 
 export function renderTelegramProgressDraftPreview(
   snapshot: ChannelProgressDraftCompositorSnapshot,
-  options: { richMessages: boolean; maxLines: number; maxLineChars: number; toolProgress: boolean },
+  options: {
+    richMessages: boolean;
+    maxLines: number;
+    maxLineChars: number;
+    toolProgress: boolean;
+    commentaryProgressEnabled?: boolean;
+  },
 ): TelegramDraftPreview {
   const { maxLines, maxLineChars } = options;
   const activity =
-    snapshot.statusHeadline || snapshot.plan?.length
+    !options.commentaryProgressEnabled && (snapshot.statusHeadline || snapshot.plan?.length)
       ? snapshot.lines.filter(
           (line) => typeof line !== "string" && !line.id?.startsWith("reasoning:"),
         )
@@ -196,6 +203,11 @@ export function renderTelegramAccountProgressDraftPreview(
     toolProgress: resolveChannelStreamingPreviewToolProgress(
       accountConfig,
       streamMode !== "progress",
+      streamMode,
+    ),
+    commentaryProgressEnabled: resolveChannelStreamingProgressCommentary(
+      accountConfig,
+      false,
       streamMode,
     ),
     maxLines: resolveChannelProgressDraftMaxLines(accountConfig),

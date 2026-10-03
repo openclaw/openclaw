@@ -23,6 +23,118 @@ describe("Telegram preview and presentation delivery through HTTP", () => {
   } = http;
 
   it.each([
+    { richMessages: false, commentary: true, toolProgress: true },
+    { richMessages: true, commentary: true, toolProgress: true },
+    { richMessages: false, commentary: false, toolProgress: true },
+    { richMessages: true, commentary: false, toolProgress: true },
+    { richMessages: false, commentary: true, toolProgress: false },
+    { richMessages: true, commentary: true, toolProgress: false },
+  ])(
+    "preserves reasoning beside preambles through HTTP (rich=$richMessages, commentary=$commentary, tools=$toolProgress)",
+    async ({ richMessages, commentary, toolProgress }) => {
+      await dispatchProgressTurn(
+        async (options) => {
+          await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "exec-1" });
+          await options?.onReasoningStream?.({ text: "Checking files" });
+          await waitForBotApiCall((call) => JSON.stringify(call.fields).includes("Checking files"));
+          expect([...visibleMessages.values()].join("\n")).toContain("Checking files");
+
+          await options?.onItemEvent?.({
+            kind: "preamble",
+            phase: "end",
+            itemId: "p1",
+            progressText: "Reading the workspace",
+          });
+          await waitForBotApiCall((call) =>
+            JSON.stringify(call.fields).includes("Reading the workspace"),
+          );
+          const first = [...visibleMessages.values()].join("\n");
+          expect(first).toContain("Reading the workspace");
+          if (commentary) {
+            expect(first).toContain("Checking files");
+            expect(first.match(/Reading the workspace/gu)).toHaveLength(2);
+          } else {
+            expect(first).not.toContain("Checking files");
+          }
+
+          await options?.onReasoningStream?.({
+            text: "Checking files and configuration",
+            isReasoningSnapshot: true,
+          });
+          await options?.onReasoningProgress?.({ progressTokens: 200 });
+          // Flush the real queued renderer before examining transport-visible state.
+          await vi.advanceTimersByTimeAsync(1_500);
+          if (commentary) {
+            await waitForBotApiCall((call) =>
+              JSON.stringify(call.fields).includes("Checking files and configuration"),
+            );
+          }
+          const last = [...visibleMessages.values()].join("\n");
+          expect(last).toContain("Reading the workspace");
+          if (commentary) {
+            expect(last).toContain("Checking files and configuration");
+            if (toolProgress) {
+              expect(last).toContain("Thinking… (~200 tokens)");
+            } else {
+              expect(last).not.toContain("Thinking…");
+            }
+          } else {
+            expect(last).not.toContain("Checking files");
+            expect(last).not.toContain("Thinking…");
+          }
+        },
+        {
+          mode: "progress",
+          toolProgress,
+          cfg: { agents: { defaults: { reasoningDefault: "stream" } } },
+          telegramCfg: {
+            richMessages,
+            streaming: { mode: "progress", progress: { commentary, toolProgress, label: false } },
+          },
+          finalReply: { text: "Done" },
+        },
+      );
+      expect([...visibleMessages.values()].join("\n")).toContain("Done");
+    },
+  );
+
+  it.each([false, true])(
+    "publishes paired preambles once despite verbose visibility=%s",
+    async (verboseActive) => {
+      await dispatchProgressTurn(
+        async (options) => {
+          options?.onVerboseProgressVisibility?.(() => verboseActive);
+          await options?.onItemEvent?.({
+            kind: "preamble",
+            phase: "end",
+            itemId: "p1",
+            progressText: "Checking recent context",
+          });
+          await waitForBotApiCall((call) =>
+            JSON.stringify(call.fields).includes("Checking recent context"),
+          );
+          const writes = acceptedCalls.filter((call) =>
+            JSON.stringify(call.fields).includes("Checking recent context"),
+          );
+          expect(writes).toHaveLength(1);
+          expect(
+            [...visibleMessages.values()].join("\n").match(/Checking recent context/gu),
+          ).toHaveLength(2);
+        },
+        {
+          mode: "progress",
+          toolProgress: true,
+          telegramCfg: {
+            richMessages: false,
+            streaming: { mode: "progress", progress: { commentary: true, label: false } },
+          },
+          finalReply: { text: "Done" },
+        },
+      );
+    },
+  );
+
+  it.each([
     { hook: "reply_payload_sending", mode: "partial" },
     { hook: "message_sending", mode: "progress" },
   ] as const)(
