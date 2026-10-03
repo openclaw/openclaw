@@ -61,11 +61,11 @@ import {
 import { capturePluginLifecycleAuthority, isPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
+  captureActivePluginRegistrySnapshot,
   getActivePluginChannelRegistry,
   getActivePluginRegistry,
   getActivePluginRegistryKey,
   getActivePluginRegistryWorkspaceDir,
-  getActivePluginRuntimeSubagentMode,
   setActivePluginRegistry,
 } from "./runtime.js";
 
@@ -358,7 +358,7 @@ describe("loadOpenClawPlugins", () => {
       options: { onlyPluginIds: ["activation-prior"] },
     });
     const priorKey = getActivePluginRegistryKey();
-    const priorMode = getActivePluginRuntimeSubagentMode();
+    const priorMode = captureActivePluginRegistrySnapshot().runtimeSubagentMode;
     const priorWorkspaceDir = getActivePluginRegistryWorkspaceDir();
     const priorRecord = priorRegistry.plugins.find((entry) => entry.id === "activation-prior");
     expect(priorRecord).toBeDefined();
@@ -400,7 +400,7 @@ describe("loadOpenClawPlugins", () => {
     expect(isPluginRegistryRetired(priorRegistry)).toBe(false);
     expect(getGlobalPluginRegistry()).toBe(priorRegistry);
     expect(getActivePluginRegistryKey()).toBe(priorKey);
-    expect(getActivePluginRuntimeSubagentMode()).toBe(priorMode);
+    expect(captureActivePluginRegistrySnapshot().runtimeSubagentMode).toBe(priorMode);
     expect(getActivePluginRegistryWorkspaceDir()).toBe(priorWorkspaceDir);
     expect(getPluginCommandSpecs().map((command) => command.name)).toEqual(["prior"]);
     expect(priorAuthority!()).toBe(true);

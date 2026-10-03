@@ -21,6 +21,10 @@ import {
   StartupMaintenanceRequiredError,
 } from "../infra/startup-maintenance-required.js";
 import { PluginBlobStoreError } from "../plugin-state/plugin-blob-store.types.js";
+import {
+  SecretStoreValidationError,
+  isSecretStoreValidationCode,
+} from "../secrets/store/secret-store-validation-error.js";
 import { SkillUploadRequestError } from "../skills/lifecycle/upload-store-error.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
@@ -37,6 +41,7 @@ type StateMigrationKind = ConstructorParameters<
 >[0];
 
 export type ErrorIdentity =
+  | { type: "secret-store-validation"; secretCode: SecretStoreValidationError["code"] }
   | { type: "session-goal-operation"; goalCode: SessionGoalOperationErrorCode }
   | { type: "worker-session-already-attached"; sessionId: string; environmentId: string }
   | {
@@ -80,6 +85,9 @@ export type ErrorIdentity =
   | { type: "agent-media-migration"; pathname: string; schemaVersion: number };
 
 export function identifyError(error: Error): ErrorIdentity {
+  if (error instanceof SecretStoreValidationError) {
+    return { type: "secret-store-validation", secretCode: error.code };
+  }
   if (error instanceof DuplicateAgentError) {
     return { type: "duplicate-agent" };
   }
@@ -200,6 +208,10 @@ function isBlobOperation(value: unknown): value is PluginBlobStoreError["operati
 
 export function parseIdentity(node: Record<string, unknown>): ErrorIdentity | undefined {
   switch (node.type) {
+    case "secret-store-validation":
+      return isSecretStoreValidationCode(node.secretCode) && node.code === node.secretCode
+        ? { type: node.type, secretCode: node.secretCode }
+        : undefined;
     case "worker-session-already-attached":
       return typeof node.sessionId === "string" && typeof node.environmentId === "string"
         ? { type: node.type, sessionId: node.sessionId, environmentId: node.environmentId }
@@ -290,6 +302,8 @@ function unreachableErrorNode(node: never): never {
 
 export function createError(node: ErrorIdentity & { message: string }): Error {
   switch (node.type) {
+    case "secret-store-validation":
+      return new SecretStoreValidationError(node.secretCode, node.message);
     case "duplicate-agent":
       return new DuplicateAgentError(node.message);
     case "worker-session-already-attached":

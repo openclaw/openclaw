@@ -281,7 +281,7 @@ export async function collectSecurityWarnings(
     defaults: cfg.secrets?.defaults,
   }).ref;
   findings.push(
-    ...findSecretStoreRedactedValueFindings({ database: { env } }).map(
+    ...(await findSecretStoreRedactedValueFindings({ database: { env } })).map(
       (finding): SecurityAuditFinding => ({
         checkId: "doctor.secret_store_redacted_value",
         severity: "warn",

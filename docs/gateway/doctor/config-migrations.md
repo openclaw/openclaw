@@ -36,9 +36,9 @@ published later, including an extended-stable release, still counts. Retain a
 transform whenever a release in that window can still write its input format.
 A supported release that preserves a legacy
 format when rewriting existing data also counts as a writer. A format last
-written before the cutoff may be retired only with a clear refusal naming an
-intermediate release to upgrade through before retrying. Retirement must never
-silently discard persisted data.
+written before the cutoff may be retired together with its Doctor checks.
+When Doctor refuses a retired input, it names an intermediate release to upgrade
+through before retrying. Retirement must leave persisted source data untouched.
 
 Legacy normalization belongs to Doctor and migration owners, with the existing
 backup and verification flow. Runtime readers consume canonical state.
@@ -79,6 +79,20 @@ repairing their tables. Shipped schema-1
 memory/auth/cache databases remain supported; see [agent schema
 history](/reference/database-schemas/agent-schema-history) for the supported
 layouts and recovery route.
+
+Telegram's pre-July bot-info, sticker, thread-binding, update-offset, message,
+sent-message, and topic-name JSON sidecars are no longer inspected or archived.
+Their last file writers shipped in May 2026. To recover state held only in those
+files, use a pre-update backup with OpenClaw `2026.9.5` Doctor before updating.
+See [legacy state migration](/cli/doctor/state-migrations).
+
+Telegram SQLite update-offset versions 1 and 2 remain supported because published
+July-era Doctor imports can still write them. Doctor normalizes those rows to
+version 3 after saving a verified SQLite backup. The cursor, row timestamps,
+expiry, and unrelated fields are preserved. Missing bot identity and token
+fingerprints remain null; account startup retains responsibility for token
+rotation and any required ingress purge. Updates run this repair before account
+startup. After a manual package replacement, run `openclaw doctor --fix` first.
 
 Old `openclaw.extension.json` npm declaration stubs are ignored by discovery and
 Doctor. They are not plugin manifests, and their files remain unchanged. Reinstall
@@ -159,6 +173,7 @@ Doctor also refuses these retired config inputs:
   `talk.model`, and `talk.voice`.
 - `channels.telegram.requireMention`, `channels.feishu.accounts.<id>.botName`,
   and the retired `channels.webchat` section.
+- `channels.telegram.groupMentionsOnly`; use `channels.telegram.groups["*"].requireMention`.
 - `session.threadBindings.ttlHours` and Discord/LINE/Matrix/Telegram `threadBindings.ttlHours`,
   including per-account settings.
 - Telegram `dm`, `direct.*.threadReplies`, native draft preview settings, and scalar

@@ -743,6 +743,7 @@ describe("doctor health contributions", () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
       valid: true,
+      sourceConfig: {},
       config: {},
       issues: [],
     });

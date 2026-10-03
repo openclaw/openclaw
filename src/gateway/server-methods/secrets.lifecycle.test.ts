@@ -62,7 +62,7 @@ describe("secret store mutation lifecycle", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const name = "OPENCLAW_GATEWAY_TOKEN";
       const value = "synthetic-gateway-token";
-      writeSecretStoreEntry({
+      await writeSecretStoreEntry({
         scope: { kind: "team" },
         name,
         value,
@@ -98,7 +98,7 @@ describe("secret store mutation lifecycle", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const name = "SYNTHETIC_DELETE_KEY";
         const value = "test-secret-delete-must-survive";
-        writeSecretStoreEntry({
+        await writeSecretStoreEntry({
           scope: { kind: "team" },
           name,
           value,
@@ -219,7 +219,7 @@ describe("secret store mutation lifecycle", () => {
           name: "APPROVED_POLICY_KEY",
           allowedHosts: ["proposed.example.test"],
         });
-        expect(listSecretStoreEntries({ scope: { kind: "team" } })).toMatchObject([
+        expect(await listSecretStoreEntries({ scope: { kind: "team" } })).toMatchObject([
           { name: "APPROVED_POLICY_KEY", allowedHosts: ["approved.example.test"] },
         ]);
         expect(result.details).toEqual({

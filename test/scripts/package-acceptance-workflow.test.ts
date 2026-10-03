@@ -10643,7 +10643,17 @@ describe("package artifact reuse", () => {
     expect(dockerRows).toContainEqual(
       expect.objectContaining({ suite_id: "live-gateway-docker", timeout_minutes: 40 }),
     );
-    expect(workflow).toContain("suite_id: native-live-extensions-a-k");
+    expect(
+      workflowMatrixEntry(
+        LIVE_E2E_WORKFLOW,
+        "validate_live_media_provider_suites",
+        "native-live-extensions-a-k",
+      ),
+    ).toMatchObject({
+      command:
+        "OPENCLAW_LIVE_ANTHROPIC_COMPACTION=1 node .release-harness/scripts/test-live-shard.mjs native-live-extensions-a-k",
+      profiles: "full",
+    });
     expect(workflow).toContain("suite_id: native-live-extensions-l-n");
     expect(workflow).toContain("suite_id: native-live-extensions-moonshot");
     expect(workflow).toContain("suite_id: native-live-extensions-openai");

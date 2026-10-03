@@ -4,6 +4,7 @@ import type {
   Question,
   QuestionAnswers,
   QuestionResolvedEvent,
+  QuestionResolveResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -105,6 +106,30 @@ afterEach(async () => {
 });
 
 describe("QuestionManager", () => {
+  it("hides a committing question on reset and settles it without touching a reused id", async () => {
+    const commit = createDeferredCore();
+    const onResolved = vi.fn();
+    const original = manager.request({ questions, timeoutMs: 10_000, onResolved });
+    const waiting = manager.waitAnswer(original.id);
+    const pending = manager.resolveWithCommit(original.id, answers, undefined, {
+      commit: () => commit.promise,
+    });
+    let successor: ReturnType<QuestionManager["request"]> | undefined;
+    try {
+      manager.reset();
+      expect(manager.get(original.id)).toBeNull();
+      expect(manager.list()).toEqual([]);
+      successor = manager.request({ id: original.id, questions, timeoutMs: 10_000 });
+    } finally {
+      commit.resolve();
+      await pending;
+    }
+    await expect(waiting).resolves.toEqual({ status: "answered", answers });
+    expect(manager.get(original.id)).toBe(successor);
+    expect(successor?.status).toBe("pending");
+    expect(onResolved).not.toHaveBeenCalled();
+  });
+
   it.each(["cleanup", "reset", "close"] as const)(
     "retains private read facts through completion and releases them on %s",
     async (retirement) => {
@@ -228,7 +253,10 @@ describe("QuestionManager", () => {
     } satisfies PublicQuestionRequest;
     const record = manager.request(request);
 
-    expect(manager.resolve(record.id, answers)).toEqual({ status: "answered", answers });
+    const sdkManager: NonNullable<GatewayRequestHandlerOptions["context"]["questionManager"]> =
+      manager;
+    const result: QuestionResolveResult = sdkManager.resolve(record.id, answers);
+    expect(result).toEqual({ status: "answered", answers });
     expect(observed).toEqual([{ id: record.id, status: "answered", answers }]);
     await manager.drain();
     expect(observed).toHaveLength(1);

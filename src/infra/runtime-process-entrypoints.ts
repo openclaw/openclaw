@@ -41,6 +41,9 @@ export const runtimeProcessEntrypoints = {
   boardStore: runtimeProcessEntrypoint("boards/sqlite-board-store.worker"),
   sessionSharingStore: runtimeProcessEntrypoint("config/sessions/session-sharing-store.worker"),
   heartbeatOutcomeStore: runtimeProcessEntrypoint("infra/heartbeat-outcome-store.worker"),
+  messageToolRunOutcomeStore: runtimeProcessEntrypoint(
+    "infra/message-tool-run-outcome-store.worker",
+  ),
   contextEngineTurnOutbox: runtimeProcessEntrypoint(
     "agents/harness/context-engine-turn-outbox.worker",
   ),

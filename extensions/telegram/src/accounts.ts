@@ -27,29 +27,13 @@ type CredentialUnavailableDiagnostic = NonNullable<
 
 export { mergeTelegramAccountConfig, resolveTelegramAccountConfig } from "./account-config.js";
 
-let log: ReturnType<typeof createSubsystemLogger> | null = null;
+const log = createSubsystemLogger("telegram/accounts");
 
-function getLog() {
-  if (!log) {
-    log = createSubsystemLogger("telegram/accounts");
-  }
-  return log;
-}
-
-function formatDebugArg(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (value instanceof Error) {
-    return value.stack ?? value.message;
-  }
-  return util.inspect(value, { colors: false, depth: null, compact: true, breakLength: Infinity });
-}
-
-const debugAccounts = (...args: unknown[]) => {
+const debugAccounts = (operation: string, details: unknown) => {
   if (isTruthyEnvValue(process.env.OPENCLAW_DEBUG_TELEGRAM_ACCOUNTS)) {
-    const parts = args.map((arg) => formatDebugArg(arg));
-    getLog().warn(parts.join(" ").trim());
+    log.warn(
+      `${operation} ${util.inspect(details, { colors: false, depth: null, compact: true, breakLength: Infinity })}`,
+    );
   }
 };
 
@@ -84,7 +68,7 @@ export function resolveDefaultTelegramAccountId(cfg: OpenClawConfig): string {
   const selection = resolveDefaultTelegramAccountSelection(cfg);
   if (selection.shouldWarnMissingDefault && !emittedMissingDefaultWarn) {
     emittedMissingDefaultWarn = true;
-    getLog().warn(
+    log.warn(
       `channels.telegram: accounts.default is missing; falling back to "${selection.accountId}". ` +
         `${formatSetExplicitDefaultInstruction("telegram")} to avoid routing surprises in multi-account setups.`,
     );

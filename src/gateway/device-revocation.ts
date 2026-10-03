@@ -285,8 +285,5 @@ export function invalidateGatewayDeviceRevocation(
 export function closeGatewayDeviceRevocation(context: object): void {
   const owner = getOwner(context);
   owner.closed = true;
-  for (const bucket of owner.devices.values()) {
-    bucket.clear();
-  }
   owner.devices.clear();
 }

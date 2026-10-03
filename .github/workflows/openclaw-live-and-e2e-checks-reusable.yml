@@ -4765,7 +4765,7 @@ jobs:
         include:
           - suite_id: native-live-extensions-a-k
             label: Native live plugins A-K
-            command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-a-k
+            command: OPENCLAW_LIVE_ANTHROPIC_COMPACTION=1 node .release-harness/scripts/test-live-shard.mjs native-live-extensions-a-k
             timeout_minutes: 30
             profile_env_only: false
             profiles: full

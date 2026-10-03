@@ -321,51 +321,62 @@ export function isPendingAssistantError(value: unknown): boolean {
   );
 }
 
-function createRecoveredAssistantErrorProjection(initialPending = false) {
+export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecoveryOptions) {
+  const projectCoordination = createSubagentCoordinationHistoryProjection(
+    options?.subagentCoordination,
+  );
   const messages: Array<Record<string, unknown>> = [];
-  let unseenPending = initialPending;
+  let unseenPending = options?.assistantErrorPending ?? false;
   let recoveryObserved = false;
   let pendingIndexes: number[] = [];
   const repairedIndexes = new Set<number>();
-  return {
-    append(message: Record<string, unknown>) {
-      const index = messages.length;
-      messages.push(message);
-      if (message.role === "user") {
-        unseenPending = false;
-        pendingIndexes = [];
-        return;
-      }
-      if (isPendingAssistantError(message)) {
-        pendingIndexes.push(index);
-        return;
-      }
-      if (
-        (!unseenPending && pendingIndexes.length === 0) ||
-        !hasVisibleAssistantDisplayContent(message)
-      ) {
-        return;
-      }
-      // An incremental reader carries only a pending bit. It must reload raw
-      // history before deciding which previously emitted failures were recovered.
-      recoveryObserved ||= unseenPending;
+  const append = (message: Record<string, unknown>) => {
+    const index = messages.length;
+    messages.push(message);
+    if (message.role === "user") {
       unseenPending = false;
-      const completedRunId =
-        (message.stopReason === "stop" || message.stopReason === "length") &&
-        !isTranscriptOnlyOpenClawAssistantMessage(message)
-          ? readSessionTranscriptRunId(message)
-          : undefined;
-      pendingIndexes = pendingIndexes.filter((pendingIndex) => {
-        const failedRunId = readSessionTranscriptRunId(messages[pendingIndex]);
-        // Unattributed legacy stream sentinels retain their existing turn-local
-        // repair. Runtime attempt failures require completion of the exact run.
-        if (failedRunId && failedRunId !== completedRunId) {
-          return true;
+      pendingIndexes = [];
+      return;
+    }
+    if (isPendingAssistantError(message)) {
+      pendingIndexes.push(index);
+      return;
+    }
+    if (
+      (!unseenPending && pendingIndexes.length === 0) ||
+      !hasVisibleAssistantDisplayContent(message)
+    ) {
+      return;
+    }
+    // An incremental reader carries only a pending bit. It must reload raw
+    // history before deciding which previously emitted failures were recovered.
+    recoveryObserved ||= unseenPending;
+    unseenPending = false;
+    const completedRunId =
+      (message.stopReason === "stop" || message.stopReason === "length") &&
+      !isTranscriptOnlyOpenClawAssistantMessage(message)
+        ? readSessionTranscriptRunId(message)
+        : undefined;
+    pendingIndexes = pendingIndexes.filter((pendingIndex) => {
+      const failedRunId = readSessionTranscriptRunId(messages[pendingIndex]);
+      // Unattributed legacy stream sentinels retain their existing turn-local
+      // repair. Runtime attempt failures require completion of the exact run.
+      if (failedRunId && failedRunId !== completedRunId) {
+        return true;
+      }
+      repairedIndexes.add(pendingIndex);
+      recoveryObserved = true;
+      return false;
+    });
+  };
+  return {
+    append(input: unknown[]) {
+      const projected = projectCoordination(prepareChatHistoryRecoveryMessages(input, options));
+      for (const message of toProjectedMessages(projected)) {
+        if (!isOpenClawMessageToolMirrorAssistantMessage(message)) {
+          append(message);
         }
-        repairedIndexes.add(pendingIndex);
-        recoveryObserved = true;
-        return false;
-      });
+      }
     },
     get pending() {
       return unseenPending || pendingIndexes.length > 0;
@@ -462,27 +473,6 @@ export function prepareChatHistoryRecoveryMessages(
   return options?.stripEnvelope === false
     ? projectedMessages
     : stripEnvelopeFromMessages(projectedMessages);
-}
-
-export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecoveryOptions) {
-  const projectCoordination = createSubagentCoordinationHistoryProjection(
-    options?.subagentCoordination,
-  );
-  const recovery = createRecoveredAssistantErrorProjection(options?.assistantErrorPending);
-  return {
-    append(messages: unknown[]) {
-      const projected = projectCoordination(prepareChatHistoryRecoveryMessages(messages, options));
-      for (const message of toProjectedMessages(projected)) {
-        if (!isOpenClawMessageToolMirrorAssistantMessage(message)) {
-          recovery.append(message);
-        }
-      }
-    },
-    get pending() {
-      return recovery.pending;
-    },
-    result: recovery.result.bind(recovery),
-  };
 }
 
 export function projectChatDisplayMessagesWithState(

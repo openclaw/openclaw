@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { applyRemoteModelCatalogUpdate } from "../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
@@ -96,9 +97,7 @@ export function createDeferredGatewayUpdateCheck(params: {
     void (async () => {
       if (params.waitForPostReadyWork) {
         await params.waitForPostReadyWork();
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextTurn();
       }
       if (stopped || params.isClosing?.()) {
         return;
@@ -156,9 +155,7 @@ export function createDeferredGatewayUpdateCheck(params: {
         });
       })();
       await ownerReady;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextTurn();
       if (!stopped && !params.isClosing?.()) {
         await runWithGatewayIndependentRootWorkAdmission(async () => {
           if (stopped || params.isClosing?.()) {
