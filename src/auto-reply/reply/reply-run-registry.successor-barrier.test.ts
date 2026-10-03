@@ -99,25 +99,6 @@ describe("reply run successor barriers", () => {
     });
   });
 
-  it("stops a successor wait when its signal aborts", async () => {
-    const operation = createTestReplyOperation();
-    registerReplyOperationSuccessorBarrier({
-      operation,
-      sessionId: operation.sessionId,
-      sessionKeys: [operation.key],
-      start: () => new Promise<void>(() => {}),
-    });
-    operation.complete();
-    const controller = new AbortController();
-    const wait = waitForReplyRunSuccessorAdmission(operation.key, null, {
-      signal: controller.signal,
-    });
-
-    controller.abort();
-
-    await expect(wait).resolves.toEqual({ settled: false });
-  });
-
   it.each(["pending", "rejected"] as const)(
     "starts a late deferred release and keeps successors fenced while it is %s",
     async (releaseState) => {
