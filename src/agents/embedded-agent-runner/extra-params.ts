@@ -4,7 +4,6 @@ import {
   detectOpenAICompletionsCompat,
   resolveOpenAICompletionsCompat,
 } from "@openclaw/ai/transports";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   type NativeWebSearchToolPolicyParams,
   isNativeWebSearchAllowedByToolPolicy,
@@ -133,7 +132,14 @@ export function resolvePreparedExtraParams(params: {
   providerRuntimeHandle?: ProviderRuntimePluginHandle;
   auth?: ProviderPrepareExtraParamsContext["auth"];
 }): Record<string, unknown> {
-  const resolvedExtraParams = params.resolvedExtraParams ?? resolveExtraParams(params);
+  const resolvedExtraParams =
+    params.resolvedExtraParams ??
+    resolveExtraParams({
+      cfg: params.cfg,
+      provider: params.provider,
+      modelId: params.modelId,
+      agentId: params.agentId,
+    });
   const override = stripRequestScopedExtraParams(
     sanitizeExtraParamsOverride(params.extraParamsOverride),
   );
@@ -588,7 +594,10 @@ function isDeepSeekV4OpenAICompletionsModel(model: Parameters<StreamFn>[0]): boo
 }
 
 function isMicrosoftFoundryProviderId(provider: unknown): boolean {
-  const normalizedProvider = normalizeLowercaseStringOrEmpty(provider);
+  if (typeof provider !== "string") {
+    return false;
+  }
+  const normalizedProvider = provider.trim().toLowerCase();
   return (
     normalizedProvider === "microsoft-foundry" ||
     normalizedProvider.startsWith("microsoft-foundry-")
@@ -608,7 +617,8 @@ function deepSeekV4NativeThinkingAllowedByCompat(model: Parameters<StreamFn>[0])
 function resolveDeepSeekV4ThinkingFormatOverride(
   model: Parameters<StreamFn>[0],
 ): string | undefined {
-  const configured = (model as ProviderRuntimeModel).compat?.thinkingFormat;
+  const compat = (model as ProviderRuntimeModel).compat;
+  const configured = compat && typeof compat === "object" ? compat.thinkingFormat : undefined;
   if (typeof configured === "string") {
     return configured;
   }

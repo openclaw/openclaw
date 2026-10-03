@@ -138,18 +138,35 @@ function normalizeEmbeddedAttemptToolMetas(
       (entry): entry is EmbeddedAttemptSubscription["toolMetas"][number] & { toolName: string } =>
         typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
     )
-    .map((entry) => ({
-      toolName: entry.toolName,
-      meta: entry.meta,
-      replaySafe: entry.replaySafe === true,
-      ...(entry.toolCallId ? { toolCallId: entry.toolCallId } : {}),
-      ...(typeof entry.isError === "boolean" ? { isError: entry.isError } : {}),
-      ...(entry.terminate === true ? { terminate: true } : {}),
-      ...(entry.asyncStarted === true ? { asyncStarted: true } : {}),
-      ...(entry.asyncTaskRunId ? { asyncTaskRunId: entry.asyncTaskRunId } : {}),
-      ...(entry.asyncTaskId ? { asyncTaskId: entry.asyncTaskId } : {}),
-      ...(entry.codeModeSuspended === true ? { codeModeSuspended: true } : {}),
-    }));
+    .map((entry) => {
+      const normalized: EmbeddedRunAttemptResult["toolMetas"][number] = {
+        toolName: entry.toolName,
+        meta: entry.meta,
+        replaySafe: entry.replaySafe === true,
+      };
+      if (entry.toolCallId) {
+        normalized.toolCallId = entry.toolCallId;
+      }
+      if (typeof entry.isError === "boolean") {
+        normalized.isError = entry.isError;
+      }
+      if (entry.terminate === true) {
+        normalized.terminate = true;
+      }
+      if (entry.asyncStarted === true) {
+        normalized.asyncStarted = true;
+      }
+      if (entry.asyncTaskRunId) {
+        normalized.asyncTaskRunId = entry.asyncTaskRunId;
+      }
+      if (entry.asyncTaskId) {
+        normalized.asyncTaskId = entry.asyncTaskId;
+      }
+      if (entry.codeModeSuspended === true) {
+        normalized.codeModeSuspended = true;
+      }
+      return normalized;
+    });
 }
 
 export function completeEmbeddedAttemptResult(

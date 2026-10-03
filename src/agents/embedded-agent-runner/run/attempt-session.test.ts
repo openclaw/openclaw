@@ -34,7 +34,7 @@ const hoisted = vi.hoisted(() => ({
   applySystemPromptToSession: vi.fn(),
   buildEmbeddedExtensionFactories: vi.fn(),
   createAgentSessionForEmbeddedRunner: vi.fn(),
-  DefaultResourceLoader: vi.fn(class {}),
+  DefaultResourceLoader: vi.fn<new () => { reload: () => Promise<void> }>(),
   createPreparedEmbeddedAgentSettingsManager: vi.fn(),
   getGlobalHookRunner: vi.fn(),
   installMessageToolOnlyTerminalHook: vi.fn(),
