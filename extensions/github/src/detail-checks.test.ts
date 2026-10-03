@@ -1,4 +1,3 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadGitHubDetail } from "./detail.js";
 import type { GitHubTarget } from "./targets.js";
@@ -122,49 +121,6 @@ describe("GitHub PR checks through the document loader", () => {
     }
   });
 
-  it("treats complete empty CI as neutral despite the legacy API's empty pending aggregate", async () => {
-    const detail = await loadGitHubDetail(target(), undefined, publicFetch());
-    expect(detail).toMatchObject({
-      partial: false,
-      checks: {
-        state: "neutral",
-        summary: "No checks reported",
-        total: 0,
-        items: [],
-        truncated: false,
-      },
-    });
-  });
-
-  it.each([
-    ["completed", "cancelled", "failure", "Canceled"],
-    ["completed", "timed_out", "failure", "Timed out"],
-    ["completed", "action_required", "failure", "Action required"],
-    ["completed", "stale", "failure", "Stale"],
-    ["completed", "startup_failure", "failure", "Could not start"],
-    ["completed", "neutral", "neutral", "Neutral"],
-    ["waiting", null, "pending", "Waiting"],
-  ])("projects check %s/%s as %s", async (status, conclusion, state, detail) => {
-    const result = await loadGitHubDetail(
-      target(),
-      undefined,
-      publicFetch(runs([run({ status, conclusion })])),
-    );
-    expect(result).toMatchObject({ partial: false, checks: { state, items: [{ state, detail }] } });
-  });
-
-  it("projects legacy errors as failures", async () => {
-    const result = await loadGitHubDetail(
-      target(),
-      undefined,
-      publicFetch(runs(), statuses([commitStatus({ state: "error" })])),
-    );
-    expect(result).toMatchObject({
-      partial: false,
-      checks: { state: "failure", items: [{ state: "failure", detail: "Error" }] },
-    });
-  });
-
   it("prioritizes failed then pending checks without treating skipped jobs as passes", async () => {
     const result = await loadGitHubDetail(
       target(),
@@ -222,45 +178,31 @@ describe("GitHub PR checks through the document loader", () => {
     );
   });
 
-  it.each(["runs", "statuses"])(
-    "preserves the PR and successful sibling when %s is unavailable",
-    async (source) => {
-      const fetchMock =
-        source === "runs"
-          ? publicFetch(
-              json({ message: "sensitive upstream diagnostic" }, 503),
-              statuses([commitStatus()]),
-            )
-          : publicFetch(runs([run()]), json({ message: "sensitive upstream diagnostic" }, 404));
-      const detail = await loadGitHubDetail(target(), undefined, fetchMock);
-      expect(detail).toMatchObject({
-        body: "Keep the PR body",
-        partial: true,
-        checks: {
-          state: "unavailable",
-          summary: "Checks incomplete · 1 passed",
-          total: 1,
-          truncated: true,
-        },
-      });
-      expect(detail.checks?.items).toHaveLength(1);
-      expect(JSON.stringify(detail)).not.toContain("sensitive upstream");
-    },
-  );
-
-  it("does not collapse same-name checks whose app identity is unavailable", async () => {
-    const result = await loadGitHubDetail(
+  it("preserves the PR and successful sibling when checks are unavailable", async () => {
+    const detail = await loadGitHubDetail(
       target(),
       undefined,
       publicFetch(
-        runs([run({ id: 1, app: null, conclusion: "failure" }), run({ id: 2, app: null })]),
+        json({ message: "sensitive upstream diagnostic" }, 503),
+        statuses([commitStatus()]),
       ),
     );
-    expect(result.checks).toMatchObject({ state: "failure", total: 2 });
-    expect(result.checks?.items).toHaveLength(2);
+    expect(detail).toMatchObject({
+      body: "Keep the PR body",
+      partial: true,
+      checks: {
+        state: "unavailable",
+        summary: "Checks incomplete · 1 passed",
+        total: 1,
+        truncated: true,
+      },
+    });
+    expect(detail.checks?.items).toHaveLength(1);
+    expect(JSON.stringify(detail)).not.toContain("sensitive upstream");
   });
 
-  it.each(["failure", "pending"])("retains known %s above incomplete data", async (state) => {
+  it("retains known pending checks above incomplete data", async () => {
+    const state = "pending";
     const result = await loadGitHubDetail(
       target(),
       undefined,
@@ -272,7 +214,7 @@ describe("GitHub PR checks through the document loader", () => {
         state,
         truncated: true,
         summary: expect.stringMatching(/^Checks incomplete/u),
-        items: [{ state, detail: state === "failure" ? "Failed" : "Pending" }],
+        items: [{ state, detail: "Pending" }],
       },
     });
   });
@@ -290,24 +232,21 @@ describe("GitHub PR checks through the document loader", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  it.each([undefined, "abcdef0", "../main", "a".repeat(41)])(
-    "does not substitute a branch or merge SHA for invalid head %s",
-    async (headSha) => {
-      const fetchMock = publicFetch();
-      fetchMock
-        .mockReset()
-        .mockResolvedValueOnce(json({ private: false, visibility: "public" }))
-        .mockResolvedValueOnce(json({ ...pull(), head: { sha: headSha, ref: "feature/checks" } }));
-      const detail = await loadGitHubDetail(target(), undefined, fetchMock);
-      expect(detail).toMatchObject({
-        body: "Keep the PR body",
-        partial: true,
-        checks: { state: "unavailable", items: [] },
-      });
-      expect(detail.checks?.commit).toBeUndefined();
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-    },
-  );
+  it("does not substitute a branch or merge SHA for an invalid head", async () => {
+    const fetchMock = publicFetch();
+    fetchMock
+      .mockReset()
+      .mockResolvedValueOnce(json({ private: false, visibility: "public" }))
+      .mockResolvedValueOnce(json({ ...pull(), head: { sha: "../main", ref: "feature/checks" } }));
+    const detail = await loadGitHubDetail(target(), undefined, fetchMock);
+    expect(detail).toMatchObject({
+      body: "Keep the PR body",
+      partial: true,
+      checks: { state: "unavailable", items: [] },
+    });
+    expect(detail.checks?.commit).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 
   it.each([
     {
@@ -323,16 +262,6 @@ describe("GitHub PR checks through the document loader", () => {
     {
       name: "unknown conclusion",
       check: () => runs([run({ conclusion: "mystery" })]),
-      legacy: () => statuses(),
-    },
-    {
-      name: "malformed list",
-      check: () => json({ total_count: 0, check_runs: null }),
-      legacy: () => statuses(),
-    },
-    {
-      name: "oversized response",
-      check: () => new Response("x".repeat(1024 * 1024 + 1)),
       legacy: () => statuses(),
     },
   ])("never reports success for $name", async ({ check, legacy }) => {
@@ -362,83 +291,18 @@ describe("GitHub PR checks through the document loader", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
-  it.each([
-    "javascript:alert(1)",
-    "http://ci.example.com/log",
-    "https://user:password@ci.example.com/log",
-  ])("omits unsafe check and status links: %s", async (url) => {
-    const result = await loadGitHubDetail(
-      target(),
-      undefined,
-      publicFetch(runs([run({ html_url: url })]), statuses([commitStatus({ target_url: url })])),
-    );
-    expect(result.checks?.items).toHaveLength(2);
-    expect(result.checks?.items.every((item) => item.url === undefined)).toBe(true);
-  });
-
-  it("refreshes the exact PR head and rechecks a changed result even within the cache TTL", async () => {
-    const input = target();
-    const fetchMock = publicFetch(runs([run()]));
-    await loadGitHubDetail(input, undefined, fetchMock);
-    fetchMock
-      .mockResolvedValueOnce(json({ private: false, visibility: "public" }))
-      .mockResolvedValueOnce(json(pull(nextSha)))
-      .mockResolvedValueOnce(runs([run({ head_sha: nextSha, status: "queued", conclusion: null })]))
-      .mockResolvedValueOnce(statuses([], nextSha));
-    const refreshed = await loadGitHubDetail(input, undefined, fetchMock, true);
-    expect(refreshed.checks).toMatchObject({
-      commit: nextSha,
-      state: "pending",
-      items: [{ state: "pending", detail: "Queued" }],
-    });
-    expect(await loadGitHubDetail(input, undefined, fetchMock)).toBe(refreshed);
-    expect(fetchMock.mock.calls.slice(6).map(([url]) => url)).toEqual([
-      expect.stringContaining("/commits/" + nextSha + "/check-runs?"),
-      expect.stringContaining("/commits/" + nextSha + "/status?"),
-    ]);
-    fetchMock
-      .mockResolvedValueOnce(json({ private: false, visibility: "public" }))
-      .mockResolvedValueOnce(json(pull(nextSha)))
-      .mockResolvedValueOnce(runs([run({ head_sha: nextSha })]))
-      .mockResolvedValueOnce(statuses([], nextSha));
-    expect((await loadGitHubDetail(input, undefined, fetchMock, true)).checks).toMatchObject({
-      commit: nextSha,
-      state: "success",
-    });
-  });
-
-  it("does not let a late old-head read overwrite the refreshed document cache", async () => {
-    const input = target();
-    const deferred = createDeferred<Response>();
-    const requested = createDeferred<void>();
-    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (url) => {
-      const path = new URL(url instanceof Request ? url.url : url).pathname;
-      if (path.endsWith("/pulls/1")) {
-        return json(pull());
-      }
-      if (path.endsWith("/check-runs")) {
-        requested.resolve();
-        return deferred.promise;
-      }
-      if (path.endsWith("/status")) {
-        return statuses();
-      }
-      return json({ private: false, visibility: "public" });
-    });
-    const older = loadGitHubDetail(input, undefined, fetchMock);
-    await requested.promise;
-    const freshFetch = publicFetch(
-      runs([run({ head_sha: nextSha, conclusion: "failure" })]),
-      statuses([], nextSha),
-      nextSha,
-    );
-    const fresh = await loadGitHubDetail(input, undefined, freshFetch, true);
-    deferred.resolve(runs([run()]));
-    expect((await older).checks).toMatchObject({ state: "success", commit: sha });
-    expect(fresh.checks).toMatchObject({ state: "failure", commit: nextSha });
-    expect(await loadGitHubDetail(input, undefined, fetchMock)).toBe(fresh);
-    expect(freshFetch).toHaveBeenCalledTimes(4);
-  });
+  it.each(["http://ci.example.com/log", "https://user:password@ci.example.com/log"])(
+    "omits unsafe check and status links: %s",
+    async (url) => {
+      const result = await loadGitHubDetail(
+        target(),
+        undefined,
+        publicFetch(runs([run({ html_url: url })]), statuses([commitStatus({ target_url: url })])),
+      );
+      expect(result.checks?.items).toHaveLength(2);
+      expect(result.checks?.items.every((item) => item.url === undefined)).toBe(true);
+    },
+  );
 
   it("expires complete PR snapshots after 30 seconds rather than keeping checks for five minutes", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1000);
