@@ -38,7 +38,11 @@ if (build) {
     bin: process.execPath,
     args: ["--import", "./scripts/tsx.mjs", "scripts/build-all.mts", build.profile],
     cwd: "/workspace",
-    env: { ...process.env, ...(build.privateQa ? { OPENCLAW_BUILD_PRIVATE_QA: "1" } : {}) },
+    env: {
+      ...process.env,
+      ...(build.privateQa ? { OPENCLAW_BUILD_PRIVATE_QA: "1" } : {}),
+      ...(build.declarations ? { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" } : {}),
+    },
     requireProcessTreeExit: true,
   });
 }
