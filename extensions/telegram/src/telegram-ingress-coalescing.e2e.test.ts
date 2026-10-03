@@ -114,15 +114,21 @@ const processingOutcome = await import("./bot-processing-outcome.js");
 const {
   admitAlbum,
   assertSpoolTombstoned,
-  createDownstreamTurnAssertions,
+  createDownstreamTurnFixture,
   createIngressMonitor,
   flushHeldQuietWindow,
   resetTelegramIngressRuntime,
   runtimeErrors,
   stopIngressResources,
+  useIngressTimers,
 } = await import("./telegram-ingress-coalescing-fixture.test-support.js");
-const { captureNextDownstreamTurn, awaitSingleDownstreamTurn, assertAlbumTurnAndTombstones } =
-  createDownstreamTurnAssertions(downstreamTurns);
+const {
+  captureNextDownstreamTurn,
+  awaitSingleDownstreamTurn,
+  assertAlbumTurnAndTombstones,
+  holdFirstDownstreamTurn,
+  holdDownstreamLane,
+} = createDownstreamTurnFixture(downstreamTurns);
 
 describe("Telegram durable ingress coalescing", () => {
   const originalStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -215,36 +221,9 @@ describe("Telegram durable ingress coalescing", () => {
   });
 
   it("keeps a later album alive and ordered behind a slowly adopting album", async () => {
-    const headDispatched = createDeferred<void>();
-    const releaseHead = createDeferred<void>();
-    const headFinished = createDeferred<void>();
     const { monitor } = await createMonitor({ adoptionStallTimeoutMs: 1_000 });
-    downstreamTurns.mockImplementation(async (_ctx, abortSignal, lifecycle) => {
-      if (downstreamTurns.mock.calls.length === 1) {
-        if (!lifecycle?.deferredHeartbeatIntervalMs) {
-          throw new Error("Expected the deferred turn's heartbeat cadence");
-        }
-        lifecycle.onDeferred?.();
-        const heartbeat = setInterval(
-          () => lifecycle.onDeferredHeartbeat?.(),
-          lifecycle.deferredHeartbeatIntervalMs,
-        );
-        headDispatched.resolve();
-        try {
-          await releaseHead.promise;
-          if (!abortSignal?.aborted) {
-            await lifecycle.onAdopted();
-          }
-        } finally {
-          clearInterval(heartbeat);
-          headFinished.resolve();
-        }
-      }
-      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
-    });
-    vi.useFakeTimers({
-      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"],
-    });
+    const { headDispatched, releaseHead, headFinished } = holdFirstDownstreamTurn();
+    useIngressTimers();
     monitor.start();
     try {
       await admitAlbum(monitor, "A", 1_001);
@@ -270,40 +249,9 @@ describe("Telegram durable ingress coalescing", () => {
   });
 
   it("keeps a later same-sender forward batch alive behind a deferred batch", async () => {
-    const releaseHead = createDeferred<void>();
-    const turnsDeferred = [createDeferred<void>(), createDeferred<void>()];
-    const turnsFinished: Promise<void>[] = [];
-    // Session-lane stand-in: every turn defers, heartbeats, and adopts after the turn ahead.
-    let laneTail: Promise<void> = releaseHead.promise;
     const { monitor } = await createMonitor({ adoptionStallTimeoutMs: 3_000 });
-    downstreamTurns.mockImplementation(async (_ctx, abortSignal, lifecycle) => {
-      if (!lifecycle?.deferredHeartbeatIntervalMs) {
-        throw new Error("Expected the deferred turn's heartbeat cadence");
-      }
-      const ahead = laneTail;
-      const finished = createDeferred<void>();
-      laneTail = finished.promise;
-      const turnIndex = turnsFinished.push(finished.promise) - 1;
-      lifecycle.onDeferred?.();
-      const heartbeat = setInterval(
-        () => lifecycle.onDeferredHeartbeat?.(),
-        lifecycle.deferredHeartbeatIntervalMs,
-      );
-      turnsDeferred[turnIndex]?.resolve();
-      try {
-        await ahead;
-        if (!abortSignal?.aborted) {
-          await lifecycle.onAdopted();
-        }
-      } finally {
-        clearInterval(heartbeat);
-        finished.resolve();
-      }
-      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
-    });
-    vi.useFakeTimers({
-      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"],
-    });
+    const { releaseHead, turnsDeferred, turnsFinished } = holdDownstreamLane();
+    useIngressTimers();
     monitor.start();
     try {
       await monitor.admit(forwardedTextUpdate({ updateId: 1_401, messageId: 1, text: "Batch A" }));
@@ -365,9 +313,7 @@ describe("Telegram durable ingress coalescing", () => {
       followerDispatched.resolve();
       return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
     });
-    vi.useFakeTimers({
-      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"],
-    });
+    useIngressTimers();
     monitor.start();
     try {
       await admitAlbum(monitor, "A", 1_101);
@@ -457,9 +403,7 @@ describe("Telegram durable ingress coalescing", () => {
       adoptionStallTimeoutMs: 1_000,
       onRuntimeError: (error) => runtimeErrors.push(error),
     });
-    vi.useFakeTimers({
-      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"],
-    });
+    useIngressTimers();
     monitor.start();
     try {
       await admitAlbum(monitor, "A", 1_201);
@@ -483,9 +427,7 @@ describe("Telegram durable ingress coalescing", () => {
 
   it("dispatches interleaved albums in first-member arrival order", async () => {
     const { monitor } = await createMonitor();
-    vi.useFakeTimers({
-      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"],
-    });
+    useIngressTimers();
     monitor.start();
     try {
       for (const [index, name] of ["A", "B", "A"].entries()) {

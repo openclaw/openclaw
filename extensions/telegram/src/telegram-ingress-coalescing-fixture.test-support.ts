@@ -62,7 +62,7 @@ export async function assertSpoolTombstoned(params: { stateDir: string; updateId
   }
 }
 
-export function createDownstreamTurnAssertions(
+export function createDownstreamTurnFixture(
   downstreamTurns: Mock<
     (
       ctx: MsgContext,
@@ -106,7 +106,77 @@ export function createDownstreamTurnAssertions(
     await assertSpoolTombstoned(params);
   }
 
-  return { captureNextDownstreamTurn, awaitSingleDownstreamTurn, assertAlbumTurnAndTombstones };
+  function holdFirstDownstreamTurn() {
+    const headDispatched = createDeferred<void>();
+    const releaseHead = createDeferred<void>();
+    const headFinished = createDeferred<void>();
+    downstreamTurns.mockImplementation(async (_ctx, abortSignal, lifecycle) => {
+      if (downstreamTurns.mock.calls.length === 1) {
+        if (!lifecycle?.deferredHeartbeatIntervalMs) {
+          throw new Error("Expected the deferred turn's heartbeat cadence");
+        }
+        lifecycle.onDeferred?.();
+        const heartbeat = setInterval(
+          () => lifecycle.onDeferredHeartbeat?.(),
+          lifecycle.deferredHeartbeatIntervalMs,
+        );
+        headDispatched.resolve();
+        try {
+          await releaseHead.promise;
+          if (!abortSignal?.aborted) {
+            await lifecycle.onAdopted();
+          }
+        } finally {
+          clearInterval(heartbeat);
+          headFinished.resolve();
+        }
+      }
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+    });
+    return { headDispatched, releaseHead, headFinished };
+  }
+
+  function holdDownstreamLane() {
+    const releaseHead = createDeferred<void>();
+    const turnsDeferred = [createDeferred<void>(), createDeferred<void>()];
+    const turnsFinished: Promise<void>[] = [];
+    // Session-lane stand-in: every turn defers, heartbeats, and adopts after the turn ahead.
+    let laneTail: Promise<void> = releaseHead.promise;
+    downstreamTurns.mockImplementation(async (_ctx, abortSignal, lifecycle) => {
+      if (!lifecycle?.deferredHeartbeatIntervalMs) {
+        throw new Error("Expected the deferred turn's heartbeat cadence");
+      }
+      const ahead = laneTail;
+      const finished = createDeferred<void>();
+      laneTail = finished.promise;
+      const turnIndex = turnsFinished.push(finished.promise) - 1;
+      lifecycle.onDeferred?.();
+      const heartbeat = setInterval(
+        () => lifecycle.onDeferredHeartbeat?.(),
+        lifecycle.deferredHeartbeatIntervalMs,
+      );
+      turnsDeferred[turnIndex]?.resolve();
+      try {
+        await ahead;
+        if (!abortSignal?.aborted) {
+          await lifecycle.onAdopted();
+        }
+      } finally {
+        clearInterval(heartbeat);
+        finished.resolve();
+      }
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+    });
+    return { releaseHead, turnsDeferred, turnsFinished };
+  }
+
+  return {
+    captureNextDownstreamTurn,
+    awaitSingleDownstreamTurn,
+    assertAlbumTurnAndTombstones,
+    holdFirstDownstreamTurn,
+    holdDownstreamLane,
+  };
 }
 
 export function resetTelegramIngressRuntime() {
@@ -207,4 +277,10 @@ export async function stopIngressResources(activeResources: TelegramIngressResou
       await telegramTransport.close();
     }),
   );
+}
+
+export function useIngressTimers() {
+  vi.useFakeTimers({
+    toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"],
+  });
 }
