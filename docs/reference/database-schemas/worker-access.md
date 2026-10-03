@@ -365,6 +365,16 @@ retain native transactions and yielding writer admission. Arbitrary async plugin
 updaters retain their existing nested-admission behavior. Schemas, durability,
 public callback contracts, and update behavior are unchanged.
 
+Embedded writer claims, live-model-switch consolidation, and pending-final delivery
+preparation, settlement, and cleanup explicitly select that worker patch path.
+Their reducers prepare outside the transaction; the worker rereads the selected
+rows before applying the patch and publishes acknowledged results before releasing
+the existing writer queue. Uncertain writes never replay. Writer-claim admission
+reads retain their current owner. Lifecycle-event persistence, cron preparation,
+and opaque SDK updaters retain their existing native routes; these callers do not
+change the default patch contract. Schemas, retention, durability, and update
+behavior are unchanged.
+
 Durable transcript turns append messages, consume pending inputs, evaluate typed
 latest-assistant and active-entry predicates, update entries, and commit goal
 receipts in one agent-executor transaction. Host preparation uses worker-read
