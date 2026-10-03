@@ -15,11 +15,18 @@ export function collectRawSessionText(content: unknown): string | null {
   const parts: string[] = [];
   for (const block of content) {
     const record = asOptionalObjectRecord(block);
-    if (record?.type === "text" && typeof record.text === "string") {
+    if (record && isSessionTextBlockType(record.type) && typeof record.text === "string") {
       parts.push(record.text);
     }
   }
   return parts.length > 0 ? parts.join("\n") : null;
+}
+
+// Persisted transcripts keep provider text as `text`, `input_text` (Responses-style
+// user input), or `output_text` (Responses-style assistant output); all three carry
+// conversation text that memory search must index.
+function isSessionTextBlockType(type: unknown): boolean {
+  return type === "text" || type === "input_text" || type === "output_text";
 }
 
 /** Retain memory's input facts, not tool results, attachments, or provider replay payloads. */
