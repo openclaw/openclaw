@@ -226,12 +226,12 @@ async function prepareTemplate(options: CheckoutOptions) {
         heads[0] === `# branch.oid ${commit}`
       );
     },
-    prepare: async (record) => {
+    prepare: async (preparing) => {
       options.requireSpace();
-      await backend.createTemplate(record.path, options);
+      await backend.createTemplate(preparing.path, options);
       await requireGit(
         options.repoRoot,
-        ["worktree", "add", "--detach", "--", record.path, commit],
+        ["worktree", "add", "--detach", "--", preparing.path, commit],
         checkoutGitOptions(options),
       );
     },

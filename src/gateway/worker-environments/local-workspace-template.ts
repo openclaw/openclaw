@@ -201,12 +201,12 @@ export async function cloneLocalWorkspaceTemplate(params: {
         "sandbox dependency template",
       ),
     validate: (existing) => validateTemplate(existing.path, params.baseCommit, guard),
-    prepare: async (record) => {
-      await prepareSource(record.path);
+    prepare: async (preparing) => {
+      await prepareSource(preparing.path);
       const result = await prepareSandboxDependencyTemplate({
-        directory: record.path,
+        directory: preparing.path,
         cfg: params.sandbox,
-        scopeKey: record.id,
+        scopeKey: preparing.id,
         identity,
         signal: guard.signal,
         assertCurrent: guard.commitGuard,
@@ -214,9 +214,9 @@ export async function cloneLocalWorkspaceTemplate(params: {
       });
       let reason = result.installed ? undefined : result.reason;
       if (result.installed) {
-        const contained = await hasContainedVirtualStore(record.path, identity.docker.workdir);
+        const contained = await hasContainedVirtualStore(preparing.path, identity.docker.workdir);
         guard.commitGuard();
-        if (contained && (await validateTemplate(record.path, params.baseCommit, guard, true))) {
+        if (contained && (await validateTemplate(preparing.path, params.baseCommit, guard, true))) {
           log.info("sandbox dependency template prepared for the selected commit");
           return;
         }
@@ -226,8 +226,8 @@ export async function cloneLocalWorkspaceTemplate(params: {
       }
       log.warn(`sandbox dependency template using source-only fallback: ${reason}`);
       guard.commitGuard();
-      await fs.rm(record.path, { recursive: true, force: true });
-      await prepareSource(record.path);
+      await fs.rm(preparing.path, { recursive: true, force: true });
+      await prepareSource(preparing.path);
     },
   });
   if (!record) {
