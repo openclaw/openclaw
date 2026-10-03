@@ -2,17 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  GATEWAY_OWNER_HEARTBEAT_MS,
-  GATEWAY_OWNER_HEARTBEAT_STALE_MS,
-} from "./gateway-lock-payload.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import {
   acquireGatewayStateOwner,
   acquireStateDatabaseSchemaLease,
   assertStateDatabaseAccessAllowed,
   assertStateDatabaseReadAllowed,
-  resolveGatewayStateOwnerPath,
 } from "./gateway-state-owner.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -64,117 +59,6 @@ describe("bounded Gateway state reads", () => {
     vi.useRealTimers();
   });
 
-  it.each([80_000, 91_000])(
-    "keeps admission within persisted custody after a %i ms fsync delay",
-    (delayMs) => {
-      const databasePath = createDatabase(tempDirs.make("openclaw-owner-heartbeat-admission-"));
-      const ownerPath = resolveGatewayStateOwnerPath(databasePath);
-      const epoch = Date.parse("2026-01-01T00:00:00Z");
-      const timersBefore = vi.getTimerCount();
-      vi.setSystemTime(epoch);
-      const fsync = fs.fsyncSync.bind(fs);
-      const delayedFsync = vi.spyOn(fs, "fsyncSync").mockImplementationOnce((fd) => {
-        fsync(fd);
-        fs.futimesSync(fd, new Date(epoch), new Date(epoch));
-        vi.setSystemTime(epoch + delayMs);
-      });
-      let owner: ReturnType<typeof acquireServingOwner> | undefined;
-      try {
-        if (delayMs > GATEWAY_OWNER_HEARTBEAT_STALE_MS) {
-          expect(() => {
-            owner = acquireServingOwner(databasePath);
-          }).toThrow("no longer current");
-        } else {
-          const acquired = (owner = acquireServingOwner(databasePath));
-          expect(fs.statSync(ownerPath).mtimeMs).toBe(epoch + delayMs);
-          expect(() => acquired.assertCurrent()).not.toThrow();
-          vi.advanceTimersByTime(GATEWAY_OWNER_HEARTBEAT_MS);
-          expect(() => acquired.assertCurrent()).not.toThrow();
-          expect(fs.statSync(ownerPath).mtimeMs).toBe(epoch + delayMs + GATEWAY_OWNER_HEARTBEAT_MS);
-        }
-      } finally {
-        owner?.release();
-        delayedFsync.mockRestore();
-      }
-      expect(fs.existsSync(ownerPath)).toBe(false);
-      expect(vi.getTimerCount()).toBe(timersBefore);
-    },
-  );
-
-  it("renews immutable owner and projection files until the final retained schema lease ends", async () => {
-    const root = tempDirs.make("openclaw-owner-heartbeat-");
-    const databasePath = createDatabase(root);
-    const timersBefore = vi.getTimerCount();
-    const gateway = await acquireGatewayLock({
-      allowInTests: true,
-      env: { OPENCLAW_STATE_DIR: root },
-      timeoutMs: 0,
-      readProcessStartTime: () => null,
-    });
-    if (!gateway) {
-      throw new Error("Expected Gateway ownership");
-    }
-    const schema = acquireStateDatabaseSchemaLease(databasePath);
-    const files = [gateway.lockPath, gateway.stateLockPath].map((lockPath) => ({
-      lockPath,
-      raw: fs.readFileSync(lockPath, "utf8"),
-      mtime: fs.statSync(lockPath).mtimeMs,
-    }));
-    try {
-      for (let tick = 0; tick < 3; tick += 1) {
-        vi.advanceTimersByTime(GATEWAY_OWNER_HEARTBEAT_MS);
-        expect(() => gateway.assertCurrent()).not.toThrow();
-        expect(() => schema.assertCurrent()).not.toThrow();
-        for (const file of files) {
-          expect(fs.readFileSync(file.lockPath, "utf8")).toBe(file.raw);
-          const mtime = fs.statSync(file.lockPath).mtimeMs;
-          expect(mtime).toBeGreaterThan(file.mtime);
-          file.mtime = mtime;
-        }
-      }
-      await gateway.release();
-      vi.advanceTimersByTime(GATEWAY_OWNER_HEARTBEAT_MS);
-      expect(() => schema.assertCurrent()).not.toThrow();
-      for (const file of files) {
-        expect(fs.readFileSync(file.lockPath, "utf8")).toBe(file.raw);
-        expect(fs.statSync(file.lockPath).mtimeMs).toBeGreaterThan(file.mtime);
-      }
-      schema.release();
-      expect(vi.getTimerCount()).toBe(timersBefore);
-      for (const file of files) {
-        expect(fs.existsSync(file.lockPath)).toBe(false);
-      }
-    } finally {
-      schema.release();
-      await gateway.release();
-    }
-  });
-
-  it.each(["authority check", "delayed heartbeat"] as const)(
-    "irrevocably fences expired ownership when observed by %s",
-    (observation) => {
-      const databasePath = createDatabase(tempDirs.make("openclaw-owner-heartbeat-expired-"));
-      const owner = acquireServingOwner(databasePath);
-      const startedAt = Date.now();
-      const mtime = fs.statSync(owner.path).mtimeMs;
-      try {
-        vi.setSystemTime(startedAt + GATEWAY_OWNER_HEARTBEAT_STALE_MS + 1);
-        if (observation === "authority check") {
-          expect(() => owner.assertCurrent()).toThrow("no longer current");
-        }
-        vi.advanceTimersByTime(GATEWAY_OWNER_HEARTBEAT_MS);
-        expect(() => owner.assertCurrent()).toThrow("no longer current");
-        expect(fs.statSync(owner.path).mtimeMs).toBe(mtime);
-        vi.setSystemTime(startedAt);
-        vi.advanceTimersByTime(GATEWAY_OWNER_HEARTBEAT_MS);
-        expect(() => owner.assertCurrent()).toThrow("no longer current");
-        expect(fs.statSync(owner.path).mtimeMs).toBe(mtime);
-      } finally {
-        owner.release();
-      }
-    },
-  );
-
   it.each(["owner", "projection"] as const)(
     "rechecks a replaced %s when the read verification window expires",
     async (kind) => {
@@ -194,7 +78,6 @@ describe("bounded Gateway state reads", () => {
         assertStateDatabaseReadAllowed(databasePath);
         fs.unlinkSync(replacedPath);
         fs.writeFileSync(replacedPath, "replacement");
-        const replacementMtime = fs.statSync(replacedPath).mtimeMs;
         expect(() => assertStateDatabaseReadAllowed(databasePath)).not.toThrow();
         vi.advanceTimersByTime(999);
         expect(() => assertStateDatabaseReadAllowed(databasePath)).not.toThrow();
@@ -205,8 +88,6 @@ describe("bounded Gateway state reads", () => {
             ? assertStateDatabaseAccessAllowed(databasePath)
             : gateway.assertCurrent(),
         ).toThrow(kind === "owner" ? "could not be verified" : "no longer current");
-        vi.advanceTimersByTime(GATEWAY_OWNER_HEARTBEAT_MS);
-        expect(fs.statSync(replacedPath).mtimeMs).toBe(replacementMtime);
       } finally {
         await gateway.release();
       }

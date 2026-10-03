@@ -53,7 +53,11 @@ export function classifyGatewayLockProcessNamespace(
   value: unknown,
   lockPath?: string,
 ): "same" | "dead" | "unknown" {
-  // Legacy records retain their same-namespace PID recovery contract.
+  // Evidence                                      Classification
+  // Legacy, or same boot + PID namespace           existing PID rules
+  // Different boot on the same host               dead
+  // Foreign/unreadable namespace, mtime >90s old    dead
+  // Foreign/unreadable namespace, otherwise        unknown; preserve
   if (value === undefined) {
     return "same";
   }
@@ -68,16 +72,13 @@ export function classifyGatewayLockProcessNamespace(
       return "same";
     }
   }
-  if (lockPath) {
-    try {
-      if (Date.now() - fs.statSync(lockPath).mtimeMs > GATEWAY_OWNER_HEARTBEAT_STALE_MS) {
-        return "dead";
-      }
-    } catch {
-      // An unreadable heartbeat cannot establish that its owner stopped renewing.
-    }
+  try {
+    return lockPath && Date.now() - fs.statSync(lockPath).mtimeMs > GATEWAY_OWNER_HEARTBEAT_STALE_MS
+      ? "dead"
+      : "unknown";
+  } catch {
+    return "unknown";
   }
-  return "unknown";
 }
 
 const LockPayloadSchema = z.object({

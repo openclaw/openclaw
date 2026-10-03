@@ -46,7 +46,6 @@ import {
 } from "./gateway-state-owner.js";
 
 export const GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS = 5 * 60_000;
-const GATEWAY_OWNER_HEARTBEAT_POLL_MS = 5_000;
 const log = createSubsystemLogger("gateway");
 
 export type GatewayLockHandle = {
@@ -480,6 +479,7 @@ export async function acquireGatewayLock(
   }
   const now = opts.now ?? performance.now.bind(performance);
   const startedAt = now();
+  const heartbeatDeadlineMs = startedAt + GATEWAY_OWNER_HEARTBEAT_STALE_MS + 5_000;
   const timeoutMs = resolveTimerTimeoutMs(
     opts.timeoutMs,
     role === "gateway" ? GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS : 0,
@@ -519,7 +519,6 @@ export async function acquireGatewayLock(
     borrowedOwner = tryBorrowGatewayStateOwner(databasePath);
   }
   let waited = false;
-  let waitingForHeartbeat = false;
   let projection: GatewayStateProjection | undefined;
   let stateOwner: ReturnType<typeof acquireGatewayStateOwner>;
   try {
@@ -531,51 +530,42 @@ export async function acquireGatewayLock(
         maxPollIntervalMs: 2000,
         now,
         sleep: opts.sleep,
-        acquire: () =>
-          acquireWithWait({
-            deadlineMs: Math.min(
-              deadlineMs,
-              startedAt + GATEWAY_OWNER_HEARTBEAT_STALE_MS + GATEWAY_OWNER_HEARTBEAT_POLL_MS,
-            ),
-            pollIntervalMs: GATEWAY_OWNER_HEARTBEAT_POLL_MS,
-            now,
-            sleep: opts.sleep,
-            shouldRetry: (error) => {
-              if (role !== "gateway" || !(error instanceof GatewayLockNamespaceError)) {
-                return false;
-              }
-              if (!waitingForHeartbeat && now() < deadlineMs) {
-                log.warn(
-                  "Waiting for the previous Gateway's owner heartbeat to expire before reclaiming state (up to 95 seconds).",
-                );
-                waitingForHeartbeat = true;
-              }
-              return true;
-            },
-            acquire: async () => {
-              const owner = acquireGatewayStateOwner({
-                databasePath,
-                payload,
-                projectionPath: paths.stateLockPath,
-                getProjection: () => projection,
-              });
-              try {
-                if (previousOwner) {
-                  projection = previousOwner.retainProjection();
-                }
-                await assertHistoricalGatewayOwnerStopped(paths, opts, projection);
-                await previousOwner?.release();
-                owner.assertCurrent();
-                return owner;
-              } catch (error) {
-                projection?.release();
-                projection = undefined;
-                owner.release();
-                throw error;
-              }
-            },
-          }),
+        acquire: async () => {
+          const owner = acquireGatewayStateOwner({
+            databasePath,
+            payload,
+            projectionPath: paths.stateLockPath,
+            getProjection: () => projection,
+          });
+          try {
+            if (previousOwner) {
+              projection = previousOwner.retainProjection();
+            }
+            await assertHistoricalGatewayOwnerStopped(paths, opts, projection);
+            await previousOwner?.release();
+            owner.assertCurrent();
+            return owner;
+          } catch (error) {
+            projection?.release();
+            projection = undefined;
+            owner.release();
+            throw error;
+          }
+        },
         shouldRetry: (error) => {
+          if (error instanceof GatewayLockNamespaceError && role === "gateway") {
+            const remaining = Math.min(deadlineMs, heartbeatDeadlineMs) - now();
+            if (remaining <= 0) {
+              return false;
+            }
+            if (!waited) {
+              log.warn(
+                "Waiting for the previous Gateway's owner heartbeat to expire before reclaiming state (up to 95 seconds).",
+              );
+            }
+            waited = true;
+            return { delayMs: Math.min(5_000, remaining) };
+          }
           if (!(error instanceof GatewayStateOwnerContentionError)) {
             return false;
           }
