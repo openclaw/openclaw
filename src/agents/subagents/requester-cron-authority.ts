@@ -482,7 +482,9 @@ export async function withRequesterCronAuthority<T>(
   const authority = params.batch[0] && state.byEntry.get(getSubagentRunRuntimeKey(params.batch[0]));
   const child = params.batch.length === 1 ? params.batch[0] : undefined;
   const replayOnly =
-    authority?.kind === "yield" && isRequesterAuthorityWaveReplayCurrent(authority, params);
+    authority?.kind === "yield" &&
+    isCurrent(authority, false) &&
+    isRequesterAuthorityWaveReplayCurrent(authority, params);
   const pause: RequesterAuthorityDispatch<RequesterCronAuthority>["pause"] =
     child?.pauseReason === "sessions_yield" && child.requesterSettleWake?.pauseNotice
       ? { entry: child }
@@ -510,26 +512,26 @@ export async function withRequesterCronAuthority<T>(
     : undefined;
   const scoped = pause ?? wave;
   const current = () => {
+    if (!isCurrent(authority, !replayOnly && !scoped?.scope)) {
+      return false;
+    }
     if (replayOnly) {
       return isRequesterAuthorityWaveReplayCurrent(authority, params);
     }
     if (scoped?.scope) {
       // An admitted scoped turn keeps operator and session revocation, not other waves' state.
       const { active, signal } = scoped.scope;
-      return !scoped.released && active && !signal.aborted && isCurrent(authority, false);
+      return !scoped.released && active && !signal.aborted;
     }
     const pausedEntry = pause && authority.runs.get(pause.entry.runId);
-    return (
-      isCurrent(authority) &&
-      (scoped
-        ? !scoped.released &&
+    return scoped
+      ? !scoped.released &&
           params.isCurrent() &&
           (!pause ||
             (isSameSubagentRunOwner(pausedEntry, pause.entry) &&
               pausedEntry?.pauseReason === "sessions_yield" &&
               Boolean(pausedEntry.requesterSettleWake?.pauseNotice)))
-        : authority.runScopeBound === true || params.isCurrent())
-    );
+      : authority.runScopeBound === true || params.isCurrent();
   };
   if (!current()) {
     retire(authority);

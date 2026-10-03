@@ -4,6 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { prepareAgentCommandExecutionIdentity } from "../agents/agent-command-execution-identity.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
+import {
+  createCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapability,
+} from "../agents/cron-creator-authority-context.js";
 import { consumeSubagentPauseNotice } from "../agents/subagents/registry/subagent-delivery-state.js";
 import { subagentRuns as runs } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
@@ -19,9 +23,13 @@ import {
 } from "../agents/tools/gateway-caller-context.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
-import { registerAgentRunContext } from "../infra/agent-run-registry.js";
+import {
+  registerAgentRunContext,
+  rotateAgentRunRegistryLifecycleGeneration,
+} from "../infra/agent-run-registry.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { mergeProfiles } from "../state/user-profile-writes.worker.js";
+import { readOperatorToolGatewayAuthority } from "./operator-tool-gateway-authority.js";
 import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
@@ -420,6 +428,10 @@ describe("requester pause authority at the Gateway effect", () => {
     "sibling replay cache missing",
     "sibling replay operator only cache missing",
     "sibling replay revoked",
+    "sibling replay source revoked",
+    "sibling replay channel grant revoked",
+    "sibling replay channel grant revoked after await",
+    "sibling replay lifecycle rotated",
     "final replay",
     "late retirement",
     "late retirement revoked",
@@ -496,6 +508,7 @@ describe("requester pause authority at the Gateway effect", () => {
         }),
         { runs, context: captureOpenClawStateWorkerContext() },
       );
+      let channelGrantCurrent = true;
       const admitted: Array<{ runId: string; profileId?: string; cronCurrent?: boolean }> = [];
       agentCommandMock.mockImplementation(async (input) => {
         const opts = input as AgentCommandGatewayIngressOpts;
@@ -530,12 +543,29 @@ describe("requester pause authority at the Gateway effect", () => {
             const recorder = expectDefined(opts.userTurnTranscriptRecorder, "Gateway recorder");
             expect(await recorder.persistApproved()).toMatchObject({ appended: true });
             if (runId === originalRunId) {
-              expect(
-                await markRequesterTurnYielded({
+              const mark = () =>
+                markRequesterTurnYielded({
                   requesterSessionKey: parent,
                   requesterAgentId: "main",
                   requesterTurnRunId: runId,
-                }),
+                });
+              expect(
+                outcome.startsWith("sibling replay channel grant revoked")
+                  ? await runWithCronCreatorAuthorityCapability(
+                      expectDefined(
+                        createCronCreatorAuthorityCapability(
+                          runId,
+                          { kind: "unknown" },
+                          {
+                            source: "channel-owner",
+                            isCurrent: () => channelGrantCurrent,
+                          },
+                        ),
+                        "original channel-owner grant",
+                      ),
+                      mark,
+                    )
+                  : await mark(),
               ).toBe(2);
               expect(
                 await settleRequesterAfterSessionSpawns({
@@ -659,6 +689,37 @@ describe("requester pause authority at the Gateway effect", () => {
               }
             }
           }
+          if (outcome === "sibling replay channel grant revoked after await") {
+            // Owner-level after-await proof on a real admitted, cached Gateway wave.
+            await withRequesterCronAuthority(
+              {
+                requesterSessionKey: parent,
+                requesterSessionId: parentId,
+                requesterAgentId: "main",
+                batch: [current(sibling)],
+                rearmGeneration: 1,
+                runId: siblingRunId,
+                isCurrent: () => true,
+              },
+              async () => {
+                const assertCurrent = expectDefined(
+                  expectDefined(readOperatorToolGatewayAuthority(), "replay operator scope")
+                    .assertCurrent,
+                  "replay source assertion",
+                );
+                assertCurrent();
+                await Promise.resolve();
+                channelGrantCurrent = false;
+                expect(assertCurrent).toThrow("no longer current");
+              },
+            );
+          } else if (outcome.startsWith("sibling replay channel grant revoked")) {
+            channelGrantCurrent = false;
+          } else if (outcome === "sibling replay source revoked") {
+            revokeRequesterCronAuthority(parent);
+          } else if (outcome === "sibling replay lifecycle rotated") {
+            rotateAgentRunRegistryLifecycleGeneration();
+          }
           if (outcome === "sibling replay revoked") {
             const successor = createOperatorClient({
               profileName: `replay-successor-${id}`,
@@ -707,9 +768,15 @@ describe("requester pause authority at the Gateway effect", () => {
           cronCurrent: outcome.includes("operator only") ? undefined : true,
         };
         if (
-          !["operator revoked", "sibling replay revoked", "retired delivery claim"].includes(
-            outcome,
-          )
+          ![
+            "operator revoked",
+            "sibling replay revoked",
+            "sibling replay source revoked",
+            "sibling replay channel grant revoked",
+            "sibling replay channel grant revoked after await",
+            "sibling replay lifecycle rotated",
+            "retired delivery claim",
+          ].includes(outcome)
         ) {
           await resumed;
           if (outcome === "final replay") {
