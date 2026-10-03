@@ -490,7 +490,7 @@ describe("worker tunnel manager", () => {
           }
         },
       );
-      const resetDispatched = createDeferred<void>();
+      const resetDispatched = createDeferred();
       const manager = createWorkerTunnelManager({
         runner: {
           ...fake.runner,

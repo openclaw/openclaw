@@ -664,6 +664,7 @@ src/gateway/worker-environments/workspace-manifest-computation.runtime.ts
 src/gateway/worker-environments/workspace-manifest-overlay.ts
 src/gateway/worker-environments/workspace-manifest-worker.ts
 src/gateway/worker-environments/workspace-manifest.ts
+src/gateway/worker-environments/workspace-path-ancestors.ts
 src/gateway/worker-environments/workspace-path-exclusions.ts
 src/gateway/worker-environments/workspace-reconcile-apply.ts
 src/gateway/worker-environments/workspace-reconcile-core.ts

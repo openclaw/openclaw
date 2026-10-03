@@ -48,14 +48,14 @@ export function createWorkerEnvironmentStoreKernel(
   ensureWorkerEnvironmentStoreSchema(database);
   const db = database.db;
   const createIntent = (
-    db: DatabaseSync,
+    intentDb: DatabaseSync,
     input: WorkerEnvironmentIntentInput,
   ): WorkerEnvironmentRecord => {
     const environmentId = requireWorkerEnvironmentString(input.environmentId, "id");
     const createdAtMs = now();
     executeSqliteQuerySync(
-      db,
-      queryWorkerEnvironmentStore(db)
+      intentDb,
+      queryWorkerEnvironmentStore(intentDb)
         .insertInto("worker_environments")
         .values({
           environment_id: environmentId,
@@ -93,7 +93,7 @@ export function createWorkerEnvironmentStoreKernel(
           last_error: null,
         }),
     );
-    return getRequiredWorkerEnvironment(db, environmentId);
+    return getRequiredWorkerEnvironment(intentDb, environmentId);
   };
   return {
     ...createPreparedEnvironmentStoreOps({ db, now, createIntent, get: findWorkerEnvironment }),

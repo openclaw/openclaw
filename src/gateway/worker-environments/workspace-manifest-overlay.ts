@@ -35,7 +35,7 @@ export function applyWorkspaceSourceOverlay(
   }
   // Retained children preserve their parents; incoming children replace setup-only ancestor files.
   for (const entryPath of nodes.keys()) {
-    for (const parent of [...workspacePathAncestors(entryPath)].reverse()) {
+    for (const parent of [...workspacePathAncestors(entryPath)].toReversed()) {
       nodes.set(parent, { path: parent, type: "directory" });
     }
   }

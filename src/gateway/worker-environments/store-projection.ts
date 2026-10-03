@@ -215,7 +215,7 @@ function createWorkerEnvironmentProjection() {
     },
     pendingReconciliations() {
       assertActive();
-      return [...reconciliations].map(([token, recovery]) => ({ token, ...recovery }));
+      return [...reconciliations].map(([token, recovery]) => Object.assign({ token }, recovery));
     },
     hasPendingReconciliation: () => reconciliations.size !== 0,
     release(token: object) {
