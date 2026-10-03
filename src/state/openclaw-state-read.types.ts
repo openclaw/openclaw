@@ -561,7 +561,7 @@ export type OpenClawStateReadOutcome =
   | { value: Extract<OpenClawStateReadReply, { ok: true }> }
   | { error: unknown; sourceAdmitted?: boolean };
 
-export type OpenClawStateReadPhase = "before-read" | "read" | "unobserved";
+type OpenClawStateReadPhase = "before-read" | "read" | "unobserved";
 export type OpenClawStateReadReceipt = { phase: OpenClawStateReadPhase };
 export type OpenClawStateReadOptions = {
   /** Cancellation abandons delivery only after the accepted read and cleanup settle. */

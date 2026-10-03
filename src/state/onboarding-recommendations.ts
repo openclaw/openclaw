@@ -27,7 +27,7 @@ export function createOnboardingRecommendationsStore(params: {
   const configKey = `onboarding.recommendations.${resolveWorkspaceStateIdentity(params.workspaceDir).workspaceKey}`;
   const database = params.database ?? {};
   return {
-    async read(): Promise<OnboardingRecommendationsRecord | null> {
+    read: async (): Promise<OnboardingRecommendationsRecord | null> => {
       const result = await executeExistingOpenClawStateRead(database, {
         type: "onboardingRecommendations.read",
         configKey,
@@ -40,7 +40,7 @@ export function createOnboardingRecommendationsStore(params: {
       }
       throw new Error("Unexpected onboarding recommendations read result");
     },
-    writeOffer(offer: WriteOnboardingRecommendationsOfferParams) {
+    writeOffer: (offer: WriteOnboardingRecommendationsOfferParams) => {
       const captured = prepareOnboardingRecommendationOffer(offer);
       const context = captureOpenClawStateWorkerContext(database);
       return executeOpenClawStateWorker(context, {
@@ -48,7 +48,7 @@ export function createOnboardingRecommendationsStore(params: {
         input: { configKey, params: captured },
       });
     },
-    acknowledge(options: AcknowledgeOnboardingRecommendationsParams = {}) {
+    acknowledge: (options: AcknowledgeOnboardingRecommendationsParams = {}) => {
       const context = captureOpenClawStateWorkerContext(database);
       const captured = structuredClone({ ...options, nowMs: options.nowMs ?? Date.now() });
       return executeOpenClawStateWorker(context, {
@@ -56,7 +56,7 @@ export function createOnboardingRecommendationsStore(params: {
         input: { configKey, params: captured },
       });
     },
-    updatePending(options: UpdatePendingOnboardingRecommendationsParams) {
+    updatePending: (options: UpdatePendingOnboardingRecommendationsParams) => {
       const captured = prepareOnboardingRecommendationPending(options);
       const context = captureOpenClawStateWorkerContext(database);
       return executeOpenClawStateWorker(context, {
@@ -64,7 +64,7 @@ export function createOnboardingRecommendationsStore(params: {
         input: { configKey, params: captured },
       });
     },
-    clearPending(options: ClearPendingOnboardingRecommendationsParams) {
+    clearPending: (options: ClearPendingOnboardingRecommendationsParams) => {
       const context = captureOpenClawStateWorkerContext(database);
       const captured = structuredClone(options);
       return executeOpenClawStateWorker(context, {
@@ -72,7 +72,7 @@ export function createOnboardingRecommendationsStore(params: {
         input: { configKey, params: captured },
       });
     },
-    clear() {
+    clear: () => {
       return executeOpenClawStateWorker(captureOpenClawStateWorkerContext(database), {
         type: "onboardingRecommendations.clear",
         input: { configKey },

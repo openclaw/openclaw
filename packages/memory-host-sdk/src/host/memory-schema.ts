@@ -294,6 +294,26 @@ export function ensureMemoryIndexSchema(params: {
   ftsEnabled: boolean;
   ftsTokenizer?: "unicode61" | "trigram";
 }): { ftsAvailable: boolean; ftsError?: string } {
+  if (
+    tableHasExactColumns(params.db, "meta", ["key", "value"]) &&
+    tableHasExactColumns(params.db, "files", ["path", "source", "hash", "mtime", "size"]) &&
+    tableHasExactColumns(params.db, "chunks", [
+      "id",
+      "path",
+      "source",
+      "start_line",
+      "end_line",
+      "hash",
+      "model",
+      "text",
+      "embedding",
+      "updated_at",
+    ])
+  ) {
+    throw new Error(
+      "Retired memory index format detected. Preserve a complete copy of your state and configuration, then use OpenClaw 2026.9.7 to migrate a compatible copy of this index before retrying the upgrade.",
+    );
+  }
   const embeddingCacheTable = params.embeddingCacheTable ?? MEMORY_EMBEDDING_CACHE_TABLE;
   const ftsTable = params.ftsTable ?? MEMORY_INDEX_FTS_TABLE;
   params.db.exec(

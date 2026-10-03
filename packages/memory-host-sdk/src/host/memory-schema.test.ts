@@ -287,9 +287,17 @@ describe("memory index schema", () => {
     }
   });
 
-  it("stores source records with the same path in separate sources", () => {
+  it("stores separate sources alongside unrelated generic tables", () => {
     const db = new DatabaseSync(":memory:");
     try {
+      db.exec(`
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE files (name TEXT PRIMARY KEY);
+        CREATE TABLE chunks (content TEXT);
+        INSERT INTO meta VALUES ('application', 'unrelated');
+        INSERT INTO files VALUES ('original');
+        INSERT INTO chunks VALUES ('preserved');
+      `);
       ensureMemoryIndexSchema({
         db,
         cacheEnabled: false,
@@ -309,6 +317,11 @@ describe("memory index schema", () => {
         { path: "shared.md", source: "memory", hash: "memory-hash" },
         { path: "shared.md", source: "sessions", hash: "session-hash" },
       ]);
+      expect(db.prepare("SELECT * FROM meta").all()).toEqual([
+        { key: "application", value: "unrelated" },
+      ]);
+      expect(db.prepare("SELECT * FROM files").all()).toEqual([{ name: "original" }]);
+      expect(db.prepare("SELECT * FROM chunks").all()).toEqual([{ content: "preserved" }]);
     } finally {
       db.close();
     }

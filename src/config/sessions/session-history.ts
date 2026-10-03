@@ -1,4 +1,3 @@
-export type { SessionTranscriptInstance } from "./session-accessor.sqlite-contract.js";
 export { listSessionTranscriptInstances } from "./session-accessor.sqlite-entry.js";
 export { listSessionEntriesByStatus } from "./session-entry-status-read.js";
 export {
