@@ -116,7 +116,7 @@ vi.mock("../state/backup-run-records.js", async (importOriginal) => ({
   readBackupRunFreshness: async () => ({}),
 }));
 vi.mock("../security/audit.runtime.js", () => ({ runSecurityAudit: mocks.audit }));
-vi.mock("../node-host/config.js", () => ({ loadNodeHostConfigReadOnly: mocks.nodeConfig }));
+vi.mock("../node-host/config.js", () => ({ loadNodeHostConfig: mocks.nodeConfig }));
 
 Object.assign(mocks.runtime, createTestRuntime());
 

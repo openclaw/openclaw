@@ -71,16 +71,11 @@ function loadContainedSkillRecord(params: {
   }
   // Discovery selected one terminal SKILL.md; keep its parsed facts, not its content, in the cache.
   const record: LoadedSkillRecord = { skill: loaded.skill, frontmatter: loaded.frontmatter };
-  const canonicalSkillDir = params.canonicalSkillDir;
-  return canonicalSkillDir ? canonicalizeLoadedSkillRecord(record, canonicalSkillDir) : record;
-}
-
-function canonicalizeLoadedSkillRecord(
-  record: LoadedSkillRecord,
-  canonicalSkillDir: string,
-): LoadedSkillRecord {
+  if (!params.canonicalSkillDir) {
+    return record;
+  }
   const originalBaseDir = path.resolve(record.skill.baseDir);
-  const canonicalBaseDir = path.resolve(canonicalSkillDir);
+  const canonicalBaseDir = path.resolve(params.canonicalSkillDir);
   if (originalBaseDir === canonicalBaseDir) {
     return record;
   }
@@ -236,7 +231,7 @@ export function loadWorkspaceSkillSourceEntries(
   for (const root of plan.roots) {
     const records = grouped.get(root.tier) ?? [];
     for (const record of loadSkillRootRecords({ ...root, config })) {
-      records.push(Object.assign({}, record, { sourceOrder: root.order }));
+      records.push({ ...record, sourceOrder: root.order });
     }
     grouped.set(root.tier, records);
   }
@@ -248,13 +243,12 @@ export function loadWorkspaceSkillSourceEntries(
       source: "openclaw-extra",
       limits: resolveSkillDiscoveryLimits(config),
     })) {
-      extra.push(
-        Object.assign({}, record, {
-          sourceOrder:
-            (plan.roots.find((root) => root.tier !== "extra")?.order ??
-              Math.max(-1, ...plan.roots.map((root) => root.order ?? -1)) + 1) - 0.5,
-        }),
-      );
+      extra.push({
+        ...record,
+        sourceOrder:
+          (plan.roots.find((root) => root.tier !== "extra")?.order ??
+            Math.max(-1, ...plan.roots.map((root) => root.order ?? -1)) + 1) - 0.5,
+      });
     }
   }
   grouped.set("extra", extra);

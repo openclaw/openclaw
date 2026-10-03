@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaProviderMode } from "./model-selection.js";
 import type { QaMockProviderServer } from "./providers/shared/types.js";
 import type { QaTransportActionName, QaTransportAdapter } from "./qa-transport.js";
+import type { QaRuntimeSelection, RuntimeId } from "./runtime-id.js";
 
 type QaRuntimeGatewayClient = {
   readonly evidenceIdentity?: { protocol: number; version: string } | null;
@@ -40,6 +41,9 @@ type QaRuntimeGatewayClient = {
 };
 
 export type QaSuiteRuntimeEnv = {
+  // Suite execution cells supply this identity; standalone helpers may have no cell.
+  runtimeId?: RuntimeId;
+  runtimeSelection?: QaRuntimeSelection;
   gateway: QaRuntimeGatewayClient;
   outputDir: string;
   transport: QaTransportAdapter;

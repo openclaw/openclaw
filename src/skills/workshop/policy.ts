@@ -10,7 +10,7 @@ import { resolveSkillWorkshopConfig } from "./config.js";
 
 // Proposal reconciliation and skill-install dependencies belong to actual approval-detail lookup.
 const loadPendingSkillProposalResolver = createLazyRuntimeNamedExport(
-  () => import("./policy.runtime.js"),
+  () => import("./service-query.js"),
   "resolvePendingSkillProposal",
 );
 

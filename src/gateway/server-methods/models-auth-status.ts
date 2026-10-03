@@ -14,11 +14,9 @@ import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.j
 import {
   type AuthProfileHealthStatus,
   type AuthProviderHealth,
-  type AuthProviderHealthStatus,
   formatRemainingShort,
 } from "../../agents/auth-health.js";
 import {
-  type AuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
   externalCliDiscoveryForConfigStatus,
   listProfilesForProvider,
@@ -126,18 +124,10 @@ function buildExpiry(
 
 function providerDisplayName(provider: string): string {
   const usageId = resolveUsageProviderId(provider);
-  const usageLabel = usageId ? providerUsageLabel(usageId) : undefined;
-  if (usageLabel) {
-    return usageLabel;
-  }
-  return provider;
+  return (usageId && providerUsageLabel(usageId)) || provider;
 }
 
-type ModelAuthStatusRollup = {
-  status: AuthProviderHealthStatus;
-  expiresAt?: number;
-  remainingMs?: number;
-};
+type ModelAuthStatusRollup = Pick<AuthProviderHealth, "status" | "expiresAt" | "remainingMs">;
 
 function aggregateProfileStatus(
   profiles: AuthProviderHealth["profiles"],
@@ -187,7 +177,7 @@ export function aggregateRefreshableAuthStatus(
 function mapProvider(
   prov: AuthProviderHealth,
   cfg: OpenClawConfig,
-  store: AuthProfileStore,
+  store: RuntimeAuthProfileStore,
   authAliasLookupParams: ProviderAuthAliasLookupParams,
   usageByProvider: Map<string, ProviderUsageStatus>,
   expectsOAuthSet: Set<string>,
@@ -207,15 +197,13 @@ function mapProvider(
     providerKey,
     providerAuthKey: authProviderKey,
   });
-  const runtimeStore: RuntimeAuthProfileStore = store;
   const storedOrderKey =
     findNormalizedProviderKey(store.order, authProviderKey) ??
     findNormalizedProviderKey(store.order, providerKey);
   const localOrderStored =
-    storedOrderKey !== undefined &&
-    runtimeStore.runtimeLocalOrderProviderIds?.includes(storedOrderKey);
+    storedOrderKey !== undefined && store.runtimeLocalOrderProviderIds?.includes(storedOrderKey);
   const localProfileIds = new Set(
-    runtimeStore.runtimeLocalProfileIds ??
+    store.runtimeLocalProfileIds ??
       Object.keys(store.profiles).filter((profileId) => !externalProfileIds.has(profileId)),
   );
   const providerOrderLocked = configBoundAuthProviders.has(authProviderKey);

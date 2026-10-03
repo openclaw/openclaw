@@ -661,7 +661,6 @@ async function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
 }
 
 const testing = {
-  failQueuedSubagentRun: subagentRunManager.failQueuedSubagentRun,
   sweepOnceForTests: subagentSweeper.sweepOnce,
   runSweeperTickForTests: subagentSweeper.runTick,
 } as const;

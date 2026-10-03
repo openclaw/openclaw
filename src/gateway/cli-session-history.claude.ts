@@ -511,59 +511,6 @@ export async function resolveClaudeCliSessionFilePathAsync(params: {
   return undefined;
 }
 
-/** Reads visible messages for a bound Claude CLI session. */
-export function readClaudeCliSessionMessages(params: {
-  cliSessionId: string;
-  homeDir?: string;
-  localSessionId?: string;
-  reseedReceipt?: CliSessionReseedReceipt;
-}): TranscriptLikeMessage[] {
-  const filePath = resolveClaudeCliSessionFilePath(params);
-  if (!filePath) {
-    return [];
-  }
-
-  let content: string;
-  try {
-    content = fs.readFileSync(filePath, "utf-8");
-  } catch {
-    return [];
-  }
-
-  const messages: TranscriptLikeMessage[] = [];
-  const toolNameRegistry: ToolNameRegistry = new Map();
-  const reseedState = createClaudeReseedImportState(params);
-  const lines = content.split(/\r?\n/);
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-    const line = lines[lineIndex] ?? "";
-    if (!line.trim()) {
-      continue;
-    }
-    try {
-      const parsed = decodeClaudeCliProjectEntry(line);
-      const message = parseClaudeCliHistoryEntry(
-        parsed,
-        params.cliSessionId,
-        lineIndex + 1,
-        toolNameRegistry,
-        {
-          reseedMode: "recover",
-          reseedState,
-        },
-      );
-      if (message) {
-        messages.push(message);
-      }
-    } catch {
-      // Ignore malformed external history entries.
-    }
-  }
-  const visibleMessages = coalesceClaudeCliToolMessages(messages);
-  // Match local transcript persistence before dedupe so imported secrets cannot
-  // bypass exact-text matching or reach chat history through the external copy.
-  return visibleMessages.map(redactClaudeCliHistoryMessage);
-}
-
 export type ClaudeCliFallbackSeed = {
   summaryText?: string;
   recentTurns: TranscriptLikeMessage[];

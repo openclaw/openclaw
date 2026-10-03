@@ -139,6 +139,7 @@ it.each([
       expect(ctx.configResult.persistCanonicalAgentRoster).toBe(true);
       expect(ctx.configResult.skipWizardMetadataForIncludeWrite).toBe(true);
       expect(ctx.configResult.referenceSource?.installedPluginIdRecovery?.size).toBe(1);
+      expect(ctx.cfg.meta?.migrations?.webhookListeners).toBe(true);
       const transform = configModule.transformConfigFile;
       let firstCommit: Awaited<ReturnType<typeof transform>> | undefined;
       vi.spyOn(configModule, "transformConfigFile").mockImplementation(async (params) => {
@@ -180,8 +181,12 @@ it.each([
       expect(saved.agents.entries).toHaveProperty("main");
       expect(saved.plugins).toEqual({ $include: "./plugin-parent.json" });
       await expect(fs.readFile(parent, "utf8")).resolves.toBe(parentRaw);
-      await expect(fs.readFile(state.configPath + ".bak", "utf8")).resolves.toBe(rootRaw);
-      if (["standalone", "update", "environment-rotation"].includes(scenario)) {
+      const completed = ["standalone", "update", "environment-rotation"].includes(scenario);
+      await expect(
+        fs.readFile(state.configPath + (completed ? ".bak.1" : ".bak"), "utf8"),
+      ).resolves.toBe(rootRaw);
+      if (completed) {
+        expect(saved.meta.migrations.webhookListeners).toBe(true);
         if (scenario === "environment-rotation") {
           expect(saved.gateway.auth.token).toBe("${ROOT_VALUE}");
         }
@@ -197,6 +202,7 @@ it.each([
           (await configModule.readConfigFileSnapshot()).hash,
         );
       } else {
+        expect(saved.meta?.migrations?.webhookListeners).toBeUndefined();
         expect(ctx.configResultWriteCommitted).not.toBe(true);
         expect(ctx.configResult.confirmedConfigSource?.hash).toBe(firstCommit?.persistedHash);
         await expect(fs.readFile(leaf, "utf8")).resolves.toBe(

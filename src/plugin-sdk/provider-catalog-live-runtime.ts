@@ -128,17 +128,6 @@ function matchesProviderCatalogScope(
   );
 }
 
-function buildProviderConfig<T extends ModelDefinitionConfig>(
-  params: BuildLiveModelProviderConfigParams<T>,
-  models: readonly T[],
-): ModelProviderConfig {
-  return {
-    ...params.providerConfig,
-    ...(params.apiKey ? { apiKey: params.apiKey } : {}),
-    models: [...models],
-  };
-}
-
 async function projectCachedLiveModelRows<T extends ModelDefinitionConfig>(
   params: BuildLiveModelProviderConfigParams<T> & {
     fallback: ModelProviderConfig;
@@ -180,7 +169,11 @@ async function projectCachedLiveModelRows<T extends ModelDefinitionConfig>(
 export async function buildLiveModelProviderConfig<T extends ModelDefinitionConfig>(
   params: BuildLiveModelProviderConfigParams<T>,
 ): Promise<ModelProviderConfig> {
-  const fallback = buildProviderConfig(params, params.models);
+  const fallback: ModelProviderConfig = {
+    ...params.providerConfig,
+    ...(params.apiKey ? { apiKey: params.apiKey } : {}),
+    models: [...params.models],
+  };
   const cacheKeyParts =
     params.discoveryMode === "strict"
       ? [
@@ -220,7 +213,7 @@ export async function buildLiveModelProviderConfig<T extends ModelDefinitionConf
     const liveModelIdSet = new Set(liveModelIds);
     const models = params.models.filter((model) => liveModelIdSet.has(model.id));
     if (models.length > 0 || params.discoveryMode === "strict") {
-      return buildProviderConfig(params, models);
+      return { ...fallback, models };
     }
   } catch (error) {
     if (params.discoveryMode === "strict") {

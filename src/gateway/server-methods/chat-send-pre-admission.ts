@@ -64,7 +64,8 @@ export function respondChatSendAdmissionError(
   error: unknown,
   respond: GatewayRequestHandlerOptions["respond"],
 ): void {
-  if (error instanceof Error && error.message === "goal-session-busy") {
+  const reason = error instanceof Error ? error.message : undefined;
+  if (reason === "goal-session-busy") {
     respond(
       false,
       undefined,
@@ -76,27 +77,24 @@ export function respondChatSendAdmissionError(
     );
     return;
   }
-  if (error instanceof Error && error.message === SESSION_ROUTING_CHANGED_ERROR_REASON) {
+  if (reason === SESSION_ROUTING_CHANGED_ERROR_REASON) {
     respondChatSessionRoutingChanged(respond);
     return;
   }
-  if (error instanceof Error && error.message === ACTIVE_LEAF_CHANGED_ERROR_REASON) {
+  if (
+    reason === ACTIVE_LEAF_CHANGED_ERROR_REASON ||
+    reason === SESSION_SETTINGS_CHANGED_ERROR_REASON
+  ) {
     respond(
       false,
       undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "active branch changed; review and retry", {
-        details: { reason: ACTIVE_LEAF_CHANGED_ERROR_REASON },
-      }),
-    );
-    return;
-  }
-  if (error instanceof Error && error.message === SESSION_SETTINGS_CHANGED_ERROR_REASON) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "Session settings changed before send. Retry.", {
-        details: { reason: SESSION_SETTINGS_CHANGED_ERROR_REASON },
-      }),
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        reason === ACTIVE_LEAF_CHANGED_ERROR_REASON
+          ? "active branch changed; review and retry"
+          : "Session settings changed before send. Retry.",
+        { details: { reason } },
+      ),
     );
     return;
   }

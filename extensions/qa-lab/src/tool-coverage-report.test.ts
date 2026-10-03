@@ -638,6 +638,7 @@ describe("qa tool coverage report", () => {
     expect(applyPatchRow?.tracking).toBeUndefined();
     expect(report.rows.find((row) => row.tool === "sessions_spawn")).toEqual(
       expect.objectContaining({
+        capabilityLayer: "openclaw-dynamic-direct",
         required: true,
         action: expect.stringContaining("hard gate"),
       }),
@@ -654,6 +655,7 @@ describe("qa tool coverage report", () => {
     expect(report.rows.find((row) => row.tool === "image_generate")).toEqual(
       expect.objectContaining({
         bucket: "openclaw-dynamic-integration",
+        capabilityLayer: "openclaw-dynamic-searchable",
         expectedLayer: "openclaw-dynamic",
         required: false,
       }),
@@ -661,7 +663,7 @@ describe("qa tool coverage report", () => {
     expect(report.rows.find((row) => row.tool === "web_search")).toEqual(
       expect.objectContaining({
         bucket: "openclaw-dynamic-integration",
-        capabilityLayer: "openclaw-dynamic-direct",
+        capabilityLayer: "openclaw-dynamic-searchable",
         required: true,
       }),
     );

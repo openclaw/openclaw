@@ -15,6 +15,7 @@ import {
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { SessionPendingInputs } from "../../state/openclaw-agent-db.generated.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
@@ -52,7 +53,7 @@ export type SessionPendingInputOwner = {
   sessionKey: string;
   /** Native cache locator; may be the process-held incognito sentinel. */
   databasePath: string;
-  /** Prepared physical locator serialized only to a database worker. */
+  /** Captured physical locator, or native incognito locator, for comparisons and workers. */
   workerDatabasePath: string;
   idempotencyKey: string;
   lifecycleGeneration: string;
@@ -319,7 +320,7 @@ export function hasRegisteredSessionPendingInputOwner(
 ): boolean {
   const owner = owners.live.get(row.input_id);
   return (
-    owner?.databasePath === databasePath &&
+    owner?.workerDatabasePath === databasePath &&
     owner.sessionId === row.session_id &&
     owner.sessionKey === row.session_key &&
     owner.lifecycleGeneration === row.lifecycle_generation &&
@@ -335,9 +336,8 @@ export function readSessionPendingInputOwnerIds(
     "input_id" | "session_key" | "session_id" | "lifecycle_generation"
   >[],
 ): Set<string> {
-  const candidates = rows.filter((row) =>
-    hasRegisteredSessionPendingInputOwner(database.path, row),
-  );
+  const databasePath = readOpenClawAgentDatabaseIdentity(database).canonicalPath || database.path;
+  const candidates = rows.filter((row) => hasRegisteredSessionPendingInputOwner(databasePath, row));
   if (!candidates.length) {
     return new Set();
   }
@@ -480,7 +480,8 @@ export function claimCurrentSessionPendingInputDedupeRecovery(
     owner.sources ||
     owner.restartRecovered !== true ||
     recoveredDedupeOwners.has(owner) ||
-    owner.databasePath !== database.path ||
+    owner.workerDatabasePath !==
+      (readOpenClawAgentDatabaseIdentity(database).canonicalPath || database.path) ||
     owner.sessionId !== scope.sessionId ||
     owner.sessionKey !== scope.sessionKey ||
     owner.idempotencyKey !== `${runId}:user`
@@ -548,7 +549,8 @@ export function resolveSessionPendingInputAppend(
   // A bound-session mirror shares source correlation, never its pending custody.
   const ownsInput =
     owner?.idempotencyKey === idempotencyKey &&
-    owner.databasePath === database.path &&
+    owner.workerDatabasePath ===
+      (readOpenClawAgentDatabaseIdentity(database).canonicalPath || database.path) &&
     owner.sessionId === scope.sessionId &&
     owner.sessionKey === scope.sessionKey;
   if (!row && !ownsInput) {
@@ -680,11 +682,12 @@ export function consumeSessionPendingInput(
   }
   const owner = owners.current.getStore();
   const inputIds = new Set(pending.sourceInputIds ?? [pending.inputId]);
+  const databasePath = readOpenClawAgentDatabaseIdentity(database).canonicalPath || database.path;
   const consumedOwners = (owner?.sources ?? (owner ? [owner] : [])).filter(
     (candidate) =>
       (owners.live.get(candidate.inputId) === candidate ||
         workerCustody.getStore()?.owner === owner) &&
-      candidate.databasePath === database.path &&
+      candidate.workerDatabasePath === databasePath &&
       inputIds.has(candidate.inputId),
   );
   if (pending.sourceInputIds) {

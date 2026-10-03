@@ -90,7 +90,7 @@ export function hasExplicitChannelConfig(params: {
   if (enabled === false) {
     return false;
   }
-  return enabled === true || hasMeaningfulChannelConfig(entry);
+  return enabled === true || hasMeaningfulChannelConfig(entry, params.channelId);
 }
 
 /** Lists explicitly configured channel ids, excluding global channel config keys. */

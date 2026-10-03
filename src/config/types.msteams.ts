@@ -99,7 +99,7 @@ export type MSTeamsConfig = Omit<
     managedIdentityClientId?: string;
     /** Gateway webhook route configuration. */
     webhook?: MSTeamsWebhookConfig;
-    /** Compatibility listener; omitted retains wildcard port 3978, false disables it. */
+    /** Explicit compatibility listener; omitted or false opens no separate port. */
     legacyWebhook?: false | { port: number; host?: string };
     /** Send native Teams typing indicator before replies. Default: true for groups/channels; DMs use informative stream status. */
     typingIndicator?: boolean;

@@ -1,3 +1,60 @@
+import { hashCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
+import type { CliSessionReseedReceipt, SessionEntry } from "../config/sessions.js";
+
+export function cliMeta(externalId: string, cliSessionId: string | null = "session-1") {
+  return {
+    importedFrom: "claude-cli",
+    externalId,
+    ...(cliSessionId === null ? {} : { cliSessionId }),
+  };
+}
+
+export function answer(
+  timestamp?: number,
+  externalId?: string,
+  cliSessionId: string | null = "session-1",
+) {
+  return {
+    role: "assistant",
+    content: "Repeated answer",
+    ...(timestamp === undefined ? {} : { timestamp }),
+    ...(externalId === undefined ? {} : { __openclaw: cliMeta(externalId, cliSessionId) }),
+  };
+}
+
+export function boundEntry(sessionId: string): SessionEntry {
+  return {
+    sessionId: "openclaw-session",
+    updatedAt: 1,
+    cliSessionBindings: { "claude-cli": { sessionId } },
+  };
+}
+
+export function receipt(
+  prompt: string,
+  localSessionId = "openclaw-session",
+): CliSessionReseedReceipt {
+  return {
+    version: 1,
+    promptHash: hashCliReseedPrompt(prompt),
+    localSessionId,
+    userTurnDisposition: "persisted",
+  };
+}
+
+export function user(content: unknown, timestamp?: number, meta?: Record<string, unknown>) {
+  return {
+    role: "user",
+    content,
+    ...(timestamp === undefined ? {} : { timestamp }),
+    ...(meta ? { __openclaw: meta } : {}),
+  };
+}
+
+export function claudeUser(content: unknown, fields: Record<string, unknown> = {}) {
+  return { type: "user", ...fields, message: { role: "user", content } };
+}
+
 export function buildLegacyReseedPrompt(current = "current"): string {
   return [
     "Continue this conversation using the OpenClaw transcript below as prior session history.",

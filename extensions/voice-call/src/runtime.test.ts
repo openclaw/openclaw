@@ -470,8 +470,19 @@ describe("createVoiceCallRuntime lifecycle", () => {
       throw new Error("expected per-call realtime registration resolver");
     }
     expect(runtime.config.agentId).toBe("operator");
+    expect(() =>
+      resolveCallRegistration({
+        callId: "unowned",
+        sessionKey: "agent:operator:voice:unowned",
+        direction: "outbound",
+        from: "+15550001111",
+        to: "+15550002222",
+      }),
+    ).toThrow("no recorded agent owner");
+    expect(mocks.resolveConfiguredRealtimeVoiceProvider).not.toHaveBeenCalled();
     const defaultRegistration = resolveCallRegistration({
       callId: "call-default",
+      agentId: "operator",
       direction: "outbound",
       from: "+15550001111",
       to: "+15550002222",
@@ -739,6 +750,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-aborted",
+      agentId: "main",
       direction: "inbound",
       from: "+15550001234",
       to: "+15550009999",
@@ -788,6 +800,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     mocks.managerGetCall.mockReturnValue({
       callId: "call-1",
       sessionKey: "voice:call:call-1",
+      agentId: "main",
       direction: "inbound",
       from: "+15550001234",
       to: "+15550009999",
@@ -840,6 +853,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-locked",
+      agentId: "main",
       direction: "inbound",
       from: "+15550001234",
       to: "+15550009999",
@@ -888,6 +902,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-1",
+      agentId: "main",
       direction: "inbound",
       from: "+15550001234",
       to: "+15550009999",
@@ -963,6 +978,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       );
       const call = {
         callId: "call-1",
+        agentId: "main",
         state: "active",
         direction: "inbound",
         from: "+15550001234",
@@ -1038,6 +1054,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-1",
+      agentId: "main",
       direction: "outbound",
       from: "+15550001234",
       to: "+15550009999",

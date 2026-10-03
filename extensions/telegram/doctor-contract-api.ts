@@ -1,6 +1,6 @@
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
-export { normalizeCompatibilityConfig, legacyConfigRules } from "./config-doctor-api.js";
+export * from "./config-doctor-api.js";
 
 export const stateMigrations: PluginDoctorStateMigration[] = [
   {

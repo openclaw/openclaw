@@ -194,6 +194,24 @@ composition, Memory reads, and public SDK Codex history. P5a changes no schema,
 retention, settlement owner, update behavior, or operator configuration, and
 retires no T1 sites before activation.
 
+### Incognito compute and usage (P5b, inactive)
+
+Usage reverse RPC and transcript reconciliation can use a captured actor and
+session generation. Each extraction and bounded publication takes its own FIFO
+turn; compute retains actor lifetime without holding that queue while awaiting
+another worker. SQL, source framing, refresh locks, and projection claims remain
+on the actor. Usage inventory preserves explicit selections and discovery cutoffs.
+
+Caller authority is rechecked before disclosure and at transaction and commit
+grants. Compute scopes own distinct source identities and lock tokens. Revocation
+refuses results while exact cleanup drains accepted work and removes unfinished
+projection chunks; releasing a borrow still joins its cleanup. Actor loss returns
+`INCOGNITO_SESSION_ENDED` without replay or a replacement database.
+
+These routes remain inactive until P7. Production incognito stays host-owned;
+schemas, retention, durability, update behavior, and operator configuration are
+unchanged, and no T1 sites are retired. P5c adds Memory and Codex history adapters.
+
 ### Existing worker flows
 
 Shared-state transaction diagnostics inherit the executing worker command name

@@ -1971,7 +1971,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/commands/doctor-agent-memory-schema.test.ts",
   "src/commands/doctor-auth-canonical-api-key-alias.test.ts",
   "src/commands/doctor-auth-flat-profiles.test.ts",
-  "src/commands/doctor-auth-oauth-sidecar.test.ts",
   "src/commands/doctor-auth-shared-receipt.test.ts",
   "src/commands/doctor-auth-source-owner.test.ts",
   "src/commands/doctor-auth.shared-health.test.ts",

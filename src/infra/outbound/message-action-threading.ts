@@ -1,5 +1,3 @@
-// Message-action threading helpers inherit reply/thread metadata only for
-// same-conversation sends and prepare outbound session mirroring.
 import { readToolStringParam } from "../../agents/tools/common.js";
 import type { OutboundReplyFacts } from "../../channels/message/types.js";
 import type {
@@ -209,7 +207,7 @@ export async function prepareOutboundMirrorRoute(params: {
           threadId: resolvedThreadId,
         })
       : null;
-  if (outboundRoute && !params.dryRun) {
+  if (outboundRoute) {
     params.actionParams["__sessionKey"] = outboundRoute.sessionKey;
   }
   if (params.agentId) {

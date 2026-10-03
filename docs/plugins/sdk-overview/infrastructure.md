@@ -380,15 +380,41 @@ limits and timeout defaults. A shipped timeout profile can be preserved with
 `timeouts: { headers, request, socket }` in milliseconds. These are plugin
 registration contracts, not new operator configuration.
 
-The channel owns effective listener resolution: preserve its shipped default when
-`legacyWebhook` is omitted, use an explicit endpoint object when configured, and
-register no legacy listener when it is `false`. Resolve the same endpoint for
+The channel owns effective listener resolution: register a legacy listener only
+for an explicit `legacyWebhook` endpoint object. Omitted settings and `false`
+select Gateway-only ingress. Resolve the same endpoint for
 runtime routing and Doctor guidance. Plugin-owned Doctor contracts can compose
 `createLegacyWebhookListenerDoctorContract` from
 `openclaw/plugin-sdk/runtime-doctor-migrations` to preserve authored ports and
 inherited bind addresses through the normal backed-up config write. An explicit
 legacy host without a port uses the channel's shipped default port. Canonical
 `false` settings remain authoritative when Doctor removes retired keys.
+For retirement of a historical default, export the helper's static
+`historicalWebhookListener` property from the existing config Doctor module and
+its `config-doctor-api` and `doctor-contract-api` entrypoints. This
+`{ channelId, port, host? }` object reuses the helper's historical defaults.
+The host validates that the channel belongs to the plugin, the port is an integer
+from 1 to 65535, and an explicit host is nonblank. Set the factory option
+`preserveAuthoredActivation: true` only when authored listener settings previously
+implied channel activation. The returned static declaration carries this flag;
+the host preserves activation after prior-operation and completion checks, before
+adding implicit pins. The normalizer must not enable the channel itself. Keep
+`doctorContract.configRepair: true` in the manifest. Return
+`historicalWebhookAccountIds` from the existing `normalizeCompatibilityConfig`
+result, using the plugin's account and transport owners to select eligible
+accounts. An empty array means inspection completed with no eligible accounts;
+an `undefined` array entry selects an accountless channel root. Return `null`
+when the current process cannot decide environment-dependent eligibility. Omit
+the field only when the contract is not implemented. The host owns
+prior-operation detection, pin creation, and completion; the normalizer returns
+eligibility without opening listeners or creating implicit endpoints.
+Automatic pins belong to existing accounts, including `accounts.default`, so
+accounts added later do not inherit them. Doctor backs up the config before
+persisting pins with `meta.migrations.webhookListeners`. The marker records exact
+inserted paths per completed channel, or `true` for a fresh installation.
+Removing a pin while retaining this marker does not recreate it on a later
+Doctor run or update. See [webhook migrations](/gateway/doctor/config-migrations#channel-webhook-listeners)
+for read-only config behavior.
 Return normal listener guidance in `runConfigSequence().infoNotes` so Doctor
 labels it as information. Keep actionable configuration problems in
 `warningNotes`; `changeNotes` describe applied repairs.

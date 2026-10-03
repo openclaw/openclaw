@@ -187,9 +187,6 @@ export function isTransientSqliteError(err: unknown): boolean {
     const messageParts = [candidate.message, candidate.errstr];
     for (const rawMessage of messageParts) {
       const message = normalizeLowercaseStringOrEmpty(rawMessage);
-      if (!message) {
-        continue;
-      }
       if (TRANSIENT_SQLITE_MESSAGE_CODE_RE.test(message)) {
         return true;
       }
@@ -241,9 +238,6 @@ function isTransientFileWatchError(err: unknown): boolean {
 
     // Without an ENOSPC code, only classify explicit watcher resource exhaustion.
     // Generic "file watcher failed" labels can wrap permission/config/runtime failures.
-    if (!message) {
-      continue;
-    }
     if (
       (message.includes("no space left on device") && hasFileWatchSignal(message)) ||
       hasFileWatchExhaustionSignal(message)

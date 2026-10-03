@@ -282,48 +282,30 @@ function resolveDirectSendContext(params: {
   };
 }
 
-function resolveRegistrationDebugSuffix(
-  registration: ApnsRegistration,
-  relayResult?: Pick<ApnsRelayPushResponse, "tokenSuffix">,
-): string {
-  if (registration.transport === "direct") {
-    return registration.token.slice(-8);
-  }
-  return (
-    relayResult?.tokenSuffix ?? registration.tokenDebugSuffix ?? registration.relayHandle.slice(-8)
-  );
-}
-
 function toPushResult(params: {
   registration: ApnsRegistration;
   response: ApnsRequestResponse | ApnsRelayPushResponse;
   tokenSuffix?: string;
 }): ApnsPushResult {
-  const response =
-    "body" in params.response
-      ? {
-          ok: params.response.status === 200,
-          status: params.response.status,
-          apnsId: params.response.apnsId,
-          reason: parseReason(params.response.body),
-          environment: params.registration.environment,
-          tokenSuffix: params.tokenSuffix,
-        }
-      : params.response;
+  const { registration, response } = params;
+  const direct = "body" in response;
   return {
-    ok: response.ok,
+    ok: direct ? response.status === 200 : response.ok,
     status: response.status,
     apnsId: response.apnsId,
-    reason: response.reason,
+    reason: direct ? parseReason(response.body) : response.reason,
     tokenSuffix:
       params.tokenSuffix ??
-      resolveRegistrationDebugSuffix(
-        params.registration,
-        "tokenSuffix" in response ? response : undefined,
-      ),
-    topic: params.registration.topic,
-    environment: response.environment ?? params.registration.environment,
-    transport: params.registration.transport,
+      (registration.transport === "direct"
+        ? registration.token.slice(-8)
+        : ((!direct ? response.tokenSuffix : undefined) ??
+          registration.tokenDebugSuffix ??
+          registration.relayHandle.slice(-8))),
+    topic: registration.topic,
+    environment: direct
+      ? registration.environment
+      : (response.environment ?? registration.environment),
+    transport: registration.transport,
   };
 }
 

@@ -3,9 +3,65 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveRunWorkspaceDir } from "./workspace-run.js";
+import { resolveRootedRunRuntimeWorkspace, resolveRunWorkspaceDir } from "./workspace-run.js";
 
 vi.unmock("./agent-scope-config.js");
+
+describe("rooted runtime workspace selection", () => {
+  const canonical = path.resolve("/tmp/rooted-agent-workspace");
+  const executionRoot = path.resolve("/tmp/rooted-task");
+  const config: OpenClawConfig = {
+    agents: { entries: { main: { workspace: canonical } } },
+  };
+
+  it.each([
+    { bootstrapWorkspaceDir: canonical, expected: canonical },
+    { bootstrapWorkspaceDir: `${canonical}/../rooted-agent-workspace`, expected: canonical },
+    { bootstrapWorkspaceDir: executionRoot, expected: undefined },
+    { bootstrapWorkspaceDir: undefined, expected: undefined },
+    { bootstrapWorkspaceDir: "   ", expected: undefined },
+  ])(
+    "only borrows explicit canonical bootstrap $bootstrapWorkspaceDir",
+    ({ bootstrapWorkspaceDir, expected }) => {
+      expect(
+        resolveRootedRunRuntimeWorkspace({
+          config,
+          agentId: "main",
+          workspaceDir: executionRoot,
+          bootstrapWorkspaceDir,
+        })?.workspaceDir,
+      ).toBe(expected);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps same-workspace reload binding unless execution is confined (%s)",
+    (confined) => {
+      expect(
+        resolveRootedRunRuntimeWorkspace({
+          config,
+          agentId: "main",
+          workspaceDir: canonical,
+          bootstrapWorkspaceDir: canonical,
+          ...(confined ? { requireWorkspaceOnly: true, sessionRoot: canonical } : {}),
+        })?.workspaceDir,
+      ).toBe(confined ? canonical : undefined);
+    },
+  );
+
+  it.each([undefined, {}])(
+    "does not invent canonical ownership without a roster (%j)",
+    (missingConfig) => {
+      expect(
+        resolveRootedRunRuntimeWorkspace({
+          config: missingConfig,
+          workspaceDir: executionRoot,
+          bootstrapWorkspaceDir: canonical,
+        }),
+      ).toBeUndefined();
+    },
+  );
+});
 
 describe("resolveRunWorkspaceDir", () => {
   it("resolves explicit workspace values without fallback", () => {

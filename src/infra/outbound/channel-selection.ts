@@ -1,7 +1,4 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-// Channel selection chooses a deliverable message channel from explicit input,
-// tool context fallback, or configured plugin accounts.
 import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
@@ -71,23 +68,19 @@ function listConfiguredOfficialExternalRepairHints(
 function formatMissingOfficialExternalChannelsMessage(
   hints: readonly OfficialExternalPluginRepairHint[],
 ): string {
-  if (hints.length === 1) {
-    const hint = hints[0];
-    if (!hint) {
-      return "";
-    }
-    return `Configured official external channel ${hint.label} is missing its plugin. ${hint.repairHint}`;
+  const [onlyHint] = hints;
+  if (hints.length === 1 && onlyHint) {
+    return `Configured official external channel ${onlyHint.label} is missing its plugin. ${onlyHint.repairHint}`;
   }
   const labels = hints.map((hint) => hint.label).join(", ");
   const installCommands = hints.map((hint) => hint.installCommand).join("; ");
   return `Configured official external channels ${labels} are missing their plugins. Run: openclaw doctor --fix, or install individually: ${installCommands}.`;
 }
 
-const CHANNEL_SELECTION_ERROR_DEDUPE_LIMIT = 1024;
 // Bound process-lifetime warning state; evicted plugin/account failures may log again.
 const loggedChannelSelectionErrors = createDedupeCache({
   ttlMs: 0,
-  maxSize: CHANNEL_SELECTION_ERROR_DEDUPE_LIMIT,
+  maxSize: 1024,
 });
 
 function logChannelSelectionError(params: {
@@ -245,8 +238,8 @@ export async function resolveMessageChannelSelection(params: {
     params.accountResolution,
   );
   const configured = configuredPlugins.map((plugin) => plugin.id);
-  if (configuredPlugins.length === 1) {
-    const plugin = expectDefined(configuredPlugins[0], "configured plugin at 0");
+  const [plugin] = configuredPlugins;
+  if (configuredPlugins.length === 1 && plugin) {
     return {
       channel: plugin.id,
       plugin,
