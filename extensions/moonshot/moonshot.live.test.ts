@@ -83,7 +83,7 @@ describe("moonshot live auth drift detection", () => {
 });
 
 describeLive("moonshot plugin live", () => {
-  it("runs Kimi web search through the provider tool", async () => {
+  it("runs Kimi web search through the provider tool", async ({ skip }) => {
     const provider = createKimiWebSearchProvider();
     const tool = provider.createTool?.({
       config: {},
@@ -104,8 +104,7 @@ describeLive("moonshot plugin live", () => {
       } catch (error) {
         lastError = error;
         if (isMoonshotAuthDrift(error)) {
-          console.warn("[moonshot:live] skip Kimi web search: auth drift");
-          return;
+          skip("[moonshot:live] Kimi web search: auth drift");
         }
         if (!isTransientKimiSearchError(error) || attempt === 1) {
           throw error;
