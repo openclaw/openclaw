@@ -332,6 +332,43 @@ describe("doctor config persistence", () => {
     },
   );
 
+  it.each([
+    { config: { exposeErrorText: true }, key: "channels.whatsapp.exposeErrorText" },
+    {
+      config: { accounts: { work: { exposeErrorText: false } } },
+      key: "channels.whatsapp.accounts.work.exposeErrorText",
+    },
+  ])(
+    "preserves retired $key and gives an intermediate upgrade during update",
+    async ({ config, key }) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        await withEnvAsync(
+          { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+          async () => {
+            const configPath = await writeOpenClawConfig(home, {
+              channels: { $include: "./channels.json" },
+              gateway: { mode: "local" },
+              plugins: { enabled: false },
+            });
+            const includePath = path.join(path.dirname(configPath), "channels.json");
+            const includeRaw = JSON.stringify({ whatsapp: config });
+            await fs.writeFile(includePath, includeRaw);
+            const rootRaw = await fs.readFile(configPath, "utf8");
+            const backupRaw = JSON.stringify({ gateway: { mode: "local" } });
+            await fs.writeFile(`${configPath}.bak`, backupRaw);
+
+            const preparing = prepareDoctorContext(configPath);
+            await expect(preparing).rejects.toThrow(key);
+            await expect(preparing).rejects.toThrow("Install OpenClaw 2026.9.5");
+            await expect(fs.readFile(configPath, "utf8")).resolves.toBe(rootRaw);
+            await expect(fs.readFile(includePath, "utf8")).resolves.toBe(includeRaw);
+            await expect(fs.readFile(`${configPath}.bak`, "utf8")).resolves.toBe(backupRaw);
+          },
+        );
+      });
+    },
+  );
+
   it("preserves browser references across authorized successive writes and environment rotation", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       await withEnvAsync(
