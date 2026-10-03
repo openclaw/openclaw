@@ -355,6 +355,7 @@
     "!dist/extensions/slack/**",
     "!dist/extensions/slack-huddles/**",
     "!dist/extensions/sms/**",
+    "!dist/extensions/snowflake/**",
     "!dist/extensions/stepfun/**",
     "!dist/extensions/synthetic/**",
     "!dist/extensions/synology-chat/**",

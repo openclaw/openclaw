@@ -2226,6 +2226,7 @@
                       "providers/qianfan",
                       "providers/qwen",
                       "providers/radius",
+                      "providers/snowflake",
                       "providers/stepfun",
                       "providers/synthetic",
                       "providers/telnyx",
