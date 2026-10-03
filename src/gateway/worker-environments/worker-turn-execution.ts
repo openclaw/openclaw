@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { SKILL_RESOURCE_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/skill-resources.js";
 import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { readRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { bindAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
 import { createOpenClawCodingToolsInternal } from "../../agents/agent-tools.js";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
@@ -10,6 +11,7 @@ import {
   loadManifestModelCatalog,
   overlayConfiguredModelCatalog,
 } from "../../agents/model-catalog.js";
+import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import { convertToLlm } from "../../agents/sessions/messages.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
@@ -22,6 +24,7 @@ import {
   prepareActiveNodeContext,
 } from "../../infra/active-node-context.js";
 import { registerAgentRunDelegatedAuthorityClosedHandler } from "../../infra/agent-run-registry.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js";
 import { createWorkerBrowserToolDefinition } from "../../worker/browser-runtime.js";
 import { createWorkerComputerTool } from "../../worker/computer-runtime.js";
@@ -40,7 +43,7 @@ import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js
 import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js";
 import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
 import { createWorkerReplyMedia } from "./worker-reply-media.js";
-import { waitForTurnOperation } from "./worker-turn-admission.js";
+import { releaseClaimIfOwned, waitForTurnOperation } from "./worker-turn-admission.js";
 import {
   WorkerTurnExecutionError,
   type WorkerTurnEnvironmentService,
@@ -56,7 +59,7 @@ import {
   windowInitialMessages,
 } from "./worker-turn-payload.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
-import { persistWorkerTurnUserMessage } from "./worker-turn-user-message.js";
+import { gateWorkerTurnInput, persistWorkerTurnUserMessage } from "./worker-turn-user-message.js";
 import {
   type executeRemoteExecTurn,
   reconcileWorkspaceAfterTurn,
@@ -70,7 +73,19 @@ export async function executeWorkerTurn(
     onTerminal: () => void;
   },
 ) {
-  const { placement, turn } = params;
+  const { placement, turn: input } = params;
+  await using preparedRuntime = await acquireAgentRunPreparedModelRuntime(
+    {
+      config: input.config ?? {},
+      agentId: placement.agentId,
+      agentDir: input.agentDir ?? resolveAgentDir(input.config ?? {}, placement.agentId),
+      workspaceDir: input.workspaceDir,
+    },
+    { pluginGeneration: input.pluginGeneration, abortSignal: input.abortSignal },
+  );
+  params.assertRunCurrent?.();
+  input.abortSignal?.throwIfAborted();
+  const turn = { ...input, config: preparedRuntime.snapshot.config };
   const modelRef = assertSupportedTurn(turn);
   const { environment, bootstrapReceipt } = requireCurrentWorkerTurnEnvironment({
     environments: params.environments,
@@ -104,32 +119,48 @@ export async function executeWorkerTurn(
   turn.onExecutionPhase?.({ phase: "runner_entered", backend: "cloud-worker" });
   const transcriptTarget = resolveWorkerTurnTranscriptTarget(turn);
   const recorder = turn.userTurnTranscriptRecorder;
+  let blocked = false;
   const assertTurnInputCurrent = () => {
     params.assertRunCurrent?.();
     turn.abortSignal?.throwIfAborted();
-    if (recorder?.isBlocked()) {
+    if (recorder?.isBlocked() && !blocked) {
       throw new Error("Cloud worker turn input is blocked");
     }
   };
-  const assertTranscriptCurrent = () => {
-    resolveWorkerTurnTranscriptTarget({ ...transcriptTarget, sessionTarget: transcriptTarget });
-  };
   const assertSourceCurrent = () => {
     assertTurnInputCurrent();
-    assertTranscriptCurrent();
+    resolveWorkerTurnTranscriptTarget({ ...transcriptTarget, sessionTarget: transcriptTarget });
   };
   const assertContextCurrent = () => {
     assertTurnInputCurrent();
     if (!params.placements.validateTurnClaim(params.turnClaim)) {
       throw new Error("Worker turn claim changed during context preparation");
     }
-    assertTranscriptCurrent();
+    resolveWorkerTurnTranscriptTarget({ ...transcriptTarget, sessionTarget: transcriptTarget });
   };
   assertContextCurrent();
   if (recorder?.hasRuntimePersistencePending()) {
     await recorder.waitForRuntimePersistence();
     assertContextCurrent();
   }
+  const blockedResult = await withPluginRuntimeGenerationScope(preparedRuntime.snapshot, () =>
+    gateWorkerTurnInput({
+      turn,
+      transcriptTarget,
+      identity: placement,
+      modelRef,
+      startedAt,
+      assertCurrent: assertContextCurrent,
+      onBlocked: () => {
+        blocked = true;
+      },
+    }),
+  );
+  if (blockedResult) {
+    await releaseClaimIfOwned(params.placements, params.turnClaim);
+    return blockedResult;
+  }
+  assertContextCurrent();
   if (recorder && turn.suppressNextUserMessagePersistence !== true && !recorder.hasPersisted()) {
     const persisted = await recorder.persistApproved({
       cwd: params.workspace.kind === "local" ? params.workspace.path : placement.remoteWorkspaceDir,
@@ -323,7 +354,7 @@ export async function executeWorkerTurn(
       skillWorkshop = createLibrarySkillWorkshopTool({
         ...capability,
         defaultTarget: "personal",
-        invoke: (input) =>
+        invoke: (invocation) =>
           withGatewayToolCallerIdentity(
             {
               agentId: placement.agentId,
@@ -336,7 +367,7 @@ export async function executeWorkerTurn(
               },
               workerTurnClaim: params.turnClaim,
             },
-            () => capability.invoke(input),
+            () => capability.invoke(invocation),
           ),
       });
     }

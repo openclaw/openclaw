@@ -1,9 +1,20 @@
+import { buildEmbeddedRunBlockedResult } from "../../agents/embedded-agent-runner/run/blocked-run-result.js";
+import {
+  buildAgentRunBlockedUserMessage,
+  runBeforeAgentRunGate,
+} from "../../agents/harness/before-agent-run.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
+import { convertToLlm } from "../../agents/sessions/messages.js";
 import { SessionTranscriptMessageCommittedError } from "../../agents/sessions/session-manager-message-error.js";
 import { withSessionManagerWrite } from "../../agents/sessions/session-manager-write-admission.js";
-import type { SessionManager } from "../../agents/sessions/session-manager.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
+import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
+} from "../../plugins/hook-agent-context.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import type { prepareWorkerTurnMedia } from "./worker-turn-media.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
@@ -61,4 +72,92 @@ export async function persistWorkerTurnUserMessage(params: {
     throw error;
   }
   return entryId ?? null;
+}
+
+export async function gateWorkerTurnInput({
+  turn,
+  transcriptTarget,
+  identity,
+  modelRef,
+  startedAt,
+  assertCurrent,
+  onBlocked,
+}: {
+  turn: SessionPlacementTurnParams;
+  transcriptTarget: BoundAgentRunSessionTarget;
+  identity: { agentId: string; sessionId: string; sessionKey: string };
+  modelRef: { provider: string; model: string };
+  startedAt: number;
+  assertCurrent: () => void;
+  onBlocked: () => void;
+}) {
+  const recorder = turn.userTurnTranscriptRecorder;
+  const runner = getGlobalHookRunner();
+  if (!runner?.hasHooks("before_agent_run")) {
+    return undefined;
+  }
+  const history = await SessionManager.openModelContextAsync(transcriptTarget, {
+    admission: recorder?.getAdmissionReceipt(),
+    signal: turn.abortSignal,
+  });
+  assertCurrent();
+  const channel = buildAgentHookContextChannelFields(turn);
+  const block = await runBeforeAgentRunGate(
+    runner,
+    {
+      prompt: turn.prompt,
+      messages: convertToLlm(history.buildSessionContext().messages),
+      channelId: channel.channelId,
+      accountId: turn.agentAccountId,
+      senderId: turn.senderId ?? undefined,
+      senderIsOwner: turn.senderIsOwner,
+    },
+    {
+      agentId: identity.agentId,
+      sessionId: identity.sessionId,
+      sessionKey: identity.sessionKey,
+      workspaceDir: turn.workspaceDir,
+      runId: turn.runId,
+      modelProviderId: modelRef.provider,
+      modelId: modelRef.model,
+      trigger: turn.trigger,
+      ...channel,
+      ...buildAgentHookContextIdentityFields(turn),
+    },
+  );
+  assertCurrent();
+  if (!block) {
+    return undefined;
+  }
+  onBlocked();
+  const message = buildAgentRunBlockedUserMessage(turn.runId, block);
+  await withSessionTranscriptWriteAssertion(transcriptTarget, assertCurrent, async () => {
+    if (recorder) {
+      const persisted = await recorder.persistBlocked(message);
+      assertCurrent();
+      if (persisted) {
+        turn.onUserMessagePersisted?.(persisted.message);
+      }
+    } else {
+      const manager = await SessionManager.openAsync(
+        transcriptTarget,
+        undefined,
+        undefined,
+        turn.abortSignal,
+      );
+      assertCurrent();
+      await withSessionManagerWrite(manager, () => manager.appendMessageAsync(message));
+      assertCurrent();
+      turn.onUserMessagePersisted?.(message);
+    }
+  });
+  assertCurrent();
+  return buildEmbeddedRunBlockedResult({
+    text: block.message,
+    errorKind: "hook_block",
+    errorMessage: block.message,
+    durationMs: Date.now() - startedAt,
+    agentMeta: { sessionId: identity.sessionId, ...modelRef },
+    replayInvalid: false,
+  });
 }
