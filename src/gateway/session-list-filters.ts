@@ -18,10 +18,6 @@ import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { sessionActivityTimestamp } from "../shared/session-activity-timestamp.js";
-import {
-  isCronSessionDisplayKey,
-  isSystemCreatedSessionRow,
-} from "../shared/session-list-visibility.js";
 import type { SessionActivityPulse, SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import type { SynchronousWork } from "../shared/synchronous-work.js";
 import {
@@ -95,18 +91,8 @@ function createSessionCandidateFilter(params: SessionListFilterParams) {
     const storeKey = target.storeKey ?? key;
     if (
       selection.isCronRun ||
-      (opts.excludeCron === true && isCronSessionDisplayKey(key)) ||
-      (opts.excludeSystem === true &&
-        isSystemCreatedSessionRow({
-          key,
-          createdActor: entry.createdActor,
-          createdVia: entry.createdVia,
-          label: entry.label,
-          displayName: entry.displayName,
-          subject: entry.subject,
-          // Same provenance fact sessionClassificationForRow projects to clients.
-          classification: entry.heartbeatIsolatedBaseSessionKey ? "heartbeat" : undefined,
-        })) ||
+      (opts.excludeCron === true && selection.isCron) ||
+      (opts.excludeSystem === true && selection.isSystem) ||
       (opts.excludeSubagents === true && selection.isSubagent) ||
       (!includeGlobal && storeKey === "global") ||
       (!includeUnknown && storeKey === "unknown")
