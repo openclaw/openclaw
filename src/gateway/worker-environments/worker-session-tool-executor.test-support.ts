@@ -427,14 +427,14 @@ async function createWorkerSessionToolTestFixture(
   const ownerExecute = createWorkerSessionToolExecutor(executorParams);
   const toolRuntimes: ReturnType<typeof createWorkerGatewayToolRuntime>[] = [];
   function createToolRuntime(
-    options: Pick<
+    runtimeOptions: Pick<
       Parameters<typeof createWorkerGatewayTools>[0],
       "prepareTools" | "skillWorkshop"
     > & {
       identity?: WorkerConnectionIdentity;
     } = {},
   ) {
-    const workerIdentity = options.identity ?? identity;
+    const workerIdentity = runtimeOptions.identity ?? identity;
     const claim = workerIdentity.turnClaim;
     if (!claim) {
       throw new Error("Expected a claimed worker turn");
@@ -450,7 +450,7 @@ async function createWorkerSessionToolTestFixture(
         policy: prepareCoreToolPolicy({}),
         tools: createWorkerGatewayTools({
           ...executorParams,
-          ...options,
+          ...runtimeOptions,
           identity: workerIdentity,
         }).filter((tool) => placements.isWorkerTurnToolAuthorized(claim, tool.name)),
       }),

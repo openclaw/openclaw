@@ -74,7 +74,7 @@ export function registerWorkerGatewayToolExecutionTests(
           }),
       });
       const surface = await runtime.getSurface(identity);
-      const tool = surface.tools.find((tool) => tool.definition.name === "worker_probe");
+      const tool = surface.tools.find((entry) => entry.definition.name === "worker_probe");
       if (!tool) {
         throw new Error("Expected the admitted generic Gateway tool");
       }
