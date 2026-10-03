@@ -10,10 +10,11 @@ import {
 } from "../../../node-version.mjs";
 import { NODE_RELEASE_VERSION_CASES } from "../../../test/helpers/node-version-cases.js";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
-import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../../shared/worker-bundle-hash.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { bootstrapWorker as bootstrapWorkerCore } from "./bootstrap.js";
+import { fakeRunner, result } from "./bootstrap.test-support.js";
 import { createWorkerBundleProducer, type WorkerInstallationArtifact } from "./bundle.js";
 
 type WorkerBootstrapRequest = Parameters<typeof bootstrapWorkerCore>[0];
@@ -68,41 +69,6 @@ const BUNDLE: WorkerInstallationArtifact = {
 
 function tagged(action: "current" | "install" | "receipt", payload: string): string {
   return `${OUTPUT_TAG}\t${action}\t${payload}\n`;
-}
-
-function result(overrides: Partial<SpawnResult> = {}): SpawnResult {
-  return {
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
-}
-
-function fakeRunner(
-  responses: SpawnResult[],
-  inspectCall?: (
-    argv: string[],
-    options: Parameters<WorkerBootstrapCommandRunner>[1],
-  ) => void | Promise<void>,
-) {
-  const calls: Array<{
-    argv: string[];
-    options: Parameters<WorkerBootstrapCommandRunner>[1];
-  }> = [];
-  const runCommand: WorkerBootstrapCommandRunner = async (argv, options) => {
-    calls.push({ argv, options });
-    await inspectCall?.(argv, options);
-    const response = responses.shift();
-    if (!response) {
-      throw new Error("unexpected bootstrap command");
-    }
-    return response;
-  };
-  return { calls, runCommand };
 }
 
 function commandPort(argv: string[]): number {

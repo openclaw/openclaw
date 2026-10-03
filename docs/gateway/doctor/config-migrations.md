@@ -213,6 +213,27 @@ runs the same migration. Repeating Doctor leaves the normalized row and its IDs
 unchanged. Published SDK and operator input normalization remain available at
 the input boundary.
 
+## Channel account routing during an update
+
+Doctor preserves existing channel account maps and their implicit default route.
+Shared root policy never creates an extra `accounts.default` beside named accounts.
+An empty account map can still receive migrated single-account fields; plugins
+such as WhatsApp keep their supported shared policy at the root.
+
+When a policy-only, unlinked WhatsApp `accounts.default` sits beside named
+accounts, Doctor warns that it may be left over from an earlier promotion or may
+be an intentional account awaiting login. It names the account currently selected
+for unqualified operations and leaves the account map, shared policy, and routing
+unchanged. Doctor cannot infer who created an account from this config shape.
+
+To explicitly select an existing named account while retaining all accounts and
+shared policy, run `openclaw config set channels.whatsapp.defaultAccount '"work"' --strict-json`
+(replace `work` with the desired account ID). If you decide the default account is
+unwanted, first preserve any shared policy inherited from it, then run
+`openclaw channels remove --channel whatsapp --account default --delete`.
+Doctor's warning provides the command for a configured named account. It does not
+perform either action, including during updates or repeated `doctor --fix` runs.
+
 ## Channel ownership during an update
 
 When Doctor migrates a legacy `agents.list` roster without a `default: true` marker

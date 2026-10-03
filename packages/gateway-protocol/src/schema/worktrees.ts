@@ -40,6 +40,7 @@ export const WorktreeRecordSchema = closedObject({
   lastActiveAt: Type.Integer({ minimum: 0 }),
   removedAt: Type.Optional(Type.Integer({ minimum: 0 })),
   runEndCleanup: Type.Optional(WorktreeRunEndCleanupSchema),
+  gcProtection: Type.Optional(NonEmptyString),
 });
 
 export const WorktreesListParamsSchema = closedObject({});
@@ -51,6 +52,9 @@ export const WorktreesCreateParamsSchema = closedObject({
   repoRoot: NonEmptyString,
   name: Type.Optional(WorktreeNameSchema),
   baseRef: Type.Optional(NonEmptyString),
+  profiles: Type.Optional(Type.Array(NonEmptyString)),
+  expectedOwnerId: Type.Optional(NonEmptyString),
+  expectedRepoIdentity: Type.Optional(NonEmptyString),
 });
 
 export const WorktreesRemoveParamsSchema = closedObject({

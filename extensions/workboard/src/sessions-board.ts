@@ -380,7 +380,6 @@ export function createWorkboardSessionsBoardService(
   };
   return {
     id: "workboard-sessions-board",
-    reload: { configPrefixes: ["agents", "plugins"] },
     async start(context) {
       const state = activeState();
       await state.owner?.stop();

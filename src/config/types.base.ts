@@ -64,10 +64,7 @@ export type ChannelStreamingConfig<
 export type ChannelDeliveryStreamingConfig = z.input<typeof ChannelDeliveryStreamingConfigSchema>;
 
 /** Streaming subset used by channels that render visible preview/progress replies. */
-export type ChannelPreviewStreamingConfig = Pick<
-  ChannelStreamingConfig,
-  "mode" | "chunkMode" | "preview" | "progress" | "block"
->;
+export type ChannelPreviewStreamingConfig = SchemaChannelStreamingConfig;
 
 export type MarkdownConfig = NonNullable<z.input<typeof MarkdownConfigSchema>>;
 export type MarkdownTableMode = NonNullable<MarkdownConfig["tables"]>;

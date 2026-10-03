@@ -1,7 +1,4 @@
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
@@ -171,48 +168,6 @@ export function ensureNodeWorkerPreparedWorkspaceSchema(database: DatabaseSync):
   ); // sqlite-allow-raw -- Canonical first-use DDL; workspace rows use Kysely.
 }
 
-function resolveLegacyManagedImageRoot(recordJson: unknown): string | null {
-  if (typeof recordJson !== "string") {
-    return null;
-  }
-  const record = safeParseJsonRecord(recordJson);
-  if (!record || !isRecord(record.original)) {
-    return null;
-  }
-  const mediaRoot = record.original.mediaRoot;
-  if (typeof mediaRoot === "string" && mediaRoot.trim()) {
-    return path.resolve(mediaRoot);
-  }
-  const originalPath = record.original.path;
-  if (typeof originalPath !== "string" || !originalPath.trim()) {
-    return null;
-  }
-  const resolvedOriginalPath = path.resolve(originalPath);
-  return path.dirname(path.dirname(path.dirname(resolvedOriginalPath)));
-}
-
-function backfillLegacyManagedImageRoots(db: DatabaseSync): void {
-  const rows = db
-    .prepare("SELECT attachment_id, record_json FROM managed_outgoing_image_records")
-    .all() as Array<{ attachment_id: string; record_json: unknown }>;
-  const updateRoot = db.prepare(
-    "UPDATE managed_outgoing_image_records SET original_media_root = ? WHERE attachment_id = ?",
-  );
-  const deleteRecord = db.prepare(
-    "DELETE FROM managed_outgoing_image_records WHERE attachment_id = ?",
-  );
-  for (const row of rows) {
-    const mediaRoot = resolveLegacyManagedImageRoot(row.record_json);
-    if (mediaRoot) {
-      updateRoot.run(mediaRoot, row.attachment_id);
-    } else {
-      // This table had no shipped writer. Discard malformed unexpected rows
-      // instead of retaining unusable empty roots or wedging every database open.
-      deleteRecord.run(row.attachment_id);
-    }
-  }
-}
-
 function ensureWorkerSessionToolStateSchema(db: DatabaseSync): void {
   db.exec(
     [
@@ -344,10 +299,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync, scope: "runtime" | 
   // The shipped JSON runtime predeclared this table but never populated it.
   // The transitional default makes ADD COLUMN portable; schema-v2 tables are
   // rebuilt from canonical STRICT SQL immediately afterward, removing it.
-  const addedOriginalMediaRoot = ensureColumn(db, ...columns.originalMediaRoot[0]);
-  if (addedOriginalMediaRoot) {
-    backfillLegacyManagedImageRoots(db);
-  }
+  ensureColumn(db, ...columns.originalMediaRoot[0]);
   ensureColumns(db, columns.beforeTaskAttribution);
   // Keep the released physical layout without repairing retired Task attribution or bindings.
   ensureColumns(db, columns.taskRequester);

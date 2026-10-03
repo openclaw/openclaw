@@ -18,6 +18,7 @@ import {
 import {
   commandFailure,
   isSuccess,
+  matchesCommandFailure,
   runSshScript,
   type WorkerBootstrapCommandRunner,
 } from "./bootstrap-command.js";
@@ -575,20 +576,12 @@ function parsePreflight(
   expected: WorkerAdmissionHandshake,
   expectedUploadFilename: string,
 ): { action: "current"; receipt: WorkerAdmissionHandshake } | { action: "install"; path: string } {
-  if (
-    result.code === NODE_MISSING_EXIT_CODE ||
-    result.stderr.includes(NODE_MISSING_MARKER) ||
-    result.stdout.includes(NODE_MISSING_MARKER)
-  ) {
+  if (matchesCommandFailure(result, NODE_MISSING_EXIT_CODE, NODE_MISSING_MARKER)) {
     throw new Error(
       "Worker bootstrap requires Node.js on the leased host; install Node in the provider setup phase and retry",
     );
   }
-  if (
-    result.code === NODE_UNSUPPORTED_EXIT_CODE ||
-    result.stderr.includes(NODE_UNSUPPORTED_MARKER) ||
-    result.stdout.includes(NODE_UNSUPPORTED_MARKER)
-  ) {
+  if (matchesCommandFailure(result, NODE_UNSUPPORTED_EXIT_CODE, NODE_UNSUPPORTED_MARKER)) {
     throw new Error(
       "Worker bootstrap requires Node 24.16.0+ or 26.1.0+ with WAL-reset-safe SQLite on the leased host; install a supported Node runtime in the provider setup phase and retry",
     );
@@ -716,11 +709,7 @@ export async function bootstrapWorker(
       }),
     );
     assertCurrent();
-    if (
-      install.code === NPM_MISSING_EXIT_CODE ||
-      install.stderr.includes(NPM_MISSING_MARKER) ||
-      install.stdout.includes(NPM_MISSING_MARKER)
-    ) {
+    if (matchesCommandFailure(install, NPM_MISSING_EXIT_CODE, NPM_MISSING_MARKER)) {
       throw new Error(
         "Worker npm bootstrap requires npm on the leased host; use bundle install or provide npm in the provider setup phase",
       );

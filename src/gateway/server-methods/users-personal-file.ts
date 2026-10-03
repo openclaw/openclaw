@@ -116,10 +116,12 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
       );
     }
     const cfg = context.getRuntimeConfig();
+    const profile = readUserProfileIdentity(canonicalId);
     const policy = resolveOperatorRolePolicyForAssignment(
       canonicalId,
-      readUserProfileIdentity(canonicalId)?.role ?? null,
+      profile?.role ?? null,
       cfg,
+      profile?.githubLogin ?? null,
     );
     if (
       ![

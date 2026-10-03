@@ -174,6 +174,26 @@ These adapters remain inactive until P7. Production incognito still uses the
 host owner; no flag selects competing writers. This stage changes no schema,
 retention, durability, session deadline, or update behavior and retires no T1 sites.
 
+### Incognito history (P5a, inactive)
+
+History pages, deltas, selected entries, title/preview, branches, context, search,
+matching, receipts, and hydration can read the actor's retained connection through
+its existing FIFO. Shared selectors also serve durable history; no second SQLite
+reader or database copy is created. Read grants use current actor facts, and
+disclosure rechecks live caller authority after waits. RPC and HTTP composition
+use the existing history kernels with prepared display facts and recheck the
+captured session claim before returning a page.
+
+Hydration acquires one synchronous snapshot and returns detached events through
+the broker's existing result framing. It preserves incognito's full-materialization
+behavior; it does not adopt durable hydration's lower-memory streaming contract.
+Actor loss returns `INCOGNITO_SESSION_ENDED` rather than empty history.
+
+Production incognito remains host-owned until P7. P5b adds usage/projection
+composition, Memory reads, and public SDK Codex history. P5a changes no schema,
+retention, settlement owner, update behavior, or operator configuration, and
+retires no T1 sites before activation.
+
 ### Existing worker flows
 
 Shared-state transaction diagnostics inherit the executing worker command name

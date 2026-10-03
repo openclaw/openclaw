@@ -6,8 +6,8 @@ import {
   toStringifiedError,
 } from "@openclaw/normalization-core/error-coercion";
 import {
-  parseStrictPositiveInteger,
   resolveIntegerOption,
+  resolvePositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
@@ -38,6 +38,7 @@ import { resolveGatewayLocalPortOverride } from "./gateway-port-option.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 import { formatDocsHelp } from "./help-format.js";
+import { parseLogsPositiveInt } from "./logs-cli.options.js";
 
 type LogsTailPayload = {
   file?: string;
@@ -99,17 +100,6 @@ const JOURNAL_FALLBACK_NOTICE =
 const JOURNAL_CURSOR_PREFIX = "-- cursor: ";
 const JOURNAL_MAX_LIMIT = 5000;
 const JOURNAL_MAX_BYTES = 1_000_000;
-
-function parsePositiveInt(value: string | undefined, fallback: number, flag: string): number {
-  if (value === undefined) {
-    return fallback;
-  }
-  const parsed = parseStrictPositiveInteger(value);
-  if (parsed === undefined) {
-    throw new Error(`${flag} must be a positive integer.`);
-  }
-  return parsed;
-}
 
 function normalizeLogTailPayloadSource(payload: LogsTailPayload): LogsTailPayload {
   if (payload.sourceKind || !payload.file) {
@@ -535,9 +525,12 @@ export function registerLogsCli(program: Command) {
       }
     };
     const { logLine, errorLine, emitJsonLine } = createLogWriters(abortGatewayRecoveryProbe);
-    const interval = parsePositiveInt(opts.interval, 1000, "--interval");
-    const limit = parsePositiveInt(opts.limit, 200, "--limit");
-    const maxBytes = parsePositiveInt(opts.maxBytes, 250_000, "--max-bytes");
+    const interval = resolvePositiveTimerTimeoutMs(
+      parseLogsPositiveInt(opts.interval, 1000, "--interval"),
+      1000,
+    );
+    const limit = parseLogsPositiveInt(opts.limit, 200, "--limit");
+    const maxBytes = parseLogsPositiveInt(opts.maxBytes, 250_000, "--max-bytes");
     let gatewayCursor: number | undefined;
     let journalCursor: string | undefined;
     let journalSince: string | undefined;

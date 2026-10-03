@@ -16,7 +16,6 @@ import type { AgentDatabaseAdmissionRefusal } from "../state/agent-database-admi
 import type { DoctorUpdateBudget, DoctorUpdateWork } from "./doctor-update-budget.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import type { HealthCheckContext } from "./health-checks.js";
-import type { FlowContribution } from "./types.js";
 
 type DoctorConfigResult = {
   cfg: OpenClawConfig;
@@ -104,9 +103,9 @@ export type DoctorHealthCheckContext = HealthCheckContext & {
   readonly deferInspectionDisposal?: (dispose: () => Promise<void>) => void;
 };
 
-export type DoctorHealthContribution = FlowContribution & {
-  kind: "core";
-  surface: "health";
+export type DoctorHealthContribution = {
+  id: string;
+  label: string;
   required?: true;
   /** Diagnostics with no update migration or readiness dependency stay in standalone Doctor. */
   updateWork?: DoctorUpdateWork;
@@ -117,6 +116,4 @@ export type DoctorHealthContribution = FlowContribution & {
 
 export type DoctorContributionHealthCheck = Omit<DoctorHealthCheck, "id" | "kind" | "source"> & {
   readonly id?: string;
-  readonly kind?: "core";
-  readonly source?: string;
 };

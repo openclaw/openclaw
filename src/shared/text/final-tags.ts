@@ -1,3 +1,4 @@
+import { skipWhitespace } from "../../../packages/tool-call-repair/src/grammar.js";
 import { findCodeRegions } from "./code-regions.js";
 
 type FinalTagMatch = {
@@ -14,66 +15,14 @@ function isWhitespace(char: string): boolean {
 }
 
 function parseAttributeList(text: string): boolean {
-  let index = 0;
+  const attribute = /[^\s=/"'<>]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'<>]+))?/y;
+  let index = skipWhitespace(text, 0);
   while (index < text.length) {
-    while (index < text.length && isWhitespace(text[index] ?? "")) {
-      index += 1;
-    }
-    if (index >= text.length) {
-      return true;
-    }
-
-    const nameStart = index;
-    while (index < text.length) {
-      const char = text[index] ?? "";
-      if (isWhitespace(char) || char === "=") {
-        break;
-      }
-      if (char === "/" || char === '"' || char === "'" || char === "<" || char === ">") {
-        return false;
-      }
-      index += 1;
-    }
-    if (index === nameStart) {
+    attribute.lastIndex = index;
+    if (!attribute.test(text)) {
       return false;
     }
-
-    while (index < text.length && isWhitespace(text[index] ?? "")) {
-      index += 1;
-    }
-    if (text[index] !== "=") {
-      continue;
-    }
-    index += 1;
-    while (index < text.length && isWhitespace(text[index] ?? "")) {
-      index += 1;
-    }
-    if (index >= text.length) {
-      return false;
-    }
-
-    const quote = text[index];
-    if (quote === '"' || quote === "'") {
-      index += 1;
-      const end = text.indexOf(quote, index);
-      if (end === -1) {
-        return false;
-      }
-      index = end + 1;
-      continue;
-    }
-
-    const valueStart = index;
-    while (index < text.length && !isWhitespace(text[index] ?? "")) {
-      const char = text[index] ?? "";
-      if (char === '"' || char === "'" || char === "<" || char === ">") {
-        return false;
-      }
-      index += 1;
-    }
-    if (index === valueStart) {
-      return false;
-    }
+    index = skipWhitespace(text, attribute.lastIndex);
   }
   return true;
 }

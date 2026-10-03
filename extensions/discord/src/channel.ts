@@ -669,6 +669,16 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
     security: discordSecurityAdapter,
     threading: {
       matchesToolContextTarget: matchesDiscordToolContextTarget,
+      // A Discord thread is addressed by its own channel id, so only a send to
+      // that thread's channel carries the current thread. Parent and sibling
+      // channels stay unthreaded; this never redirects a send into the thread.
+      resolveAutoThreadId: ({ to, toolContext }) => {
+        const threadId = normalizeOptionalString(toolContext?.currentThreadTs);
+        if (!threadId) {
+          return undefined;
+        }
+        return normalizeDiscordMessagingTarget(to) === `channel:${threadId}` ? threadId : undefined;
+      },
       scopedAccountReplyToMode: {
         resolveAccount: (cfg, accountId) => resolveDiscordAccount({ cfg, accountId }),
         resolveReplyToMode: (account) => account.config.replyToMode,

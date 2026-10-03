@@ -1664,10 +1664,6 @@ export async function planLegacyStateMigrationsReadOnly(params: {
     configPath: path.resolve(params.snapshot.configPath),
     stateDir: path.resolve(params.snapshot.stateDir),
   };
-  assertNoRetiredStateFiles(
-    "JSON delivery queues",
-    listRetiredDeliveryQueueFiles(requestedSnapshot.stateDir),
-  );
   const callerEnv = createLegacyStateMigrationCallerEnv({
     env: params.env,
     snapshot: requestedSnapshot,
@@ -1720,6 +1716,13 @@ export async function planLegacyStateMigrationsReadOnly(params: {
       },
     });
   }
+  // The identity owner refuses unusable snapshot paths first; only an admitted
+  // state directory is scanned for retired files, so a non-directory path keeps
+  // its `snapshot-identity-unavailable` refusal instead of an inspection error.
+  assertNoRetiredStateFiles(
+    "JSON delivery queues",
+    listRetiredDeliveryQueueFiles(requestedSnapshot.stateDir),
+  );
   if (identityBefore.configDigest !== configBefore.rootDigest) {
     const message = "Copied config changed while migration planning was starting.";
     return createLegacyStateMigrationPlan({

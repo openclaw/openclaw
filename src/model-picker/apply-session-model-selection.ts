@@ -110,45 +110,6 @@ export type ApplySessionModelSelectionResult =
     }
   | { status: "conflict"; message: string };
 
-type AppliedRuntimeDirective = Exclude<
-  Parameters<typeof applyModelRuntimeDirective>[1],
-  { kind: "invalid" }
->;
-
-type ApplySessionModelSelectionToEntryResult = {
-  changed: boolean;
-  runtimeChange?: { kind: "clear" } | { kind: "set"; runtime: string };
-};
-
-/** Applies the model transaction field family to one caller-owned snapshot. */
-function applySessionModelSelectionToEntry(params: {
-  cfg: OpenClawConfig;
-  agentDir: string;
-  entry: SessionEntry;
-  currentProvider: string;
-  request: SessionModelSelectionRequest;
-  runtime: AppliedRuntimeDirective;
-  markLiveSwitchPending?: boolean;
-}): ApplySessionModelSelectionToEntryResult {
-  const modelChange = applyModelOverrideWithAuthProfileCompatibility({
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    entry: params.entry,
-    currentProvider: params.currentProvider,
-    selection: params.request,
-    explicitDefaultSelection: params.request.isDefault,
-    profileOverride: params.request.profileOverride,
-    markLiveSwitchPending: params.markLiveSwitchPending,
-  });
-  const runtimeChange = applyModelRuntimeDirective(params.entry, params.runtime);
-  return {
-    changed: modelChange.updated || runtimeChange.updated,
-    ...(params.runtime.kind === "clear" || params.runtime.kind === "set"
-      ? { runtimeChange: params.runtime }
-      : {}),
-  };
-}
-
 function formatModelSwitchEvent(provider: string, model: string, alias?: string): string {
   const label = `${provider}/${model}`;
   return alias ? `Model switched to ${alias} (${label}).` : `Model switched to ${label}.`;
@@ -313,15 +274,18 @@ export async function applySessionModelSelectionInternal(
   const thinkingCatalog = prepared.catalog;
   const selectedCatalogEntry = findSelectedCatalogEntry({ catalog: thinkingCatalog, ...request });
   const nextEntry = { ...startingEntry };
-  const applied = applySessionModelSelectionToEntry({
+  const modelChange = applyModelOverrideWithAuthProfileCompatibility({
     cfg: params.cfg,
     agentDir: resolveAgentDir(params.cfg, params.agentId),
     entry: nextEntry,
     currentProvider: params.currentProvider,
-    request,
-    runtime,
+    selection: request,
+    explicitDefaultSelection: request.isDefault,
+    profileOverride: request.profileOverride,
     markLiveSwitchPending: params.markLiveSwitchPending,
   });
+  const runtimeChange = applyModelRuntimeDirective(nextEntry, runtime);
+  const selectionChanged = modelChange.updated || runtimeChange.updated;
   const thinkingRuntime = resolveEffectiveAgentRuntime({
     cfg: params.cfg,
     provider: request.provider,
@@ -385,7 +349,7 @@ export async function applySessionModelSelectionInternal(
       initialEntry,
       entry: nextEntry,
       allowCreate: params.allowCreate,
-      reassertLiveModelSwitchPending: applied.changed && nextEntry.liveModelSwitchPending === true,
+      reassertLiveModelSwitchPending: selectionChanged && nextEntry.liveModelSwitchPending === true,
       requireModelSelectionUnlocked: true,
       touchedFields: SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
       validateCommit,
@@ -407,7 +371,7 @@ export async function applySessionModelSelectionInternal(
         next: nextEntry,
         current: persistence.entry,
         reassertLiveModelSwitchPending:
-          applied.changed && nextEntry.liveModelSwitchPending === true,
+          selectionChanged && nextEntry.liveModelSwitchPending === true,
       })
     ) {
       return {
@@ -440,7 +404,7 @@ export async function applySessionModelSelectionInternal(
   const provider = request.provider;
   const model = request.model;
   const effectiveModelRef = `${provider}/${model}`;
-  const changed = applied.changed || thinkingRemap !== undefined;
+  const changed = selectionChanged || thinkingRemap !== undefined;
   operatorScope?.assertCurrent();
   assertOperatorModelAllowed(operatorAuthority, request);
   const configuredDefaultUpdate =
@@ -510,7 +474,7 @@ export async function applySessionModelSelectionInternal(
       modelContextTokens: selectedCatalogEntry?.contextTokens,
     }),
     ...(configuredDefaultUpdate ? { configuredDefaultUpdate } : {}),
-    ...(applied.runtimeChange ? { runtimeChange: applied.runtimeChange } : {}),
+    ...(runtime.kind === "clear" || runtime.kind === "set" ? { runtimeChange: runtime } : {}),
     ...(thinkingRemap ? { thinkingRemap } : {}),
   };
 }

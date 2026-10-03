@@ -21,6 +21,7 @@ import type { ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
 import { resolveRecordedProjectRoot } from "../../projects/project-registry.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { captureLocalStateMutationGuard } from "./local-state-owner.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
 
@@ -80,25 +81,59 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         invalidParams(respond);
         return;
       }
-      const repoRoot = await resolveAuthorizedRepoRoot(params.repoRoot, opts);
-      if (!repoRoot) {
+      if (params.expectedRepoIdentity && !params.expectedOwnerId) {
+        invalidParams(respond);
         return;
       }
       const scopes = Array.isArray(opts.client?.connect.scopes) ? opts.client.connect.scopes : [];
-      respond(
-        true,
-        publicWorktreeRecord(
-          await service.create({
-            repoRoot,
-            name: params.name,
-            baseRef: params.baseRef,
-            ownerKind: "manual",
-            // Repository hooks and .openclaw/worktree-setup.sh execute repo code.
-            runSetupScript: scopes.includes(ADMIN_SCOPE),
+      if (params.expectedOwnerId && !scopes.includes(ADMIN_SCOPE)) {
+        respond(
+          false,
+          undefined,
+          missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
+        );
+        return;
+      }
+      let commitGuard: (() => void) | undefined;
+      let repoRoot: string | undefined;
+      try {
+        if (params.expectedOwnerId) {
+          commitGuard = captureLocalStateMutationGuard(
+            params.expectedOwnerId,
+            opts,
+            params.expectedRepoIdentity
+              ? { path: params.repoRoot, identity: params.expectedRepoIdentity }
+              : undefined,
+          );
+        }
+        repoRoot = await resolveAuthorizedRepoRoot(params.repoRoot, opts);
+        if (!repoRoot) {
+          return;
+        }
+        commitGuard?.();
+      } catch (error) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, String(error), {
+            details: { reason: "STATE_OWNER_CHANGED", mutationAccepted: false },
+            retryable: false,
           }),
-        ),
-        undefined,
-      );
+        );
+        return;
+      }
+      const record = await service.create({
+        repoRoot,
+        name: params.name,
+        baseRef: params.baseRef,
+        ...(params.profiles?.length ? { profiles: params.profiles } : {}),
+        ...(commitGuard ? { commitGuard, signal: opts.signal } : {}),
+        ownerKind: "manual",
+        // Repository hooks and .openclaw/worktree-setup.sh execute repo code.
+        runSetupScript: scopes.includes(ADMIN_SCOPE),
+      });
+      commitGuard?.();
+      respond(true, params.expectedOwnerId ? record : publicWorktreeRecord(record), undefined);
     },
     "worktrees.remove": async ({ params, respond }) => {
       if (!validateWorktreesRemoveParams(params)) {

@@ -738,7 +738,7 @@ describe("doctor config flow", () => {
     expect(channel?.accounts).toEqual({ work: { enabled: true } });
   });
 
-  it("promotes covered legacy keys when an absent plugin has no declarations", async () => {
+  it("seeds an empty account map for covered legacy keys without plugin declarations", async () => {
     const result = await runConfig({
       repair: true,
       config: {
@@ -746,7 +746,7 @@ describe("doctor config flow", () => {
           "legacy-demo": {
             dmPolicy: "allowlist",
             appToken: "legacy-app-token",
-            accounts: { work: { enabled: true } },
+            accounts: {},
           },
         },
       },
@@ -755,11 +755,12 @@ describe("doctor config flow", () => {
     const channel = result.cfg.channels?.["legacy-demo"];
     expect(channel?.dmPolicy).toBeUndefined();
     expect(channel?.appToken).toBeUndefined();
-    expect(channel?.accounts?.default).toEqual({
-      dmPolicy: "allowlist",
-      appToken: "legacy-app-token",
+    expect(channel?.accounts).toEqual({
+      default: {
+        dmPolicy: "allowlist",
+        appToken: "legacy-app-token",
+      },
     });
-    expect(channel?.accounts?.work).toEqual({ enabled: true, dmPolicy: "allowlist" });
   });
 
   it('repairs open dmPolicy allowFrom variants with ["*"] in one pass', async () => {

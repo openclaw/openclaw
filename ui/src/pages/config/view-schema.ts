@@ -5,24 +5,6 @@ import { analyzeConfigSchema, type ConfigSchemaAnalysis } from "../../components
 import { t } from "../../i18n/index.ts";
 import type { ConfigViewState } from "./view-types.ts";
 
-function scopeSchemaSections(
-  schema: JsonSchema | null,
-  params: { include?: ReadonlySet<string> | null; exclude?: ReadonlySet<string> | null },
-): JsonSchema | null {
-  if (!schema || schemaType(schema) !== "object" || !schema.properties) {
-    return schema;
-  }
-  const include = params.include;
-  const exclude = params.exclude;
-  const nextProps: Record<string, JsonSchema> = {};
-  for (const [key, property] of Object.entries(schema.properties)) {
-    if (property && (!include?.size || include.has(key)) && !exclude?.has(key)) {
-      nextProps[key] = property;
-    }
-  }
-  return { ...schema, properties: nextProps };
-}
-
 export function asConfigSchema(value: unknown): JsonSchema | null {
   if (!isRecord(value)) {
     return null;
@@ -30,20 +12,14 @@ export function asConfigSchema(value: unknown): JsonSchema | null {
   return value as JsonSchema;
 }
 
-function configSectionKey(sections?: readonly string[]): string {
-  return sections?.length ? sections.join("\u001f") : "";
-}
-
 export function getConfigSchemaAnalysis(
   viewState: ConfigViewState,
   schema: JsonSchema | null,
-  includeSections?: readonly string[],
-  excludeSections?: readonly string[],
   include?: ReadonlySet<string> | null,
   exclude?: ReadonlySet<string> | null,
 ): ConfigSchemaAnalysis {
-  const includeKey = configSectionKey(includeSections);
-  const excludeKey = configSectionKey(excludeSections);
+  const includeKey = include ? [...include].join("\u001f") : "";
+  const excludeKey = exclude ? [...exclude].join("\u001f") : "";
   const cached = viewState.schemaAnalysisCache;
   if (
     cached &&
@@ -53,7 +29,16 @@ export function getConfigSchemaAnalysis(
   ) {
     return cached.analysis;
   }
-  const scopedSchema = scopeSchemaSections(schema, { include, exclude });
+  let scopedSchema = schema;
+  if (schema && schemaType(schema) === "object" && schema.properties) {
+    const properties: Record<string, JsonSchema> = {};
+    for (const [key, property] of Object.entries(schema.properties)) {
+      if (property && (!include?.size || include.has(key)) && !exclude?.has(key)) {
+        properties[key] = property;
+      }
+    }
+    scopedSchema = { ...schema, properties };
+  }
   const analysis = analyzeConfigSchema(scopedSchema);
   viewState.schemaAnalysisCache = { schema, includeKey, excludeKey, analysis };
   return analysis;

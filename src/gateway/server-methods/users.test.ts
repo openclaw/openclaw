@@ -209,7 +209,7 @@ describe("users gateway methods", () => {
     listProfiles.mockResolvedValue([{ id: "profile-1" }]);
 
     expect(await runUsersHandler("users.list", {})).toHaveBeenCalledWith(true, {
-      profiles: [{ id: "profile-1" }],
+      profiles: [{ id: "profile-1", roleSource: "default" }],
     });
   });
 

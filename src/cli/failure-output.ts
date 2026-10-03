@@ -100,6 +100,7 @@ const EXPECTED_CLI_ERROR_NAMES = new Set([
   "AgentSelectionRequiredError",
   "ConfigReadOnlyError",
   "NixModeConfigMutationError",
+  "LocalStateOwnerError",
 ]);
 
 export function isExpectedCliError(error: unknown): error is Error {

@@ -19,6 +19,7 @@ import type {
   IncognitoSessionRead,
   IncognitoSessionOperations,
 } from "./session-incognito-contract.js";
+import type { IncognitoHistoryOperations } from "./session-incognito-history-contract.js";
 import {
   incognitoLifecycleKeys,
   isIncognitoLifecycleCommand,
@@ -245,6 +246,16 @@ export function createIncognitoSessionFacts(
                 throw outcome.error;
               }
               if (!changing) {
+                // Read results carry current worker facts, never authority captured before a wait.
+                withGrant(() => {
+                  authority.assertCurrent();
+                  assertActorCurrent();
+                  for (const facts of outcome.value.facts) {
+                    authorizeSessionFacts(authority, "commit", facts);
+                  }
+                  authority.assertCurrent();
+                  assertActorCurrent();
+                });
                 outcome.value.facts.forEach(install);
               }
               for (const key of targets) {
@@ -268,18 +279,23 @@ export function createIncognitoSessionFacts(
                 assertActorCurrent();
                 signal?.throwIfAborted();
                 if (
+                  request.stage === "open" ||
                   !isRecord(request.facts) ||
                   !isDeepStrictEqual(request.facts.identity, identity)
                 ) {
                   throw new Error("Incognito session operation belongs to another actor");
                 }
-                if (request.stage !== "prepare") {
+                if (
+                  request.stage !== "prepare" ||
+                  (!changing && request.facts.sessions !== undefined)
+                ) {
                   if (
-                    !changing ||
-                    !(
-                      (phase === "prepare" && request.stage === "transaction") ||
-                      (phase === "transaction" && request.stage === "commit")
-                    )
+                    changing
+                      ? !(
+                          (phase === "prepare" && request.stage === "transaction") ||
+                          (phase === "transaction" && request.stage === "commit")
+                        )
+                      : request.stage !== "prepare"
                   ) {
                     throw new Error("Incognito session authority requested out of order");
                   }
@@ -313,10 +329,16 @@ export function createIncognitoSessionFacts(
                   }
                   for (const entry of facts) {
                     targets.add(entry.sessionKey);
-                    pending.add(entry.sessionKey);
+                    if (changing) {
+                      pending.add(entry.sessionKey);
+                    }
                   }
                   for (const entry of facts) {
-                    authorizeSessionFacts(authority, request.stage, entry);
+                    authorizeSessionFacts(
+                      authority,
+                      request.stage === "prepare" ? "transaction" : request.stage,
+                      entry,
+                    );
                   }
                   if (request.stage === "commit") {
                     postimage = facts;
@@ -379,6 +401,12 @@ export function createIncognitoSessionFacts(
             (result) => result.value,
             signal,
           ),
+        history: <Key extends keyof IncognitoHistoryOperations>(
+          authority: IncognitoSessionAuthority,
+          command: { type: Key; input: IncognitoHistoryOperations[Key]["input"] },
+          signal?: AbortSignal,
+        ): Promise<IncognitoHistoryOperations[Key]["output"]> =>
+          perform(authority, command, false, (result) => result.value, signal),
         transcript: <Key extends keyof IncognitoTranscriptOperations>(
           authority: IncognitoSessionAuthority,
           command: { type: Key; input: IncognitoTranscriptOperations[Key]["input"] },

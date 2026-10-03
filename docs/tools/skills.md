@@ -367,6 +367,12 @@ publish and sync.
     `openclaw skills update` tracks ClawHub installs only — reinstall Git or
     local sources to refresh them.
 
+    ClawHub tracking uses `.clawhub/lock.json` in the workspace and
+    `.clawhub/origin.json` in each installed skill. The pre-July 2026
+    `.clawdhub` directory is no longer read. For older installs, rename those
+    metadata directories to `.clawhub` before updating or verifying skills;
+    preserve and reconcile any existing `.clawhub` metadata instead of overwriting it.
+
   </Accordion>
   <Accordion title="Verification and security scanning">
     `openclaw skills verify @owner/<slug>` asks ClawHub for the skill's
