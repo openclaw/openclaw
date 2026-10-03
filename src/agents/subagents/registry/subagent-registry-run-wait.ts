@@ -1,3 +1,4 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -71,10 +72,7 @@ function resolveCompletionAfterHardRunDeadline(params: {
   if (deadlineMs === undefined) {
     return undefined;
   }
-  const observedEndedAt =
-    typeof params.observedEndedAt === "number" && Number.isFinite(params.observedEndedAt)
-      ? params.observedEndedAt
-      : params.now;
+  const observedEndedAt = asFiniteNumber(params.observedEndedAt) ?? params.now;
   return observedEndedAt > deadlineMs ? deadlineMs : undefined;
 }
 
@@ -189,8 +187,14 @@ export type SubagentManagerOptions = {
   completeSubagentRun(args: SubagentCompletionRequest): Promise<void>;
 };
 
-export class SubagentWaitManager {
+export abstract class SubagentWaitManager {
   constructor(protected readonly options: SubagentManagerOptions) {}
+
+  protected abstract readonly adoptPausedSubagentRunIntoSuccessor: (params: {
+    childSessionKey: string;
+    childAgentId?: string;
+    assertCurrent?: () => void;
+  }) => Promise<boolean>;
 
   protected currentRunOwnsSession(entry: SubagentRunRecord): boolean {
     const current = this.options.runs.get(entry.runId);
@@ -337,6 +341,14 @@ export class SubagentWaitManager {
           if (paused?.pauseReason === "sessions_yield") {
             this.options.clearPendingLifecycleError(runId);
             this.options.clearPendingLifecycleTimeout(runId);
+            if (
+              await this.adoptPausedSubagentRunIntoSuccessor({
+                childSessionKey: paused.childSessionKey,
+                childAgentId: paused.childAgentId,
+              })
+            ) {
+              return;
+            }
             if (paused.requesterSettleWake?.pauseNotice) {
               this.options.resumedRuns.delete(getSubagentRunRuntimeKey(paused));
               this.options.resumeSubagentRun(runId);
@@ -384,13 +396,12 @@ export class SubagentWaitManager {
         return;
       }
       const observedStartedAt =
-        typeof wait.startedAt === "number" && Number.isFinite(wait.startedAt)
-          ? wait.startedAt
-          : await this.options.resolveSubagentSessionStartedAt({
-              childSessionKey: entry.childSessionKey,
-              notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
-              assertCurrent,
-            });
+        asFiniteNumber(wait.startedAt) ??
+        (await this.options.resolveSubagentSessionStartedAt({
+          childSessionKey: entry.childSessionKey,
+          notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
+          assertCurrent,
+        }));
       entry = currentEntry();
       const completeAsRunTimeout = (endedAt?: number, startedAt?: number) =>
         complete({

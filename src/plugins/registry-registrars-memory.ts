@@ -7,25 +7,18 @@ import type { OpenClawPluginApi } from "./types.js";
 export function createMemoryRegistrars(state: PluginRegistryState) {
   const { registry, reportRegistrationError, reportRegistrationWarning } = state;
 
-  const requireMemorySlot = (record: PluginRecord, surface: string): boolean => {
-    if (!hasKind(record.kind, "memory")) {
-      throw new Error(`only memory plugins can register a memory ${surface}`);
-    }
-    if (Array.isArray(record.kind) && record.kind.length > 1 && !record.memorySlotSelected) {
-      reportRegistrationWarning(
-        record,
-        `dual-kind plugin not selected for memory slot; skipping memory ${surface} registration`,
-      );
-      return false;
-    }
-    return true;
-  };
-
   const registerMemoryCapability = (
     record: PluginRecord,
     capability: Parameters<OpenClawPluginApi["registerMemoryCapability"]>[0],
   ) => {
-    if (!requireMemorySlot(record, "capability")) {
+    if (!hasKind(record.kind, "memory")) {
+      throw new Error("only memory plugins can register a memory capability");
+    }
+    if (Array.isArray(record.kind) && record.kind.length > 1 && !record.memorySlotSelected) {
+      reportRegistrationWarning(
+        record,
+        "dual-kind plugin not selected for memory slot; skipping memory capability registration",
+      );
       return;
     }
     // Dreaming keeps an unselected sidecar active for consolidation. Strip its

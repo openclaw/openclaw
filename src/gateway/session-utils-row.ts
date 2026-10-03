@@ -37,7 +37,6 @@ import {
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { deriveSessionUnread } from "../shared/session-unread.js";
-import { runSynchronousWork } from "../shared/synchronous-work.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import { resolveActiveFallbackState } from "../status/fallback-notice-state.js";
 import { readSessionFallbackModel } from "../status/session-fallback-model.js";
@@ -65,7 +64,7 @@ import {
   deriveSessionTitle,
   prepareSessionTitleRead,
   resolveEstimatedSessionCostUsd,
-  buildStoreChildSessionLinksWork,
+  readStoreChildSessionLinks,
   type SessionChildLink,
   resolveSessionChildOwners,
 } from "./session-utils-core.js";
@@ -100,8 +99,7 @@ export function readSessionRowInputs(params: {
   now?: number;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
-  transcriptUsageMaxBytes?: number;
-  storeChildSessionLinksByKey?: Map<string, SessionChildLink[]>;
+  childLinks?: SessionChildLink[];
   excludedChildKeys?: ReadonlySet<string>;
   rowContext?: SessionListRowContext;
   configuredAgentIds?: ReadonlySet<string>;
@@ -143,7 +141,6 @@ export function readSessionRowInputs(params: {
             ...(rowContext.subagentRunsByChildSessionKey.get(key) ?? []).map((run) => run.model),
           ],
           allowPluginNormalization: !lightweight,
-          maxTranscriptBytes: params.transcriptUsageMaxBytes,
           rowContext,
           agentId,
           storeAgentId: params.storeAgentId,
@@ -263,16 +260,13 @@ export function readSessionRowInputs(params: {
       }),
       pluginExtensions,
       includeSwarmSummary: params.rowContext !== undefined,
-      childLinks: (
-        params.storeChildSessionLinksByKey ??
-        runSynchronousWork(
-          buildStoreChildSessionLinksWork({
-            store,
-            keys: [key],
-            subagentRunsByChildSessionKey: rowContext.subagentRunsByChildSessionKey,
-          }),
-        )
-      ).get(key),
+      childLinks:
+        params.childLinks ??
+        readStoreChildSessionLinks({
+          store,
+          key,
+          subagentRunsByChildSessionKey: rowContext.subagentRunsByChildSessionKey,
+        }),
       usageByFallbackModel,
       freshSessionTotalTokens,
       estimatedCostUsd: lightweight

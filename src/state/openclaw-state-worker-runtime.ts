@@ -27,6 +27,11 @@ import { recordUpdateRunMutationInWorker } from "../infra/update-run-mutation.wo
 import { reconcileUpdateRunCandidatesInWorker } from "../infra/update-run-reconciliation.worker.js";
 import { writeSecretStoreEntryForConfigRefInDatabase } from "../secrets/store/secret-store-config-ref.kernel.js";
 import { purgeExpiredSecretStoreEntriesInDatabase } from "../secrets/store/secret-store-expiry.kernel.js";
+import {
+  writeSecretStoreEntriesInDatabase,
+  rollbackSecretStoreEntryWriteInDatabase,
+  deleteSecretStoreEntryInDatabase,
+} from "../secrets/store/secret-store-write.js";
 import { executeSessionStateCommand } from "../sessions/session-state-events.worker.js";
 import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-upstream-links.kernel.js";
 import { executeSessionUpstreamCommand } from "../sessions/session-upstream-links.worker.js";
@@ -219,6 +224,20 @@ export function executeSharedStateCommand(
   }
   if (command.type === "sandboxRegistry.write") {
     return writeSandboxRegistry(command.input, writeOptions);
+  }
+  if (command.type === "secrets.write") {
+    return writeSecretStoreEntriesInDatabase(
+      { ...command.input, database: writeOptions },
+      command.input.capturePrevious,
+      (stage) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    );
+  }
+  if (command.type === "secrets.rollback" || command.type === "secrets.delete") {
+    const admit = (stage: "transaction" | "commit") =>
+      requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
+    return command.type === "secrets.rollback"
+      ? rollbackSecretStoreEntryWriteInDatabase({ ...command.input, database: writeOptions }, admit)
+      : deleteSecretStoreEntryInDatabase({ ...command.input, database: writeOptions }, admit);
   }
   if (command.type === "secrets.purge") {
     return purgeExpiredSecretStoreEntriesInDatabase(command.input, writeOptions);

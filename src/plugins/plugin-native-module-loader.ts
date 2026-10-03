@@ -41,7 +41,7 @@ export function bindNativePluginInstanceModuleLoader(
     instance: PluginModuleLoaderOwner;
     rootDir: string;
     origin: PluginOrigin;
-    bindModuleLoader?: PluginModuleLoaderOwner["bindModuleLoader"];
+    bindModuleLoader: PluginModuleLoaderOwner["bindModuleLoader"];
   },
   cache: ReturnType<typeof getPluginCache>,
   artifact: ReturnType<typeof capturePluginGenerationArtifact>,
@@ -126,13 +126,24 @@ export function bindNativePluginInstanceModuleLoader(
           let target: string | undefined;
           const requireMode = kind === "require-call" || kind === "require-resolve";
           const conditions = [...getBunConditions(requireMode)];
-          if (source === parent && request.startsWith(".")) {
+          const relative = request.startsWith(".");
+          if (
+            source === parent &&
+            (relative ||
+              (!path.isAbsolute(request) &&
+                !request.startsWith("file:") &&
+                // Bun handles package-import pattern trailers that the JS resolver rejects.
+                !request.startsWith("#") &&
+                !isBuiltin(request)))
+          ) {
             // Jiti implements computed imports through require.resolve; relative source capture
             // still follows the authored import graph rather than that internal mechanism.
             const captured = artifact.captureModule(
               parent,
               request,
-              kind === "require-resolve" && !artifact.isRequireReference(parent, request)
+              relative &&
+                kind === "require-resolve" &&
+                !artifact.isRequireReference(parent, request)
                 ? ["node", "module-sync", "import"]
                 : conditions,
             );
@@ -141,22 +152,7 @@ export function bindNativePluginInstanceModuleLoader(
                 captured.target.search || captured.target.hash
                   ? captured.target.href
                   : fileURLToPath(captured.target);
-            }
-          } else if (
-            source === parent &&
-            !path.isAbsolute(request) &&
-            !request.startsWith("file:") &&
-            // Bun handles package-import pattern trailers that the JS resolver rejects.
-            !request.startsWith("#") &&
-            !isBuiltin(request)
-          ) {
-            const captured = artifact.captureModule(parent, request, conditions);
-            if (captured && "target" in captured) {
-              target =
-                captured.target.search || captured.target.hash
-                  ? captured.target.href
-                  : fileURLToPath(captured.target);
-            } else if (captured && "retryNative" in captured) {
+            } else if (!relative && captured && "retryNative" in captured) {
               try {
                 let selected: URL;
                 try {
@@ -263,7 +259,7 @@ export function bindNativePluginInstanceModuleLoader(
     origin: params.origin,
     rootDir: params.rootDir,
   });
-  (params.bindModuleLoader ?? params.instance.bindModuleLoader.bind(params.instance))(
+  params.bindModuleLoader(
     (source) =>
       withPluginCache(cache, () => {
         const captured = artifact.resolve(source, rejectHardlinks);

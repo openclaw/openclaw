@@ -2984,6 +2984,7 @@ export const en: TranslationMap & {
   // Login copy lives in the lazy en-login catalog; the anchor keeps its merge target.
   login: {},
   chat: {
+    agentDatabaseWarming: "This agent is still starting. Retry in a moment.",
     historyRequestTimedOut: "Chat history request timed out. Retry to load the conversation.",
     clawhub: {
       retryStatus: "Status unavailable · Retry",

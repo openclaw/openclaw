@@ -671,7 +671,6 @@ describe("worker placement restart recovery", () => {
           throw new Error("stale recovery lifecycle was replaced");
         },
         runActivationBarrier: async ({ activate }) => activate(),
-        reportTransition: (observer, placement) => observer?.(placement),
       });
 
       await startup.resumeProvisioning(original, async () => {});

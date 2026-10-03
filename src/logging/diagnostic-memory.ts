@@ -1,6 +1,6 @@
 import { channel } from "node:diagnostics_channel";
 import { totalmem } from "node:os";
-import { getHeapStatistics } from "node:v8";
+import { getHeapSpaceStatistics, getHeapStatistics } from "node:v8";
 import {
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
   type DiagnosticMemoryPressureEvent,
@@ -415,7 +415,10 @@ export function emitDiagnosticMemorySample(options?: {
   if (shouldEmitSample) {
     emitDiagnosticEvent({
       type: "diagnostic.memory.sample",
-      memory,
+      memory: {
+        ...memory,
+        heapSpaces: DEFAULT_IS_BUN_RUNTIME ? undefined : getHeapSpaceStatistics(),
+      },
       uptimeMs: options?.uptimeMs ?? Math.round(process.uptime() * 1000),
     });
   }

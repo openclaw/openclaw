@@ -25,9 +25,11 @@ function collectParameterText(parameters: unknown, depth: number, parts: string[
       collectParameterText(child, depth + 1, parts);
     }
   }
-  const items = parameters.items;
-  if (items !== undefined) {
-    collectParameterText(items, depth + 1, parts);
+  for (const keyword of ["items", "anyOf", "oneOf", "allOf"]) {
+    const schemas = parameters[keyword];
+    for (const child of Array.isArray(schemas) ? schemas : [schemas]) {
+      collectParameterText(child, depth + 1, parts);
+    }
   }
 }
 

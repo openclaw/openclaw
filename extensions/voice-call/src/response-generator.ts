@@ -39,7 +39,7 @@ type VoiceResponseParams = {
   /** Caller ownership prepared by the call boundary. */
   senderIsOwner: boolean | undefined;
   /** Agent frozen on the call record. */
-  agentId?: string;
+  agentId: string;
   /** Audible call transcript, used only for bounded first-turn opening context. */
   transcript: Array<{ speaker: "user" | "bot"; text: string }>;
   userMessage: string;
@@ -304,7 +304,7 @@ export async function generateVoiceResponse(
     };
   }
   const cfg = coreConfig;
-  const agentId = resolveCallAgentId({ agentId: params.agentId }, voiceConfig);
+  const agentId = resolveCallAgentId(params);
 
   const resolvedSessionKey = resolveVoiceCallSessionKey({
     config: { ...voiceConfig, agentId },

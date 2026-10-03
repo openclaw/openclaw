@@ -127,21 +127,13 @@ export function hasAuthProfileForProvider(params: {
   let store = params.authStore;
   if (!store) {
     const agentDir = params.agentDir?.trim();
-    if (!agentDir) {
+    if (!agentDir || !hasAnyAuthProfileStoreSource(agentDir)) {
       return false;
     }
-    if (!hasAnyAuthProfileStoreSource(agentDir)) {
+    store = loadAuthStoreForProvider({ ...params, agentDir });
+    if (!store) {
       return false;
     }
-    // Only include external CLI profiles when callers explicitly want live
-    // provider availability, not when checking stored profile shape.
-    store = params.includeExternalCli
-      ? ensureAuthProfileStore(agentDir, {
-          externalCli: externalCliDiscoveryForProviderAuth({ provider: params.provider }),
-        })
-      : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-          allowKeychainPrompt: false,
-        });
   }
   const profileIds = listProfilesForProvider(store, params.provider);
   return profileIds.some((profileId) => {

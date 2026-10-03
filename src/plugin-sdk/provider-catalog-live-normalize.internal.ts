@@ -199,10 +199,6 @@ function findLiveModelTemplate(
   modelId: string,
   models: readonly ModelDefinitionConfig[],
 ): ModelDefinitionConfig | undefined {
-  const exact = models.find((model) => model.id === modelId);
-  if (exact) {
-    return exact;
-  }
   const normalizedId = modelId.toLowerCase();
   let best: ModelDefinitionConfig | undefined;
   let bestScore = 0;
@@ -279,10 +275,7 @@ function buildOpenAICompatibleLiveModel(
       ? { ...exact, contextWindow: liveContextWindow }
       : exact;
   }
-  // Manifest-published ids returned above are known-good. Everything past this
-  // point is a model the manifest has never described, so an opted-in provider
-  // gate decides whether its request shaping is understood well enough to
-  // surface it at all.
+  // Only unknown ids need the provider's request-shaping gate.
   if (acceptUnknownModel && !acceptUnknownModel({ id, record })) {
     return undefined;
   }

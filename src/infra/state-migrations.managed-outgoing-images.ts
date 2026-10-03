@@ -62,10 +62,6 @@ type ClaimedLegacySource = {
   parsed: ParsedLegacyRecord;
 };
 
-function resolveLegacyManagedOutgoingImageRecordsDir(stateDir: string): string {
-  return path.join(stateDir, "media", "outgoing", "records");
-}
-
 function sourceNameFromDoctorClaim(name: string): string | null {
   const markerIndex = name.indexOf(DOCTOR_CLAIM_MARKER);
   if (markerIndex < 0) {
@@ -86,7 +82,7 @@ export function detectLegacyManagedOutgoingImages(params: {
   stateDir: string;
   doctorOnlyStateMigrations?: boolean;
 }): LegacyStateDetection["managedOutgoingImages"] {
-  const sourceDir = resolveLegacyManagedOutgoingImageRecordsDir(params.stateDir);
+  const sourceDir = path.join(params.stateDir, "media", "outgoing", "records");
   let hasLegacy = false;
   if (params.doctorOnlyStateMigrations === true) {
     try {

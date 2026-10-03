@@ -51,7 +51,7 @@ const {
     );
   },
 });
-export { resolveDefaultNextcloudTalkAccountId };
+export { mergeNextcloudTalkAccountConfig, resolveDefaultNextcloudTalkAccountId };
 
 export function listNextcloudTalkAccountIds(cfg: CoreConfig): string[] {
   const ids = listNextcloudTalkAccountIdsInternal(cfg);

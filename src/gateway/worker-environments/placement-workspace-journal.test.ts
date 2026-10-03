@@ -142,6 +142,17 @@ describe("worker placement workspace journal", () => {
       },
     });
     await store.markWorkspaceResultPending(claim);
+    const pendingResult = store.preparedWorkspaceResult(claim)!;
+    const placement = store.preparedWorkspaceResultPlacement(claim)!;
+    expect(store.preparedWorkspaceResult(claim)).toBe(pendingResult);
+    expect(store.preparedWorkspaceResultPlacement(claim)).toBe(placement);
+    expect(() => {
+      pendingResult.claimId = "different-claim";
+    }).toThrow(TypeError);
+    expect(() => {
+      placement.turnClaim!.claimId = "different-claim";
+    }).toThrow(TypeError);
+    expect(store.validateWorkspaceResultClaim(claim)).toBe(true);
     const queries = observeHostDataSql();
     try {
       expect(await store.getWorkspaceReconciliationPlacement(owner)).toMatchObject({
@@ -160,6 +171,11 @@ describe("worker placement workspace journal", () => {
         manifestRef: journal.currentManifestRef,
       });
       expect(accepted.workspaceBaseManifestRef).toBe(journal.currentManifestRef);
+      expect(store.preparedWorkspaceResultPlacement(claim)).not.toBe(placement);
+      expect(store.preparedWorkspaceResultPlacement(claim)?.workspaceBaseManifestRef).toBe(
+        journal.currentManifestRef,
+      );
+      expect(placement.workspaceBaseManifestRef).toBe(active.workspaceBaseManifestRef);
       expect((await store.loadWorkspaceReconciliation(owner))?.appliedManifestRef).toBe(
         journal.currentManifestRef,
       );

@@ -350,7 +350,6 @@ export async function healthCommand(
         accountIds,
       });
       const accountId = resolvePreferredAccountId({
-        accountIds,
         defaultAccountId,
         boundAccounts,
       });

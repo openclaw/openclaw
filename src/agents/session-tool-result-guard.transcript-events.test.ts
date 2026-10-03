@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
@@ -31,7 +32,6 @@ import {
   onInternalSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
-import { attachRuntimeUserTurnTranscriptContext } from "../sessions/user-turn-transcript-runtime-context.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -42,6 +42,7 @@ import { normalizeAssistantReplayContent } from "./embedded-agent-runner/replay-
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
+import { persistAgentSessionMessage } from "./sessions/agent-session-transcript.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import {
@@ -210,73 +211,93 @@ describe("guardSessionManager transcript updates", () => {
     expect(loadSessionEntry(target)?.compactionCount).toBe(2);
   });
 
-  it("consumes a steered source under its own custody and does not repeat its approval hook", async () => {
-    const { root, target, sessionEntry } = await openPersistedSessionManager();
-    const recorderTarget = { ...target, sessionEntry };
-    const ambient = createUserTurnTranscriptRecorder({
-      input: { text: "Active turn", timestamp: 1, idempotencyKey: "active:user" },
-      target: recorderTarget,
-    });
-    const source = createUserTurnTranscriptRecorder({
-      input: { text: "Steered source", timestamp: 2, idempotencyKey: "steered:user" },
-      target: recorderTarget,
-      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-    });
-    try {
-      await ambient.stageApproved!({ runId: "active", assertCurrent: () => {} });
-      await ambient.persistApproved();
-      const approvalHook = vi.fn(({ message }: PluginHookBeforeMessageWriteEvent) => {
-        if (message.role !== "user") {
-          return undefined;
+  it.each(["physical", "alias"])(
+    "consumes staged input via the %s database path through a reused guard with one approval",
+    async (locator) => {
+      const { root, target, sessionEntry } = await openPersistedSessionManager();
+      const recorderTarget = { ...target, sessionEntry };
+      const aliasRoot = path.join(root, "alias");
+      fs.symlinkSync(root, aliasRoot, "junction");
+      const aliasedTarget = {
+        ...recorderTarget,
+        storePath: path.join(aliasRoot, path.relative(root, target.storePath)),
+      };
+      const ambient = createUserTurnTranscriptRecorder({
+        input: { text: "Active turn", timestamp: 1, idempotencyKey: "active:user" },
+        target: recorderTarget,
+      });
+      const source = createUserTurnTranscriptRecorder({
+        input: { text: "Steered source", timestamp: 2, idempotencyKey: "steered:user" },
+        target: locator === "alias" ? aliasedTarget : recorderTarget,
+        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+      });
+      try {
+        await ambient.stageApproved!({ runId: "active", assertCurrent: () => {} });
+        await ambient.persistApproved();
+        const approvalHook = vi.fn(({ message }: PluginHookBeforeMessageWriteEvent) => {
+          if (message.role !== "user") {
+            return undefined;
+          }
+          return {
+            message: {
+              ...message,
+              content: `[approved] ${typeof message.content === "string" ? message.content : ""}`,
+            },
+          };
+        });
+        installWriteHook(approvalHook);
+        const manager = guardSessionManager(await SessionManager.openAsync(target, root), {
+          agentId: target.agentId,
+          sessionKey: target.sessionKey,
+          preparedUserTurnMessage: await ambient.resolveMessage(),
+          preparedUserTurnTranscriptRecorder: ambient,
+          suppressNextUserMessagePersistence: true,
+        });
+        expect(await source.stageApproved!({ runId: "steered", assertCurrent: () => {} })).toBe(
+          true,
+        );
+        const approved = await source.resolveMessage();
+        if (!approved) {
+          throw new Error("Expected approved steering input");
         }
-        return {
-          message: {
-            ...message,
-            content: `[approved] ${typeof message.content === "string" ? message.content : ""}`,
-          },
-        };
-      });
-      installWriteHook(approvalHook);
-      expect(await source.stageApproved!({ runId: "steered", assertCurrent: () => {} })).toBe(true);
-      const approved = await source.resolveMessage();
-      if (!approved) {
-        throw new Error("Expected approved steering input");
+        const pending = await listSessionPendingInputs(target);
+        expect(pending.total).toBe(1);
+        expect(pending.items[0]?.state).toBe("queued");
+        const guarded = guardSessionManager(manager, {
+          agentId: target.agentId,
+          sessionKey: target.sessionKey,
+          preparedUserTurnMessage: approved,
+          preparedUserTurnTranscriptRecorder: source,
+        });
+        const runtimeMessage = { ...approved, content: "Rendered source prompt" };
+
+        expect(source.getAdmissionReceipt()).toBeUndefined();
+        expect(source.isPendingInputConsumed?.()).toBe(false);
+        // The reused guard must recover the current source, not its first turn's recorder.
+        const entryId = await persistAgentSessionMessage(guarded, runtimeMessage, {
+          invalidateSerializedPrefixCache: false,
+        });
+
+        assert(entryId);
+        expect(entryId).toBe(pending.items[0]?.id);
+        expect(guarded.getEntry(entryId)).toMatchObject({ message: approved });
+        expect(source.getAdmissionReceipt()).toMatchObject({ entryId });
+        expect(source.isPendingInputConsumed?.()).toBe(true);
+        expect(source.getPersistedMessage?.()).toEqual(approved);
+        expect(await listSessionPendingInputs(target)).toEqual({ items: [], total: 0 });
+        expect(approvalHook).toHaveBeenCalledOnce();
+
+        const unstagedId = guarded.appendMessage(makeUserMessage("Unstaged source", 3));
+        expect(approvalHook).toHaveBeenCalledTimes(2);
+        expect(guarded.getEntry(unstagedId)).toMatchObject({
+          message: { role: "user", content: "[approved] Unstaged source" },
+        });
+      } finally {
+        source.finishPendingInput?.("interrupted");
+        ambient.finishPendingInput?.("interrupted");
       }
-      const pending = await listSessionPendingInputs(target);
-      expect(pending.total).toBe(1);
-      const guarded = guardSessionManager(SessionManager.open(target, root), {
-        agentId: target.agentId,
-        sessionKey: target.sessionKey,
-        preparedUserTurnMessage: await ambient.resolveMessage(),
-        preparedUserTurnTranscriptRecorder: ambient,
-        suppressNextUserMessagePersistence: true,
-      });
-      const runtimeMessage = attachRuntimeUserTurnTranscriptContext(
-        { role: "user", content: "Rendered steering prompt", timestamp: 2 },
-        { message: approved, recorder: source },
-      );
-
-      expect(source.getAdmissionReceipt()).toBeUndefined();
-      // The already-running turn's async context is not the steered input's custody.
-      const entryId = ambient.withPendingInput!(() => guarded.appendMessage(runtimeMessage));
-
-      expect(entryId).toBe(pending.items[0]?.id);
-      expect(guarded.getEntry(entryId)).toMatchObject({ message: approved });
-      expect(source.getAdmissionReceipt()).toMatchObject({ entryId });
-      expect(source.getPersistedMessage?.()).toEqual(approved);
-      expect(await listSessionPendingInputs(target)).toEqual({ items: [], total: 0 });
-      expect(approvalHook).toHaveBeenCalledOnce();
-
-      const unstagedId = guarded.appendMessage(makeUserMessage("Unstaged source", 3));
-      expect(approvalHook).toHaveBeenCalledTimes(2);
-      expect(guarded.getEntry(unstagedId)).toMatchObject({
-        message: { role: "user", content: "[approved] Unstaged source" },
-      });
-    } finally {
-      source.finishPendingInput?.("interrupted");
-      ambient.finishPendingInput?.("interrupted");
-    }
-  });
+    },
+  );
 
   it("combines explicit redaction with one fresh SQLite admission across replay", async () => {
     const { root, target, sessionEntry, sessionManager } = await openPersistedSessionManager();

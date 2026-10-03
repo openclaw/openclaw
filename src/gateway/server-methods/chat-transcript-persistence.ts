@@ -351,30 +351,17 @@ export async function appendAssistantTranscriptMessage(
       cfg?: OpenClawConfig;
     },
 ): Promise<GatewayInjectedTranscriptAppendResult> {
+  const { createIfMissing, cfg, ...append } = params;
   const scope = assistantTranscriptScope(params);
   if (!scope) {
     return { ok: false, error: "transcript identity not resolved" };
   }
-  if (!params.createIfMissing && !(await transcriptExists(scope))) {
+  if (!createIfMissing && !(await transcriptExists(scope))) {
     return { ok: false, error: "transcript not found" };
   }
   return appendInjectedAssistantMessageToTranscript({
-    expectedSessionId: params.expectedSessionId,
-    expectedLifecycleRevision: params.expectedLifecycleRevision,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    storePath: params.storePath,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    message: params.message,
-    label: params.label,
-    content: params.content,
-    idempotencyKey: params.idempotencyKey,
-    stopReason: params.stopReason,
-    abortMeta: params.abortMeta,
-    ttsSupplement: params.ttsSupplement,
-    ...(params.contextFreeCommand === true ? { contextFreeCommand: true } : {}),
-    config: params.cfg,
-    onMessageCommitted: params.onMessageCommitted,
+    ...append,
+    config: cfg,
   });
 }
 

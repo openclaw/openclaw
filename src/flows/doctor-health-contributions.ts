@@ -164,7 +164,7 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
       const { randomToken } = await loadOnboardHelpersModule();
       const database = { env: ctx.env ?? process.env };
       const entry = { scope: { kind: "team" as const }, name: gatewayTokenRef.id, database };
-      let rollback: (() => boolean) | undefined;
+      let rollback: (() => Promise<boolean>) | undefined;
       try {
         const current = readSecretStoreValue(entry);
         if (!current.ok || !isRedactedSecretValue(current.value)) {
@@ -181,7 +181,7 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
           preserveRowIds: true,
         });
         const nextToken = randomToken();
-        ({ rollback } = writeSecretStoreEntryWithRollback({
+        ({ rollback } = await writeSecretStoreEntryWithRollback({
           ...entry,
           value: nextToken,
           expectedValue: current.value,
@@ -201,7 +201,7 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
         let recovery = "";
         try {
           if (rollback) {
-            recovery = rollback()
+            recovery = (await rollback())
               ? " The previous entry was restored."
               : " The entry changed again and was left untouched.";
           }

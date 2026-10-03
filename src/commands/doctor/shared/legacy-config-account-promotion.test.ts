@@ -231,6 +231,7 @@ it.each([
   }
 
   const cfg: OpenClawConfig = {
+    meta: { migrations: { webhookListeners: true } },
     ...(enabled === undefined
       ? {}
       : {
@@ -278,6 +279,7 @@ it.each([false, true])(
     state = await createOpenClawTestState({ label: "doctor-whatsapp-routing", applyEnv: true });
     vi.stubEnv("OPENCLAW_OAUTH_DIR", state.statePath("credentials"));
     const cfg: OpenClawConfig = {
+      meta: { migrations: { webhookListeners: true } },
       channels: {
         whatsapp: {
           dmPolicy: "allowlist",

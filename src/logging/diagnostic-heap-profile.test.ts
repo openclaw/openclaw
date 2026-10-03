@@ -12,7 +12,9 @@ const native = vi.hoisted(() => ({
   disconnect: vi.fn(),
   wait: vi.fn(),
   resolveRoot: vi.fn(),
+  heapSpaces: vi.fn(),
 }));
+vi.mock("node:v8", () => ({ getHeapSpaceStatistics: native.heapSpaces }));
 vi.mock("node:timers/promises", () => ({ setTimeout: native.wait }));
 vi.mock("node:trace_events", () => ({ getEnabledCategories: () => undefined }));
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
@@ -76,6 +78,7 @@ beforeEach(() => {
   vi.stubEnv("NODE_OPTIONS", "");
   vi.stubEnv("NODE_V8_COVERAGE", "");
   native.wait.mockResolvedValue(undefined);
+  native.heapSpaces.mockReturnValue([]);
   native.resolveRoot.mockResolvedValue("/fixture/openclaw");
   native.post.mockImplementation(async (method) =>
     method === "HeapProfiler.stopSampling" ? { profile: profile() } : {},
@@ -90,6 +93,17 @@ afterEach(() => {
 
 describe("diagnostic heap profile owner", () => {
   it("preserves allocation samples and redacts native data before returning memory readings", async () => {
+    const before = [
+      {
+        space_name: "old_space",
+        space_used_size: 100,
+        space_size: 200,
+        space_available_size: 50,
+        physical_space_size: 180,
+      },
+    ];
+    const after = [{ ...before[0], space_used_size: 150 }];
+    native.heapSpaces.mockReturnValueOnce(before).mockReturnValueOnce(after);
     const outcome = await capture();
     expect(outcome).toMatchObject({
       status: "complete",
@@ -100,6 +114,8 @@ describe("diagnostic heap profile owner", () => {
         includeObjectsCollectedByMinorGC: false,
         heapUsedBefore: expect.any(Number),
         heapUsedAfter: expect.any(Number),
+        heapSpacesBefore: before,
+        heapSpacesAfter: after,
         rssBefore: expect.any(Number),
         rssAfter: expect.any(Number),
         truncated: false,

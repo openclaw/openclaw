@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as ranking from "./tool-search-ranking.js";
 import {
   buildLexicalIndex,
+  readParameterText,
   scoreLexical,
   tokenizeDocument,
   tokenizeQuery,
@@ -188,38 +189,89 @@ describe("scoreLexical", () => {
 });
 
 describe("untrusted schemas", () => {
-  it("never traverses parameters from a source the catalog treats as untrusted", async () => {
-    // compactToolSearchCatalogEntry already reports non-first-party parameters
-    // as "unknown"; indexing must respect the same boundary. A client can hand
-    // us a lazy object that throws on property access, and MCP-authored text
-    // must not become ranking input.
-    const hostile = entry({
-      source: "client",
-      name: "client_pick_file",
-      description: "Ask the client to pick a file",
-      parameters: {
-        type: "object",
-        properties: new Proxy(
-          {},
-          {
-            ownKeys: () => {
-              throw new Error("client properties must remain deferred");
+  it.each(["client", "mcp"] as const)(
+    "never traverses parameters from the untrusted %s source",
+    async (source) => {
+      // compactToolSearchCatalogEntry already reports non-first-party parameters
+      // as "unknown"; indexing must respect the same boundary. A client can hand
+      // us a lazy object that throws on property access, and MCP-authored text
+      // must not become ranking input.
+      const hostile = entry({
+        source,
+        name: "client_pick_file",
+        description: "Ask the client to pick a file",
+        parameters: {
+          type: "object",
+          properties: new Proxy(
+            {},
+            {
+              ownKeys: () => {
+                throw new Error("client properties must remain deferred");
+              },
             },
-          },
-        ),
-      },
-    });
-    const search = runtime([...CATALOG, hostile]);
+          ),
+        },
+      });
+      const search = runtime([...CATALOG, hostile]);
 
-    // Reaching the schema at all throws, so surviving the query is the proof.
-    await expect(search.search("pick a file")).resolves.toBeDefined();
-    expect((await search.search("client_pick_file")).map((hit) => hit.name)).toContain(
-      "client_pick_file",
-    );
-  });
+      // Reaching the schema at all throws, so surviving the query is the proof.
+      await expect(search.search("pick a file")).resolves.toBeDefined();
+      expect((await search.search("client_pick_file")).map((hit) => hit.name)).toContain(
+        "client_pick_file",
+      );
+    },
+  );
 });
 
 describe("ToolSearchRuntime.search", () => {
+  it.each(["anyOf", "oneOf", "allOf"])(
+    "finds parameter metadata inside %s branches and refreshes it after edits",
+    async (keyword) => {
+      const branch = {
+        type: "object",
+        properties: { orchard: { type: "string", description: "Collect apples" } },
+      };
+      const search = runtime([
+        entry({
+          name: "indexed_resource",
+          parameters: { [keyword]: [{ description: "Measure asteroids" }, branch] },
+        }),
+      ]);
+
+      for (const query of ["asteroids", "orchard", "apples"]) {
+        expect((await search.search(query)).map((hit) => hit.name)).toEqual(["indexed_resource"]);
+      }
+      branch.properties.orchard.description = "Observe meteors";
+      expect((await search.search("meteors")).map((hit) => hit.name)).toEqual(["indexed_resource"]);
+      expect(await search.search("apples")).toEqual([]);
+      expect(await search.search("orchard", { allowedIds: new Set() })).toEqual([]);
+    },
+  );
+
+  it("finds metadata through composed property and array-item schemas", async () => {
+    const search = runtime([
+      entry({
+        name: "indexed_resource",
+        parameters: {
+          type: "object",
+          properties: {
+            resources: {
+              anyOf: [
+                { type: "null" },
+                {
+                  type: "array",
+                  items: { allOf: [{ type: "string", description: "Observe meteors" }] },
+                },
+              ],
+            },
+          },
+        },
+      }),
+    ]);
+
+    expect((await search.search("meteors")).map((hit) => hit.name)).toEqual(["indexed_resource"]);
+  });
+
   it("reuses document tokens across runtimes and visibility views until the catalog changes", async () => {
     const catalog = CATALOG.map(entry);
     const tokenize = vi.spyOn(ranking, "tokenizeDocument");
@@ -366,5 +418,36 @@ describe("ToolSearchRuntime.search", () => {
     // The catalog is described in English, so this matches nothing. The old
     // scorer returned every tool in id order for exactly this input.
     expect(await runtime().search("価格を調べて")).toEqual([]);
+  });
+});
+
+describe("readParameterText", () => {
+  it("ignores boolean schemas and literal data while collecting composed metadata", () => {
+    expect(
+      readParameterText({
+        description: "visible",
+        const: { description: "literal" },
+        enum: [{ description: "literal" }],
+        anyOf: [true, false, { description: "branch" }],
+        oneOf: [],
+        allOf: [],
+      }),
+    ).toBe("visible branch");
+  });
+
+  it("reads metadata from tuple items", () => {
+    expect(
+      readParameterText({ items: [{ description: "first" }, { description: "second" }] }),
+    ).toBe("first second");
+  });
+
+  it("keeps cyclic composed schemas bounded", () => {
+    const schema: Record<string, unknown> = {
+      description: "visible",
+    };
+    schema.anyOf = [schema];
+
+    expect(readParameterText(schema).split(" ")).toEqual(Array(5).fill("visible"));
+    expect(readParameterText(schema, 5)).toBe("");
   });
 });

@@ -343,6 +343,7 @@ extension ChatMessageBubble {
         let textColor = self.textColor
         let shouldRenderBubble = self.shouldRenderBubble
         let toolActivityItems = self.toolActivityItems
+        let hasOnboardingShadow = self.style == .onboarding && !self.isUser
 
         VStack(alignment: .leading, spacing: 6) {
             if shouldRenderBubble {
@@ -352,11 +353,13 @@ extension ChatMessageBubble {
                         .padding(.horizontal, 12)
                         .background(AnyShapeStyle(self.bubbleFillColor))
                         .clipShape(self.bubbleShape)
-                        .overlay(self.bubbleBorder)
+                        .overlay(self.bubbleShape.strokeBorder(
+                            self.bubbleBorderColor,
+                            lineWidth: self.bubbleBorderWidth))
                         .shadow(
-                            color: self.bubbleShadowColor,
-                            radius: self.bubbleShadowRadius,
-                            y: self.bubbleShadowYOffset)
+                            color: hasOnboardingShadow ? Color.black.opacity(0.28) : .clear,
+                            radius: hasOnboardingShadow ? 6 : 0,
+                            y: hasOnboardingShadow ? 2 : 0)
                         .padding(.leading, self.tailPaddingLeading)
                         .padding(.trailing, self.tailPaddingTrailing)
                 } else {
@@ -547,8 +550,8 @@ extension ChatMessageBubble {
         }
         guard self.message.role.lowercased() == "assistant" else { return [] }
         return ChatToolActivity.items(
-            calls: self.toolCalls,
-            results: self.inlineToolResults,
+            calls: self.message.content.filter(\.isToolCall),
+            results: self.message.content.filter(\.isToolResult),
             activity: self.message.activity,
             liveTools: self.liveToolCalls)
     }
@@ -594,14 +597,6 @@ extension ChatMessageBubble {
             else { return nil }
             return content.preview
         }
-    }
-
-    private var toolCalls: [OpenClawChatMessageContent] {
-        self.message.content.filter(\.isToolCall)
-    }
-
-    private var inlineToolResults: [OpenClawChatMessageContent] {
-        self.message.content.filter(\.isToolResult)
     }
 
     private var usagePresentation: ChatMessageUsagePresentation? {
@@ -650,17 +645,10 @@ extension ChatMessageBubble {
         return 1
     }
 
-    private var bubbleBorder: some View {
-        self.bubbleShape.strokeBorder(self.bubbleBorderColor, lineWidth: self.bubbleBorderWidth)
-    }
-
     private var bubbleShape: ChatBubbleShape {
-        ChatBubbleShape(cornerRadius: ChatUIConstants.bubbleCorner, tail: self.bubbleTail)
-    }
-
-    private var bubbleTail: ChatBubbleShape.Tail {
-        guard self.style == .onboarding else { return .none }
-        return self.isUser ? .right : .left
+        ChatBubbleShape(
+            cornerRadius: ChatUIConstants.bubbleCorner,
+            tail: self.style == .onboarding ? (self.isUser ? .right : .left) : .none)
     }
 
     private var tailPaddingLeading: CGFloat {
@@ -669,18 +657,6 @@ extension ChatMessageBubble {
 
     private var tailPaddingTrailing: CGFloat {
         self.style == .onboarding && self.isUser ? 8 : 0
-    }
-
-    private var bubbleShadowColor: Color {
-        self.style == .onboarding && !self.isUser ? Color.black.opacity(0.28) : .clear
-    }
-
-    private var bubbleShadowRadius: CGFloat {
-        self.style == .onboarding && !self.isUser ? 6 : 0
-    }
-
-    private var bubbleShadowYOffset: CGFloat {
-        self.style == .onboarding && !self.isUser ? 2 : 0
     }
 }
 
@@ -884,61 +860,36 @@ struct ChatOutboxStatusLabel: View {
     let state: OpenClawChatOutboxMessageState
 
     var body: some View {
+        let presentation = self.presentation
         HStack(spacing: 4) {
-            Image(systemName: self.iconName)
+            Image(systemName: presentation.iconName)
                 .font(.system(size: 10, weight: .semibold))
-            Text(self.title)
+            Text(presentation.title)
                 .font(OpenClawChatTypography.caption)
         }
         .foregroundStyle(self.state.isFailed ? AnyShapeStyle(OpenClawChatTheme.danger) : AnyShapeStyle(.secondary))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            Text(self.accessibilityText)
+            Text(presentation.accessibilityText)
                 .font(OpenClawChatTypography.caption))
     }
 
-    private var title: LocalizedStringResource {
+    private var presentation: (
+        title: LocalizedStringResource,
+        iconName: String,
+        accessibilityText: LocalizedStringResource)
+    {
         switch self.state {
         case .queued:
-            "Queued"
+            ("Queued", "clock", "Queued, sends when reconnected")
         case .sending:
-            "Sending…"
+            ("Sending…", "arrow.up.circle", "Sending")
         case .confirming:
-            "Confirming…"
+            ("Confirming…", "checkmark.circle", "Sent, waiting for chat history confirmation")
         case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError:
-            "Delivery unknown"
+            ("Delivery unknown", "questionmark.circle", "Delivery unconfirmed, touch and hold to retry or delete")
         case .failed:
-            "Not sent"
-        }
-    }
-
-    private var iconName: String {
-        switch self.state {
-        case .queued:
-            "clock"
-        case .sending:
-            "arrow.up.circle"
-        case .confirming:
-            "checkmark.circle"
-        case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError:
-            "questionmark.circle"
-        case .failed:
-            "exclamationmark.circle"
-        }
-    }
-
-    private var accessibilityText: LocalizedStringResource {
-        switch self.state {
-        case .queued:
-            "Queued, sends when reconnected"
-        case .sending:
-            "Sending"
-        case .confirming:
-            "Sent, waiting for chat history confirmation"
-        case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError:
-            "Delivery unconfirmed, touch and hold to retry or delete"
-        case .failed:
-            "Not sent, touch and hold to retry or delete"
+            ("Not sent", "exclamationmark.circle", "Not sent, touch and hold to retry or delete")
         }
     }
 }

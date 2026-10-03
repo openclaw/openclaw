@@ -375,7 +375,6 @@ export async function cleanupSessionBeforeMutation(params: {
   legacyKey?: string;
   canonicalKey?: string;
   reason: "session-reset" | "session-delete";
-  onAcpResetMeta?: (params: { sessionKey: string; meta: SessionAcpMeta }) => void;
   assertCurrent?: () => void;
 }) {
   const cleanupError = await ensureSessionRuntimeCleanup({
@@ -414,7 +413,6 @@ export async function cleanupSessionBeforeMutation(params: {
     agentId: params.target.agentId,
     fallbackSessionKeys: [params.canonicalKey, params.legacyKey, params.key],
     reason: params.reason,
-    onResetMeta: params.onAcpResetMeta,
     assertCurrent: params.assertCurrent,
   });
   params.assertCurrent?.();
