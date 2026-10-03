@@ -1,5 +1,4 @@
 // Detects approval-not-found errors across gateway response shapes.
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 const INVALID_REQUEST = "INVALID_REQUEST";
@@ -9,7 +8,11 @@ const LEGACY_APPROVAL_NOT_FOUND_RE =
   /\b(?:unknown or expired approval id|approval expired or not found)\b/i;
 
 function readApprovalErrorDetailsReason(value: unknown): string | null {
-  return normalizeOptionalString(asOptionalRecord(value)?.reason) ?? null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const reason = (value as { reason?: unknown }).reason;
+  return normalizeOptionalString(reason) ?? null;
 }
 
 /**

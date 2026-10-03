@@ -379,7 +379,19 @@ export function matchAllowlist(
 
 type ExecArgvToken =
   | {
-      kind: "empty" | "terminator" | "stdin" | "positional";
+      kind: "empty";
+      raw: string;
+    }
+  | {
+      kind: "terminator";
+      raw: string;
+    }
+  | {
+      kind: "stdin";
+      raw: string;
+    }
+  | {
+      kind: "positional";
       raw: string;
     }
   | {
