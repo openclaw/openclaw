@@ -2934,7 +2934,7 @@ ui/src/components/theme-mode-toggle.ts	1
 ui/src/components/web-awesome.ts	2
 ui/src/components/wizard-step-controls.ts	4
 ui/src/i18n/lib/translate.ts	1
-ui/src/lib/agents/display.ts	6
+ui/src/lib/agents/display.ts	5
 ui/src/lib/board/gateway-provider.ts	2
 ui/src/lib/board/widget-bridge.ts	2
 ui/src/lib/board/widget-sandbox-host.ts	1
@@ -2968,7 +2968,6 @@ ui/src/pages/channels/view.detail.ts	1
 ui/src/pages/channels/view.nostr-profile-form.ts	4
 ui/src/pages/channels/view.nostr.ts	5
 ui/src/pages/channels/view.ts	9
-ui/src/pages/chat/chat-avatar.ts	1
 ui/src/pages/chat/chat-gateway.ts	1
 ui/src/pages/chat/chat-history-retry.ts	1
 ui/src/pages/chat/chat-page-retained-sessions.ts	1
@@ -3012,7 +3011,7 @@ ui/src/pages/chat/input-history.ts	1
 ui/src/pages/chat/run-lifecycle.ts	1
 ui/src/pages/chat/scroll.ts	1
 ui/src/pages/chat/session-cache.ts	2
-ui/src/pages/chat/stream-reconciliation.ts	3
+ui/src/pages/chat/stream-reconciliation.ts	1
 ui/src/pages/chat/talk/gateway-relay.ts	1
 ui/src/pages/chat/talk/google-live.ts	1
 ui/src/pages/chat/talk/shared.ts	3
