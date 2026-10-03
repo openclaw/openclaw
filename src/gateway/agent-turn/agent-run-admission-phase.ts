@@ -47,6 +47,7 @@ import { canPrepareAgentSessionWorktree } from "./agent-handler-helpers.js";
 import { resolveAgentRunAdmissionModel } from "./agent-run-admission-model.js";
 import {
   createAgentRunAdmissionRevalidator,
+  releaseFailedAgentRunAdmission,
   resolveAgentRunAdmissionError,
 } from "./agent-run-admission-revalidation.js";
 import type {
@@ -540,7 +541,7 @@ export async function prepareAgentRunDispatch(
     try {
       return await inputAdmission;
     } finally {
-      releasePreparedAgentRunUserTurn(userTurn, parentResume ? "cancelled" : "interrupted");
+      await releasePreparedAgentRunUserTurn(userTurn, parentResume ? "cancelled" : "interrupted");
     }
   }
   const accepted = {
@@ -572,7 +573,7 @@ export async function prepareAgentRunDispatch(
     assertInputOwnerCurrent();
     capturedOperator.authority?.assertCurrent();
   } catch (error) {
-    const failure = releasePreparedAgentRunUserTurnAfterFailure(userTurn, error);
+    const failure = await releasePreparedAgentRunUserTurnAfterFailure(userTurn, error);
     return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.INVALID_REQUEST, failure));
   }
   try {
@@ -623,7 +624,7 @@ export async function prepareAgentRunDispatch(
         activeRunAbort.controller.signal.throwIfAborted();
         capturedOperator.authority?.assertCurrent();
       } catch (err) {
-        const failure = releasePreparedAgentRunUserTurnAfterFailure(userTurn, err);
+        const failure = await releasePreparedAgentRunUserTurnAfterFailure(userTurn, err);
         return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.UNAVAILABLE, failure));
       }
     }
@@ -701,16 +702,6 @@ export async function prepareAgentRunDispatch(
       restoreAdmittedRestartRecoveryInterrupted,
     };
   } catch (error) {
-    const failure = releasePreparedAgentRunUserTurnAfterFailure(userTurn, error, "interrupted");
-    try {
-      await cleanupPreaccept();
-    } catch (cleanupError) {
-      throw new AggregateError(
-        [failure, cleanupError],
-        `${formatForLog(failure)}; agent admission cleanup failed: ${formatForLog(cleanupError)}`,
-        { cause: cleanupError },
-      );
-    }
-    throw failure;
+    return releaseFailedAgentRunAdmission(userTurn, error, cleanupPreaccept);
   }
 }

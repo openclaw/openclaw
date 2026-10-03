@@ -5,9 +5,11 @@ import { errorShapeFromError } from "../error-shape.js";
 import type { readInProcessSubagentResume } from "../in-process-subagent-resume.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { assertParentSubagentResumeCurrent } from "../session-subagent-resume.js";
+import { formatForLog } from "../ws-log.js";
 import { setAbortedAgentDedupeEntries } from "./agent-dedupe.js";
 import {
   releasePreparedAgentRunUserTurn,
+  releasePreparedAgentRunUserTurnAfterFailure,
   type PreparedAgentRunUserTurn,
 } from "./agent-run-user-turn.js";
 import type { AgentTurnContext, AgentTurnPrincipal } from "./types.js";
@@ -20,6 +22,25 @@ export function resolveAgentRunAdmissionError(
   return error instanceof SessionMutationAuthorizationChangedError
     ? error.error
     : errorShapeFromError(code, error);
+}
+
+/** Join rejected input and preaccept cleanup without losing either failure. */
+export async function releaseFailedAgentRunAdmission(
+  userTurn: PreparedAgentRunUserTurn,
+  error: unknown,
+  cleanupPreaccept: () => Promise<void>,
+): Promise<never> {
+  const failure = await releasePreparedAgentRunUserTurnAfterFailure(userTurn, error, "interrupted");
+  try {
+    await cleanupPreaccept();
+  } catch (cleanupError) {
+    throw new AggregateError(
+      [failure, cleanupError],
+      `${formatForLog(failure)}; agent admission cleanup failed: ${formatForLog(cleanupError)}`,
+      { cause: cleanupError },
+    );
+  }
+  throw failure;
 }
 
 /** Revalidate the same prepared admission after each asynchronous preparation step. */
@@ -81,8 +102,15 @@ export function createAgentRunAdmissionRevalidator(options: {
   };
   return (userTurn?: PreparedAgentRunUserTurn): true | Promise<undefined> => {
     const result = revalidate();
-    return result === true || !userTurn
-      ? result
-      : result.finally(() => releasePreparedAgentRunUserTurn(userTurn, "interrupted"));
+    if (result === true || !userTurn) {
+      return result;
+    }
+    return (async () => {
+      try {
+        return await result;
+      } finally {
+        await releasePreparedAgentRunUserTurn(userTurn, "interrupted");
+      }
+    })();
   };
 }

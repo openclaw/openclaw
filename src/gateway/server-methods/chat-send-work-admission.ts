@@ -67,10 +67,25 @@ export function releaseChatSendCallerAuthority(params: {
 export function createChatSendWorkAdmission(params: {
   admission: Pick<SessionWorkAdmissionLease, "release">;
   releaseCallerAuthority?: () => void;
+  releaseGatewayRootContinuation?: () => void;
   logGateway: Pick<GatewayRequestContext["logGateway"], "warn">;
 }) {
   let references = 1;
-  let finishPendingInput: (() => void) | undefined;
+  let finishPendingInput: (() => void | Promise<void>) | undefined;
+  const releaseAdmission = () => {
+    try {
+      params.admission.release();
+    } finally {
+      try {
+        params.releaseCallerAuthority?.();
+      } finally {
+        params.releaseGatewayRootContinuation?.();
+      }
+    }
+  };
+  const warnCleanupFailure = (error: unknown) => {
+    params.logGateway.warn(`Failed to finish pending chat input: ${formatForLog(error)}`);
+  };
   const release = () => {
     if (references === 0) {
       return;
@@ -79,18 +94,23 @@ export function createChatSendWorkAdmission(params: {
     if (references !== 0) {
       return;
     }
+    let pending: void | Promise<void> = undefined;
     try {
-      finishPendingInput?.();
+      pending = finishPendingInput?.();
     } catch (error) {
       // The durable row remains recoverable; a failed disposition write must
       // not strand session/root drain ownership during shutdown.
-      params.logGateway.warn(`Failed to finish pending chat input: ${formatForLog(error)}`);
-    } finally {
-      try {
-        params.admission.release();
-      } finally {
-        params.releaseCallerAuthority?.();
-      }
+      warnCleanupFailure(error);
+    }
+    if (pending) {
+      // The existing admission's drain joins this write before releasing the
+      // session/root fence; prompt custody has already been revoked.
+      void pending.then(releaseAdmission, (error: unknown) => {
+        warnCleanupFailure(error);
+        releaseAdmission();
+      });
+    } else {
+      releaseAdmission();
     }
   };
   const hold = () => {
@@ -113,7 +133,7 @@ export function createChatSendWorkAdmission(params: {
       references += 1;
       return hold();
     },
-    setPendingInputCleanup: (finish: () => void) => {
+    setPendingInputCleanup: (finish: () => void | Promise<void>) => {
       finishPendingInput = finish;
     },
   };

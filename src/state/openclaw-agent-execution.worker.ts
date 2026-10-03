@@ -378,6 +378,8 @@ function openAgentDatabaseBackend(
     "conversation.delivery.begin": loadConversationDeliveryOperations,
     "conversation.delivery.transition": loadConversationDeliveryOperations,
     "session.pendingInputs.withdraw": loadAgentPendingInputOperations,
+    "session.pendingInputs.read": loadAgentPendingInputOperations,
+    "session.pendingInputs.mutate": loadAgentPendingInputOperations,
     "session.pendingInputs.interruptHistory": loadAgentPendingInputOperations,
     "session.archivePruning.deletePublished": loadAgentArchivePruningOperations,
     "session.archivePruning.pruneRetention": loadAgentArchivePruningOperations,

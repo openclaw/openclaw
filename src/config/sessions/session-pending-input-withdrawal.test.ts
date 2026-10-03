@@ -134,6 +134,7 @@ it.each(["default", "shared"] as const)(
         for (const receipt of receipts) {
           receipt.finish("cancelled");
         }
+        await Promise.all(receipts.map(async (receipt) => receipt.settled?.()));
       }
     });
   },
@@ -163,6 +164,7 @@ it("preserves a consumed source receipt when withdrawal targets its original run
       for (const receipt of receipts) {
         receipt.finish("cancelled");
       }
+      await Promise.all(receipts.map(async (receipt) => receipt.settled?.()));
     }
   });
 });
@@ -192,6 +194,7 @@ it("does not withdraw an old or successor input after the canonical session rese
       for (const receipt of receipts) {
         receipt.finish("cancelled");
       }
+      await Promise.all(receipts.map(async (receipt) => receipt.settled?.()));
     }
   });
 });
@@ -228,6 +231,7 @@ it("rolls back withdrawal when current authority is revoked at commit", async ()
     } finally {
       admitted.mockRestore();
       receipt.finish("cancelled");
+      await receipt.settled?.();
     }
   });
 });
@@ -317,6 +321,7 @@ it("recovers the committed withdrawal when delivery of the worker result fails",
     } finally {
       observer.mockRestore();
       receipt.finish("cancelled");
+      await receipt.settled?.();
     }
   });
 });

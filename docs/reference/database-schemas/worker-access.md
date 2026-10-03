@@ -1117,8 +1117,24 @@ an aborted but registered owner retains the right to finish cancelled. Confirmed
 commit receipts update the returned page even if ordinary result delivery fails,
 and accepted work settles before database custody is released. Process-held
 incognito reads retain their existing owner until the separate actor cutover;
-stage, finish, append, and submitted-input recovery remain separate work. This
+submitted-input recovery remains separate work. This
 changes no schema, retention, durability, configuration, or update behavior.
+
+Pending-input staging, processing completion, and terminal disposition use the
+same agent executor. The host captures the physical source before awaiting
+preparation, applies message hooks outside the transaction, and publishes custody
+only after native commit acknowledgment within the writer FIFO. The worker
+compares the staging snapshot and exact run, request, session, and lifecycle
+identities; transaction and commit grants recheck the live host owner. Lost
+responses reconcile native receipts, and uncertain outcomes never replay.
+Finishing immediately revokes execution while the same owner protects history
+custody until its disposition settles. Recorder and database cleanup owners join
+accepted work before releasing their resources. Source receipts stay distinct
+from collected transcript messages, and processing completion remains distinct
+from transcript consumption. Incognito keeps its process-held owner, and the
+released synchronous recorder completion callback retains its native SDK
+contract; internal callers await its asynchronous companion. Schemas, stored
+bytes, retention, and update behavior are unchanged.
 
 A missing resident row gets a bounded worker sharing read before history treats
 it as absent. This preserves refusal for durable entries marked incognito, which
