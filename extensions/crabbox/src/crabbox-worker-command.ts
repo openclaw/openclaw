@@ -282,6 +282,7 @@ export async function stopCrabboxLease(params: {
   warn: (message: string) => void;
   sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 }): Promise<void> {
+  const deadline = Date.now() + CRABBOX_STOP_TIMEOUT_MS;
   let result = await runCrabboxCommandWithCoordinatorRetry({
     action: "stop",
     args: ["stop", "--provider", params.provider, "--id", params.id],
@@ -303,13 +304,20 @@ export async function stopCrabboxLease(params: {
     result.code === 4 &&
     output.includes("Azure fixed lease cannot be adopted without its create intent")
   ) {
+    // Recovery shares the cleanup allowance reserved by the provider lifecycle.
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      throw new Error("Crabbox stop timed out before Azure fixed-lease recovery", {
+        cause: crabboxCommandError("stop", result),
+      });
+    }
     result = await runCrabboxCommandWithCoordinatorRetry({
       action: "stop recovery",
       args: ["stop", "--provider", params.provider, "--id", params.id, "--force"],
       binary: params.binary,
       runCommand: params.runCommand,
       sleep: params.sleep,
-      timeoutMs: CRABBOX_STOP_TIMEOUT_MS,
+      timeoutMs: remainingMs,
     });
   }
   crabboxCommandOutput("stop", result);
