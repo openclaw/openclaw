@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
 import { getUpdateRun, getUpdateRunAsync } from "../infra/update-run-ledger.js";
 import { isAcknowledgedAbandonedUpdateRun } from "../infra/update-run-record.js";
@@ -8,10 +9,20 @@ import {
 import { readUpdateRunStatus } from "../infra/update-run-status.js";
 
 type Formatter = (value: string) => string;
+type StatusReportOptions = {
+  ok?: Formatter;
+  warn?: Formatter;
+  muted?: Formatter;
+  localGatewayHealthy?: boolean;
+};
 
-function renderStatusReport(run: Parameters<typeof renderUpdateRunReport>[0]) {
+function renderStatusReport(
+  run: Parameters<typeof renderUpdateRunReport>[0],
+  localGatewayHealthy = false,
+) {
   const report = renderUpdateRunReport(run);
   const reconciled = isAcknowledgedAbandonedUpdateRun(run);
+  const historicalFailure = run.status === "failed" && !reconciled && localGatewayHealthy;
   const message =
     run.status === "failed" && !reconciled
       ? run.steps
@@ -22,37 +33,43 @@ function renderStatusReport(run: Parameters<typeof renderUpdateRunReport>[0]) {
   return {
     ...report,
     reconciled,
-    headline: message ? `${report.headline} ${message}` : report.headline,
+    historicalFailure,
+    headline: historicalFailure
+      ? `Last update run failed (${sanitizeTerminalText(run.reason?.trim() || "unknown reason").slice(0, 240)}) — Gateway is currently healthy; run \`openclaw update\` to reconcile.`
+      : message
+        ? `${report.headline} ${message}`
+        : report.headline,
   };
 }
 
-function readReport(payload: RestartSentinelPayload) {
+function readReport(payload: RestartSentinelPayload, localGatewayHealthy = false) {
   const run = payload.stats?.runId ? getUpdateRun(payload.stats.runId) : undefined;
-  return renderStatusReport(run ?? updateRunReportInputFromSentinel(payload));
+  return renderStatusReport(run ?? updateRunReportInputFromSentinel(payload), localGatewayHealthy);
 }
 
 export function formatUpdateRestartStatusValue(
   payload: RestartSentinelPayload | null | undefined,
-  opts: { ok?: Formatter; warn?: Formatter; muted?: Formatter } = {},
+  opts: StatusReportOptions = {},
 ): string | null {
   if (!payload || payload.kind !== "update") {
     return null;
   }
-  return formatUpdateRestartReport(payload, readReport(payload), opts);
+  return formatUpdateRestartReport(payload, readReport(payload, opts.localGatewayHealthy), opts);
 }
 
 function formatUpdateRestartReport(
   payload: RestartSentinelPayload,
-  { headline, reconciled }: ReturnType<typeof renderStatusReport>,
-  opts: { ok?: Formatter; warn?: Formatter; muted?: Formatter },
+  { headline, reconciled, historicalFailure }: ReturnType<typeof renderStatusReport>,
+  opts: StatusReportOptions,
 ): string {
-  const format = reconciled
-    ? opts.muted
-    : payload.status === "error"
-      ? opts.warn
-      : payload.status === "ok"
-        ? opts.ok
-        : opts.muted;
+  const format =
+    reconciled || historicalFailure
+      ? opts.muted
+      : payload.status === "error"
+        ? opts.warn
+        : payload.status === "ok"
+          ? opts.ok
+          : opts.muted;
   return format ? format(headline) : headline;
 }
 
@@ -68,7 +85,9 @@ export async function buildStatusUpdateRows(
     ];
   }
   const run = history.activeRun ?? history.lastRun;
-  const rows = run ? [{ Item: "Update run", Value: renderStatusReport(run).headline }] : [];
+  const rows = run
+    ? [{ Item: "Update run", Value: renderStatusReport(run, opts.localGatewayHealthy).headline }]
+    : [];
   if (history.runReconciliationError) {
     rows.push({
       Item: "Update reconciliation",
@@ -85,7 +104,10 @@ export async function buildStatusUpdateRows(
       : undefined;
     const restart = formatUpdateRestartReport(
       payload,
-      renderStatusReport(restartRun ?? updateRunReportInputFromSentinel(payload)),
+      renderStatusReport(
+        restartRun ?? updateRunReportInputFromSentinel(payload),
+        opts.localGatewayHealthy,
+      ),
       opts,
     );
     if (restart) {

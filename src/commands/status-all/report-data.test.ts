@@ -134,6 +134,7 @@ describe("buildStatusAllReportData", () => {
     "different-run",
     "same-prose",
     "generic-sentinel",
+    "failed-healthy",
   ] as const)(
     "keeps current update availability alongside %s history without observing config",
     async (history) => {
@@ -170,6 +171,10 @@ describe("buildStatusAllReportData", () => {
         "generic-sentinel",
       ].includes(history);
       if (hasRun) {
+        if (history === "failed-healthy") {
+          completed.status = "failed";
+          completed.reason = "post-update-failed";
+        }
         mocks.history.mockResolvedValue({ lastRun: completed });
         mocks.getUpdateRun.mockReturnValue(completed);
       }
@@ -218,6 +223,7 @@ describe("buildStatusAllReportData", () => {
             gatewayProbe: null,
             gatewayCallOverrides: undefined,
             remoteUrlMissing: false,
+            localGatewayHealthy: history === "failed-healthy",
           },
           secretDiagnostics: [],
           tailscaleMode: "off",
@@ -246,7 +252,11 @@ describe("buildStatusAllReportData", () => {
               {
                 Item: "Update run",
                 Value:
-                  history === "active" ? "⬆️ OpenClaw update in progress: verifying." : success,
+                  history === "active"
+                    ? "⬆️ OpenClaw update in progress: verifying."
+                    : history === "failed-healthy"
+                      ? "Last update run failed (post-update-failed) — Gateway is currently healthy; run `openclaw update` to reconcile."
+                      : success,
               },
             ]
           : []),

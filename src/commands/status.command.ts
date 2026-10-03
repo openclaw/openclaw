@@ -286,6 +286,7 @@ export async function statusCommand(
       ok,
       warn,
       muted,
+      localGatewayHealthy: scan.localGatewayHealthy,
     },
   );
   const lines = await buildStatusCommandReportLines(

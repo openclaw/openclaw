@@ -146,6 +146,7 @@ export async function appendStatusAllDiagnosis(params: {
   agentStatus?: AgentStatusLike;
   gatewayReachable: boolean;
   gatewayStartupPhase?: string;
+  localGatewayHealthy?: boolean;
   health: Awaited<ReturnType<typeof resolveStatusGatewayHealthSafe>> | null | undefined;
   nodeOnlyGateway: NodeOnlyGatewayInfo | null;
 }) {
@@ -217,7 +218,9 @@ export async function appendStatusAllDiagnosis(params: {
     lines.push(
       `  ${muted(`${summarizeRestartSentinel(params.sentinel.payload)} · ${formatTimeAgo(Date.now() - params.sentinel.payload.ts)}`)}`,
     );
-    const updateRestartValue = formatUpdateRestartStatusValue(params.sentinel.payload);
+    const updateRestartValue = formatUpdateRestartStatusValue(params.sentinel.payload, {
+      localGatewayHealthy: params.localGatewayHealthy,
+    });
     if (updateRestartValue) {
       lines.push(`  ${muted(`Update restart: ${updateRestartValue}`)}`);
     }

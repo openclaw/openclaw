@@ -47,6 +47,14 @@ Channels without a probe, such as WhatsApp, report lifecycle health instead.
 In the Health table, `healthy` is `OK`; degraded lifecycle states and failed
 probes remain `WARN`. A lifecycle `OK` does not mean a live probe ran.
 
+The Update run row preserves the last recorded update outcome. When the local
+Gateway passes the current readiness and connection checks, a previous failure
+is labeled as historical: `Last update run failed (post-update-failed) — Gateway
+is currently healthy; run openclaw update to reconcile.` Status does not rewrite
+the failed run or claim the update succeeded. Starting, unreachable, degraded,
+and remote Gateways do not qualify for this local-health note. Use
+`openclaw update status` to inspect the saved verification failure.
+
 `--deep` also asks the running Gateway whether the Node executable it still holds can be started. A Homebrew upgrade can delete that Cellar path while the LaunchAgent plist still points at a valid symlink and the Gateway port stays reachable. Status then warns:
 
 ```text

@@ -4,11 +4,14 @@ import type { UpdateCheckResult } from "../infra/update-check.js";
 import {
   createUpdateRun,
   finishUpdateRun,
+  getUpdateRun,
+  recordUpdateRunPhase,
   recordUpdateRunStep,
 } from "../infra/update-run-ledger.js";
 import type { UpdateRunRecord, UpdateRunStep } from "../infra/update-run-record.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { VERSION } from "../version.js";
+import { buildStatusUpdateRows } from "./status-update-restart.ts";
 import {
   formatUpdateAvailableHint,
   formatUpdateOneLiner,
@@ -64,6 +67,51 @@ const readStatus = (fetchGit = false) =>
   getUpdateCheckResult({ timeoutMs: 5000, fetchGit, includeRegistry: false });
 
 describe("status update ledger evidence", () => {
+  it.each([true, false, undefined])(
+    "separates failed history from current local Gateway health (%s)",
+    async (localGatewayHealthy) => {
+      const run = recordRun({
+        status: "failed",
+        reason: "post-update-failed",
+        steps: [
+          {
+            step: "gateway verification",
+            status: "failed",
+            failureFacts: [
+              {
+                check: "gateway",
+                code: "post-update-failed",
+                message: "Gateway did not settle; startup phase: waiting for managed service",
+              },
+            ],
+          },
+        ],
+      });
+      const saved = getUpdateRun(run.runId);
+      const rows = await buildStatusUpdateRows(null, { localGatewayHealthy });
+      expect(rows).toEqual([
+        {
+          Item: "Update run",
+          Value: localGatewayHealthy
+            ? "Last update run failed (post-update-failed) — Gateway is currently healthy; run `openclaw update` to reconcile."
+            : "⚠️ OpenClaw update failed: post-update-failed. Gateway did not settle; startup phase: waiting for managed service",
+        },
+      ]);
+      expect(getUpdateRun(run.runId)).toEqual(saved);
+    },
+  );
+
+  it("does not replace an active update with a historical failure's current-health note", async () => {
+    recordRun({ status: "failed", reason: "post-update-failed" });
+    const active = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
+    recordUpdateRunPhase(active.runId, "verifying");
+    const rows = await buildStatusUpdateRows(null, { localGatewayHealthy: true });
+    expect(rows[0]).toEqual({
+      Item: "Update run",
+      Value: "⬆️ OpenClaw update in progress: verifying.",
+    });
+  });
+
   it("reports a newer fetch failure using cached counts", async () => {
     recordRun({ status: "succeeded", steps: [{ step: "git fetch", status: "completed" }] });
     const run = recordRun({
