@@ -675,6 +675,49 @@ describe("agent runtime identity token", () => {
     },
   );
 
+  it.each(["signed", "direct"] as const)(
+    "carries a %s remote administrator requester grant without claiming tool capture",
+    async (mode) => {
+      useTempHome();
+      const runtimeToken = await importRuntimeTokenModule();
+      const grants = await import("./cron-creator-authority-grant.js");
+      const run = operationalRun("run-remote-admin-requester");
+      const scope = grants.createCronCreatorAuthorityRunScope(
+        run.operationalRunInstance.runId,
+        { kind: "unknown" },
+        { source: "control-ui-admin" },
+        undefined,
+        undefined,
+        undefined,
+        true,
+      );
+      try {
+        const grant = grants.mintCronCreatorAuthorityGrant(
+          scope,
+          undefined,
+          undefined,
+          undefined,
+          "requester",
+        );
+        const params = {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          operationalRunInstance: run.operationalRunInstance,
+          cronCreatorAuthorityGrant: grant,
+        };
+        const identity = await createIdentity(runtimeToken, mode, params);
+        expect(identity).toMatchObject({ cronCreatorAuthorityGrant: grant });
+        expect(identity).not.toHaveProperty("cronToolsAllowCapture");
+        grants.revokeCronCreatorAuthorityRunScope(scope);
+        await expect(createIdentity(runtimeToken, mode, params)).rejects.toThrow(
+          "require tool-surface or authenticated-requester provenance",
+        );
+      } finally {
+        grants.revokeCronCreatorAuthorityRunScope(scope);
+      }
+    },
+  );
+
   it("does not mint local credentials while rejecting invalid presented tokens", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();

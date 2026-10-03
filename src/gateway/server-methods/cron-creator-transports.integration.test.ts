@@ -1,6 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withTestTimeout,
+} from "../../../test/helpers/promise.js";
 import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
@@ -8,6 +12,7 @@ import {
   type AdmittedRunContext,
 } from "../../agents/admitted-run-context.js";
 import {
+  bindCronRequesterGrant,
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
@@ -18,6 +23,7 @@ import {
   bindGatewayContextResolver,
   clearGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { createAgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
@@ -28,8 +34,10 @@ import {
 } from "../mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../mcp-http.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
+import { handleGatewayRequest } from "../server-methods.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { resolveGatewayChatCronCreatorAuthorityAdmission } from "./cron-creator-authority-admission.js";
+import { cronHandlers } from "./cron.js";
 import {
   SESSION,
   CREATOR,
@@ -42,6 +50,7 @@ import {
   createCreatorTransportTools,
   installRequesterCronAuthorityTestHooks,
 } from "./requester-cron-authority.test-support.js";
+import type { GatewayClient, RespondFn } from "./types.js";
 
 // Attached-node inventory is unrelated to these original-caller and Cron commit boundaries.
 vi.mock("../../agents/node-exec-availability.js", () => ({
@@ -51,6 +60,150 @@ vi.mock("../../agents/node-exec-availability.js", () => ({
 installRequesterCronAuthorityTestHooks();
 
 describe("original caller through Cron creator transports", () => {
+  it(
+    "commits a tool-free remote admin request but rejects revoked and out-of-scope writes",
+    { timeout: 30_000 },
+    async () => {
+      const config: OpenClawConfig = { ...cfg };
+      setRuntimeConfigSnapshot(config);
+      const entered = createDeferred();
+      const release = createDeferred();
+      let hold = false;
+      const fixture = createCronFixture(async () => {
+        if (hold) {
+          entered.resolve();
+          await release.promise;
+        }
+        return [];
+      }, config);
+      const caller = captureGatewayDeviceRevocation(
+        fixture.context,
+        { deviceId: "requester-device", role: "operator" },
+        () => true,
+      );
+      const admin = createSyntheticPluginRuntimeClient({ scopes: ["operator.admin"] });
+      admin.internal = { controlUiAdmin: true };
+      const runId = "remote-admin-requester-write";
+      const admitted = expectDefined(
+        admission(runId, admin, undefined, caller.isCurrent),
+        "remote admin admission",
+      );
+      expect(admitted.callerScopedCreation).toBe(true);
+
+      const job = {
+        schedule: { kind: "every" as const, everyMs: 60_000 },
+        sessionTarget: "current" as const,
+        payload: { kind: "agentTurn" as const, message: "Check status", toolsAllow: [] },
+        delivery: { mode: "none" as const },
+      };
+      const invoke = async (client: GatewayClient, name: string, agentId?: string) => {
+        const params = { ...job, name, ...(agentId ? { agentId } : {}) };
+        const respond = vi.fn<RespondFn>();
+        await expectDefined(
+          cronHandlers["cron.add"],
+          "cron.add handler",
+        )({
+          req: { type: "req", id: name, method: "cron.add", params },
+          params,
+          client,
+          context: fixture.context,
+          respond,
+          isWebchatConnect: () => false,
+        });
+        return expectDefined(respond.mock.calls[0], "cron.add response");
+      };
+
+      try {
+        await inRun(runId, admitted, async (identity, run) => {
+          bindGatewayContextResolver(run, () => fixture.context);
+          try {
+            const issue = expectDefined(bindCronRequesterGrant(runId), "requester grant");
+            const runtimeIdentity = expectDefined(
+              await createAgentRuntimeIdentity({
+                agentId: identity.agentId,
+                sessionKey: identity.sessionKey,
+                operationalRunInstance: identity.operationalRunInstance,
+                cronCreatorAuthorityGrant: issue(),
+              }),
+              "remote requester runtime identity",
+            );
+            expect(runtimeIdentity.cronToolsAllowCapture).toBeUndefined();
+            const agentClient = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
+            agentClient.internal!.agentRuntimeIdentity = runtimeIdentity;
+
+            const allowed = await invoke(agentClient, "Allowed requester");
+            expect(allowed[0], JSON.stringify(allowed)).toBe(true);
+            const stored = await fixture.read();
+            expect(stored).toMatchObject([
+              { name: "Allowed requester", payload: { toolsAllow: [] } },
+            ]);
+            expect(stored[0]?.runtimeAuthority).toBeUndefined();
+
+            agentClient.internal!.agentRuntimeIdentity = await createAgentRuntimeIdentity({
+              agentId: identity.agentId,
+              sessionKey: identity.sessionKey,
+              operationalRunInstance: identity.operationalRunInstance,
+              cronCreatorAuthorityGrant: issue(),
+            });
+            hold = true;
+            const pending = invoke(agentClient, "Revoked requester");
+            try {
+              await awaitGateBeforeSettlement(
+                entered.promise,
+                pending,
+                "cron validation was not reached",
+              );
+              invalidateGatewayDeviceRevocation(fixture.context, "requester-device", "operator");
+            } finally {
+              release.resolve();
+            }
+            const denied = await pending;
+            expect(denied[0]).toBe(false);
+            expect(denied[2]?.message).toMatch(/authority.*no longer active/i);
+            expect(await fixture.read()).toEqual(stored);
+          } finally {
+            release.resolve();
+            clearGatewayContextResolver(run);
+          }
+        });
+
+        const nonadmin = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
+        nonadmin.internal = { controlUiAdmin: true };
+        expect(admission("nonadmin-requester", nonadmin)).toBeUndefined();
+        await inRun("nonadmin-requester", undefined, async (identity) => {
+          nonadmin.internal!.agentRuntimeIdentity = identity;
+          const respond = vi.fn<RespondFn>();
+          await handleGatewayRequest({
+            req: {
+              type: "req",
+              id: "nonadmin-rpc",
+              method: "cron.add",
+              params: { ...job, name: "Nonadmin RPC" },
+            },
+            client: nonadmin,
+            context: fixture.context,
+            respond,
+            isWebchatConnect: () => false,
+          });
+          expect(respond.mock.calls[0]).toMatchObject([
+            false,
+            undefined,
+            { message: "missing scope: operator.admin" },
+          ]);
+          expect((await fixture.read()).map((entry) => entry.name)).toEqual(["Allowed requester"]);
+
+          const denied = await invoke(nonadmin, "Out-of-scope requester", "other-agent");
+          expect(denied[0]).toBe(false);
+          expect(denied[2]?.message).toContain("outside caller scope");
+          expect((await fixture.read()).map((entry) => entry.name)).toEqual(["Allowed requester"]);
+        });
+      } finally {
+        release.resolve();
+        caller.release();
+      }
+    },
+  );
+
   it("preserves ordinary restricted caller creation without management admission", async () => {
     const config: OpenClawConfig = { ...cfg, tools: { allow: [AUTOMATIONS_TOOL_NAME] } };
     setRuntimeConfigSnapshot(config);

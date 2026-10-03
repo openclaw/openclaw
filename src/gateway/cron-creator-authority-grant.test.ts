@@ -17,6 +17,7 @@ import {
   createCronCreatorAuthorityRunScope,
   getCronManagementAuthority,
   getCronManagementCallerOrigin,
+  hasCronCreatorGrantProvenance,
   mintCronCreatorAuthorityGrant,
   resolveCronCreatorAuthorityGrantProvenance,
   revokeCronCreatorAuthorityRunScope,
@@ -123,6 +124,55 @@ describe("cron creator authority grants", () => {
     ).toThrow("requires authenticated creator facts");
     revokeCronCreatorAuthorityRunScope(local);
     revokeCronCreatorAuthorityRunScope(external);
+  });
+
+  it("retains requester-only remote admin provenance without granting runtime authority", () => {
+    const remote = createCronCreatorAuthorityRunScope(
+      "run-remote-admin",
+      { kind: "unknown" },
+      { source: "control-ui-admin" },
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+    const grant = mintCronCreatorAuthorityGrant(
+      remote,
+      undefined,
+      undefined,
+      undefined,
+      "requester",
+    );
+    expect(resolveCronCreatorAuthorityGrantProvenance(grant, remote.runId)).toEqual({
+      capturesRuntimeAuthority: false,
+      callerScopedCreation: true,
+    });
+    expect(hasCronCreatorGrantProvenance({ cronCreatorAuthorityGrant: grant }, remote.runId)).toBe(
+      true,
+    );
+    expect(hasCronCreatorGrantProvenance({ cronCreatorAuthorityGrant: grant }, "other-run")).toBe(
+      false,
+    );
+    expect(() => mintCronCreatorAuthorityGrant(remote)).toThrow(
+      "Automation creation is not granted",
+    );
+    expect(consumeCronCreatorAuthorityGrant(grant).authority).toBeUndefined();
+    expect(hasCronCreatorGrantProvenance({ cronCreatorAuthorityGrant: grant }, remote.runId)).toBe(
+      false,
+    );
+    revokeCronCreatorAuthorityRunScope(remote);
+  });
+
+  it("does not infer remote creator provenance from admin management alone", () => {
+    const remote = createCronCreatorAuthorityRunScope(
+      "run-admin-only",
+      { kind: "unknown" },
+      { source: "control-ui-admin" },
+    );
+    expect(() =>
+      mintCronCreatorAuthorityGrant(remote, undefined, undefined, undefined, "requester"),
+    ).toThrow("Automation creation is not granted");
+    revokeCronCreatorAuthorityRunScope(remote);
   });
 
   it("rejects a runId mismatch without consuming the exact grant", () => {

@@ -289,6 +289,7 @@ describe("fresh remote administrator creation", () => {
             const grant = requester!();
             expect(resolveCronCreatorAuthorityGrantProvenance(grant, runId)).toEqual({
               capturesRuntimeAuthority: false,
+              callerScopedCreation: true,
             });
             expect(consumeCronCreatorAuthorityGrant(grant).authority).toBeUndefined();
             expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow("no longer active");
