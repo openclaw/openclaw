@@ -103,7 +103,12 @@ function prepareRequesterPolicy(
   };
   const assertRole = (profile: UserProfileAccessFacts | undefined, config: OpenClawConfig) => {
     const role = profile
-      ? resolveOperatorRolePolicyForAssignment(profile.profileId, profile.assignedRole, config)
+      ? resolveOperatorRolePolicyForAssignment(
+          profile.profileId,
+          profile.assignedRole,
+          config,
+          profile.githubLogin ?? null,
+        )
       : undefined;
     if (
       !roleScopesAllow({

@@ -131,13 +131,15 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
     assertCurrent?: () => void;
     admit?: (facts: DevicePairingAdmissionFacts) => void;
     onTokensReplaced?: (deviceId: string, roles: readonly string[]) => void;
+    /** Map a refused operation only after its admission and publication have settled. */
+    onAuthorityRefused?: () => DevicePairingWorkerOperations[Key]["output"];
   } = {},
 ): Promise<DevicePairingWorkerOperations[Key]["output"]> {
   const context = captureOpenClawStateWorkerContext(
     options.baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: options.baseDir } } : {},
   );
   const captured = structuredClone(command);
-  return withDevicePairingLock(async () => {
+  const operation = withDevicePairingLock(async () => {
     context.admission.assertCurrent();
     options.assertCurrent?.();
     const publication = captureDevicePairingPublication(context.admission);
@@ -217,6 +219,15 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
       }
     }
   });
+  const onAuthorityRefused = options.onAuthorityRefused;
+  return onAuthorityRefused
+    ? operation.catch((error: unknown) => {
+        if (error instanceof DevicePairingAuthorityRefusedError) {
+          return onAuthorityRefused();
+        }
+        throw error;
+      })
+    : operation;
 }
 
 /** Start the privileged effect in the same interval that publishes its pairing facts. */

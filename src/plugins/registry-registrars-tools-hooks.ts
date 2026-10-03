@@ -20,6 +20,7 @@ import {
   resolveConversationAccessAllowed,
   resolvePromptInjectionAllowed,
 } from "./hook-policy-decisions.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import {
   resolveTypedHookTimeoutMs,
   type PluginRegistryState,
@@ -275,6 +276,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     if (normalized.length > 0) {
       record.toolNames.push(...normalized);
     }
+    getPluginInstance(record)?.admitFactory(factory);
     registry.tools.push({
       ...createRegistration(record, {
         factory,

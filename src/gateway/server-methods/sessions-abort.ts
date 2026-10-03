@@ -49,7 +49,7 @@ import {
   resolveStoredSessionOwnerAgentId,
 } from "../session-store-key.js";
 import { loadSessionEntry } from "../session-utils.js";
-import { resolveWorkerInferenceTarget } from "../worker-environments/inference-control-internal.js";
+import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import { resolveChatAbortRequester } from "./chat-abort-authorization.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
 import {
@@ -172,7 +172,9 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     const requestedParamAgentId = normalizeOptionalString(p.agentId);
     const clearQueued = p.clearQueued === true;
     const workerRunTarget = requestedRunId
-      ? resolveWorkerInferenceTarget(context.workerEnvironmentService, requestedRunId)
+      ? getWorkerInferenceSessionControl(
+          context.workerEnvironmentService,
+        )?.resolveSessionTargetForRunId(requestedRunId)
       : undefined;
     const embeddedRun = requestedRunId
       ? resolveActiveEmbeddedRunOwnerByRunId(requestedRunId)

@@ -8,7 +8,7 @@ import {
 } from "../acp/runtime/session-meta-keys.js";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { noteSessionTranscriptHealth } from "../commands/doctor-session-transcripts.js";
-import { loadTranscriptEvents } from "../config/sessions/session-accessor.sqlite-read.js";
+import { loadTranscriptEvents } from "../config/sessions/session-transcript-events.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";

@@ -346,12 +346,12 @@ describe("worker chat.abort settlement", () => {
             expect(harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor).toBe(
               finishing?.seq,
             );
-            expect(harness.placementStore.listPendingWorkspaceResults()).toHaveLength(1);
+            expect(await harness.placementStore.listPendingWorkspaceResultsAsync()).toHaveLength(1);
           } else {
             expect(harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor).toBe(
               cursorAtAbort,
             );
-            expect(harness.placementStore.listPendingWorkspaceResults()).toEqual([]);
+            expect(await harness.placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
           }
           if (fence === "credential") {
             expect(failure).toBeUndefined();

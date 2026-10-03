@@ -89,6 +89,7 @@ describe("subagent registry recovery scheduling", () => {
         storePath: "/synthetic-kill/sessions.sqlite",
         entry: killSessionEntry.current,
         assertCurrent: assertOwner,
+        prepareRead: () => undefined,
         withPublication: async (publish) => await publish(),
         release: () => {},
       };

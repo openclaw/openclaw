@@ -70,6 +70,59 @@ describe("gateway operator role config", () => {
     gateway: { roles: { default: "guest", definitions: { guest: role } } },
   });
 
+  test("accepts GitHub login assignments to configured roles", () => {
+    const roles = {
+      default: "guest",
+      definitions: { guest: validRole, release_admin: validRole },
+      assignments: { byGithubLogin: { " Octo-Cat ": "release_admin" } },
+    };
+
+    expect(OpenClawSchema.parse({ gateway: { roles } }).gateway?.roles).toEqual(roles);
+  });
+
+  test.each([
+    {
+      name: "unknown assigned role",
+      byGithubLogin: { octocat: "missing" },
+      login: "octocat",
+      message: "must name a configured role definition",
+    },
+    {
+      name: "malformed GitHub login",
+      byGithubLogin: { octo_cat: "guest" },
+      login: "octo_cat",
+      message: "Invalid GitHub login",
+    },
+    {
+      name: "case-insensitive duplicate GitHub logins",
+      byGithubLogin: { Octocat: "guest", octocat: "guest" },
+      login: "octocat",
+      message: "Duplicate GitHub login",
+    },
+  ])("rejects $name", ({ byGithubLogin, login, message }) => {
+    const result = OpenClawSchema.safeParse({
+      gateway: {
+        roles: {
+          default: "guest",
+          definitions: { guest: validRole },
+          assignments: { byGithubLogin },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: ["gateway", "roles", "assignments", "byGithubLogin", login],
+            message: expect.stringContaining(message),
+          }),
+        ]),
+      );
+    }
+  });
+
   test("validates model source, scoped aliases, empty membership and future-family exclusions", () => {
     const result = validateConfigObject({
       agents: {

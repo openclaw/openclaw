@@ -924,6 +924,10 @@ describe("EmbeddedTuiBackend", () => {
     createSessionRowProjectionMock,
     listProjectedSessionsMock,
     runSessionStartupMigrationMock,
+    getRuntimeConfigMock,
+    refreshPreparedModelRuntimeSnapshotsMock,
+    agentCommandFromIngressMock,
+    unregisterConfigWriteListenerMock,
     flushMicrotasks,
   });
 
@@ -966,27 +970,6 @@ describe("EmbeddedTuiBackend", () => {
       }
       expect(await fs.readFile(storePath)).toEqual(before);
     });
-  });
-
-  it("publishes the configured runtime before admitting the first local turn", async () => {
-    const initialConfig = { agents: { list: [{ id: "main" }] } };
-    getRuntimeConfigMock.mockReturnValue(initialConfig);
-    const publication = deferred<void>();
-    refreshPreparedModelRuntimeSnapshotsMock.mockReturnValueOnce(publication.promise);
-
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-
-    const send = sendMainChat(backend, "hello", "run-waits-for-published-runtime");
-    await flushMicrotasks();
-
-    expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(initialConfig);
-    expect(agentCommandFromIngressMock).not.toHaveBeenCalled();
-
-    publication.resolve();
-    await send;
-    await vi.waitFor(() => expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1));
-    await backend.stop();
   });
 
   it("queues config runtime publication ahead of later local turns and unregisters on stop", async () => {

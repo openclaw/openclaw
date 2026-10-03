@@ -1,4 +1,5 @@
 import { realpathSync } from "node:fs";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
@@ -52,6 +53,7 @@ async function makeService(params: {
       logger: quietLogger as never,
       dataDir,
       workerModuleUrl,
+      scheduler: createTestPluginServiceScheduler(),
     },
   );
   services.push(service);

@@ -85,30 +85,19 @@ function resolveDiscordDeliveryTarget(
   event: DiscordSubagentDeliveryTargetEvent,
 ): DiscordSubagentDeliveryTargetResult {
   const requesterAccountId = event.requesterOrigin?.accountId?.trim();
-  const requesterThreadId =
-    event.requesterOrigin?.threadId != null && event.requesterOrigin.threadId !== ""
-      ? (normalizeOptionalStringifiedId(event.requesterOrigin.threadId) ?? "")
-      : "";
+  const requesterThreadId = normalizeOptionalStringifiedId(event.requesterOrigin?.threadId);
   const bindings = listThreadBindingsBySessionKey({
     targetSessionKey: event.childSessionKey,
     ...(requesterAccountId ? { accountId: requesterAccountId } : {}),
     targetKind: "subagent",
   });
-  if (bindings.length === 0) {
-    return undefined;
-  }
-
   let binding: (typeof bindings)[number] | undefined;
   if (requesterThreadId) {
-    binding = bindings.find((entry) => {
-      if (entry.threadId !== requesterThreadId) {
-        return false;
-      }
-      if (requesterAccountId && entry.accountId !== requesterAccountId) {
-        return false;
-      }
-      return true;
-    });
+    binding = bindings.find(
+      (entry) =>
+        entry.threadId === requesterThreadId &&
+        (!requesterAccountId || entry.accountId === requesterAccountId),
+    );
   }
   if (!binding && bindings.length === 1) {
     binding = bindings[0];

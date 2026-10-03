@@ -6,6 +6,7 @@ import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-help
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -84,12 +85,13 @@ function resolveAccount(cfg: OpenClawConfig, accountId = "default"): ResolvedDis
 }
 
 function startDiscordAccount(cfg: OpenClawConfig, accountId = "default") {
-  return discordPlugin.gateway!.startAccount!(
-    createStartAccountContext({
+  return discordPlugin.gateway!.startAccount!({
+    ...createStartAccountContext({
       account: resolveAccount(cfg, accountId),
       cfg,
     }),
-  );
+    scheduler: createTestPluginServiceScheduler(),
+  });
 }
 
 function prepareDiscordStartupMocks() {
@@ -115,7 +117,10 @@ async function expectDiscordStartupDelay(
 ) {
   const ctx = createStartAccountContext({ account: resolveAccount(cfg, accountId), cfg });
   sleepWithAbortMock.mockClear();
-  await discordPlugin.gateway!.startAccount!(ctx);
+  await discordPlugin.gateway!.startAccount!({
+    ...ctx,
+    scheduler: createTestPluginServiceScheduler(),
+  });
   if (expectedMs === 0) {
     expect(sleepWithAbortMock).not.toHaveBeenCalled();
     return;
@@ -796,7 +801,10 @@ describe("discordPlugin outbound", () => {
       statusPatchSink: (next) => statusPatches.push({ ...next }),
     });
 
-    await discordPlugin.gateway!.startAccount!(ctx);
+    await discordPlugin.gateway!.startAccount!({
+      ...ctx,
+      scheduler: createTestPluginServiceScheduler(),
+    });
 
     const monitorParams = objectArgAt(monitorDiscordProviderMock, 0, 0);
     expect(monitorParams.token).toBe("discord-token");
@@ -891,7 +899,10 @@ describe("discordPlugin outbound", () => {
       application: { intents: { messageContent: "enabled" } },
     });
 
-    await discordPlugin.gateway!.startAccount!(ctx);
+    await discordPlugin.gateway!.startAccount!({
+      ...ctx,
+      scheduler: createTestPluginServiceScheduler(),
+    });
 
     await expectStaleProbeMetadataCleared(statusPatches);
   });
@@ -913,7 +924,10 @@ describe("discordPlugin outbound", () => {
       application: { intents: { messageContent: "enabled" } },
     });
 
-    await discordPlugin.gateway!.startAccount!(ctx);
+    await discordPlugin.gateway!.startAccount!({
+      ...ctx,
+      scheduler: createTestPluginServiceScheduler(),
+    });
 
     await expectStaleProbeMetadataCleared(statusPatches);
   });

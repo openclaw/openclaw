@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createFileWatchNotifier } from "../../infra/file-watch-notifier.js";
 import type { applyExtractedSkillRoot } from "../lifecycle/archive-install.js";
 import type * as Uninstall from "../lifecycle/clawhub-uninstall.js";
@@ -14,8 +15,8 @@ import {
 
 type ApplyRequest = Omit<
   Parameters<typeof applyExtractedSkillRoot>[0],
-  "workspaceDir" | "logger" | "beforeInstall"
->;
+  "workspaceDir" | "logger" | "beforeInstall" | "authorizeMutation"
+> & { publicationCheckpoints?: boolean };
 type RemovalRequest = { plan: Uninstall.ClawHubSkillUninstallPlan; reportChange?: boolean };
 type Decision = { decision: null | { error: string; failureKind?: unknown } };
 type WatchRequest = Pick<WorkspaceSkillSourceRequest, "sourcePlan" | "executionWorkspaceDir">;
@@ -45,6 +46,30 @@ export async function serveWorkspaceSkills(options: {
       const result = await applyExtractedSkillRoot({
         ...request,
         workspaceDir: workspace,
+        // SSH publishers close stdin after their policy reply; paired nodes opt into
+        // keeping it open for authorization at each persistent publication.
+        beforePersistentApply:
+          request.publicationCheckpoints === true
+            ? () => {
+                if (input.destroyed || input.readableEnded) {
+                  throw new Error("Skill installation transport closed");
+                }
+              }
+            : undefined,
+        authorizeMutation:
+          request.publicationCheckpoints === true
+            ? async () => {
+                await write({ type: "prepared", phase: "apply" });
+                const reply = await lines.read();
+                if (reply.decision === null) {
+                  return;
+                }
+                if (!isRecord(reply.decision) || typeof reply.decision.error !== "string") {
+                  throw new Error("Invalid Gateway publication decision");
+                }
+                throw new Error(reply.decision.error);
+              }
+            : undefined,
         logger: { info: console.error, warn: console.error },
         beforeInstall: async (mode) => {
           await write({ type: "prepared", mode });

@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   GatewayAccessGrantRef,
   PluginGatewayAccessAuthority,
+  PluginGatewayAccessPolicy,
 } from "../plugins/gateway-access-policy.types.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { onUserProfilesChanged, readUserProfileVersion } from "../state/user-profile-events.js";
@@ -67,9 +68,31 @@ function currentAccessPolicies() {
 
 export function hasGatewayOperatorAccessPolicies(config: OpenClawConfig): boolean {
   return (
+    usesGitHubRoleAssignments(config, null) ||
     currentAccessPolicies().length > 0 ||
     Object.values(config.gateway?.roles?.definitions ?? {}).some((role) => role.accessPolicyPlugin)
   );
+}
+
+function usesGitHubRoleAssignments(config: OpenClawConfig, assignedRole: string | null): boolean {
+  const roles = config.gateway?.roles;
+  return Boolean(
+    roles &&
+    Object.keys(roles.assignments?.byGithubLogin ?? {}).length > 0 &&
+    (!assignedRole || !Object.hasOwn(roles.definitions, assignedRole)),
+  );
+}
+
+function pluginProfile(
+  profile: Pick<UserProfileAccessFacts, "profileId" | "emails" | "githubAccountIds">,
+  assignedRole: string | null,
+): Parameters<PluginGatewayAccessPolicy["authorize"]>[0]["profile"] {
+  return {
+    profileId: profile.profileId,
+    emails: [...profile.emails],
+    ...(profile.githubAccountIds ? { githubAccountIds: [...profile.githubAccountIds] } : {}),
+    assignedRole,
+  };
 }
 
 /** Bind additional access to this exact authenticated person and the original policy lifetimes. */
@@ -87,6 +110,7 @@ export function resolveGatewayOperatorAccessAuthority(
   const profile = resident.readCurrentFacts();
   const emails = [...profile.emails];
   const githubAccountIds = [...(profile.githubAccountIds ?? [])];
+  const usesGithubAssignments = usesGitHubRoleAssignments(config, profile.assignedRole);
   let profileVersion = readUserProfileVersion();
   return resolvePreparedGatewayOperatorAccessAuthority(
     {
@@ -94,6 +118,7 @@ export function resolveGatewayOperatorAccessAuthority(
       emails,
       githubAccountIds,
       role: profile.assignedRole,
+      githubLogin: profile.githubLogin ?? null,
       isCurrent: () => {
         resident.assertCurrent();
         if (profile.profileId !== profileId) {
@@ -107,6 +132,7 @@ export function resolveGatewayOperatorAccessAuthority(
           // Display/avatar changes preserve admitted work.
           if (
             current.profileId !== profileId ||
+            (usesGithubAssignments && current.githubLogin !== profile.githubLogin) ||
             emails.some((email) => !currentEmails.has(email)) ||
             githubAccountIds.some((accountId) => !current.githubAccountIds?.includes(accountId))
           ) {
@@ -127,6 +153,7 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
     profileId: string;
     emails: readonly string[];
     githubAccountIds?: readonly number[];
+    githubLogin?: string | null;
     role: string | null;
     isCurrent: () => boolean;
   }>,
@@ -139,11 +166,11 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
   if (policies.length === 0 && !hasGatewayOperatorAccessPolicies(config)) {
     return null;
   }
-  const emails = [...profile.emails];
   const requiredPlugin = resolveOperatorRolePolicyForAssignment(
     profile.profileId,
     profile.role,
     config,
+    profile.githubLogin ?? null,
   )?.accessPolicyPlugin;
   if (requiredPlugin && !policies.some((entry) => entry.pluginId === requiredPlugin)) {
     throw new GatewayOperatorAccessDeniedError();
@@ -178,12 +205,7 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
     const authorities = policies.flatMap(({ policy, pluginId }) => {
       const authority = policy.authorize({
         config,
-        profile: {
-          profileId: profile.profileId,
-          emails: [...emails],
-          ...(profile.githubAccountIds ? { githubAccountIds: [...profile.githubAccountIds] } : {}),
-          assignedRole: profile.role,
-        },
+        profile: pluginProfile(profile, profile.role),
         requiredByRole: pluginId === requiredPlugin,
       });
       if (authority && pluginId === requiredPlugin) {
@@ -194,7 +216,7 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
     if (!requiredPolicyConfirmed) {
       throw new GatewayOperatorAccessDeniedError();
     }
-    if (authorities.length === 0) {
+    if (authorities.length === 0 && !usesGitHubRoleAssignments(config, profile.role)) {
       releaseProfiles();
       return null;
     }
@@ -222,7 +244,9 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
       signal,
       gatewayAccessGrant: original?.authority.grantId
         ? Object.freeze({ pluginId: original.pluginId, grantId: original.authority.grantId })
-        : undefined,
+        : authorities.length === 0
+          ? null
+          : undefined,
     };
   } catch {
     releaseProfiles();
@@ -242,6 +266,7 @@ export function resumeGatewayOperatorAccessGrant(
     profile.profileId,
     profile.assignedRole,
     config,
+    profile.githubLogin ?? null,
   )?.accessPolicyPlugin;
   if (requiredPlugin && requiredPlugin !== grant?.pluginId) {
     // A newly required policy cannot replace the original request's recorded basis.
@@ -249,7 +274,7 @@ export function resumeGatewayOperatorAccessGrant(
   }
   const context = {
     config,
-    profile,
+    profile: pluginProfile(profile, profile.assignedRole),
   };
   if (grant) {
     const policy = policies.find(({ pluginId }) => pluginId === grant.pluginId)?.policy;

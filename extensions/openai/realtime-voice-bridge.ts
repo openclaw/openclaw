@@ -30,7 +30,6 @@ import {
   isOpenAIRealtimeStartupAuthFailure,
   requireOpenAIRealtimeApiKey,
   requireOpenAIRealtimePlatformAuth,
-  resolveOpenAIRealtimeEnvApiKey,
   resolveOpenAIRealtimeSecretInput,
   type OpenAIRealtimeUserMessageOptions,
   type OpenAIRealtimeVoiceBridgeConfig,
@@ -435,18 +434,18 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
 
     if (hasOpenAIRealtimeConfiguredApiKeyInput(cfg.apiKey)) {
       const directApiKey = resolveOpenAIRealtimeSecretInput(cfg.apiKey);
-      if (directApiKey.status === "missing") {
+      if (!directApiKey) {
         throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
       }
-      return this.resolveApiKeyConnectionParams(directApiKey.value, model);
+      return this.resolveApiKeyConnectionParams(directApiKey, model);
     }
 
     if (cfg.azureEndpoint) {
-      const directApiKey = resolveOpenAIRealtimeEnvApiKey();
-      if (directApiKey.status === "missing") {
+      const directApiKey = resolveOpenAIRealtimeSecretInput(process.env.OPENAI_API_KEY);
+      if (!directApiKey) {
         throw new Error(OPENAI_REALTIME_API_KEY_REQUIRED);
       }
-      return this.resolveApiKeyConnectionParams(directApiKey.value, model);
+      return this.resolveApiKeyConnectionParams(directApiKey, model);
     }
 
     return this.resolveDefaultConnectionParams(model);
@@ -464,7 +463,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
       },
       this.runtime,
     );
-    return this.resolveApiKeyConnectionParams(auth.value, model);
+    return this.resolveApiKeyConnectionParams(auth, model);
   }
 
   private resolveApiKeyConnectionParams(

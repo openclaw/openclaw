@@ -24,6 +24,17 @@ function assistant(content: unknown, fields: Record<string, unknown> = {}) {
 }
 
 describe("message-normalizer", () => {
+  it("hides the stored subagent envelope in rendered user content without changing the source", () => {
+    const text =
+      "[Subagent Context] You are running as a subagent (depth 1/5). Complete the current [Subagent Task]; inherited conversation is background context, not your assignment.\n\n[Subagent Task]\n\nInvestigate Side chat.\n\nBegin. Execute the assigned task to completion.";
+    const message = { role: "user", content: [{ type: "text", text }] };
+    expect(normalizeMessage(message).content).toEqual([
+      { type: "text", text: "Investigate Side chat." },
+    ]);
+    expect(message.content).toEqual([{ type: "text", text }]);
+    expect(assistant(text).content).toEqual([{ type: "text", text }]);
+  });
+
   afterEach(() => vi.useRealTimers());
 
   it("degrades missing transcript entries to an empty unknown message", () => {

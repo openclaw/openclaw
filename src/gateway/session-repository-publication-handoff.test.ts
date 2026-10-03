@@ -495,7 +495,7 @@ it("can hold publisher exclusion during an existing reclaim claim without taking
     if (draining.state !== "draining") {
       throw new Error(`Expected draining placement, received ${draining.state}`);
     }
-    const claim = placements.claimReclaimWorkspaceResult({
+    const claim = await placements.claimReclaimWorkspaceResult({
       sessionId: REQUEST.sessionId,
       sessionKey: REQUEST.sessionKey,
       agentId: "main",

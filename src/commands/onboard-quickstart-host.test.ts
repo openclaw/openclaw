@@ -53,7 +53,7 @@ describe("runQuickstartForegroundGateway", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each(["token", "password"] as const)(
+  it.each(["token", "password", "trusted-proxy"] as const)(
     "starts the Gateway and verifies %s auth before opening the dashboard",
     async (mode) => {
       const h = createHostHarness({
@@ -61,7 +61,15 @@ describe("runQuickstartForegroundGateway", () => {
           mode: "local",
           bind: "loopback",
           port: 19431,
-          auth: { mode, token: "synthetic-token", password: "synthetic-password" },
+          auth: {
+            mode,
+            ...(mode === "token"
+              ? { token: "synthetic-token" }
+              : { password: "synthetic-password" }),
+            ...(mode === "trusted-proxy"
+              ? { trustedProxy: { userHeader: "x-forwarded-user" } }
+              : {}),
+          },
           controlUi: { basePath: "/dashboard" },
         },
       });
@@ -74,7 +82,7 @@ describe("runQuickstartForegroundGateway", () => {
         expect.objectContaining({
           url: "ws://127.0.0.1:19431/dashboard",
           token: mode === "token" ? "synthetic-token" : undefined,
-          password: mode === "password" ? "synthetic-password" : undefined,
+          password: mode === "token" ? undefined : "synthetic-password",
         }),
       );
 

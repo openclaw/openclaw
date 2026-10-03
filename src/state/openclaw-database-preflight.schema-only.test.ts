@@ -187,6 +187,7 @@ it.each([
       const run = () =>
         preflightOpenClawDatabaseSchemas({
           env,
+          preserveSourceArtifacts: true,
           verifyCurrentSchemaShape: mode !== "header",
           requireStartupMigrationReadiness: mode === "startup",
           signal: controller.signal,

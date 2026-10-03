@@ -24,6 +24,7 @@ import {
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
+import { createPluginServiceScheduler } from "../../plugins/service-scheduler.js";
 import type { OpenClawPluginDefinition } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
@@ -33,6 +34,7 @@ import {
   resolveBundledPluginPublicModulePath,
 } from "../../test-utils/bundled-plugin-public-surface.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -144,6 +146,8 @@ export async function createComposedCatalogFixture(
     throw new Error("Expected a bound loopback native endpoint");
   }
   const previous = captureActivePluginRegistrySnapshot();
+  const scheduler = createTestGatewayScheduler();
+  const serviceScheduler = createPluginServiceScheduler(scheduler).scheduler;
   let stopCatalog: (() => Promise<void>) | undefined;
   let projection: SessionRowProjection | undefined;
   let stateOwner: ReturnType<typeof acquireGatewayStateOwner> | undefined;
@@ -157,11 +161,16 @@ export async function createComposedCatalogFixture(
   };
   const cleanup = async () => {
     projection?.dispose();
+    serviceScheduler.beginClose();
     try {
       await stopCatalog?.();
     } finally {
       try {
-        await closeEndpoint();
+        try {
+          await scheduler.stop();
+        } finally {
+          await closeEndpoint();
+        }
       } finally {
         try {
           if (stateOwner) {
@@ -250,6 +259,7 @@ export async function createComposedCatalogFixture(
       stateDir: state.stateDir,
       workspaceDir: state.workspaceDir,
       logger,
+      scheduler: serviceScheduler,
     };
     stopCatalog = async () => {
       await service.stop?.(serviceContext);

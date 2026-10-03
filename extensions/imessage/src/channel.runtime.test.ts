@@ -2,6 +2,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
 import { IMessageRpcClient } from "./client.js";
@@ -34,6 +35,7 @@ function makeCtx(params: {
   const logEvents: { level: string; line: string }[] = [];
   return {
     ctx: {
+      scheduler: createTestPluginServiceScheduler(),
       cfg: params.cfg,
       accountId: params.accountId,
       account,

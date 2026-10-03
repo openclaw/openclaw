@@ -100,7 +100,7 @@ not overwrite the existing skill.
   shared-auth ownership still attached to the old `main` installation.
 - `--flow quickstart`: opens the classic wizard with minimal prompts, uses
   a generated Gateway secret by default, without asking you to choose token or
-  password. Existing password-mode configurations are preserved. Explicit local Gateway flags such as
+  password. Existing password and trusted-proxy configurations are preserved. Explicit local Gateway flags such as
   `--gateway-port`, `--gateway-bind`, `--gateway-auth`, and `--tailscale`
   override the corresponding stored or default quickstart values; omitted
   options keep their current values.
@@ -384,6 +384,8 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
 With `--secret-input-mode ref`, onboarding stores new credentials as refs instead of plaintext: auth profiles use `keyRef: { source: "env", provider: "default", id: <envVar> }`, and custom providers use `models.providers.<id>.apiKey` (for example `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`). Set the provider env var when adding a new credential; an inline key flag without its matching env var fails fast. Existing resolvable named auth profiles and their `env`, `file`, `exec`, or `store` references are reused unchanged, without a new `apiKey` or `keyRef` write or additional provider env var. Existing plaintext profile credentials are not migrated; run `openclaw secrets configure --apply`, then `openclaw secrets audit --check`. See [Secrets management](/gateway/secrets).
 
 ### Gateway auth (non-interactive)
+
+Existing [trusted-proxy authentication](/gateway/trusted-proxy-auth) and its proxy policy stay intact on rerun unless you explicitly select another auth mode. Selecting Tailscale Funnel while retaining trusted-proxy auth is rejected; switch explicitly with `--gateway-auth password` or keep Tailscale exposure off. Same-host completion uses the configured local password (including SecretRefs) or `OPENCLAW_GATEWAY_PASSWORD`, through the Gateway's loopback listener. Post-setup health checks stay on the configured local Gateway port, ignoring ambient Gateway URL and port overrides.
 
 - Without auth flags or an existing credential, onboarding generates a Gateway secret and stores it as `gateway.auth.token` with `gateway.auth.mode: "token"`. Quickstart keeps its existing plaintext storage default; `--secret-input-mode ref` explicitly requests a reference. Run `openclaw dashboard` to open the Control UI.
 - `--gateway-auth token --gateway-token <token>` stores a supplied plaintext secret.

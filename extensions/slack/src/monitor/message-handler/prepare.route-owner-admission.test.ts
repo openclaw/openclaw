@@ -158,10 +158,7 @@ it.each([
       ts: "1770408518.000002",
       ...(threaded ? { thread_ts: threadTs } : {}),
     },
-    isDirectMessage: direct,
-    isGroupDm: false,
-    isRoom: !direct,
-    isRoomish: !direct,
+    chatType: direct ? "direct" : "channel",
   });
   const route = prepared.route;
   expect(route.agentId).toBe(configured ? "work" : "main");

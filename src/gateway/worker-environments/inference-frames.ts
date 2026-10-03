@@ -6,7 +6,6 @@ import {
   type WorkerInferenceTerminalFrame,
   type WorkerInferenceTerminalOutcome,
   validateWorkerInferenceTerminalFrame,
-  validateWorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 
@@ -78,7 +77,6 @@ export function normalizeTerminalOutcome(
   outcome: WorkerInferenceTerminalOutcome,
 ): WorkerInferenceTerminalOutcome {
   if (
-    !validateWorkerInferenceTerminalOutcome(outcome) ||
     validFrameBytes(terminalFrame(entry, outcome), validateWorkerInferenceTerminalFrame) === null
   ) {
     return terminalError("provider-error");

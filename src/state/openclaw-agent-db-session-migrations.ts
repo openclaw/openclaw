@@ -15,21 +15,23 @@ import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 type MigratedConversationEntry = Record<string, unknown>;
 
-export function dropLegacySessionTranscriptSearchSchema(db: DatabaseSync): void {
-  // The pre-landing sessions_search branch tracked JSONL file watermarks and
-  // stored session_key inside the FTS table. Both are derived caches; drop
-  // them so reconcile rebuilds the row-native index shape.
-  db.exec("DROP TABLE IF EXISTS session_transcript_files;");
-  const columns = db.prepare("PRAGMA table_info(session_transcript_fts)").all();
-  if (columns.some((row) => row.name === "session_key")) {
-    db.exec(`
-      DROP TABLE IF EXISTS session_transcript_fts;
-      DROP TABLE IF EXISTS session_transcript_index_state;
-    `);
+export function assertSupportedAgentMigrationSchemas(
+  db: DatabaseSync,
+  pathname: string,
+  userVersion: number,
+): void {
+  if (
+    (userVersion < 8 &&
+      ["sessions", "session_entries", "transcript_events"].some((table) =>
+        tableExists(db, table),
+      )) ||
+    tableExists(db, "session_transcript_files") ||
+    readSqliteTableColumns(db, "session_transcript_fts")?.has("session_key")
+  ) {
+    throw new SqliteSchemaMismatchError(
+      `OpenClaw agent database ${pathname} contains an unreleased session schema (version ${userVersion}). Preserve a complete copy of your state directory and configuration, including shared agent registration. Run "openclaw doctor --fix" with OpenClaw 2026.9.7 against that copy. If a store is held, follow Doctor's explicit agent-restoration instructions, then rerun Doctor before retrying the upgrade.`,
+    );
   }
-}
-
-export function assertSupportedAgentMigrationSchemas(db: DatabaseSync, pathname: string): void {
   const acpParentStreamColumns = readSqliteTableColumns(db, "acp_parent_stream_events");
   const trajectoryColumns = readSqliteTableColumns(db, "trajectory_runtime_events");
   const memorySourceColumns = readSqliteTableColumns(db, "memory_index_sources");
@@ -458,29 +460,6 @@ export function ensureSessionEntryValidityProjection(db: DatabaseSync): void {
     }
     for (const row of rows) {
       update.run(parseSqliteSessionEntryRecord(row) ? 1 : -1, row.session_key);
-    }
-  }
-}
-
-export function migrateSessionEntryStatusProjection(
-  db: DatabaseSync,
-  readStatus: (entryJson: unknown) => string | null,
-): void {
-  const columns = readSqliteTableColumns(db, "session_entries");
-  if (!columns) {
-    return;
-  }
-  if (!columns.has("status")) {
-    db.exec(
-      "ALTER TABLE session_entries ADD COLUMN status TEXT CHECK (status IS NULL OR status IN ('running', 'done', 'failed', 'killed', 'timeout'));",
-    );
-  }
-  const rows = db.prepare("SELECT session_key, entry_json FROM session_entries").all();
-  const update = db.prepare("UPDATE session_entries SET status = ? WHERE session_key = ?");
-  update.setReadBigInts(true);
-  for (const row of rows) {
-    if (typeof row.session_key === "string") {
-      update.run(readStatus(row.entry_json), row.session_key);
     }
   }
 }

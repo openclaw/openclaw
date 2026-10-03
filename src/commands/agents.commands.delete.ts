@@ -92,31 +92,6 @@ function failAgentsDelete(opts: AgentsDeleteOptions, runtime: RuntimeEnv, messag
   }
 }
 
-function logClearedOwnerRefs(runtime: RuntimeEnv, clearedOwnerRefs: readonly string[]): void {
-  if (clearedOwnerRefs.length > 0) {
-    runtime.log(`Cleared owner references: ${clearedOwnerRefs.join(", ")}`);
-  }
-}
-
-function logSessionPurgeWarning(runtime: RuntimeEnv, agentId: string, purgeFailed: boolean): void {
-  if (purgeFailed) {
-    runtime.error(
-      `Warning: session-store purge failed for deleted agent "${agentId}"; source data was retained. Retry deletion after resolving the storage error.`,
-    );
-  }
-}
-
-function logTrashFailures(
-  runtime: RuntimeEnv,
-  failed: readonly AgentDeleteFailedPath[] | undefined,
-): void {
-  for (const failure of failed ?? []) {
-    runtime.error(
-      `Warning: path could not be moved to Trash: ${failure.reason}; remove it manually at ${failure.path}`,
-    );
-  }
-}
-
 async function maybeDeleteAgentThroughGateway(params: {
   config: OpenClawConfig;
   agentId: string;
@@ -299,9 +274,19 @@ export async function agentsDeleteCommand(
       });
     } else {
       runtime.log(`Deleted agent: ${agentId}`);
-      logClearedOwnerRefs(runtime, result.clearedOwnerRefs);
-      logSessionPurgeWarning(runtime, agentId, cleanup.purgeFailed === true);
-      logTrashFailures(runtime, cleanup.failed);
+      if (result.clearedOwnerRefs.length > 0) {
+        runtime.log(`Cleared owner references: ${result.clearedOwnerRefs.join(", ")}`);
+      }
+      if (cleanup.purgeFailed === true) {
+        runtime.error(
+          `Warning: session-store purge failed for deleted agent "${agentId}"; source data was retained. Retry deletion after resolving the storage error.`,
+        );
+      }
+      for (const failure of cleanup.failed ?? []) {
+        runtime.error(
+          `Warning: path could not be moved to Trash: ${failure.reason}; remove it manually at ${failure.path}`,
+        );
+      }
     }
   };
 

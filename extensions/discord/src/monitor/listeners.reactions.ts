@@ -121,10 +121,11 @@ async function runDiscordReactionHandler(initialParams: {
   });
 }
 
-type DiscordReactionIngressAuthorizationParams = {
-  isPolicyCurrent?: () => boolean;
+type DiscordReactionIngressAuthorizationParams = Omit<
+  DiscordReactionRoutingParams,
+  "botUserId" | "guildEntries"
+> & {
   cfg: OpenClawConfig;
-  accountId: string;
   user: User;
   memberRoleIds: string[];
   isDirectMessage: boolean;
@@ -133,13 +134,6 @@ type DiscordReactionIngressAuthorizationParams = {
   channelId: string;
   channelName?: string;
   channelSlug: string;
-  dmEnabled: boolean;
-  groupDmEnabled: boolean;
-  groupDmChannels: string[];
-  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
-  allowFrom: string[];
-  groupPolicy: "open" | "allowlist" | "disabled";
-  allowNameMatching: boolean;
   guildInfo: import("./allow-list.js").DiscordGuildEntryResolved | null;
   channelConfig?: import("./allow-list.js").DiscordChannelConfigResolved | null;
 };

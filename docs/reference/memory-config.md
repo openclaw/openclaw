@@ -118,6 +118,13 @@ automatically re-embedding everything. Rebuild when you are ready with
 `openclaw memory index --force --agent <id>`.
 </Warning>
 
+If an outage activates a fallback that cannot read the existing index, later
+searches retry the configured primary, with a 30-second cooldown between recovery
+attempts. Once the primary responds and matches the stored provider, model, and
+provider settings, search resumes without restarting the Gateway or rebuilding
+the index. An index already built with the fallback stays on that compatible
+provider; recovery never silently replaces its embeddings.
+
 When `provider` is unset, legacy `provider: "auto"` is present, or
 `provider: "none"` intentionally selects FTS-only mode, memory recall can still
 use lexical FTS ranking when embeddings are unavailable.

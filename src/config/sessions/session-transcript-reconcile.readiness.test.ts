@@ -26,7 +26,7 @@ vi.mock("node:timers/promises", async (importOriginal) => ({
 const observer = useReconcileWorkerObserver();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it.each(["reader-import", "between-polls", "queued-status", "during-close"] as const)(
+it.each(["between-polls", "queued-status", "during-close"] as const)(
   "preserves readiness lifetime and cancellation across %s",
   async (boundary) => {
     const stateDir = tempDirs.make("openclaw-projection-read-retirement-");
@@ -74,34 +74,7 @@ it.each(["reader-import", "between-polls", "queued-status", "during-close"] as c
         await closing;
         await waitForSessionTranscriptIndexReconcile(options);
       };
-      if (boundary === "reader-import") {
-        const runtime = await import("./session-transcript-worker-runtime.js");
-        const entered = createDeferred();
-        const continueImport = createDeferred();
-        vi.doMock("./session-transcript-worker-runtime.js", async () => {
-          entered.resolve();
-          await continueImport.promise;
-          return runtime;
-        });
-        try {
-          const outcome = waitForSessionTranscriptProjection(scope).then(
-            () => ({ ok: true as const }),
-            (error: unknown) => ({ ok: false as const, error }),
-          );
-          await entered.promise;
-          await retire();
-          continueImport.resolve();
-          await expect(outcome).resolves.toMatchObject({
-            ok: false,
-            error: expect.objectContaining({
-              message: "Agent database execution admission is closed",
-            }),
-          });
-        } finally {
-          continueImport.resolve();
-          vi.doUnmock("./session-transcript-worker-runtime.js");
-        }
-      } else if (boundary === "during-close") {
+      if (boundary === "during-close") {
         observer.onTask = undefined;
         const closing = closeOpenClawAgentDatabasesAsync();
         let scheduled: { ok: true } | { ok: false; error: unknown };

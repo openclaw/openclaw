@@ -10,10 +10,10 @@ import {
   prepareExternalMessageActionTargetForResolution,
   shouldDeferExternalMessageActionTargetResolution,
 } from "../../channels/plugins/message-action-dispatch.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type {
   ChannelId,
   ChannelMessageActionName,
-  ChannelPlugin,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

@@ -256,28 +256,32 @@ enum MacNodeClaudeSessionCatalog {
 
     static func shouldAdvertise(
         root: [String: Any]? = nil,
-        homeURL: URL = FileManager.default.homeDirectoryForCurrentUser) -> Bool
+        homeURL: URL = FileManager.default.homeDirectoryForCurrentUser,
+        environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool
     {
         let root = root ?? OpenClawConfigFile.loadDict()
         guard OpenClawConfigFile.defaultEnabledBundledPluginAllowed(
             MacNodeClaudeSessionCatalogContract.pluginId,
             root: root)
         else { return false }
+        let projectsURL = self.projectsURL(homeURL: homeURL, environment: environment)
         var isDirectory: ObjCBool = false
         return FileManager.default.fileExists(
-            atPath: projectsURL(homeURL: homeURL).path,
+            atPath: projectsURL.path,
             isDirectory: &isDirectory) && isDirectory.boolValue
     }
 
     static func list(
         paramsJSON: String?,
-        homeURL: URL = FileManager.default.homeDirectoryForCurrentUser) throws -> String
+        homeURL: URL = FileManager.default.homeDirectoryForCurrentUser,
+        environment: [String: String] = ProcessInfo.processInfo.environment) throws -> String
     {
         try Task.checkCancellation()
         let params = try decodeListParams(paramsJSON)
         let offset = try decodeCursor(params.cursor, label: "catalog")
         let search = params.searchTerm?.lowercased()
-        let records = try sessions(homeURL: homeURL).filter { record in
+        let projectsURL = self.projectsURL(homeURL: homeURL, environment: environment)
+        let records = try sessions(homeURL: homeURL, projectsURL: projectsURL).filter { record in
             guard let search else { return true }
             return [record.name, record.cwd, record.gitBranch, record.threadId]
                 .compactMap { $0?.lowercased() }
@@ -297,13 +301,16 @@ enum MacNodeClaudeSessionCatalog {
 
     static func read(
         paramsJSON: String?,
-        homeURL: URL = FileManager.default.homeDirectoryForCurrentUser) throws -> String
+        homeURL: URL = FileManager.default.homeDirectoryForCurrentUser,
+        environment: [String: String] = ProcessInfo.processInfo.environment) throws -> String
     {
         try Task.checkCancellation()
         let params = try decodeReadParams(paramsJSON)
         let cursor = try params.cursor.map(self.decodeTranscriptCursor)
+        let projectsURL = self.projectsURL(homeURL: homeURL, environment: environment)
         guard let target = try sessionFileForRead(
             homeURL: homeURL,
+            projectsURL: projectsURL,
             threadId: params.threadId,
             leaseId: cursor?.leaseId)
         else { throw CatalogError.invalidParams("Claude session is unavailable") }
@@ -392,7 +399,7 @@ enum MacNodeClaudeSessionCatalog {
         }
         let hasEarlierItems = selected.count < found.count || position > 0
         let leaseId = target.leaseId ?? self.transcriptReadLeases.store(
-            rootPath: self.projectsURL(homeURL: homeURL).standardizedFileURL.path,
+            rootPath: projectsURL.standardizedFileURL.path,
             threadId: params.threadId,
             fileURL: fileURL)
         var response: [String: Any] = try [
@@ -416,8 +423,16 @@ enum MacNodeClaudeSessionCatalog {
 }
 
 extension MacNodeClaudeSessionCatalog {
-    private static func projectsURL(homeURL: URL) -> URL {
-        homeURL.appending(path: ".claude/projects", directoryHint: .isDirectory)
+    private static func projectsURL(homeURL: URL, environment: [String: String]) -> URL {
+        // Claude Code's "Respect CLAUDE_CONFIG_DIR everywhere" replaces ~/.claude;
+        // Desktop metadata stays HOME/Library-scoped, matching the TS scan.
+        let configured = environment["CLAUDE_CONFIG_DIR"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let configDir = if let configured, !configured.isEmpty {
+            URL(filePath: configured, directoryHint: .isDirectory).absoluteURL
+        } else {
+            homeURL.appending(path: ".claude", directoryHint: .isDirectory)
+        }
+        return configDir.appending(path: "projects", directoryHint: .isDirectory)
     }
 
     private static func desktopSessionsURL(homeURL: URL) -> URL {
@@ -493,11 +508,11 @@ extension MacNodeClaudeSessionCatalog {
     }
 
     private static func revalidatedSessionFile(
-        homeURL: URL,
+        projectsURL: URL,
         threadId: String,
         candidate: URL) -> URL?
     {
-        let resolvedRoot = self.projectsURL(homeURL: homeURL).resolvingSymlinksInPath()
+        let resolvedRoot = projectsURL.resolvingSymlinksInPath()
         guard let fileURL = self.safeSessionFile(
             root: resolvedRoot,
             resolvedRoot: resolvedRoot,
@@ -510,17 +525,18 @@ extension MacNodeClaudeSessionCatalog {
 
     private static func sessionFileForRead(
         homeURL: URL,
+        projectsURL: URL,
         threadId: String,
         leaseId: String?) throws -> (fileURL: URL, leaseId: String?)?
     {
-        let rootPath = self.projectsURL(homeURL: homeURL).standardizedFileURL.path
+        let rootPath = projectsURL.standardizedFileURL.path
         if let leaseId {
             if let candidate = self.transcriptReadLeases.lookup(
                 leaseId: leaseId,
                 rootPath: rootPath,
                 threadId: threadId),
                 let fileURL = self.revalidatedSessionFile(
-                    homeURL: homeURL,
+                    projectsURL: projectsURL,
                     threadId: threadId,
                     candidate: candidate)
             {
@@ -531,11 +547,11 @@ extension MacNodeClaudeSessionCatalog {
             self.transcriptReadLeases.remove(leaseId: leaseId)
         }
 
-        guard let candidate = try self.sessions(homeURL: homeURL)
+        guard let candidate = try self.sessions(homeURL: homeURL, projectsURL: projectsURL)
             .first(where: { $0.threadId == threadId })?.fileURL
         else { return nil }
         guard let fileURL = self.revalidatedSessionFile(
-            homeURL: homeURL,
+            projectsURL: projectsURL,
             threadId: threadId,
             candidate: candidate)
         else { return nil }
@@ -806,9 +822,8 @@ extension MacNodeClaudeSessionCatalog {
         inspection.shouldStop = true
     }
 
-    private static func sessions(homeURL: URL) throws -> [SessionRecord] {
+    private static func sessions(homeURL: URL, projectsURL: URL) throws -> [SessionRecord] {
         try Task.checkCancellation()
-        let projectsURL = self.projectsURL(homeURL: homeURL)
         let rootPath = projectsURL.standardizedFileURL.path
         let enumerationObserver = self.catalogEnumerationObserver.value
         enumerationObserver?(rootPath)
@@ -1026,9 +1041,7 @@ extension MacNodeClaudeSessionCatalog {
         if let maxBytes, data.count > maxBytes {
             throw CatalogError.responseTooLarge
         }
-        guard let result = String(data: data, encoding: .utf8)
-        else { throw CatalogError.unavailable }
-        return result
+        return String(bytes: data, encoding: .utf8)!
     }
 
     private static func truncateUTF8(_ value: String, maxBytes: Int) -> String {

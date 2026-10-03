@@ -554,9 +554,7 @@ struct DashboardWindowSmokeTests {
             "url": "https://docs.openclaw.ai/platforms/macos",
             "target": "inline",
         ])
-        #expect(try request == DashboardLinkRequest(
-            url: #require(URL(string: "https://docs.openclaw.ai/platforms/macos")),
-            target: .inline))
+        #expect(try request == #require(URL(string: "https://docs.openclaw.ai/platforms/macos")))
 
         #expect(DashboardWindowController.linkRequest(from: [
             "type": "open-link",
@@ -577,9 +575,7 @@ struct DashboardWindowSmokeTests {
             "type": "open-link",
             "url": "mailto:hello@example.com",
             "target": "external",
-        ]) == DashboardLinkRequest(
-            url: #require(URL(string: "mailto:hello@example.com")),
-            target: .external))
+        ]) == #require(URL(string: "mailto:hello@example.com")))
         #expect(DashboardWindowController.linkRequest(from: [
             "type": "open-link",
             "url": "mailto:hello@example.com",

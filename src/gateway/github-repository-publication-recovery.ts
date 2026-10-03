@@ -171,6 +171,30 @@ export function createRepositoryGitHubPublicationRecovery(params: {
   ) => Promise<SessionGitHubPublicationResult>;
 }) {
   const { placements } = params;
+  const deferOrphanedRequestsWithPendingResults = (
+    pending: Awaited<ReturnType<WorkerSessionPlacementStore["listPendingWorkspaceResultsAsync"]>>,
+  ): void => {
+    deferRepositoryGitHubPublicationClaims(
+      listRepositoryGitHubPublications({ ownerProfileId: null, pending: true })
+        .filter((row) => {
+          if (!row.claim_id) {
+            return false;
+          }
+          const placement = placements.get(row.session_id);
+          const claim = placement ? exactClaimForPlacement(placement) : undefined;
+          return (
+            !(claim && matchesRepositoryGitHubPublicationClaim(row, claim)) &&
+            !pending.some(
+              (result) =>
+                result.sessionId === row.session_id &&
+                result.claimId === row.claim_id &&
+                result.runId === row.run_id,
+            )
+          );
+        })
+        .map((row) => row.request_id),
+    );
+  };
   return {
     async prepareClaimWorkspace(claim: WorkerSessionTurnClaim): Promise<void> {
       const assertCurrent = () => {
@@ -190,6 +214,7 @@ export function createRepositoryGitHubPublicationRecovery(params: {
             matchesRepositoryGitHubPublicationClaim(candidate, claim)),
       )) {
         try {
+          await placements.prepareWorkspaceResultClaim(claim);
           const requester = await restoreGitHubPublicationRequester(
             row.requester_authority_json,
             { sessionKey: row.session_key, agentId: row.agent_id },
@@ -284,28 +309,12 @@ export function createRepositoryGitHubPublicationRecovery(params: {
         throw new AggregateError(failures, failures.map((error) => error.message).join("; "));
       }
     },
+    /** @deprecated Await deferOrphanedRequestsAsync; retained for released plugin contexts. */
     deferOrphanedRequests(): void {
-      const pending = placements.listPendingWorkspaceResults();
-      deferRepositoryGitHubPublicationClaims(
-        listRepositoryGitHubPublications({ ownerProfileId: null, pending: true })
-          .filter((row) => {
-            if (!row.claim_id) {
-              return false;
-            }
-            const placement = placements.get(row.session_id);
-            const claim = placement ? exactClaimForPlacement(placement) : undefined;
-            return (
-              !(claim && matchesRepositoryGitHubPublicationClaim(row, claim)) &&
-              !pending.some(
-                (result) =>
-                  result.sessionId === row.session_id &&
-                  result.claimId === row.claim_id &&
-                  result.runId === row.run_id,
-              )
-            );
-          })
-          .map((row) => row.request_id),
-      );
+      deferOrphanedRequestsWithPendingResults(placements.listPendingWorkspaceResults());
+    },
+    async deferOrphanedRequestsAsync(): Promise<void> {
+      deferOrphanedRequestsWithPendingResults(await placements.listPendingWorkspaceResultsAsync());
     },
   };
 }

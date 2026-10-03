@@ -514,11 +514,14 @@ export async function createBackupArchive(
         return false;
       }
       const isDirectory = entryStat.isDirectory();
+      // Staged images retain the sealed source's policy, even when scratch lives
+      // beside the archive in an excluded update-capture directory.
+      const inventoryPath = sourcePathRemaps.get(resolvedEntryPath) ?? resolvedEntryPath;
       if (
         !onlyConfig &&
         !(isDirectory || entryStat.isSymbolicLink()
-          ? inventory.isTraversable(resolvedEntryPath)
-          : inventory.isIncluded(resolvedEntryPath))
+          ? inventory.isTraversable(inventoryPath)
+          : inventory.isIncluded(inventoryPath))
       ) {
         return false;
       }

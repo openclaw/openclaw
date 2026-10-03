@@ -2,6 +2,7 @@ import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
+import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import {
   createRuntimeConfigReader,
@@ -56,6 +57,7 @@ import { formatDiscordStartupStatusMessage } from "./startup-status.js";
 import { createDiscordReadyStatusPatch, type DiscordMonitorStatusSink } from "./status.js";
 
 export type MonitorDiscordOpts = {
+  scheduler: PluginServiceSchedulerV1;
   token?: string;
   accountId?: string;
   config?: OpenClawConfig;
@@ -84,7 +86,8 @@ function isDiscordDisallowedIntentsError(err: unknown): boolean {
   return message.includes(String(DISCORD_DISALLOWED_INTENTS_CODE));
 }
 
-export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
+export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
+  const { scheduler } = opts;
   const startupStartedAt = Date.now();
   const cfg = opts.config ?? getRuntimeConfig();
   const readConfig = opts.readConfig ?? createRuntimeConfigReader(cfg);
@@ -360,6 +363,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       gatewaySupervisor: createdGatewaySupervisor,
       autoPresenceController: createdAutoPresenceController,
     } = await createDiscordMonitorClient({
+      scheduler,
       accountId: account.accountId,
       applicationId,
       token,
@@ -427,6 +431,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         DiscordVoiceStateUpdateListener,
       } = await discordProviderRuntime.loadDiscordVoiceRuntime();
       voiceManager = new DiscordVoiceManager({
+        scheduler,
         readPolicy,
         client,
         cfg,

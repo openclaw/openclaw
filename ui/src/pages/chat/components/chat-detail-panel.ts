@@ -10,6 +10,7 @@ import {
   scheduleStaleChunkReload,
 } from "../../../app/stale-chunk-reload.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
+import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import type { MarkdownGitHubContext } from "../../../components/markdown-render-options.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import { t } from "../../../i18n/index.ts";
@@ -56,7 +57,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) githubContext: MarkdownGitHubContext = {};
   @property({ type: Boolean }) embedded = false;
   @property({ attribute: false }) onOpenWorkspaceFile?:
-    | ((target: { path: string; line?: number | null }) => void)
+    | ((target: MarkdownFileLinkTarget) => void)
     | null = null;
   @property({ attribute: false }) onOpenSessionLink?: ((target: SessionLinkTarget) => void) | null =
     null;

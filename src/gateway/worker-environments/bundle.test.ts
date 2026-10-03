@@ -5,6 +5,10 @@ import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
+  extractWorkerBundleArchive,
+  DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
+} from "../../shared/worker-bundle-archive.js";
+import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -81,6 +85,36 @@ function bundleArtifact(overrides: Partial<WorkerBundleArtifact> = {}): WorkerBu
 }
 
 describe("worker bundle producer", () => {
+  it("seals split chunks and verifies them after relocation", async () => {
+    await withTestDir({ prefix: "openclaw-worker-chunks-" }, async (root) => {
+      const packageRoot = path.join(root, "package");
+      await writeFixture(packageRoot, 'export { value } from "./worker-chunk-runtime.mjs";');
+      const chunk = path.join(packageRoot, "dist/worker/worker-chunk-runtime.mjs");
+      await fs.writeFile(chunk, "export const value = 1;");
+      const first = await createWorkerBundleProducer({
+        packageRoot,
+        cacheDir: path.join(root, "cache"),
+      }).prepare();
+      expect(await listTarball(first.tarballPath)).toContain("worker-chunk-runtime.mjs");
+      const destination = path.join(root, "installed");
+      await extractWorkerBundleArchive({
+        tarballPath: first.tarballPath,
+        destination,
+        expectedBundleHash: first.bundleHash,
+        limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
+      });
+      expect(await fs.readFile(path.join(destination, "worker-chunk-runtime.mjs"), "utf8")).toBe(
+        "export const value = 1;",
+      );
+      await fs.writeFile(chunk, "export const value = 2;");
+      const changed = await createWorkerBundleProducer({
+        packageRoot,
+        cacheDir: path.join(root, "cache"),
+      }).prepare();
+      expect(changed.bundleHash).not.toBe(first.bundleHash);
+    });
+  });
+
   it("hashes and archives only the dedicated deploy artifacts", async () => {
     await withTestDir({ prefix: "openclaw-worker-bundle-" }, async (root) => {
       const packageA = path.join(root, "package-a");
@@ -610,6 +644,7 @@ describe("worker bundle producer", () => {
 
   it.skipIf(process.platform === "win32")("rejects symlinked deploy artifacts", async () => {
     for (const artifactName of [
+      "worker-chunk-symlink.mjs",
       "file-tool-planning.worker.mjs",
       "github-exec-launcher.mjs",
       "image-processor.worker.mjs",
@@ -623,6 +658,9 @@ describe("worker bundle producer", () => {
         const packageRoot = path.join(root, "package");
         await writeFixture(packageRoot);
         const artifactPath = path.join(packageRoot, "dist", "worker", artifactName);
+        if (artifactName === "worker-chunk-symlink.mjs") {
+          await fs.writeFile(artifactPath, "export {};\n");
+        }
         await fs.rename(artifactPath, `${artifactPath}.target`);
         await fs.symlink(`${artifactName}.target`, artifactPath);
 

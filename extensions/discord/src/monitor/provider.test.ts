@@ -4,6 +4,7 @@ import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createEmptyPluginRegistry,
   setActivePluginRegistry,
@@ -323,7 +324,12 @@ describe("monitorDiscordProvider", () => {
   });
 
   function runProvider(overrides: Partial<Parameters<typeof monitorDiscordProvider>[0]> = {}) {
-    return monitorDiscordProvider({ config: baseConfig(), runtime: baseRuntime(), ...overrides });
+    return monitorDiscordProvider({
+      scheduler: createTestPluginServiceScheduler(),
+      config: baseConfig(),
+      runtime: baseRuntime(),
+      ...overrides,
+    });
   }
 
   it("awaits restored thread bindings before reconciliation and provider startup", async () => {
@@ -334,7 +340,11 @@ describe("monitorDiscordProvider", () => {
       entered.resolve();
       return ready.promise;
     });
-    const monitor = monitorDiscordProvider({ config: baseConfig(), runtime: baseRuntime() });
+    const monitor = monitorDiscordProvider({
+      scheduler: createTestPluginServiceScheduler(),
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
     try {
       await entered.promise;
       expect(reconcileAcpThreadBindingsOnStartupMock).not.toHaveBeenCalled();
@@ -366,6 +376,7 @@ describe("monitorDiscordProvider", () => {
 
       await expect(
         monitorDiscordProvider({
+          scheduler: createTestPluginServiceScheduler(),
           config: baseConfig(),
           runtime: baseRuntime(),
         }),
@@ -399,6 +410,7 @@ describe("monitorDiscordProvider", () => {
         });
       }
       const monitor = monitorDiscordProvider({
+        scheduler: createTestPluginServiceScheduler(),
         config: baseConfig(),
         runtime: baseRuntime(),
         abortSignal: controller.signal,
@@ -506,6 +518,7 @@ describe("monitorDiscordProvider", () => {
     });
 
     await monitorDiscordProvider({
+      scheduler: createTestPluginServiceScheduler(),
       config: cfg,
       runtime: baseRuntime(),
       channelRuntime,

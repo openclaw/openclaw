@@ -7,7 +7,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { DEFAULT_ASK, DEFAULT_SECURITY } from "../infra/exec-approvals-config.js";
 import {
   analyzeArgvCommand,
@@ -24,24 +24,22 @@ import {
   updateExecApprovals,
   type ExecAsk,
   type ExecApprovalsFile,
-  type ExecApprovalsResolved,
   type ExecApprovalsSnapshot,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
 import { planShellAuthorization } from "../infra/exec-authorization-plan.js";
-import {
-  requestExecHostViaSocket,
-  type ExecHostRequest,
-  type ExecHostResponse,
-} from "../infra/exec-host.js";
 import { extractShellWrapperCommand } from "../infra/exec-wrapper-resolution.js";
+import { listHostDirectories } from "../infra/host-directory-listing.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   NODE_DEVICE_APPS_COMMAND,
+  NODE_FS_LIST_DIR_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
+  NODE_TERMINAL_UPLOAD_COMMAND,
   NODE_WORKER_DESKTOP_COMPUTER_COMMAND,
 } from "../infra/node-commands.js";
+import { stageTerminalUpload } from "../infra/terminal-file-upload.js";
 import { logWarn } from "../logger.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import {
@@ -56,20 +54,16 @@ import {
   type NodeHostInvokeRuntime,
 } from "./invoke-agent-cli-claude-handler.js";
 import { invokeDeviceApps } from "./invoke-device-apps.js";
-import { invokeNodeFileCommand } from "./invoke-file-commands.js";
 import { boundMcpToolResultPayload } from "./invoke-mcp-result.js";
 import { decodeNodeInvokeParams as decodeParams } from "./invoke-payload.js";
 import { withNodeHostPluginInvocation } from "./invoke-plugin-context.js";
 import { runCommand } from "./invoke-run-command.js";
-import { buildSystemRunPrepareCoverageEnv } from "./invoke-system-run-plan.js";
 import {
   buildSystemRunApprovalPlan,
-  handleSystemRunInvoke,
-  resolveEffectiveSystemRunExecPolicy,
-} from "./invoke-system-run.js";
+  buildSystemRunPrepareCoverageEnv,
+} from "./invoke-system-run-plan.js";
+import { handleSystemRunInvoke, resolveEffectiveSystemRunExecPolicy } from "./invoke-system-run.js";
 import type {
-  ExecEventPayload,
-  ExecFinishedEventParams,
   NodeInvokeRequestPayload,
   SkillBinsProvider,
   SystemRunParams,
@@ -85,7 +79,6 @@ import { resolveNodeHostedSkillDirectory } from "./skills.js";
 
 const MCP_ERROR_MESSAGE_MAX_CHARS = 1_024;
 
-const OUTPUT_EVENT_TAIL = 20_000;
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 type NodeHostPrivateInvokeRuntime = NodeHostInvokeRuntime & {
@@ -197,22 +190,8 @@ function resolveExecSecurity(value?: string): ExecSecurity {
   return value === "deny" || value === "allowlist" || value === "full" ? value : DEFAULT_SECURITY;
 }
 
-function isCmdExeInvocation(argv: string[]): boolean {
-  const token = argv[0]?.trim();
-  if (!token) {
-    return false;
-  }
-  const base = normalizeLowercaseStringOrEmpty(path.win32.basename(token));
-  return base === "cmd.exe" || base === "cmd";
-}
-
 function resolveExecAsk(value?: string): ExecAsk {
   return value === "off" || value === "on-miss" || value === "always" ? value : DEFAULT_ASK;
-}
-
-/** Builds a sanitized execution environment with controlled PATH and approved overrides. */
-function sanitizeEnv(overrides?: Record<string, string> | null): Record<string, string> {
-  return sanitizeHostExecEnv({ overrides, blockPathOverrides: true });
 }
 
 function requireExecApprovalsBaseHash(
@@ -280,62 +259,6 @@ async function handleSystemWhich(params: SystemWhichParams, env?: Record<string,
     }
   }
   return { bins: found };
-}
-
-function buildExecEventPayload(payload: ExecEventPayload): ExecEventPayload {
-  if (!payload.output) {
-    return payload;
-  }
-  const trimmed = payload.output.trim();
-  if (!trimmed) {
-    return payload;
-  }
-  return {
-    ...payload,
-    output:
-      trimmed.length <= OUTPUT_EVENT_TAIL
-        ? trimmed
-        : `... (truncated) ${sliceUtf16Safe(trimmed, trimmed.length - OUTPUT_EVENT_TAIL)}`,
-  };
-}
-
-async function sendExecFinishedEvent(
-  params: ExecFinishedEventParams & {
-    client: NodeHostClient;
-  },
-) {
-  const combined = [params.result.stdout, params.result.stderr, params.result.error]
-    .filter(Boolean)
-    .join("\n");
-  await sendNodeEvent(
-    params.client,
-    "exec.finished",
-    buildExecEventPayload({
-      sessionKey: params.sessionKey,
-      runId: params.runId,
-      host: "node",
-      command: params.commandText,
-      exitCode: params.result.exitCode ?? undefined,
-      timedOut: params.result.timedOut,
-      success: params.result.success,
-      output: combined,
-      suppressNotifyOnExit: params.suppressNotifyOnExit,
-    }),
-  );
-}
-
-async function runViaMacAppExecHost(params: {
-  approvals: ExecApprovalsResolved;
-  request: ExecHostRequest;
-  signal?: AbortSignal;
-}): Promise<ExecHostResponse | null> {
-  const { approvals, request } = params;
-  return await requestExecHostViaSocket({
-    socketPath: approvals.socketPath,
-    token: approvals.token,
-    request,
-    signal: params.signal,
-  });
 }
 
 function classifyExecApprovalsStorageError(err: unknown): "TIMEOUT" | "UNAVAILABLE" {
@@ -567,7 +490,7 @@ async function dispatchInvoke(
       if (!Array.isArray(params.bins)) {
         throw new Error("INVALID_REQUEST: bins required");
       }
-      const env = sanitizeEnv(undefined);
+      const env = sanitizeHostExecEnv({ blockPathOverrides: true });
       const payload = await handleSystemWhich(params, env);
       await response.json(payload);
     } catch (err) {
@@ -576,12 +499,24 @@ async function dispatchInvoke(
     return;
   }
 
-  const fileCommand = await invokeNodeFileCommand(command, frame.paramsJSON);
-  if (fileCommand) {
-    if ("error" in fileCommand) {
-      await response.invalid(fileCommand.error);
-    } else {
-      await response.json(fileCommand.payload);
+  if (command === NODE_FS_LIST_DIR_COMMAND || command === NODE_TERMINAL_UPLOAD_COMMAND) {
+    try {
+      const params = decodeParams<Record<string, unknown>>(frame.paramsJSON);
+      if (command === NODE_FS_LIST_DIR_COMMAND) {
+        if (params.path !== undefined && typeof params.path !== "string") {
+          throw new Error("INVALID_REQUEST: path must be a string");
+        }
+        await response.json(await listHostDirectories(params.path));
+      } else {
+        if (typeof params.name !== "string" || typeof params.contentBase64 !== "string") {
+          throw new Error("INVALID_REQUEST: terminal upload name and content are required");
+        }
+        await response.json(
+          await stageTerminalUpload({ name: params.name, contentBase64: params.contentBase64 }),
+        );
+      }
+    } catch (error) {
+      await response.invalid(error);
     }
     return;
   }
@@ -598,14 +533,6 @@ async function dispatchInvoke(
       response,
       skillBins,
       runtime,
-      deps: {
-        resolveExecSecurity,
-        resolveExecAsk,
-        isCmdExeInvocation,
-        sanitizeEnv,
-        runViaMacAppExecHost,
-        buildExecEventPayload,
-      },
     });
     return;
   }
@@ -647,8 +574,6 @@ async function dispatchInvoke(
       const execPolicy = await resolveEffectiveSystemRunExecPolicy({
         cfg: getRuntimeConfig(),
         agentId: normalizeOptionalString(params.agentId),
-        defaultSecurity: resolveExecSecurity(undefined),
-        defaultAsk: resolveExecAsk(undefined),
         requireSocket: preferMacAppExecHost,
       });
       // Omitted caller policy retains the approval-preparation contract. A caller can
@@ -730,24 +655,14 @@ async function dispatchInvoke(
   }
 
   await handleSystemRunInvoke({
-    client,
     params,
     skillBins,
     signal: runtime.signal,
     execHostEnforced,
     execHostFallbackAllowed,
-    resolveExecSecurity,
-    resolveExecAsk,
-    isCmdExeInvocation,
-    sanitizeEnv,
     runCommand,
-    runViaMacAppExecHost,
-    sendNodeEvent,
-    buildExecEventPayload,
+    sendNodeEvent: (event, payload) => sendNodeEvent(client, event, payload),
     sendInvokeResult: response.send,
-    sendExecFinishedEvent: async (event) => {
-      await sendExecFinishedEvent({ ...event, client });
-    },
     preferMacAppExecHost,
   });
 }
@@ -815,4 +730,3 @@ async function sendNodeEvent(client: NodeHostClient, event: string, payload: unk
     // ignore: node events are best-effort
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

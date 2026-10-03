@@ -43,7 +43,6 @@ type SharedMatrixClientLeaseState = {
 };
 
 type SharedMatrixClientState = {
-  auth: MatrixAuth;
   client: MatrixClient;
   key: string;
   started: boolean;
@@ -94,21 +93,10 @@ async function createSharedMatrixClient(params: {
 }): Promise<SharedMatrixClientState> {
   const { createMatrixClient } = await loadMatrixCreateClientDeps();
   const client = await createMatrixClient({
-    homeserver: params.auth.homeserver,
-    userId: params.auth.userId,
-    accessToken: params.auth.accessToken,
-    password: params.auth.password,
-    deviceId: params.auth.deviceId,
-    encryption: params.auth.encryption,
+    ...params.auth,
     localTimeoutMs: params.timeoutMs,
-    initialSyncLimit: params.auth.initialSyncLimit,
-    accountId: params.auth.accountId,
-    allowPrivateNetwork: params.auth.allowPrivateNetwork,
-    ssrfPolicy: params.auth.ssrfPolicy,
-    dispatcherPolicy: params.auth.dispatcherPolicy,
   });
   return {
-    auth: params.auth,
     client,
     key: buildSharedClientKey(params.auth),
     started: false,

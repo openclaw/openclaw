@@ -7,7 +7,7 @@ import type { ChannelSecurityDmPolicy } from "./types.core.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
 export function resolveChannelDefaultAccountId<ResolvedAccount>(params: {
-  plugin: ChannelPlugin<ResolvedAccount>;
+  plugin: ChannelPlugin<ResolvedAccount, unknown, unknown, 1 | 2>;
   cfg: OpenClawConfig;
   accountIds?: string[];
 }): string {

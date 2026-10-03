@@ -16,6 +16,14 @@ actor MicLevelMonitor {
     private let minimumLevelDelta = 0.02
 
     func start(onLevel: @MainActor @Sendable @escaping (Double) -> Void) async throws {
+        guard AppLaunchRuntimePlan.current.allowsActivation ||
+            AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        else {
+            throw NSError(domain: "MicLevelMonitor", code: 1, userInfo: [
+                NSLocalizedDescriptionKey:
+                    "Microphone permission required; relaunch without --no-activate and retry",
+            ])
+        }
         if self.engine != nil {
             self.update = onLevel
             return

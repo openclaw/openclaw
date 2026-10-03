@@ -142,12 +142,23 @@ path to inspect before retrying recovery. Sibling `.openclaw.update-stage-*`
 directories are outside that package fingerprint; do not remove stages that
 another updater may still be using.
 
-Package publication hashes the candidate before activation and the installed
+Package publication verifies the candidate before activation and the installed
 package after publication. Launcher publication checks package identities without
 repeatedly hashing both generations. Retirement verifies the live package before
 deleting obsolete backups; rollback still hashes a backup before restoring it
 and verifies the restored bytes. These improvements belong to the installed
 updater and do not change an older updater already running.
+
+Within one updater process, these checks still walk every entry to verify
+identity, metadata, directory listings, links, and a final metadata sweep. A
+file's content digest from the earlier baseline or staged-package scan is reused
+only when its complete metadata, including inode, link count, size, modification
+time, and change time, is unchanged and its change time predates that earlier
+read by at least five seconds. Recovery helpers and later commands re-read file
+contents. Like the metadata sweep, these checks observe the package rather than
+lock it: writes through an already-modified shared memory mapping may not update
+file times. Keep other package managers and tools that modify the installation
+stopped during an update.
 
 An older installed updater that stops with `Package rollback verification byte
 limit exceeded` cannot obtain this repair from its staged candidate. Use the

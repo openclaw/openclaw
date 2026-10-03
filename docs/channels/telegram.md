@@ -31,7 +31,7 @@ Telegram is production-ready for bot DMs and groups via grammY. Long polling is 
 - [Telegram media and attachments](/channels/telegram/media) — photo albums, voice and video notes, locations, venues, and stickers.
 - [Telegram events and operations](/channels/telegram/events) — reaction notifications, config writes, and error reply policy.
 - [Telegram transports](/channels/telegram/transports) — long polling and webhook mode compared.
-- [Telegram Dashboard Mini App](/channels/telegram/mini-app) — open the Control UI inside Telegram with `/dashboard`.
+- [Telegram Control UI Mini App](/channels/telegram/mini-app) — open the Control UI inside Telegram with `/controlui`.
 - [Telegram troubleshooting](/channels/telegram/troubleshooting) — silent groups, missing commands, rejected tokens, and unstable polling.
 
 ## Where each section moved
@@ -40,7 +40,7 @@ Every section heading from the previous single-page version keeps its anchor her
 
 - <a id="quick-setup" />[Quick setup](/channels/telegram/setup#quick-setup)
 - <a id="telegram-side-settings" />[Telegram side settings](/channels/telegram/setup#telegram-side-settings)
-- <a id="dashboard-mini-app" />[Dashboard Mini App](/channels/telegram/mini-app#dashboard-mini-app)
+- <a id="dashboard-mini-app" />[Control UI Mini App](/channels/telegram/mini-app#dashboard-mini-app)
 - <a id="access-control-and-activation" />[Access control and activation](/channels/telegram/access-control#access-control-and-activation)
 - <a id="group-bot-identity" />[Group bot identity](/channels/telegram/access-control#group-bot-identity)
 - <a id="finding-your-telegram-user-id" />[Finding your Telegram user ID](/channels/telegram/access-control#finding-your-telegram-user-id)

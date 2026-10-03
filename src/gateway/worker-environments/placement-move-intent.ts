@@ -39,6 +39,11 @@ type MoveDatabase = Pick<
   StateDatabase,
   "worker_environments" | "worker_session_placement_moves" | "worker_session_placements"
 >;
+type MoveSourceCompletion = {
+  operationId: string;
+  sessionId: string;
+  expectedGeneration: number;
+};
 
 export type WorkerPlacementMoveTarget = SessionMoveTarget;
 
@@ -373,6 +378,55 @@ function requireExactAttachedEnvironment(
 
 export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
   const { read, write, now } = runtime;
+  const completeSourceToLocal = (
+    completion:
+      | { state: "reconciling"; input: MoveSourceCompletion }
+      | { state: "failed"; input: MoveSourceCompletion & { expectedRecoveryError: string } },
+  ): WorkerSessionPlacementRecord =>
+    write((db) => {
+      const { state, input } = completion;
+      const intent = requireExactMove(db, input);
+      if (state === "failed" && (!intent.abandonSource || intent.target.kind !== "gateway")) {
+        throw new Error(`Session ${intent.sessionId} placement move is not an abandonment`);
+      }
+      const current = getRequired(db, intent.sessionId);
+      const label = state === "failed" ? "abandoned" : "Gateway";
+      if (
+        current.state !== state ||
+        current.generation !== input.expectedGeneration ||
+        current.environmentId !== intent.source.environmentId ||
+        current.activeOwnerEpoch !== intent.source.ownerEpoch ||
+        (state === "failed" &&
+          (current.recoveryError !== input.expectedRecoveryError || current.turnClaim !== null))
+      ) {
+        throw new Error(
+          `Cannot complete stale ${label} placement move for session ${intent.sessionId}`,
+        );
+      }
+      const values = transitionValues(current, "local", {}, now());
+      let statement = query(db)
+        .updateTable("worker_session_placements")
+        .set(values)
+        .where("session_id", "=", intent.sessionId)
+        .where("state", "=", state)
+        .where("transition_generation", "=", current.generation)
+        .where("environment_id", "=", intent.source.environmentId)
+        .where("active_owner_epoch", "=", intent.source.ownerEpoch);
+      if (state === "failed") {
+        statement = statement.where("recovery_error", "=", input.expectedRecoveryError);
+      }
+      const result = executeSqliteQuerySync(db, statement.where("turn_claim_owner", "is", null));
+      if (result.numAffectedRows !== 1n) {
+        throw new Error(`Session ${intent.sessionId} changed during ${label} placement move`);
+      }
+      if (intent.target.kind === "gateway") {
+        deleteExactMove(db, intent);
+      }
+      const record = getRequired(db, intent.sessionId);
+      publishPlacementTurnClaimState(db, record);
+      return record;
+    });
+
   return {
     getPlacementMove(sessionId: string): WorkerPlacementMoveIntent | undefined {
       const row = findMoveRow(read(), "session_id", required(sessionId, "move session id"));
@@ -484,95 +538,14 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
       });
     },
 
-    completePlacementMoveSourceToLocal(input: {
-      operationId: string;
-      sessionId: string;
-      expectedGeneration: number;
-    }): WorkerSessionPlacementRecord {
-      return write((db) => {
-        const intent = requireExactMove(db, input);
-        const current = getRequired(db, intent.sessionId);
-        if (
-          current.state !== "reconciling" ||
-          current.generation !== input.expectedGeneration ||
-          current.environmentId !== intent.source.environmentId ||
-          current.activeOwnerEpoch !== intent.source.ownerEpoch
-        ) {
-          throw new Error(
-            `Cannot complete stale Gateway placement move for session ${intent.sessionId}`,
-          );
-        }
-        const values = transitionValues(current, "local", {}, now());
-        const result = executeSqliteQuerySync(
-          db,
-          query(db)
-            .updateTable("worker_session_placements")
-            .set(values)
-            .where("session_id", "=", intent.sessionId)
-            .where("state", "=", "reconciling")
-            .where("transition_generation", "=", current.generation)
-            .where("environment_id", "=", intent.source.environmentId)
-            .where("active_owner_epoch", "=", intent.source.ownerEpoch)
-            .where("turn_claim_owner", "is", null),
-        );
-        if (result.numAffectedRows !== 1n) {
-          throw new Error(`Session ${intent.sessionId} changed during Gateway placement move`);
-        }
-        if (intent.target.kind === "gateway") {
-          deleteExactMove(db, intent);
-        }
-        const record = getRequired(db, intent.sessionId);
-        publishPlacementTurnClaimState(db, record);
-        return record;
-      });
+    completePlacementMoveSourceToLocal(input: MoveSourceCompletion): WorkerSessionPlacementRecord {
+      return completeSourceToLocal({ state: "reconciling", input });
     },
 
-    completeAbandonedPlacementMoveSourceToLocal(input: {
-      operationId: string;
-      sessionId: string;
-      expectedGeneration: number;
-      expectedRecoveryError: string;
-    }): WorkerSessionPlacementRecord {
-      return write((db) => {
-        const intent = requireExactMove(db, input);
-        if (!intent.abandonSource || intent.target.kind !== "gateway") {
-          throw new Error(`Session ${intent.sessionId} placement move is not an abandonment`);
-        }
-        const current = getRequired(db, intent.sessionId);
-        if (
-          current.state !== "failed" ||
-          current.generation !== input.expectedGeneration ||
-          current.environmentId !== intent.source.environmentId ||
-          current.activeOwnerEpoch !== intent.source.ownerEpoch ||
-          current.recoveryError !== input.expectedRecoveryError ||
-          current.turnClaim !== null
-        ) {
-          throw new Error(
-            `Cannot complete stale abandoned placement move for session ${intent.sessionId}`,
-          );
-        }
-        const values = transitionValues(current, "local", {}, now());
-        const result = executeSqliteQuerySync(
-          db,
-          query(db)
-            .updateTable("worker_session_placements")
-            .set(values)
-            .where("session_id", "=", intent.sessionId)
-            .where("state", "=", "failed")
-            .where("transition_generation", "=", current.generation)
-            .where("environment_id", "=", intent.source.environmentId)
-            .where("active_owner_epoch", "=", intent.source.ownerEpoch)
-            .where("recovery_error", "=", input.expectedRecoveryError)
-            .where("turn_claim_owner", "is", null),
-        );
-        if (result.numAffectedRows !== 1n) {
-          throw new Error(`Session ${intent.sessionId} changed during abandoned placement move`);
-        }
-        deleteExactMove(db, intent);
-        const record = getRequired(db, intent.sessionId);
-        publishPlacementTurnClaimState(db, record);
-        return record;
-      });
+    completeAbandonedPlacementMoveSourceToLocal(
+      input: MoveSourceCompletion & { expectedRecoveryError: string },
+    ): WorkerSessionPlacementRecord {
+      return completeSourceToLocal({ state: "failed", input });
     },
 
     completePlacementMoveToWorker(input: {

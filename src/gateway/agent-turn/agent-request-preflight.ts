@@ -25,7 +25,10 @@ import {
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../sessions/input-provenance.js";
 import { isSubagentSessionKey } from "../../sessions/session-key-utils.js";
-import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
+import {
+  createAgentDatabaseAdmissionErrorShape,
+  readAgentDatabaseAdmissionRefusal,
+} from "../../state/agent-database-admission.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import {
   resolveExpectedExistingSessionConstraint,
@@ -95,13 +98,7 @@ export function prepareAgentRequestPreflight(params: {
     tryResolveLegacyCompatibilityAgentId(cfg);
   const refusal = selectedAgentId ? readAgentDatabaseAdmissionRefusal(selectedAgentId) : undefined;
   if (refusal) {
-    params.io.emitAcceptance([
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, `${refusal.reason}\n${refusal.repairHint}`, {
-        details: refusal,
-      }),
-    ]);
+    params.io.emitAcceptance([false, undefined, createAgentDatabaseAdmissionErrorShape(refusal)]);
     return undefined;
   }
   const collectorSession = findSwarmCollectorSession(requestSessionKey, selectedAgentId);

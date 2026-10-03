@@ -292,39 +292,33 @@ export async function maybeMigrateLegacyStorage({
 }): Promise<void> {
   const { rootDir, storagePath } = storagePaths;
   await assertMatrixSupportedStateRoot(rootDir);
-  const hasAccountScopedLegacyStorageFile = fs.existsSync(storagePath);
-  const syncCache = hasAccountScopedLegacyStorageFile
-    ? await import("./sync-cache-state.js")
-    : null;
-  const hasAccountScopedLegacyStorage =
-    hasAccountScopedLegacyStorageFile &&
-    (await syncCache?.readLegacyMatrixSyncCacheState(rootDir)) !== null;
-  if (!hasAccountScopedLegacyStorage) {
+  if (!fs.existsSync(storagePath)) {
+    return;
+  }
+  const syncCache = await import("./sync-cache-state.js");
+  if (!(await syncCache.readLegacyMatrixSyncCacheState(rootDir))) {
     return;
   }
 
   const logger = getMatrixRuntime().logging.getChildLogger({ module: "matrix-storage" });
   fs.mkdirSync(rootDir, { recursive: true });
-  const migrations: string[] = [];
-  let archiveSyncCache = false;
+  let migrated = false;
   try {
-    if (syncCache && hasAccountScopedLegacyStorage) {
-      const persisted = await syncCache.readLegacyMatrixSyncCacheState(rootDir);
-      if (persisted) {
-        const store = getMatrixRuntime().state.openKeyedStore<
-          import("./sync-cache-state.js").MatrixSyncCacheRecord
-        >(syncCache.openMatrixSyncCacheStoreOptions(rootDir));
-        if (!(await syncCache.hasMatrixSyncCacheStateInStore({ storageRootDir: rootDir, store }))) {
-          await syncCache.writeMatrixSyncCacheStateToStore({
-            storageRootDir: rootDir,
-            payload: persisted,
-            store,
-          });
-          await claimCurrentTokenStorageState({ rootDir });
-          migrations.push(`- account sync cache: ${storagePath} -> ${rootDir} SQLite sync cache`);
-        }
-        archiveSyncCache = true;
-      }
+    const persisted = await syncCache.readLegacyMatrixSyncCacheState(rootDir);
+    if (!persisted) {
+      return;
+    }
+    const store = getMatrixRuntime().state.openKeyedStore<
+      import("./sync-cache-state.js").MatrixSyncCacheRecord
+    >(syncCache.openMatrixSyncCacheStoreOptions(rootDir));
+    if (!(await syncCache.hasMatrixSyncCacheStateInStore({ storageRootDir: rootDir, store }))) {
+      await syncCache.writeMatrixSyncCacheStateToStore({
+        storageRootDir: rootDir,
+        payload: persisted,
+        store,
+      });
+      await claimCurrentTokenStorageState({ rootDir });
+      migrated = true;
     }
   } catch (err) {
     throw new Error(`Failed migrating legacy Matrix client storage: ${String(err)}`, {
@@ -332,12 +326,14 @@ export async function maybeMigrateLegacyStorage({
     });
   }
   const archivePath = `${storagePath}.migrated`;
-  const skippedArchive = archiveSyncCache && fs.existsSync(archivePath);
-  if (archiveSyncCache && !skippedArchive) {
+  const skippedArchive = fs.existsSync(archivePath);
+  if (!skippedArchive) {
     fs.renameSync(storagePath, archivePath);
   }
-  if (migrations.length > 0) {
-    logger.info(`matrix: migrated legacy client storage into ${rootDir}\n${migrations.join("\n")}`);
+  if (migrated) {
+    logger.info(
+      `matrix: migrated legacy client storage into ${rootDir}\n- account sync cache: ${storagePath} -> ${rootDir} SQLite sync cache`,
+    );
   }
   if (skippedArchive) {
     logger.warn?.(

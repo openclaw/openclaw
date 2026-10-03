@@ -28,7 +28,7 @@ extension VoiceWakeOverlayController {
             },
             onAlreadyVisible: { window in
                 self.updateWindowFrame(animate: true)
-                window.orderFrontRegardless()
+                AppActivation.shared.orderFrontRegardless(window: window)
             })
     }
 
@@ -54,8 +54,7 @@ extension VoiceWakeOverlayController {
 
     func bringNativeWindowToFront() {
         guard self.model.isVisible, let window = self.window else { return }
-        window.level = Self.preferredWindowLevel
-        window.orderFrontRegardless()
+        AppActivation.shared.orderFrontRegardless(window: window, level: Self.preferredWindowLevel)
     }
 
     func targetFrame() -> NSRect {

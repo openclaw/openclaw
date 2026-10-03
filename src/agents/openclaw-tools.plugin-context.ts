@@ -8,6 +8,11 @@ import {
  * Normalizes workspace, delivery, browser, sandbox, and active-model inputs before plugin tool invocation.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  assertMemoryAudienceCurrent,
+  assertMemoryAudienceSession,
+} from "../plugins/memory-audience.js";
+import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
@@ -42,6 +47,8 @@ export type OpenClawPluginToolOptions = {
   modelId?: string;
   requesterSenderId?: string | null;
   senderIsOwner?: boolean;
+  /** Host-prepared memory audience shared by every plugin tool in this turn. */
+  memoryAudience?: MemoryAudience;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   requesterAgentIdOverride?: string;
   sessionId?: string;
@@ -68,6 +75,9 @@ export function resolveOpenClawPluginToolInputs(params: {
 }) {
   const { options, resolvedConfig, runtimeConfig, getRuntimeConfig } = params;
   const sessionKey = options?.runSessionKey ?? options?.agentSessionKey;
+  if (options?.memoryAudience) {
+    assertMemoryAudienceSession(options.memoryAudience, sessionKey);
+  }
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey,
     config: resolvedConfig,
@@ -123,6 +133,10 @@ export function resolveOpenClawPluginToolInputs(params: {
       nativeChannelId: options?.nativeChannelId,
       requesterSenderId: options?.requesterSenderId ?? undefined,
       senderIsOwner: options?.senderIsOwner,
+      memoryAudience: options?.memoryAudience,
+      assertMemoryAudienceCurrent: options?.memoryAudience
+        ? () => assertMemoryAudienceCurrent(options.memoryAudience!)
+        : undefined,
       conversationReadOrigin: normalizeConversationReadInvocationOrigin(
         options?.conversationReadOrigin,
       ),

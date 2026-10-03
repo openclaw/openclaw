@@ -32,6 +32,9 @@ function browserRuntime(
 ): PluginRuntime {
   const gateway: PluginRuntime["gateway"] = {
     isAvailable: async () => true,
+    subscribeSessionChanges() {
+      throw new Error("Unexpected session change subscription");
+    },
     async readSessionFacts() {
       throw new Error("Unexpected session facts request");
     },

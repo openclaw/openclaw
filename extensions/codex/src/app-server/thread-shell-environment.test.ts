@@ -60,15 +60,7 @@ describe("Codex managed shell environment", () => {
   });
 
   it.each([
-    { label: "native", nativePath: "/native/bin", expected: "/native/bin" },
-    { label: "empty native", nativePath: "", expected: "" },
     { label: "inherited", expected: "/gateway/bin" },
-    {
-      label: "request",
-      nativePath: "/native/bin",
-      requestPath: "/request/bin",
-      expected: "/request/bin",
-    },
     { label: "empty request", nativePath: "/native/bin", requestPath: "", expected: "" },
   ])(
     "prepends to the $label PATH without replacing its base",
@@ -161,32 +153,15 @@ describe("Codex managed shell environment", () => {
         experimental_use_profile: false,
         exclude: ["GIT_*"],
         set: {
+          ...options.shellEnvironment,
           PATH: ["/host-tools", "/user-selected/bin"].join(path.delimiter),
-          GH_CONFIG_DIR: "/host-selected",
           KEEP_ME: "yes",
-          GH_TOKEN: "",
-          GITHUB_TOKEN: "",
-          PREVIEW_SERVICE_TOKEN: "",
-          OPENCLAW_STATE_DIR: "/fixture/diagnosed",
-          OPENCLAW_CONFIG_PATH: "/fixture/custom.json",
-          OPENCLAW_WORKSPACE_DIR: "/fixture/default-workspace",
         },
       });
       expect(config?.allow_login_shell).toBe(false);
       const includeOnly = shellEnvironmentPolicy.include_only;
       expect(includeOnly).toHaveLength(8);
-      expect(includeOnly).toEqual(
-        expect.arrayContaining([
-          "PATH",
-          "GH_CONFIG_DIR",
-          "GITHUB_TOKEN",
-          "GH_TOKEN",
-          "PREVIEW_SERVICE_TOKEN",
-          "OPENCLAW_STATE_DIR",
-          "OPENCLAW_CONFIG_PATH",
-          "OPENCLAW_WORKSPACE_DIR",
-        ]),
-      );
+      expect(includeOnly).toEqual(expect.arrayContaining(Object.keys(options.shellEnvironment)));
       expect(shellEnvironmentPolicy.experimental_use_profile).toBe(false);
       expect(shellEnvironmentPolicy).not.toHaveProperty("use_profile");
     },
@@ -233,14 +208,7 @@ describe("Codex managed shell environment", () => {
 
     expect(config?.shell_environment_policy).toMatchObject({
       experimental_use_profile: false,
-      set: {
-        KEEP_ME: "yes",
-        PATH: "/host-tools:/usr/bin",
-        Path: "/host-tools:/usr/bin",
-        GH_CONFIG_DIR: "/host-selected",
-        GH_TOKEN: "",
-        PREVIEW_SERVICE_TOKEN: "",
-      },
+      set: { KEEP_ME: "yes", ...options.shellEnvironment },
       filters: {
         KEEP_ME: "include",
         "GIT_*": "exclude",

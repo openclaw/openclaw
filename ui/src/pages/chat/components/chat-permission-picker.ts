@@ -125,16 +125,16 @@ export function renderChatPermissionPicker(params: ChatPermissionPickerProps) {
           >${params.mode ? PERMISSION_ICONS[params.mode] : icons.shieldCheck}</span
         >
       </button>
+      <div class="chat-controls__popover-title chat-controls__permission-heading">
+        ${t("chat.permissionControls.label")}
+      </div>
       <wa-dropdown-item
-        class="chat-controls__popover-title chat-controls__permission-heading"
+        class="chat-controls__permission-learn-more learn-more-link"
         href=${PERMISSION_MODES_DOCS_URL}
         target=${EXTERNAL_LINK_TARGET}
         rel=${buildExternalLinkRel()}
       >
-        <span>${t("chat.permissionControls.label")}</span>
-        <span slot="details" class="chat-controls__permission-learn-more learn-more-link"
-          >${t("common.learnMore")}</span
-        >
+        ${t("common.learnMore")}
       </wa-dropdown-item>
       ${PERMISSION_OPTIONS.map((mode, index) => {
         const value = mode ?? DEFAULT_PERMISSION_VALUE;

@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -162,7 +163,11 @@ describe("monitorTlonProvider summary delivery", () => {
     sseClientMock.poke.mockReset().mockResolvedValue(undefined);
     const started = Promise.withResolvers<void>();
     ingressMock.start.mockImplementationOnce(() => started.resolve());
-    const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime });
+    const monitor = monitorTlonProvider({
+      scheduler: createTestPluginServiceScheduler(),
+      abortSignal: controller.signal,
+      runtime,
+    });
     void monitor.catch(started.reject);
     try {
       await started.promise;
@@ -364,6 +369,7 @@ describe("monitorTlonProvider history ownership", () => {
         },
       });
       const firstMonitor = monitorTlonProvider({
+        scheduler: createTestPluginServiceScheduler(),
         abortSignal: firstController.signal,
         runtime,
       });
@@ -387,6 +393,7 @@ describe("monitorTlonProvider history ownership", () => {
 
         monitors.push(
           monitorTlonProvider({
+            scheduler: createTestPluginServiceScheduler(),
             accountId: scenario === "restart" ? "default" : "secondary",
             abortSignal: nextController.signal,
             runtime,

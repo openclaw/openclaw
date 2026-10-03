@@ -41,6 +41,7 @@ function strictRecord<T extends z.ZodRawShape>(shape: T) {
 const identityConfig = strictRecord({
   profileId: githubOAuthProfileId,
   kind: z.literal("oauth").optional(),
+  allowInSandbox: z.boolean().optional(),
   gitAuthor: strictRecord({ name: authorValue.optional(), email: authorValue.optional() })
     .refine((author) => Object.keys(author).length > 0)
     .optional(),

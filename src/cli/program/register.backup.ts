@@ -66,76 +66,72 @@ export function registerBackupCommand(program: Command) {
       });
     });
 
-  backup
-    .command("verify <archive>")
-    .description("Validate a backup archive and its embedded manifest")
-    .option("--from <location>", "Read a backup key or latest from a storage location")
-    .option("--namespace <name>", "Backup namespace (default: sanitized hostname)")
-    .option("--json", "Output JSON", false)
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
-          [
-            "openclaw backup verify ./2026-03-09T08-00-00.000+08-00-openclaw-backup.tar.gz",
-            "Check that the archive structure and manifest are intact.",
-          ],
-          [
-            "openclaw backup verify ~/Backups/latest.tar.gz --json",
-            "Emit machine-readable verification output.",
-          ],
-        ])}`,
-    )
-    .action(async (archive, opts) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        if (opts.from !== undefined) {
-          const { backupRemoteVerifyCommand } = await import("../../commands/backup-remote.js");
-          await backupRemoteVerifyCommand(defaultRuntime, { ...opts, archive });
-        } else {
+  for (const operation of ["verify", "restore"] as const) {
+    const restore = operation === "restore";
+    const command = backup
+      .command(`${operation} <archive>`)
+      .description(
+        restore
+          ? "Restore a verified backup archive to a fresh staging directory"
+          : "Validate a backup archive and its embedded manifest",
+      )
+      .option("--from <location>", "Read a backup key or latest from a storage location")
+      .option("--namespace <name>", "Backup namespace (default: sanitized hostname)");
+    if (restore) {
+      command.requiredOption(
+        "--target <dir>",
+        "Fresh target directory; non-empty directories are refused",
+      );
+    }
+    command
+      .option("--json", "Output JSON", false)
+      .addHelpText(
+        "after",
+        () =>
+          `\n${theme.heading("Examples:")}\n${formatHelpExamples(
+            restore
+              ? [
+                  [
+                    "openclaw backup restore ~/Backups/latest.tar.gz --target ./restored-openclaw",
+                    "Verify, then extract the whole archive into a fresh staging directory.",
+                  ],
+                  [
+                    "openclaw backup restore ~/Backups/latest.tar.gz --target ./restored-openclaw --json",
+                    "Emit machine-readable restore details and rollback warnings.",
+                  ],
+                ]
+              : [
+                  [
+                    "openclaw backup verify ./2026-03-09T08-00-00.000+08-00-openclaw-backup.tar.gz",
+                    "Check that the archive structure and manifest are intact.",
+                  ],
+                  [
+                    "openclaw backup verify ~/Backups/latest.tar.gz --json",
+                    "Emit machine-readable verification output.",
+                  ],
+                ],
+          )}`,
+      )
+      .action((archive, opts) =>
+        runCommandWithRuntime(defaultRuntime, async () => {
+          if (opts.from !== undefined) {
+            const remote = await import("../../commands/backup-remote.js");
+            const run = restore
+              ? remote.backupRemoteRestoreCommand
+              : remote.backupRemoteVerifyCommand;
+            await run(defaultRuntime, { ...opts, archive });
+            return;
+          }
           if (opts.namespace) {
             throw new Error("--namespace requires --from <location>.");
           }
-          const { backupVerifyCommand } = await import("../../commands/backup-verify.js");
-          await backupVerifyCommand(defaultRuntime, { ...opts, archive });
-        }
-      });
-    });
-
-  backup
-    .command("restore <archive>")
-    .description("Restore a verified backup archive to a fresh staging directory")
-    .option("--from <location>", "Read a backup key or latest from a storage location")
-    .option("--namespace <name>", "Backup namespace (default: sanitized hostname)")
-    .requiredOption("--target <dir>", "Fresh target directory; non-empty directories are refused")
-    .option("--json", "Output JSON", false)
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
-          [
-            "openclaw backup restore ~/Backups/latest.tar.gz --target ./restored-openclaw",
-            "Verify, then extract the whole archive into a fresh staging directory.",
-          ],
-          [
-            "openclaw backup restore ~/Backups/latest.tar.gz --target ./restored-openclaw --json",
-            "Emit machine-readable restore details and rollback warnings.",
-          ],
-        ])}`,
-    )
-    .action(async (archive, opts) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        if (opts.from !== undefined) {
-          const { backupRemoteRestoreCommand } = await import("../../commands/backup-remote.js");
-          await backupRemoteRestoreCommand(defaultRuntime, { ...opts, archive });
-        } else {
-          if (opts.namespace) {
-            throw new Error("--namespace requires --from <location>.");
-          }
-          const { backupRestoreCommand } = await import("../../commands/backup-restore.js");
-          await backupRestoreCommand(defaultRuntime, { ...opts, archive });
-        }
-      });
-    });
+          const run = restore
+            ? (await import("../../commands/backup-restore.js")).backupRestoreCommand
+            : (await import("../../commands/backup-verify.js")).backupVerifyCommand;
+          await run(defaultRuntime, { ...opts, archive });
+        }),
+      );
+  }
 
   backup
     .command("list")

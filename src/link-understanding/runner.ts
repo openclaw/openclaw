@@ -3,7 +3,6 @@ import { applyTemplate } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { LinkModelConfig, LinkToolsConfig } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
-// Link-understanding runner fetches allowed URLs and invokes configured commands with bounded content.
 import { createAbortError, isAbortError } from "../infra/abort-signal.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
@@ -38,21 +37,6 @@ function resolveFetchTimeoutMsFromConfig(params: {
 
 function isLinkUrlTemplate(value: string): boolean {
   return value.includes("LinkUrl") || value.includes("LinkFinalUrl");
-}
-
-function commandName(command: string): string {
-  return (command.split(/[\\/]/).pop() ?? command).toLowerCase();
-}
-
-function isUrlFetcherCommand(command: string): boolean {
-  return commandName(command) === "curl" || commandName(command) === "wget";
-}
-
-function buildLinkCliArgs(params: { args: string[]; ctx: MsgContext }): string[] {
-  const templCtx = { ...params.ctx };
-  return params.args
-    .filter((arg) => !isLinkUrlTemplate(arg))
-    .map((arg) => applyTemplate(arg, templCtx));
 }
 
 async function fetchLinkContent(params: {
@@ -108,17 +92,16 @@ async function runCliEntry(params: {
   }
   const args = params.entry.args ?? [];
   const timeoutMs = resolveTimeoutMsFromConfig({ config: params.config, entry: params.entry });
-  if (isUrlFetcherCommand(command) && args.some(isLinkUrlTemplate)) {
+  const name = (command.split(/[\\/]/).pop() ?? command).toLowerCase();
+  if ((name === "curl" || name === "wget") && args.some(isLinkUrlTemplate)) {
     // curl/wget URL templates mark the entry as a fetcher; guarded fetch already supplied content.
     return params.content;
   }
 
+  const templCtx = { ...params.ctx };
   const argv = [
     command,
-    ...buildLinkCliArgs({
-      args,
-      ctx: params.ctx,
-    }),
+    ...args.filter((arg) => !isLinkUrlTemplate(arg)).map((arg) => applyTemplate(arg, templCtx)),
   ];
 
   if (shouldLogVerbose()) {
@@ -161,15 +144,7 @@ async function runLinkEntries(params: {
       break;
     }
     try {
-      const output = await runCliEntry({
-        content: params.content,
-        entry,
-        finalUrl: params.finalUrl,
-        ctx: params.ctx,
-        url: params.url,
-        config: params.config,
-        signal: params.signal,
-      });
+      const output = await runCliEntry({ ...params, entry });
       if (output) {
         return output;
       }

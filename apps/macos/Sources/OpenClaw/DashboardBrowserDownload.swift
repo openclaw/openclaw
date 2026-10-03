@@ -53,6 +53,7 @@ final class DashboardBrowserDownload: NSObject, WKDownloadDelegate {
 
     /// Returns true for cancellation, false only after the completed file is saved.
     func start(using webView: WKWebView, url: URL) async throws -> Bool {
+        guard AppLaunchRuntimePlan.current.allowsActivation else { throw DashboardBrowserError.dialogDeferred }
         guard self.isCurrent() else { throw DashboardBrowserError.unavailable }
         return try await withCheckedThrowingContinuation { continuation in
             self.continuation = continuation

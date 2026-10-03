@@ -9,6 +9,7 @@ import type {
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CHECK_IDS, type POLICY_CHECK_IDS } from "./check-ids.js";
 import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./fix-metadata.js";
+import { workspaceRepairsEnabled } from "./policy-runtime.js";
 
 type PolicyCheckId = (typeof POLICY_CHECK_IDS)[number];
 type ConfigRecord = Record<string, unknown>;
@@ -388,14 +389,6 @@ function setValueAtOcPath(cfg: ConfigRecord, ocPath: string, value: unknown): bo
   }
   current[last] = value;
   return true;
-}
-
-function workspaceRepairsEnabled(ctx: HealthRepairContext): boolean {
-  const plugins = isRecord(ctx.cfg.plugins) ? ctx.cfg.plugins : {};
-  const entries = isRecord(plugins.entries) ? plugins.entries : {};
-  const policy = isRecord(entries.policy) ? entries.policy : {};
-  const config = isRecord(policy.config) ? policy.config : {};
-  return config.workspaceRepairs === true;
 }
 
 function workspaceRepairsDisabledResult(): HealthRepairResult {

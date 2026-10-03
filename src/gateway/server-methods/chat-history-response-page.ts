@@ -1,14 +1,9 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { composeTranscriptDisplay } from "../../chat/transcript-display-position.js";
 import type {
   ChatHistoryPage,
   ChatHistoryPageParams,
   ChatHistoryResponsePage,
 } from "../../config/sessions/session-history-types.js";
-import {
-  isForwardedUserMessage,
-  isProjectedForwardedMessage,
-} from "../chat-display-projection.helpers.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import { capArrayByJsonBytes } from "../session-transcript-readers.js";
 import {
@@ -28,11 +23,16 @@ export function prepareChatHistoryResponsePage(
   historyPage: ChatHistoryPage,
   {
     entry: historyEntry,
+    compactionMetrics,
     maxHistoryBytes,
     messageId,
-  }: Pick<ChatHistoryPageParams, "entry" | "maxHistoryBytes" | "messageId">,
+  }: Pick<ChatHistoryPageParams, "entry" | "compactionMetrics" | "maxHistoryBytes" | "messageId">,
 ): ChatHistoryResponsePage {
-  const normalized = enrichChatHistoryCompactionMarkers(historyPage.messages, historyEntry);
+  const normalized = enrichChatHistoryCompactionMarkers(
+    historyPage.messages,
+    historyEntry,
+    compactionMetrics,
+  );
   // Imported snapshots have no back-scroll cursor. Preserve their complete
   // snapshot budget until the external history owner supports pagination.
   const responseHistoryBytes = historyPage.completeCliImport
@@ -116,35 +116,14 @@ export function prepareChatHistoryResponsePage(
   };
 }
 
-/** Keep host-owned live labels and legacy enrichment on the object path. */
 export function encodeChatHistoryResponsePage(
   page: ChatHistoryPage,
   params: ChatHistoryPageParams,
 ): ChatHistoryPage {
-  if (
-    !params.encodeResponse ||
-    page.messages.some((value) => {
-      const message = asOptionalRecord(value);
-      const metadata = asOptionalRecord(message?.["__openclaw"]);
-      return (
-        !message ||
-        isForwardedUserMessage(message) ||
-        isProjectedForwardedMessage(message) ||
-        metadata?.kind === "compaction" ||
-        (message.role === "user" && asOptionalRecord(metadata?.senderIdentity)?.type === "profile")
-      );
-    })
-  ) {
+  if (!params.encodeResponse) {
     return page;
   }
   const response = prepareChatHistoryResponsePage(page, params);
-  if (
-    (response.omission?.normalizedBytes ?? response.messagesBytes) <
-      CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES ||
-    response.messagesBytes > getMaxChatHistoryMessagesBytes()
-  ) {
-    return page;
-  }
   return {
     ...page,
     messages: [],

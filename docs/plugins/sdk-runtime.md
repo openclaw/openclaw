@@ -128,13 +128,33 @@ its managed handles. Already admitted calls and streams have a bounded chance
 to finish before disposal; retaining an old function does not make it a current
 runtime handle.
 
-Ordinary stream results project their payload on the first `value` read. Nested managed
-readers share data inspection within that synchronous read, while each reader
-keeps its own instance admission. An unread terminal payload does not need data
-inspection. Plain payloads retain their native identity and remain mutable;
-they are not frozen or transferred. Nested readers recheck later reads for
-mutations that need executable views. This does not give a closed
-consumer permission to read a retained active-stream result or call its methods.
+### Plugin value boundary
+
+OpenClaw admits native plugins when it loads and registers them, using the
+existing [manifest validation](/plugins/manifest) and
+[load policy](/plugins/architecture-internals/load-pipeline). Every loaded native
+plugin uses the same value contract: hook results, tool results, and stream
+events cross by reference. The plugin boundary does not copy, freeze,
+deep-inspect, or attach lazy readers to these values.
+
+Plugin authors must not mutate values after handing them to the host, including
+nested objects and byte buffers. Produce a new value for a later update.
+Registered callables retain their instance scope, receiver binding, and lifecycle
+fencing. Plugin code runs inside a Gateway request scope established for its
+invocation.
+
+An admitted iterator owns its invocation scope and call lease for its lifetime.
+Advancing or closing it executes plugin code in that scope without creating a
+new scope for each event. Completion, cancellation, and stream cleanup settle
+that same lease. If `return()` yields from a generator's `finally` block, a later
+resumption acquires a new lease through the original owner and scope. A retained
+iterator cannot acquire fresh authority after its owner closes.
+
+Native plugins execute in the Gateway process and are not sandboxed. Provenance
+diagnostics and capability-specific trust requirements still apply;
+`plugins.allow` permits loading without verifying source provenance. These
+load-time facts belong to the instance until the plugin owner replaces it through
+restart or an explicit reload or installation operation.
 
 Context engines selected by an admitted turn remain owned through that turn's
 commit and engine disposal. Replacing an enabled plugin waits for those consumers

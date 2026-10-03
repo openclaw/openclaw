@@ -117,13 +117,7 @@ function classifyIMessageApprovalTargetTransport(params: {
   return "unknown";
 }
 
-/**
- * Cache-only capability check, run before the prompt is sent so the tapback hint
- * can be omitted up front. Deliberately never probes: a probe spawns imsg and
- * would put seconds of latency in front of an approval prompt. An available
- * bridge status is cached for the process lifetime (see probe.ts), so the only
- * cost of a cold cache is that the first approval after start uses tapbacks.
- */
+// Never spawn a probe before an approval prompt; a cold cache falls back to tapbacks.
 function canIMessageApprovalUsePoll(params: {
   cfg: OpenClawConfig;
   target: PreparedIMessageApprovalTarget;
@@ -184,16 +178,8 @@ function resolveIMessageApprovalCliOptions(params: {
   };
 }
 
-/**
- * Send the poll balloon after the approval details prompt. imsg normally echoes
- * every poll question as a separate caption after the balloon; suppress that
- * echo because OpenClaw already rendered the full context above the controls.
- *
- * Conversation-read authority: `chatGuid` is resolved from the approval's own
- * routing target (origin session or a configured approver), so this read is
- * host-originated and carries the server-owned direct-operator attestation.
- *
- */
+// Suppress imsg's duplicate caption. Routing targets are host-owned, so chat lookup
+// carries direct-operator authority rather than model-delegated authority.
 async function deliverIMessageApprovalPoll(params: {
   cfg: OpenClawConfig;
   target: PreparedIMessageApprovalTarget;
@@ -295,11 +281,7 @@ async function deliverIMessageApprovalPoll(params: {
   }
 }
 
-/**
- * Polls must target a chat Messages already knows. Unlike send, we never
- * synthesize an unregistered DM identifier here: the bridge would reject it and
- * the poll would be lost.
- */
+// Polls require a registered chat; synthesizing a new DM would lose the control.
 async function resolveIMessageApprovalChatGuid(params: {
   to: string;
   cliOptions: { cliPath: string; dbPath?: string; timeoutMs?: number };
@@ -327,11 +309,7 @@ async function resolveIMessageApprovalChatGuid(params: {
   });
 }
 
-/**
- * The prompt went out without its tapback hint because a poll was expected.
- * If poll delivery fails, restore the complete reaction fallback while the
- * original details message still carries every manual command.
- */
+// Restore the reaction hint when an expected poll could not be delivered.
 async function recoverIMessageApprovalTextFallback(params: {
   cfg: OpenClawConfig;
   target: PreparedIMessageApprovalTarget;
@@ -541,12 +519,7 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         const result = await sendMessageIMessage(preparedTarget.to, promptText, {
           config: cfg,
           ...(reactionFallbackVisible ? { approvalPrompt } : {}),
-          // Approval delivery is host-originated: the target comes from the
-          // approval's own routing (origin session or a configured approver),
-          // never from model input. Attest that so #99905's conversation-read
-          // policy sees the real authority instead of failing closed to
-          // "delegated". If the target ever becomes caller-influenced, this
-          // must go back to delegated.
+          // Authority comes from host-owned approval routing, never model input.
           conversationReadOrigin: "direct-operator",
           ...(preparedTarget.accountId ? { accountId: preparedTarget.accountId } : {}),
         });

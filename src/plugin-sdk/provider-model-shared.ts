@@ -412,16 +412,6 @@ export function buildProviderReplayFamilyHooks(
   throw new Error("Unsupported provider replay family");
 }
 
-/** @deprecated Provider-owned replay hook shortcut; use local provider hooks instead. */
-export const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "openai-compatible",
-});
-
-/** @deprecated Anthropic provider-owned replay hook shortcut; use local provider hooks instead. */
-export const ANTHROPIC_BY_MODEL_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "anthropic-by-model",
-});
-
 /** @deprecated Anthropic provider-owned replay hook shortcut; use local provider hooks instead. */
 export const NATIVE_ANTHROPIC_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
   family: "native-anthropic-by-model",

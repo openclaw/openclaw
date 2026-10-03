@@ -454,3 +454,19 @@ export function buildBootstrapContextFiles(
   }
   return result;
 }
+
+/** Builds bounded context files from already-resolved bootstrap file metadata. */
+export function buildBootstrapContextForFiles(
+  bootstrapFiles: WorkspaceBootstrapFile[],
+  params: {
+    config?: OpenClawConfig;
+    agentId?: string | null;
+    warn?: (message: string) => void;
+  },
+): EmbeddedContextFile[] {
+  return buildBootstrapContextFiles(bootstrapFiles, {
+    maxChars: resolveBootstrapMaxChars(params.config, params.agentId),
+    totalMaxChars: resolveBootstrapTotalMaxChars(params.config, params.agentId),
+    warn: params.warn,
+  });
+}

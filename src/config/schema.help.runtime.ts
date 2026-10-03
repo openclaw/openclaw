@@ -98,6 +98,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.github.gitAuthor.email": "Optional process-local Git author and committer email.",
   "agents.entries.*.tools.github":
     "Complete managed GitHub CLI identity and Git author override for this agent. Omit it to inherit the system identity.",
+  "agents.entries.*.tools.github.allowInSandbox":
+    "Allows this agent's managed GitHub credentials and Git author inside its own Docker or Podman sandbox (default: false). Shared scope refuses identity injection; other backends reject provisioning. Security audit warns while enabled.",
   "tools.exec.host":
     'Selects execution target strategy for shell commands. Use "auto" for runtime-aware behavior (sandbox when available, otherwise gateway), or pin sandbox/gateway/node explicitly when you need a fixed surface.',
   "tools.exec.mode":

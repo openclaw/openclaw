@@ -37,9 +37,15 @@ export class DiscordVoiceSpeakerContextResolver {
   ) {}
 
   async resolveContext(guildId: string, userId: string): Promise<VoiceSpeakerContext> {
-    const cached = this.getCachedContext(guildId, userId);
+    const key = `${guildId}:${userId}`;
+    const cached = this.cache.get(key);
     if (cached) {
-      return cached;
+      const now = asDateTimestampMs(Date.now());
+      const expiresAt = asDateTimestampMs(cached.expiresAt);
+      if (now !== undefined && expiresAt !== undefined && expiresAt > now) {
+        return { ...cached.context };
+      }
+      this.cache.delete(key);
     }
     const identity = await this.resolveIdentity(guildId, userId);
     const context = {
@@ -53,7 +59,10 @@ export class DiscordVoiceSpeakerContextResolver {
         allowNameMatching: false,
       }).ownerAllowed,
     };
-    this.setCachedContext(guildId, userId, context);
+    const expiresAt = resolveExpiresAtMsFromDurationMs(SPEAKER_CONTEXT_CACHE_TTL_MS);
+    if (expiresAt !== undefined) {
+      this.cache.set(key, { context: { ...context }, expiresAt });
+    }
     return context;
   }
 
@@ -88,36 +97,6 @@ export class DiscordVoiceSpeakerContextResolver {
       } catch {
         return { id: userId, label: userId, memberRoleIds: [] };
       }
-    }
-  }
-
-  private resolveCacheKey(guildId: string, userId: string): string {
-    return `${guildId}:${userId}`;
-  }
-
-  private getCachedContext(guildId: string, userId: string): VoiceSpeakerContext | undefined {
-    const key = this.resolveCacheKey(guildId, userId);
-    const cached = this.cache.get(key);
-    if (!cached) {
-      return undefined;
-    }
-    const now = asDateTimestampMs(Date.now());
-    const expiresAt = asDateTimestampMs(cached.expiresAt);
-    if (now === undefined || expiresAt === undefined || expiresAt <= now) {
-      this.cache.delete(key);
-      return undefined;
-    }
-    return { ...cached.context };
-  }
-
-  private setCachedContext(guildId: string, userId: string, context: VoiceSpeakerContext): void {
-    const key = this.resolveCacheKey(guildId, userId);
-    const expiresAt = resolveExpiresAtMsFromDurationMs(SPEAKER_CONTEXT_CACHE_TTL_MS);
-    if (expiresAt !== undefined) {
-      this.cache.set(key, {
-        context: { ...context },
-        expiresAt,
-      });
     }
   }
 }

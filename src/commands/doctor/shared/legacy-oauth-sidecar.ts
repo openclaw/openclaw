@@ -7,15 +7,15 @@ import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeUniqueTrimmedStringList,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { authProfilesLog } from "../../../agents/auth-profiles/constants.js";
 import { LEGACY_OAUTH_REF_PROVIDER } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
 import type { LegacyOAuthRef } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
 import { resolveOAuthDir, resolveStateDir } from "../../../config/paths.js";
 import { loadJsonFileThroughSymlink } from "../../../infra/json-file.js";
-
-export { isLegacyOAuthRef } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
-export type { LegacyOAuthRef } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
 
 const LEGACY_OAUTH_SECRET_DIRNAME = "auth-profiles";
 const LEGACY_OAUTH_SECRET_VERSION = 1;
@@ -25,7 +25,7 @@ const LEGACY_OAUTH_SECRET_KEYCHAIN_SERVICE = "OpenClaw Auth Profile Secrets";
 const LEGACY_OAUTH_SECRET_KEYCHAIN_ACCOUNT = "oauth-profile-master-key";
 const LEGACY_OAUTH_SECRET_KEY_FILE_NAME = "auth-profile-secret-key";
 
-export type LegacyOAuthSecretMaterial = {
+type LegacyOAuthSecretMaterial = {
   /** OAuth access token from the legacy sidecar. */
   access?: string;
   /** OAuth refresh token from the legacy sidecar. */
@@ -191,19 +191,13 @@ function readLegacyMacOAuthSecretKeychainKey(params: {
 }
 
 function resolveLegacyOAuthSecretKeySeeds(env: NodeJS.ProcessEnv): string[] {
-  const seeds: string[] = [];
-  const addSeed = (value: string | undefined): void => {
-    const trimmed = value?.trim();
-    if (trimmed && !seeds.includes(trimmed)) {
-      seeds.push(trimmed);
-    }
-  };
-  addSeed(env[LEGACY_OAUTH_SECRET_KEY_ENV]);
-  if (env.NODE_ENV === "test" && env.VITEST === "true") {
-    addSeed("openclaw-test-oauth-profile-secret-key");
-  }
-  addSeed(readLegacyOAuthSecretKeyFile(env));
-  return seeds;
+  return normalizeUniqueTrimmedStringList([
+    env[LEGACY_OAUTH_SECRET_KEY_ENV],
+    env.NODE_ENV === "test" && env.VITEST === "true"
+      ? "openclaw-test-oauth-profile-secret-key"
+      : undefined,
+    readLegacyOAuthSecretKeyFile(env),
+  ]);
 }
 
 function decryptLegacyOAuthSecretMaterialWithSeed(

@@ -11,7 +11,7 @@ import type {
   ChannelThreadingAdapter,
   ChannelThreadingToolContext,
 } from "../../types.core.js";
-import type { ChannelPlugin } from "../../types.js";
+import type { ChannelPlugin } from "../../types.plugin.js";
 
 type ChannelReplyTransport = NonNullable<
   ReturnType<NonNullable<ChannelThreadingAdapter["resolveReplyTransport"]>>

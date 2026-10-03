@@ -197,13 +197,6 @@ export async function writeCallsToStore(
   }
 }
 
-export function writeLegacyCallsJsonl(storePath: string, calls: Record<string, unknown>[]): void {
-  fs.mkdirSync(storePath, { recursive: true });
-  const logPath = path.join(storePath, "calls.jsonl");
-  const lines = calls.map((c) => JSON.stringify(c)).join("\n") + "\n";
-  fs.writeFileSync(logPath, lines);
-}
-
 export function makePersistedCall(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {

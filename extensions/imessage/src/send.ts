@@ -122,20 +122,9 @@ type IMessageSendOpts = IMessageSendHandoff & {
 };
 
 type IMessageSendResult = {
-  /**
-   * Generic identifier returned by the bridge. May be a GUID string, a
-   * numeric ROWID stringified, or the literal "ok"/"unknown" placeholders
-   * when the bridge declines to return one. Most callers (reply cache, echo
-   * cache, receipts) want this field — it is the broadest match for
-   * downstream lookups.
-   */
+  /** Bridge ID, numeric ROWID, or an "ok"/"unknown" placeholder. */
   messageId: string;
-  /**
-   * GUID-only identifier suitable for matching inbound `reacted_to_guid`
-   * fields. Undefined when the bridge returned only a numeric ROWID or
-   * placeholder. Approval-reaction bindings MUST use this field so the
-   * outbound key matches what the inbound tapback will surface.
-   */
+  /** Stable GUID for inbound tapback bindings; never a numeric ROWID or placeholder. */
   guid?: string;
   /** Transport confirmed by the bridge for the message that was sent. */
   service?: Exclude<IMessageService, "auto">;
@@ -169,11 +158,7 @@ function resolveMessageId(result: Record<string, unknown> | null | undefined): s
   return raw ? raw.trim() : null;
 }
 
-// Approval-reaction bindings need to match `reacted_to_guid` on the inbound
-// tapback, which is always the iMessage GUID (never a numeric ROWID). Some imsg
-// bridge variants return a numeric `message_id` from `send` without a `guid` —
-// for the approval path we strictly require the string GUID so we never bind
-// against a numeric id that the inbound side can't produce.
+// Tapbacks identify their target by GUID, never the numeric ROWID some sends return.
 function resolveOutboundMessageGuid(
   result: Record<string, unknown> | null | undefined,
 ): string | null {
@@ -301,24 +286,6 @@ async function resolveFallbackSentMessageGuid(params: {
   );
 }
 
-function shouldRecoverApprovalPromptGuid(params: {
-  approvalPrompt?: IMessageApprovalPromptBinding;
-  filePath?: string;
-  replyToId?: string | null;
-}): boolean {
-  return Boolean(params.approvalPrompt && !params.filePath && !params.replyToId);
-}
-
-function canCheckSentMessageAfterRpcTimeout(params: {
-  dbPath?: string;
-  resolveSentMessageGuidImpl?: IMessageSendOpts["resolveSentMessageGuidImpl"];
-}): boolean {
-  return (
-    Boolean(params.resolveSentMessageGuidImpl) ||
-    canResolveLatestSentMessageGuidFromChatDb(params.dbPath)
-  );
-}
-
 function resolveOutboundEchoMedia(
   mediaContentType: string | undefined,
 ): MediaPlaceholderTextFact | undefined {
@@ -355,14 +322,11 @@ function createIMessageSendReceipt(params: {
       results[0].conversationId = params.target.chatIdentifier;
     }
   }
-  const receiptParams: Parameters<typeof createMessageReceiptFromOutboundResults>[0] = {
+  return createMessageReceiptFromOutboundResults({
     results,
     kind: params.kind,
-  };
-  if (params.replyToId) {
-    receiptParams.replyToId = params.replyToId;
-  }
-  return createMessageReceiptFromOutboundResults(receiptParams);
+    ...(params.replyToId ? { replyToId: params.replyToId } : {}),
+  });
 }
 
 async function withOriginalIMessageAttachmentPath<T>(
@@ -435,9 +399,7 @@ function isAttachmentCommandFallbackError(error: unknown): boolean {
   );
 }
 
-// A threaded reply (reply_to) needs the private-API bridge transport; on an
-// AppleScript-only deployment imsg rejects it outright. Detect that specific
-// error so we can resend the message unthreaded instead of dropping it (#99638).
+// AppleScript-only imsg rejects threaded replies; retry only this rejection unthreaded.
 function isThreadedReplyUnsupportedError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /reply_to requires bridge transport|cannot send threaded repl|threaded repl(?:y|ies)\b.*(?:unsupported|not supported|requires|unavailable)|requires bridge transport/iu.test(
@@ -492,10 +454,7 @@ async function trySendAttachmentForTarget(params: {
   timeoutMs?: number;
   remoteHost?: string;
   runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
-  requestRpc?: (
-    method: string,
-    params: Record<string, unknown>,
-  ) => Promise<Record<string, unknown>>;
+  requestRpc: (method: string, params: Record<string, unknown>) => Promise<Record<string, unknown>>;
   withRemoteFile: typeof withIMessageRemoteFile;
   resolveMessageGuidImpl?: IMessageSendOpts["resolveMessageGuidImpl"];
   assertDirectAdapterHandoff?: () => void;
@@ -572,10 +531,6 @@ async function trySendAttachmentForTarget(params: {
     });
     result = await withOriginalIMessageAttachmentPath(params.filePath, async (attachmentPath) => {
       if (params.remoteHost) {
-        const requestRpc = params.requestRpc;
-        if (!requestRpc) {
-          throw new Error("iMessage remote attachment RPC is unavailable");
-        }
         return await params.withRemoteFile({
           remoteHost: params.remoteHost,
           localPath: attachmentPath,
@@ -594,7 +549,7 @@ async function trySendAttachmentForTarget(params: {
             } else {
               rpcParams.chat_identifier = attachmentChatTarget;
             }
-            return await requestRpc("send.attachment", rpcParams);
+            return await params.requestRpc("send.attachment", rpcParams);
           },
         });
       }
@@ -725,9 +680,7 @@ export async function sendMessageIMessage(
     conversationReadOrigin: opts.conversationReadOrigin,
   });
   opts.assertDirectAdapterHandoff?.();
-  // Sends use a dedicated longer floor (not the 10s probe timeout) so macOS 26
-  // bridge stalls aren't aborted mid-send. A configured probe timeout may extend
-  // sends, but only an explicit per-call timeout may shorten them.
+  // Only an explicit per-call timeout may shorten the bridge-send floor.
   const timeoutMs =
     opts.timeoutMs ??
     Math.max(account.config.probeTimeoutMs ?? 0, DEFAULT_IMESSAGE_SEND_TIMEOUT_MS);
@@ -781,9 +734,7 @@ export async function sendMessageIMessage(
   if (!message.trim() && !filePath) {
     throw new Error("iMessage send requires text or media");
   }
-  // Extract markdown bold/italic/underline/strikethrough into typed-run
-  // ranges that the imsg bridge applies via attributedBody. The sender needs
-  // macOS 15+; pre-Sequoia recipients see the same marker-stripped plain text.
+  // Native attributedBody ranges require macOS 15+; older recipients see plain text.
   const formatted = sanitizeIMessageFinalOutboundText(message, {
     formatMarkdown: true,
     protection: protectedRoles,
@@ -794,9 +745,7 @@ export async function sendMessageIMessage(
   }
   const echoText = message.trim() || undefined;
   const echoMedia = filePath ? resolveOutboundEchoMedia(mediaContentType) : undefined;
-  // The reply id actually delivered. The threaded-reply fallback below clears it
-  // so the receipt and approval binding report the unthreaded send it became,
-  // not the threaded reply the transport rejected (#99638).
+  // Unthreaded fallback must also clear reply metadata from receipts and bindings.
   let effectiveReplyToId = resolvedReplyToId;
   const runCli =
     opts.runCliJson ??
@@ -861,7 +810,6 @@ export async function sendMessageIMessage(
       try {
         captionResult = await sendMessageIMessage(to, text, {
           ...opts,
-          ...(opts.client ? { client: opts.client } : {}),
           mediaUrl: undefined,
           onDeliveryResult: undefined,
         });
@@ -965,10 +913,6 @@ export async function sendMessageIMessage(
       result = await requestSuccessfulSend(params);
     } catch (error) {
       if (resolvedReplyToId && isThreadedReplyUnsupportedError(error)) {
-        // #99638: the transport cannot deliver a threaded reply, so resend the
-        // message unthreaded rather than dropping it. Covers text and media
-        // replies alike (both carry reply_to through this send). One retry with
-        // reply_to stripped, keeping any file; a further failure propagates.
         const plainParams = { ...params };
         delete plainParams.reply_to;
         result = await requestSuccessfulSend(plainParams);
@@ -976,15 +920,12 @@ export async function sendMessageIMessage(
       } else if (filePath || !isIMessageRpcSendTimeout(error)) {
         throw error;
       } else if (
-        !shouldRecoverApprovalPromptGuid({
-          approvalPrompt: opts.approvalPrompt,
-          filePath,
-          replyToId: resolvedReplyToId,
-        }) ||
-        !canCheckSentMessageAfterRpcTimeout({
-          dbPath: chatDbLookupPath,
-          resolveSentMessageGuidImpl: opts.resolveSentMessageGuidImpl,
-        })
+        !opts.approvalPrompt ||
+        resolvedReplyToId ||
+        !(
+          opts.resolveSentMessageGuidImpl ||
+          canResolveLatestSentMessageGuidFromChatDb(chatDbLookupPath)
+        )
       ) {
         throw error;
       } else {
@@ -1005,25 +946,14 @@ export async function sendMessageIMessage(
     const resolvedId = resolveMessageId(result);
     const messageId =
       resolvedId ?? (result?.ok || result?.success || result?.status === "sent" ? "ok" : "unknown");
-    // GUID-only id for approval-reaction binding (inbound `reacted_to_guid`
-    // never carries a numeric ROWID, so the bind key must match). Undefined
-    // when the bridge only returned a placeholder id. Numeric ROWIDs are
-    // resolved through chat.db when available so chat_id sends can still bind
-    // to the stable GUID surfaced by inbound tapbacks.
+    // Recover numeric ROWIDs through chat.db before binding tapback GUIDs.
     let approvalBindingMessageId = await resolveApprovalBindingMessageGuid({
       dbPath: chatDbLookupPath,
       messageId: resolvedId,
       result,
       resolveMessageGuidImpl: opts.resolveMessageGuidImpl,
     });
-    if (
-      !approvalBindingMessageId &&
-      shouldRecoverApprovalPromptGuid({
-        approvalPrompt: opts.approvalPrompt,
-        filePath,
-        replyToId: effectiveReplyToId,
-      })
-    ) {
+    if (!approvalBindingMessageId && opts.approvalPrompt && !filePath && !effectiveReplyToId) {
       approvalBindingMessageId = await resolveFallbackSentMessageGuid({
         dbPath: chatDbLookupPath,
         target,
@@ -1038,10 +968,7 @@ export async function sendMessageIMessage(
       media: echoMedia,
       messageId: resolvedId ?? undefined,
     });
-    // Record the outbound message in the reply cache with isFromMe=true so
-    // edit/unsend actions can verify the agent actually sent the message
-    // before dispatching. Inbound recording (in monitor/inbound-processing)
-    // sets isFromMe=false, so the cache distinguishes own-sent from received.
+    // Outbound provenance authorizes later edit/unsend; inbound cache entries cannot.
     const providerChatGuid = stringValue(result.chat_guid) ?? stringValue(result.chatGuid);
     const confirmedService = resolveIMessageDirectChatService(
       resultService(result.service) ?? service,

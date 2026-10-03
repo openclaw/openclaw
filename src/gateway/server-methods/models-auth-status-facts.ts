@@ -143,18 +143,15 @@ function buildModelAuthStatusFacts(
   // enrichment explicit so static auth providers are not polled by default.
   const usageProviderIds = [
     ...new Set(
-      authHealth.profiles
-        .filter((p) => {
-          if (p.type === "oauth" || p.type === "token") {
-            return true;
-          }
-          const usageProvider = resolveUsageProviderId(p.provider, {
-            credentialType: p.type,
-          });
-          return usageProvider ? apiKeyUsageStatusProviders.has(usageProvider) : false;
-        })
-        .map((p) => resolveUsageProviderId(p.provider, { credentialType: p.type }))
-        .filter((id): id is UsageProviderId => Boolean(id)),
+      authHealth.profiles.flatMap((profile) => {
+        const provider = resolveUsageProviderId(profile.provider, { credentialType: profile.type });
+        return provider &&
+          (profile.type === "oauth" ||
+            profile.type === "token" ||
+            apiKeyUsageStatusProviders.has(provider))
+          ? [provider]
+          : [];
+      }),
     ),
   ];
 

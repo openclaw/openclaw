@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { readLegacyCompactionHistory } from "../../config/sessions/legacy-compaction-history.js";
+import { readLegacyCompactionMetrics } from "../../config/sessions/legacy-compaction-history.js";
 import type {
   ChatHistoryPage,
   ChatHistoryPageParams,
@@ -98,23 +98,12 @@ function resolveChatHistoryActiveLeafEntryId(
 export function enrichChatHistoryCompactionMarkers(
   messages: unknown[],
   entry: ChatHistoryPageParams["entry"],
+  metrics = readLegacyCompactionMetrics(entry),
 ): unknown[] {
-  let checkpoints: ReturnType<typeof readLegacyCompactionHistory>;
-  try {
-    checkpoints = readLegacyCompactionHistory(entry);
-  } catch {
-    // Corrupt legacy metadata cannot hide readable transcript history.
+  if (metrics.length === 0) {
     return messages;
   }
-  if (checkpoints.length === 0) {
-    return messages;
-  }
-  const checkpointByEntryId = new Map(
-    checkpoints.flatMap((checkpoint) => {
-      const entryId = checkpoint.postCompaction.entryId;
-      return entryId ? [[entryId, checkpoint] as const] : [];
-    }),
-  );
+  const checkpointByEntryId = new Map(metrics.map((metric) => [metric.entryId, metric]));
   let changed = false;
   const enriched = messages.map((message) => {
     const record = asOptionalRecord(message);

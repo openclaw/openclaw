@@ -21,6 +21,7 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
   toolRegistrationComplete: boolean;
   runConsumer<T>(consume: () => T): T;
   adopt<T>(value: T): T;
+  admitFactory(factory: (...args: never[]) => unknown): void;
   retainWork(): () => void;
   readonly retainedWorkCount: number;
   readonly ordinaryCallCount: number;
@@ -51,7 +52,6 @@ export type PluginInvocationBinding = {
 export type PluginInvocationContext = {
   /** Retained consumers in this context are joined by a pending reload drain. */
   readonly holdsPendingReplacement?: boolean;
-  assertCurrent?: (instance: PluginInstanceHandle) => void;
   lookup: (instance: PluginInstanceHandle) => PluginInvocationBinding | undefined;
 };
 

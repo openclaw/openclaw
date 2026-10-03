@@ -25,6 +25,6 @@ export type RecordInboundSession = (params: {
   groupResolution?: GroupKeyResolution | null;
   createIfMissing?: boolean;
   updateLastRoute?: InboundLastRouteUpdate;
-  onRecordError: (err: unknown) => void;
+  onRecordError: (err: unknown) => void | Promise<void>;
   trackSessionMetaTask?: (task: Promise<unknown>) => void;
 }) => Promise<void>;

@@ -19,7 +19,11 @@ import type { SparklineSample } from "../../components/sparkline-tile.ts";
 import { t } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { formatGatewayHost } from "../../lib/gateway-host.ts";
-import { readSystemInfo, SYSTEM_INFO_POLL_INTERVAL_MS } from "../../lib/system-info.ts";
+import {
+  canReadSystemInfo,
+  readSystemInfo,
+  SYSTEM_INFO_POLL_INTERVAL_MS,
+} from "../../lib/system-info.ts";
 import {
   GatewayPageController,
   type GatewayPageChange,
@@ -31,7 +35,7 @@ import {
   summarizeConnectionPing,
   type ConnectionPingSummary,
 } from "./latency.ts";
-import { isUnknownSystemInfoMethodError, supportsSystemInfo } from "./system-info.ts";
+import { isUnknownSystemInfoMethodError } from "./system-info.ts";
 import { renderConnection } from "./view.ts";
 
 const CONNECTION_DOCS_URL = "https://docs.openclaw.ai/gateway/remote";
@@ -102,7 +106,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
       this.systemInfo = null;
     }
     if (snapshot.phase === "connected" && snapshot.hello) {
-      this.systemInfoUnavailable = !supportsSystemInfo(snapshot.hello);
+      this.systemInfoUnavailable = !canReadSystemInfo(snapshot);
       if (this.systemInfoUnavailable) {
         this.gateway.invalidate();
         this.systemInfoRequest?.abort();

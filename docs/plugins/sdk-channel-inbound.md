@@ -297,6 +297,12 @@ transcript-context merge, and record-stage diagnostics; it does not change dispa
 routing or hook correlation. An explicit override must be non-empty and contain no
 surrounding whitespace.
 
+The shared `recordInboundSession` recorder joins its metadata writer before
+returning, so dispatch cannot race creation of the session store. Metadata write
+failures still reach `onRecordError` without failing the turn. The promise passed
+to `trackSessionMetaTask` includes asynchronous error reporting; reporting and
+automatic session maintenance remain outside foreground completion.
+
 Reject `deliver` or `finalization` when native delivery fails. If no provider
 send was attempted, throw `PlatformMessageNotDispatchedError` from
 `openclaw/plugin-sdk/error-runtime`; core suppresses a false `message_sent`

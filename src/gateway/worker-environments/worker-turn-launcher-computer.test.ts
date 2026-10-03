@@ -623,7 +623,7 @@ describe("worker launch capabilities", () => {
       ]);
       expect(launchTurn).not.toHaveBeenCalled();
       expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       const placement = placements.get(SESSION_ID);
       expect([placement?.state, placement?.turnClaim]).toEqual(["active", null]);
       if (retainedNodeAuthority) {

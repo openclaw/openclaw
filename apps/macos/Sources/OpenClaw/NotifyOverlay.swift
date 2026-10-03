@@ -78,7 +78,7 @@ final class NotifyOverlayController {
             target: target)
         { window in
             OverlayPanelFactory.applyFrame(window: self.window, target: self.targetFrame(), animate: true)
-            window.orderFrontRegardless()
+            AppActivation.shared.orderFrontRegardless(window: window)
         }
     }
 

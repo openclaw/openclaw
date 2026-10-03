@@ -193,8 +193,8 @@ describe("FileSettingsStorage", () => {
       const root = fixtures.createTempDir("openclaw-settings-umask-");
       const agentDir = join(root, "agent");
       const result = await runNodeScript(
-        [
-          ...resolveRuntimeWorkerArgv(storageUrl, resolveTestNodeExecPath()).slice(0, -1),
+        (workerArgv) => [
+          ...workerArgv(storageUrl).slice(0, -1),
           "--input-type=module",
           "--eval",
           String.raw`

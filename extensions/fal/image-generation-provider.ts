@@ -154,24 +154,23 @@ function parseFalImageGenerationResponse(payload: unknown): {
   return { images, prompt: normalizeOptionalString(payload.prompt) };
 }
 
-function ensureFalModelPath(model: string | undefined, hasInputImages: boolean): string {
-  const trimmed = model?.trim() || DEFAULT_FAL_IMAGE_MODEL;
-  const schema = resolveFalImageModelSchema(trimmed);
+function ensureFalModelPath(
+  model: string,
+  hasInputImages: boolean,
+  schema: FalImageModelSchema,
+): string {
   if (!hasInputImages || schema.appendEditPath === false) {
-    return trimmed;
+    return model;
   }
-  if (isFalGptImage25Model(trimmed)) {
-    return trimmed.replace(/\/text-to-image$/, "/edit");
+  if (isFalGptImage25Model(model)) {
+    return model.replace(/\/text-to-image$/, "/edit");
   }
-  if (
-    trimmed.endsWith(`/${schema.appendEditPath}`) ||
-    trimmed.endsWith("/edit") ||
-    trimmed.endsWith(`/${DEFAULT_FAL_EDIT_SUBPATH}`) ||
-    trimmed.includes("/image-to-image/")
-  ) {
-    return trimmed;
-  }
-  return `${trimmed}/${schema.appendEditPath}`;
+  return model.includes("/image-to-image/") ||
+    [schema.appendEditPath, "edit", DEFAULT_FAL_EDIT_SUBPATH].some((suffix) =>
+      model.endsWith(`/${suffix}`),
+    )
+    ? model
+    : `${model}/${schema.appendEditPath}`;
 }
 
 function isFalGptImage25Model(model: string): boolean {
@@ -680,7 +679,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       if (isGptImage25) {
         validateFalGptImage25Size(imageSize);
       }
-      const model = ensureFalModelPath(req.model, hasInputImages);
+      const model = ensureFalModelPath(requestedModel, hasInputImages, schema);
 
       if (hasInputImages && inputImageCount > schema.maxInputImages) {
         throw new Error(formatFalReferenceLimitError(schema, inputImageCount));

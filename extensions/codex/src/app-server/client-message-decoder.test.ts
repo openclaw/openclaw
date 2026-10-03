@@ -42,80 +42,6 @@ describe("CodexAppServerClient message decoding", () => {
     vi.restoreAllMocks();
   });
 
-  it("dispatches interleaved responses, notifications, and server requests in stdout order", async () => {
-    const harness = createHarness();
-    const observed: string[] = [];
-    harness.client.addNotificationHandler((message) => {
-      observed.push(message.method);
-    });
-    harness.client.addRequestHandler((request) => {
-      observed.push(request.method);
-      return { decision: "decline" };
-    });
-    const first = harness.client.request(
-      "thread/list",
-      {},
-      {
-        attemptWaiterFinished: () => observed.push("first response"),
-      },
-    );
-    const second = harness.client.request(
-      "thread/list",
-      {},
-      {
-        attemptWaiterFinished: () => observed.push("second response"),
-      },
-    );
-    const firstId = JSON.parse(await harness.waitForWrite(0)).id;
-    const secondId = JSON.parse(await harness.waitForWrite(1)).id;
-    const frames = [
-      { method: "turn/started", params: { threadId: "thread-1" } },
-      { id: secondId, result: { data: [{ id: "second" }] } },
-      {
-        id: "approval-1",
-        method: "item/commandExecution/requestApproval",
-        params: { threadId: "thread-1" },
-      },
-      { method: "item/agentMessage/delta", params: { delta: "hello" } },
-      { id: firstId, result: { data: [{ id: "first" }] } },
-      { method: "turn/completed", params: { threadId: "thread-1" } },
-    ];
-
-    harness.process.stdout.write(`${frames.map((frame) => JSON.stringify(frame)).join("\n")}\n`);
-
-    expect(observed).toEqual([
-      "turn/started",
-      "second response",
-      "item/commandExecution/requestApproval",
-      "item/agentMessage/delta",
-      "first response",
-      "turn/completed",
-    ]);
-    await expect(first).resolves.toEqual({ data: [{ id: "first" }] });
-    await expect(second).resolves.toEqual({ data: [{ id: "second" }] });
-    expect(JSON.parse(await harness.waitForWrite(2))).toEqual({
-      id: "approval-1",
-      result: { decision: "decline" },
-    });
-    expect(harness.warn).not.toHaveBeenCalled();
-  });
-
-  it.each(["\n", "\r\n"])(
-    "preserves split UTF-8 and raw-newline recovery with %j framing",
-    (separator) => {
-      const harness = createHarness();
-      const bytes = Buffer.from(
-        `${prefix}猫${separator}😀"}}${separator}${JSON.stringify(following)}${separator}`,
-      );
-      for (let offset = 0; offset < bytes.length; offset++) {
-        harness.process.stdout.write(bytes.subarray(offset, offset + 1));
-      }
-
-      expect(harness.notifications).toEqual([notification("猫\n😀"), following]);
-      expect(harness.warn).not.toHaveBeenCalled();
-    },
-  );
-
   it("delivers the final stdout frame at EOF without a trailing newline", async () => {
     const harness = createHarness();
     harness.process.stdout.end(JSON.stringify(following));
@@ -156,21 +82,31 @@ describe("CodexAppServerClient message decoding", () => {
   });
 
   it.each([
-    { name: "trailing spaces", fragments: ["first ", " second "], delta: "first \n second " },
-    { name: "empty fragments", fragments: ["", "middle", "", ""], delta: "\nmiddle\n\n" },
     {
-      name: "escaped quotes, backslashes, and Unicode",
+      name: "spaces, empty fragments, escapes, and split UTF-8 with CRLF framing",
       fragments: [
-        String.raw`first \"quoted\"`,
+        String.raw` first \"quoted\" `,
+        "",
         String.raw`path C:\\synthetic\\`,
-        String.raw`unicode \u0061 \uD83D\uDE00`,
+        String.raw`unicode \u0061 \uD83D\uDE00 猫 😀 `,
+        "",
+        "",
       ],
-      delta: 'first "quoted"\npath C:\\synthetic\\\nunicode a 😀',
+      delta: ' first "quoted" \n\npath C:\\synthetic\\\nunicode a 😀 猫 😀 \n\n',
+      separator: "\r\n",
     },
-    { name: "trailing backslash", fragments: ["first \\", "second"], delta: "first \\nsecond" },
-  ])("preserves $name while recovering raw-newline strings", ({ fragments, delta }) => {
+    {
+      name: "trailing backslash",
+      fragments: ["first \\", "second"],
+      delta: "first \\nsecond",
+      separator: "\n",
+    },
+  ])("preserves $name while recovering raw-newline strings", ({ fragments, delta, separator }) => {
     const harness = createHarness();
-    harness.process.stdout.write(` \t\n  ${prefix}${fragments.join("\n")}"}}\n`);
+    const bytes = Buffer.from(` \t\n  ${prefix}${fragments.join(separator)}"}}${separator}`);
+    for (let offset = 0; offset < bytes.length; offset++) {
+      harness.process.stdout.write(bytes.subarray(offset, offset + 1));
+    }
     harness.process.stdout.write(`\u00a0${JSON.stringify(following)}\u00a0\n`);
     expect(harness.notifications).toEqual([notification(delta), following]);
     expect(harness.warn).not.toHaveBeenCalled();
@@ -214,7 +150,6 @@ describe("CodexAppServerClient message decoding", () => {
     { name: "invalid escape", fragments: ["first", String.raw`bad \q`] },
     { name: "incomplete Unicode escape", fragments: ["first", String.raw`bad \u12`] },
     { name: "unescaped control", fragments: ["first", "bad\tvalue"] },
-    { name: "initial unescaped control", fragments: ["bad\tvalue"] },
     { name: "initial trailing control", fragments: ["bad\t"] },
     { name: "invalid completed frame", fragments: ["first", 'second"}} trailing'] },
     { name: "invalid syntax before open string", fragments: ['first","bad": @ "unfinished'] },

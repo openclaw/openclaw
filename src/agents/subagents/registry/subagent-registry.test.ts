@@ -14,10 +14,7 @@ import {
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
-import {
-  bindGatewayContextResolver,
-  getPluginRuntimeGatewayRequestScope,
-} from "../../../plugins/runtime/gateway-request-scope.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -65,6 +62,7 @@ import {
 import { registerSupersededNativeTimingTest } from "./subagent-registry.native-termination.test-support.js";
 import { registerSubagentRegistrationPersistenceTests } from "./subagent-registry.persistence.test-support.js";
 import {
+  activateSubagentRegistryWithRecoveryRuntime,
   registerRestoredRequesterWakeSettlementTests,
   registerRestoredRollbackPublicationTest,
   registerRestoredRotationFailureTest,
@@ -224,14 +222,7 @@ describe("subagent registry seam flow", () => {
       }) as never,
     sendRecoveryNotice: vi.fn(),
   };
-  const activateRegistry = async () => {
-    const gatewayContext = {
-      recoveryRuntime,
-      resolveGatewayContext: () => gatewayContext as never,
-    };
-    bindGatewayContextResolver(recoveryRuntime, gatewayContext.resolveGatewayContext);
-    await mod.activateSubagentRegistry(gatewayContext.resolveGatewayContext);
-  };
+  const activateRegistry = () => activateSubagentRegistryWithRecoveryRuntime(mod, recoveryRuntime);
   const hydrateAndActivateRegistry = async () => {
     await mod.initSubagentRegistry();
     await activateRegistry();

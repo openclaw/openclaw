@@ -7,7 +7,7 @@ import {
   disposePluginRegistryInstances,
   waitForPluginRegistryRetirement,
 } from "../plugins/runtime.js";
-import { startPluginServices } from "../plugins/services.js";
+import { startPluginServices } from "../plugins/services.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import {

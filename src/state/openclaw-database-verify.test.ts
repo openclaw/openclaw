@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { readStableSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { readMainDatabasePosixLocks } from "../infra/sqlite-posix-locks.test-support.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
@@ -234,7 +234,7 @@ describe("OpenClaw database integrity verifier", () => {
 
   it("relays a late restart-receipt Worker open to the parent verifier after native opening settles", async () => {
     const result = await runNodeScript(
-      resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(databaseVerifyHostRuntimeEntrypoint)),
+      (workerArgv) => workerArgv(resolveRuntimeWorkerUrl(databaseVerifyHostRuntimeEntrypoint)),
       process.env,
       30_000,
       { requireProcessTreeExit: true },

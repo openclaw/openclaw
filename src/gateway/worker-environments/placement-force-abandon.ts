@@ -75,7 +75,7 @@ export async function forceAbandonWorkerEnvironment(
     refs: string[];
     repositoryWorkspaceId?: string;
   }> = [];
-  for (const pending of placements.listPendingWorkspaceResults()) {
+  for (const pending of await placements.listPendingWorkspaceResultsAsync()) {
     if (pending.environmentId === environmentId) {
       const placement = placements.get(pending.sessionId);
       if (isCurrentWorkerWorkspacePendingResultOwner(placement, pending)) {
@@ -97,7 +97,7 @@ export async function forceAbandonWorkerEnvironment(
         }
         placements.failWorkspaceResultAndReleaseTurn(pending, recoveryError);
       } else {
-        placements.abandonWorkspaceResult(pending);
+        await placements.abandonWorkspaceResult(pending);
       }
     }
   }

@@ -18,6 +18,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "../state/openclaw-agent-db.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as transcriptArchives from "./doctor-session-sqlite-archive.js";
 import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
@@ -43,6 +44,90 @@ function receipt(env: NodeJS.ProcessEnv) {
 }
 
 describe("retained session receipt recovery", () => {
+  it.each(["current", "legacy"] as const)(
+    "keeps a %s receipt valid after repeated device-number changes",
+    async (format) => {
+      await withOpenClawTestState({ label: "receipt-reboot" }, async (state) => {
+        const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(
+          state,
+          "default",
+          "brave",
+        );
+        const options = { cfg, env: state.env, allAgents: true };
+        await runDoctorSessionSqlite({ ...options, mode: "import" });
+        const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, scope).path;
+        const file = fs.statSync(sqlitePath, { bigint: true });
+        const before = receipt(state.env);
+        if (format === "legacy") {
+          const reportJson = JSON.stringify({
+            ...before,
+            databaseIdentity: `${file.dev + 1n}:${file.ino}`,
+          });
+          runOpenClawStateWriteTransaction(
+            ({ db }) => {
+              db.prepare(
+                "UPDATE migration_runs SET report_json = ? WHERE id IN (SELECT last_run_id FROM migration_sources WHERE migration_kind = 'deferred-plugin-session-import')",
+              ).run(reportJson);
+              db.prepare(
+                "UPDATE migration_sources SET report_json = ? WHERE migration_kind = 'deferred-plugin-session-import'",
+              ).run(reportJson);
+            },
+            { env: state.env },
+          );
+        }
+        const lstat = fs.lstatSync;
+        const reboot = vi.spyOn(fs, "lstatSync").mockImplementation((pathname, statOptions) => {
+          const current = lstat(pathname, statOptions);
+          if (pathname === sqlitePath && current) {
+            Object.defineProperty(current, "dev", { value: file.dev + 2n });
+          }
+          return current;
+        });
+        try {
+          if (format === "current") {
+            const validated = await runDoctorSessionSqlite({ ...options, mode: "validate" });
+            expect(validated.targets.flatMap((target) => target.issues)).not.toContainEqual(
+              expect.objectContaining({ code: "retained_plugin_source_conflict" }),
+            );
+          }
+          const repaired = await runDoctorSessionSqlite({ ...options, mode: "import" });
+          expect(repaired.targets.flatMap((target) => target.issues)).not.toContainEqual(
+            expect.objectContaining({ code: "retained_plugin_source_conflict" }),
+          );
+          const upgraded = receipt(state.env);
+          expect(upgraded.sources).toEqual(before.sources);
+          await upsertSessionEntryCore(
+            { ...scope, sessionKey: "agent:main:kept" },
+            { label: "Current metadata after reboot" },
+          );
+          reboot.mockImplementation((pathname, statOptions) => {
+            const current = lstat(pathname, statOptions);
+            if (pathname === sqlitePath && current) {
+              Object.defineProperty(current, "dev", { value: file.dev + 3n });
+            }
+            return current;
+          });
+          const validated = await runDoctorSessionSqlite({ ...options, mode: "validate" });
+          expect(validated.targets.flatMap((target) => target.issues)).not.toContainEqual(
+            expect.objectContaining({ code: "retained_plugin_source_conflict" }),
+          );
+          const repeated = await runDoctorSessionSqlite({ ...options, mode: "import" });
+          expect(repeated.targets.flatMap((target) => target.issues)).not.toContainEqual(
+            expect.objectContaining({ code: "retained_plugin_source_index_rebuilt" }),
+          );
+          expect(receipt(state.env)).toEqual(upgraded);
+          expect(upgraded.databaseIdentity).toMatch(new RegExp(`^inode:${file.ino}:birthtime:`));
+          expect(repeated.totals.importedEntries).toBe(0);
+          expect(repeated.totals.importedTranscriptEvents).toBe(0);
+          expect(
+            loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.label,
+          ).toBe("Current metadata after reboot");
+        } finally {
+          reboot.mockRestore();
+        }
+      });
+    },
+  );
   it.each(["verification", "archive"] as const)(
     "protects newer history when an empty source changes before %s",
     async (phase) => {
@@ -255,7 +340,9 @@ describe("retained session receipt recovery", () => {
           currentIndex,
         );
         const database = fs.statSync(sqlitePath, { bigint: true });
-        expect(after.databaseIdentity).toBe(`${database.dev}:${database.ino}`);
+        expect(after.databaseIdentity).toBe(
+          `inode:${database.ino}:birthtime:${process.platform === "linux" ? "0" : database.birthtimeNs}`,
+        );
         expect(after).not.toEqual(before);
         expect(recovered.totals.validatedTranscriptEvents).toBe(4);
         expect(

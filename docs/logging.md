@@ -668,6 +668,15 @@ completion behavior.
 
 ### Slow agent database opens
 
+Foreground Gateway startup reports a bounded set of `startup phase` records even
+without opt-in tracing. CLI records identify entry-module loading, environment
+selection, command imports, and state preparation before `loading configuration`.
+Gateway records identify database preflight, authentication, startup maintenance,
+listener binding, and readiness. Measured phases log both their start and elapsed
+duration; `total` is elapsed time from process startup (or the current in-process
+restart). These are wall times, including asynchronous waits, not CPU measurements.
+Set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` for the detailed nested phase breakdown.
+
 The `slow OpenClaw agent database open` warning includes `phaseDurationsMs` when
 a persistent database open takes at least one second:
 

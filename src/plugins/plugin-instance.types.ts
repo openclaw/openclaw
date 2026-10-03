@@ -36,15 +36,6 @@ export type PluginInstanceCallLease = {
   release: () => void | Promise<unknown>;
 };
 
-/** An iterator keeps the admission that owns its pending protocol operations. */
-export type PluginIteratorAdmission = {
-  readonly done: boolean;
-  readonly active: boolean;
-  invoke: <T>(run: () => T) => T;
-  close: () => void;
-  call: (key: PropertyKey, method: Function | undefined, args: unknown[]) => Promise<unknown>;
-};
-
 /** Inventory custody owns retirement without depending on registry contributions. */
 export interface PluginInstanceResource {
   readonly pluginId: string;

@@ -390,6 +390,17 @@ describe("resolveQuickstartGatewayDefaults", () => {
     },
   };
 
+  it.each([
+    { credentials: {}, mode: "token" },
+    { credentials: { token: "stored-token" }, mode: "token" },
+    { credentials: { password: "stored-password" }, mode: "password" },
+  ])("retains existing no-auth credential inference: $mode", ({ credentials, mode }) => {
+    expect(
+      resolveQuickstartGatewayDefaults({ gateway: { auth: { mode: "none", ...credentials } } })
+        .authMode,
+    ).toBe(mode);
+  });
+
   it("aligns credential-only overrides while keeping an explicit auth mode authoritative", () => {
     const mode = (
       opts: Parameters<typeof resolveQuickstartGatewayDefaults>[1],

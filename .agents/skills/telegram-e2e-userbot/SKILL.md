@@ -31,8 +31,11 @@ export TELEGRAM_E2E_SKILL_DIR
 Verify `node`, `uv`, and a dependency-ready runtime for the exact ref before
 leasing a credential. The runner uses built `dist/entry.js`; `--source-gateway`
 uses the repository's development launcher when a dependency-ready source run
-is appropriate. The live run must not implicitly install or build. Only the
-`mock` backend needs `scripts/e2e/mock-openai-server.mjs`.
+is appropriate. It runs core and the Telegram plugin from TypeScript source;
+other plugins, including the model provider, use built output when it exists,
+so rebuild before claiming their changes. The live run must not implicitly
+install or build. Only the `mock` backend needs
+`scripts/e2e/mock-openai-server.mjs`.
 
 Convex access can come from either:
 

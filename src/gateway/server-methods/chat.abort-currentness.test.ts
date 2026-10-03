@@ -28,11 +28,12 @@ function createDeferredWorkerCancellation() {
   const workerPersistence = createDeferred<string[]>();
   const service = {};
   registerWorkerInferenceSessionControl(service, {
-    reserveDrain: () => {
+    hasSession: () => true,
+    reserveSessionDrain: () => {
       throw new Error("unexpected drain reservation");
     },
-    resolveTarget: () => undefined,
-    captureCancel: () => ({
+    resolveSessionTargetForRunId: () => undefined,
+    captureSessionCancellation: () => ({
       runIds: ["worker-run"],
       cancel: (control) => {
         control?.assertCurrent?.();
@@ -345,11 +346,14 @@ describe("chat.abort original authority and registration", () => {
   );
 
   it("does not fall back to live worker queries without a registered capture owner", async () => {
-    const cancelInferenceForSession = vi.fn(() => ["worker-run"]);
+    const captureSessionCancellation = vi.fn(() => ({
+      runIds: ["worker-run"],
+      cancel: async () => ["worker-run"],
+    }));
     const context = createChatAbortContext({
       workerEnvironmentService: {
-        cancelInferenceForSession,
-        hasInferenceForSession: () => true,
+        captureSessionCancellation,
+        hasSession: () => true,
       },
     });
     for (const runId of [undefined, "worker-run"]) {
@@ -362,6 +366,6 @@ describe("chat.abort original authority and registration", () => {
       });
       expectAbortPayload(requireLastRespondCall(response)[1], { aborted: false, runIds: [] });
     }
-    expect(cancelInferenceForSession).not.toHaveBeenCalled();
+    expect(captureSessionCancellation).not.toHaveBeenCalled();
   });
 });

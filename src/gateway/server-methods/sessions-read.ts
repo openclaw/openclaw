@@ -24,6 +24,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
+import { errorShapeFromError } from "../error-shape.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
@@ -85,7 +86,13 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         if (error instanceof SessionMutationAuthorizationChangedError) {
           throw error;
         }
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+        respond(
+          false,
+          undefined,
+          errorShapeFromError(ErrorCodes.UNAVAILABLE, error, {
+            message: formatErrorMessage(error),
+          }),
+        );
       }
       return;
     }
@@ -258,7 +265,11 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
       }
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+      respond(
+        false,
+        undefined,
+        errorShapeFromError(ErrorCodes.UNAVAILABLE, error, { message: formatErrorMessage(error) }),
+      );
     }
   },
   "sessions.list": withSessionListDiagnostics(async (args, diagnostics) => {

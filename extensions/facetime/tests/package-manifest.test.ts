@@ -56,7 +56,7 @@ describe("FaceTime plugin manifest", () => {
     );
     // Release preparation bumps the package version and host contract together.
     const hostVersion = packageManifest.version;
-    expect(hostVersion).toMatch(/^\d{4}\.\d{1,2}\.\d{1,2}$/u);
+    expect(hostVersion).toMatch(/^\d{4}\.\d{1,2}\.\d{1,2}(?:-beta\.\d+)?$/u);
 
     expect(packageManifest.openclaw.extensions).toEqual(["./index.ts"]);
     expect(packageManifest.openclaw.runtimeExtensions).toBeUndefined();

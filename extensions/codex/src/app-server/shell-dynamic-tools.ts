@@ -13,6 +13,16 @@ type OpenClawDynamicTool = ReturnType<OpenClawCodingToolsFactory>[number];
 export const CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME = "node_exec";
 export const CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME = "gateway_exec";
 export const CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME = "gateway_process";
+const CODEX_DISABLED_NATIVE_SHELL_DYNAMIC_TOOLS = new Set([
+  "exec",
+  "process",
+  "sandbox_exec",
+  "sandbox_process",
+  CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME,
+  CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME,
+  CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
+]);
+
 const PROCESS_FOLLOWUP_TEXT =
   "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
 
@@ -130,4 +140,21 @@ export function createSandboxProcessProjection(
     description:
       "Manage background shell sessions through OpenClaw's configured sandbox backend for this session: list, poll, log, write, send-keys, submit, paste, kill, clear, or remove. Use only for sandbox follow-up; use Codex's native shell session handling only when no OpenClaw sandbox is active and native Code Mode is available.",
   };
+}
+
+/** Keeps replacement shell tools direct even when model metadata mandates Codex Code Mode. */
+export function placeDisabledNativeShellToolsInDirectNamespace<
+  T extends { name: string; catalogMode?: string },
+>(tools: T[], nativeToolSurfaceEnabled: boolean | undefined): T[] {
+  if (nativeToolSurfaceEnabled !== false) {
+    return tools;
+  }
+  for (const tool of tools) {
+    if (CODEX_DISABLED_NATIVE_SHELL_DYNAMIC_TOOLS.has(normalizeCodexDynamicToolName(tool.name))) {
+      // Runtime tools can carry non-enumerable policy metadata and prototype behavior.
+      // Preserve the prepared object identity while changing only its Codex catalog placement.
+      tool.catalogMode = "direct-only";
+    }
+  }
+  return tools;
 }

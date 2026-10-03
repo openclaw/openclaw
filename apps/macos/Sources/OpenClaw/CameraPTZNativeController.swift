@@ -42,6 +42,11 @@ struct NativeCameraPTZBackend: CameraPTZBackend {
     }
 
     func withCaptureSession<T>(deviceId: String, body: () throws -> T) throws -> T {
+        guard AppLaunchRuntimePlan.current.allowsActivation ||
+            AVCaptureDevice.authorizationStatus(for: .video) == .authorized
+        else {
+            throw CameraPTZError.unsupported("Camera permission required; relaunch without --no-activate and retry")
+        }
         guard let device = CameraDeviceResolver.camera(deviceId: deviceId) else {
             throw CameraPTZError.deviceNotFound(deviceId)
         }

@@ -67,11 +67,11 @@ async function seedPendingWorkspace(scenario: RecoveryScenario) {
       ownerEpoch: environment.ownerEpoch,
     },
   });
-  placements.markWorkspaceResultPending(claim);
+  await placements.markWorkspaceResultPending(claim);
   if (scenario === "accepted result on offline runner") {
-    placements.acceptWorkspaceResult(claim);
+    await placements.acceptWorkspaceResult(claim);
   }
-  placements.handoffWorkspaceResultRecovery(claim);
+  await placements.handoffWorkspaceResultRecovery(claim);
   const staleFields = {
     "stale pending generation": { placement_generation: claim.placementGeneration - 1 },
     "stale pending environment": { environment_id: "previous-environment" },
@@ -115,7 +115,7 @@ async function seedPendingWorkspace(scenario: RecoveryScenario) {
   const before = {
     entry: loadSessionEntry(sessionKey).entry,
     placement: placements.get(sessionId),
-    pending: placements.listPendingWorkspaceResults(),
+    pending: await placements.listPendingWorkspaceResultsAsync(),
   };
   expect(before.entry?.sessionId).toBe(sessionId);
   expect(before.pending).toHaveLength(1);
@@ -128,10 +128,10 @@ async function seedPendingWorkspace(scenario: RecoveryScenario) {
     },
     reclaim,
     waitForTurnClaimRelease,
-    expectPreserved() {
+    async expectPreserved() {
       expect(loadSessionEntry(sessionKey).entry).toEqual(before.entry);
       expect(placements.get(sessionId)).toEqual(before.placement);
-      expect(placements.listPendingWorkspaceResults()).toEqual(before.pending);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual(before.pending);
     },
   };
 }
@@ -164,7 +164,7 @@ describe.each([
     });
     expect(fixture.waitForTurnClaimRelease).not.toHaveBeenCalled();
     expect(fixture.reclaim).not.toHaveBeenCalled();
-    fixture.expectPreserved();
+    await fixture.expectPreserved();
   });
 
   // Both RPCs use the same drain owner; cover each ordinary-drain branch once.
@@ -190,6 +190,6 @@ describe.each([
     expect(result.error?.details).toBeUndefined();
     expect(fixture.waitForTurnClaimRelease).toHaveBeenCalledOnce();
     expect(fixture.reclaim).not.toHaveBeenCalled();
-    fixture.expectPreserved();
+    await fixture.expectPreserved();
   });
 });

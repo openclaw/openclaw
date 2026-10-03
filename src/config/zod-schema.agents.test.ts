@@ -112,3 +112,42 @@ describe("explicit ambient agent targets", () => {
     ).toBe(true);
   });
 });
+
+describe("agent GitHub sandbox identity", () => {
+  const profileId = "ghp_0123456789abcdef0123456789abcdef";
+
+  it.each([undefined, false, true])("accepts allowInSandbox=%s for one agent", (allowInSandbox) => {
+    const github = { profileId, ...(allowInSandbox === undefined ? {} : { allowInSandbox }) };
+    const result = AgentsSchema.safeParse({ entries: { release: { tools: { github } } } });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data?.entries?.release?.tools?.github).toEqual(github);
+    }
+  });
+
+  it.each(["true", 1, null])("rejects non-boolean allowInSandbox=%s", (allowInSandbox) => {
+    const result = AgentsSchema.safeParse({
+      entries: { release: { tools: { github: { profileId, allowInSandbox } } } },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual([
+        expect.objectContaining({
+          path: ["entries", "release", "tools", "github", "allowInSandbox"],
+        }),
+      ]);
+    }
+  });
+
+  it("rejects a global sandbox identity opt-in", () => {
+    const result = OpenClawSchema.safeParse({
+      tools: { github: { profileId, allowInSandbox: true } },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual([
+        expect.objectContaining({ path: ["tools", "github"], code: "unrecognized_keys" }),
+      ]);
+    }
+  });
+});

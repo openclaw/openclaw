@@ -26,7 +26,6 @@ const CONTROL_UI_COMPRESSIBLE_EXTENSIONS = new Set([
   ".wasm",
   ".webmanifest",
 ]);
-const CONTROL_UI_PRECOMPRESSED_ASSET_EXTENSIONS = new Set([".br", ".gz"]);
 
 const CONTROL_UI_CONTENT_TYPES: Readonly<Record<string, string>> = {
   ".html": "text/html; charset=utf-8",
@@ -50,10 +49,6 @@ const CONTROL_UI_CONTENT_TYPES: Readonly<Record<string, string>> = {
 export function isControlUiStaticAssetExtension(extension: string): boolean {
   // Missing .html paths can be client-side routes; the other known types stay 404.
   return extension !== ".html" && Object.hasOwn(CONTROL_UI_CONTENT_TYPES, extension);
-}
-
-export function isControlUiPrecompressedAssetExtension(extension: string): boolean {
-  return CONTROL_UI_PRECOMPRESSED_ASSET_EXTENSIONS.has(extension);
 }
 
 type ControlUiEncodingSelection = ControlUiRepresentationEncoding | "not-acceptable";

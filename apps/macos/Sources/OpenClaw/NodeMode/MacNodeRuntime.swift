@@ -149,7 +149,7 @@ actor MacNodeRuntime {
             await MainActor.run { LiveMacNodeRuntimeMainActorServices() }
         },
         computerControlEnabled: @escaping @Sendable () -> Bool = {
-            MacNodeRuntime.computerControlEnabledDefault()
+            isComputerControlEnabled()
         },
         computerControlProvider: @escaping @Sendable () -> ComputerControlProvider = {
             ComputerControlProvider.current()
@@ -960,13 +960,7 @@ extension MacNodeRuntime {
     }
 
     private static func encodePayload(_ obj: some Encodable) throws -> String {
-        let data = try JSONEncoder().encode(obj)
-        guard let json = String(bytes: data, encoding: .utf8) else {
-            throw NSError(domain: "Node", code: 21, userInfo: [
-                NSLocalizedDescriptionKey: "Failed to encode payload as UTF-8",
-            ])
-        }
-        return json
+        try String(bytes: JSONEncoder().encode(obj), encoding: .utf8)!
     }
 
     static func projectedOuterFrameBytes(
@@ -1009,10 +1003,6 @@ extension MacNodeRuntime {
 
     private nonisolated static func cameraEnabled() -> Bool {
         AppDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false
-    }
-
-    nonisolated static func computerControlEnabledDefault() -> Bool {
-        isComputerControlEnabled()
     }
 
     private nonisolated static func locationMode() -> OpenClawLocationMode {

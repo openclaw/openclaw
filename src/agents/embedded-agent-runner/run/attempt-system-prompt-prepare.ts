@@ -228,6 +228,21 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
           cfg: attempt.config ?? {},
           agentId: params.setup.sessionAgentId,
           activeProjectKeys,
+          context: policyPreparation.assertCurrent
+            ? {
+                authority: attempt.sessionKey
+                  ? {
+                      kind: "session",
+                      sessionKey: attempt.sessionKey,
+                      sessionId: attempt.sessionId,
+                      sandboxed: sandboxInfo?.enabled === true,
+                      audience: attempt.memoryAudience,
+                    }
+                  : { kind: "host", operation: "project-memory-bootstrap" },
+                assertCurrent: policyPreparation.assertCurrent,
+                signal: policyPreparation.signal,
+              }
+            : undefined,
         })
       : [];
   const projectMemoryWriteInstruction = buildProjectMemoryWriteInstruction(

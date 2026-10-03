@@ -158,15 +158,11 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       agentId,
       sessionKey,
     });
-    const candidates = new Set([sessionKey, canonicalKey]);
-    let freshest: SessionEntry | undefined;
-    for (const key of candidates) {
-      const entry = index.get(key);
-      if (entry && (!freshest || (entry.updatedAt ?? 0) > (freshest.updatedAt ?? 0))) {
-        freshest = entry;
-      }
-    }
-    return freshest;
+    const requested = index.get(sessionKey);
+    const canonical = index.get(canonicalKey);
+    return canonical && (!requested || (canonical.updatedAt ?? 0) > (requested.updatedAt ?? 0))
+      ? canonical
+      : requested;
   };
 
   const createdActorForSession = (sessionKey: string): SessionCatalogSession["createdActor"] => {

@@ -260,6 +260,7 @@ export type OpenClawStateReadCommand =
   | { type: "sandboxRegistry.browsers" }
   | WorkspaceJournalReadCommand
   | { type: "workers.placementRecoveryCandidates" }
+  | { type: "workers.placementPendingResults"; sessionId?: string }
   | {
       type: "workers.placementProjection";
       sessionIds: readonly string[];
@@ -386,6 +387,7 @@ export type OpenClawStateReadResult =
   | { type: "cron.scratch"; snapshot: CronScratchSnapshot | undefined }
   | {
       type: "cron.jobNames";
+      storeKey: string;
       names: Map<string, string | undefined>;
     }
   | {
@@ -462,6 +464,7 @@ export type OpenClawStateReadResult =
         | {
             profileId: string;
             role: string | null;
+            githubLogin?: string | null;
             aliases: string[];
             display: UserProfileDisplay;
           }
@@ -537,6 +540,10 @@ export type OpenClawStateReadResult =
     }
   | WorkspaceJournalReadResult
   | { type: "workers.placementRecoveryCandidates"; candidates: WorkerPlacementRecoveryCandidate[] }
+  | {
+      type: "workers.placementPendingResults";
+      pendingResults: import("../gateway/worker-environments/placement-workspace-result.types.js").WorkerWorkspacePendingResult[];
+    }
   | {
       type: "workers.placementProjection";
       result: WorkerSessionPlacementReadResult;

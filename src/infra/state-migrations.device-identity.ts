@@ -185,32 +185,28 @@ function importAndRecordReceipt(params: {
       }
       const imported = !existing || existingState === "invalid";
       const repaired = existingState === "invalid";
-      if (!existing) {
-        executeSqliteQuerySync(
-          db,
-          stateDb.insertInto("device_identities").values({
-            identity_key: IDENTITY_KEY,
-            device_id: params.snapshot.identity.deviceId,
-            public_key_pem: params.snapshot.identity.publicKeyPem,
-            private_key_pem: params.snapshot.identity.privateKeyPem,
-            created_at_ms: params.snapshot.identity.createdAtMs,
-            updated_at_ms: now,
-          }),
-        );
-      } else if (repaired) {
-        executeSqliteQuerySync(
-          db,
-          stateDb
-            .updateTable("device_identities")
-            .set({
-              device_id: params.snapshot.identity.deviceId,
-              public_key_pem: params.snapshot.identity.publicKeyPem,
-              private_key_pem: params.snapshot.identity.privateKeyPem,
-              created_at_ms: params.snapshot.identity.createdAtMs,
-              updated_at_ms: now,
-            })
-            .where("identity_key", "=", IDENTITY_KEY),
-        );
+      if (imported) {
+        const row = {
+          device_id: params.snapshot.identity.deviceId,
+          public_key_pem: params.snapshot.identity.publicKeyPem,
+          private_key_pem: params.snapshot.identity.privateKeyPem,
+          created_at_ms: params.snapshot.identity.createdAtMs,
+          updated_at_ms: now,
+        };
+        if (existing) {
+          executeSqliteQuerySync(
+            db,
+            stateDb
+              .updateTable("device_identities")
+              .set(row)
+              .where("identity_key", "=", IDENTITY_KEY),
+          );
+        } else {
+          executeSqliteQuerySync(
+            db,
+            stateDb.insertInto("device_identities").values({ identity_key: IDENTITY_KEY, ...row }),
+          );
+        }
       }
 
       const verified = readCanonicalIdentity(db);
@@ -244,19 +240,6 @@ function importAndRecordReceipt(params: {
     },
     { env: params.env },
   );
-}
-
-async function removePath(params: {
-  stateRoot: Root;
-  stateDir: string;
-  sourcePath: string;
-  removeSource?: (sourcePath: string) => Promise<void> | void;
-}): Promise<void> {
-  if (params.removeSource) {
-    await params.removeSource(params.sourcePath);
-    return;
-  }
-  await params.stateRoot.remove(relativeLegacyPath(params.stateDir, params.sourcePath));
 }
 
 async function cleanupReceiptSources(params: {
@@ -318,7 +301,11 @@ async function cleanupReceiptSources(params: {
     }
     try {
       verifyCanonicalIdentity(snapshot.identity, params.env);
-      await removePath({ ...params, sourcePath: candidate });
+      if (params.removeSource) {
+        await params.removeSource(candidate);
+      } else {
+        await params.stateRoot.remove(relativeLegacyPath(params.stateDir, candidate));
+      }
       removed += 1;
     } catch (error) {
       warnings.push(`Retired device identity cleanup failed for ${candidate}: ${String(error)}`);

@@ -3,6 +3,27 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { deliverQueuedSessionDelivery } from "./server-restart-sentinel.js";
 
+type LoadedSessionEntryBase = ReturnType<typeof import("./session-utils.js").loadSessionEntry>;
+export type RestartSentinelSessionFixture = Omit<LoadedSessionEntryBase, "agentId"> &
+  Partial<Pick<LoadedSessionEntryBase, "agentId">>;
+
+export function createRestartSentinelSessionFixture(
+  canonicalKey: string,
+  entry: RestartSentinelSessionFixture["entry"],
+  overrides: Partial<RestartSentinelSessionFixture> = {},
+): RestartSentinelSessionFixture {
+  return {
+    cfg: {},
+    entry,
+    store: {},
+    storePath: "/tmp/sessions.json",
+    canonicalKey,
+    storeKeys: [canonicalKey],
+    legacyKey: undefined,
+    ...overrides,
+  };
+}
+
 export async function appendRestartSentinelTranscriptReceipt(
   params: Parameters<
     typeof import("../config/sessions/transcript.js").appendAssistantMessageToSessionTranscript

@@ -11,7 +11,8 @@ import {
   assertOpenClawAgentDatabaseForMaintenance,
   resolveOpenClawAgentSqlitePath,
 } from "openclaw/plugin-sdk/sqlite-runtime";
-import { resolveMemoryAgentIds } from "./cli-runtime-common.js";
+import { resolveForeignMemorySlotOwner } from "./cli-memory-slot.js";
+import { emitMemoryCoreSidecarNotice, resolveMemoryAgentIds } from "./cli-runtime-common.js";
 import type { MemoryResetCommandOptions } from "./cli.types.js";
 import {
   closeMemoryDatabase,
@@ -23,6 +24,10 @@ export async function runMemoryReset(opts: MemoryResetCommandOptions): Promise<v
   // Reset needs no embedding provider or credentials, including when search is disabled.
   const cfg = getRuntimeConfig({ skipPluginValidation: true });
   const agentIds = resolveMemoryAgentIds(cfg, opts.agent);
+  const slotOwner = resolveForeignMemorySlotOwner(cfg);
+  if (slotOwner) {
+    emitMemoryCoreSidecarNotice(slotOwner);
+  }
   if (!opts.yes) {
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
       throw new Error(

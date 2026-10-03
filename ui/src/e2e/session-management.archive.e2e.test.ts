@@ -76,11 +76,11 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.patch")).toEqual([]);
       await captureUiProof(suite, page, "agent-archive-after.png");
 
-      await page.getByRole("button", { name: "Filter & sort" }).click();
+      await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
       await chooseSidebarMenuOption(page, "Status", "Archived");
       await closeSidebarMenu(page);
       await row.waitFor({ state: "visible" });
-      await page.getByRole("button", { name: "Filter & sort" }).click();
+      await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
       await chooseSidebarMenuOption(page, "Status", "Active");
       await closeSidebarMenu(page);
       await row.waitFor({ state: "detached" });
@@ -121,7 +121,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page.getByRole("button", { name: "Filter & sort" }).click();
+      await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
       await chooseSidebarMenuOption(page, "Status", "Archived");
       await closeSidebarMenu(page);
 

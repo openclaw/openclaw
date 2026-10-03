@@ -266,6 +266,8 @@ export async function installPackageDir<
   afterInstall?: (installedDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
   afterBackup?: (backupDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
   beforePersistentApply?: () => void;
+  /** Remote owners answer before displacement/publication; local checks still run at the mutation. */
+  authorizeMutation?: () => Promise<void>;
 }): Promise<InstallPackageDirSuccess | InstallPackageDirFailure | TAfterInstallFailure> {
   const transactionRequest = resolvePackageDirInstallTransactionRequest(params);
   const deferCommit = transactionRequest !== undefined;
@@ -603,6 +605,9 @@ export async function installPackageDir<
         expectedRealPath: installBaseRealPath,
       });
       // Displacing the current install uses the same final ownership check as publication.
+      if (params.authorizeMutation) {
+        await params.authorizeMutation();
+      }
       await movePathWithCopyFallback({
         assertBeforeMutation: assertPersistentApply,
         onDestinationPublished: (receipt) => {
@@ -636,6 +641,9 @@ export async function installPackageDir<
       installBaseDir,
       expectedRealPath: installBaseRealPath,
     });
+    if (params.authorizeMutation) {
+      await params.authorizeMutation();
+    }
     await movePathWithCopyFallback({
       assertBeforeMutation: assertPersistentApply,
       onDestinationPublished: (receipt) => {

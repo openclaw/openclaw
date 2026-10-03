@@ -119,17 +119,21 @@ describe("gateway chat-state maintenance", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("sweeps abandoned progress-only records without requiring assistant text", async () => {
+  it.each(["progress", "registration"])("sweeps abandoned %s records", async (kind) => {
     const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
     vi.setSystemTime(staleRunTimestamp());
-    const runId = "orphan-progress";
-    deps.chatRunState.recordProgressEvent(runId, {
-      runId,
-      seq: 1,
-      ts: Date.now(),
-      stream: "tool",
-      data: { phase: "start", toolCallId: "read-1", name: "read" },
-    });
+    const runId = `orphan-${kind}`;
+    if (kind === "registration") {
+      deps.chatRunState.registry.add(runId, { sessionKey: "main", clientRunId: runId });
+    } else {
+      deps.chatRunState.recordProgressEvent(runId, {
+        runId,
+        seq: 1,
+        ts: Date.now(),
+        stream: "tool",
+        data: { phase: "start", toolCallId: "read-1", name: "read" },
+      });
+    }
     vi.setSystemTime(now);
     const timers = startGatewayMaintenanceTimers(deps);
     try {

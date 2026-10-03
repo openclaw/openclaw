@@ -12,7 +12,6 @@ import {
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
-  normalizeBaseUrl,
   readProviderBinaryResponse,
   readProviderJsonResponse,
   redactProviderResponseErrorText,
@@ -731,11 +730,8 @@ export async function runComfyWorkflow(params: {
       capability: params.capability === "music" ? "audio" : params.capability,
       transport: "http",
     });
-  const normalizedBaseUrl =
-    normalizeBaseUrl(baseUrl) ||
-    (mode === "cloud" ? DEFAULT_COMFY_CLOUD_BASE_URL : DEFAULT_COMFY_LOCAL_BASE_URL);
   const networkPolicy = resolveComfyNetworkPolicy({
-    baseUrl: normalizedBaseUrl,
+    baseUrl,
     allowPrivateNetwork,
     explicitAllowPrivateNetwork,
     mode,
@@ -748,7 +744,7 @@ export async function runComfyWorkflow(params: {
       );
     }
     const uploadedName = await uploadInputImage({
-      baseUrl: normalizedBaseUrl,
+      baseUrl,
       headers: new Headers(headers),
       timeoutMs,
       policy: networkPolicy,
@@ -771,7 +767,7 @@ export async function runComfyWorkflow(params: {
   };
 
   const promptResponse = await readJsonResponse<ComfyPromptResponse>({
-    url: `${normalizedBaseUrl}${mode === "cloud" ? "/api/prompt" : "/prompt"}`,
+    url: `${baseUrl}${mode === "cloud" ? "/api/prompt" : "/prompt"}`,
     init: {
       method: "POST",
       headers,
@@ -790,7 +786,7 @@ export async function runComfyWorkflow(params: {
   }
 
   const history = await waitForComfyHistory({
-    baseUrl: normalizedBaseUrl,
+    baseUrl,
     promptId,
     headers: new Headers(headers),
     timeoutMs,
@@ -820,7 +816,7 @@ export async function runComfyWorkflow(params: {
   const maxOutputBytes = resolveGeneratedMediaMaxBytes(params.cfg, outputKind);
   for (const output of outputFiles) {
     const downloaded = await downloadOutputFile({
-      baseUrl: normalizedBaseUrl,
+      baseUrl,
       headers: new Headers(headers),
       timeoutMs,
       policy: networkPolicy,

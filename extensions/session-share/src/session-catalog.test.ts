@@ -1,8 +1,11 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   sessionCatalogPaging,
@@ -61,7 +64,7 @@ async function catalogFixture() {
     config: { current: () => config },
     nodes: { list, invoke },
   });
-  let service: OpenClawPluginService | undefined;
+  let service: Parameters<OpenClawPluginApi["registerService"]>[0] | undefined;
   const api = createTestPluginApi({
     runtime,
     registerService: (registered) => {
@@ -69,13 +72,27 @@ async function catalogFixture() {
     },
   });
   const catalog = createSessionShareCatalog(api);
-  const serviceContext = { config, logger: api.logger, stateDir: "/unused", invokeNode: invoke };
+  const scheduler = createTestPluginServiceScheduler();
+  const serviceContext = {
+    config,
+    logger: api.logger,
+    stateDir: "/unused",
+    invokeNode: invoke,
+    scheduler,
+  };
   await service?.start(serviceContext);
   return {
     catalog,
     list,
     invoke,
-    stop: async () => service?.stop?.(serviceContext),
+    stop: async () => {
+      scheduler.beginClose();
+      try {
+        await service?.stop?.(serviceContext);
+      } finally {
+        await scheduler.stop();
+      }
+    },
     configure: (next: OpenClawConfig) => {
       config = next;
     },

@@ -4,7 +4,7 @@ import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.core.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";

@@ -104,10 +104,14 @@ function createBrowser(
     },
   );
   onTestFinished(() => {
+    for (const controller of controllers) {
+      controller.hostDisconnected?.();
+    }
     gateway.disconnect();
     browser?.disconnect();
   });
   return {
+    host,
     browser,
     onProjectMissing,
     onSelectProject,
@@ -116,6 +120,11 @@ function createBrowser(
     client,
     context,
     hello,
+    connectHost() {
+      for (const controller of controllers) {
+        controller.hostConnected?.();
+      }
+    },
     detachHost() {
       for (const controller of controllers) {
         controller.hostDisconnected?.();
@@ -611,6 +620,31 @@ describe("DraftGatewayState", () => {
     expect(fixture.browser.projectId).toBe("");
   });
 
+  it("resumes a background-opened Gateway name when the page becomes visible", async () => {
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    onTestFinished(() => visibility.mockRestore());
+    const request = vi.fn(async (method: string) =>
+      method === "projects.list" ? { projects: [] } : { machineName: "Visible Gateway" },
+    );
+    const fixture = createBrowser(request);
+    const task = (
+      fixture.gateway as unknown as { gatewayNameTask: { taskComplete: Promise<unknown> } }
+    ).gatewayNameTask;
+    fixture.hello.features.methods.push("system.info");
+    fixture.connectHost();
+    fixture.update();
+    await task.taskComplete;
+    const requestUpdate = vi.spyOn(fixture.host, "requestUpdate");
+    expect(fixture.gateway.gatewayName).toBe("");
+    expect(request.mock.calls.some(([method]) => method === "system.info")).toBe(false);
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(requestUpdate).toHaveBeenCalledOnce();
+    fixture.queuedUpdate();
+    await task.taskComplete;
+    expect(fixture.gateway.gatewayName).toBe("Visible Gateway");
+  });
+
   it("retains a discovered name when the same connection's recovery scope arrives", async () => {
     const fixture = createBrowser(async (method) =>
       method === "projects.list" ? { projects: [] } : { machineName: "Gateway A" },
@@ -672,12 +706,28 @@ describe("DraftGatewayState", () => {
   });
 
   it.each([
-    { advertised: false, response: { machineName: "Hidden Gateway" }, name: "" },
-    { advertised: true, response: { hostname: "host.example" }, name: "host" },
-    { advertised: true, response: null, name: "" },
+    {
+      advertised: false,
+      response: { machineName: "Hidden Gateway" },
+      name: "",
+      scopes: ["operator.read"],
+    },
+    {
+      advertised: true,
+      response: { hostname: "host.example" },
+      name: "host",
+      scopes: ["operator.read"],
+    },
+    { advertised: true, response: null, name: "", scopes: ["operator.read"] },
+    {
+      advertised: true,
+      response: { machineName: "Private Gateway" },
+      name: "",
+      scopes: ["operator.sessions.read"],
+    },
   ])(
     "settles name discovery with advertisement $advertised and response $response",
-    async ({ advertised, response, name }) => {
+    async ({ advertised, response, name, scopes }) => {
       let current: typeof response | { machineName: string } = { machineName: "Current Gateway" };
       const request = vi.fn(async (method: string) => {
         if (method === "projects.list") {
@@ -696,6 +746,7 @@ describe("DraftGatewayState", () => {
       fixture.context.gateway.snapshot.phase = "reconnecting";
       fixture.update();
       fixture.hello.features.methods = advertised ? ["system.info"] : [];
+      fixture.hello.auth.scopes = scopes;
       fixture.context.gateway.snapshot.phase = "connected";
       fixture.update();
       await new Promise<void>((resolve) => {
@@ -703,7 +754,7 @@ describe("DraftGatewayState", () => {
       });
       await waitForFast(() => expect(fixture.gateway.gatewayName).toBe(name));
       expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(
-        advertised ? 2 : 1,
+        advertised && scopes.includes("operator.read") ? 2 : 1,
       );
     },
   );

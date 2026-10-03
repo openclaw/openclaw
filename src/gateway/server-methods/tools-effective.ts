@@ -223,16 +223,6 @@ function scheduleBaseToolsEffectiveRefresh(
   return task;
 }
 
-function refreshBaseToolsEffectiveInBackground(
-  key: string,
-  context: TrustedToolsEffectiveContext,
-  dependencies: ToolsEffectiveDependencies,
-): void {
-  void scheduleBaseToolsEffectiveRefresh(key, context, dependencies).catch((err: unknown) => {
-    logWarn(`tools-effective: background refresh failed: ${String(err)}`);
-  });
-}
-
 async function resolveCachedBaseToolsEffective(
   context: TrustedToolsEffectiveContext,
   dependencies: ToolsEffectiveDependencies,
@@ -248,7 +238,9 @@ async function resolveCachedBaseToolsEffective(
     if (ageMs < TOOLS_EFFECTIVE_STALE_TTL_MS) {
       // Stale-while-revalidate keeps the tools panel responsive while a new
       // registry/config snapshot is rebuilt in the background.
-      refreshBaseToolsEffectiveInBackground(key, context, dependencies);
+      void scheduleBaseToolsEffectiveRefresh(key, context, dependencies).catch((err: unknown) => {
+        logWarn(`tools-effective: background refresh failed: ${String(err)}`);
+      });
       return cached.value;
     }
   }

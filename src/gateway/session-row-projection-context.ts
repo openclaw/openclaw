@@ -15,7 +15,7 @@ import {
   buildProjectedSubagentActivity,
   buildSessionListRowMetadataContext,
 } from "./session-utils-projection.js";
-import { refreshSessionRowProfiles } from "./session-utils-row.js";
+import { projectSessionRowChildLinks, refreshSessionRowProfiles } from "./session-utils-row.js";
 
 /** Registry and display facts have their own lifecycle, independent of stored row acquisition. */
 export function createSessionRowProjectionContext(subagents: SubagentSessionListReadView) {
@@ -190,7 +190,7 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
         row.profileRevision = profileRevision;
       }
       if (row.subagentRevision !== subagentRevision) {
-        row.materialized.source.childLinks = readChildLinks(row);
+        row.materialized.source.childLinks = projectSessionRowChildLinks(readChildLinks(row));
         row.materialized.row.swarm = buildSessionSwarmSummary(
           current.subagentRuns.swarmRunsByRequesterSessionKey.get(row.key) ?? [],
           row.key,

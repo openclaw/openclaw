@@ -82,8 +82,7 @@ actor TalkMLXSpeechSynthesizer {
         }
 
         self.ensureMemoryPressureMonitor()
-        self.idleTask?.cancel()
-        self.idleTask = nil
+        SimpleTaskSupport.stop(task: &self.idleTask)
 
         let id = UUID().uuidString
         self.activeID = id
@@ -166,10 +165,8 @@ actor TalkMLXSpeechSynthesizer {
     }
 
     func shutdown() async {
-        self.cancelEscalationTask?.cancel()
-        self.cancelEscalationTask = nil
-        self.idleTask?.cancel()
-        self.idleTask = nil
+        SimpleTaskSupport.stop(task: &self.cancelEscalationTask)
+        SimpleTaskSupport.stop(task: &self.idleTask)
         // Revoke ownership before sends suspend; retire only the captured helper.
         let transport = self.transport
         let activeID = self.activeID
@@ -358,8 +355,7 @@ actor TalkMLXSpeechSynthesizer {
         guard self.activeID == id else { return }
         self.activeID = nil
         self.cancelRequestedID = nil
-        self.cancelEscalationTask?.cancel()
-        self.cancelEscalationTask = nil
+        SimpleTaskSupport.stop(task: &self.cancelEscalationTask)
         self.scheduleIdleShutdown()
     }
 

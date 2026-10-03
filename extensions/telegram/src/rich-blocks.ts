@@ -18,6 +18,7 @@ import {
   measureInputRichBlocks,
   normalizeInputRichBlocks,
   normalizeRichText,
+  richTextLink,
   type InputRichBlock,
   type InputRichBlockParagraph,
   type RichBlockTableCell,
@@ -249,7 +250,7 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
           ? item.wrap(container)
           : item.kind === "link"
             ? item.target.kind === "url"
-              ? { type: "url", text: container, url: item.target.href }
+              ? richTextLink(container, item.target.href)
               : { type: "anchor_link", text: container, anchor_name: item.target.name }
             : { type: item.kind === "annotation" ? "code" : item.style, text: container };
       frameStack.at(-1)?.push(node);
@@ -576,33 +577,19 @@ function emitSegments(
         break;
       }
       case "list": {
-        const rendered = renderMarkdownRichListSource(segment.source, (start, end) =>
-          emitSegments(
-            ir,
-            children.filter((child) => child.start >= start && child.end <= end),
-            start,
-            end,
-            degradationReasons,
-            [],
-            depth + 1,
-          ),
-        );
-        if (rendered) {
-          blocks.push(...rendered);
-        } else {
-          degradationReasons.add("list-limit");
-          blocks.push(
-            ...emitSegments(
+        blocks.push(
+          renderMarkdownRichListSource(segment.source, (start, end) =>
+            emitSegments(
               ir,
-              children.filter((child) => child.kind !== "list"),
-              segment.start,
-              segment.end,
+              children.filter((child) => child.start >= start && child.end <= end),
+              start,
+              end,
               degradationReasons,
               [],
               depth + 1,
             ),
-          );
-        }
+          ),
+        );
         break;
       }
       case "table": {

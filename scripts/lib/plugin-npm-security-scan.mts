@@ -140,10 +140,18 @@ const RELEASE_2026_9_7_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string,
   ["@openclaw/onnx:dangerous-exec:src/worker-client.ts", 1],
 ]);
 
-const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
+const RELEASE_2026_9_8_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
   ...RELEASE_2026_9_7_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
   ["@openclaw/llama-cpp-provider:dangerous-exec:src/llama-server-vc-runtime.ts", 1],
 ]);
+
+// The ACPX proxy asset was removed from the packed plugin after 2026.9.8.
+// Preserve the shipped inventory while matching current package contents.
+const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map(
+  [...RELEASE_2026_9_8_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS].filter(
+    ([key]) => key !== "@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs",
+  ),
+);
 
 type ReviewedReleaseLayout = {
   id: string;
@@ -303,21 +311,35 @@ for (const [key, count] of [
   CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(key, count);
 }
 
+const RELEASE_2026_9_8_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map(
+  CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+);
+
 const CURRENT_SECURITY_INVENTORY_POLICY: PluginSecurityInventoryPolicy = {
   layout: CURRENT_REVIEWED_RELEASE_LAYOUT,
   optionalPackedFindingCounts: CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
   requiredSourceFindingCounts: CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
 };
 
-// This loopback-only native fixture owns its temporary home and joins its child.
-// Qualify its reviewed bytes only for current validation, never frozen releases.
-const CURRENT_NATIVE_PERSONA_FIXTURE = {
-  packageName: "@openclaw/codex",
-  path: "src/app-server/run-attempt.skills.native.test.ts",
-  ruleId: "dangerous-exec",
-  count: 1,
-  sha256: "ee2e9bc850d6b8eb43f1a506d82a9f9d8c7471acf45b20f29335c6065be61e18",
-};
+const REVIEWED_EXACT_PACKED_FIXTURES = [
+  // This loopback-only native fixture owns its temporary home and joins its child.
+  {
+    packageName: "@openclaw/codex",
+    path: "src/app-server/run-attempt.skills.native.test.ts",
+    ruleId: "dangerous-exec",
+    count: 1,
+    sha256: "111364dcbc09d239ddac974953b2fe4d587b32ebcba3da8ac579a0dc1768569a",
+  },
+  // The Windows-only fixture invokes the pinned MXC executable with a generated
+  // config in dry-run mode and a fixed timeout.
+  {
+    packageName: "@openclaw/mxc-sandbox",
+    path: "test/mxc-sdk-wire-contract.integration.test.ts",
+    ruleId: "dangerous-exec",
+    count: 1,
+    sha256: "9b5b0dc1f3f43bf2983135a35e12e53c76d9769bc3abdd5da1f08f2f1085d4ee",
+  },
+] as const;
 
 const FROZEN_RELEASE_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
   ["@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts", 1],
@@ -438,7 +460,15 @@ const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurit
       requiredSourceFindingCounts: RELEASE_2026_9_7_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
     },
   ],
-  ["release/2026.9.8", CURRENT_SECURITY_INVENTORY_POLICY],
+  [
+    "release/2026.9.8",
+    {
+      ...CURRENT_SECURITY_INVENTORY_POLICY,
+      optionalPackedFindingCounts: RELEASE_2026_9_8_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_8_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+    },
+  ],
+  ["release/2026.10.1", CURRENT_SECURITY_INVENTORY_POLICY],
   [
     "extended-stable/2026.6.33",
     {
@@ -1178,8 +1208,10 @@ async function scanSupplementalInertPluginInput(
       throw new Error(`${plugin.packageName}: supplemental inert package input identity mismatch.`);
     }
     let qualifiedFixtureKey: string | undefined;
-    const fixture = CURRENT_NATIVE_PERSONA_FIXTURE;
-    if (targetContextRef === "" && plugin.packageName === fixture.packageName) {
+    const fixture = REVIEWED_EXACT_PACKED_FIXTURES.find(
+      (candidate) => candidate.packageName === plugin.packageName,
+    );
+    if (fixture && (targetContextRef === "" || targetContextRef === "release/2026.10.1")) {
       const entry = staged.inspection.inventory.find(
         (candidate) => candidate.type === "file" && candidate.path === `package/${fixture.path}`,
       );

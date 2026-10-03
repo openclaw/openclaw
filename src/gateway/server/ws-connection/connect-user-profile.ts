@@ -110,6 +110,7 @@ async function resolveAuthenticatedProfile(
     recipient: {
       profileId: authority.profileId,
       role: authority.role,
+      githubLogin: authority.githubLogin ?? null,
       aliases: new Set(authority.aliases),
     },
   };

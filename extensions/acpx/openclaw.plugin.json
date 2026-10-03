@@ -16,7 +16,6 @@
   "doctorContract": {
     "configRepair": true,
     "stateMigrations": [
-      { "id": "acpx-runtime-state-to-plugin-state" },
       {
         "id": "acpx-session-owner-resources",
         "doctorOnly": true,

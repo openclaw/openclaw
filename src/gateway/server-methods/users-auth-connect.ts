@@ -37,8 +37,10 @@ function connectHandler<P extends { profileId?: string }>(
   ) => unknown,
   requiredScope: "operator.read" | "operator.write" | "operator.admin" = "operator.write",
 ): GatewayRequestHandler {
-  return defineValidatedGatewayHandler(method, validate, async (options) => {
-    try {
+  return defineValidatedGatewayHandler(
+    method,
+    validate,
+    async (options) => {
       const action = await prepareUserModelAccountAction(
         options,
         options.params.profileId,
@@ -49,20 +51,18 @@ function connectHandler<P extends { profileId?: string }>(
         throw new Error("Model-account service is not running.");
       }
       options.respond(true, await run(service, action, options.params));
-    } catch (error) {
-      const responseError =
-        error instanceof ModelAccountConnectAuthorityError
-          ? errorShape(ErrorCodes.FORBIDDEN, error.message)
-          : error instanceof ModelAccountConnectInputError ||
-              error instanceof UserProfileNotFoundError
-            ? errorShape(ErrorCodes.INVALID_REQUEST, error.message)
-            : errorShape(
-                ErrorCodes.UNAVAILABLE,
-                "Model account connect is unavailable right now; try again shortly.",
-              );
-      options.respond(false, undefined, responseError);
-    }
-  });
+    },
+    (error) =>
+      error instanceof ModelAccountConnectAuthorityError
+        ? errorShape(ErrorCodes.FORBIDDEN, error.message)
+        : error instanceof ModelAccountConnectInputError ||
+            error instanceof UserProfileNotFoundError
+          ? errorShape(ErrorCodes.INVALID_REQUEST, error.message)
+          : errorShape(
+              ErrorCodes.UNAVAILABLE,
+              "Model account connect is unavailable right now; try again shortly.",
+            ),
+  );
 }
 
 export const usersAuthConnectHandlers: GatewayRequestHandlers = {

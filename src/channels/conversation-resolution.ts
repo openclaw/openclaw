@@ -24,7 +24,7 @@ import {
   resolveBundledChannelThreadBindingInboundConversation,
 } from "./plugins/thread-binding-api.js";
 import type { ChannelCommandConversationContext } from "./plugins/types.adapters.js";
-import type { ChannelPlugin } from "./plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "./plugins/types.plugin.js";
 import { normalizeAnyChannelId } from "./registry.js";
 
 type ConversationResolution = {

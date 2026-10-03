@@ -326,6 +326,58 @@ describe("markdownToTelegramRichBlocks", () => {
     expect(result.plainText).toBe("<b>literal</b> <i>alt</i> <br>tail");
   });
 
+  it.each([
+    ["Markdown link", "Hi [Sam](tg://user?id=123456789)!"],
+    ["inline HTML link", 'Hi <a href="tg://user?id=123456789">Sam</a>!'],
+  ])("emits tg://user ID links as text mentions (%s)", (_, markdown) => {
+    expect(markdownToTelegramRichBlocks(markdown).blocks).toEqual([
+      {
+        type: "paragraph",
+        text: [
+          "Hi ",
+          {
+            type: "text_mention",
+            text: "Sam",
+            user: { id: 123456789, is_bot: false, first_name: "" },
+          },
+          "!",
+        ],
+      },
+    ]);
+  });
+
+  it("emits tg://user ID links inside HTML islands as text mentions", () => {
+    expect(
+      markdownToTelegramRichBlocks(
+        '<details><summary>More</summary><div><a href="tg://user?id=42">Sam</a></div></details>',
+      ).blocks,
+    ).toEqual([
+      {
+        type: "details",
+        summary: "More",
+        blocks: [
+          {
+            type: "paragraph",
+            text: {
+              type: "text_mention",
+              text: "Sam",
+              user: { id: 42, is_bot: false, first_name: "" },
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it.each(["tg://user?id=abc", "tg://user?id=1&x=2", "tg://resolve?domain=openclaw"])(
+    "keeps other tg:// links as URLs (%s)",
+    (url) => {
+      expect(markdownToTelegramRichBlocks(`[Sam](${url})`).blocks).toEqual([
+        { type: "paragraph", text: { type: "url", text: "Sam", url } },
+      ]);
+    },
+  );
+
   it("keeps authored HTML and encoded attribute data beside literal tags", () => {
     const result = markdownToTelegramRichBlocks(
       '<a href="https://example.com/?a=1&amp;b=2">**literal**</a> &lt;i&gt;text&lt;/i&gt;',

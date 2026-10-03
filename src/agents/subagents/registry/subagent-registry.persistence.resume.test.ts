@@ -13,6 +13,7 @@ import {
 } from "./subagent-registry.persistence-fixture.test-support.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
+import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.types.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest as closeSeedStateDatabase } from "../../../state/openclaw-state-db.js";
 import "./subagent-registry.mocks.shared.js";
@@ -227,9 +228,13 @@ describe("subagent registry persistence resume", () => {
     const waitingForActivation = failure === "restart before activation";
     let firstGatewayOpen = true;
     const firstGateway = {
+      chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
       resolveGatewayContext: () => (firstGatewayOpen ? (firstGateway as never) : undefined),
     };
-    const replacementGateway = { resolveGatewayContext: () => replacementGateway as never };
+    const replacementGateway = {
+      chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
+      resolveGatewayContext: () => replacementGateway as never,
+    };
     if (restarting) {
       vi.useFakeTimers();
     }
@@ -365,9 +370,13 @@ describe("subagent registry persistence resume", () => {
       let oldFinished = 0;
       let firstGatewayOpen = true;
       const firstGateway = {
+        chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
         resolveGatewayContext: () => (firstGatewayOpen ? (firstGateway as never) : undefined),
       };
-      const replacementGateway = { resolveGatewayContext: () => replacementGateway as never };
+      const replacementGateway = {
+        chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
+        resolveGatewayContext: () => replacementGateway as never,
+      };
       vi.useFakeTimers();
       try {
         await withRegistryState(async () => {
@@ -646,6 +655,7 @@ describe("subagent registry persistence resume", () => {
         };
         let firstLifecycleOpen = true;
         const gatewayContext = {
+          chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
           recoveryRuntime,
           resolveGatewayContext: vi.fn(),
         };
@@ -699,6 +709,7 @@ describe("subagent registry persistence resume", () => {
           waitForAgent: vi.fn(async () => ({ status: "pending" })),
         };
         const replacementGateway = {
+          chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
           recoveryRuntime: replacementRuntime,
           resolveGatewayContext: () => replacementGateway as never,
         };

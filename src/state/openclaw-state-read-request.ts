@@ -511,7 +511,10 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       (input.executionLimit === undefined ? 0 : 8)
     );
   }
-  if (command.type === "workers.placementProjection") {
+  if (
+    command.type === "workers.placementProjection" ||
+    command.type === "workers.placementPendingResults"
+  ) {
     return Buffer.byteLength(JSON.stringify(command), "utf8");
   }
   if (command.type === "workerEnvironments.pruneCandidates") {

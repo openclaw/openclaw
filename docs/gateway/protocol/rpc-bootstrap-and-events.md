@@ -173,6 +173,10 @@ or protocol-version change.
 - `session.observer`: safe live session headline and status digest. A model-authored
   preamble can update the headline immediately; utility-model assessments replace
   it later when available. Web, iOS, and Android use the same run-scoped digest.
+  Utility-model replies may wrap the JSON digest in one plain or `json` Markdown
+  fence; surrounding prose and invalid digest fields are rejected. If repeated
+  invalid replies disable the observer for a run, the warning includes a redacted,
+  whitespace-collapsed prefix of the last rejected reply, capped at 160 characters.
   The optional `sessionId` and opaque `lifecycleRevision` identify the session
   lifecycle; `lifecycleRevision` can be absent before the first reset. Revisions
   increase across runs within that lifecycle but can restart after a reset.

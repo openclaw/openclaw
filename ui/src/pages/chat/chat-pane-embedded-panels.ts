@@ -145,7 +145,7 @@ export function sidebarPanelDefinitions(
               phase: state.connected ? "connected" : "stopped",
             },
             "portal.list",
-            "operator.write",
+            "operator.read",
           )
         : SIDEBAR_PANEL_SHORTCUTS[slot]?.available(panelContext)),
     ),

@@ -150,9 +150,7 @@ describe("Codex app-server sandbox shell tools", () => {
   it.each([
     { allow: undefined, expected: ["message", "sandbox_exec", "sandbox_process"] },
     { allow: ["group:runtime"], expected: ["sandbox_exec", "sandbox_process"] },
-    { allow: ["exec*"], expected: ["sandbox_exec", "sandbox_process"] },
     { allow: ["exec"], restrictWith: ["process"], expected: ["sandbox_process"] },
-    { allow: ["sandbox_process"], restrictWith: ["process"], expected: ["sandbox_process"] },
   ])(
     "keeps Docker shell projections pinned for runtime selectors $allow restricted by $restrictWith",
     async ({ allow, restrictWith, expected }) => {

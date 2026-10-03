@@ -17,10 +17,7 @@ import { withRootBoundedLegacyFileLock } from "./state-migrations.mcp-oauth-lock
 import { importLegacyMcpOAuthStore } from "./state-migrations.mcp-oauth-store.js";
 import type { LegacyMcpOAuthDetection } from "./state-migrations.mcp-oauth.types.js";
 import type { LegacyMcpOAuthImportResult } from "./state-migrations.mcp-oauth.worker-contract.js";
-import {
-  resolveLegacyMigrationSourceKey,
-  type LegacyMigrationReceipt,
-} from "./state-migrations.receipts.js";
+import { resolveLegacyMigrationSourceKey } from "./state-migrations.receipts.js";
 import {
   LegacyMigrationSourceClaim,
   legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
@@ -143,35 +140,6 @@ async function markLegacySourceRemoved(context: OpenClawStateWorkerContext, sour
   );
 }
 
-async function cleanupReceiptAuthoritativeSources(params: {
-  stateRoot: Root;
-  stateDir: string;
-  sourcePath: string;
-  receipt: LegacyMigrationReceipt;
-  context: OpenClawStateWorkerContext;
-  removeSource?: (sourcePath: string) => Promise<void> | void;
-}): Promise<number> {
-  let removed = 0;
-  for (const candidate of [params.sourcePath, `${params.sourcePath}${DOCTOR_CLAIM_SUFFIX}`]) {
-    if (!(await params.stateRoot.exists(relativeLegacyPath(params.stateDir, candidate)))) {
-      continue;
-    }
-    await readLegacySourceSnapshot(params.stateRoot, params.stateDir, candidate, {
-      parseStore: false,
-    });
-    if (params.removeSource) {
-      await params.removeSource(candidate);
-    } else {
-      await params.stateRoot.remove(relativeLegacyPath(params.stateDir, candidate));
-    }
-    removed += 1;
-  }
-  if (!params.receipt.removedSource || removed > 0) {
-    await markLegacySourceRemoved(params.context, params.receipt.sourceKey);
-  }
-  return removed;
-}
-
 async function migrateOneStore(params: {
   stateRoot: Root;
   stateDir: string;
@@ -201,7 +169,16 @@ async function migrateOneStore(params: {
   });
   if (receipt) {
     try {
-      const removed = await cleanupReceiptAuthoritativeSources({ ...params, receipt });
+      const removed = await source.removeRetiredSources({
+        readSnapshot: (candidate) =>
+          readLegacySourceSnapshot(params.stateRoot, params.stateDir, candidate, {
+            parseStore: false,
+          }),
+        removeSource: params.removeSource,
+      });
+      if (!receipt.removedSource || removed > 0) {
+        await markLegacySourceRemoved(params.context, receipt.sourceKey);
+      }
       if (removed > 0) {
         changes.push("Discarded recreated retired MCP OAuth JSON without importing it.");
       }

@@ -1,7 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
-import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
+import { stripUserEnvelopeForDisplay } from "../../../../src/auto-reply/reply/user-envelope-display.js";
 import { projectChatWorkContextForDisplay } from "../../../../src/chat/work-context.js";
 import { readPersistedMediaFacts } from "../../../../src/media/media-facts.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
@@ -27,7 +27,7 @@ function processMessageText(text: string, role: string): string {
     return stripThinkingTags(withoutInternalContext);
   }
   return shouldStripInboundMetadata
-    ? stripInboundMetadata(stripEnvelope(withoutInternalContext))
+    ? stripUserEnvelopeForDisplay(withoutInternalContext)
     : stripEnvelope(withoutInternalContext);
 }
 

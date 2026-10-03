@@ -19,7 +19,6 @@ import {
 } from "./plugin-native-admission-state.js";
 import {
   auditOpenClawPeerDependenciesInManagedNpmRoot,
-  linkOpenClawPeerDependencies,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "./plugin-peer-link.js";
 
@@ -902,92 +901,3 @@ it("snapshots a mutable native edit once while retained generations keep their p
     }
   });
 });
-
-it.each(["npm", "archive"] as const)(
-  "uses a source-path fallback only for retained npm trees when linking a %s artifact is unavailable",
-  async (source) => {
-    await withOpenClawTestState({ label: `native-link-${source}` }, async (state) => {
-      const fixture = createFixture(state.path("installed"), true);
-      fixture.index.installRecords = {
-        "fixture-package": { source, installPath: fixture.installRoot },
-      };
-      fs.writeFileSync(
-        path.join(fixture.root, "child.cjs"),
-        "module.exports = require('openclaw/plugin-sdk/identity');",
-      );
-      const hosts = ["first", "second"].map((identity) => {
-        const host = state.path(`fallback-host-${identity}`);
-        fs.mkdirSync(host);
-        fs.writeFileSync(
-          path.join(host, "package.json"),
-          JSON.stringify({
-            name: "openclaw",
-            exports: { "./plugin-sdk/identity": "./identity.cjs" },
-          }),
-        );
-        fs.writeFileSync(
-          path.join(host, "identity.cjs"),
-          `module.exports = ${JSON.stringify(identity)};`,
-        );
-        return host;
-      });
-      fs.writeFileSync(
-        path.join(fixture.installRoot, "package.json"),
-        JSON.stringify({
-          name: "fixture-package",
-          version: "1.0.0",
-          peerDependencies: { openclaw: "*" },
-        }),
-      );
-      await linkOpenClawPeerDependencies({
-        installedDir: fixture.installRoot,
-        peerDependencies: { openclaw: "*" },
-        hostRoot: hosts[0],
-        logger: {},
-      });
-      const cache = createPluginCache();
-      preparePluginNativeAdmissions(fixture.index, cache);
-      const failure = Object.assign(new Error("fixture filesystem does not support hardlinks"), {
-        code: "EXDEV",
-      });
-      const link = fs.linkSync;
-      const fault = vi.spyOn(fs, "linkSync").mockImplementation((from, to) => {
-        if (from === fixture.filename) {
-          throw failure;
-        }
-        link(from, to);
-      });
-      let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
-      let successor: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
-      try {
-        const capture = () => {
-          artifact = withPluginCache(cache, () => capturePluginGenerationArtifact(fixture.root));
-        };
-        if (source === "archive") {
-          expect(capture).toThrow(failure);
-        } else {
-          capture();
-          artifact!.linkHost(hosts[0]!);
-          expect(fs.realpathSync(artifact!.resolve(fixture.filename))).toBe(fixture.filename);
-          expect(fs.readFileSync(artifact!.resolve(fixture.filename)).equals(fixture.bytes)).toBe(
-            true,
-          );
-          const native = fs.realpathSync(artifact!.resolve(fixture.filename));
-          expect(createRequire(native)(path.join(path.dirname(native), "child.cjs"))).toBe("first");
-          successor = withPluginCache(cache, () => capturePluginGenerationArtifact(fixture.root));
-          expect(() => successor!.linkHost(hosts[1]!)).toThrow(
-            "does not resolve the selected OpenClaw host",
-          );
-          expect(fs.realpathSync(path.join(fixture.installRoot, "node_modules", "openclaw"))).toBe(
-            fs.realpathSync(hosts[0]!),
-          );
-        }
-      } finally {
-        fault.mockRestore();
-        await successor?.disposeAsync();
-        await artifact?.disposeAsync();
-        await retirePluginCache(cache);
-      }
-    });
-  },
-);

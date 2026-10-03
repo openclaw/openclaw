@@ -73,6 +73,12 @@ describe("desktop approval upgrade", () => {
         },
         baseDir,
       );
+      // Seed the legacy hint directly: current requests keep upgrades interactive.
+      await withPairedDeviceRecords(baseDir, (devices) => {
+        const legacy = expectDefined(devices[nodeId]?.pendingNodeSurface, "legacy pending surface");
+        legacy.silent = true;
+        return { value: undefined, persist: true };
+      });
       expect(await migrateLegacyDesktopStreamOptOuts({}, baseDir)).toBe(1);
       const after = expectDefined(await getPairedDevice(nodeId, baseDir), "migrated device");
       expect(after.nodeSurface?.commands).toEqual(["system.run"]);

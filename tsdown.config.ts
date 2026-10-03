@@ -116,7 +116,7 @@ function matchesExternalOption(
 function buildInputOptions(
   options: InputOptionsArg,
   build?: { bundleAllDependencies?: boolean },
-): InputOptionsReturn {
+): Awaited<InputOptionsReturn> {
   if (process.env.OPENCLAW_BUILD_VERBOSE === "1") {
     return undefined;
   }
@@ -238,7 +238,7 @@ function nodeBuildConfig(
   };
 }
 
-function workerDeployBuildConfig(entry: Record<string, string>): UserConfig {
+function workerDeployBuildConfig(entry: Record<string, string>, split = false): UserConfig {
   return {
     name: TSDOWN_UNIFIED_CONFIG_GROUP,
     entry,
@@ -268,11 +268,19 @@ function workerDeployBuildConfig(entry: Record<string, string>): UserConfig {
     fixedExtension: false,
     minify: { codegen: true, compress: true, mangle: { keepNames: true } },
     outExtensions: () => ({ js: ".mjs", dts: ".d.ts" }),
-    outputOptions: { codeSplitting: false, assetFileNames: "worker/[name][extname]" },
+    outputOptions: {
+      codeSplitting: split,
+      strictExecutionOrder: true,
+      chunkFileNames: "worker/worker-chunk-[hash].mjs",
+      assetFileNames: "worker/[name][extname]",
+    },
     plugins: [createStateSchemaInlinePlugin(), createWorkerDeployBuildPlugin()],
     shims: true,
     sourcemap: OUTPUT_SOURCE_MAPS,
-    inputOptions: (options) => buildInputOptions(options, { bundleAllDependencies: true }),
+    inputOptions: (options) => ({
+      ...(buildInputOptions(options, { bundleAllDependencies: true }) ?? options),
+      ...(split ? { preserveEntrySignatures: "allow-extension" as const } : {}),
+    }),
   };
 }
 
@@ -971,7 +979,13 @@ const configs: UserConfig[] = [
     },
     false,
   ),
-  workerDeployBuildConfig({ "worker/worker": "src/worker/worker-deploy-entry.ts" }),
+  workerDeployBuildConfig(
+    {
+      "worker/worker": "src/worker/worker-deploy-entry.ts",
+      "worker/worker-chunk-highlight": "node_modules/highlight.js/lib/index.js",
+    },
+    true,
+  ),
   workerDeployBuildConfig({
     "worker/file-tool-planning.worker": "src/worker/worker-deploy-file-tool-planning.ts",
   }),

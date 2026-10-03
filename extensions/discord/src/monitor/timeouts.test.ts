@@ -118,4 +118,36 @@ describe("discord monitor timeouts", () => {
 
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
+
+  it.each(["resolve", "reject"] as const)(
+    "keeps the deadline error when aborted work synchronously %ss",
+    async (settlement) => {
+      vi.useFakeTimers();
+      const timeoutError = new Error("Discord request timed out");
+      let receivedSignal: AbortSignal | undefined;
+      const failure = withAbortTimeout({
+        timeoutMs: 100,
+        createTimeoutError: () => timeoutError,
+        run: (signal) => {
+          receivedSignal = signal;
+          return new Promise<string>((resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () =>
+                settlement === "resolve" ? resolve("closed") : reject(new Error("request aborted")),
+              { once: true },
+            );
+          });
+        },
+      }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(await failure).toBe(timeoutError);
+      expect(receivedSignal?.aborted).toBe(true);
+    },
+  );
 });

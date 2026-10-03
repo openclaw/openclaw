@@ -15,6 +15,7 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import type { UpdateDoctorWriteAuthority } from "../infra/update-doctor-result.js";
 import { POST_CORE_UPDATE_ENV } from "../infra/update-post-core-context.js";
+import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import {
   inspectUpdateRunDriver,
   readUpdateRunDriver,
@@ -36,6 +37,7 @@ import {
   prepareDoctorDatabasePreflight,
   type DoctorDatabasePreflight,
 } from "./doctor-database-preflight.js";
+import { createDoctorRehearsalDatabaseCoverage } from "./doctor-rehearsal-databases.js";
 import {
   recordUpdateDoctorRefusal,
   resolveUpdateDoctorGitRecovery,
@@ -168,17 +170,37 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
   entry?: "cli-bootstrap" | "package-lifecycle";
   postCoreSchemaRepair?: UpdateDoctorWriteAuthority["postCoreSchemaRepair"];
   onVerifiedBackup?: (snapshots: readonly BackupSqliteSnapshotFact[]) => void;
+  /** Read-only pre-capture publication check; never authorizes an agent repair. */
+  statePublicationOnly?: boolean;
 }): Promise<DoctorDatabasePreflight | undefined> {
   if (process.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1") {
     return undefined;
   }
-  const schemas = options.schemas ?? (await prepareDoctorDatabasePreflight());
+  // Mode flags and retained captures are not live mutation authority. Only the
+  // current maintenance owner can exempt physically owned disposable core images.
+  const rehearsal = options.statePublicationOnly
+    ? undefined
+    : createDoctorRehearsalDatabaseCoverage(process.env);
+  const schemas =
+    options.schemas ??
+    (await prepareDoctorDatabasePreflight(
+      options.statePublicationOnly ? { scope: "state" } : undefined,
+    ));
+  rehearsal?.assertCurrent();
   if (!schemas.pendingMigrations?.length) {
     return schemas;
   }
+  rehearsal?.admit([
+    ...schemas.pendingMigrations
+      .filter((database) => database.kind === "agent")
+      .map((database) => database.path),
+    ...(schemas.agentDatabaseMigrationDiscovery?.discovery.targets.map(
+      (database) => database.path,
+    ) ?? []),
+  ]);
   let updater: Awaited<ReturnType<typeof readDrivingUpdater>>;
   const sharedContentUpgrade =
-    options.entry !== undefined &&
+    (options.entry !== undefined || options.statePublicationOnly === true) &&
     schemas.pendingMigrations.some(
       (database) => database.kind === "state" && database.supportedVersion > 17,
     );
@@ -187,6 +209,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
   } catch {
     // A missing or unreadable run cannot prove that the driver writes the ledger.
   }
+  rehearsal?.assertCurrent();
   if (options.entry === "package-lifecycle" && !updater?.requiresReadableSharedContent) {
     return schemas;
   }
@@ -196,8 +219,11 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
   const blockedMigrations = schemas.pendingMigrations.filter((database) =>
     updater.requiresReadableSharedContent
       ? database.kind === "state" && database.supportedVersion > 17
-      : database.kind === "agent" || !updater.canDeferStateSchema,
+      : database.kind === "agent"
+        ? !options.statePublicationOnly && !rehearsal?.excludes(database.path)
+        : !updater.canDeferStateSchema,
   );
+  rehearsal?.assertCurrent();
   if (blockedMigrations.length === 0) {
     return schemas;
   }
@@ -209,6 +235,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
   const recovery = updater.postCoreStarted
     ? postCoreRecovery
     : await resolveUpdateDoctorGitRecovery();
+  rehearsal?.assertCurrent();
   if (updater.canDeferStateSchema && blockedMigrations.every((entry) => entry.kind === "agent")) {
     const capturePending = () =>
       blockedMigrations.map((database) => ({
@@ -286,7 +313,10 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
           `the retained archive at ${backup.archivePath} has no captured canonical image for these agent databases.`,
         );
       }
-      await verifyBackupArchive(backup.archivePath, requiredSnapshots);
+      // A mixed fleet's archive also captures disposable agents. Bind every
+      // captured agent image before later migrations, not just the blocked subset.
+      const migrationSnapshots = snapshotFacts.filter((snapshot) => snapshot.role === "agent");
+      await verifyBackupArchive(backup.archivePath, migrationSnapshots);
       assertCurrent();
       const current = await readDrivingUpdater();
       assertCurrent();
@@ -306,7 +336,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
         const identity = statSync(migration.path, { throwIfNoEntry: false });
         if (
           !identity?.isFile() ||
-          !requiredSnapshots.some(
+          !migrationSnapshots.some(
             (fact) =>
               fact.role === "agent" &&
               fact.agentId === migration.agentId &&
@@ -369,7 +399,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
     targetVersion: VERSION,
     recovery,
   });
-  if (recovery) {
+  if (recovery && !options.statePublicationOnly) {
     recordUpdateDoctorRefusal(error.message);
   }
   if (options.json) {
@@ -384,6 +414,17 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
 export async function preflightUpdateDoctorCli(options: { json?: boolean }) {
   // Pin the invoking parent before schema admission can yield or reparent us.
   const parent = readUpdateRunDriver(process.ppid);
+  if (resolveUpdateRehearsalRoot(process.env)) {
+    // This is only read admission. The real Doctor maintenance owner must run
+    // the full guard before original capture, relocation, or any repair writer.
+    await guardUpdateDoctorSchemaUpgrade({
+      ...options,
+      entry: "cli-bootstrap",
+      statePublicationOnly: true,
+    });
+    // State-only facts must never replace the later complete fleet inspection.
+    return undefined;
+  }
   const schemas = await guardUpdateDoctorSchemaUpgrade({ ...options, entry: "cli-bootstrap" });
   if (schemas?.updateSchemaRehearsal) {
     await rehearseDeferredUpdateDoctorSchemaForParent(schemas, defaultRuntime, parent);

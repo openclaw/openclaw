@@ -256,10 +256,6 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
       }
     },
     read,
-    refresh: () =>
-      write(async (id) => {
-        await host.request("workboard.sessionsBoard.refresh", { boardId: id });
-      }),
     move: (sessionKey: string, columnId: string) =>
       write(async (id) => {
         await host.request("workboard.sessionsBoard.move", { boardId: id, sessionKey, columnId });

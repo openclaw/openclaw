@@ -405,11 +405,9 @@ export function readDeferredPluginSessionImport(
   return recorded;
 }
 
-export function hasDeferredPluginSessionImport(params: {
-  target: SessionImportTarget;
-  sqlitePath: string;
-  env: NodeJS.ProcessEnv;
-}): boolean {
+export function hasDeferredPluginSessionImport(
+  params: Pick<SessionImportSource, "target" | "sqlitePath" | "env">,
+): boolean {
   return Boolean(readDeferredPluginSessionImportReceipt(params));
 }
 
@@ -460,6 +458,10 @@ export async function rebuildDeferredPluginSessionSourceIndex(
   }
   const recorded = DeferredPluginSessionImportSchema.parse(JSON.parse(receipt.reportJson));
   const currentDatabaseIdentity = databaseIdentity(params.sqlitePath);
+  const physicalIdentity = databaseIdentity(params.sqlitePath, "physical");
+  // Shipped receipts lack creation time. An unchanged physical file can upgrade without
+  // resurrecting legitimately deleted sessions; other bindings still require recovery proof.
+  const sameLegacyDatabase = recorded.databaseIdentity === physicalIdentity;
   const target = { ...params.target, sqlitePath: params.sqlitePath };
   const index = recorded.sources.find((source) => source.path === path.resolve(target.storePath));
   let verifiedIndex = index;
@@ -470,6 +472,7 @@ export async function rebuildDeferredPluginSessionSourceIndex(
   const assertCurrent = () => {
     if (
       !isDeepStrictEqual(readDeferredPluginSessionImportReceipt(params), receipt) ||
+      databaseIdentity(params.sqlitePath, "physical") !== physicalIdentity ||
       databaseIdentity(params.sqlitePath) !== currentDatabaseIdentity ||
       (verifiedIndex &&
         !missingIndex &&
@@ -582,7 +585,7 @@ export async function rebuildDeferredPluginSessionSourceIndex(
       })(),
     );
   }
-  if (currentDatabaseIdentity !== recorded.databaseIdentity) {
+  if (currentDatabaseIdentity !== recorded.databaseIdentity && !sameLegacyDatabase) {
     assertVerifiedSessionSources(params, { ...recorded, sources });
     await verifyDeferredSessionDatabase({
       ...params,
@@ -602,6 +605,7 @@ export async function rebuildDeferredPluginSessionSourceIndex(
       const current = readDeferredPluginSessionImportReceipt({ ...params, database: db });
       if (
         !isDeepStrictEqual(current, receipt) ||
+        databaseIdentity(params.sqlitePath, "physical") !== physicalIdentity ||
         databaseIdentity(params.sqlitePath) !== currentDatabaseIdentity
       ) {
         throw new Error(
@@ -609,9 +613,7 @@ export async function rebuildDeferredPluginSessionSourceIndex(
         );
       }
       const reportJson = JSON.stringify(rebuilt);
-      const rebuiltIndex = rebuilt.sources.find(
-        (source) => source.path === path.resolve(target.storePath),
-      );
+      const rebuiltIndex = sources.find((source) => source.path === path.resolve(target.storePath));
       const query = getNodeSqliteKysely<DB>(db);
       executeSqliteQuerySync(
         db,

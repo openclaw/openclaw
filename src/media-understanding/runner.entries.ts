@@ -641,12 +641,8 @@ export async function runProviderEntry(params: {
   if (params.secretOwnerId) {
     assertSecretOwnerAvailable("capability", params.secretOwnerId);
   }
-  const { maxBytes, maxChars, timeoutMs, prompt, hasConfiguredPrompt } = resolveEntryRunOptions({
-    capability,
-    entry,
-    cfg,
-    config: params.config,
-  });
+  const { maxBytes, maxChars, timeoutMs, prompt, hasConfiguredPrompt } =
+    resolveEntryRunOptions(params);
 
   if (capability === "image") {
     if (!params.agentDir) {
@@ -740,15 +736,12 @@ export async function runProviderEntry(params: {
     // STT prompts are spelling/context hints; injected instructions can be echoed on silence.
     const audioPrompt = params.request?.prompt ?? (hasConfiguredPrompt ? prompt : undefined);
     const transport = resolveProviderRequestContext({
+      ...params,
       providerId,
-      cfg,
-      entry,
-      config: params.config,
     });
     const providerQuery = resolveProviderQuery({
+      ...params,
       providerId,
-      config: params.config,
-      entry,
     });
     const model =
       entry.model?.trim() ||
@@ -791,13 +784,9 @@ export async function runProviderEntry(params: {
         "audio transcription callback",
       );
       const auth = await resolveProviderExecutionAuth({
-        capability,
+        ...params,
         providerId,
         provider,
-        cfg,
-        entry,
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
       });
       result = await executeProviderRequest(providerId, auth, (requestAuth) =>
         transcribeAudio({ ...input, ...requestAuth }),
@@ -833,19 +822,13 @@ export async function runProviderEntry(params: {
     );
   }
   const auth = await resolveProviderExecutionAuth({
-    capability,
+    ...params,
     providerId,
     provider,
-    cfg,
-    entry,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
   });
   const { baseUrl, headers, request } = resolveProviderRequestContext({
+    ...params,
     providerId,
-    cfg,
-    entry,
-    config: params.config,
   });
   const model =
     entry.model?.trim() ||
@@ -891,7 +874,7 @@ export async function runCliEntry(params: {
   config?: MediaUnderstandingConfig;
   request?: MediaRequestOverrides;
 }): Promise<MediaUnderstandingOutput | null> {
-  const { entry, capability, cfg, ctx } = params;
+  const { entry, capability, ctx } = params;
   const attachmentIndex = params.attachment.index;
   const cli = resolveCliModelEntry(entry);
   if (!cli.ok) {
@@ -899,12 +882,7 @@ export async function runCliEntry(params: {
   }
   const { command, args } = cli.value;
   const language = params.request?.language ?? entry.language ?? params.config?.language;
-  const { maxBytes, maxChars, timeoutMs, prompt } = resolveEntryRunOptions({
-    capability,
-    entry,
-    cfg,
-    config: params.config,
-  });
+  const { maxBytes, maxChars, timeoutMs, prompt } = resolveEntryRunOptions(params);
   const attachmentPath = await params.cache.getPath({
     attachmentIndex,
     maxBytes,

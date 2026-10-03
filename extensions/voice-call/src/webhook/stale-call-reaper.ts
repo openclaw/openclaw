@@ -1,7 +1,6 @@
+import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import type { CallManager } from "../manager.js";
 import { TerminalStates, type CallRecord, type CallState } from "../types.js";
-
-// Background cleanup loop for calls that never reached answered/terminal state.
 
 const CHECK_INTERVAL_MS = 30_000;
 
@@ -16,20 +15,21 @@ type StaleCallReaperManager = {
   endCall: CallManager["endCall"];
 };
 
-/** Start a stale-call reaper and return its cleanup callback. */
+/** Stop joins provider hangups before the call manager can close. */
 export function startStaleCallReaper(params: {
+  scheduler: PluginServiceSchedulerV1;
   manager: StaleCallReaperManager;
   staleCallReaperSeconds?: number;
-}): (() => void) | null {
+}): (() => Promise<void>) | null {
   const maxAgeSeconds = params.staleCallReaperSeconds;
   if (!maxAgeSeconds || maxAgeSeconds <= 0) {
     return null;
   }
 
   const maxAgeMs = maxAgeSeconds * 1000;
-  const callsBeingReaped = new Set<string>();
-  const interval = setInterval(() => {
+  const reap = async () => {
     const now = Date.now();
+    const hangups: Promise<void>[] = [];
     for (const call of params.manager.getActiveCalls()) {
       // Skip calls that have been answered (answeredAt set) or are in a live
       // conversation state. Inbound Twilio calls may never fire a call.answered
@@ -46,12 +46,11 @@ export function startStaleCallReaper(params: {
 
       // Unanswered provider calls can be stranded when callbacks are missed; end them explicitly.
       const age = now - call.startedAt;
-      if (age > maxAgeMs && !callsBeingReaped.has(call.callId)) {
-        callsBeingReaped.add(call.callId);
+      if (age > maxAgeMs) {
         console.log(
           `[voice-call] Reaping stale call ${call.callId} (age: ${Math.round(age / 1000)}s, state: ${call.state})`,
         );
-        void params.manager
+        const operation = params.manager
           .endCall(call.callId)
           .then((result) => {
             if (!result.success) {
@@ -62,15 +61,22 @@ export function startStaleCallReaper(params: {
           })
           .catch((err: unknown) => {
             console.warn(`[voice-call] Reaper failed to end call ${call.callId}:`, err);
-          })
-          .finally(() => {
-            callsBeingReaped.delete(call.callId);
           });
+        hangups.push(operation);
       }
     }
-  }, CHECK_INTERVAL_MS);
-
-  return () => {
-    clearInterval(interval);
+    await Promise.allSettled(hangups);
   };
+
+  if (params.scheduler.signal.aborted) {
+    return null;
+  }
+  const scheduler = params.scheduler.scope();
+  scheduler.schedule({
+    id: "stale-call-reaper",
+    delayMs: CHECK_INTERVAL_MS,
+    everyMs: CHECK_INTERVAL_MS,
+    run: reap,
+  });
+  return () => scheduler.stop();
 }

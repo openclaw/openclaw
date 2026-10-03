@@ -3,10 +3,13 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import type {
   OpenClawPluginNodeHostCommand,
-  OpenClawPluginService,
+  OpenClawPluginApi,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   sessionCatalogPaging,
@@ -37,7 +40,7 @@ afterEach(() => vi.restoreAllMocks());
 function registerSessionShare(runtime: PluginRuntime, config: OpenClawConfig = {}) {
   const nodeCommands: OpenClawPluginNodeHostCommand[] = [];
   const catalogs: SessionCatalogProvider[] = [];
-  const services: OpenClawPluginService[] = [];
+  const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
   const api = createTestPluginApi({
     runtime,
     config,
@@ -125,7 +128,8 @@ function catalogFixture(stateDir: string) {
     nodes: { list, invoke },
   });
   const { catalog, services, logger } = registerSessionShare(runtime);
-  const serviceContext = { config, stateDir, logger, invokeNode: invoke };
+  const scheduler = createTestPluginServiceScheduler();
+  const serviceContext = { config, stateDir, logger, invokeNode: invoke, scheduler };
   return {
     catalog,
     list,
@@ -138,11 +142,16 @@ function catalogFixture(stateDir: string) {
       );
     },
     stop: async () => {
-      await Promise.all(
-        services.map(async (service) => {
-          await service.stop?.(serviceContext);
-        }),
-      );
+      scheduler.beginClose();
+      try {
+        await Promise.all(
+          services.map(async (service) => {
+            await service.stop?.(serviceContext);
+          }),
+        );
+      } finally {
+        await scheduler.stop();
+      }
     },
     setConfig: (next: OpenClawConfig) => {
       config = next;

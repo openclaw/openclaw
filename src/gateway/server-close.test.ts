@@ -31,11 +31,11 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS } from "../plugins/services.js";
 import {
-  PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
+  createServiceRegistration,
   startPluginServices,
-} from "../plugins/services.js";
-import { createServiceRegistration } from "../plugins/services.test-support.js";
+} from "../plugins/services.test-support.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { OpenClawPluginService } from "../plugins/types.js";
 import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";

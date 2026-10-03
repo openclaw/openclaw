@@ -1,4 +1,3 @@
-// Presents model-proposed follow-up tasks that belong to the active TUI session.
 import {
   SelectList,
   Text,
@@ -69,7 +68,6 @@ function sanitizeTaskText(text: string): string {
   return sanitizeRenderableText(text.replace(TASK_BIDI_CONTROL_RE, ""));
 }
 
-/** Parses the task suggestion shape carried by Gateway list and event payloads. */
 function parseTuiTaskSuggestion(value: unknown): TaskSuggestion | null {
   const record = asOptionalObjectRecord(value);
   if (!record) {
@@ -98,10 +96,7 @@ function parseTuiTaskSuggestion(value: unknown): TaskSuggestion | null {
 
 class TaskPrompt implements Component {
   private readonly title: Text;
-  private readonly metadata: Text;
-  private readonly summary: Text;
-  private readonly instructionLabel = new Text(theme.system("Instructions:"));
-  private readonly instructions: Text;
+  private readonly details: Text[];
   private readonly detailPosition = new Text();
   private readonly confirmation = new Text();
   private detailOffset = 0;
@@ -113,9 +108,12 @@ class TaskPrompt implements Component {
     private readonly requestRender: () => void,
   ) {
     this.title = new Text(theme.header(`Suggested follow-up: ${clean(suggestion.title)}`));
-    this.metadata = new Text(theme.dim(`Project: ${clean(suggestion.cwd)}`));
-    this.summary = new Text(theme.system(`Why: ${clean(suggestion.tldr)}`));
-    this.instructions = new Text(theme.system(sanitizeTaskText(suggestion.prompt.trim())));
+    this.details = [
+      new Text(theme.dim(`Project: ${clean(suggestion.cwd)}`)),
+      new Text(theme.system(`Why: ${clean(suggestion.tldr)}`)),
+      new Text(theme.system("Instructions:")),
+      new Text(theme.system(sanitizeTaskText(suggestion.prompt.trim()))),
+    ];
   }
 
   setConfirmation(text: string): void {
@@ -125,10 +123,7 @@ class TaskPrompt implements Component {
   invalidate(): void {
     for (const component of [
       this.title,
-      this.metadata,
-      this.summary,
-      this.instructionLabel,
-      this.instructions,
+      ...this.details,
       this.detailPosition,
       this.confirmation,
       this.selector,
@@ -140,12 +135,7 @@ class TaskPrompt implements Component {
   render(width: number): string[] {
     // Page the complete confirmation details as one unit. This keeps actions
     // visible without hiding a long project-path suffix from the operator.
-    const detailLines = [
-      ...this.metadata.render(width),
-      ...this.summary.render(width),
-      ...this.instructionLabel.render(width),
-      ...this.instructions.render(width),
-    ];
+    const detailLines = this.details.flatMap((component) => component.render(width));
     this.detailLineCount = detailLines.length;
     const maxDetailOffset = Math.max(0, detailLines.length - TASK_DETAIL_VIEWPORT_LINES);
     this.detailOffset = Math.min(this.detailOffset, maxDetailOffset);
@@ -182,10 +172,9 @@ class TaskPrompt implements Component {
       const nextOffset = Math.min(maxOffset, Math.max(0, this.detailOffset + delta));
       if (nextOffset !== this.detailOffset) {
         this.detailOffset = nextOffset;
-        this.metadata.invalidate();
-        this.summary.invalidate();
-        this.instructionLabel.invalidate();
-        this.instructions.invalidate();
+        for (const component of this.details) {
+          component.invalidate();
+        }
         this.requestRender();
       }
       return;
@@ -194,7 +183,6 @@ class TaskPrompt implements Component {
   }
 }
 
-/** Coordinates Gateway task-suggestion events with the active TUI overlay. */
 export function createTuiTaskSuggestionController(deps: TaskSuggestionControllerDeps) {
   const createSelector =
     deps.createSelector ??
@@ -258,11 +246,7 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
       .find(
         (entry) => !hiddenIds.has(entry.id) && !resolvingIds.has(entry.id) && matchesSession(entry),
       );
-    if (!suggestion) {
-      return;
-    }
-
-    if (actions.length === 0) {
+    if (!suggestion || actions.length === 0) {
       return;
     }
 
@@ -273,7 +257,7 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
     const dismissIndex = actions.findIndex((action) => action.value === "dismiss");
     selector.setSelectedIndex?.(Math.max(dismissIndex, 0));
     let acceptArmed = false;
-    let prompt: TaskPrompt | null = null;
+    const prompt = new TaskPrompt(suggestion, selector, deps.requestRender);
 
     const resolve = async (action: TaskAction) => {
       if (activeId !== suggestion.id || activeSelector !== selector) {
@@ -333,7 +317,7 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
 
     selector.onSelectionChange = () => {
       acceptArmed = false;
-      prompt?.setConfirmation("");
+      prompt.setConfirmation("");
     };
     selector.onSelect = (item) => {
       if (activeSelector !== selector) {
@@ -346,16 +330,12 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
         deps.requestRender();
         return;
       }
-      if (selectedAction.value === "dismiss") {
-        void resolve(selectedAction);
-        return;
-      }
-      if (acceptArmed) {
+      if (selectedAction.value === "dismiss" || acceptArmed) {
         void resolve(selectedAction);
         return;
       }
       acceptArmed = true;
-      prompt?.setConfirmation("Press Enter again to start this task.");
+      prompt.setConfirmation("Press Enter again to start this task.");
       deps.requestRender();
     };
     selector.onCancel = () => {
@@ -368,7 +348,6 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
       presentNext();
       deps.requestRender();
     };
-    prompt = new TaskPrompt(suggestion, selector, deps.requestRender);
     activeOverlay = deps.openOverlay(prompt);
     deps.requestRender();
   };

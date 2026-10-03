@@ -1,4 +1,5 @@
 import type { ChannelToolSend } from "openclaw/plugin-sdk/channel-contract";
+import { stripChannelTargetPrefix } from "openclaw/plugin-sdk/channel-core";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MSTeamsConfig } from "../runtime-api.js";
@@ -6,21 +7,13 @@ import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } f
 import { resolveMSTeamsReplyPolicy, resolveMSTeamsRouteConfig } from "./policy.js";
 import { parseMSTeamsTeamChannelInput } from "./resolve-allowlist.js";
 
-function stripConversationPrefix(raw: string): string {
-  const trimmed = raw.trim();
-  if (/^conversation:/i.test(trimmed)) {
-    return trimmed.slice("conversation:".length).trim();
-  }
-  return trimmed;
-}
-
 /** Normalize Teams conversation targets for equality (strips `conversation:` and `;messageid=`). */
 function normalizeMSTeamsThreadingTarget(raw: string | undefined): string | undefined {
   const value = normalizeOptionalString(raw);
   if (!value) {
     return undefined;
   }
-  return normalizeMSTeamsConversationId(stripConversationPrefix(value));
+  return normalizeMSTeamsConversationId(stripChannelTargetPrefix(value, "conversation"));
 }
 
 function extractMSTeamsResultConversationId(value: unknown): string | undefined {
@@ -65,7 +58,7 @@ export function extractMSTeamsToolSendResult(
     return null;
   }
   const normalizedConversationId = normalizeMSTeamsConversationId(
-    stripConversationPrefix(conversationId),
+    stripChannelTargetPrefix(conversationId, "conversation"),
   );
   return normalizedConversationId ? { to: `conversation:${normalizedConversationId}` } : null;
 }

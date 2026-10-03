@@ -139,24 +139,11 @@ class DiscordComponentButton extends Button {
   }
 }
 
-function bindSelectControl(spec: SelectControlSpec) {
-  return (ctx: AgentComponentContext, handlers: DiscordComponentControlHandlers) =>
-    new DiscordComponentSelectControl(spec, ctx, handlers);
-}
-
-export function createDiscordComponentButtonControl(
-  ctx: AgentComponentContext,
-  handlers: DiscordComponentControlHandlers,
-): Button {
-  return new DiscordComponentButton(ctx, handlers);
-}
-
-export const createDiscordComponentStringSelectControl = bindSelectControl(SELECT_CONTROLS.string);
-export const createDiscordComponentUserSelectControl = bindSelectControl(SELECT_CONTROLS.user);
-export const createDiscordComponentRoleSelectControl = bindSelectControl(SELECT_CONTROLS.role);
-export const createDiscordComponentMentionableSelectControl = bindSelectControl(
-  SELECT_CONTROLS.mentionable,
-);
-export const createDiscordComponentChannelSelectControl = bindSelectControl(
-  SELECT_CONTROLS.channel,
-);
+export const discordComponentControlFactories = [
+  (ctx: AgentComponentContext, handlers: DiscordComponentControlHandlers) =>
+    new DiscordComponentButton(ctx, handlers),
+  ...Object.values(SELECT_CONTROLS).map(
+    (spec) => (ctx: AgentComponentContext, handlers: DiscordComponentControlHandlers) =>
+      new DiscordComponentSelectControl(spec, ctx, handlers),
+  ),
+];

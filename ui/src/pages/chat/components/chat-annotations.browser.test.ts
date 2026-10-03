@@ -306,11 +306,16 @@ describe("annotation editor", () => {
     },
   );
 
-  it.each([1440, 390])(
-    "grows downward from one line to five, then scrolls (%ipx)",
-    async (width) => {
+  it.each([
+    { width: 1440, expanded: false },
+    { width: 390, expanded: false },
+    { width: 1440, expanded: true },
+    { width: 390, expanded: true },
+  ])(
+    "grows to five lines and scrolls without fading editable text ($width px, editing=$expanded)",
+    async ({ width, expanded }) => {
       await page.viewport(width, 900);
-      const { input, popup } = openEditor();
+      const { input, popup } = openEditor(expanded);
       const oneLine = input.getBoundingClientRect().height;
       const originalTop = popup.getBoundingClientRect().top;
       const lineHeight = Number.parseFloat(getComputedStyle(input).lineHeight);
@@ -325,7 +330,15 @@ describe("annotation editor", () => {
       expect(input.getBoundingClientRect().height).toBeLessThanOrEqual(
         oneLine + lineHeight * 4 + 1,
       );
-      input.scrollTop = input.scrollHeight;
+      for (const scrollTop of [
+        0,
+        (input.scrollHeight - input.clientHeight) / 2,
+        input.scrollHeight,
+      ]) {
+        input.scrollTop = scrollTop;
+        input.dispatchEvent(new Event("scroll"));
+        expect(getComputedStyle(input).maskImage).toBe("none");
+      }
       expect(input.scrollTop).toBeGreaterThan(0);
       expect(popup.getBoundingClientRect().top).toBeCloseTo(originalTop, 0);
       expect(popup.getBoundingClientRect().right).toBeLessThanOrEqual(window.innerWidth);

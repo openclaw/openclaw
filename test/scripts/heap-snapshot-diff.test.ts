@@ -10,7 +10,7 @@ type FixtureNode = {
   id: number;
   name: string;
   size: number;
-  edges: Array<[type: number, target: number]>;
+  edges: Array<[type: number, target: number, name?: string]>;
 };
 
 function fixture(grown: boolean) {
@@ -26,19 +26,19 @@ function fixture(grown: boolean) {
       id: 1,
       name: "root",
       size: 0,
-      edges: [[0, 1], [0, 2], [1, 7], [2, 4], ...growthEdges],
+      edges: [[0, 1, "cache"], [0, 2], [1, 7], [2, 4, "shortcut"], ...growthEdges],
     },
     {
       id: 3,
       name: "Cache 🦞",
       size: 10,
       edges: [
-        [0, 3],
-        [0, 5],
+        [0, 3, "nested"],
+        [0, 5, "shared"],
       ],
     },
     { id: 5, name: "Cache 🦞", size: 20, edges: [[0, 5]] },
-    { id: 7, name: "Cache 🦞", size: 5, edges: [[0, 4]] },
+    { id: 7, name: "Cache 🦞", size: 5, edges: [[0, 4, "payload"]] },
     { id: 9, name: "Payload", size: grown ? 90 : 40, edges: [[0, 3]] },
     { id: 11, name: "Shared", size: grown ? 70 : 30, edges: [] },
     { id: 13, name: "Detached", size: 1_000, edges: [[0, 1]] },
@@ -46,7 +46,13 @@ function fixture(grown: boolean) {
     ...growthNodes,
   ];
   // An unused string crosses the streaming reader's chunk boundary without becoming a class label.
-  const strings = ["x".repeat(1024 * 1024), ...new Set(nodes.map((node) => node.name))];
+  const strings = [
+    "x".repeat(1024 * 1024),
+    ...new Set([
+      ...nodes.map((node) => node.name),
+      ...nodes.flatMap((node) => node.edges.map((edge) => edge[2] ?? "ref")),
+    ]),
+  ];
   return JSON.stringify({
     snapshot: {
       meta: {
@@ -65,21 +71,38 @@ function fixture(grown: boolean) {
       node.size,
       node.edges.length,
     ]),
-    edges: nodes.flatMap((node) => node.edges.flatMap(([type, target]) => [type, 0, target * 5])),
+    edges: nodes.flatMap((node) =>
+      node.edges.flatMap(([type, target, name]) => [
+        type,
+        strings.indexOf(name ?? "ref"),
+        target * 5,
+      ]),
+    ),
     strings,
   });
 }
 
-it("diffs dominator retention without counting shared, weak, detached, or nested same-class bytes twice", () => {
+it("diffs exclusive retained sizes and named strong paths without double-counting shared or nested objects", () => {
   const directory = tempDirs.make("heap-snapshot-diff-");
   const before = path.join(directory, "before.heapsnapshot");
   const after = path.join(directory, "after.heapsnapshot");
   writeFileSync(before, fixture(false));
   writeFileSync(after, fixture(true));
   const result = JSON.parse(
-    execFileSync(process.execPath, ["scripts/heap-snapshot-diff.mjs", before, after, "--json"], {
-      encoding: "utf8",
-    }),
+    execFileSync(
+      process.execPath,
+      [
+        "scripts/heap-snapshot-diff.mjs",
+        before,
+        after,
+        "--json",
+        "--max-depth",
+        "3",
+        "--node",
+        "15",
+      ],
+      { encoding: "utf8" },
+    ),
   );
 
   expect(result.before).toEqual({ nodes: 8, reachable: 6 });
@@ -115,4 +138,39 @@ it("diffs dominator retention without counting shared, weak, detached, or nested
   expect(
     result.classes.some((row: { label: string }) => /Detached|WeakOnly/u.test(row.label)),
   ).toBe(false);
+  const payload = result.retainers.find((row: { id: number }) => row.id === 9);
+  expect(payload.rootPath).toEqual({
+    depth: 3,
+    omittedAncestors: 1,
+    nodes: [
+      {
+        id: 3,
+        label: "object: Cache 🦞",
+        retained: 105,
+        incomingEdge: { type: "property", name: "cache" },
+      },
+      {
+        id: 7,
+        label: "object: Cache 🦞",
+        retained: 95,
+        incomingEdge: { type: "property", name: "nested" },
+      },
+      {
+        id: 9,
+        label: "object: Payload",
+        retained: 90,
+        incomingEdge: { type: "property", name: "payload" },
+      },
+    ],
+  });
+  const shared = result.retainers.find((row: { id: number }) => row.id === 11);
+  expect(shared.rootPath.nodes.map((node: { id: number }) => node.id)).toEqual([1, 3, 11]);
+  expect(shared.dominatorPath.nodes.map((node: { id: number }) => node.id)).toEqual([1, 11]);
+  expect(result.retainers.find((row: { id: number }) => row.id === 15)).toEqual({
+    id: 15,
+    label: "object: WeakOnly",
+    retained: 0,
+    rootPath: null,
+    dominatorPath: null,
+  });
 });

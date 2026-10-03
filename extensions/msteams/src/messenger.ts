@@ -46,28 +46,6 @@ import {
   type MSTeamsSendHandoff,
 } from "./send-handoff.js";
 
-type MSTeamsConversationReference = {
-  activityId?: string;
-  user?: { id?: string; name?: string; aadObjectId?: string };
-  agent?: { id?: string; name?: string; aadObjectId?: string } | null;
-  conversation: { id: string; conversationType?: string; tenantId?: string };
-  channelId: string;
-  serviceUrl?: string;
-  locale?: string;
-  /**
-   * Top-level tenant ID echoed onto the Bot Framework connector request. Included
-   * alongside `conversation.tenantId` so the connector can route proactive sends
-   * to the correct Azure AD tenant. Missing it causes HTTP 403 on proactive
-   * (bot-initiated) messages.
-   */
-  tenantId?: string;
-  /**
-   * Azure AD object ID of the target user, forwarded on proactive sends so
-   * Bot Framework can resolve the personal DM recipient on the connector side.
-   */
-  aadObjectId?: string;
-};
-
 type MSTeamsReplyRenderOptions = {
   textChunkLimit: number;
   chunkText?: boolean;
@@ -100,9 +78,7 @@ type MSTeamsSendRetryEvent = {
   classification: ReturnType<typeof classifyMSTeamsSendError>;
 };
 
-export function buildConversationReference(
-  ref: StoredConversationReference,
-): MSTeamsConversationReference {
+export function buildConversationReference(ref: StoredConversationReference) {
   const conversationId = ref.conversation?.id?.trim();
   if (!conversationId) {
     throw new Error("Invalid stored reference: missing conversation.id");
@@ -466,7 +442,7 @@ export async function sendMSTeamsMessages(
     startIndex: number,
     threadActivityId?: string,
   ): Promise<string[]> => {
-    let baseRef: MSTeamsConversationReference;
+    let baseRef: ReturnType<typeof buildConversationReference>;
     try {
       baseRef = buildConversationReference(params.conversationRef);
     } catch (error) {

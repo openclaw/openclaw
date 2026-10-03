@@ -185,7 +185,6 @@ describe("managed plugin installation", () => {
     expect(mocks.officialCatalog).not.toHaveBeenCalled();
     expect(mocks.clawhubInstall).toHaveBeenCalledWith(
       expect.objectContaining({
-        spec: "clawhub:@openclaw/diffs",
         expectedPluginId: "diffs",
       }),
     );

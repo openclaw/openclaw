@@ -16,7 +16,8 @@ import {
   getReplyPayloadMetadata,
 } from "../../auto-reply/reply-payload.js";
 import { isFencedProviderReadAction } from "../../channels/plugins/message-action-dispatch.js";
-import type { ChannelId, ChannelPlugin } from "../../channels/plugins/types.public.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";

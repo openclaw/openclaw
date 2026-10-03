@@ -25,7 +25,6 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { t } from "../../i18n/index.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { presenceConnectivitySignature } from "../../lib/nodes/inventory.ts";
 import {
   approveDevicePairing,
@@ -41,7 +40,7 @@ import {
   type ExecApprovalsTarget,
   type DevicesPageDataState,
 } from "../../lib/nodes/page-operations.ts";
-import { readSystemInfo } from "../../lib/system-info.ts";
+import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
 import {
   GatewayPageController,
   type GatewayPageChange,
@@ -378,12 +377,7 @@ class DevicesPage extends OpenClawLightDomElement {
 
   private get canLoadSystemInfo(): boolean {
     const snapshot = this.gateway.snapshot;
-    return (
-      this.isConnected &&
-      snapshot?.phase === "connected" &&
-      !this.systemInfoUnavailable &&
-      isGatewayMethodAdvertised(snapshot, "system.info") === true
-    );
+    return this.isConnected && !this.systemInfoUnavailable && canReadSystemInfo(snapshot);
   }
 
   private get canLoadDesktopEnvironments(): boolean {

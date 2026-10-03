@@ -31,8 +31,8 @@ import { isAbortError } from "../../infra/abort-signal.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
-import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
+import { runWithChatAbortExecution } from "../chat-abort-lifecycle-internal.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
@@ -63,11 +63,20 @@ import { resolveExecutionIdentitySpawnFacts } from "./agent-run-execution-lineag
 import type { StartAgentRunExecutionParams } from "./agent-run-execution-types.js";
 import { settleUnstartedGatewayFollowup } from "./agent-run-subagent.js";
 import {
+  annotateAgentRunUserTurnPrompt,
   finalizePreparedAgentRunUserTurn,
   releasePreparedAgentRunUserTurn,
 } from "./agent-run-user-turn.js";
 
 export async function startAgentRunExecution(params: StartAgentRunExecutionParams): Promise<void> {
+  return await runWithChatAbortExecution(
+    params.prepared.activeRunAbort.entry,
+    () => executeAgentRun(params),
+    params.prepared.activeRunAbort.cleanup,
+  );
+}
+
+async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<void> {
   const { prepared } = params;
   const diagnostics = createAgentRunDiagnostics(
     params.resolvedSessionKey,
@@ -329,18 +338,11 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
         }
 
         if (!params.isRawModelRun) {
-          const unannotatedMessage = message;
-          message = annotateInterSessionPromptText(unannotatedMessage, params.inputProvenance);
-          if (execApprovalContinuationPromptRange) {
-            if (!message.endsWith(unannotatedMessage)) {
-              throw new Error("exec approval continuation prompt range could not be annotated");
-            }
-            const offset = message.length - unannotatedMessage.length;
-            execApprovalContinuationPromptRange = {
-              start: offset + execApprovalContinuationPromptRange.start,
-              end: offset + execApprovalContinuationPromptRange.end,
-            };
-          }
+          ({ message, execApprovalContinuationPromptRange } = annotateAgentRunUserTurnPrompt({
+            message,
+            inputProvenance: params.inputProvenance,
+            execApprovalContinuationPromptRange,
+          }));
         }
         const senderIsOwner = prepared.userTurn.senderIsOwner;
         const userTurnTranscriptRecorder = prepared.userTurn.recorder;

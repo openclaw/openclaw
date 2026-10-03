@@ -39,6 +39,7 @@ import {
   directSessionReq,
   expectNoSessionQueueCleanup,
 } from "./test/server-sessions.test-helpers.js";
+import { registerWorkerInferenceSessionControl } from "./worker-environments/inference-control-internal.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
@@ -746,9 +747,16 @@ test("sessions.compact preserves accepted command-lane work", async () => {
 
 test("sessions.compact refuses real compaction while a worker inference owns the session", async () => {
   const { storePath, sessionId } = await createCompactionSession("sess-compact-worker-inference");
-  const hasInferenceForSession = vi.fn(
-    (candidateSessionId: string) => candidateSessionId === sessionId,
-  );
+  const hasSession = vi.fn((candidateSessionId: string) => candidateSessionId === sessionId);
+  const workerEnvironmentService = {};
+  registerWorkerInferenceSessionControl(workerEnvironmentService, {
+    hasSession,
+    reserveSessionDrain: () => {
+      throw new Error("Compaction must reject active inference before draining");
+    },
+    captureSessionCancellation: () => ({ runIds: [], cancel: async () => [] }),
+    resolveSessionTargetForRunId: () => undefined,
+  });
   const runtimeConfig = {
     agents: { list: [{ id: "main", default: true }] },
     session: { store: storePath },
@@ -760,7 +768,7 @@ test("sessions.compact refuses real compaction while a worker inference owns the
     {
       context: {
         getRuntimeConfig: () => runtimeConfig,
-        workerEnvironmentService: { hasInferenceForSession },
+        workerEnvironmentService,
       },
     },
   );
@@ -770,7 +778,7 @@ test("sessions.compact refuses real compaction while a worker inference owns the
     code: "INVALID_REQUEST",
     message: expect.stringContaining("has an active run"),
   });
-  expect(hasInferenceForSession).toHaveBeenCalledWith(sessionId);
+  expect(hasSession).toHaveBeenCalledWith(sessionId);
   expect(embeddedRunMock.compactEmbeddedAgentSession).not.toHaveBeenCalled();
   expectNoSessionQueueCleanup();
 });

@@ -245,6 +245,8 @@ export async function readSessionTranscriptCatalogPage(
     }
     const projected = projectChatDisplayMessages(page.events.map(sqliteMessageEventWithSeq), {
       maxChars: MAX_CATALOG_TEXT_CHARS,
+      // Catalog assistant items contain text/model facts, not forwarded sender labels.
+      resolveCronJobName: () => undefined,
     });
     const bySequence = new Map<unknown, SessionCatalogTranscriptItem[]>();
     for (const message of projected.toReversed()) {

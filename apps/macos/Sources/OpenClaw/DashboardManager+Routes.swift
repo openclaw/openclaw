@@ -277,13 +277,13 @@ extension DashboardManager {
         }
     }
 
-    func handleGatewaySetup(_ link: GatewayConnectDeepLink) {
-        NSApp.activate(ignoringOtherApps: true)
+    func handleGatewaySetup(_ link: GatewayConnectDeepLink) async {
+        AppActivation.shared.activate()
         let coordinator = DashboardGatewaySetupCoordinator(
             adapter: DashboardPrimaryGatewayAdapter(state: AppStateStore.shared),
             confirm: { title, message in
                 let alert = DashboardWindowController.makeGatewaySetupAlert(title: title, message: message)
-                return alert.runModal() == .alertFirstButtonReturn
+                return await AppActivation.shared.response(to: alert) == .alertFirstButtonReturn
             },
             presentError: { [weak self] title, message in
                 self?.presentGatewayError(title: title, message: message)
@@ -291,6 +291,6 @@ extension DashboardManager {
             openConnectionSettings: {
                 AppNavigationActions.openConnection()
             })
-        coordinator.handle(link)
+        await coordinator.handle(link)
     }
 }

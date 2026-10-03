@@ -64,17 +64,20 @@ export function addGatewayRunCommand(cmd: Command, hooks: GatewayRunCommandHooks
       const resolved = resolveGatewayRunOptions(opts, command);
       const { withAgentDatabaseStartupAdmission } =
         await import("../../state/agent-database-startup.js");
-      return withAgentDatabaseStartupAdmission(async () => {
-        try {
-          await hooks.beforeRun?.(resolved);
-          const { runGatewayCommand } = await import("./run.js");
-          await runGatewayCommand(resolved, getGatewayRunRuntimeHooks());
-        } catch (error) {
-          const { handleGatewayStartupMaintenance } = await import("./startup-maintenance.js");
-          if (!(await handleGatewayStartupMaintenance(error))) {
-            throw error;
+      return withAgentDatabaseStartupAdmission(
+        async () => {
+          try {
+            await hooks.beforeRun?.(resolved);
+            const { runGatewayCommand } = await import("./run.js");
+            await runGatewayCommand(resolved, getGatewayRunRuntimeHooks());
+          } catch (error) {
+            const { handleGatewayStartupMaintenance } = await import("./startup-maintenance.js");
+            if (!(await handleGatewayStartupMaintenance(error))) {
+              throw error;
+            }
           }
-        }
-      });
+        },
+        { deferInspections: !resolved.updateCanary },
+      );
     });
 }

@@ -20,30 +20,17 @@ import { TWILIO_REGIONS } from "./providers/twilio-region.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 import { isTailscalePortAllowed, VoiceCallTailscaleConfigSchema } from "./tailscale-config.js";
 
-/**
- * E.164 phone number format: +[country code][number]
- * Examples use 555 prefix (reserved for fictional numbers)
- */
 const E164Schema = z
   .string()
   .regex(/^\+[1-9]\d{1,14}$/, "Expected E.164 format, e.g. +15550001234");
 
-/**
- * Controls how inbound calls are handled:
- * - "disabled": Block all inbound calls (outbound only)
- * - "allowlist": Only accept calls from numbers in allowFrom
- * - "pairing": Unknown callers can request pairing (future)
- * - "open": Accept all inbound calls (dangerous!)
- */
 const InboundPolicySchema = z.enum(["disabled", "allowlist", "pairing", "open"]);
 
 const SecretInputSchema = buildSecretInputSchema();
 
 const TelnyxConfigSchema = z
   .object({
-    /** Telnyx API v2 key */
     apiKey: z.string().min(1).optional(),
-    /** Telnyx connection ID (from Call Control app) */
     connectionId: z.string().min(1).optional(),
     /** Public key for webhook signature verification */
     publicKey: z.string().min(1).optional(),
@@ -62,7 +49,6 @@ const TwilioConfigSchema = z
 
 const PlivoConfigSchema = z
   .object({
-    /** Plivo Auth ID (starts with MA/SA) */
     authId: z.string().min(1).optional(),
     authToken: z.string().min(1).optional(),
   })
@@ -95,25 +81,12 @@ const VoiceCallServeConfigSchema = z
 
 const VoiceCallTunnelConfigSchema = z
   .object({
-    /**
-     * Tunnel provider:
-     * - "none": No tunnel (use publicUrl if set, or manual setup)
-     * - "ngrok": Use ngrok for public HTTPS tunnel
-     * - "tailscale-serve": Tailscale serve (private to tailnet)
-     * - "tailscale-funnel": Tailscale funnel (public HTTPS)
-     */
     provider: z.enum(["none", "ngrok", "tailscale-serve", "tailscale-funnel"]).default("none"),
     /** ngrok auth token (optional, enables longer sessions and more features) */
     ngrokAuthToken: z.string().min(1).optional(),
     /** ngrok custom domain (paid feature, e.g., "myapp.ngrok.io") */
     ngrokDomain: z.string().min(1).optional(),
-    /**
-     * Allow ngrok free tier compatibility mode.
-     * When true, forwarded headers may be trusted for loopback requests
-     * to reconstruct the public ngrok URL used for signing.
-     *
-     * IMPORTANT: This does NOT bypass signature verification.
-     */
+    /** Trust loopback forwarding for ngrok URL reconstruction; signatures remain mandatory. */
     allowNgrokFreeTierLoopbackBypass: z.boolean().default(false),
   })
   .strict()
@@ -121,10 +94,7 @@ const VoiceCallTunnelConfigSchema = z
 
 const VoiceCallWebhookSecurityConfigSchema = z
   .object({
-    /**
-     * Allowed hostnames for webhook URL reconstruction.
-     * Only these hosts are accepted from forwarding headers.
-     */
+    /** Only these hosts are accepted from forwarding headers. */
     allowedHosts: z.array(z.string().min(1)).default([]),
     /**
      * Trust X-Forwarded-* headers without a hostname allowlist.
@@ -141,11 +111,6 @@ const VoiceCallWebhookSecurityConfigSchema = z
   .default({ allowedHosts: [], trustForwardingHeaders: false, trustedProxyIPs: [] });
 export type WebhookSecurityConfig = z.infer<typeof VoiceCallWebhookSecurityConfigSchema>;
 
-/**
- * Call mode determines how outbound calls behave:
- * - "notify": Deliver message and auto-hangup after delay (one-way notification)
- * - "conversation": Stay open for back-and-forth until explicit end or timeout
- */
 const CallModeSchema = z.enum(["notify", "conversation"]);
 export type CallMode = z.infer<typeof CallModeSchema>;
 
@@ -323,15 +288,13 @@ export const VoiceCallConfigSchema = z
 
     plivo: PlivoConfigSchema.optional(),
 
-    /** Phone number to call from (E.164) */
     fromNumber: E164Schema.optional(),
 
-    /** Default phone number to call (E.164) */
+    /** Default outbound target. */
     toNumber: E164Schema.optional(),
 
     inboundPolicy: InboundPolicySchema.default("disabled"),
 
-    /** Allowlist of phone numbers for inbound calls (E.164) */
     allowFrom: z.array(E164Schema).default([]),
 
     inboundGreeting: z.string().optional(),
@@ -364,10 +327,8 @@ export const VoiceCallConfigSchema = z
     /** @deprecated Prefer tunnel config. */
     tailscale: VoiceCallTailscaleConfigSchema,
 
-    /** Tunnel configuration (unified ngrok/tailscale) */
     tunnel: VoiceCallTunnelConfigSchema,
 
-    /** Webhook signature reconstruction and proxy trust configuration */
     webhookSecurity: VoiceCallWebhookSecurityConfigSchema,
 
     streaming: VoiceCallStreamingConfigSchema,
@@ -386,7 +347,6 @@ export const VoiceCallConfigSchema = z
     /** TTS override (deep-merges with core tts) */
     tts: TtsConfigSchema,
 
-    /** Store path for call logs */
     store: z.string().optional(),
 
     /** Response/session owner. Required when multiple agents have no legacy owner. */
@@ -721,14 +681,9 @@ function resolveVoiceCallAgentSessionKey(params: {
   });
 }
 
-/**
- * Resolves the configuration by merging environment variables into missing fields.
- * Returns a new configuration object with environment variables applied.
- */
 export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallConfig {
   const resolved = normalizeVoiceCallConfig(config);
 
-  // Telnyx
   if (resolved.provider === "telnyx") {
     resolved.telnyx = resolved.telnyx ?? {};
     resolved.telnyx.apiKey =
@@ -739,7 +694,6 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
       resolved.telnyx.publicKey ?? resolveSpeechProviderApiKey(process.env.TELNYX_PUBLIC_KEY);
   }
 
-  // Twilio
   if (resolved.provider === "twilio") {
     resolved.fromNumber =
       resolved.fromNumber ?? resolveSpeechProviderApiKey(process.env.TWILIO_FROM_NUMBER);
@@ -750,7 +704,6 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
       resolved.twilio.authToken ?? resolveSpeechProviderApiKey(process.env.TWILIO_AUTH_TOKEN);
   }
 
-  // Plivo
   if (resolved.provider === "plivo") {
     resolved.plivo = resolved.plivo ?? {};
     resolved.plivo.authId =
@@ -772,9 +725,6 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
   return normalizeVoiceCallConfig(resolved);
 }
 
-/**
- * Validate that the configuration has all required fields for the selected provider.
- */
 export function validateProviderConfig(config: VoiceCallConfig): {
   valid: boolean;
   errors: string[];

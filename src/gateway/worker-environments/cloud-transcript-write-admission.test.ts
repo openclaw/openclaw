@@ -184,7 +184,7 @@ describe("cloud transcript write admission", () => {
         claimId: "report-claim",
         runId: "report-run",
       });
-      placements.markWorkspaceResultPending(turnClaim);
+      await placements.markWorkspaceResultPending(turnClaim);
       if (cleared) {
         placements.recordWorkspaceResultConflict(turnClaim, {
           paths: ["src/local.ts"],
@@ -251,7 +251,7 @@ describe("cloud transcript write admission", () => {
         expect(publish).not.toHaveBeenCalled();
         expect(placements.validateWorkspaceResultClaim(turnClaim)).toBe(true);
         if (change === "draining") {
-          placements.startWorkspaceResultDrain(turnClaim);
+          await placements.startWorkspaceResultDrain(turnClaim);
         } else if (change === "claim") {
           vi.spyOn(placements, "validateWorkspaceResultClaim").mockReturnValue(false);
         } else if (change === "missing") {
@@ -282,7 +282,7 @@ describe("cloud transcript write admission", () => {
           expect(outcome).toBeInstanceOf(Error);
           expect(SessionManager.open(sessionTarget).getBranch()).toEqual([]);
           expect(publish).not.toHaveBeenCalled();
-          expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
         }
       } finally {
         gate.release.resolve();

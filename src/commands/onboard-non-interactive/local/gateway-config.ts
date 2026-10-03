@@ -77,6 +77,15 @@ export function applyNonInteractiveGatewayConfig(params: {
     authMode = "token";
   }
   if (changesAuthOrTailscale && tailscaleMode === "funnel" && authMode !== "password") {
+    if (authMode === "trusted-proxy") {
+      rejectOnboardingOption(
+        opts,
+        runtime,
+        'Tailscale Funnel requires password auth, but the Gateway is configured with "trusted-proxy" auth. ' +
+          "Re-run with --gateway-auth password to switch, or keep Tailscale exposure off.",
+      );
+      return null;
+    }
     authMode = "password";
   }
 

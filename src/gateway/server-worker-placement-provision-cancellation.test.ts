@@ -99,7 +99,7 @@ describe("dispatch Stop before provider allocation", () => {
     const interrupted = createDeferredCore();
     const targetedAdmission = createDeferredCore();
     const cleanup = new AbortController();
-    const waitForClaim = placements.waitForTurnClaimRelease.bind(placements);
+    const waitForClaim = placements.waitForTurnClaimRelease;
     vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementation((sessionId, options) => {
       const waiting = waitForClaim(sessionId, {
         ...options,
@@ -368,7 +368,7 @@ describe("dispatch Stop before provider allocation", () => {
         expect(harness.environments.createWithRequest).toHaveBeenCalledTimes(
           outcome === "published" ? 1 : 0,
         );
-        expect(placements.listPendingWorkspaceResults()).toEqual([]);
+        expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       } finally {
         release.resolve();
         await Promise.allSettled([moving, stopping]);

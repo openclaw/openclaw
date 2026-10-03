@@ -96,8 +96,12 @@ describe("remote testbox gate delegation", () => {
       expected: ["OPENCLAW_TEST_PROJECTS_PARALLEL=2", "OPENCLAW_VITEST_MAX_WORKERS=1"],
     },
     {
-      name: "normalized integer controls",
-      env: { OPENCLAW_TEST_PROJECTS_PARALLEL: " 02 ", OPENCLAW_VITEST_MAX_WORKERS: "001" },
+      name: "normalized integer controls with terminal colors",
+      env: {
+        FORCE_COLOR: "1",
+        OPENCLAW_TEST_PROJECTS_PARALLEL: " 02 ",
+        OPENCLAW_VITEST_MAX_WORKERS: "001",
+      },
       expected: ["OPENCLAW_TEST_PROJECTS_PARALLEL=2", "OPENCLAW_VITEST_MAX_WORKERS=1"],
     },
     {

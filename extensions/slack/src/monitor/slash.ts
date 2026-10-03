@@ -64,7 +64,6 @@ import {
 import { resolveSlackSenderAuthentication } from "./ingress.js";
 import { resolveSlackSessionEventRoutingContext } from "./message-handler/prepare-routing.js";
 import { escapeSlackMrkdwn } from "./mrkdwn.js";
-import { isSlackChannelAllowedByPolicy } from "./policy.js";
 import {
   createSlackResponseUrlBudget,
   SlackResponseAlreadyReportedError,
@@ -257,15 +256,15 @@ function buildSlackCommandArgMenuBlocks(params: {
     params.supportsExternalSelect &&
     canUseStaticSelect &&
     encodedChoices.length > SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX;
+  const confirm = buildSlackArgMenuConfirm({ command: params.command, arg: params.arg });
+  const selectElement = { action_id: SLACK_COMMAND_ARG_ACTION_ID, confirm };
   const rows = canUseOverflow
     ? [
         {
-          type: "actions",
           elements: [
             {
+              ...selectElement,
               type: "overflow",
-              action_id: SLACK_COMMAND_ARG_ACTION_ID,
-              confirm: buildSlackArgMenuConfirm({ command: params.command, arg: params.arg }),
               options: buildSlackArgMenuOptions(encodedChoices),
             },
           ],
@@ -274,20 +273,13 @@ function buildSlackCommandArgMenuBlocks(params: {
     : canUseExternalSelect
       ? [
           {
-            type: "actions",
-            block_id: `${SLACK_EXTERNAL_ARG_MENU_PREFIX}${params.createExternalMenuToken(
-              encodedChoices,
-            )}`,
+            block_id: `${SLACK_EXTERNAL_ARG_MENU_PREFIX}${params.createExternalMenuToken(encodedChoices)}`,
             elements: [
               {
+                ...selectElement,
                 type: "external_select",
-                action_id: SLACK_COMMAND_ARG_ACTION_ID,
-                confirm: buildSlackArgMenuConfirm({ command: params.command, arg: params.arg }),
                 min_query_length: 0,
-                placeholder: {
-                  type: "plain_text",
-                  text: `Search ${params.arg}`,
-                },
+                placeholder: { type: "plain_text", text: `Search ${params.arg}` },
               },
             ],
           },
@@ -299,7 +291,6 @@ function buildSlackCommandArgMenuBlocks(params: {
             ),
             SLACK_COMMAND_ARG_BUTTON_ROW_SIZE,
           ).map((choices, rowIndex) => ({
-            type: "actions",
             elements: choices.map((choice, colIndex) => ({
               type: "button",
               action_id: `${SLACK_COMMAND_ARG_ACTION_ID}_${rowIndex}_${colIndex}`,
@@ -308,17 +299,15 @@ function buildSlackCommandArgMenuBlocks(params: {
                 text: truncateSlackText(choice.label, SLACK_COMMAND_ARG_BUTTON_TEXT_MAX),
               },
               value: choice.value,
-              confirm: buildSlackArgMenuConfirm({ command: params.command, arg: params.arg }),
+              confirm,
             })),
           }))
         : chunkItems(encodedChoices, SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX).map(
             (choices, index) => ({
-              type: "actions",
               elements: [
                 {
+                  ...selectElement,
                   type: "static_select",
-                  action_id: SLACK_COMMAND_ARG_ACTION_ID,
-                  confirm: buildSlackArgMenuConfirm({ command: params.command, arg: params.arg }),
                   placeholder: {
                     type: "plain_text",
                     text:
@@ -352,7 +341,7 @@ function buildSlackCommandArgMenuBlocks(params: {
       type: "context",
       elements: [{ type: "mrkdwn", text: contextText }],
     },
-    ...visibleRows,
+    ...visibleRows.map((row) => Object.assign({ type: "actions" }, row)),
   ];
 }
 
@@ -494,28 +483,6 @@ export function createSlackCommandHandler(params: {
           defaultRequireMention: ctx.defaultRequireMention,
           allowNameMatching: ctx.allowNameMatching,
         });
-        if (ctx.useAccessGroups) {
-          const channelAllowlistConfigured = (ctx.channelsConfigKeys?.length ?? 0) > 0;
-          const channelAllowed = channelConfig?.allowed !== false;
-          if (
-            !isSlackChannelAllowedByPolicy({
-              groupPolicy: ctx.groupPolicy,
-              channelAllowlistConfigured,
-              channelAllowed,
-            })
-          ) {
-            await respondEphemeral("This channel is not allowed.");
-            return false;
-          }
-          // When groupPolicy is "open", only block channels that are EXPLICITLY denied
-          // (i.e., have a matching config entry with allow:false). Channels not in the
-          // config (matchSource undefined) should be allowed under open policy.
-          const hasExplicitConfig = Boolean(channelConfig?.matchSource);
-          if (!channelAllowed && (ctx.groupPolicy !== "open" || hasExplicitConfig)) {
-            await respondEphemeral("This channel is not allowed.");
-            return false;
-          }
-        }
       }
 
       const sender = await ctx.resolveUserName(command.user_id, eventScope);
@@ -583,10 +550,7 @@ export function createSlackCommandHandler(params: {
               ts: p.eventTs,
               thread_ts: p.threadTs,
             },
-            isDirectMessage,
-            isGroupDm,
-            isRoom,
-            isRoomish,
+            chatType,
             channelConfig,
             eventScope,
           });

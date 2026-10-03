@@ -18,6 +18,7 @@ import type { PlacementSessionToolWorkerOperations } from "../gateway/worker-env
 import type { PlacementTurnClaimWorkerOperations } from "../gateway/worker-environments/placement-turn-claims.worker-contract.js";
 import type { WorkspaceJournalWorkerOperations } from "../gateway/worker-environments/placement-workspace-journal.worker-contract.js";
 import type { WorkerEnvironmentWorkerOperations } from "../gateway/worker-environments/store-worker-contract.js";
+import type { WorkerTranscriptCommitOperations } from "../gateway/worker-environments/transcript-commit-store.worker-contract.js";
 import type { DeliveryQueueWorkerOperations } from "../infra/delivery-queue.worker-contract.js";
 import type { DevicePairingWorkerOperations } from "../infra/device-pairing-worker-contract.js";
 import type { ExecAuthorizationWorkerOperations } from "../infra/exec-approvals-authorization.worker-contract.js";
@@ -88,6 +89,7 @@ export type RegisteredStateWorkerOperations = ClawProvenanceWriteOperations &
   PlacementTurnClaimWorkerOperations &
   WorkspaceJournalWorkerOperations &
   WorkerEnvironmentWorkerOperations &
+  WorkerTranscriptCommitOperations &
   RepositoryWorkspaceWorkerOperations &
   UserProfileWorkerOperations;
 
@@ -191,6 +193,10 @@ export const stateWorkerRegistry = createWorkerOperationRegistry<RegisteredState
   placementJournals: () =>
     import("../gateway/worker-environments/placement-workspace-journal.worker.js").then(
       (m) => m.workspaceJournalOperations,
+    ),
+  placementTranscript: () =>
+    import("../gateway/worker-environments/transcript-commit-store.worker.js").then(
+      (m) => m.workerTranscriptCommitOperations,
     ),
   workerEnvironments: () =>
     import("../gateway/worker-environments/store.worker.js").then(

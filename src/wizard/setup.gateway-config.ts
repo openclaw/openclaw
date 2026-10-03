@@ -151,6 +151,13 @@ export async function configureGatewayForSetup(
   }
 
   if (tailscaleMode === "funnel" && authMode !== "password") {
+    // Funnel must not replace the operator's proxy identity policy.
+    if (authMode !== "token") {
+      throw new Error(
+        `Tailscale Funnel requires password auth, but the Gateway is configured with "${authMode}" auth. ` +
+          `Re-run with --gateway-auth password to switch, or keep Tailscale exposure off.`,
+      );
+    }
     await prompter.note(t("wizard.gatewayNotes.tailscaleFunnelPassword"), t("wizard.gateway.auth"));
     authMode = "password";
   }

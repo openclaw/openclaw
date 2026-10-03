@@ -2,7 +2,6 @@ import path from "node:path";
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
 import { buildBootstrapBudgetState, buildBootstrapInjectionStats } from "../../bootstrap-budget.js";
 import {
-  buildBootstrapContextForFiles,
   hasCompletedBootstrapTurn,
   makeBootstrapWarn,
   resolveBootstrapFilesForRun,
@@ -13,6 +12,7 @@ import {
   isPrimaryBootstrapRun,
   resolveWorkspaceBootstrapRouting,
 } from "../../bootstrap-routing.js";
+import { buildBootstrapContextForFiles } from "../../embedded-agent-helpers/bootstrap.js";
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,

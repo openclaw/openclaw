@@ -323,7 +323,8 @@ prepare_limit_summary() {
 DOCKER_RUN_USER_ARGS=()
 UPGRADE_ENTRYPOINT=()
 if [ "$UPDATE_RESTART_MODE" = auto-auth ]; then
-  DOCKER_RUN_USER_ARGS+=(--user root --cgroupns private --cap-add SYS_ADMIN --security-opt apparmor=unconfined)
+  # MAC_OVERRIDE permits replacing unconfined; the entrypoint drops every capability.
+  DOCKER_RUN_USER_ARGS+=(--user root --cgroupns private --cap-add SYS_ADMIN --cap-add MAC_OVERRIDE --security-opt apparmor=unconfined)
   UPGRADE_ENTRYPOINT=(bash /tmp/openclaw-release-harness/scripts/e2e/lib/upgrade-survivor/cgroup-entrypoint.sh)
 fi
 PROBE_ENV_ARGS=(

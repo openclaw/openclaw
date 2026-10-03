@@ -83,6 +83,7 @@ Notes:
 - With the default-off [secret egress proxy](/gateway/secrets#secret-egress-proxy), Gateway-hosted exec receives shared-store `secret` entries only as process-local sentinels. The authenticated loopback proxy substitutes plaintext at outbound HTTPS request time. Each managed process has its own proxy grant, which survives the originating turn and is revoked on process exit, cancellation, timeout, or Gateway shutdown.
 - Shared-store `env` entries are intentionally plaintext and reach Gateway-hosted exec from the next agent run. They do not reach sandbox, remote `node`, ACP, or Codex-native shell execution. Under the Codex harness, use `gateway_exec` for this OpenClaw-managed environment path.
 - With a [managed GitHub identity](/gateway/config-tools#tools.github), Gateway-hosted exec validates the selected profile and binds its credential privately at each process launch. An unavailable profile blocks that local execution with reconnect guidance instead of falling back to native keyring credentials. Running shells retain their launch token. Later exec launches observe refreshes. Codex-native shell does not share this launch binding.
+- Sandboxed exec excludes that identity unless `agents.entries.<id>.tools.github.allowInSandbox: true`. This agent-only opt-in supports Docker and Podman, including role-required sandboxes: the profile is mounted read-only at `/openclaw/github`, and commands receive its managed token and Git author. Effective shared scope refuses injection with a warning; security audit warns for every opt-in. See [sandbox GitHub identity](/gateway/config-tools/github-identity#sandbox-opt-in).
 - Secret egress sets `NODE_USE_ENV_PROXY=1` so supported Node.js global `fetch` clients honor the process-scoped proxy. It does not use `NODE_OPTIONS`.
 - For channel-origin runs, OpenClaw also exposes a narrow sender/chat identity JSON payload in `OPENCLAW_CHANNEL_CONTEXT` when the channel provided those ids.
 - `exec` cannot run `openclaw channels login` or `/approve` shell commands: `openclaw channels login` is an interactive channel-auth flow, and `/approve` needs to go through the approval command handler, not a shell. Run channel login in a terminal on the gateway host, or use a channel-specific login agent tool when one exists (for example `whatsapp_login`).
@@ -178,6 +179,8 @@ These paths skip the approval owner that detects strict inline evaluation. Tight
 For ordinary configured full/off execution without prompts for these forms, leave `strictInlineEval` unset or set it to `false`. `askFallback: "full"` does not satisfy strict inline-eval approval when detection runs.
 
 ### PATH handling
+
+Gateway-hosted commands use an `openclaw` launcher tied to the running Gateway's installation. Source checkouts pin any inherited TSX preload to that checkout on both Node and Bun, so the launcher also works from an agent workspace outside the checkout.
 
 - `host=gateway`: merges your login-shell `PATH` into the exec environment. `env.PATH` overrides are rejected for host execution. The daemon itself still runs with a minimal `PATH`:
   - macOS: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`

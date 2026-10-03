@@ -116,6 +116,35 @@ function sendCompactionCompleted(
   send({ method: "turn/completed", params: { threadId, turn } });
 }
 
+function leaseClient(preparedShell = false) {
+  return getLeasedSharedCodexAppServerClient({
+    startOptions: preparedShell
+      ? { ...runtime.start, env: { ...runtime.start.env, COMPACTION_TEST_SHELL: "prepared" } }
+      : runtime.start,
+    agentDir,
+    authProfileId: null,
+  });
+}
+
+function compact(sessionId: string, sessionKey: string, abortSignal?: AbortSignal) {
+  return maybeCompactCodexAppServerSession(
+    {
+      sessionId,
+      sessionKey,
+      sessionFile,
+      agentDir,
+      workspaceDir: directory,
+      trigger: "manual",
+      abortSignal,
+    },
+    { bindingStore: testCodexAppServerBindingStore, pluginConfig },
+  );
+}
+
+function resume(client: CodexAppServerClient, threadId: string) {
+  return client.request("thread/resume", { threadId, excludeTurns: true }, { timeoutMs: 1000 });
+}
+
 it.each(["closed", "detached", "unconfirmed-close", "rejected-close"])(
   "supports repeated compaction and the next turn (owner %s)",
   async (ownerState) => {
@@ -184,26 +213,11 @@ it.each(["closed", "detached", "unconfirmed-close", "rejected-close"])(
       }
       return harness.client;
     });
-    const owner = await getLeasedSharedCodexAppServerClient({
-      startOptions: {
-        ...runtime.start,
-        env: { ...runtime.start.env, COMPACTION_TEST_SHELL: "prepared" },
-      },
-      agentDir,
-      authProfileId: null,
-    });
-    await owner.request(
-      "thread/resume",
-      { threadId: "owned-thread", excludeTurns: true },
-      { timeoutMs: 1000 },
-    );
+    const owner = await leaseClient(true);
+    await resume(owner, "owned-thread");
     await owner.request("turn/start", { threadId: "owned-thread", input: [] }, { timeoutMs: 1000 });
     await retainCodexAppServerLiveThread(owner, "owned-thread");
-    await owner.request(
-      "thread/resume",
-      { threadId: "sibling-thread", excludeTurns: true },
-      { timeoutMs: 1000 },
-    );
+    await resume(owner, "sibling-thread");
     await retainCodexAppServerLiveThread(owner, "sibling-thread");
     registerCodexTestSessionIdentity(sessionFile, "session-1", sessionKey, "main");
     await writeCodexAppServerBinding(sessionFile, {
@@ -223,17 +237,7 @@ it.each(["closed", "detached", "unconfirmed-close", "rejected-close"])(
     }
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const compaction = maybeCompactCodexAppServerSession(
-        {
-          sessionId: "session-1",
-          sessionKey,
-          sessionFile,
-          agentDir,
-          workspaceDir: directory,
-          trigger: "manual",
-        },
-        { bindingStore: testCodexAppServerBindingStore, pluginConfig },
-      );
+      const compaction = compact("session-1", sessionKey);
 
       if (closeFails) {
         await expect(compaction).rejects.toThrow(
@@ -273,23 +277,9 @@ it.each(["closed", "detached", "unconfirmed-close", "rejected-close"])(
       expect(await consumeCodexAppServerLiveThread(owner, "owned-thread")).toBeDefined();
       expect(await consumeCodexAppServerLiveThread(owner, "sibling-thread")).toBeDefined();
     }
-    const nextOwner =
-      ownerState === "detached"
-        ? owner
-        : await getLeasedSharedCodexAppServerClient({
-            startOptions: {
-              ...runtime.start,
-              env: { ...runtime.start.env, COMPACTION_TEST_SHELL: "prepared" },
-            },
-            agentDir,
-            authProfileId: null,
-          });
+    const nextOwner = ownerState === "detached" ? owner : await leaseClient(true);
     try {
-      await nextOwner.request(
-        "thread/resume",
-        { threadId: "owned-thread", excludeTurns: true },
-        { timeoutMs: 1000 },
-      );
+      await resume(nextOwner, "owned-thread");
       await expect(
         nextOwner.request(
           "turn/start",
@@ -368,11 +358,7 @@ it.each([
       return harness.client;
     });
 
-    const owner = await getLeasedSharedCodexAppServerClient({
-      startOptions: runtime.start,
-      agentDir,
-      authProfileId: null,
-    });
+    const owner = await leaseClient();
     registerCodexTestSessionIdentity(sessionFile, "session-final-owner", sessionKey, "main");
     const prepareThread = (client: CodexAppServerClient) =>
       startOrResumeThread({
@@ -398,17 +384,7 @@ it.each([
       closed: false,
     });
 
-    const compaction = maybeCompactCodexAppServerSession(
-      {
-        sessionId: "session-final-owner",
-        sessionKey,
-        sessionFile,
-        agentDir,
-        workspaceDir: directory,
-        trigger: "manual",
-      },
-      { bindingStore: testCodexAppServerBindingStore, pluginConfig },
-    );
+    const compaction = compact("session-final-owner", sessionKey);
     const pendingCompact = await compactStarted.promise;
     if (!lateRelease) {
       releaseRetirementLease?.();
@@ -443,11 +419,7 @@ it.each([
         expect(await retainCodexAppServerBindingSubscription(owner, threadId)).toBe(true);
       }
     }
-    const nextOwner = await getLeasedSharedCodexAppServerClient({
-      startOptions: runtime.start,
-      agentDir,
-      authProfileId: null,
-    });
+    const nextOwner = await leaseClient();
     const entered = createDeferred<void>();
     const released = createDeferred<void>();
     let acquired = false;
@@ -541,11 +513,7 @@ it("cancels compaction waiting for a closing owner without releasing its thread 
   const harness = createOwnershipHarness(() => {}, false);
   transports.push(harness);
   const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
-  const owner = await getLeasedSharedCodexAppServerClient({
-    startOptions: runtime.start,
-    agentDir,
-    authProfileId: null,
-  });
+  const owner = await leaseClient();
   const sessionKey = "agent:main:closing-owner";
   registerCodexTestSessionIdentity(sessionFile, "closing-session", sessionKey, "main");
   await writeCodexAppServerBinding(sessionFile, {
@@ -565,18 +533,7 @@ it("cancels compaction waiting for a closing owner without releasing its thread 
     },
   );
   const abort = new AbortController();
-  const compaction = maybeCompactCodexAppServerSession(
-    {
-      sessionId: "closing-session",
-      sessionKey,
-      sessionFile,
-      agentDir,
-      workspaceDir: directory,
-      trigger: "manual",
-      abortSignal: abort.signal,
-    },
-    { bindingStore: testCodexAppServerBindingStore, pluginConfig },
-  );
+  const compaction = compact("closing-session", sessionKey, abort.signal);
   let queueEntered = false;
   let queued: Promise<void> | undefined;
   try {

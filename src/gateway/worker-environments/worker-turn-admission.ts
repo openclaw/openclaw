@@ -66,11 +66,11 @@ export async function waitForPendingWorkerResult(params: {
   );
   // Restart clears local claims without discarding durable results. A claimless result cannot
   // make progress through this wait; keep its fence and let recovery retain control of the files.
+  const pendingResults = await params.placements.listPendingWorkspaceResultsAsync(params.sessionId);
+  params.signal?.throwIfAborted();
   if (
     !params.placements.get(params.sessionId)?.turnClaim &&
-    params.placements
-      .listPendingWorkspaceResults(params.sessionId)
-      .some((pending) => pending.sessionId === params.sessionId)
+    pendingResults.some((pending) => pending.sessionId === params.sessionId)
   ) {
     throw new Error(
       "Workspace recovery is still pending after its turn ended. " +
@@ -356,20 +356,23 @@ export async function claimWorkerTurn(params: {
     if (!(error instanceof ActiveTurnClaimError)) {
       throw error;
     }
+    const pendingResults = await params.placements.listPendingWorkspaceResultsAsync(
+      params.identity.sessionId,
+    );
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     const activePlacement = params.placements.get(params.identity.sessionId);
     const activeClaim = activePlacement?.turnClaim;
     if (activeClaim?.runId === params.runId) {
       throw error;
     }
-    const resultIsReconciling = params.placements
-      .listPendingWorkspaceResults(params.identity.sessionId)
-      .some(
-        (pending) =>
-          activeClaim?.owner === "worker" &&
-          pending.sessionId === params.identity.sessionId &&
-          pending.claimId === activeClaim.claimId &&
-          pending.runId === activeClaim.runId,
-      );
+    const resultIsReconciling = pendingResults.some(
+      (pending) =>
+        activeClaim?.owner === "worker" &&
+        pending.sessionId === params.identity.sessionId &&
+        pending.claimId === activeClaim.claimId &&
+        pending.runId === activeClaim.runId,
+    );
     const cancelledClaim = activePlacement && projectWorkerSessionTurnClaim(activePlacement);
     if (resultIsReconciling) {
       await waitForPendingWorkerResult({

@@ -11,6 +11,7 @@ import {
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
 import {
   extractCanvasFromDetails,
   extractCanvasFromText,
@@ -241,6 +242,12 @@ function serializeToolInput(args: unknown): string | undefined {
   } catch {
     return typeof args === "bigint" ? String(args) : Object.prototype.toString.call(args);
   }
+}
+
+/** Rendering only: extraction and result retrieval retain the original card. */
+export function resolveToolCardDisplay(card: ToolCard): ToolCard {
+  const call = unwrapToolCallForDisplay(card);
+  return call === card ? card : { ...card, ...call, inputText: serializeToolInput(call.args) };
 }
 
 export function formatCollapsedToolSummaryText(value: string | undefined): string | undefined {

@@ -1,6 +1,7 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import type { PreparedGitHubToolEnvironment } from "../github-tool-identity.types.js";
 import type { SandboxBackendHandle } from "./backend-handle.types.js";
 import type {
   CreateSandboxBackendParams,
@@ -169,8 +170,16 @@ export function requireSandboxBackendFactory(id: string): SandboxBackendFactory 
 export async function createSandboxBackend(
   params: CreateSandboxBackendParams,
   operatorAuthority?: AdmittedRunOperatorAuthority,
+  githubIdentity?: PreparedGitHubToolEnvironment,
 ): Promise<SandboxBackendHandle> {
   const factory = requireSandboxBackendFactory(params.cfg.backend);
+  if (
+    githubIdentity &&
+    factory !== createDockerSandboxBackend &&
+    factory !== createPodmanSandboxBackend
+  ) {
+    throw new Error("Sandbox GitHub identity requires the built-in Docker or Podman backend.");
+  }
   const reserveRuntimeId = resolveSandboxBackendRegistration(params.cfg.backend)?.reserveRuntimeId;
   const toEntry = (backend: SandboxBackendHandle): SandboxRegistryEntry => ({
     containerName: backend.runtimeId,
@@ -187,9 +196,9 @@ export async function createSandboxBackend(
     // A plugin overriding the same backend ID retains its own lifecycle contract.
     const backend =
       factory === createDockerSandboxBackend
-        ? await createDockerSandboxBackend(params, operatorAuthority)
+        ? await createDockerSandboxBackend(params, operatorAuthority, githubIdentity)
         : factory === createPodmanSandboxBackend
-          ? await createPodmanSandboxBackend(params, operatorAuthority)
+          ? await createPodmanSandboxBackend(params, operatorAuthority, githubIdentity)
           : await factory(params);
     await updateRegistry(toEntry(backend));
     return backend;

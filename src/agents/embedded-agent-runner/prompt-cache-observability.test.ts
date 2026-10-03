@@ -114,32 +114,39 @@ describe("prompt cache observability", () => {
     });
   });
 
-  it.each([false, true])(
-    "detects mutated block text with a reused content array (rebuilt wrapper=%s)",
-    (rebuildWrapper) => {
-      const sessionId = scopedKey("mutated-text");
-      const block: TextContent = { type: "text", text: "original" };
-      const first: Message = { role: "user", content: "question", timestamp: 1 };
-      const message = makeAgentAssistantMessage({ content: [block], timestamp: 2 });
-      beginOpenAIObservation({ sessionId, messages: [first, message] });
-      completePromptCacheObservation({ sessionId, usage: { cacheRead: 8_000 } });
+  it.each([
+    ["block", false],
+    ["block", true],
+    ["string", false],
+    ["string", true],
+  ] as const)("detects mutated %s text (rebuilt wrapper=%s)", (kind, rebuildWrapper) => {
+    const sessionId = scopedKey(`mutated-${kind}`);
+    const block: TextContent = { type: "text", text: "original" };
+    const first: Message = { role: "user", content: "question", timestamp: 1 };
+    const message: Message =
+      kind === "string"
+        ? { role: "user", content: "original", timestamp: 2 }
+        : makeAgentAssistantMessage({ content: [block], timestamp: 2 });
+    beginOpenAIObservation({ sessionId, messages: [first, message] });
+    completePromptCacheObservation({ sessionId, usage: { cacheRead: 8_000 } });
+    if (message.role === "user") {
+      message.content = "rewritten";
+    } else {
       block.text = "rewritten";
-      const detail =
-        "message 1 (assistant) differs from the previous request; history must be append-only";
-      withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
-        expect(() =>
-          beginOpenAIObservation({
-            sessionId,
-            messages: [first, rebuildWrapper ? { ...message } : message],
-          }),
-        ).toThrow(detail);
-      });
-      expect(
-        completePromptCacheObservation({ sessionId, usage: { input: 8_000, cacheRead: 0 } })
-          ?.changes,
-      ).toEqual([{ code: "historyRewrite", detail }]);
-    },
-  );
+    }
+    const detail = `message 1 (${message.role}) differs from the previous request; history must be append-only`;
+    withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
+      expect(() =>
+        beginOpenAIObservation({
+          sessionId,
+          messages: [first, rebuildWrapper ? { ...message } : message],
+        }),
+      ).toThrow(detail);
+    });
+    expect(
+      completePromptCacheObservation({ sessionId, usage: { input: 8_000, cacheRead: 0 } })?.changes,
+    ).toEqual([{ code: "historyRewrite", detail }]);
+  });
 
   it("detects nested tool arguments mutated in place", () => {
     withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {

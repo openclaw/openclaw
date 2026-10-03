@@ -1,4 +1,3 @@
-/** Formatting and validation helpers for migration previews and apply results. */
 import { log } from "@clack/prompts";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { redactMigrationPlan } from "../../plugin-sdk/migration.js";
@@ -125,10 +124,7 @@ const REASON_CODE_MESSAGES: Record<string, string> = {
   "not selected for migration": "Skipped because it was not selected for migration",
 };
 
-// Phrase-form conflict reasons, used as-is in selection-prompt hints
-// (`<source label> <phrase>`) and wrapped into sentence form for preview
-// /result rows. Keep one map so the two surfaces never drift.
-/** Shared short conflict phrases used by migration output and selection hints. */
+// Selection hints use phrases; preview/result rows capitalize them as sentences.
 export const MIGRATION_CONFLICT_REASON_PHRASES: Record<string, string> = {
   "target exists": "already installed in workspace",
   "plugin exists": "already installed in workspace",

@@ -473,15 +473,16 @@ export function createSessionsSpawnTool(
               signal: executionSignal,
             },
           });
-        const visibleResult = opts?.expectedParentSessionId
-          ? await runWithScopedSessionAccess({
-              cfg: effectiveConfig,
-              expectedSessionId: opts.expectedParentSessionId,
-              ...(opts.signal ? { signal: opts.signal } : {}),
-              targetSessionKey: expectedParentSessionKey!,
-              run: spawnVisible,
-            })
-          : await spawnVisible();
+        const visibleResult =
+          params.visible === true && opts?.expectedParentSessionId
+            ? await runWithScopedSessionAccess({
+                cfg: effectiveConfig,
+                expectedSessionId: opts.expectedParentSessionId,
+                ...(opts.signal ? { signal: opts.signal } : {}),
+                targetSessionKey: expectedParentSessionKey!,
+                run: spawnVisible,
+              })
+            : await spawnVisible();
         if (visibleResult) {
           recordAcceptedSessionSpawn(visibleResult, context ?? "isolated");
           return jsonResult(
@@ -550,6 +551,8 @@ export function createSessionsSpawnTool(
           assertActive,
           onSpawnEffectsStart,
           agentSessionKey: opts?.agentSessionKey,
+          senderIsOwner: opts?.senderIsOwner,
+          expectedParentSessionId: opts?.expectedParentSessionId,
           requesterTurnRunId: opts?.requesterTurnRunId,
           completionOwnerKey: opts?.completionOwnerKey,
           requesterAgentIdOverride: opts?.requesterAgentIdOverride,

@@ -7,6 +7,8 @@ import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
+import { canReadSystemInfo } from "../../lib/system-info.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import * as catalog from "./catalog-target.ts";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "./cloud-profile-discovery.ts";
 import { requestPlaceCatalog } from "./cloud-target.ts";
@@ -118,14 +120,22 @@ export class DraftGatewayState {
     this.gatewayNameTask = new Task(host, {
       args: () =>
         [
-          this.read().isConnected && this.gatewayConnectedValue ? this.gatewayClientValue : null,
-          isGatewayMethodAdvertised(this.read().context?.gateway.snapshot ?? {}, "system.info") ===
-            true,
+          this.read().isConnected && this.gatewayConnectedValue ? this.gatewaySource : null,
+          canReadSystemInfo(this.read().context?.gateway.snapshot) &&
+            document.visibilityState !== "hidden",
           this.gatewayConnectionEpochValue,
         ] as const,
-      task: ([client, advertised, _connectionEpoch], { signal }) =>
-        discoverGatewayName(client, advertised, signal),
+      task: ([gateway, available, _connectionEpoch], { signal }) =>
+        discoverGatewayName(gateway, available, signal),
     });
+    // Shared system reads pause in background tabs; visibility must wake this one-shot task.
+    new SubscriptionsController(host).watch(
+      () => document,
+      (source, notify) => {
+        source.addEventListener("visibilitychange", notify);
+        return () => source.removeEventListener("visibilitychange", notify);
+      },
+    );
     this.cloudProfileTask = new Task(host, {
       args: () =>
         [

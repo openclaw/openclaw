@@ -21,7 +21,7 @@ import { createPlacementTurnClaimFixtureOps } from "./placement-test-fixtures.js
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
-import { createWorkerTranscriptCommitStore } from "./transcript-commit-store.js";
+import { createWorkerTranscriptCommitStore } from "./transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
 import { claimWorkerPlacement } from "./worker-turn-rpc.test-support.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
@@ -60,8 +60,8 @@ describe("worker transcript claim fences", () => {
         getConfig: () => ({ session: { store: target.storePath } }),
         store: {
           ...ledger,
-          begin(input) {
-            const result = ledger.begin(input);
+          async begin(input, assertCurrent) {
+            const result = await ledger.begin(input, assertCurrent);
             applicationStarted.resolve();
             return result;
           },

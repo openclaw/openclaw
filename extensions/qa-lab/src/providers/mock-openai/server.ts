@@ -143,7 +143,7 @@ import {
   extractPlannedToolIdentity,
   splitMockStreamingText,
   buildChannelStreamingFixtureEvents,
-  QA_TELEGRAM_PREPARED_DELIVERY_RE,
+  resolveTelegramChannelStreamingPause,
   buildAssistantThenToolCallEvents,
   buildAssistantEvents,
   buildStreamingFinalAnswerEvents,
@@ -180,6 +180,7 @@ import {
   parseToolOutputJson,
 } from "./mock-openai-input.js";
 import { createMockOpenAiRequestLog } from "./mock-openai-request-log.js";
+import { writeMockOpenAiResponsesHttp } from "./mock-openai-responses-http.js";
 import { attachQaMockResponsesWebSocketServer } from "./mock-openai-responses-websocket.js";
 import {
   buildSlackOwnedRequesterEvents,
@@ -2221,11 +2222,17 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
           }
         : {}),
       ...(failure ? { failure } : {}),
-      ...(QA_TELEGRAM_PREPARED_DELIVERY_RE.test(splitMockConversationContext(prompt).current)
-        ? { previewPauseMs: 3_000 }
-        : QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)
+      ...((() => {
+        const telegramPause = resolveTelegramChannelStreamingPause(
+          splitMockConversationContext(prompt).current,
+        );
+        return telegramPause && params?.telegramChannelStreamingPause
+          ? { previewPause: params.telegramChannelStreamingPause }
+          : telegramPause;
+      })() ??
+        (QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)
           ? { previewPauseMs: finalOnlyMarkerPauseMs }
-          : {}),
+          : {})),
       // Stall one request; later failures let the normal retry budget settle the turn.
       ...(repeatedRequestRecovery &&
       scenarioState.repeatedRequestRecoveryAttempts <= QA_REPEATED_REQUEST_STALL_ATTEMPT
@@ -2361,35 +2368,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       }
       if (url.pathname === "/v1/responses") {
         const dispatched = await dispatchResponses({ body, raw, headers: req.headers });
-        if (dispatched.failure) {
-          if (dispatched.failure.retryAfterSeconds !== undefined) {
-            res.setHeader("retry-after", String(dispatched.failure.retryAfterSeconds));
-          }
-          writeJson(res, dispatched.failure.status, {
-            error: {
-              type: dispatched.failure.type,
-              ...(dispatched.failure.code ? { code: dispatched.failure.code } : {}),
-              message: dispatched.failure.message,
-            },
-          });
-          return;
-        }
-        const { events } = dispatched;
-        if (dispatched.responsePauseMs !== undefined) {
-          await sleep(dispatched.responsePauseMs);
-        }
-        if (body.stream !== true) {
-          const completion = events.at(-1);
-          if (!completion || completion.type !== "response.completed") {
-            writeJson(res, 500, { error: "mock completion failed" });
-            return;
-          }
-          writeJson(res, 200, completion.response);
-          dispatched.onResponseSent?.();
-          return;
-        }
-        await writeSse(res, events, "responses", dispatched.previewPauseMs);
-        dispatched.onResponseSent?.();
+        await writeMockOpenAiResponsesHttp(res, body.stream === true, dispatched);
         return;
       }
       const dispatched = await dispatchProvider({

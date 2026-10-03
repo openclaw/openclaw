@@ -1,6 +1,7 @@
 // Command-specific secret target policy. Each exported helper returns the config secret IDs
 // a command may inspect, with optional concrete-path filters for selected providers/accounts.
 import { isDeepStrictEqual } from "node:util";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -132,16 +133,6 @@ function isConfiguredSecretCandidate(value: unknown): boolean {
 
 type WebCapability = "search" | "fetch";
 
-function resolveWebConfig(
-  config: OpenClawConfig,
-  kind: WebCapability,
-): Record<string, unknown> | undefined {
-  const web = config.tools?.web?.[kind];
-  return web && typeof web === "object" && !Array.isArray(web)
-    ? (web as Record<string, unknown>)
-    : undefined;
-}
-
 function resolveWebProviders(
   config: OpenClawConfig,
   kind: WebCapability,
@@ -228,11 +219,7 @@ function withSelectedWebProviderForDiscovery(
   const next = structuredClone(config);
   const tools = (next.tools ??= {});
   const web = (tools.web ??= {});
-  const existing = web[kind];
-  web[kind] =
-    existing && typeof existing === "object" && !Array.isArray(existing)
-      ? { ...existing, provider: providerId }
-      : { provider: providerId };
+  web[kind] = { ...asOptionalRecord(web[kind]), provider: providerId };
   return next;
 }
 
@@ -630,7 +617,7 @@ function getCapabilityWebCommandSecretTargets(
   kind: WebCapability,
   providerId?: string | null,
 ): CommandSecretTargetScope {
-  const web = resolveWebConfig(config, kind);
+  const web = asOptionalRecord(config.tools?.web?.[kind]);
   if (web?.enabled === false) {
     return {
       targetIds: new Set(getCapabilityWebTargetIds(kind)),

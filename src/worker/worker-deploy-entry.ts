@@ -5,6 +5,7 @@ import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { drainProcessOutput } from "../process/output-drain.js";
 import workerDeployBrowserRuntime from "./worker-deploy-browser-runtime.js";
 import { runWorkerProcess } from "./worker-process.js";
+import { loadWorkerTurnRuntime } from "./worker.runtime.js";
 
 try {
   await assertSupportedRuntime();
@@ -29,6 +30,7 @@ try {
   }
 
   if (internalWorkerPrewarm) {
+    await loadWorkerTurnRuntime();
     flushCompileCache();
   } else {
     await runWorkerProcess({

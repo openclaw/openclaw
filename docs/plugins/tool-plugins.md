@@ -6,6 +6,7 @@ read_when:
   - You want to build a simple OpenClaw plugin that only adds agent tools
   - You want to use defineToolPlugin instead of hand-writing plugin manifest metadata
   - You need to scaffold, generate, validate, test, or publish a tool-only plugin
+  - You need the plugin tool context's memory audience and currency guards
 ---
 
 `defineToolPlugin` builds a plugin that only adds agent-callable tools: no
@@ -161,6 +162,29 @@ account, thread, and local-media policy; plugins cannot retarget this helper,
 and retained copies stop working after the turn closes. The helper is unavailable
 for channels whose delivery is owned by a Gateway transport.
 
+For an admitted session turn, the optional
+`memoryAudience?: MemoryAudience` field carries the same host-resolved memory
+audience used by the selected memory provider. It is either
+`{ kind: "owner-private", agentId }` or
+`{ kind: "conversation", agentId, sessionKey, sessionId }`. The field is absent
+when the host cannot prove an audience or when no session turn exists. Plugins
+must consume this prepared value and must not infer memory authority from
+`senderIsOwner`, session-key patterns, or session lookups.
+
+Tools that retain or use `memoryAudience` across awaited work must call both
+currency guards immediately before releasing data or performing an effect:
+
+```typescript
+toolContext.assertInvocationCurrent();
+toolContext.assertMemoryAudienceCurrent?.();
+```
+
+The optional `assertMemoryAudienceCurrent?(): void` guard fails after any session
+in the captured lineage changes incarnation or lifecycle.
+`assertInvocationCurrent` separately checks the admitted tool invocation and
+plugin lifetime. Use a version 2 tool context when the tool depends on these live
+authority checks.
+
 A factory may return a core `AgentTool`, an array of them, or `null` or
 `undefined` to opt out, as the example above does. When it returns a concrete
 tool, that tool uses the core runtime signature
@@ -197,13 +221,15 @@ api.registerTool(
 );
 ```
 
-The `OpenClawPluginToolContext<2>` type requires `assertInvocationCurrent`.
-Carry it through awaited work and invoke it in the final synchronous write or
-request guard, before effects—not only before starting work or after returning.
-It checks the captured plugin lifetime and admitted run/worker authority; a
-continuation also checks the original owner's live exact-parent binding. Standalone
-HTTP/RPC calls use their authenticated request lifetime, while MCP tools retain
-the existing authenticated grant or loopback-runtime lifetime.
+The `OpenClawPluginToolContext<2>` type requires `assertInvocationCurrent` and
+may provide `memoryAudience` with `assertMemoryAudienceCurrent`.
+Carry `assertInvocationCurrent` through awaited work and invoke it in the final
+synchronous write or request guard, before effects—not only before starting work
+or after returning. It checks the captured plugin lifetime and admitted
+run/worker authority; a continuation also checks the original owner's live
+exact-parent binding. Standalone HTTP/RPC calls use their authenticated request
+lifetime, while MCP tools retain the existing authenticated grant or
+loopback-runtime lifetime.
 Metadata-only catalog construction does not grant invocation authority. A retained
 versioned tool without an admitted invocation fails when its guard is called.
 

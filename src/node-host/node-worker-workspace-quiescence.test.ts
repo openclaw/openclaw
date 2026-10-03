@@ -1,10 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  REMOTE_WORKSPACE_QUIESCE_JS,
-  REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
-  REMOTE_WORKSPACE_RESUME_JS,
-} from "../gateway/worker-environments/workspace-quiescence-scripts.js";
+import { workspaceQuiescenceArgv } from "../gateway/worker-environments/workspace-quiescence-scripts.js";
 import type { ManagedRun, ProcessSupervisor, RunExit } from "../process/supervisor/types.js";
 import type { NodeWorkerWorkspaceQuiescenceInput } from "../worker/node-workspace-protocol.js";
 import { NodeWorkerWorkspaceQuiescence } from "./node-worker-workspace-quiescence.js";
@@ -79,25 +75,27 @@ function fixture(operation: NodeWorkerWorkspaceQuiescenceInput) {
 // complement, but never count as, native Windows Job/filesystem acceptance.
 describe("Windows-selected quiescence controller contracts", () => {
   it.each([
-    [
-      { action: "acquire", nonce, timeoutMs: 30_000 },
-      REMOTE_WORKSPACE_QUIESCE_JS,
-      ["30000", "shared-host", "owned", nonce],
-    ],
+    [{ action: "acquire", nonce, timeoutMs: 30_000 }, ["30000", "shared-host", "owned", nonce]],
     [
       { action: "renew", nonce, timeoutMs: 30_000, validationMode: "final" },
-      REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
       [nonce, "30000", "final", "shared-host"],
     ],
-    [{ action: "release", nonce }, REMOTE_WORKSPACE_RESUME_JS, [nonce, "owned"]],
-  ] satisfies [NodeWorkerWorkspaceQuiescenceInput, string, string[]][])(
+    [{ action: "release", nonce }, [nonce, "owned"]],
+  ] satisfies [NodeWorkerWorkspaceQuiescenceInput, string[]][])(
     "routes operation %# through scoped command cleanup without a POSIX helper",
-    async (operation, script, args) => {
+    async (operation, args) => {
       const f = fixture(operation);
+      const command = workspaceQuiescenceArgv(
+        f.context.workspaceDir,
+        operation,
+        "shared-host",
+        "owned",
+      );
+      expect(command.slice(3)).toEqual([f.context.workspaceDir, ...args]);
       await expect(f.owner.execute(f.context)).resolves.toBe("ok");
       expect(mocks.spawn).toHaveBeenCalledWith(
         expect.objectContaining({
-          argv: [process.execPath, "-e", script, f.context.workspaceDir, ...args],
+          argv: [process.execPath, ...command.slice(1)],
           cwd: f.context.workspaceDir,
           env: f.context.env,
           exactEnv: true,

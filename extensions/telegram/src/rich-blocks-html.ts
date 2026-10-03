@@ -5,7 +5,7 @@
 // while rich-blocks-html-map.ts owns block-level island mapping.
 import type { MarkdownIR } from "openclaw/plugin-sdk/text-chunking";
 import { decodeTelegramHtmlEntities } from "./format-html.js";
-import { MAX_RICH_BLOCK_NESTING, type RichText } from "./rich-block-model.js";
+import { MAX_RICH_BLOCK_NESTING, richTextLink, type RichText } from "./rich-block-model.js";
 
 export type HtmlNode = { start: number; end: number } & (
   | { kind: "text"; text: string }
@@ -16,7 +16,7 @@ const VOID_TAGS = new Set(["br", "hr", "img", "input", "tg-map"]);
 
 const INLINE_STYLE_TAGS: Record<
   string,
-  Exclude<Extract<RichText, { text: RichText }>["type"], "url" | "anchor_link">
+  Exclude<Extract<RichText, { text: RichText }>["type"], "url" | "text_mention" | "anchor_link">
 > = {
   b: "bold",
   strong: "bold",
@@ -238,7 +238,7 @@ export function htmlNodesToRichText(
         // In-message fragments are RichTextAnchorLink, not RichTextUrl.
         parts.push(wrap((text) => ({ type: "anchor_link", text, anchor_name: href.slice(1) })));
       } else {
-        parts.push(href ? wrap((text) => ({ type: "url", text, url: href })) : emit(children));
+        parts.push(href ? wrap((text) => richTextLink(text, href)) : emit(children));
       }
       continue;
     }

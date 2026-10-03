@@ -351,7 +351,7 @@ describe("runDoctorConfigPreflight", () => {
                 session: { idleMinutes: 45 },
                 channels: {
                   discord: {
-                    guilds: { "100": { channels: { general: { allow: true } } } },
+                    guilds: { "100": { channels: { general: { enabled: true } } } },
                   },
                 },
               },

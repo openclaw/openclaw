@@ -665,16 +665,23 @@ describe("resolveControlUiLinks", () => {
     expect(links.wsUrl).toBe("ws://10.211.55.3:18789");
   });
 
-  it("keeps co-located LAN probes on loopback", () => {
-    const links = resolveLocalControlUiProbeLinks({
-      port: 18789,
-      bind: "lan",
-    });
+  it.each(["loopback", "lan", "custom", "tailnet", "auto"] as const)(
+    "keeps co-located %s probes on loopback",
+    (bind) => {
+      mocks.pickPrimaryTailnetIPv4.mockReturnValueOnce("100.64.0.9");
+      const links = resolveLocalControlUiProbeLinks({
+        port: 18789,
+        bind,
+        customBindHost: "192.0.2.10",
+        tlsEnabled: true,
+        basePath: "/dashboard",
+      });
 
-    expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
-    expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
-    expect(mocks.resolveAdvertisedLanHostCore).not.toHaveBeenCalled();
-  });
+      expect(links.httpUrl).toBe("https://127.0.0.1:18789/dashboard/");
+      expect(links.wsUrl).toBe("wss://127.0.0.1:18789/dashboard");
+      expect(mocks.resolveAdvertisedLanHostCore).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("normalizeGatewayTokenInput", () => {

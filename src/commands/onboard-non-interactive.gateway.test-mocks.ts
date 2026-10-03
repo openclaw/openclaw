@@ -35,7 +35,9 @@ type InstallGatewayDaemonResult = Awaited<ReturnType<typeof installGatewayDaemon
 const installGatewayDaemonNonInteractiveMock = vi.hoisted(() =>
   vi.fn(async (): Promise<InstallGatewayDaemonResult> => ({ installed: true })),
 );
-const healthCommandMock = vi.hoisted(() => vi.fn(async () => {}));
+const healthCommandMock = vi.hoisted(() =>
+  vi.fn<typeof import("./health.js").healthCommandNonExiting>(async () => {}),
+);
 const waitForGatewayReachableMock = vi.hoisted(() =>
   vi.fn<NonNullable<WaitForGatewayReachableMock>>(
     (params) => gatewayReachableState.mock?.(params) ?? Promise.resolve({ ok: true }),
@@ -45,6 +47,7 @@ const gatewayServiceMock = vi.hoisted(() => ({
   label: "LaunchAgent",
   loadedText: "loaded",
   isLoaded: vi.fn(async () => true),
+  readCommand: vi.fn(async () => null),
   readRuntime: vi.fn(async () => ({
     status: "running",
     state: "active",
@@ -61,7 +64,8 @@ gatewayOnboardConfigSnapshotMock.mockImplementation(async () =>
   onboardTestConfigStore.readSnapshot(),
 );
 
-vi.mock("../config/io.js", () => ({
+vi.mock("../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.js")>()),
   createConfigIO: () => ({
     configPath: resolveTestConfigPath(),
   }),
@@ -101,6 +105,7 @@ export const capturedReplaceConfigFileCalls: Array<{
 vi.mock("../config/config.js", async (importActual) => {
   const actual = await importActual<typeof import("../config/config.js")>();
   return {
+    ...actual,
     replaceConfigFile: async ({
       nextConfig,
       writeOptions,

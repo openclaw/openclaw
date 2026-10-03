@@ -32,16 +32,7 @@ export function ingressFindings(
   }
   if (hasValidScopedPolicy(policy, policyPath, policyDocName)) {
     for (const target of channelScopedPolicyTargets(policy)) {
-      if (
-        ingressPolicyShapeFinding(target.overlay.ingress, {
-          policyDocName,
-          policyPath,
-          targetPrefix: `scopes/${ocPathSegment(target.scopeName)}/ingress`,
-          propertyPrefix: `scopes.${target.scopeName}.ingress`,
-          allowSession: false,
-        }) !== undefined ||
-        !isRecord(target.overlay.ingress)
-      ) {
+      if (!isRecord(target.overlay.ingress)) {
         continue;
       }
       findings.push(

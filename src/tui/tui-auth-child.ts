@@ -56,9 +56,6 @@ export function createTuiAuthChildOwner() {
   };
 
   return {
-    get running(): boolean {
-      return active !== null && isChildRunning(active.child);
-    },
     spawnAndWait: async (spawnChild: () => ChildProcess): Promise<TuiAuthChildResult> => {
       if (closed) {
         throw new Error("TUI auth child owner is closed");

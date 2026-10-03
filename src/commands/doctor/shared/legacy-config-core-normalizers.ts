@@ -245,19 +245,26 @@ function normalizeLegacyRuntimeAgentModelConfig(
   selectedRuntime?: string;
   selectedRefs: SelectedRuntimeRef[];
 } {
+  const selectedRefs: SelectedRuntimeRef[] = [];
+  const migrate = (ref: unknown) => {
+    const migrated =
+      typeof ref === "string"
+        ? migrateUnblockedLegacyRuntimeModelRef(ref, blockedModelIdentities)
+        : null;
+    if (!migrated) {
+      return ref;
+    }
+    selectedRefs.push({ ref: migrated.ref, runtime: migrated.runtime });
+    return migrated.ref;
+  };
   if (typeof raw === "string") {
-    const migrated = migrateUnblockedLegacyRuntimeModelRef(raw, blockedModelIdentities);
-    return migrated
+    const value = migrate(raw);
+    return selectedRefs.length > 0
       ? {
-          value: migrated.ref,
+          value,
           changed: true,
-          selectedRuntime: migrated.runtime,
-          selectedRefs: [
-            {
-              ref: migrated.ref,
-              runtime: migrated.runtime,
-            },
-          ],
+          selectedRuntime: selectedRefs[0]!.runtime,
+          selectedRefs,
         }
       : { value: raw, changed: false, selectedRefs: [] };
   }
@@ -265,50 +272,20 @@ function normalizeLegacyRuntimeAgentModelConfig(
     return { value: raw, changed: false, selectedRefs: [] };
   }
 
-  const migratedPrimary =
-    typeof raw.primary === "string"
-      ? migrateUnblockedLegacyRuntimeModelRef(raw.primary, blockedModelIdentities)
-      : null;
-  let changed = false;
   const next: Record<string, unknown> = { ...raw };
-  const selectedRefs: SelectedRuntimeRef[] = [];
-  let selectedRuntime = migratedPrimary?.runtime;
-  if (migratedPrimary) {
-    next.primary = migratedPrimary.ref;
-    selectedRefs.push({
-      ref: migratedPrimary.ref,
-      runtime: migratedPrimary.runtime,
-    });
-    changed = true;
+  if (typeof raw.primary === "string") {
+    next.primary = migrate(raw.primary);
   }
   if (Array.isArray(raw.fallbacks)) {
-    next.fallbacks = raw.fallbacks.map((fallback) => {
-      if (typeof fallback !== "string") {
-        return fallback;
-      }
-      const migratedFallback = migrateUnblockedLegacyRuntimeModelRef(
-        fallback,
-        blockedModelIdentities,
-      );
-      if (migratedFallback) {
-        selectedRuntime ??= migratedFallback.runtime;
-        selectedRefs.push({
-          ref: migratedFallback.ref,
-          runtime: migratedFallback.runtime,
-        });
-        changed = true;
-        return migratedFallback.ref;
-      }
-      return fallback;
-    });
+    next.fallbacks = raw.fallbacks.map(migrate);
   }
-  if (!changed) {
+  if (selectedRefs.length === 0) {
     return { value: raw, changed: false, selectedRefs: [] };
   }
   return {
     value: next,
     changed: true,
-    selectedRuntime,
+    selectedRuntime: selectedRefs[0]!.runtime,
     selectedRefs,
   };
 }
@@ -526,43 +503,27 @@ function normalizeLegacyCodexCliProviderRuntimePins(
   cfg: OpenClawConfig,
   changes: string[],
 ): OpenClawConfig {
-  if (!isRecord(cfg.models)) {
-    return cfg;
-  }
   return normalizeModelProviders(cfg, (rawProvider, providerId) => {
-    let providerChanged = false;
-    const nextProvider: Record<string, unknown> = { ...rawProvider };
+    let provider = rawProvider;
     const providerRuntime = normalizeLegacyCodexCliAgentRuntimePolicy(rawProvider.agentRuntime);
     if (providerRuntime.changed) {
-      nextProvider.agentRuntime = providerRuntime.value;
-      providerChanged = true;
+      provider = { ...provider, agentRuntime: providerRuntime.value };
       changes.push(
         `Moved models.providers.${sanitizeForLog(providerId)} agentRuntime.id from codex-cli to codex.`,
       );
     }
 
-    if (Array.isArray(rawProvider.models)) {
-      const nextProviderModels = rawProvider.models.map((entry, index) => {
-        if (!isRecord(entry)) {
-          return entry;
-        }
-        const runtime = normalizeLegacyCodexCliAgentRuntimePolicy(entry.agentRuntime);
-        if (!runtime.changed) {
-          return entry;
-        }
-        providerChanged = true;
-        const modelId = normalizeOptionalString(entry.id) ?? `[${index}]`;
-        changes.push(
-          `Moved models.providers.${sanitizeForLog(providerId)}.models.${sanitizeForLog(modelId)} agentRuntime.id from codex-cli to codex.`,
-        );
-        return Object.assign({}, entry, { agentRuntime: runtime.value });
-      });
-      if (providerChanged) {
-        nextProvider.models = nextProviderModels;
+    return normalizeProviderModels(provider, (entry, index) => {
+      const runtime = normalizeLegacyCodexCliAgentRuntimePolicy(entry.agentRuntime);
+      if (!runtime.changed) {
+        return entry;
       }
-    }
-
-    return providerChanged ? nextProvider : rawProvider;
+      const modelId = normalizeOptionalString(entry.id) ?? `[${index}]`;
+      changes.push(
+        `Moved models.providers.${sanitizeForLog(providerId)}.models.${sanitizeForLog(modelId)} agentRuntime.id from codex-cli to codex.`,
+      );
+      return { ...entry, agentRuntime: runtime.value };
+    });
   });
 }
 
@@ -663,17 +624,12 @@ export function normalizeLegacyOpenAICodexModelsAddMetadata(
   cfg: OpenClawConfig,
   changes: string[],
 ): OpenClawConfig {
-  if (!isRecord(cfg.models)) {
-    return cfg;
-  }
   return normalizeModelProviders(cfg, (rawProvider, providerId) => {
-    if (normalizeProviderId(providerId) !== "openai-codex" || !Array.isArray(rawProvider.models)) {
+    if (normalizeProviderId(providerId) !== "openai-codex") {
       return rawProvider;
     }
-    let changed = false;
-    const models = Array.from(rawProvider.models, (model) => {
+    return normalizeProviderModels(rawProvider, (model) => {
       if (
-        !isRecord(model) ||
         "metadataSource" in model ||
         !isLegacyModelsAddCodexMetadataModel({
           provider: providerId,
@@ -682,7 +638,6 @@ export function normalizeLegacyOpenAICodexModelsAddMetadata(
       ) {
         return model;
       }
-      changed = true;
       const safeProviderId = sanitizeForLog(providerId);
       const safeModelId = sanitizeForLog(normalizeOptionalString(model.id) ?? "unknown");
       changes.push(
@@ -690,8 +645,23 @@ export function normalizeLegacyOpenAICodexModelsAddMetadata(
       );
       return Object.assign({}, model, { metadataSource: "models-add" });
     });
-    return changed ? { ...rawProvider, models } : rawProvider;
   });
+}
+
+function normalizeProviderModels(
+  provider: Record<string, unknown>,
+  normalize: (model: Record<string, unknown>, index: number) => Record<string, unknown>,
+): Record<string, unknown> {
+  if (!Array.isArray(provider.models)) {
+    return provider;
+  }
+  let changed = false;
+  const models = provider.models.map((model, index) => {
+    const next = isRecord(model) ? normalize(model, index) : model;
+    changed ||= next !== model;
+    return next;
+  });
+  return changed ? { ...provider, models } : provider;
 }
 
 function normalizeModelProviders(
@@ -728,45 +698,24 @@ export function normalizeLegacyOpenAIModelProviderApi(
   cfg: OpenClawConfig,
   changes: string[],
 ): OpenClawConfig {
-  if (!isRecord(cfg.models)) {
-    return cfg;
-  }
   return normalizeModelProviders(cfg, (rawProvider, providerId) => {
-    let providerChanged = false;
-    const nextProvider: Record<string, unknown> = { ...rawProvider };
-    if (nextProvider.api === "openai") {
-      nextProvider.api = "openai-completions";
-      providerChanged = true;
+    let provider = rawProvider;
+    if (provider.api === "openai") {
+      provider = { ...provider, api: "openai-completions" };
       changes.push(
         `Moved models.providers.${sanitizeForLog(providerId)}.api "openai" → "openai-completions".`,
       );
     }
 
-    const rawProviderModels = rawProvider.models;
-    if (Array.isArray(rawProviderModels)) {
-      let modelsChanged = false;
-      const nextModels: unknown[] = [];
-      rawProviderModels.forEach((model, index) => {
-        if (!isRecord(model) || model.api !== "openai") {
-          nextModels.push(model);
-          return;
-        }
-        modelsChanged = true;
-        changes.push(
-          `Moved models.providers.${sanitizeForLog(providerId)}.models[${index}].api "openai" → "openai-completions".`,
-        );
-        nextModels.push({
-          ...model,
-          api: "openai-completions",
-        });
-      });
-      if (modelsChanged) {
-        nextProvider.models = nextModels;
-        providerChanged = true;
+    return normalizeProviderModels(provider, (model, index) => {
+      if (model.api !== "openai") {
+        return model;
       }
-    }
-
-    return providerChanged ? nextProvider : rawProvider;
+      changes.push(
+        `Moved models.providers.${sanitizeForLog(providerId)}.models[${index}].api "openai" → "openai-completions".`,
+      );
+      return { ...model, api: "openai-completions" };
+    });
   });
 }
 
@@ -995,15 +944,7 @@ export function normalizeLegacyOllamaNativeNumCtxParams(
       : applyLegacyOllamaProviderNumCtxParams({ providerId, provider: rawProvider, changes });
     const providerNumCtxApplies =
       isNativeOllamaProviderConfig(provider) && hasConfiguredOllamaProviderNumCtx(provider);
-    if (rawModels.length === 0) {
-      return provider;
-    }
-
-    let modelsChanged = false;
-    const nextModels = rawModels.map((model, index) => {
-      if (!isRecord(model)) {
-        return model;
-      }
+    return normalizeProviderModels(provider, (model, index) => {
       if (!isNativeOllamaModelConfig(provider, model)) {
         return model;
       }
@@ -1025,7 +966,6 @@ export function normalizeLegacyOllamaNativeNumCtxParams(
         return model;
       }
 
-      modelsChanged = true;
       changes.push(
         `Set models.providers.${sanitizeForLog(providerId)}.models[${index}].params.num_ctx to ${numCtx} for native Ollama compatibility.`,
       );
@@ -1033,10 +973,6 @@ export function normalizeLegacyOllamaNativeNumCtxParams(
         params: rawParams ? { ...rawParams, num_ctx: numCtx } : { num_ctx: numCtx },
       });
     });
-
-    return modelsChanged || provider !== rawProvider
-      ? { ...provider, models: nextModels }
-      : rawProvider;
   });
 }
 
@@ -1086,16 +1022,7 @@ export function normalizeLegacyMistralModelDefaults(
     if (normalizeProviderId(providerId) !== "mistral") {
       return rawProvider;
     }
-    const rawModels = rawProvider.models;
-    if (!Array.isArray(rawModels)) {
-      return rawProvider;
-    }
-
-    let modelsChanged = false;
-    const nextModels = rawModels.map((model, index) => {
-      if (!isRecord(model)) {
-        return model;
-      }
+    return normalizeProviderModels(rawProvider, (model, index) => {
       const modelId = normalizeOptionalString(model.id) ?? "";
       if (!modelId) {
         return model;
@@ -1120,18 +1047,14 @@ export function normalizeLegacyMistralModelDefaults(
         }
       }
 
-      nextModel = normalizeLegacyMistralModelCost({
+      return normalizeLegacyMistralModelCost({
         providerId,
         model: nextModel,
         modelId,
         index,
         changes,
       });
-      modelsChanged ||= nextModel !== model;
-      return nextModel;
     });
-
-    return modelsChanged ? { ...rawProvider, models: nextModels } : rawProvider;
   });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

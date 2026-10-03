@@ -10,8 +10,6 @@ import { TELEGRAM_INVALID_TOPIC_ID_MESSAGE } from "./targets.js";
 
 const sendLogger = createSubsystemLogger("telegram/send");
 const QUOTE_PARAM_RE = /\bquote not found\b|\bQUOTE_TEXT_INVALID\b|\bquote text invalid\b/i;
-const GrammyErrorCtor: typeof GrammyError | undefined =
-  typeof GrammyError === "function" ? GrammyError : undefined;
 
 type TelegramReplyParameters = {
   message_id: number;
@@ -123,7 +121,7 @@ export function getTelegramNativeQuoteReplyMessageId(
 }
 
 export function isTelegramQuoteParamError(err: unknown): boolean {
-  if (GrammyErrorCtor && err instanceof GrammyErrorCtor) {
+  if (err instanceof GrammyError) {
     return QUOTE_PARAM_RE.test(err.description);
   }
   return QUOTE_PARAM_RE.test(formatErrorMessage(err));

@@ -9,11 +9,11 @@ import {
   normalizeConversationReadInvocationOrigin,
   type ConversationReadInvocationOrigin,
 } from "../../channels/plugins/conversation-read-origin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type {
   ChannelId,
   ChannelMessageActionContext,
   ChannelMessageActionName,
-  ChannelPlugin,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
 import type { ChannelProgressDraftCompositorSnapshot } from "../../channels/progress-draft-compositor.types.js";

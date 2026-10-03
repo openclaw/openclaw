@@ -201,6 +201,41 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     });
   });
 
+  it.each([
+    { opts: {}, expectedMode: "trusted-proxy" },
+    { opts: { tailscale: "funnel" }, expectedMode: undefined },
+    { opts: { tailscale: "funnel", gatewayAuth: "password" }, expectedMode: "password" },
+  ] as const)(
+    "preserves proxy auth unless explicitly replaced: $opts",
+    ({ opts, expectedMode }) => {
+      const runtime = createRuntime();
+      const auth = {
+        mode: "trusted-proxy" as const,
+        password: "synthetic-local-password",
+        trustedProxy: { userHeader: "x-forwarded-user", allowUsers: ["operator@example.test"] },
+      };
+      const result = applyGatewayConfig({
+        nextConfig: { gateway: { auth, trustedProxies: ["10.0.0.5"] } },
+        opts,
+        runtime,
+      });
+
+      if (expectedMode === undefined) {
+        expect(result).toBeNull();
+        expect(runtime.error).toHaveBeenCalledWith(
+          expect.stringContaining("--gateway-auth password"),
+        );
+        expect(runtime.exit).toHaveBeenCalledWith(1);
+      } else {
+        expect(result?.nextConfig.gateway?.auth).toEqual({ ...auth, mode: expectedMode });
+        expect(result?.nextConfig.gateway?.trustedProxies).toEqual(["10.0.0.5"]);
+        expect(runtime.exit).not.toHaveBeenCalled();
+      }
+      expect(auth.mode).toBe("trusted-proxy");
+      expect(randomToken).not.toHaveBeenCalled();
+    },
+  );
+
   it("uses OPENCLAW_GATEWAY_TOKEN to fill an empty config on first-run", () => {
     const result = applyGatewayConfig({ env: { OPENCLAW_GATEWAY_TOKEN: "env-token" } });
 

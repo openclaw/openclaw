@@ -10,6 +10,7 @@ describe("session-scoped method admission", () => {
   it.each([
     ["agent.identity.get", { agentId: "main" }],
     ["agents.list", {}],
+    ["canvas.document.preview", { html: "<p>Preview</p>" }],
     ["models.list", {}],
     ["models.list", { sessionKey: "agent:main:own" }],
     ["progressCard.get", { sessionKey: "agent:main:own" }],
@@ -22,6 +23,10 @@ describe("session-scoped method admission", () => {
     ["chat.startup", { sessionKey: "agent:main:own" }],
     ["chat.metadata", { sessionKey: "agent:main:own" }],
     ["sessions.describe", { key: "agent:main:own" }],
+    [
+      "sessions.files.assets",
+      { sessionKey: "agent:main:own", path: "index.html", refs: ["a.png"] },
+    ],
     ["session.members.list", { sessionKey: "agent:main:own" }],
     ["themes.get", { id: "default" }],
     ["themes.list", {}],
@@ -58,17 +63,20 @@ describe("session-scoped method admission", () => {
     },
   );
 
-  it.each(["config.get", "artifacts.list", "artifacts.get", "artifacts.download"])(
-    "retains broad read authority for %s",
-    (method) => {
-      for (const scope of ["operator.sessions.read", "operator.sessions.write"]) {
-        expect(authorizeOperatorScopesForMethod(method, [scope])).toEqual({
-          allowed: false,
-          missingScope: "operator.read",
-        });
-      }
-    },
-  );
+  it.each([
+    "config.get",
+    "canvas.document.view",
+    "artifacts.list",
+    "artifacts.get",
+    "artifacts.download",
+  ])("retains broad read authority for %s", (method) => {
+    for (const scope of ["operator.sessions.read", "operator.sessions.write"]) {
+      expect(authorizeOperatorScopesForMethod(method, [scope])).toEqual({
+        allowed: false,
+        missingScope: "operator.read",
+      });
+    }
+  });
 
   it.each([
     ["chat.send", { sessionKey: "agent:main:own", message: "hello" }],

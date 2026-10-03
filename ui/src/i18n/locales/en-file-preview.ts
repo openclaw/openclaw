@@ -11,6 +11,8 @@ const catalog = {
       searchInFile: "Search in file",
       showInFiles: "Show in Files",
       unavailable: "Unable to open",
+      outsideSessionBoundary: "This file is outside {session}'s workspace, and you can't open it.",
+      assetsUnavailable: "Some assets couldn't be loaded ({count})",
       previousMatch: "Previous match",
       nextMatch: "Next match",
       overwrite: "Overwrite",

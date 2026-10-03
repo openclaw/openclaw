@@ -217,6 +217,7 @@ export function renderGroupedMessage(
     githubRepo?: MarkdownRenderOptions["githubRepo"];
     githubRepositories?: MarkdownRenderOptions["githubRepositories"];
     onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+    fileLinkSessionKey?: string;
     avatar?: TemplateResult | typeof nothing;
     entryId?: string;
     /** Freshly submitted user turn: play the one-shot composer entry animation. */
@@ -622,6 +623,7 @@ export function renderGroupedMessage(
       class="${bubbleClasses}"
       ${opts.entryRef ? ref(opts.entryRef) : nothing}
       data-message-id=${messageKey}
+      data-file-session-key=${opts.fileLinkSessionKey ?? nothing}
       data-entry-id=${opts.entryId || nothing}
       data-message-text=${actionText || nothing}
       .messageActions=${opts.messageActions}

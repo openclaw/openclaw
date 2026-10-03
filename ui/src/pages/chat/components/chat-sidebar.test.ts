@@ -236,25 +236,30 @@ describe("markdown sidebar", () => {
     }
   });
 
-  it("opens workspace files from markdown preview clicks", async () => {
-    const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
-    const onOpenWorkspaceFile = vi.fn();
-    panel.content = {
-      kind: "markdown",
-      content: "See `ui/src/pages/chat/chat-view.ts:362`",
-    };
-    panel.onOpenWorkspaceFile = onOpenWorkspaceFile;
-    document.body.append(panel);
-    await panel.updateComplete;
+  it.each([undefined, "agent:research:report"])(
+    "opens workspace files from markdown previews owned by %s",
+    async (sessionKey) => {
+      const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
+      const onOpenWorkspaceFile = vi.fn();
+      panel.content = {
+        kind: "markdown",
+        content: "See `ui/src/pages/chat/chat-view.ts:362`",
+        fileLinkSessionKey: sessionKey,
+      };
+      panel.onOpenWorkspaceFile = onOpenWorkspaceFile;
+      document.body.append(panel);
+      await panel.updateComplete;
 
-    panel.querySelector<HTMLAnchorElement>("a.markdown-file-link")?.click();
+      panel.querySelector<HTMLAnchorElement>("a.markdown-file-link")?.click();
 
-    expect(onOpenWorkspaceFile).toHaveBeenCalledWith({
-      path: "ui/src/pages/chat/chat-view.ts",
-      line: 362,
-    });
-    panel.remove();
-  });
+      expect(onOpenWorkspaceFile).toHaveBeenCalledWith({
+        path: "ui/src/pages/chat/chat-view.ts",
+        line: 362,
+        ...(sessionKey ? { sessionKey } : {}),
+      });
+      panel.remove();
+    },
+  );
 
   it.each([
     ["a Hebrew heading behind Markdown punctuation as rtl", "## כותרת ראשית", "rtl"],

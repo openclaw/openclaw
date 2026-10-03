@@ -162,7 +162,7 @@ describe("chat Swarm progress", () => {
     {
       name: "key-shaped names",
       fields: { label: childSessionKey, displayName: childSessionKey },
-      expected: "Subagent:",
+      expected: "Subagent",
     },
   ])("names a single child from $name without exposing identifiers", ({ fields, expected }) => {
     const container = renderProgress([
@@ -216,7 +216,7 @@ describe("chat Swarm progress", () => {
     try {
       hydrator.update(params);
       const group = container.querySelector("[data-swarm-group]");
-      expect(group?.querySelector("strong")?.textContent).toBe("Subagent:");
+      expect(group?.querySelector("strong")?.textContent).toBe("Subagent");
       await vi.runAllTimersAsync();
       expect(group?.querySelector("strong")?.textContent).toBe("Review CI");
       serverRows = [

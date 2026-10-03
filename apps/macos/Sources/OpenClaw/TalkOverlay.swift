@@ -87,7 +87,7 @@ final class TalkOverlayController {
             target: target)
         { window in
             window.setFrame(target, display: true)
-            window.orderFrontRegardless()
+            AppActivation.shared.orderFrontRegardless(window: window)
         }
     }
 

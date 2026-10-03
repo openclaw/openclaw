@@ -64,6 +64,8 @@ type ReasoningStreamPayload = Pick<
 };
 
 export type RunEmbeddedAgentParams = {
+  /** Host-minted parent audience inherited by a trusted internal child run. */
+  memoryAudience?: import("../../../plugins/memory-provider-types.js").MemoryAudience;
   /** Detached runs may read session identity but never write its durable transcript or metadata. */
   sessionPersistence?: "durable" | "detached";
   /** Storage-neutral transcript/session target. Defaults to sessionId/sessionKey/agentId. */

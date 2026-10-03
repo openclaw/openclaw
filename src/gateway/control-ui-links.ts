@@ -63,8 +63,10 @@ export async function resolveAdvertisedControlUiLinks(
 
 /** Resolve Control UI URLs for co-located readiness probes and health checks. */
 export function resolveLocalControlUiProbeLinks(params: ControlUiLinkParams): ControlUiLinks {
+  // Specific IPv4 binds also require loopback (resolveGatewayRequiredListenHosts).
+  // Local passwords in trusted-proxy mode are accepted only on that listener.
   return resolveControlUiLinks({
     ...params,
-    bind: params.bind === "lan" ? "loopback" : params.bind,
+    bind: "loopback",
   });
 }

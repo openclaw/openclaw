@@ -114,6 +114,9 @@ export async function runRecallSubagent(params: {
   searchQuery: string;
   modelRef: { provider: string; model: string } | undefined;
   conversationRecall?: ConversationRecallContext;
+  memoryAudience?: Parameters<
+    OpenClawPluginApi["runtime"]["agent"]["runEmbeddedAgent"]
+  >[0]["memoryAudience"];
   storePath: string;
   fastMode?: ActiveMemoryFastMode;
   abortSignal?: AbortSignal;
@@ -274,6 +277,7 @@ export async function runRecallSubagent(params: {
         runId: subagentSessionId,
         trigger: "manual",
         conversationRecall: params.conversationRecall,
+        memoryAudience: params.memoryAudience,
         toolsAllow: [...params.config.toolsAllow],
         disableMessageTool: true,
         allowGatewaySubagentBinding: true,

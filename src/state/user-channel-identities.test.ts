@@ -412,6 +412,7 @@ it("reads current roles and only canonical login identities, including the curre
     profileId: profile.id,
     role: "admin",
     emails: ["ada@example.test", "old-login@github"],
+    githubLogin: "new-login",
     loginIdentities: ["ada@example.test", "ada@passkey", "new-login@github"],
   });
   setUserProfileRole(profile.id, "member", options);

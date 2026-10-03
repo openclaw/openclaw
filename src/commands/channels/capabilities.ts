@@ -10,11 +10,11 @@ import {
   resolveMessageActionDiscoveryForPlugin,
 } from "../../channels/plugins/message-action-discovery.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type {
   ChannelCapabilities,
   ChannelCapabilitiesDiagnostics,
   ChannelCapabilitiesDisplayLine,
-  ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import { formatCliCommand } from "../../cli/command-format.js";

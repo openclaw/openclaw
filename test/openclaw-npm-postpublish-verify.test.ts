@@ -567,6 +567,17 @@ describe("collectInstalledContextEngineRuntimeErrors", () => {
       `installed package root dist contains more than ${INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT} JavaScript files; refusing to scan unbounded package contents.`,
     ]);
   });
+
+  it("keeps split worker chunks within their own bounded scan", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    writeInstalledFile(packageRoot, "dist/root.js");
+    for (let index = 0; index < INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT; index += 1) {
+      writeInstalledFile(packageRoot, `dist/worker/worker-chunk-${index}.mjs`);
+    }
+
+    expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toStrictEqual([]);
+  });
 });
 
 describe("resolveInstalledBinaryCommandInvocation", () => {

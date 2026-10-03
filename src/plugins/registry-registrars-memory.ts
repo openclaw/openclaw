@@ -1,3 +1,4 @@
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import { hasKind } from "./slots.js";
@@ -33,6 +34,8 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
     const dropsSlotOwnerFacts =
       !memorySlotSelected &&
       (capability.runtime !== undefined ||
+        capability.providerRuntime !== undefined ||
+        capability.recallToolNames !== undefined ||
         capability.deterministicRecallToolName !== undefined ||
         capability.supportsPrivateTranscriptRecall !== undefined);
     if (dropsSlotOwnerFacts) {
@@ -43,10 +46,16 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
     }
     const {
       runtime: _droppedRuntime,
+      providerRuntime: _droppedProviderRuntime,
+      recallToolNames: _droppedRecallToolNames,
       deterministicRecallToolName: _droppedRecallToolName,
       supportsPrivateTranscriptRecall: _droppedPrivateRecall,
       ...consolidationCapability
     } = capability;
+    if (memorySlotSelected && capability.runtime) {
+      // oxlint-disable-next-line typescript/unbound-method -- Record factory identity; executable views bind the original receiver.
+      getPluginInstance(record)?.admitFactory(capability.runtime.getMemorySearchManager);
+    }
     registry.memoryCapabilities.push({
       pluginId: record.id,
       capability: memorySlotSelected ? capability : consolidationCapability,

@@ -15,6 +15,7 @@ import type { BrowserTabSelection } from "../../../components/browser/browser-ta
 import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
+import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
@@ -185,7 +186,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   typingActors?: readonly ChatTypingActorView[];
   typingOverflow?: ChatTypingOverflow;
   onOpenSidebar?: (content: SidebarContent) => void;
-  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+  onOpenWorkspaceFile?: (target: MarkdownFileLinkTarget) => void;
   onOpenSessionLink?: (target: SessionLinkTarget) => void;
   onNavigate?: (routeId: "cron", options: { search: string }) => void;
   onRequestOpenImage?: () => number;

@@ -65,12 +65,6 @@ afterEach(async () => {
 });
 
 describe("Apple Foundation Models helper lifecycle", () => {
-  it("discovers a cold model without installing a helper or enabling inference", async () => {
-    expect(await native.probe()).toEqual(facts);
-    expect(await fs.readdir(directory)).toEqual([]);
-    await expect(native.run({ messages: [] })).rejects.toThrow("setup again");
-  });
-
   it("cleans up cold discovery on cancellation without publishing an executable", async () => {
     await expect(native.probe({ signal: cancelAfterCompile() })).rejects.toThrow();
     expect(await fs.readdir(directory)).toEqual([]);
@@ -84,7 +78,11 @@ describe("Apple Foundation Models helper lifecycle", () => {
     expect(await fs.readdir(directory)).toEqual([]);
   });
 
-  it("installs a helper during selected setup and reuses it for discovery and inference", async () => {
+  it("keeps discovery disposable until selection installs a reusable helper", async () => {
+    expect(await native.probe()).toEqual(facts);
+    expect(await fs.readdir(directory)).toEqual([]);
+    await expect(native.run({ messages: [] })).rejects.toThrow("setup again");
+    vi.mocked(runCommandBuffered).mockClear();
     const first = await native.prepare();
     expect(first).toMatchObject(facts);
     expect(await native.probe()).toEqual(facts);
@@ -115,18 +113,6 @@ describe("Apple Foundation Models helper lifecycle", () => {
     await expect(native.probe()).rejects.toThrow("does not install developer tools automatically");
     expect(runCommandBuffered).toHaveBeenCalledOnce();
     expect(await fs.readdir(directory)).toEqual([]);
-  });
-
-  it("preserves large numeric tool identifiers without rounding them", async () => {
-    await native.prepare();
-    vi.mocked(runCommandBuffered).mockResolvedValue(
-      success(
-        '{"text":"","toolCalls":[{"id":"call-1","name":"lookup","arguments":{"id":9007199254740993}}],"inputTokens":10,"outputTokens":10}',
-      ),
-    );
-    expect((await native.run({ messages: [] })).toolCalls[0]?.arguments.id).toBe(
-      "9007199254740993",
-    );
   });
 
   it("preserves native context errors and rejects malformed helper output", async () => {

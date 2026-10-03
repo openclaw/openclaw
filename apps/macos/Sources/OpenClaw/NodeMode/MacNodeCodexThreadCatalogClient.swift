@@ -1,3 +1,4 @@
+import ConcurrencyExtras
 import Darwin
 import Foundation
 import Subprocess
@@ -38,19 +39,6 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
     struct Response: Sendable {
         let data: Data
         let sourceHomeId: String
-    }
-
-    private final class CancellationState: @unchecked Sendable {
-        private let lock = NSLock()
-        private var cancelled = false
-
-        func cancel() {
-            self.lock.withLock { self.cancelled = true }
-        }
-
-        func isCancelled() -> Bool {
-            self.lock.withLock { self.cancelled }
-        }
     }
 
     private final class PendingRequest: @unchecked Sendable {
@@ -156,11 +144,11 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         try Task.checkCancellation()
         let requestParamsData = try JSONSerialization.data(withJSONObject: requestParams)
         let token = UUID()
-        let cancellationState = CancellationState()
+        let cancellationState = LockIsolated(false)
         let result: Response = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 self.queue.async {
-                    guard !cancellationState.isCancelled() else {
+                    guard !cancellationState.value else {
                         continuation.resume(throwing: CancellationError())
                         return
                     }
@@ -190,7 +178,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
                 }
             }
         } onCancel: {
-            cancellationState.cancel()
+            cancellationState.setValue(true)
             self.queue.async {
                 self.failRequest(token: token, error: CancellationError())
             }

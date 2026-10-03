@@ -660,7 +660,12 @@ const AgentToolsSchema = z
     /** Exec tool defaults for this agent. */
     exec: ToolExecSchema,
     /** Complete per-agent GitHub CLI identity and Git author override. */
-    github: GitHubToolIdentitySchema,
+    github: GitHubToolIdentitySchema.unwrap()
+      .extend({
+        /** Explicitly expose this agent's managed identity inside its own sandbox (default: false). */
+        allowInSandbox: z.boolean().optional(),
+      })
+      .optional(),
     /** Filesystem tool path guards. */
     fs: ToolFsSchema,
     /** Runtime loop detection for repetitive/ stuck tool-call patterns. */

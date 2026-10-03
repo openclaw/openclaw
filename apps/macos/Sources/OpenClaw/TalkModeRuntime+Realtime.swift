@@ -353,13 +353,8 @@ extension TalkModeRuntime {
               realtimeRelayGeneration == relayGeneration
         else { throw CancellationError() }
         let activeSessionKey = await self.dependencies.selectedSession()
-        let sessionKey: String = if let activeSessionKey {
-            activeSessionKey
-        } else {
-            bootstrap.sessionKey
-        }
         let options = RealtimeTalkRelaySession.Options(
-            sessionKey: sessionKey,
+            sessionKey: activeSessionKey ?? bootstrap.sessionKey,
             provider: realtimeProvider,
             model: realtimeModelId,
             voice: realtimeSpeakerVoice)
@@ -564,11 +559,7 @@ extension TalkModeRuntime {
     }
 
     func handleRealtimeSpeakingChanged(_ speaking: Bool, relayGeneration: UInt64) async {
-        guard let session = realtimeSession,
-              ownsRealtimeRelay(relayGeneration, session),
-              isEnabled,
-              !self.isPaused
-        else { return }
+        guard let session = self.activeRealtimeRelay(relayGeneration) else { return }
         let phase: TalkModePhase = speaking ? .speaking : .listening
         self.phase = phase
         _ = await self.projectRealtimeRelay(relayGeneration, session) {
@@ -577,22 +568,14 @@ extension TalkModeRuntime {
     }
 
     func handleRealtimeInputLevel(_ level: Double, relayGeneration: UInt64) async {
-        guard let session = realtimeSession,
-              ownsRealtimeRelay(relayGeneration, session),
-              isEnabled,
-              !self.isPaused
-        else { return }
+        guard let session = self.activeRealtimeRelay(relayGeneration) else { return }
         _ = await self.projectRealtimeRelay(relayGeneration, session) {
             self.controller()?.updateLevel(level)
         }
     }
 
     func handleRealtimeOutputLevel(_ level: Double?, relayGeneration: UInt64) async {
-        guard let session = realtimeSession,
-              ownsRealtimeRelay(relayGeneration, session),
-              isEnabled,
-              !self.isPaused
-        else { return }
+        guard let session = self.activeRealtimeRelay(relayGeneration) else { return }
         _ = await self.projectRealtimeRelay(relayGeneration, session) {
             self.controller()?.updateSpeakingLevel(level)
         }
@@ -602,11 +585,7 @@ extension TalkModeRuntime {
         _ transcript: RealtimeTalkTranscript,
         relayGeneration: UInt64) async
     {
-        guard let session = realtimeSession,
-              ownsRealtimeRelay(relayGeneration, session),
-              isEnabled,
-              !self.isPaused
-        else { return }
+        guard let session = self.activeRealtimeRelay(relayGeneration) else { return }
         let text = transcript.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         guard transcript.role == "user" else { return }
@@ -621,6 +600,13 @@ extension TalkModeRuntime {
                 self.controller()?.updatePartialTranscript(text)
             }
         }
+    }
+
+    private func activeRealtimeRelay(_ generation: UInt64) -> RealtimeTalkRelaySession? {
+        guard let session = realtimeSession,
+              self.ownsRealtimeRelay(generation, session), isEnabled, !isPaused
+        else { return nil }
+        return session
     }
 
     func ownsRealtimeRelay(_ generation: UInt64, _ session: RealtimeTalkRelaySession?) -> Bool {
@@ -647,8 +633,7 @@ extension TalkModeRuntime {
 
     func cancelScheduledRealtimeRecovery() {
         realtimeRestartGeneration &+= 1
-        realtimeRestartTask?.cancel()
-        realtimeRestartTask = nil
+        SimpleTaskSupport.stop(task: &self.realtimeRestartTask)
     }
 
     private func scheduleRealtimeRecovery(

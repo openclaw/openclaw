@@ -39,7 +39,7 @@ function placementStoreDefaults(
     retireSessionPlacement: vi.fn(),
     pruneOrphanedWorkspaceReconciliations: async () => [],
     listWorkspaceReconciliationOwners: async () => [],
-    listPendingWorkspaceResults: () => [],
+    listPendingWorkspaceResultsAsync: () => [],
   };
 }
 

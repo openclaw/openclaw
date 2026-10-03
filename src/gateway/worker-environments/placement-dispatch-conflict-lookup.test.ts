@@ -62,7 +62,7 @@ describe("worker placement dispatch conflict lookup", () => {
     });
 
     expect(harness.reportWorkspaceResultConflict).not.toHaveBeenCalled();
-    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
     expect(workerPlacementWarn).toHaveBeenCalledExactlyOnceWith(
       `Cloud workspace conflict state unknown sessionId=${REQUEST.sessionId} reason=malformed-report; preserving prior conflict state`,
@@ -90,7 +90,7 @@ describe("worker placement dispatch conflict lookup", () => {
           ownerEpoch: active.activeOwnerEpoch,
         },
       });
-      placementStore.markWorkspaceResultPending(claim);
+      await placementStore.markWorkspaceResultPending(claim);
 
       const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
       const restartedHarness = createTestHarness(
@@ -105,7 +105,7 @@ describe("worker placement dispatch conflict lookup", () => {
         turnClaim: null,
         workspaceBaseManifestRef: restartedHarness.reconciledManifestRef,
       });
-      expect(restartedStore.listPendingWorkspaceResults()).toEqual([]);
+      expect(await restartedStore.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(restartedHarness.environments.destroy).toHaveBeenCalledOnce();
       expect(restartedHarness.log).not.toContain("workspace:resume");
       expect(restartedHarness.reportWorkspaceResultConflict).not.toHaveBeenCalled();

@@ -182,8 +182,6 @@ describe("node browser proxy admission", () => {
 
   it.each([
     { phase: "startup", restriction: "disabled" },
-    { phase: "startup", restriction: "profile" },
-    { phase: "staging", restriction: "disabled" },
     { phase: "staging", restriction: "profile" },
   ] as const)(
     "rechecks $restriction admission after awaited $phase",

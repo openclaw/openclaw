@@ -102,7 +102,8 @@ describe("prepared harness source delivery", () => {
 
   it.each([
     {
-      name: "delivers one streamed answer when preparation changes tool ownership to automatic",
+      name: "delivers one streamed answer when preparation changes legacy tool ownership to automatic",
+      legacyPreliminary: true,
       candidatePath: "cli-failure-embedded" as const,
       preliminaryVisibleReplies: "message_tool" as const,
       preparedVisibleReplies: "automatic" as const,
@@ -133,7 +134,8 @@ describe("prepared harness source delivery", () => {
       genuineTtsDelivery: true,
     },
     {
-      name: "rejects a native harness attempt to mint TTS source delivery",
+      name: "rejects a native harness attempt to mint TTS source delivery with legacy defaults",
+      legacyPrepared: true,
       candidatePath: "embedded" as const,
       preliminaryVisibleReplies: "automatic" as const,
       preparedVisibleReplies: "message_tool" as const,
@@ -289,7 +291,10 @@ describe("prepared harness source delivery", () => {
       registerAgentHarness({
         id: "preliminary-owner",
         label: "Preliminary owner",
-        deliveryDefaults: { visibleReplies: testCase.preliminaryVisibleReplies },
+        deliveryDefaults:
+          "legacyPreliminary" in testCase
+            ? { sourceVisibleReplies: testCase.preliminaryVisibleReplies }
+            : { visibleReplies: testCase.preliminaryVisibleReplies },
         supports: ({ modelProvider }) =>
           testCase.preparedVisibleReplies === "automatic" && modelProvider?.preparedAuth
             ? { supported: false, reason: "raw route only" }
@@ -302,7 +307,10 @@ describe("prepared harness source delivery", () => {
         {
           id: "codex",
           label: "Prepared tool owner",
-          deliveryDefaults: { visibleReplies: "message_tool" },
+          deliveryDefaults:
+            "legacyPrepared" in testCase
+              ? { sourceVisibleReplies: "message_tool" }
+              : { visibleReplies: "message_tool" },
           supports: ({ provider, modelProvider }) =>
             provider === "openai" && modelProvider?.preparedAuth
               ? { supported: true, priority: 200 }

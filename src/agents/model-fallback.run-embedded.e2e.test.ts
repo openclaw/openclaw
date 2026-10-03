@@ -361,7 +361,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
 
       await expect(run).rejects.toMatchObject({
         name: "FailoverError",
-        message: expect.stringContaining("API rate limit reached"),
+        message: "⚠️ The AI service needs a short break. Please try again in a few minutes.",
         reason: "rate_limit",
         provider: "openai",
         model: "mock-1",

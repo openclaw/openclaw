@@ -173,8 +173,8 @@ enum CommandResolver {
         guard FileManager().fileExists(atPath: base.path) else { return [] }
         guard let entries = try? FileManager().contentsOfDirectory(atPath: base.path) else { return [] }
 
-        let sorted = entries.compactMap { entry -> (name: String, version: RuntimeVersion)? in
-            guard let version = RuntimeVersion.from(string: entry),
+        let sorted = entries.compactMap { entry -> (name: String, version: Semver)? in
+            guard let version = RuntimeLocator.parseVersion(entry),
                   RuntimeLocator.isSupportedNodeVersion(version)
             else { return nil }
             return (entry, version)

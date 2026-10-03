@@ -92,44 +92,31 @@ export const pluginsControlUiHandlers: GatewayRequestHandlers = {
     "plugins.controlUi.list",
     validatePluginsControlUiListParams,
     async ({ respond }) => {
-      try {
-        const isCurrent = captureCatalogAuthority();
-        const catalog = await listControlUiPluginCatalog();
-        if (!isCurrent()) {
-          throw new Error("plugin registry was replaced");
-        }
-        respond(true, catalog);
-      } catch {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "Control UI plugin catalog is unavailable"),
-        );
+      const isCurrent = captureCatalogAuthority();
+      const catalog = await listControlUiPluginCatalog();
+      if (!isCurrent()) {
+        throw new Error("plugin registry was replaced");
       }
+      respond(true, catalog);
     },
+    () => errorShape(ErrorCodes.UNAVAILABLE, "Control UI plugin catalog is unavailable"),
   ),
   "plugins.controlUi.reload": defineValidatedGatewayHandler(
     "plugins.controlUi.reload",
     validatePluginsControlUiReloadParams,
     async ({ params, respond, context }) => {
-      try {
-        const isCurrent = captureCatalogAuthority();
-        const catalog = await reloadControlUiPluginCatalog(params.pluginId);
-        if (!isCurrent()) {
-          throw new Error("plugin registry was replaced");
-        }
-        context.broadcast("plugins.controlUi.changed", { revision: catalog.revision });
-        respond(true, catalog);
-      } catch {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "Control UI reload failed. Confirm the plugin is active, build its browser assets, and retry.",
-          ),
-        );
+      const isCurrent = captureCatalogAuthority();
+      const catalog = await reloadControlUiPluginCatalog(params.pluginId);
+      if (!isCurrent()) {
+        throw new Error("plugin registry was replaced");
       }
+      context.broadcast("plugins.controlUi.changed", { revision: catalog.revision });
+      respond(true, catalog);
     },
+    () =>
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        "Control UI reload failed. Confirm the plugin is active, build its browser assets, and retry.",
+      ),
   ),
 };

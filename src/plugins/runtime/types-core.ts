@@ -388,7 +388,7 @@ export type PluginRuntimeCore = {
      * budget timeouts for the run that will actually execute.
      */
     resolveCliBackendDispatchEligibility: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibility;
-    ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
+    ensureAgentWorkspace: typeof import("./runtime-agent-workspace.js").ensurePluginAgentWorkspace;
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveSessionStorePathCore;
       createSessionEntry: (

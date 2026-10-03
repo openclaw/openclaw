@@ -21,7 +21,7 @@ import {
   prepareExternalMessageActionTargetForResolution,
   shouldDeferExternalMessageActionTargetResolution,
 } from "./message-action-dispatch.js";
-import type { ChannelMessageActionContext, ChannelPlugin } from "./types.js";
+import type { ChannelMessageActionContext, ChannelPlugin } from "./types.public.js";
 
 const receipt = { content: [{ type: "text" as const, text: "delivered" }], details: { ok: true } };
 

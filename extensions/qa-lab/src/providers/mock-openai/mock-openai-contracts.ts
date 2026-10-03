@@ -42,6 +42,7 @@ export type QaMockProviderDispatchResult = {
   failure?: QaMockProviderFailure;
   onResponseSent?: () => void;
   previewPauseMs?: number;
+  previewPause?: () => Promise<void>;
   responsePauseMs?: number;
 };
 
@@ -464,13 +465,14 @@ export async function writeSse(
   events: Array<StreamEvent | AnthropicStreamEvent>,
   protocol: "responses" | "anthropic",
   pauseMs?: number,
+  pause?: () => Promise<void>,
 ) {
   const frames = events.map(
     (event) =>
       `${protocol === "anthropic" ? `event: ${event.type}\n` : ""}data: ${JSON.stringify(event)}\n\n`,
   );
   const completionIndex =
-    pauseMs === undefined
+    pauseMs === undefined && pause === undefined
       ? -1
       : events.findIndex((event, index) => isPreviewCompletion(event, events[index - 1]));
   const body =
@@ -485,7 +487,11 @@ export async function writeSse(
   if (completionIndex >= 0) {
     // Flush preview deltas before delaying the final text and completion frames.
     res.write(frames.slice(0, completionIndex).join(""));
-    await sleep(pauseMs);
+    if (pause) {
+      await pause();
+    } else {
+      await sleep(pauseMs);
+    }
   }
   res.end(body);
 }

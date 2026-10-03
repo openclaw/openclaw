@@ -21,15 +21,6 @@ export async function handleDiscordReactionMessagingAction(ctx: DiscordMessaging
         removeErrorMessage: "Emoji is required to remove a Discord reaction.",
       });
       await ctx.assertReadTargetAllowed({ channelId });
-      if (remove) {
-        await discordMessagingActionRuntime.removeReactionDiscord(
-          channelId,
-          messageId,
-          emoji,
-          ctx.withReactionRuntimeOptions(),
-        );
-        return jsonResult({ ok: true, removed: emoji });
-      }
       if (isEmpty) {
         const removed = await discordMessagingActionRuntime.removeOwnReactionsDiscord(
           channelId,
@@ -38,13 +29,11 @@ export async function handleDiscordReactionMessagingAction(ctx: DiscordMessaging
         );
         return jsonResult({ ok: true, removed: removed.removed });
       }
-      await discordMessagingActionRuntime.reactMessageDiscord(
-        channelId,
-        messageId,
-        emoji,
-        ctx.withReactionRuntimeOptions(),
-      );
-      return jsonResult({ ok: true, added: emoji });
+      const mutate = remove
+        ? discordMessagingActionRuntime.removeReactionDiscord
+        : discordMessagingActionRuntime.reactMessageDiscord;
+      await mutate(channelId, messageId, emoji, ctx.withReactionRuntimeOptions());
+      return jsonResult({ ok: true, [remove ? "removed" : "added"]: emoji });
     }
     case "reactions": {
       if (!ctx.isActionEnabled("reactions")) {

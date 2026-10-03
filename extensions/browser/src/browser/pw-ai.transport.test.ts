@@ -118,53 +118,48 @@ afterAll(async () => {
 });
 
 describe("pw-ai", () => {
-  it("captures an ai snapshot via Playwright for a specific target", async () => {
-    const p1 = createPage({ targetId: "T1", snapshotFull: "ONE" });
-    const p2 = createPage({ targetId: "T2", snapshotFull: "TWO" });
-    createBrowser([p1.page, p2.page]);
-
-    const res = await snapshotRoleViaPlaywright({
-      refsMode: "aria",
-      cdpUrl,
-      targetId: "T2",
-    });
-
-    expect(res.snapshot).toBe("TWO");
-    expect(p1.session.detach).toHaveBeenCalled();
-    expect(p2.session.detach).toHaveBeenCalled();
-    expect(p2.page.off).toHaveBeenCalledWith("framenavigated", expect.any(Function));
-    expect(p2.page.off).toHaveBeenCalledWith("framedetached", expect.any(Function));
-  });
-
   it.each([
     ["e1", "e2"],
     ["1", "2"],
-  ])("registers snapshot ref %s for act commands", async (buttonRef, linkRef) => {
-    const snapshot = `- button "OK" [ref=${buttonRef}]\n- link "Docs" [ref=${linkRef}]`;
-    const p1 = createPage({ targetId: "T1", snapshotFull: snapshot });
-    createBrowser([p1.page]);
+  ])(
+    "acts on the selected target's snapshot ref %s over one connection",
+    async (buttonRef, linkRef) => {
+      const snapshot = `- button "OK" [ref=${buttonRef}]\n- link "Docs" [ref=${linkRef}]`;
+      const p1 = createPage({ targetId: "T1", snapshotFull: "OTHER PAGE" });
+      const p2 = createPage({ targetId: "T2", snapshotFull: snapshot });
+      createBrowser([p1.page, p2.page]);
 
-    const res = await snapshotRoleViaPlaywright({
-      refsMode: "aria",
-      cdpUrl,
-      targetId: "T1",
-    });
+      const res = await snapshotRoleViaPlaywright({
+        refsMode: "aria",
+        cdpUrl,
+        targetId: "T2",
+      });
 
-    expect(res.snapshot).toBe(snapshot);
-    expect(res.refs).toEqual({
-      [buttonRef]: { role: "button", name: "OK" },
-      [linkRef]: { role: "link", name: "Docs" },
-    });
+      expect(res.snapshot).toBe(snapshot);
+      expect(res.refs).toEqual({
+        [buttonRef]: { role: "button", name: "OK" },
+        [linkRef]: { role: "link", name: "Docs" },
+      });
+      expect(p1.session.detach).toHaveBeenCalled();
+      expect(p2.session.detach).toHaveBeenCalled();
+      expect(p2.page.off).toHaveBeenCalledWith("framenavigated", expect.any(Function));
+      expect(p2.page.off).toHaveBeenCalledWith("framedetached", expect.any(Function));
 
-    await clickViaPlaywright({
-      cdpUrl,
-      targetId: "T1",
-      ref: buttonRef,
-    });
+      await clickViaPlaywright({
+        cdpUrl,
+        targetId: "T2",
+        ref: buttonRef,
+      });
 
-    expect(p1.locator).toHaveBeenCalledWith(`aria-ref=${buttonRef}`);
-    expect(p1.click).toHaveBeenCalledTimes(1);
-  });
+      expect(p2.locator).toHaveBeenCalledWith(`aria-ref=${buttonRef}`);
+      expect(p2.click).toHaveBeenCalledTimes(1);
+      expect(p1.click).not.toHaveBeenCalled();
+      expect(connectOverCdpMock).toHaveBeenCalledTimes(1);
+      expect(discoveryRequests).toHaveBeenCalledExactlyOnceWith("/json/version");
+      expect(socketConnections).toHaveBeenCalledTimes(1);
+      expect(socketServer.clients.size).toBe(1);
+    },
+  );
 
   it("truncates oversized snapshots", async () => {
     const firstLine = "VISIBLE";
@@ -182,26 +177,5 @@ describe("pw-ai", () => {
 
     expect(res.truncated).toBe(true);
     expect(res.snapshot).toBe(`${firstLine}\n\n${marker}`);
-  });
-
-  it("reuses the CDP connection for repeated calls", async () => {
-    const p1 = createPage({ targetId: "T1", snapshotFull: "ONE" });
-    createBrowser([p1.page]);
-
-    await snapshotRoleViaPlaywright({
-      refsMode: "aria",
-      cdpUrl,
-      targetId: "T1",
-    });
-    await clickViaPlaywright({
-      cdpUrl,
-      targetId: "T1",
-      ref: "1",
-    });
-
-    expect(connectOverCdpMock).toHaveBeenCalledTimes(1);
-    expect(discoveryRequests).toHaveBeenCalledExactlyOnceWith("/json/version");
-    expect(socketConnections).toHaveBeenCalledTimes(1);
-    expect(socketServer.clients.size).toBe(1);
   });
 });

@@ -19,6 +19,9 @@ function fixture(toolContext = context) {
     gateway: {
       isAvailable: async () => true,
       request,
+      subscribeSessionChanges() {
+        throw new Error("Unexpected session change subscription");
+      },
       async readSessionFacts() {
         throw new Error("Unexpected session facts request");
       },

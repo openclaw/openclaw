@@ -156,25 +156,11 @@ async function readPersistedStore(
     ),
     "sync-chunk",
   );
-  if (!chunks) {
-    return normalizePersistedStore({
-      version: MATRIX_SYNC_CACHE_VERSION,
-      savedSync: null,
-      clientOptions: meta.clientOptions,
-      cleanShutdown: false,
-    });
-  }
+  const syncJson = chunks?.join("") ?? "";
+  const intact =
+    chunks !== null && (chunks.length === 0 || meta.syncDigest === digestText(syncJson));
   let savedSync: ISyncData | null = null;
-  if (chunks.length > 0) {
-    const syncJson = chunks.join("");
-    if (meta.syncDigest !== digestText(syncJson)) {
-      return normalizePersistedStore({
-        version: MATRIX_SYNC_CACHE_VERSION,
-        savedSync: null,
-        clientOptions: meta.clientOptions,
-        cleanShutdown: false,
-      });
-    }
+  if (intact && chunks.length > 0) {
     try {
       savedSync = toPersistedSyncData(JSON.parse(syncJson));
     } catch {
@@ -185,7 +171,7 @@ async function readPersistedStore(
     version: MATRIX_SYNC_CACHE_VERSION,
     savedSync,
     clientOptions: meta.clientOptions,
-    cleanShutdown: meta.cleanShutdown,
+    cleanShutdown: intact && meta.cleanShutdown,
   });
 }
 
