@@ -579,9 +579,13 @@ describe("stable read-only snapshot copies", () => {
   it("bounds retries for repeated source replacement and removes every incomplete copy", async () => {
     const fixture = createFixture(Buffer.alloc(0));
     let replacements = 0;
-    afterPrivateCopy(fixture.stagingRoot, () => {
-      fs.renameSync(fixture.sourcePath, `${fixture.sourcePath}.displaced-${replacements++}`);
-      fs.writeFileSync(fixture.sourcePath, "");
+    __setFsSafeTestHooksForTest({
+      beforeRootStatObservation: (pathname) => {
+        if (pathname === fixture.sourceRoot) {
+          fs.renameSync(fixture.sourcePath, `${fixture.sourcePath}.displaced-${replacements++}`);
+          fs.writeFileSync(fixture.sourcePath, "");
+        }
+      },
     });
 
     await expect(
@@ -594,24 +598,32 @@ describe("stable read-only snapshot copies", () => {
   it.each(["cancel", "io-error"])("does not retry a snapshot after %s", async (failure) => {
     const fixture = createFixture(Buffer.alloc(0));
     const controller = new AbortController();
-    const error = new Error("inspection terminated");
+    const error = Object.assign(new Error("inspection terminated"), { code: "EIO" });
     let copies = 0;
-    afterPrivateCopy(fixture.stagingRoot, () => {
-      copies += 1;
-      if (failure === "io-error") {
-        throw error;
-      }
-      controller.abort(error);
-      fs.renameSync(fixture.sourcePath, `${fixture.sourcePath}.displaced`);
-      fs.writeFileSync(fixture.sourcePath, "");
+    __setFsSafeTestHooksForTest({
+      beforeRootStatObservation: (pathname) => {
+        if (pathname !== fixture.sourceRoot) {
+          return;
+        }
+        copies += 1;
+        if (failure === "io-error") {
+          throw error;
+        }
+        controller.abort(error);
+        fs.renameSync(fixture.sourcePath, `${fixture.sourcePath}.displaced`);
+        fs.writeFileSync(fixture.sourcePath, "");
+      },
     });
-    await expect(
-      prepareSqliteReadOnlyLocationInProcess(
-        fixture.sourcePath,
-        fixture.stagingRoot,
-        controller.signal,
-      ),
-    ).rejects.toBe(error);
+    const result = prepareSqliteReadOnlyLocationInProcess(
+      fixture.sourcePath,
+      fixture.stagingRoot,
+      controller.signal,
+    );
+    if (failure === "io-error") {
+      await expect(result).rejects.toThrow(/EIO/u);
+    } else {
+      await expect(result).rejects.toBe(error);
+    }
     expect(copies).toBe(1);
     expect(fs.readdirSync(fixture.stagingRoot)).toEqual([]);
   });

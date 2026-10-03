@@ -532,9 +532,9 @@ async function prepareReadOnlySourceInProcess(
 ): Promise<PreparedSqliteReadOnlyLocation> {
   signal?.throwIfAborted();
   const canonicalPath = fs.realpathSync.native(pathname);
+  const report = createSnapshotAttemptReporter(canonicalPath);
   for (let attempt = 0; ; attempt += 1) {
     signal?.throwIfAborted();
-    const report = createSnapshotAttemptReporter(canonicalPath, attempt, performance.now());
     let operation: "raw-copy" | "online-backup" = "online-backup";
     try {
       const journalMode = readSourceJournalMode(canonicalPath);
@@ -579,7 +579,6 @@ async function prepareReadOnlySourceInProcess(
       // An inactive family can become active while its private copy is prepared.
       // Cleanup has settled; classify the current family again so a live WAL
       // writer uses the native backup protocol on the next attempt.
-      report(operation, "changed", undefined, error);
     }
   }
 }
