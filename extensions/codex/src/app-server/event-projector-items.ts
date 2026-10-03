@@ -92,6 +92,15 @@ export function auditNativeToolTerminalStatus(item: CodexThreadItem): CodexNativ
   }
   const status = readItemString(item, "status");
   if (status === "completed") {
+    // Codex reports completion of the command invocation separately from the
+    // process outcome. A nonzero exit must remain a failure in the audit trail.
+    if (
+      item.type === "commandExecution" &&
+      typeof item.exitCode === "number" &&
+      item.exitCode !== 0
+    ) {
+      return "failed";
+    }
     return "completed";
   }
   if (status === "failed" || status === "error") {
