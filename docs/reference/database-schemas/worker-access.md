@@ -677,7 +677,12 @@ acknowledged commit installs the prepared indexes. Unknown outcomes invalidate
 the projection for a worker read and never replay the mutation.
 RPCs recheck current caller access and publish their response synchronously after
 preparation. Delayed mention notifications prepare durable facts before their
-final live check, and shutdown joins accepted Inbox work. Session involvement
+final live check. Scheduler shutdown rejects new Inbox work; accepted FIFO work
+retains its own async settlement scope and current database and access guards.
+The Gateway close prelude joins this work before worker teardown. The shared-state
+resource registry also joins the Inbox before closing shared pools. Unknown
+outcomes remain unreplayed and are resynchronized from durable state on reopen.
+Session involvement
 remains with the session owner, outside the shared-state transaction. Profile
 policy and the existing session-authority reads retain their current owners.
 Schemas, stored bytes, capacity, retention, and update behavior are unchanged.

@@ -237,6 +237,34 @@ describe("temporary human mention Inbox", () => {
     });
   });
 
+  it("settles an accepted dismissal after the Gateway scheduler closes", async () => {
+    await withInbox(async (f) => {
+      await f.post("dismiss-at-close");
+      const item = (await read(f.inbox, f.bobClient)).items[0]!;
+      const held = holdMentionRead();
+      const pending = dismiss(f.inbox, f.bobClient, [item.id]);
+      let disposal: Promise<void> | undefined;
+      try {
+        await awaitGateBeforeSettlement(
+          held.ready,
+          pending,
+          "Dismissal did not prepare its snapshot",
+        );
+        f.scheduler.beginClose();
+        disposal = f.inbox.dispose();
+        held.release();
+        await Promise.all([pending, disposal]);
+        expect(readMentionStoreSnapshot(-1, openOpenClawStateDatabase().db)?.sources).toEqual([
+          expect.objectContaining({ recipients: [[f.bob.id, null]] }),
+        ]);
+      } finally {
+        held.release();
+        await Promise.allSettled([pending, disposal]);
+        held.restore();
+      }
+    });
+  });
+
   it("joins expiry descendants after callback disposal without stopping sibling work", async () => {
     await withInbox(async (f) => {
       await f.post("expiry-join");
