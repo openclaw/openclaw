@@ -1,9 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { runBestEffortCleanup } from "./non-fatal-cleanup.js";
 import { createRetainedOperation, type RetainedOperation } from "./retained-operation.js";
-import { markWorkerRetirement, type WorkerRetirementReason } from "./worker-cpu.js";
-import type { WorkerLifecycle } from "./worker-native-lifecycle.types.js";
+import type { WorkerLifecycle } from "./worker-lifecycle.js";
+import type { WorkerTaskHost, WorkerRetirementReason } from "./worker-task-host.js";
 import {
   areWorkerNativeSectionsSettled,
   cancelWorkerNativeSections,
@@ -19,12 +18,14 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
   runInContext,
   dispatch,
   serviceDeadlines,
+  markWorkerRetirement,
 }: {
   slots: Set<Slot<Input, Output>>;
   options: WorkerTaskPoolOptions<Output>;
   runInContext: <T>(operation: () => T) => T;
   dispatch: () => void;
   serviceDeadlines: () => void;
+  markWorkerRetirement: WorkerTaskHost["workerRetiring"];
 }) {
   const artifactCleanups = new Map<Promise<void>, RetainedOperation<void>>();
   let lastIdleRetirementAt = -Infinity;
@@ -187,11 +188,17 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
           const releaseResources = slot.releaseResources;
           if (releaseResources) {
             runInContext(() => {
-              const cleanup = runBestEffortCleanup({
-                cleanup: releaseResources,
-                onError: (error) =>
-                  process.emitWarning(`Worker task resource release failed: ${String(error)}`),
-              });
+              const cleanup = (async () => {
+                try {
+                  await releaseResources();
+                } catch (error) {
+                  try {
+                    process.emitWarning(`Worker task resource release failed: ${String(error)}`);
+                  } catch {
+                    // Warning sinks cannot replace the task's original outcome.
+                  }
+                }
+              })();
               // Release execution capacity at exit; terminal close still joins disposable files.
               const settled = createRetainedOperation<void>(() => {});
               artifactCleanups.set(cleanup, settled.operation);

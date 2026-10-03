@@ -1,11 +1,11 @@
-import { getChildLogger } from "../logging/logger.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   createRetainedOperation,
   flatMapRetainedOperation,
   mapRetainedOperation,
   type RetainedOperation,
-} from "./retained-operation.js";
+} from "@openclaw/worker-runtime/lifecycle";
+import { getChildLogger } from "../logging/logger.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   retainSnapshotWork,
   SqliteSnapshotCleanupError,

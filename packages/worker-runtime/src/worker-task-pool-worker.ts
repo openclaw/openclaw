@@ -1,16 +1,6 @@
 import type { Transferable } from "node:worker_threads";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { captureDeletedAgentDatabaseFences } from "./agent-database-readers.js";
-import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
-import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "./worker-cpu.js";
-import {
-  createRetainedNativeWorker,
-  type RetainedNativeWorkerSource,
-} from "./worker-native-lifecycle.js";
-import type {
-  NativeWorkerResourceDescriptor,
-  WorkerLifecycle,
-} from "./worker-native-lifecycle.types.js";
+import type { WorkerLifecycle } from "./worker-lifecycle.js";
+import type { WorkerTaskHost } from "./worker-task-host.js";
 import { releaseWorkerNativeSectionsOnExit } from "./worker-task-native-sections.js";
 import type { Slot, Task, WorkerTaskPoolOptions } from "./worker-task-pool.types.js";
 
@@ -20,6 +10,7 @@ export function postWorkerTaskInput<Input, Output>(
   task: Task<Input, Output>,
   input: Input,
   transferList: readonly Transferable[] | undefined,
+  taskContext: unknown,
 ): void {
   const transferStartedAt = performance.now();
   worker.postMessage(
@@ -28,7 +19,7 @@ export function postWorkerTaskInput<Input, Output>(
       taskId: task.id,
       interactive: Boolean(task.options.onRequest || task.options.onRequestSync),
       nativeSections: slot.nativeSections.buffer,
-      deletedAgentDatabaseFences: captureDeletedAgentDatabaseFences(),
+      taskContext,
       sampleMemory: true,
     },
     transferList,
@@ -36,17 +27,11 @@ export function postWorkerTaskInput<Input, Output>(
   task.transferMs += performance.now() - transferStartedAt;
 }
 
-export const prepareWorkerTaskResources = createLazyRuntimeModule(
-  () => import("./temp-artifact-cleanup.js"),
-);
-
 /** Physical construction and listeners share the pool's detached creation scope. */
 export function createWorkerTaskPoolWorker<Input, Output>(params: {
   slot: Slot<Input, Output>;
   options: Pick<WorkerTaskPoolOptions<Output>, "workerUrl" | "workerOptions" | "prepareWorker">;
-  retainedTransport?: true;
-  nativeSource?: RetainedNativeWorkerSource;
-  nativeResource?: NativeWorkerResourceDescriptor;
+  host: WorkerTaskHost;
   runInContext: <T>(operation: () => T) => T;
   unavailableError: (message: string) => Error;
   onStarted: (worker: WorkerLifecycle) => void;
@@ -60,12 +45,12 @@ export function createWorkerTaskPoolWorker<Input, Output>(params: {
     slot.releaseResources = prepared?.releaseResources;
     const temporaryDirectory = prepared?.temporaryDirectory;
     if (temporaryDirectory) {
-      const cleanup = prepareWorkerTaskResources();
+      const cleanup = params.host.prepareResources();
       const releaseResources = slot.releaseResources;
       slot.releaseResources = async () => {
         try {
-          const { removeTemporaryArtifacts } = await cleanup;
-          await removeTemporaryArtifacts(temporaryDirectory, "Worker task");
+          await cleanup;
+          await params.host.releaseTemporaryDirectory(temporaryDirectory);
         } finally {
           await releaseResources?.();
         }
@@ -73,8 +58,6 @@ export function createWorkerTaskPoolWorker<Input, Output>(params: {
     }
     const workerUrl = options.workerUrl;
     const workerOptions = {
-      // Preserve native require(ESM) and its transitive import-only exports.
-      execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
       ...options.workerOptions,
       ...prepared?.options,
     };
@@ -82,17 +65,9 @@ export function createWorkerTaskPoolWorker<Input, Output>(params: {
     if (slot.retiring) {
       throw params.unavailableError("worker creation closed during preparation");
     }
-    if (params.retainedTransport) {
-      const native = createRetainedNativeWorker(
-        workerUrl,
-        workerOptions,
-        params.nativeSource,
-        params.nativeResource,
-      );
-      slot.native = native;
-      return native;
-    }
-    return createCpuTrackedWorker(workerUrl, workerOptions);
+    const created = params.host.createWorker(workerUrl, workerOptions);
+    slot.native = created.native;
+    return created.worker;
   });
   let counted = false;
   const started = () => {
@@ -116,7 +91,7 @@ export function createWorkerTaskPoolWorker<Input, Output>(params: {
   slot.worker = worker;
   worker.on("message", (message: unknown) => {
     // Native message events inherit the Worker's detached creation context.
-    if (receiveWorkerMemoryPort(worker, message)) {
+    if (params.host.receiveMessage(worker, message)) {
       return;
     }
     const task = slot.task;

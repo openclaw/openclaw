@@ -1,5 +1,5 @@
+/// <reference lib="es2024.promise" />
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createDeferredCore } from "../shared/deferred.js";
 
 export type RetainedOutcome<T> =
   | Readonly<{ status: "pending" }>
@@ -21,7 +21,7 @@ export function createRetainedOperation<T>(
   resolve: (value: T) => void;
   reject: (error: unknown) => void;
 } {
-  const completion = createDeferredCore<T>();
+  const completion = Promise.withResolvers<T>();
   let outcome: RetainedOutcome<T> = Object.freeze({ status: "pending" });
   // A synchronous consumer can observe rejection without ever awaiting result.
   if (options.observeRejection !== false) {

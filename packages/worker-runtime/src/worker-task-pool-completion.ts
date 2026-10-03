@@ -1,6 +1,5 @@
 import { channel as createDiagnosticsChannel } from "node:diagnostics_channel";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { createDeferredCore } from "../shared/deferred.js";
 import type { WorkerComputePermit } from "./worker-task-capacity.js";
 import { joinOwnedWorkerTasks } from "./worker-task-pool-owned.js";
 import type { Task, WorkerTaskPoolDispatch } from "./worker-task-pool.types.js";
@@ -62,7 +61,7 @@ export function createWorkerTaskCompletion<Input, Output>(
   if (!preparation) {
     return complete;
   }
-  const cleanup = createDeferredCore();
+  const cleanup = Promise.withResolvers<void>();
   completion.preparationCleanups.set(task, cleanup.promise);
   // A failed callback stays admission-bounded until close observes its outcome.
   void cleanup.promise.catch(() => undefined);
@@ -129,6 +128,7 @@ function completeWorkerTask<Input, Output>(
         preparationMs: task.startedAt === undefined ? 0 : (task.preparedAt ?? now) - task.startedAt,
         runMs: task.preparedAt === undefined ? 0 : now - task.preparedAt,
         transferMs: task.transferMs,
+        hostWaitMs: task.hostWaitMs,
       });
     }
     const firstCleanupError = cleanupErrors[0];

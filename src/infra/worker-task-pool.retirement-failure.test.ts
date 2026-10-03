@@ -3,9 +3,9 @@ import type { EventEmitter } from "node:events";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as nativeSections from "../../packages/worker-runtime/src/worker-task-native-sections.js";
 import { resolveSessionHistoryUnavailableMessage } from "../gateway/session-history-error.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import * as nativeSections from "./worker-task-native-sections.js";
 import { createOwnedWorkerTaskPool, WorkerTaskError, WorkerTaskPool } from "./worker-task-pool.js";
 
 type PostedTask = { taskId: number; responseId?: number; nativeSections?: SharedArrayBuffer };

@@ -2797,6 +2797,12 @@ importers:
 
   packages/workboard-contract: {}
 
+  packages/worker-runtime:
+    dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
+
   ui:
     dependencies:
       '@awesome.me/webawesome':

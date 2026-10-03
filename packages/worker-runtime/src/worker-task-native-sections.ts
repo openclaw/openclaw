@@ -1,6 +1,5 @@
 /// <reference lib="es2024.sharedmemory" />
 import { AsyncLocalStorage } from "node:async_hooks";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const CANCELLED = 1;
 const SECTION = 2;
@@ -8,10 +7,14 @@ const SECTION = 2;
 export type WorkerNativeSectionState = Int32Array<SharedArrayBuffer>;
 
 // Lazy runtime chunks share the carrier, not the authority of an individual task.
-const currentNativeSection = resolveGlobalSingleton(
-  Symbol.for("openclaw.workerTaskNativeSection"),
-  () => new AsyncLocalStorage<() => () => void>(),
-);
+const nativeSectionKey = Symbol.for("openclaw.workerTaskNativeSection");
+// SAFETY: Every runtime copy owns this symbol's same AsyncLocalStorage carrier.
+const nativeSectionStore = globalThis as typeof globalThis & {
+  [nativeSectionKey]?: AsyncLocalStorage<() => () => void>;
+};
+const currentNativeSection = (nativeSectionStore[nativeSectionKey] ??= new AsyncLocalStorage<
+  () => () => void
+>());
 
 export type WorkerTaskControl = {
   /** Await one bounded native operation before allowing the worker to be terminated. */

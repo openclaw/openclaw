@@ -13,7 +13,7 @@ type Request = {
   taskId: number;
   interactive?: boolean;
   nativeSections: SharedArrayBuffer;
-  deletedAgentDatabaseFences: [string, string][];
+  taskContext: [string, string][];
 };
 type Resource = { close: () => Promise<void>; agentId?: string; revoke: () => void };
 type QuarantineDatabase = {

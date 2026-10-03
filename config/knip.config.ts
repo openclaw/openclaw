@@ -876,6 +876,7 @@ const config = {
     "packages/acp-core": workspacePackage("acp-core"),
     "packages/terminal-core": workspacePackage("terminal-core"),
     "packages/retry": workspacePackage("retry"),
+    "packages/worker-runtime": workspacePackage("worker-runtime"),
     "packages/media-generation-core": workspacePackage("media-generation-core"),
     "packages/media-understanding-common": workspacePackage("media-understanding-common"),
     "packages/memory-host-sdk": {
