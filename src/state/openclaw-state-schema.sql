@@ -1589,7 +1589,7 @@ CREATE INDEX IF NOT EXISTS idx_delivery_queue_pending
   ON delivery_queue_entries(queue_name, status, enqueued_at, id);
 
 CREATE INDEX IF NOT EXISTS idx_delivery_queue_failed
-  ON delivery_queue_entries(queue_name, status, failed_at, id);
+  ON delivery_queue_entries(status, queue_name, failed_at, id);
 
 CREATE INDEX IF NOT EXISTS idx_delivery_queue_session
   ON delivery_queue_entries(queue_name, status, session_key, enqueued_at, id)

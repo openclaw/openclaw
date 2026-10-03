@@ -86,6 +86,20 @@ writes maintain the added indexes. Older same-version readers can ignore them,
 so binary rollback preserves both rows and indexes. See the
 [accepted index design](https://github.com/openclaw/openclaw/issues/153533).
 
+Failed-delivery health counts use the shared-state delivery queue's existing
+`idx_delivery_queue_failed` index with columns `(status, queue_name, failed_at, id)`.
+This replaces the queue-first definition at the same schema version. Queue rows
+remain canonical; the nonunique index is derived. The canonical writable schema
+owner atomically rebuilds a mismatched definition during admission, including its
+integrity checks. No per-request repair or extra index is added. The rebuild uses
+startup I/O and temporary disk proportional to retained queue history, including
+a probe index and its replacement. Subsequent writes maintain the same index count.
+Older same-version writable owners can rebuild their queue-first definition on
+downgrade or binary rollback without changing rows; strict read-only validation
+may reject the changed index until that writable owner repairs it. Counts, null
+failure timestamps, ordering, retention, permissions, and durability are unchanged;
+no schema-version bump is required.
+
 Removing the Tasks and TaskFlow runtime does not change the shared-state or agent
 schema. The existing tables, indexes, and optional execution-owner columns
 remain part of the released storage contract. Cron reads and writes its existing
