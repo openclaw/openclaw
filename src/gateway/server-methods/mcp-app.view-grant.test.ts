@@ -315,7 +315,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   server = { command: "parts-mcp", codex: { defaultToolsApprovalMode: "prompt" } };
   cfg = {
-    agents: { list: [{ id: "main" }] },
+    agents: { entries: { main: {} } },
     mcp: { apps: { enabled: true }, servers: { parts: server } },
   };
   setRuntimeConfigSnapshot(cfg);
