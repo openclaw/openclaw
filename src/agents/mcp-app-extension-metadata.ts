@@ -90,9 +90,7 @@ export function readMcpAppSettings(value: unknown): McpAppSettings {
 }
 export function readMcpAppSettingsCapability(capabilities: unknown) {
   const record = asOptionalRecord(capabilities);
-  const value =
-    asOptionalRecord(record?.extensions)?.["openai/settings"] ??
-    asOptionalRecord(record?.experimental)?.["openai/settings"];
+  const value = asOptionalRecord(record?.extensions)?.["openai/settings"];
   const parsed = settingsCapabilitySchema.safeParse(value);
   return parsed.success ? parsed.data : undefined;
 }

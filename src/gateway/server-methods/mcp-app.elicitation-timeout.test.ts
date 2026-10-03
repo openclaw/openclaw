@@ -79,7 +79,15 @@ beforeEach(async () => {
     return {};
   });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  server = new Server({ name: "demo", version: "1" }, { capabilities: { tools: {} } });
+  server = new Server(
+    { name: "demo", version: "1" },
+    {
+      capabilities: {
+        tools: {},
+        experimental: { "openai/settings": { readTool: "read", updateTool: "update" } },
+      },
+    },
+  );
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [{ name: "pick", inputSchema: { type: "object" } }],
   }));
@@ -159,6 +167,61 @@ function invoke() {
   } as unknown as GatewayRequestHandlerOptions);
   return { respond, pending };
 }
+
+describe("MCP extension contracts", () => {
+  it("does not advertise settings from the unshipped experimental placement", async () => {
+    expect((await runtime.getCatalog()).servers.demo?.settings).toBeUndefined();
+  });
+
+  it("ignores the unshipped thumbnail alias in a registered app form", async () => {
+    server.setRequestHandler(CallToolRequestSchema, async () => {
+      const result = await server.request(
+        {
+          method: "openai/elicitation/create",
+          params: {
+            message: "Choose a color",
+            requestedSchema: {
+              type: "object",
+              properties: {
+                choice: {
+                  type: "string",
+                  oneOf: [
+                    {
+                      const: "Blue",
+                      title: "Blue",
+                      "x-openai-preview": { src: "https://example.com/blue.png" },
+                    },
+                    {
+                      const: "Red",
+                      title: "Red",
+                      "x-openai-thumbnail": { src: "https://example.com/red.png" },
+                    },
+                  ],
+                },
+              },
+              required: ["choice"],
+            },
+          },
+        },
+        resultSchema,
+      );
+      return { content: [], structuredContent: result };
+    });
+    const call = invoke();
+    await questionStarted.promise;
+    const request = mocks.question.mock.calls.find(([method]) => method === "question.request")![1];
+    questionAnswer.resolve(answer);
+    await call.pending;
+    expect(request.questions[0].options).toEqual([
+      { label: "Blue", value: "Blue" },
+      { label: "Red", value: "Red", thumbnail: "https://example.com/red.png" },
+    ]);
+    expect(call.respond).toHaveBeenCalledWith(true, {
+      content: [],
+      structuredContent: { action: "accept", content: { choice: "Blue" } },
+    });
+  });
+});
 
 describe("MCP tool human-input timeouts", () => {
   it("dispatches the registered app call after approval and keeps its human question alive", async () => {

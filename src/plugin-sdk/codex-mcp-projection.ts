@@ -129,7 +129,6 @@ export async function createHarnessMcpFormResourceContext(
   };
   return await createMcpAppFormResourceContext({
     origin,
-    requestId: params.requestId,
     snapshot: params.snapshot,
     signal: params.signal,
     uploadResources: await prepareMcpAppFormUpload(origin),

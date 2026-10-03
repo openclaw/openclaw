@@ -164,9 +164,7 @@ export function readStructuredInputChoice(
     value: ownValue(entry, "const"),
     label: ownValue(entry, "title"),
     description: ownValue(entry, "description"),
-    thumbnail: options.allowRichForms
-      ? (ownValue(entry, "x-openai-thumbnail") ?? ownValue(entry, "x-openai-preview"))
-      : undefined,
+    thumbnail: options.allowRichForms ? ownValue(entry, "x-openai-thumbnail") : undefined,
   };
 }
 

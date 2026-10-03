@@ -82,10 +82,9 @@ const actionSchema = z.discriminatedUnion("action", [
     .strict(),
 ]);
 
-/** Binds capabilities to one originating MCP call; its ID is not a pending Gateway record ID. */
+/** Binds resource capabilities to the originating MCP call's live authority. */
 export async function createMcpAppFormResourceContext(params: {
   origin: McpAppFormOrigin;
-  requestId: string | number;
   snapshot: Record<string, unknown>;
   signal: AbortSignal;
   uploadResources?: McpFormResourceUpload;
