@@ -118,7 +118,7 @@ describe("Crabbox service replacement", () => {
       expect(processRuntime.isPidDefinitelyDead(result.pid!)).toBe(true);
 
       vi.useFakeTimers();
-      await provider.inspect(lease);
+      await expect(provider.inspect(lease)).rejects.toMatchObject({ name: "AbortError" });
       await vi.advanceTimersByTimeAsync(15_000);
       expect(runner.mock.calls.filter(([argv]) => argv[1] === "heartbeat")).toHaveLength(1);
     } finally {
