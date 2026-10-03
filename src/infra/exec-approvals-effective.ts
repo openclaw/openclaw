@@ -68,7 +68,7 @@ export type ExecPolicyScopeSnapshot = {
   allowedDecisions: readonly ExecApprovalDecision[];
 };
 
-function resolveRequestedField<TValue>(params: {
+function resolveRequestedField<TValue extends string>(params: {
   scopeValue?: TValue;
   globalValue?: TValue;
   fallback: TValue;

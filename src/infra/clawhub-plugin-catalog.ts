@@ -371,12 +371,15 @@ function parseManifest(
         "description",
         `plugin config field ${index}`,
       );
-      return {
+      const field: ClawHubPluginConfigField = {
         name: readRequiredClawHubStringField(entry, "name", `plugin config field ${index}`),
         required: readRequiredBoolean(entry, "required", `plugin config field ${index}`),
         sensitive: readRequiredBoolean(entry, "sensitive", `plugin config field ${index}`),
-        ...(description ? { description } : {}),
       };
+      if (description) {
+        field.description = description;
+      }
+      return field;
     }),
     mcpServers: mcpServerDetails.map(({ name }) => name),
     ...(mcpServerDetails.length ? { mcpServerDetails } : {}),
@@ -385,10 +388,13 @@ function parseManifest(
         throw new Error(`Malformed ClawHub bundled skill ${index}: expected an object.`);
       }
       const description = readClawHubStringField(entry, "description", `bundled skill ${index}`);
-      return {
+      const skill: { name: string; description?: string } = {
         name: readRequiredClawHubStringField(entry, "name", `bundled skill ${index}`),
-        ...(description ? { description } : {}),
       };
+      if (description) {
+        skill.description = description;
+      }
+      return skill;
     }),
   };
 }
