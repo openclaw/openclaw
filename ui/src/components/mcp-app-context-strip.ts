@@ -54,6 +54,14 @@ export class McpAppContextStrip extends OpenClawLightDomElement {
           if (!client || !entry) {
             return;
           }
+          if ("modelContext" in payload && payload.modelContext === null) {
+            if (!("updateId" in payload) || payload.updateId !== entry.state?.updateId) {
+              return;
+            }
+            refreshes.set(entry.viewId, (refreshes.get(entry.viewId) ?? 0) + 1);
+            publishMcpAppContext(client, { ...entry, state: null });
+            return;
+          }
           const generation = (refreshes.get(entry.viewId) ?? 0) + 1;
           refreshes.set(entry.viewId, generation);
           void client

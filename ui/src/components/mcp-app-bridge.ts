@@ -77,7 +77,7 @@ export function bindMcpAppResourceHandlers(owner: {
   isDisposed: () => boolean;
   addCleanup: (cleanup: () => void) => void;
   dispatchEvent: (event: Event) => boolean;
-  onModelContextChanged: () => void;
+  onModelContextChanged: (clearedUpdateId?: string) => void;
   onConversationInputRequested: () => void;
   subscribeEvents: (
     listener: Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0],
@@ -210,7 +210,11 @@ export function bindMcpAppResourceHandlers(owner: {
         return;
       }
       if (event.event === "mcp.app.hostContextChanged") {
-        owner.onModelContextChanged();
+        owner.onModelContextChanged(
+          value.modelContext === null && typeof value.updateId === "string"
+            ? value.updateId
+            : undefined,
+        );
       }
       if (
         event.event === "mcp.app.resourceUpdated" &&

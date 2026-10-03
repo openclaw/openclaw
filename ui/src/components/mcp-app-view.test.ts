@@ -6,6 +6,8 @@ import { i18n } from "../i18n/index.ts";
 import {
   MCP_APP_VIEW_EXPIRED_EVENT,
   MCP_APP_MESSAGE_EVENT,
+  MCP_APP_CONTEXT_EVENT,
+  type McpAppContextEventDetail,
   type McpAppMessageEventDetail,
 } from "./mcp-app-security.ts";
 
@@ -122,16 +124,18 @@ describe("mcp-app-view localization", () => {
     const gatewayEventsReady = deferred();
     const gatewayEventsStopped = deferred();
     const unsubscribe = vi.fn();
-    const request = vi.fn(async (_method: string, _params: Record<string, unknown>) => ({
-      sandboxUrl: "/mcp-app-sandbox?ticket=test",
-      sandboxPort: 8444,
-      html: "<!doctype html><button>Send</button>",
-      toolInput: {},
-      toolResult: { content: [{ type: "text", text: "ready" }] },
-      messageSupported,
-      updateModelContextSupported,
-      state: null,
-    }));
+    const request = vi.fn(
+      async (_method: string, _params: Record<string, unknown>): Promise<unknown> => ({
+        sandboxUrl: "/mcp-app-sandbox?ticket=test",
+        sandboxPort: 8444,
+        html: "<!doctype html><button>Send</button>",
+        toolInput: {},
+        toolResult: { content: [{ type: "text", text: "ready" }] },
+        messageSupported,
+        updateModelContextSupported,
+        state: null,
+      }),
+    );
     const view = document.createElement(MCP_APP_VIEW_ELEMENT_NAME) as McpAppViewElement;
     Reflect.set(view, "context", {
       gateway: {
@@ -358,6 +362,38 @@ describe("mcp-app-view localization", () => {
       viewId: expect.any(String),
       content: [{ type: "text", text: "selected item" }],
     });
+  });
+
+  it("does not republish consumed context when an earlier bridge refresh settles", async () => {
+    const { bridge, request, view, gatewayListeners, gatewayEventsReady } = await mountBridge(
+      `view-context-${crypto.randomUUID()}`,
+    );
+    await gatewayEventsReady;
+    const state = { updateId: "revision-one", content: [{ type: "text", text: "selected item" }] };
+    const refresh = deferred<{ state: typeof state }>();
+    const received: McpAppContextEventDetail[] = [];
+    view.addEventListener(MCP_APP_CONTEXT_EVENT, (event: Event) => {
+      received.push((event as CustomEvent<McpAppContextEventDetail>).detail);
+    });
+    request.mockResolvedValue({ state });
+    await bridge.updateModelContextHandler?.({ content: state.content });
+    expect(received.at(-1)?.state).toEqual(state);
+    request.mockReturnValue(refresh.promise);
+    const emit = (payload: Record<string, unknown>) => {
+      for (const listener of gatewayListeners) {
+        listener({ type: "event", event: "mcp.app.hostContextChanged", payload });
+      }
+    };
+    emit({ viewId: view.viewId });
+    emit({ viewId: view.viewId, modelContext: null, updateId: state.updateId });
+    expect.soft(received.at(-1)?.state).toBeNull();
+    refresh.resolve({ state });
+    await refresh.promise;
+    await view.updateComplete;
+    expect(received.at(-1)?.state).toBeNull();
+    expect(bridge.setHostContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({ "openai/modelContext": null }),
+    );
   });
 
   it("does not let App parameters replace the mounted session, agent, or view", async () => {

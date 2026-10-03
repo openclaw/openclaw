@@ -136,7 +136,10 @@ export function removeMcpAppModelContextItem(
   index?: number,
 ): McpAppModelContextState {
   const state = getMcpAppModelContext(runtime, view);
-  if (!state || state.updateId !== updateId) {
+  if (!state) {
+    return null;
+  }
+  if (state.updateId !== updateId) {
     throw new Error("MCP App context changed; refresh before removing it");
   }
   if (index === undefined) {

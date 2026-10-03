@@ -55,7 +55,10 @@ vi.mock("../mcp-app-standalone.js", () => ({
 }));
 
 import type { McpToolCatalog, SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
-import { getMcpAppModelContext } from "../../agents/mcp-app-model-context.js";
+import {
+  getMcpAppModelContext,
+  leaseMcpAppModelContextForTurn,
+} from "../../agents/mcp-app-model-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { McpServerConfig } from "../../config/types.mcp.js";
 
@@ -257,6 +260,51 @@ describe("MCP App gateway bridge", () => {
     expect(removed.mock.calls[0]?.[1].state.content).toEqual([content[1]]);
     const stale = await invoke("mcp.app.removeModelContext", { ...params, updateId, index: 0 });
     expect(stale.mock.calls[0]?.[0]).toBe(false);
+  });
+  it("publishes a clearing receipt when a turn consumes context and accepts late removal", async () => {
+    const params = { sessionKey: "agent:main:main", viewId: "cv_app" };
+    const activeRuntime = runtime();
+    mocks.peekSessionMcpRuntime.mockReturnValue(activeRuntime);
+    const broadcastToConnIds = vi.fn();
+    const connection = new AbortController();
+    const respond = vi.fn();
+    try {
+      await mcpAppHandlers["mcp.app.view"]!({
+        params,
+        respond,
+        client: {
+          connId: "context-client",
+          connectionSignal: connection.signal,
+          connect: { scopes: ["operator.write"] },
+        },
+        context: {
+          getMcpAppSandboxPort: () => 18790,
+          getRuntimeConfig: () => ({ mcp: { apps: { enabled: true } } }),
+          broadcastToConnIds,
+        },
+      } as never);
+      expect(respond.mock.calls[0]?.[0]).toBe(true);
+      const written = await invoke("mcp.app.updateModelContext", {
+        ...params,
+        content: [{ type: "text", text: "selected hex bolt" }],
+      });
+      const updateId = written.mock.calls[0]?.[1]._meta["openai/modelContext"].updateId;
+      broadcastToConnIds.mockClear();
+      const turn = leaseMcpAppModelContextForTurn({ runtime: activeRuntime });
+      expect(turn).toBeDefined();
+      turn!.commit();
+      expect
+        .soft(broadcastToConnIds)
+        .toHaveBeenCalledWith(
+          "mcp.app.hostContextChanged",
+          { viewId: "cv_app", modelContext: null, updateId },
+          new Set(["context-client"]),
+        );
+      const removed = await invoke("mcp.app.removeModelContext", { ...params, updateId, index: 0 });
+      expect(removed.mock.calls[0]?.slice(0, 2)).toEqual([true, { state: null }]);
+    } finally {
+      connection.abort();
+    }
   });
   beforeEach(() => {
     policyEntry.sessionId = "session-1";

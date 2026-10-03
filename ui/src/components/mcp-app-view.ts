@@ -571,8 +571,18 @@ export class McpAppView extends LitElement {
           this.addResourceCleanup(createdResources, cleanup);
         },
         dispatchEvent: (event) => this.dispatchEvent(event),
-        onModelContextChanged: () => {
-          void refreshModelContext().catch(() => undefined);
+        onModelContextChanged: (clearedUpdateId) => {
+          if (clearedUpdateId) {
+            if (modelContext && modelContext.updateId !== clearedUpdateId) {
+              return;
+            }
+            ++contextGeneration;
+            modelContext = null;
+            bridge.setHostContext(buildHostContext());
+            publishContext();
+          } else {
+            void refreshModelContext().catch(() => undefined);
+          }
         },
         onConversationInputRequested: () => {
           this.displayMode = "inline";
