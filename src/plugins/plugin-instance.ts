@@ -600,11 +600,13 @@ export class PluginInstance {
       this.quiesce();
       const terminalFailures = (this.disposalFailures = new DisposalFailures(this));
       const work = new AsyncWorkScope(terminalFailures);
-      // Shared state owners still join real cleanup, independently of code-file custody.
-      const cleanup = trackAsyncWork(() =>
-        this.runDisposalCleanup(work, terminalFailures, beforeCleanup),
+      // Physical cleanup outlives the releasing caller's invocation scope.
+      const physical = pluginInvocationContext.exit(() =>
+        this.finishDisposal(
+          trackAsyncWork(() => this.runDisposalCleanup(work, terminalFailures, beforeCleanup)),
+          terminalFailures,
+        ),
       );
-      const physical = this.finishDisposal(cleanup, terminalFailures);
       const settled = physical.then(() => {
         if (terminalFailures.size) {
           throw new AggregateError(terminalFailures, `Plugin ${this.pluginId} cleanup failed`);
@@ -648,7 +650,9 @@ export class PluginInstance {
 
   private abortDisposal(work: AsyncWorkScope): void {
     if (!this.controller.signal.aborted) {
-      work.run(() => this.controller.abort(new Error(`Plugin ${this.pluginId} is retiring`)));
+      pluginInvocationContext.exit(() =>
+        work.run(() => this.controller.abort(new Error(`Plugin ${this.pluginId} is retiring`))),
+      );
     }
   }
 

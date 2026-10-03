@@ -47,6 +47,9 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     if (!record.providerIds.includes(id)) {
       record.providerIds.push(id);
     }
+    if (normalizedProvider.normalizeToolSchemas) {
+      getPluginInstance(record)?.admitFactory(normalizedProvider.normalizeToolSchemas);
+    }
     registry.providers.push(
       createRegistration(record, {
         provider: { ...normalizedProvider, pluginRoot: record.rootDir },

@@ -88,6 +88,7 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, `context engine id reserved by core: ${normalizedId}`);
       return;
     }
+    getPluginInstance(record)?.admitFactory(factory);
     const result = registerContextEngineInRegistry(
       registry,
       normalizedId,
