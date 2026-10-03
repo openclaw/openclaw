@@ -483,10 +483,60 @@ const reviewedOperations = new Map([
     "src/agents/workspace-state-store.kernel.ts",
     [
       {
+        tier: "T2",
+        operations: [
+          "registerWorkspaceStateAliasIdentitiesInTransaction",
+          "readWorkspaceStateSnapshotFromDatabase",
+        ],
+        evidence:
+          "Worker runtime/read dispatch plus Doctor workspace-alias-rebind.ts:83,324, migration workspace-setup-store.ts:528 and relocation retirement workspace-state-store.ts:256; native identity/deletion stay T1",
+      },
+      {
         tier: "W",
         operations: ["replaceWorkspaceAttestationInDatabase"],
         evidence:
-          "workspace.replaceAttestation dispatch in openclaw-state-worker-runtime.ts:205; shared snapshot/alias helpers stay T1",
+          "workspace.replaceAttestation dispatch in openclaw-state-worker-runtime.ts:212; shared snapshot/alias helpers retain Doctor/migration exposure",
+      },
+    ],
+  ],
+  [
+    "src/agents/plugin-model-catalog.ts",
+    [
+      {
+        tier: "T2",
+        operations: [
+          "repairPersistedPluginModelCatalogs",
+          "replacePersistedPluginModelCatalogEntries",
+          "retireCommittedPluginModelCatalogMigration",
+        ],
+        evidence:
+          "Only doctor-plugin-model-catalog.ts:103,126 reaches repair/import/receipt retirement; runtime replacement dispatches at plugin-model-catalog.ts:584; ModelRegistry synchronous kernel reads stay T1",
+      },
+    ],
+  ],
+  [
+    "src/state/user-preferences.store.ts",
+    [
+      {
+        tier: "W",
+        operations: ["readUserPreferences", "writeUserPreferences"],
+        evidence:
+          "Facades submit userPreferences.read/write at user-preferences.ts:53,75; state-worker-runtime.ts:124 dispatches to user-preferences.worker.ts:52,74; other helpers retain their existing tiers",
+      },
+    ],
+  ],
+  [
+    "src/state/user-profile-identity.read.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "readUserProfileEmailBindings",
+          "readUserProfileSnapshotSync",
+          "readUserProfileAuthorityInDatabase",
+        ],
+        evidence:
+          "Only registered user-profile-writes.worker.ts:126,187 / user-profiles.worker.ts:110,111 and state-read.worker.ts:566,592,605 call these readers; projects.ts:432 native aliases and admission fallbacks stay T1",
       },
     ],
   ],

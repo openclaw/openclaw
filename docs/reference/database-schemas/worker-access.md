@@ -39,6 +39,14 @@ creation, compaction, adoption, and child-spawn producers are non-notifying;
 child-spawn cursor seeding remains T1. Placement restart clearing remains T2,
 while synchronous result compatibility readers and transition guards remain T1.
 
+Workspace alias registration and snapshot operations retain T2 for their native
+Doctor/migration and relocation-retirement callers alongside worker dispatch.
+Plugin catalog repair, legacy import, and migration-receipt retirement are also
+T2; synchronous ModelRegistry loading keeps the catalog kernel T1. Preference
+read/write operations and profile email-binding, snapshot, and authority readers
+have exact worker-only entries. Native profile alias reads, admission fallbacks,
+workspace identity resolution, and explicit deletion retain their existing tiers.
+
 Runtime cache-TTL, bootstrap, prompt-error, and provider replay markers append
 through the existing transcript writer worker. Custom-message appends use the
 same worker and adopt their committed view before notifying observers. Bootstrap
