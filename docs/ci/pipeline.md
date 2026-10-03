@@ -114,6 +114,7 @@ the job's uploaded artifacts.
 | `ios-screenshot-shard`           | Two device-family shards using the locked Ruby/Fastlane bundle: iPhone in one job, and 13-inch iPad plus Watch in the other; scenarios stay serial within each device                                                                                                                                    | Screenshot-input changes and full manual CI           |
 | `ios-screenshot-evidence`        | Hosted reducer that verifies exact artifact/family topology, digests, one successful OpenClaw-managed capture per screenshot, and run provenance before publishing the canonical release screenshot artifact; replacement attempts cannot turn failed captures into passing evidence                     | After both screenshot shards                          |
 | `android`                        | Phone and Wear unit tests, debug builds, Android lint, and Kotlin lint                                                                                                                                                                                                                                   | Android-relevant changes                              |
+| `android-screenshots`            | Phone and Wear emulator captures using the same script as Play Store releases, with scene readiness and JPEG validation; retains images and synthetic fixture diagnostics                                                                                                                                | Screenshot-input PRs and full manual CI               |
 | `openclaw/ci-gate`               | Final aggregate: requires preflight and security; rejects selected skips and every downstream failure or cancellation                                                                                                                                                                                    | Every non-draft CI run                                |
 | `openclaw-performance`           | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                                                                                                             | Scheduled and manual dispatch                         |
 | `docs-external-links`            | Separate workflow: Docs External Link Audit checks external documentation links with lychee and uploads a report; it reports findings without failing, so it never blocks a pull request                                                                                                                 | Scheduled and manual dispatch                         |
@@ -123,6 +124,21 @@ of the same run. The reducer still requires matching source and workflow SHAs,
 run ID, pinned tooling, artifact digests, and successful captures. It preserves
 each family's producer attempt and records the reducer attempt separately;
 future-attempt artifacts remain invalid.
+
+Android screenshot capture runs phone and Wear serially on `ubuntu-24.04`, using
+the shared Android toolchain action's API 36 phone and API 34 Wear images and KVM
+setup. It calls `pnpm android:screenshots`, the script also invoked by the Android
+Fastlane release lane, without signing or store credentials. Capture failures,
+cancellations, and selected skips fail `openclaw/ci-gate`. Artifacts retain JPEGs,
+source/hash manifests, UI dumps, activity starts, and emulator/app diagnostics for
+14 days, including available evidence from failed captures.
+
+Selection covers Android app and build inputs, screenshot tooling, shared assets,
+native protocol and locale generation inputs, and CI setup. Ordinary JVM tests,
+benchmark-only changes, store listing metadata, and documentation do not select capture. Unavailable
+changed-path information selects capture. Like iOS screenshots, the lane excludes hourly main,
+compatibility targets, and partial npm release scopes. It checks pipeline integrity
+and scene readiness; it does not compare pixels against a baseline.
 
 ### Test runtime selection
 
