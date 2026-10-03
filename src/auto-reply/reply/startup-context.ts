@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatDateStamp, resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -172,33 +171,28 @@ async function readStartupMemoryFile(params: {
   }
 }
 
-async function listStartupMemoryPathsByDate(params: {
+async function listStartupMemoryPaths(params: {
   workspaceDir: string;
   stamps: string[];
-}): Promise<Map<string, string[]>> {
+}): Promise<string[]> {
   const memoryDir = path.join(params.workspaceDir, "memory");
-  const uniqueStamps = uniqueStrings(params.stamps);
-  const fallback = new Map(uniqueStamps.map((stamp) => [stamp, [`${stamp}.md`]]));
-  const stampSet = new Set(uniqueStamps);
+  const stampSet = new Set(params.stamps);
 
   try {
     const entries = await fs.promises.readdir(memoryDir, { withFileTypes: true });
-    const sluggedNames = entries.flatMap((entry) => {
+    const sluggedNames = entries.filter((entry) => {
       const stamp = entry.name.slice(0, 10);
-      if (
-        !entry.isFile() ||
-        !entry.name.endsWith(".md") ||
-        !stampSet.has(stamp) ||
-        !entry.name.startsWith(`${stamp}-`)
-      ) {
-        return [];
-      }
-      return [{ stamp, name: entry.name }];
+      return (
+        entry.isFile() &&
+        entry.name.endsWith(".md") &&
+        stampSet.has(stamp) &&
+        entry.name.startsWith(`${stamp}-`)
+      );
     });
 
     const sluggedNameResults = await Promise.allSettled(
-      sluggedNames.map(async ({ stamp, name }) => ({
-        stamp,
+      sluggedNames.map(async ({ name }) => ({
+        stamp: name.slice(0, 10),
         name,
         stat: await fs.promises.stat(path.join(memoryDir, name)),
       })),
@@ -214,26 +208,23 @@ async function listStartupMemoryPathsByDate(params: {
       sluggedStatsByStamp.set(stamp, stampEntries);
     }
 
-    return new Map(
-      uniqueStamps.map((stamp) => {
-        const newestSluggedNames = (sluggedStatsByStamp.get(stamp) ?? [])
-          .toSorted((left, right) => {
-            const mtimeDiff = right.stat.mtimeMs - left.stat.mtimeMs;
-            if (mtimeDiff !== 0) {
-              return mtimeDiff;
-            }
-            return right.name.localeCompare(left.name);
-          })
-          .map((entry) => entry.name);
-        const exactName = `${stamp}.md`;
-        return [
-          stamp,
-          [exactName, ...newestSluggedNames.slice(0, STARTUP_MEMORY_MAX_SLUGGED_FILES_PER_DAY)],
-        ];
-      }),
-    );
+    return params.stamps.flatMap((stamp) => {
+      const newestSluggedNames = (sluggedStatsByStamp.get(stamp) ?? [])
+        .toSorted((left, right) => {
+          const mtimeDiff = right.stat.mtimeMs - left.stat.mtimeMs;
+          if (mtimeDiff !== 0) {
+            return mtimeDiff;
+          }
+          return right.name.localeCompare(left.name);
+        })
+        .map((entry) => entry.name);
+      return [
+        `${stamp}.md`,
+        ...newestSluggedNames.slice(0, STARTUP_MEMORY_MAX_SLUGGED_FILES_PER_DAY),
+      ].map((name) => `memory/${name}`);
+    });
   } catch {
-    return fallback;
+    return params.stamps.map((stamp) => `memory/${stamp}.md`);
   }
 }
 
@@ -250,13 +241,10 @@ export async function buildSessionStartupContextPrelude(params: {
     timezone,
     dailyMemoryDays: limits.dailyMemoryDays,
   });
-  const relativePathsByDate = await listStartupMemoryPathsByDate({
+  const dailyPaths = await listStartupMemoryPaths({
     workspaceDir: params.workspaceDir,
     stamps,
   });
-  const dailyPaths = stamps.flatMap((stamp) =>
-    (relativePathsByDate.get(stamp) ?? [`${stamp}.md`]).map((entry) => `memory/${entry}`),
-  );
   const loaded: Array<{ relativePath: string; content: string }> = [];
 
   for (const relativePath of dailyPaths) {

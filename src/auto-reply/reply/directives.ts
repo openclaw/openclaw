@@ -44,23 +44,14 @@ const matchLevelDirective = (
   const start = match.index;
   const directiveEnd = match.index + match[0].length;
   const prefixEnd = directiveEnd + skipDirectiveArgPrefix(body.slice(directiveEnd));
-  let i = prefixEnd;
-  while (i < body.length && /\s/.test(body.charAt(i))) {
-    i += 1;
-  }
-  const argStart = i;
-  while (
-    i < body.length &&
-    (options?.strict ? !/\s/.test(body.charAt(i)) : /[A-Za-z-]/.test(body.charAt(i)))
-  ) {
-    i += 1;
-  }
-  const candidate = i > argStart ? body.slice(argStart, i) : undefined;
+  const argument = (options?.strict ? /^\s*(\S+)/ : /^\s*([A-Za-z-]+)/).exec(body.slice(prefixEnd));
+  const end = prefixEnd + (argument?.[0].length ?? 0);
+  const candidate = argument?.[1];
   if (
     candidate !== undefined &&
-    (options?.strict || normalize(candidate) !== undefined || body.slice(i).trim().length === 0)
+    (options?.strict || normalize(candidate) !== undefined || body.slice(end).trim().length === 0)
   ) {
-    return { start, end: i, rawLevel: candidate };
+    return { start, end, rawLevel: candidate };
   }
   return { start, end: prefixEnd };
 };

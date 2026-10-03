@@ -34,18 +34,6 @@ const replyPayloadsDedupeRuntimeLoader = createLazyImportLoader(
   () => import("./reply-payloads-dedupe.runtime.js"),
 );
 
-async function normalizeReplyPayloadMedia(params: {
-  payload: ReplyPayload;
-  normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
-}): Promise<ReplyPayload> {
-  if (!params.normalizeMediaPaths || !resolveSendableOutboundReplyParts(params.payload).hasMedia) {
-    return params.payload;
-  }
-
-  const normalized = await params.normalizeMediaPaths(params.payload);
-  return copyReplyPayloadMetadata(params.payload, normalized);
-}
-
 async function normalizeSentMediaUrlsForDedupe(params: {
   sentMediaUrls: readonly string[];
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
@@ -232,10 +220,13 @@ export async function buildReplyPayloads(params: {
         parseMode: "always",
         extractMarkdownImages: params.extractMarkdownImages,
       });
-      const mediaNormalizedPayload = await normalizeReplyPayloadMedia({
-        payload: parsed.payload,
-        normalizeMediaPaths: params.normalizeMediaPaths,
-      });
+      const mediaNormalizedPayload =
+        params.normalizeMediaPaths && resolveSendableOutboundReplyParts(parsed.payload).hasMedia
+          ? copyReplyPayloadMetadata(
+              parsed.payload,
+              await params.normalizeMediaPaths(parsed.payload),
+            )
+          : parsed.payload;
       if (parsed.isSilent) {
         mediaNormalizedPayload.text = undefined;
       }
