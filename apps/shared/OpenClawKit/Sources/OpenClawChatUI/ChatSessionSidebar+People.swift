@@ -92,7 +92,7 @@ private struct ChatSidebarPeopleFacepile: View {
     }
 }
 
-private struct ChatSidebarPersonAvatar: View {
+struct ChatSidebarPersonAvatar: View {
     @Environment(\.openClawSidebarPeopleActions) private var actions
     @State private var image: NSImage?
     let person: OpenClawChatSidebarPeople.Person
