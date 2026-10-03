@@ -490,26 +490,18 @@ export function replaceSqliteTranscriptSuffixInTransaction(
     database,
     resolved.sessionId,
     insertEvents.map((event, index) => {
-      const seq = plan.startSeq + index;
       const createdAt = insertCreatedAt[index] ?? Date.now();
       const eventId = readTranscriptEventId(event);
       const storedKey = eventId ? suffixIdentityKeys.get(eventId) : undefined;
       const nextKey = isRecord(event) ? readMessageIdempotencyKey(event.message) : null;
       const storedEventSeq = stagedData?.sources.get(index);
-      const row: {
-        event: TranscriptEvent;
-        seq: number;
-        createdAt: number;
-        storedEventSeq?: number;
-        messageIdempotencyKey?: string;
-      } = { event, seq, createdAt };
-      if (storedEventSeq !== undefined) {
-        row.storedEventSeq = storedEventSeq;
-      }
-      if (storedKey && storedKey === nextKey) {
-        row.messageIdempotencyKey = storedKey;
-      }
-      return row;
+      return {
+        event,
+        seq: plan.startSeq + index,
+        createdAt,
+        ...(storedEventSeq !== undefined ? { storedEventSeq } : {}),
+        ...(storedKey && storedKey === nextKey ? { messageIdempotencyKey: storedKey } : {}),
+      };
     }),
     retainedIdempotencyKeys,
   );

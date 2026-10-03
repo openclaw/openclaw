@@ -321,7 +321,7 @@ async function migrateLegacyMainSessionKeysInternal(
   params: Parameters<typeof migrateLegacyMainSessionKeys>[0],
 ): Promise<LegacyMainSessionMigrationResult> {
   const env = params.env ?? process.env;
-  const legacyAgentId = normalizeAgentId(params.legacyAgentId ?? "main");
+  const legacyAgentId = "main";
   const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
   const arming = resolveArmingDecision(params.cfg, legacyAgentId);
   const base = {
@@ -626,7 +626,6 @@ export async function migrateLegacyMainSessionKeys(params: {
   env?: NodeJS.ProcessEnv;
   /** Bypass the startup ledger shortcut and verify the physical legacy stores. */
   forceScan?: boolean;
-  legacyAgentId?: string;
   mode: LegacyMainSessionMigrationMode;
   now?: () => number;
 }): Promise<LegacyMainSessionMigrationResult> {
@@ -638,7 +637,7 @@ export async function migrateLegacyMainSessionKeys(params: {
     if (params.mode === "doctor-fix") {
       throw error;
     }
-    const legacyAgentId = normalizeAgentId(params.legacyAgentId ?? "main");
+    const legacyAgentId = "main";
     const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
     const arming = resolveArmingDecision(params.cfg, legacyAgentId);
     return {

@@ -4,17 +4,10 @@ import readline from "node:readline";
 import { hasErrnoCode } from "../../infra/errors.js";
 import { readFileRangeAsync } from "./file-range.js";
 
-const DEFAULT_REVERSE_CHUNK_BYTES = 64 * 1024;
-const MAX_REVERSE_CHUNK_BYTES = 1024 * 1024;
-const MIN_REVERSE_CHUNK_BYTES = 1024;
+const REVERSE_CHUNK_BYTES = 64 * 1024;
 
 type TranscriptStreamOptions = {
   signal?: AbortSignal;
-};
-
-type TranscriptReverseStreamOptions = TranscriptStreamOptions & {
-  /** Bytes read per reverse scan chunk. Clamped to [1KiB, 1MiB]. */
-  chunkBytes?: number;
 };
 
 /**
@@ -72,13 +65,8 @@ export async function* streamSessionTranscriptLines(
  */
 export async function* streamSessionTranscriptLinesReverse(
   filePath: string,
-  options: TranscriptReverseStreamOptions = {},
+  options: TranscriptStreamOptions = {},
 ): AsyncGenerator<string> {
-  const requestedChunkBytes = Number.isFinite(options.chunkBytes)
-    ? Math.max(MIN_REVERSE_CHUNK_BYTES, Math.floor(options.chunkBytes as number))
-    : DEFAULT_REVERSE_CHUNK_BYTES;
-  const chunkBytes = Math.min(requestedChunkBytes, MAX_REVERSE_CHUNK_BYTES);
-
   let fileHandle: Awaited<ReturnType<typeof fs.promises.open>>;
   try {
     fileHandle = await fs.promises.open(filePath, "r");
@@ -100,7 +88,7 @@ export async function* streamSessionTranscriptLinesReverse(
       if (options.signal?.aborted) {
         return;
       }
-      const readLength = Math.min(position, chunkBytes);
+      const readLength = Math.min(position, REVERSE_CHUNK_BYTES);
       position -= readLength;
       const chunk = await readFileRangeAsync(fileHandle, position, readLength);
       const combined = carry.length > 0 ? Buffer.concat([chunk, carry]) : chunk;

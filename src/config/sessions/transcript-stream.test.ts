@@ -113,28 +113,21 @@ describe("streamSessionTranscriptLinesReverse", () => {
   });
 
   it("preserves complete lines across chunk boundaries", async () => {
-    const longLine = "x".repeat(2048);
+    const longLine = "x".repeat(128 * 1024);
     fs.writeFileSync(transcriptPath, `${longLine}\nbeta\ngamma\n`, "utf-8");
 
-    const lines = await collect(
-      streamSessionTranscriptLinesReverse(transcriptPath, {
-        chunkBytes: 1024,
-      }),
-    );
+    const lines = await collect(streamSessionTranscriptLinesReverse(transcriptPath));
 
     expect(lines).toEqual(["gamma", "beta", longLine]);
   });
 
   it("preserves multibyte UTF-8 across chunk boundaries", async () => {
-    const firstLine = `${"a".repeat(1100)}🌊`;
-    const secondLine = `${"b".repeat(1100)}✅`;
+    const firstLine = "prefix";
+    // The first reverse read starts inside the four-byte emoji.
+    const secondLine = `🌊${"x".repeat(64 * 1024 - 2)}`;
     fs.writeFileSync(transcriptPath, `${firstLine}\n${secondLine}\n`, "utf-8");
 
-    const lines = await collect(
-      streamSessionTranscriptLinesReverse(transcriptPath, {
-        chunkBytes: 1024,
-      }),
-    );
+    const lines = await collect(streamSessionTranscriptLinesReverse(transcriptPath));
 
     expect(lines).toEqual([secondLine, firstLine]);
   });
@@ -156,27 +149,11 @@ describe("streamSessionTranscriptLinesReverse", () => {
     expect(out).toEqual(["three"]);
   });
 
-  it("clamps a sub-minimum chunk size without dropping older lines", async () => {
-    fs.writeFileSync(transcriptPath, "alpha\nbeta\ngamma\n", "utf-8");
-
-    const lines = await collect(
-      streamSessionTranscriptLinesReverse(transcriptPath, {
-        chunkBytes: 16,
-      }),
-    );
-
-    expect(lines).toEqual(["gamma", "beta", "alpha"]);
-  });
-
   it("does not emit a partial prefix until the full first line is available", async () => {
-    const firstLine = "prefix".repeat(400);
+    const firstLine = "prefix".repeat(22 * 1024);
     fs.writeFileSync(transcriptPath, `${firstLine}\nbeta\ngamma`, "utf-8");
 
-    const lines = await collect(
-      streamSessionTranscriptLinesReverse(transcriptPath, {
-        chunkBytes: 1024,
-      }),
-    );
+    const lines = await collect(streamSessionTranscriptLinesReverse(transcriptPath));
 
     expect(lines).toEqual(["gamma", "beta", firstLine]);
   });

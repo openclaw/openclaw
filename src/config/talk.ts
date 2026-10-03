@@ -64,62 +64,32 @@ export function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig 
   if (!isRecord(value)) {
     return undefined;
   }
-  const source = value;
-  const normalized: TalkRealtimeConfig = {};
-
-  const provider = normalizeOptionalString(source.provider);
-  if (provider) {
-    normalized.provider = provider;
-  }
-  const providers = normalizeTalkProviders(source.providers);
-  if (providers) {
-    normalized.providers = providers;
-  }
-  for (const key of ["model", "speakerVoice", "speakerVoiceId", "instructions"] as const) {
-    const text = normalizeOptionalString(source[key]);
-    if (text) {
-      normalized[key] = text;
+  const normalized: TalkRealtimeConfig = {
+    provider: normalizeOptionalString(value.provider),
+    providers: normalizeTalkProviders(value.providers),
+    model: normalizeOptionalString(value.model),
+    speakerVoice: normalizeOptionalString(value.speakerVoice),
+    speakerVoiceId: normalizeOptionalString(value.speakerVoiceId),
+    instructions: normalizeOptionalString(value.instructions),
+    mode: (["realtime", "stt-tts", "transcription"] as const).find((mode) => mode === value.mode),
+    transport: (["webrtc", "provider-websocket", "gateway-relay", "managed-room"] as const).find(
+      (transport) => transport === value.transport,
+    ),
+    vadThreshold: asFiniteNumberInRange(value.vadThreshold, { min: 0, max: 1 }),
+    silenceDurationMs: normalizeInteger(value.silenceDurationMs, 1),
+    prefixPaddingMs: normalizeInteger(value.prefixPaddingMs, 0),
+    reasoningEffort: normalizeOptionalString(value.reasoningEffort),
+    brain: (["agent-consult", "direct-tools", "none"] as const).find(
+      (brain) => brain === value.brain,
+    ),
+    consultRouting: (["provider-direct", "force-agent-consult"] as const).find(
+      (routing) => routing === value.consultRouting,
+    ),
+  };
+  for (const [key, field] of Object.entries(normalized)) {
+    if (field === undefined) {
+      Reflect.deleteProperty(normalized, key);
     }
-  }
-  if (source.mode === "realtime" || source.mode === "stt-tts" || source.mode === "transcription") {
-    normalized.mode = source.mode;
-  }
-  if (
-    source.transport === "webrtc" ||
-    source.transport === "provider-websocket" ||
-    source.transport === "gateway-relay" ||
-    source.transport === "managed-room"
-  ) {
-    normalized.transport = source.transport;
-  }
-  const vadThreshold = asFiniteNumberInRange(source.vadThreshold, { min: 0, max: 1 });
-  if (vadThreshold !== undefined) {
-    normalized.vadThreshold = vadThreshold;
-  }
-  const silenceDurationMs = normalizeInteger(source.silenceDurationMs, 1);
-  if (silenceDurationMs !== undefined) {
-    normalized.silenceDurationMs = silenceDurationMs;
-  }
-  const prefixPaddingMs = normalizeInteger(source.prefixPaddingMs, 0);
-  if (prefixPaddingMs !== undefined) {
-    normalized.prefixPaddingMs = prefixPaddingMs;
-  }
-  const reasoningEffort = normalizeOptionalString(source.reasoningEffort);
-  if (reasoningEffort) {
-    normalized.reasoningEffort = reasoningEffort;
-  }
-  if (
-    source.brain === "agent-consult" ||
-    source.brain === "direct-tools" ||
-    source.brain === "none"
-  ) {
-    normalized.brain = source.brain;
-  }
-  if (
-    source.consultRouting === "provider-direct" ||
-    source.consultRouting === "force-agent-consult"
-  ) {
-    normalized.consultRouting = source.consultRouting;
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
@@ -158,43 +128,22 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
     return undefined;
   }
 
-  const source = value as Record<string, unknown>;
-  const normalized: TalkConfig = {};
-  for (const key of ["agentId", "speechLocale"] as const) {
-    const text = normalizeOptionalString(source[key]);
-    if (text) {
-      normalized[key] = text;
+  const normalized: TalkConfig = {
+    agentId: normalizeOptionalString(value.agentId),
+    speechLocale: normalizeOptionalString(value.speechLocale),
+    interruptOnSpeech:
+      typeof value.interruptOnSpeech === "boolean" ? value.interruptOnSpeech : undefined,
+    consultThinkingLevel: normalizeThinkLevel(normalizeOptionalString(value.consultThinkingLevel)),
+    consultFastMode: normalizeFastMode(value.consultFastMode),
+    silenceTimeoutMs: normalizeInteger(value.silenceTimeoutMs, 1),
+    providers: normalizeTalkProviders(value.providers),
+    realtime: normalizeTalkRealtimeConfig(value.realtime),
+    provider: normalizeOptionalString(value.provider),
+  };
+  for (const [key, field] of Object.entries(normalized)) {
+    if (field === undefined) {
+      Reflect.deleteProperty(normalized, key);
     }
-  }
-  if (typeof source.interruptOnSpeech === "boolean") {
-    normalized.interruptOnSpeech = source.interruptOnSpeech;
-  }
-  const consultThinkingLevel = normalizeThinkLevel(
-    normalizeOptionalString(source.consultThinkingLevel),
-  );
-  if (consultThinkingLevel) {
-    normalized.consultThinkingLevel = consultThinkingLevel;
-  }
-  const consultFastMode = normalizeFastMode(source.consultFastMode);
-  if (typeof consultFastMode === "boolean") {
-    normalized.consultFastMode = consultFastMode;
-  }
-  const silenceTimeoutMs = normalizeInteger(source.silenceTimeoutMs, 1);
-  if (silenceTimeoutMs !== undefined) {
-    normalized.silenceTimeoutMs = silenceTimeoutMs;
-  }
-
-  const providers = normalizeTalkProviders(source.providers);
-  const realtime = normalizeTalkRealtimeConfig(source.realtime);
-  const provider = normalizeOptionalString(source.provider);
-  if (providers) {
-    normalized.providers = providers;
-  }
-  if (realtime) {
-    normalized.realtime = realtime;
-  }
-  if (provider) {
-    normalized.provider = provider;
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
