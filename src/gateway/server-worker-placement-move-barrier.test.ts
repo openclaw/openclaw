@@ -120,7 +120,7 @@ describe("worker placement move destination", () => {
           assertCurrent: assertAuthority,
           assertBindingCurrent: assertAuthority,
           config: {},
-          entry: { sessionId },
+          entry: { sessionId, updatedAt: 1 },
           target,
           worktree: { id: "research-worktree", path: "/gateway/research" },
           workspace: { kind: "local", path: "/gateway/research" },

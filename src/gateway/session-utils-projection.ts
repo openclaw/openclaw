@@ -118,7 +118,6 @@ export function resolveTranscriptUsageFallbacks(params: {
   freshTotalTokens?: number;
   fallbackModelRefs: readonly (string | undefined)[];
   allowPluginNormalization?: boolean;
-  maxTranscriptBytes?: number;
   rowContext?: SessionListRowContext;
   agentId: string;
   storeAgentId?: string;
@@ -166,7 +165,7 @@ export function resolveTranscriptUsageFallbacks(params: {
             sessionKey: params.key,
             storePath,
           },
-          typeof params.maxTranscriptBytes === "number" ? params.maxTranscriptBytes : 256 * 1024,
+          256 * 1024,
         );
       } catch {
         snapshot = null;

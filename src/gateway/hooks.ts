@@ -456,21 +456,6 @@ export type HookTargetAgentResolution =
     }
   | { ok: false; code: "owner-retired"; ownerAgentId: string; error: string };
 
-/** Resolve an optional config-mapped target to a known agent or the configured default. */
-function resolveHookTargetAgentId(
-  hooksConfig: HooksConfigResolved,
-  agentId: string | undefined,
-): string | undefined {
-  const raw = normalizeOptionalString(agentId);
-  if (!raw) {
-    return undefined;
-  }
-  const normalized = normalizeAgentId(raw);
-  return hooksConfig.agentPolicy.knownAgentIds.has(normalized)
-    ? normalized
-    : hooksConfig.agentPolicy.defaultAgentId;
-}
-
 /** Resolve request or config-mapped agent selection against durable session ownership. */
 export function resolveEffectiveHookTargetAgentId(
   hooksConfig: HooksConfigResolved,
@@ -478,9 +463,13 @@ export function resolveEffectiveHookTargetAgentId(
   source: "request" | "mapping",
 ): HookTargetAgentResolution {
   const raw = normalizeOptionalString(agentId);
-  let selectedAgentId =
-    source === "mapping" ? resolveHookTargetAgentId(hooksConfig, agentId) : undefined;
-  if (source === "request" && raw) {
+  let selectedAgentId: string | undefined;
+  if (source === "mapping" && raw) {
+    const normalized = normalizeAgentId(raw);
+    selectedAgentId = hooksConfig.agentPolicy.knownAgentIds.has(normalized)
+      ? normalized
+      : hooksConfig.agentPolicy.defaultAgentId;
+  } else if (source === "request" && raw) {
     const normalized = normalizeAgentIdStrict(raw);
     if (!normalized.ok) {
       return {

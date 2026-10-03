@@ -431,6 +431,7 @@ describe("queued progress refresh settlement", () => {
         source.controller.abort();
       }
       expect(f.context.chatQueuedTurns.has(source.runId)).toBe(false);
+      expect(f.releases.get(source.runId)).toHaveBeenCalledOnce();
       expectTerminal(await f.refresh());
       expect(f.context.dedupe.get(`chat:${source.runId}`)?.payload).toMatchObject({
         status: "timeout",

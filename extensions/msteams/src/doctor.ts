@@ -46,8 +46,8 @@ function runMSTeamsWebhookDoctorSequence({
     warningNotes: [],
     infoNotes: [
       legacy
-        ? `Microsoft Teams: compatibility port ${legacy.port} continues forwarding to Gateway route ${path}. To use only the Gateway listener, update the Azure Bot messaging endpoint or reverse-proxy upstream to Gateway port ${port}${path}, verify delivery, then set channels.msteams.legacyWebhook=false to close the old port.`
-        : `Microsoft Teams webhooks use Gateway port ${port}${path}; the compatibility listener is disabled by channels.msteams.legacyWebhook=false. Point the Azure Bot messaging endpoint or reverse-proxy upstream to this route.`,
+        ? `Microsoft Teams: compatibility port ${legacy.port} continues forwarding to Gateway route ${path}. To use only the Gateway listener, update the Azure Bot messaging endpoint or reverse-proxy upstream to Gateway port ${port}${path}, verify delivery, then remove the channels.msteams.legacyWebhook pin to close the old port.`
+        : `Microsoft Teams webhooks use Gateway port ${port}${path}; no compatibility listener is configured. Point the Azure Bot messaging endpoint or reverse-proxy upstream to this route.`,
     ],
   };
 }

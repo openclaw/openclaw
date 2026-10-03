@@ -9,6 +9,7 @@ import { GatewayScheduler } from "./gateway-scheduler.js";
 import {
   normalizeSqliteNonNegativeInteger,
   runWithSqliteBusyTimeout,
+  setSqliteBusyTimeout,
 } from "./sqlite-busy-timeout.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
@@ -96,12 +97,6 @@ export type SqliteConnectionPragmaOptions = SqliteWalMaintenanceOptions & {
   synchronous?: "NORMAL";
 };
 
-function configureSqliteBusyTimeout(db: DatabaseSync, busyTimeoutMs: number): number {
-  const normalizedTimeoutMs = normalizeSqliteNonNegativeInteger(busyTimeoutMs, "busyTimeoutMs");
-  db.exec(`PRAGMA busy_timeout = ${normalizedTimeoutMs};`);
-  return normalizedTimeoutMs;
-}
-
 /** Restrict inspection connections without changing journal or persistence policy. */
 export function configureSqliteReadOnlyPragmas(db: DatabaseSync): void {
   db.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;");
@@ -125,7 +120,7 @@ export function configureSqlitePreSchemaPragmas(
   options: Pick<SqliteConnectionPragmaOptions, "busyTimeoutMs"> = {},
 ): void {
   if (options.busyTimeoutMs !== undefined) {
-    configureSqliteBusyTimeout(db, options.busyTimeoutMs);
+    setSqliteBusyTimeout(db, options.busyTimeoutMs);
   }
   enableIncrementalAutoVacuumForFreshDatabase(db);
 }
@@ -194,7 +189,7 @@ function enableWalJournalMode(
         if (!restoreBusyTimeout) {
           // A busy handler can be bypassed to avoid deadlock. Disable it after
           // the first BUSY so explicit retries cannot overrun this deadline.
-          configureSqliteBusyTimeout(db, 0);
+          setSqliteBusyTimeout(db, 0);
           restoreBusyTimeout = true;
         }
         Atomics.wait(
@@ -207,7 +202,7 @@ function enableWalJournalMode(
     }
   } finally {
     if (restoreBusyTimeout) {
-      configureSqliteBusyTimeout(db, retryTimeoutMs);
+      setSqliteBusyTimeout(db, retryTimeoutMs);
     }
   }
 }
@@ -238,8 +233,10 @@ export function configureSqliteWalMaintenance(
   db: DatabaseSync,
   options: SqliteWalMaintenanceOptions = {},
 ): SqliteWalMaintenance {
-  const busyTimeoutMs =
-    options.busyTimeoutMs === undefined ? 0 : configureSqliteBusyTimeout(db, options.busyTimeoutMs);
+  const busyTimeoutMs = options.busyTimeoutMs ?? 0;
+  if (options.busyTimeoutMs !== undefined) {
+    setSqliteBusyTimeout(db, options.busyTimeoutMs);
+  }
   const autoCheckpointPages = normalizeSqliteNonNegativeInteger(
     options.autoCheckpointPages ?? DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES,
     "autoCheckpointPages",

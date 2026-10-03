@@ -15,7 +15,7 @@ import {
 } from "../agents/auth-profiles/sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { runSecretsAudit } from "./audit.js";
@@ -278,7 +278,7 @@ describe("secrets audit", () => {
   afterEach(async () => {
     vi.unstubAllEnvs();
     closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     await fs.rm(fixture.rootDir, { recursive: true, force: true });
   });
 
@@ -319,7 +319,7 @@ describe("secrets audit", () => {
   });
 
   it("reports plaintext that duplicates the store while resolving store refs", async () => {
-    writeSecretStoreEntry({
+    await writeSecretStoreEntry({
       scope: { kind: "team" },
       name: "STORED_API_KEY",
       value: "shared-store-value",

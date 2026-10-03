@@ -387,6 +387,7 @@ src/commands/doctor/shared/legacy-tool-name-migration.ts
 src/commands/doctor/shared/legacy-tool-policy-scopes.ts
 src/commands/doctor/shared/legacy-tools-by-sender.ts
 src/commands/doctor/shared/legacy-web-tools-migrate.ts
+src/commands/doctor/shared/legacy-webhook-pins.ts
 src/compat/legacy-names.ts
 src/config/agent-dirs.ts
 src/config/agent-limits.ts
@@ -538,6 +539,8 @@ src/config/sessions/session-entry-snapshots.ts
 src/config/sessions/session-entry-state-format.ts
 src/config/sessions/session-history-worker-errors.ts
 src/config/sessions/session-incognito-actor.ts
+src/config/sessions/session-incognito-compute-contract.ts
+src/config/sessions/session-incognito-compute.ts
 src/config/sessions/session-incognito-lifecycle-contract.ts
 src/config/sessions/session-incognito-lifecycle.ts
 src/config/sessions/cli-session-binding.ts
@@ -738,6 +741,7 @@ src/infra/dotenv-global-core.ts
 src/infra/dotenv-global.ts
 src/infra/dotenv.ts
 src/infra/ed25519-signature.ts
+src/infra/env-log.runtime.ts
 src/infra/env.ts
 src/infra/errno.ts
 src/infra/error-graph-internal.ts
@@ -1389,6 +1393,7 @@ src/sessions/session-key-utils.ts
 src/sessions/session-row-changes.ts
 src/sessions/transcript-events.ts
 src/sessions/user-turn-transcript-admission.ts
+src/secrets/store/secret-store-validation-error.ts
 src/shared/assistant-error-format.ts
 src/shared/async-work-scope.ts
 src/shared/avatar-limits.ts

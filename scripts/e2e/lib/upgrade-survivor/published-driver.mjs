@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // One managed update across the published-driver/candidate boundary, with synthetic state only.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -167,6 +168,16 @@ async function relabelCandidate(from, to) {
     const target = path.join(dir, file);
     fs.writeFileSync(target, `${JSON.stringify({ ...readJson(target), version: to }, null, 2)}\n`);
   }
+  // build-info.json is inventoried; keep the packaged content inventory truthful
+  // so the candidate's own package-verify step still proves the dist bytes.
+  const buildInfo = fs.readFileSync(path.join(dir, "package/dist/build-info.json"));
+  const inventoryFile = path.join(dir, "package/dist/postinstall-content-inventory.json");
+  const inventory = readJson(inventoryFile);
+  const buildInfoEntry = inventory.find((entry) => entry.path === "dist/build-info.json");
+  assert(buildInfoEntry, "Candidate inventory does not list dist/build-info.json");
+  buildInfoEntry.sha256 = createHash("sha256").update(buildInfo).digest("hex");
+  buildInfoEntry.size = buildInfo.length;
+  fs.writeFileSync(inventoryFile, `${JSON.stringify(inventory, null, 2)}\n`);
   const relabeled = path.join(runtime, "openclaw-candidate-relabeled.tgz");
   await run("candidate-relabel-pack", "tar", ["-czf", relabeled, "-C", dir, "package"]);
   writeJson("candidate-relabel", { from, to, package: relabeled });
@@ -245,7 +256,8 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     // driver version so the future-version guard sees an upgrade, not a downgrade.
     if (compareReleaseVersions(build.version, driverVersion) < 0) {
       candidatePackage = await relabelCandidate(build.version, driverVersion);
-      build = { ...build, version: driverVersion, relabeledFrom: build.version };
+      // Match the relabeled dist/build-info.json exactly; the installed bytes carry no source label.
+      build = { ...build, version: driverVersion };
     }
     const driverBuild = legacySqlite
       ? readJson(path.join(packageRoot, "dist/build-info.json"))

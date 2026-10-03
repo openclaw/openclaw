@@ -79,7 +79,6 @@ const mocks = vi.hoisted(() => ({
       profileIds: readonly string[];
     }>,
   })),
-  maybeRepairLegacyOAuthSidecarProfiles: vi.fn().mockResolvedValue(undefined),
   removeAuthProfilesAcrossOwnerStores: vi.fn(async () => true),
   collectAuthProfileHealthFindings: vi.fn(async () => []),
   noteAuthProfileHealth: vi.fn().mockResolvedValue(undefined),
@@ -377,10 +376,6 @@ vi.mock("../commands/doctor-plugin-manifests.js", () => ({
   legacyPluginManifestContractMigrationToHealthFinding:
     mocks.legacyPluginManifestContractMigrationToHealthFinding,
   maybeRepairLegacyPluginManifestContracts: mocks.maybeRepairLegacyPluginManifestContracts,
-}));
-
-vi.mock("../commands/doctor-auth-oauth-sidecar.js", () => ({
-  maybeRepairLegacyOAuthSidecarProfiles: mocks.maybeRepairLegacyOAuthSidecarProfiles,
 }));
 
 vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
@@ -719,7 +714,6 @@ describe("doctor health contributions", () => {
     });
     mocks.maybeRepairGatewayDaemon.mockResolvedValue(undefined);
     mocks.maybeRepairLegacyPluginManifestContracts.mockResolvedValue(undefined);
-    mocks.maybeRepairLegacyOAuthSidecarProfiles.mockResolvedValue(undefined);
     mocks.noteAuthProfileHealth.mockResolvedValue(undefined);
     mocks.noteMemorySearchHealth.mockResolvedValue(undefined);
     mocks.collectMemorySearchHealthFindings.mockResolvedValue([]);
@@ -749,6 +743,7 @@ describe("doctor health contributions", () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
       valid: true,
+      sourceConfig: {},
       config: {},
       issues: [],
     });
@@ -2127,7 +2122,7 @@ describe("doctor health contributions", () => {
     },
   );
 
-  it("runs the receipted auth migration after repairing OAuth sidecars", async () => {
+  it("runs the receipted auth migration before model diagnostics", async () => {
     const contribution = requireDoctorContribution("doctor:auth-profiles");
     const ctx = createDoctorContext({
       cfg: {},
@@ -2139,10 +2134,6 @@ describe("doctor health contributions", () => {
     await requireDoctorContribution("doctor:auth-profile-migration").run(ctx);
     await contribution.run(ctx);
 
-    expect(mocks.maybeRepairLegacyOAuthSidecarProfiles).toHaveBeenCalledWith({
-      cfg: ctx.cfg,
-      prompter: ctx.prompter,
-    });
     expect(mocks.maybeMigrateAuthProfileJsonStoresToSqlite).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       env: process.env,
@@ -2150,9 +2141,6 @@ describe("doctor health contributions", () => {
       openAICodexAuthProfileIdMap:
         mocks.collectOpenAICodexAuthProfileStoreIdMap.mock.results[0]?.value,
     });
-    expect(mocks.maybeRepairLegacyOAuthSidecarProfiles.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mock.invocationCallOrder[0]!,
-    );
     expect(mocks.maybeMigrateLegacyPluginModelCatalogs).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       prompter: ctx.prompter,

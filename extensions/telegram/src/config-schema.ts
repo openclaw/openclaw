@@ -221,7 +221,7 @@ const TelegramAccountSchemaBase = z
       ])
       .optional()
       .describe(
-        "Webhook forwarding endpoint. Omitted keeps 127.0.0.1:8787; set false after moving the reverse proxy to the Gateway webhook route.",
+        "Explicit webhook forwarding endpoint. Doctor pins existing proxy endpoints once; remove the pin after moving the proxy to the Gateway, or set false to disable inherited forwarding.",
       ),
     webhookCertPath: z
       .string()

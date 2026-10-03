@@ -6,12 +6,13 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Command as CommanderCommand, Option as CommanderOption } from "commander";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
+import type { StartupConfigPreflightOptions } from "../commands/startup-config-preflight.js";
 import {
   createInvalidConfigError,
   formatInvalidConfigDetails,
 } from "../config/io.invalid-config.js";
 import { resolveGatewayPort, resolveStateDir } from "../config/paths.js";
-import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isLoopbackHost, isSecureWebSocketUrl } from "../gateway/net.js";
 import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
 import { FLAG_TERMINATOR, isValueToken } from "../infra/cli-root-options.js";
@@ -134,16 +135,17 @@ async function tryRunGatewayRunFastPath(
     throw err;
   });
   const beforeRun = async (opts: { force?: boolean; reset?: boolean }) => {
-    let beforeStatePreparation: ((snapshot?: ConfigFileSnapshot) => Promise<boolean>) | undefined;
+    let beforeStatePreparation: StartupConfigPreflightOptions["beforeStatePreparation"];
     const shouldBootstrap = await startupTrace.measure("gateway-run-pre-bootstrap", async () => {
       const { prepareGatewayRunBootstrap, recheckGatewayRunBootstrap } =
         await import("./gateway-cli/pre-bootstrap.js");
       const prepared = await prepareGatewayRunBootstrap({ opts, runtime: defaultRuntime });
       if (prepared) {
-        beforeStatePreparation = (snapshot) =>
+        beforeStatePreparation = (snapshot, committedWrite) =>
           recheckGatewayRunBootstrap({
             opts,
             runtime: defaultRuntime,
+            committedWrite,
             ...(snapshot ? { snapshot } : {}),
           });
       }

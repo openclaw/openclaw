@@ -496,13 +496,14 @@ export function readSessionRowDatabaseFacts(
             if (!selected.ok) {
               throw selected.error;
             }
+            const boardKeys = readBoardSessionKeys(database, request.sessionKeys);
             return {
               kind: "session-row-facts" as const,
               rows: selected.value.map(({ sessionKey, entry }) => {
                 const facts: SessionRowDatabaseFacts = {
                   sessionKey,
                   entry,
-                  hasBoard: readBoardSessionKeys(database, sessionKey).length > 0,
+                  hasBoard: boardKeys.has(sessionKey),
                 };
                 if (readSessionActivitySummary(entry)) {
                   facts.activitySummaryWatermark = readSessionTranscriptWatermarkInDatabase(

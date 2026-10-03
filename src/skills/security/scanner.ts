@@ -80,25 +80,6 @@ export function isScannable(filePath: string): boolean {
   return SCANNABLE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
 }
 
-function getCachedFileScanResult(params: {
-  filePath: string;
-  identity: FileScanIdentity;
-  maxFileBytes: number;
-}): FileScanCacheEntry | undefined {
-  const cached = FILE_SCAN_CACHE.get(params.filePath);
-  if (!cached) {
-    return undefined;
-  }
-  if (
-    !sameFileScanIdentity(cached.identity, params.identity) ||
-    cached.maxFileBytes !== params.maxFileBytes
-  ) {
-    FILE_SCAN_CACHE.delete(params.filePath);
-    return undefined;
-  }
-  return cached;
-}
-
 function fileScanIdentity({ dev, ino, size, mtimeMs, ctimeMs }: Stats): FileScanIdentity {
   return { dev, ino, size, mtimeMs, ctimeMs };
 }
@@ -681,17 +662,11 @@ async function scanFileWithCache(params: {
   if (!st?.isFile()) {
     return { scanned: false, findings: [] };
   }
-  const cached = getCachedFileScanResult({
-    filePath,
-    identity: st,
-    maxFileBytes,
-  });
-  if (cached) {
-    return {
-      scanned: cached.scanned,
-      findings: cached.findings,
-    };
+  const cached = FILE_SCAN_CACHE.get(filePath);
+  if (cached && sameFileScanIdentity(cached.identity, st) && cached.maxFileBytes === maxFileBytes) {
+    return cached;
   }
+  FILE_SCAN_CACHE.delete(filePath);
 
   if (st.size > maxFileBytes) {
     const skippedEntry: FileScanCacheEntry = {

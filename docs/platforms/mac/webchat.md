@@ -102,6 +102,12 @@ clears its snooze. Archived, child, and protected main or sentinel threads
 cannot be snoozed.
 
 The sidebar loads threads in pages; choose **Load more** to reach older threads.
+In **All agents**, conversations with the same short key remain separate and keep
+their owning agent when selected or changed.
+Command-click or Shift-click to select several root threads, then choose
+**Actions → Move to group → New group…** to create a group and move the selection.
+If some moves fail, the group and completed moves remain; affected rows show
+errors so you can retry.
 Typing filters loaded rows immediately, then searches session names, metadata,
 and messages on the Gateway. Results appear in relevance order. Notices explain
 when message indexing is still in progress or archived transcripts are excluded.
@@ -190,6 +196,14 @@ web actions menu, including plugin actions and **Stop cloud worker…** when
 available. Confirmation, progress, and errors stay in the web conversation.
 Older Gateway UIs keep their existing conversation behavior without these extras.
 
+Archiving from the sidebar offers **Undo** for six seconds; hovering or focusing
+the notice pauses that countdown. Undo restores the captured thread and its
+previous pin state, including successful threads from a partial batch archive.
+Restored threads return to the Active list when the Gateway confirms the restore.
+It remains available while you change conversations, filters, or agents, and
+leaves the current conversation selected. Reconnecting retires the action; if a
+thread was replaced before Undo, the failure stays visible.
+
 **Show message preview**, **Show automation sessions**, and **Show system sessions**
 are off by default. Automation sessions are cron conversations; system sessions
 are identified from their recorded creation source. Human-created and named
@@ -245,7 +259,7 @@ running session counts come from the Gateway across agents, independently of the
 loaded thread list; unavailable counts stay unknown and offer retry after a failure.
 
 Hover or focus a person to inspect reported connections, interaction times, and
-visible session links. Recent links stay in place while the card is open and
+visible session links, including threads loaded with **Load more**. Recent links stay in place while the card is open and
 disappear if they become ineligible. **View Activity** opens that person's Activity
 page in the Dashboard for the same Gateway. Thread rows show other viewers,
 combining duplicate connections and excluding your own identity.

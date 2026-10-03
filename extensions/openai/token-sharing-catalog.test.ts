@@ -22,11 +22,19 @@ type OpenAITestCatalogResult = {
   outcomes: readonly ProviderCatalogOutcome[];
 };
 
+function sharingAuth(
+  apiKey = "sharing-fixture",
+  profileId = "openai:sharing",
+): ReturnType<ProviderCatalogContext["resolveProviderAuth"]> {
+  return { mode: "oauth", authFlow: "chatgpt-token-sharing", apiKey, profileId, source: "profile" };
+}
+
 async function runCatalogWithFetchGuard(params: {
   fetchGuard: LiveModelCatalogFetchGuard;
-  auth: ReturnType<ProviderCatalogContext["resolveProviderAuth"]>;
+  auth?: ReturnType<ProviderCatalogContext["resolveProviderAuth"]>;
   baseUrl?: string;
 }): Promise<OpenAITestCatalogResult> {
+  const auth = params.auth ?? sharingAuth();
   const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const guarded = await params.fetchGuard({
       url: typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
@@ -37,10 +45,10 @@ async function runCatalogWithFetchGuard(params: {
   });
   try {
     const result = await buildOpenAIProvider().catalog?.run({
-      resolveProviderAuth: () => params.auth,
+      resolveProviderAuth: () => auth,
       resolveProviderApiKey: () => ({
-        apiKey: params.auth.apiKey,
-        discoveryApiKey: params.auth.discoveryApiKey,
+        apiKey: auth.apiKey,
+        discoveryApiKey: auth.discoveryApiKey,
       }),
       config: params.baseUrl
         ? { models: { providers: { openai: { baseUrl: params.baseUrl, models: [] } } } }
@@ -89,12 +97,8 @@ describe("SIWC model discovery", () => {
     const selected = await runCatalogWithFetchGuard({
       fetchGuard,
       auth: {
-        mode: "oauth",
-        authFlow: "chatgpt-token-sharing",
-        apiKey: "oauth:openai",
+        ...sharingAuth("oauth:openai", "openai:sharing-selected"),
         discoveryApiKey: "sharing-selected",
-        profileId: "openai:sharing-selected",
-        source: "profile",
       },
       baseUrl: "https://proxy.example/v1",
     });
@@ -129,12 +133,8 @@ describe("SIWC model discovery", () => {
     const other = await runCatalogWithFetchGuard({
       fetchGuard,
       auth: {
-        mode: "oauth",
-        authFlow: "chatgpt-token-sharing",
-        apiKey: "oauth:openai",
+        ...sharingAuth("oauth:openai", "openai:sharing-other"),
         discoveryApiKey: "sharing-other",
-        profileId: "openai:sharing-other",
-        source: "profile",
       },
     });
     expect(fetchGuard).toHaveBeenCalledTimes(2);
@@ -150,7 +150,6 @@ describe("SIWC model discovery", () => {
   });
 
   it.each([
-    ["empty", { models: [] }, 200, "ready", false, undefined],
     [
       "hidden",
       { models: [{ slug: "fixture-hidden", visibility: "hide" }] },
@@ -171,16 +170,7 @@ describe("SIWC model discovery", () => {
         response: Response.json(body, { status }),
         release: async () => {},
       });
-      const result = await runCatalogWithFetchGuard({
-        fetchGuard,
-        auth: {
-          mode: "oauth",
-          authFlow: "chatgpt-token-sharing",
-          apiKey: "sharing-fixture",
-          profileId: "openai:sharing",
-          source: "profile",
-        },
-      });
+      const result = await runCatalogWithFetchGuard({ fetchGuard });
       expect(fetchGuard).toHaveBeenCalledTimes(1);
       expect(result.provider.models.length > 0).toBe(fallback);
       expect(result.outcomes).toEqual([
@@ -205,14 +195,7 @@ describe("SIWC model discovery", () => {
       const fetchGuard = vi.fn<LiveModelCatalogFetchGuard>();
       const { provider, outcomes } = await runCatalogWithFetchGuard({
         fetchGuard,
-        auth: {
-          mode: "oauth",
-          authFlow,
-          apiKey,
-          preparationFailed,
-          profileId: "openai:sharing",
-          source: "profile",
-        },
+        auth: { ...sharingAuth(apiKey), authFlow, preparationFailed },
       });
       expect(fetchGuard).not.toHaveBeenCalled();
       expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();

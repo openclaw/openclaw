@@ -571,6 +571,11 @@ const subagentListener = createSubagentRegistryListener({
   pendingLifecycle,
   onAgentEvent,
   resumeRequesterSettleWake,
+  adoptPausedSubagentRunIntoSuccessor: (entry) =>
+    subagentRunManager.adoptPausedSubagentRunIntoSuccessor({
+      childSessionKey: entry.childSessionKey,
+      childAgentId: entry.childAgentId,
+    }),
   refreshFrozenResultFromSession,
   completeSubagentRunWithRecovery: completionRuntime.completeSubagentRunWithRecovery,
   warn: (message, meta) => log.warn(message, meta),
@@ -634,6 +639,8 @@ export const settleFailedQueuedSubagentLaunch = subagentRunManager.settleFailedQ
 
 export const adoptPausedSubagentRunForFollowUp =
   subagentRunManager.adoptPausedSubagentRunForFollowUp;
+export const adoptPausedSubagentRunIntoSuccessor =
+  subagentRunManager.adoptPausedSubagentRunIntoSuccessor;
 
 async function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   if (opts?.persist !== false) {
@@ -661,7 +668,6 @@ async function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
 }
 
 const testing = {
-  failQueuedSubagentRun: subagentRunManager.failQueuedSubagentRun,
   sweepOnceForTests: subagentSweeper.sweepOnce,
   runSweeperTickForTests: subagentSweeper.runTick,
 } as const;

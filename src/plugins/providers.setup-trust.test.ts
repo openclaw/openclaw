@@ -60,14 +60,19 @@ module.exports = {
     };
     const expected = { id: "setup", label: "Setup Trust Provider", auth: [], pluginId, pluginRoot };
     withEnv(env, () => {
+      const providers = resolvePluginProvidersCore({
+        config: { plugins: trusted ? { allow: [pluginId] } : { enabled: true } },
+        workspaceDir,
+        env,
+        mode: "setup",
+        cache: false,
+        onlyPluginIds: [pluginId],
+      });
       expect(
-        resolvePluginProvidersCore({
-          config: { plugins: trusted ? { allow: [pluginId] } : { enabled: true } },
-          workspaceDir,
-          env,
-          mode: "setup",
-          cache: false,
-          onlyPluginIds: [pluginId],
+        providers.map(({ auth, ...metadata }) => {
+          expect(Array.isArray(auth)).toBe(true);
+          // Compare descriptor data without requiring a native constructor on the managed array.
+          return Object.assign(metadata, { auth: [...auth] });
         }),
       ).toStrictEqual(trusted ? [expected] : []);
     });

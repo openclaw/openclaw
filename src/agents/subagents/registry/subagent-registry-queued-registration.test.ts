@@ -292,6 +292,7 @@ it.each(["open", "restart", "suspend"] as const)(
           return () => {};
         },
         resumeRequesterSettleWake: vi.fn(),
+        adoptPausedSubagentRunIntoSuccessor: async () => false,
         refreshFrozenResultFromSession: async () => {},
         completeSubagentRunWithRecovery: complete,
         warn,
@@ -364,6 +365,7 @@ it.each([false, true])(
           return () => {};
         },
         resumeRequesterSettleWake: vi.fn(),
+        adoptPausedSubagentRunIntoSuccessor: async () => false,
         refreshFrozenResultFromSession: async () => {},
         completeSubagentRunWithRecovery: async () => {},
         warn: vi.fn(),
@@ -435,6 +437,7 @@ it.each(["pending", "already dispatched", "next attempt"] as const)(
           return () => {};
         },
         resumeRequesterSettleWake: vi.fn(),
+        adoptPausedSubagentRunIntoSuccessor: async () => false,
         refreshFrozenResultFromSession: async () => {},
         completeSubagentRunWithRecovery: async () => {},
         warn,

@@ -148,6 +148,8 @@ export function createChatSendTurnAdoptionLifecycle(params: {
         onAborted: (reason) => {
           params.sessionBinding.abortDiagnosticReason = reason;
           recordQueuedTerminal("aborted");
+          releaseWorkAdmission?.();
+          releaseWorkAdmission = undefined;
         },
       });
       if (enqueued && !releaseWorkAdmission) {

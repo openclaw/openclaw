@@ -5,15 +5,21 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.types.js";
-import type { SessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { SubagentCoordinationDisplayResolver } from "./chat-display-projection.history.js";
 import { createBoundSessionHistorySubagentProjection } from "./session-history-readonly-reader.js";
 import { prepareGatewaySessionStoreReadSources } from "./session-utils-store-sources.js";
 
-/** Bind source addresses and admission once, before an asynchronous history read. */
-function prepareSessionHistorySubagentSources(currentSource: SessionEntryReadSource) {
+/** Bind host-owned stores and retain their admission for one display operation. */
+export function createSessionHistorySubagentProjection(
+  scope: SessionTranscriptReadScope,
+): SubagentCoordinationDisplayResolver {
+  const databaseOptions = toDatabaseOptions(resolveSqliteTranscriptReadScope(scope));
+  const currentSource = {
+    agentId: databaseOptions.agentId,
+    path: resolveOpenClawAgentSqlitePath(databaseOptions),
+  };
   const env = process.env;
   const context = captureOpenClawStateWorkerContext({ env });
   const sourceReads = prepareGatewaySessionStoreReadSources({
@@ -22,37 +28,19 @@ function prepareSessionHistorySubagentSources(currentSource: SessionEntryReadSou
     env,
     registryPath: context.admission.databasePath,
   });
-  return {
-    stateDatabase: {
+  const bound = createBoundSessionHistorySubagentProjection(
+    (read) => withCurrentProjectionSnapshot(scope, read, { readOnly: true }),
+    {
       path: context.admission.databasePath,
       environment: context.environment,
     },
-    get sourceDatabases() {
-      return sourceReads.sources;
-    },
-    assertCurrent: () => {
-      context.maintenanceScope?.assertAdmission();
-      context.admission.assertCurrent();
-      sourceReads.assertCurrent();
-    },
-  };
-}
-
-/** Bind host-owned stores and retain their admission for one display operation. */
-export function createSessionHistorySubagentProjection(
-  scope: SessionTranscriptReadScope,
-): SubagentCoordinationDisplayResolver {
-  const databaseOptions = toDatabaseOptions(resolveSqliteTranscriptReadScope(scope));
-  const sources = prepareSessionHistorySubagentSources({
-    agentId: databaseOptions.agentId,
-    path: resolveOpenClawAgentSqlitePath(databaseOptions),
-  });
-  const bound = createBoundSessionHistorySubagentProjection(
-    (read) => withCurrentProjectionSnapshot(scope, read, { readOnly: true }),
-    sources.stateDatabase,
-    () => sources.sourceDatabases,
+    () => sourceReads.sources,
   );
-  const assertCurrent = sources.assertCurrent;
+  const assertCurrent = () => {
+    context.maintenanceScope?.assertAdmission();
+    context.admission.assertCurrent();
+    sourceReads.assertCurrent();
+  };
   const readCurrent = <T>(read: () => T): T => {
     assertCurrent();
     const result = read();

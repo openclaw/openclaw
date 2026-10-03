@@ -56,7 +56,7 @@ describe("Nextcloud Talk monitor abort", () => {
     { path: "/api/channels/talk", reason: "requires Gateway authentication" },
     { path: "/%61pi/channels/talk", reason: "requires Gateway authentication" },
   ])(
-    "blocks incompatible Gateway path $path with legacy ingress disabled and preserves default ingress",
+    "blocks incompatible Gateway path $path without a legacy listener and preserves explicit ingress",
     async ({ path, reason }) => {
       const core = createPluginRuntimeMock();
       const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
@@ -79,7 +79,6 @@ describe("Nextcloud Talk monitor abort", () => {
               "nextcloud-talk": {
                 ...config.channels["nextcloud-talk"],
                 webhookPath,
-                legacyWebhook: false as const,
               },
             },
           },
@@ -103,6 +102,7 @@ describe("Nextcloud Talk monitor abort", () => {
             "nextcloud-talk": {
               ...config.channels["nextcloud-talk"],
               webhookPath: `${path}?tenant=a`,
+              legacyWebhook: { port: 8788 },
             },
           },
         },
@@ -125,10 +125,10 @@ describe("Nextcloud Talk monitor abort", () => {
 
   it.each([
     {
-      label: "implicit default",
+      label: "Gateway-only default",
       settings: {},
       accountId: "default",
-      endpoint: { port: 8788, host: "0.0.0.0" },
+      endpoint: undefined,
     },
     {
       label: "explicit port",
@@ -181,17 +181,20 @@ describe("Nextcloud Talk monitor abort", () => {
         accountId,
       });
 
-      expect(registry.httpRoutes).toHaveLength(1);
-      expect(registry.httpRoutes[0]?.legacyListeners).toEqual(
-        endpoint
-          ? [{ ...endpoint, health: { path: "/healthz", contentType: "text/plain" } }]
-          : undefined,
-      );
-      expect(options.statusSink).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ lifecycle: "ready" }),
-      );
-      abortController.abort();
-      await monitor.stop();
+      try {
+        expect(registry.httpRoutes).toHaveLength(1);
+        expect(registry.httpRoutes[0]?.legacyListeners).toEqual(
+          endpoint
+            ? [{ ...endpoint, health: { path: "/healthz", contentType: "text/plain" } }]
+            : undefined,
+        );
+        expect(options.statusSink).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ lifecycle: "ready" }),
+        );
+      } finally {
+        abortController.abort();
+        await monitor.stop();
+      }
       expect(spool.stop).toHaveBeenCalledOnce();
     },
   );

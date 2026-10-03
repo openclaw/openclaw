@@ -154,7 +154,7 @@ export async function monitorNextcloudTalkProvider(
   if (routeConflict && legacyListener) {
     logger.warn(
       `[nextcloud-talk:${account.accountId}] ${routeConflict} ` +
-        `Legacy webhook listener ${legacyListener.host}:${legacyListener.port} remains available; verify the new route before setting legacyWebhook: false.`,
+        `Legacy webhook listener ${legacyListener.host}:${legacyListener.port} remains available; verify the new route before removing the legacyWebhook pin.`,
     );
     return { stop };
   }
@@ -165,7 +165,7 @@ export async function monitorNextcloudTalkProvider(
   if (legacyListener) {
     logger.info(
       `[nextcloud-talk:${account.accountId}] legacy webhook listener ${legacyListener.host}:${legacyListener.port} forwards to the Gateway route. ` +
-        "After verifying the callback or proxy upstream uses the Gateway port, set legacyWebhook: false to disable this account's legacy forwarding.",
+        "After verifying the callback or proxy upstream uses the Gateway port, remove the legacyWebhook pin; use legacyWebhook: false to override an inherited endpoint.",
     );
   }
 

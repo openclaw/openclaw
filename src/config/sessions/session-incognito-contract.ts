@@ -1,5 +1,6 @@
 import type { SqliteWorkerEphemeralTarget } from "../../infra/sqlite-worker-contract.js";
 import type { CommittedSessionSharingFacts } from "./session-accessor.sqlite-sharing-acquisition.js";
+import type { IncognitoComputeOperations } from "./session-incognito-compute-contract.js";
 import type { IncognitoHistoryOperations } from "./session-incognito-history-contract.js";
 import type { IncognitoLifecycleOperations } from "./session-incognito-lifecycle-contract.js";
 import type { IncognitoOutboxOperations } from "./session-incognito-outbox-contract.js";
@@ -35,6 +36,7 @@ export type IncognitoSessionCreate = {
 };
 
 type DomainOperations = IncognitoSideDataOperations &
+  IncognitoComputeOperations &
   IncognitoHistoryOperations &
   IncognitoLifecycleOperations &
   IncognitoTranscriptOperations &

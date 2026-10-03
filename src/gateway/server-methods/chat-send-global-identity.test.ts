@@ -225,7 +225,8 @@ it.each<{
       await replaceSessionEntry(row, {
         sessionId: row.sessionId,
         lifecycleRevision: "original",
-        updatedAt: 1,
+        // Identity assertions require live rows, not fixtures eligible for age-retention archiving.
+        updatedAt: Date.now(),
         status: "done",
       });
       await appendTranscriptMessage(row, {
