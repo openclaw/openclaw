@@ -56,7 +56,7 @@ export default defineControlUiPlugin({
             parent: "workboard",
             label,
             page: workboardPageTarget(board.id),
-            icon: board.icon,
+            icon: board.icon ?? "kanban",
             order,
             defaultVisible: false,
           }),
