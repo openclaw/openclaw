@@ -196,7 +196,6 @@ export function validateSynologyGatewayAccountStartup(params: {
 export async function registerSynologyWebhookRoute(params: {
   cfg: OpenClawConfig;
   account: ResolvedSynologyChatAccount;
-  accountId: string;
   log?: SynologyGatewayLog;
   abortSignal?: AbortSignal;
 }): Promise<() => Promise<void>> {

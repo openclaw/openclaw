@@ -216,22 +216,19 @@ export function createWorkerEnvironmentSessionAttachmentStore(options: {
       );
     },
     touchSessionAttachment(this: void, record) {
-      const current = get(db, record.sessionId);
-      if (
-        !current ||
-        current.environmentId !== record.environmentId ||
-        current.generation !== record.generation ||
-        current.closedAtMs !== null
-      ) {
-        throw new Error("Conversation environment attachment is no longer current");
-      }
-      executeSqliteQuerySync(
+      const result = executeSqliteQuerySync(
         db,
         query(db)
           .updateTable("worker_environment_session_attachments")
           .set({ last_used_at_ms: now() })
-          .where("session_id", "=", record.sessionId),
+          .where("session_id", "=", record.sessionId)
+          .where("environment_id", "=", record.environmentId)
+          .where("generation", "=", record.generation)
+          .where("closed_at_ms", "is", null),
       );
+      if (result.numAffectedRows !== 1n) {
+        throw new Error("Conversation environment attachment is no longer current");
+      }
     },
   } satisfies Pick<
     WorkerEnvironmentMutationMethods,

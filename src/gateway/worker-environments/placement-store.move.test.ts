@@ -178,14 +178,14 @@ describe("worker session placement moves", () => {
       abandonSource: true,
     });
     expect(store.getPlacementMove(active.sessionId)).toMatchObject({ abandonSource: true });
-    const reconciling = store.startReconcile({
+    const reconciling = await store.startReconcile({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
       expectedGeneration: begun.placement.generation,
     });
     const recoveryError = "Worker result abandoned by forced operator teardown";
-    const failed = store.fail({
+    const failed = await store.fail({
       sessionId: active.sessionId,
       expectedGeneration: reconciling.generation,
       recoveryError,
@@ -430,7 +430,7 @@ describe("worker session placement moves", () => {
     );
     expect(observed).toEqual(["workspace reconciliation is waiting"]);
 
-    const reconciling = store.startReconcile({
+    const reconciling = await store.startReconcile({
       sessionId: SESSION.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
@@ -467,7 +467,7 @@ describe("worker session placement moves", () => {
         os: "os-a",
       },
     });
-    const reconciling = store.startReconcile({
+    const reconciling = await store.startReconcile({
       sessionId: SESSION.sessionId,
       environmentId: source.environmentId,
       ownerEpoch: source.activeOwnerEpoch,
@@ -519,14 +519,14 @@ describe("worker session placement moves", () => {
       target: { kind: "gateway" },
       abandonSource: true,
     });
-    const reconciling = store.startReconcile({
+    const reconciling = await store.startReconcile({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
       expectedGeneration: begun.placement.generation,
     });
     const recoveryError = "Worker result abandoned by forced operator teardown";
-    const failed = store.fail({
+    const failed = await store.fail({
       sessionId: active.sessionId,
       expectedGeneration: reconciling.generation,
       recoveryError,
@@ -577,7 +577,7 @@ describe("worker session placement moves", () => {
       source: sourceFor(active),
       target: { kind: "gateway" },
     });
-    const reconciling = store.startReconcile({
+    const reconciling = await store.startReconcile({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
@@ -615,7 +615,7 @@ describe("worker session placement moves", () => {
         os: "os-a",
       },
     });
-    const reconciling = store.startReconcile({
+    const reconciling = await store.startReconcile({
       sessionId: source.sessionId,
       environmentId: source.environmentId,
       ownerEpoch: source.activeOwnerEpoch,

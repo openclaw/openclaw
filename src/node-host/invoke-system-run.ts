@@ -208,8 +208,6 @@ type HandleSystemRunInvokeOptions = {
   params: SystemRunParams;
   skillBins: SkillBinsProvider;
   signal?: AbortSignal;
-  execHostEnforced: boolean;
-  execHostFallbackAllowed: boolean;
   runCommand: typeof runCommand;
   /** Agent runs omit node exec lifecycle events; their own stream owns completion. */
   sendNodeEvent?: (event: string, payload: ExecEventPayload) => Promise<void>;
@@ -914,24 +912,22 @@ async function executeSystemRunPhase(
       return;
     }
     if (!response) {
-      if (opts.execHostEnforced || !opts.execHostFallbackAllowed) {
-        await sendSystemRunDenied(opts, phase.execution, {
-          reason: "companion-unavailable",
-          message: "COMPANION_APP_UNAVAILABLE: macOS app exec host unreachable",
-        });
-        return;
-      }
-    } else if (!response.ok) {
+      await sendSystemRunDenied(opts, phase.execution, {
+        reason: "companion-unavailable",
+        message: "COMPANION_APP_UNAVAILABLE: macOS app exec host unreachable",
+      });
+      return;
+    }
+    if (!response.ok) {
       await sendSystemRunDenied(opts, phase.execution, {
         reason: normalizeDeniedReason(response.error.reason),
         message: response.error.message,
       });
       return;
-    } else {
-      const result: ExecHostRunResult = response.payload;
-      await sendSystemRunCompleted(opts, phase.execution, result, JSON.stringify(result));
-      return;
     }
+    const result: ExecHostRunResult = response.payload;
+    await sendSystemRunCompleted(opts, phase.execution, result, JSON.stringify(result));
+    return;
   }
 
   if (phase.needsScreenRecording) {

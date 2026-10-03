@@ -1,6 +1,9 @@
 import { threadId } from "node:worker_threads";
 import type { Result } from "@openclaw/normalization-core/result";
-import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
+import type {
+  SessionEntryCurrentCheck,
+  SessionEntriesCurrentCheck,
+} from "../config/sessions/session-entry-current.types.js";
 import { VERSION } from "../version.js";
 import { capturePluginStateErrorCause } from "./plugin-state-error-cause.js";
 
@@ -102,7 +105,7 @@ export type PluginStateKeyedStore<T, Version extends 1 | 2 = 1> = Version extend
       withCurrent?: (authority: {
         assertCurrent: () => void;
         /** Restricts native writes and comparisons; ordinary reads use assertCurrent. */
-        sessionEntryCurrent?: SessionEntryCurrentCheck;
+        sessionEntryCurrent?: SessionEntryCurrentCheck | SessionEntriesCurrentCheck;
       }) => PluginStateKeyedStore<T, 2>;
     };
 

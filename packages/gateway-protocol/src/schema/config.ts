@@ -121,14 +121,37 @@ const GitUpdateStatusSchema = Type.Union([
   }),
 ]);
 
+const ImmutableGenerationSha = Type.String({ pattern: "^[a-f0-9]{40}$" });
+
+/** Recorded installation facts; preparation does not authorize activation. */
+const UpdateImmutableInstallSchema = closedObject({
+  root: NonEmptyString,
+  currentSha: ImmutableGenerationSha,
+  currentPath: NonEmptyString,
+  prepared: Type.Optional(
+    closedObject({
+      sha: ImmutableGenerationSha,
+      path: NonEmptyString,
+      buildDigest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+      preparedAtMs: Type.Integer({ minimum: 0 }),
+    }),
+  ),
+});
+
 /** Authoritative automatic-update schedule and in-memory campaign state. */
 export const UpdateScheduleStateSchema = closedObject({
   channel: NonEmptyString,
   autoEnabled: Type.Boolean(),
   install: Type.Optional(
     closedObject({
-      kind: Type.Union([Type.Literal("package"), Type.Literal("git"), Type.Literal("unknown")]),
+      kind: Type.Union([
+        Type.Literal("package"),
+        Type.Literal("git"),
+        Type.Literal("immutable"),
+        Type.Literal("unknown"),
+      ]),
       git: Type.Optional(GitUpdateStatusSchema),
+      immutable: Type.Optional(UpdateImmutableInstallSchema),
     }),
   ),
   target: Type.Optional(
@@ -334,6 +357,7 @@ export type ConfigSchemaResponse = Static<typeof ConfigSchemaResponseSchema>;
 export type ConfigSchemaLookupResult = Static<typeof ConfigSchemaLookupResultSchema>;
 export type UpdateStatusParams = Static<typeof UpdateStatusParamsSchema>;
 export type UpdateAvailable = Static<typeof UpdateAvailableSchema>;
+export type UpdateImmutableInstall = Static<typeof UpdateImmutableInstallSchema>;
 export type UpdateScheduleState = Static<typeof UpdateScheduleStateSchema>;
 export type UpdateStatusResult = Static<typeof UpdateStatusResultSchema>;
 export type UpdateHoldParams = Static<typeof UpdateHoldParamsSchema>;

@@ -309,7 +309,7 @@ test.each(["session id", "updated at"] as const)(
     let releaseBlockingMutation = () => {};
     const { promise: blockingMutationStarted, resolve: markBlockingMutationStarted } =
       createDeferred();
-    const blockingMutation = runExclusiveSessionLifecycleMutation({
+    const blockingMutation = runExclusiveSessionLifecycleMutation("delete", {
       scope: storePath,
       identities: [sessionKey],
       run: async () => {

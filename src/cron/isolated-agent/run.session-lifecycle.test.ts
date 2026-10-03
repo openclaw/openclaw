@@ -423,7 +423,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     const run = runCronIsolatedAgentTurn(makePersistentCronParams(sessionKey));
     await runnerStarted.promise;
     let mutationCommitted = false;
-    const mutation = runExclusiveSessionLifecycleMutation({
+    const mutation = runExclusiveSessionLifecycleMutation("patch", {
       ...admissionScope,
       prepare: async () => {
         await interruptSessionWorkAdmissions(admissionScope);

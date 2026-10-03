@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -89,6 +91,41 @@ test("publishes an explicit non-main session before the next socket describe and
       await closeGatewayTestWebSocket(ws);
     }
   }));
+
+test("publishes an explicit non-main session through a junction-backed store", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  await writeSessionStore({ entries: {}, storePath });
+  const alias = `${dir}-alias`;
+  await fs.symlink(dir, alias, process.platform === "win32" ? "junction" : "dir");
+  testState.sessionStorePath = path.join(alias, path.basename(storePath));
+  const config = await getGatewayConfigModule();
+  config.clearRuntimeConfigSnapshot();
+  config.clearConfigCache();
+  const key = "agent:main:dashboard:junction-publication";
+  const { ws } = await openClient();
+  try {
+    const created = await rpcReq<CreatedSessionPayload>(ws, "sessions.create", {
+      agentId: "main",
+      key,
+      label: "Junction publication",
+    });
+    expect(created.ok, JSON.stringify(created)).toBe(true);
+    const sessionId = requireNonEmptyString(created.payload?.sessionId, "created session id");
+    expect(created.payload?.key).toBe(key);
+    const described = await rpcReq<{ session: GatewaySessionRow | null }>(ws, "sessions.describe", {
+      agentId: "main",
+      key,
+    });
+    expect(described.ok, JSON.stringify(described)).toBe(true);
+    expect(described.payload?.session).toMatchObject({
+      key,
+      sessionId,
+      label: "Junction publication",
+    });
+  } finally {
+    await closeGatewayTestWebSocket(ws);
+  }
+});
 
 test("sessions.create scopes the main alias to the requested agent", async () => {
   const { storePath } = await createSessionStoreDir();

@@ -20,7 +20,7 @@ extension ChatSessionSidebar {
             sessions: pageSummary?.sessions ?? node.previewSessions,
             agentID: self.sessionAgentID(session),
             now: now)
-        let targetID = "session:\(session.key)"
+        let targetID = "session:\(self.interactionIdentity(session))"
         let agentID = OpenClawChatSessionKey.agentID(from: session.key) ??
             self.viewModel.sessionMutationTarget(key: session.key, agentID: session.agentId).agentID
         let facts = ChatSessionSidebarRowFacts(
@@ -46,6 +46,7 @@ extension ChatSessionSidebar {
             viewModel: self.viewModel,
             node: node,
             isChild: isChild,
+            targetID: targetID,
             facts: facts,
             attribution: attribution,
             wakeDescription: (self.sessionStatus == .snoozed || self.sessionStatus == .all) &&
@@ -65,7 +66,8 @@ extension ChatSessionSidebar {
                     pinned: session.pinned != true,
                     agentID: session.agentId)
             },
-            archive: { self.viewModel.setSessionArchived(session, archived: !session.isArchived) },
+            archive: { Task { await self.archiveSidebarSession(session) } },
+            archiving: self.batch.isArchiving(session),
             presentedAttention: self.$presentedAttention)
         return self.interactionRow(content, session: session, isChild: isChild)
             .overlay(alignment: .leading) {
@@ -141,6 +143,7 @@ private struct ChatSidebarRow: View {
     let viewModel: OpenClawChatViewModel
     let node: ChatSessionSidebarModel.Node
     let isChild: Bool
+    let targetID: String
     let facts: ChatSessionSidebarRowFacts
     let attribution: ChatSidebarOwnership.Attribution?
     let wakeDescription: String?
@@ -152,6 +155,7 @@ private struct ChatSidebarRow: View {
     let mainSessionKey: String
     let pin: () -> Void
     let archive: () -> Void
+    let archiving: Bool
     @Binding var presentedAttention: OpenClawChatAttentionPresentation?
     @State private var hovered = false
     @FocusState private var focus: Focus?
@@ -252,7 +256,7 @@ private struct ChatSidebarRow: View {
                 ChatSidebarAgentAvatar(agent: pageAgent, size: 22).help(pageAgent.displayName)
             } else if let attention = self.attention, !self.node.session.isArchived {
                 OpenClawChatAttentionBadge(
-                    summary: attention, targetID: "session:\(self.node.id)", presentation: self.$presentedAttention)
+                    summary: attention, targetID: self.targetID, presentation: self.$presentedAttention)
                     .accessibilityValue(self.leadingUnreadValue)
             } else if let glyph = self.facts.glyph {
                 self.graphic(glyph)
@@ -304,7 +308,7 @@ private struct ChatSidebarRow: View {
             .accessibilityLabel(self.node.session
                 .isArchived ? String(localized: "Restore") : String(localized: "Archive"))
             .focused(self.$focus, equals: .archive)
-            .disabled(!self.connected || !ChatSessionSidebarEligibility.canArchive(
+            .disabled(!self.connected || self.archiving || !ChatSessionSidebarEligibility.canArchive(
                 self.node.session, mainSessionKey: self.mainSessionKey))
         }
         .buttonStyle(.borderless)

@@ -9,17 +9,46 @@ export type SqliteFileContent = {
   sizeBytes: number;
 };
 
-export function assertPublishedFileIdentitySync(filePath: string, expectedIdentity: Stats): void {
+export function assertExpectedContent(
+  actual: SqliteFileContent,
+  expected: SqliteFileContent,
+  filePath: string,
+): void {
+  if (actual.sizeBytes !== expected.sizeBytes) {
+    throw new Error(
+      `SQLite snapshot size mismatch for ${filePath}: expected ${expected.sizeBytes}, got ${actual.sizeBytes}`,
+    );
+  }
+  if (actual.sha256 !== expected.sha256) {
+    throw new Error(
+      `SQLite snapshot hash mismatch for ${filePath}: expected ${expected.sha256}, got ${actual.sha256}`,
+    );
+  }
+}
+
+export function assertPublishedFileIdentitySync(
+  filePath: string,
+  expectedIdentity: Stats,
+  expectedContent: SqliteFileContent,
+): void {
   const currentIdentity = fsSync.lstatSync(filePath);
   if (
     !currentIdentity.isFile() ||
     !sameFileIdentity(expectedIdentity, currentIdentity) ||
     expectedIdentity.size !== currentIdentity.size ||
-    expectedIdentity.mtimeMs !== currentIdentity.mtimeMs ||
-    expectedIdentity.ctimeMs !== currentIdentity.ctimeMs ||
     expectedIdentity.birthtimeMs !== currentIdentity.birthtimeMs
   ) {
     throw new Error(`SQLite snapshot file changed: ${filePath}`);
+  }
+  if (
+    expectedIdentity.mtimeMs !== currentIdentity.mtimeMs ||
+    expectedIdentity.ctimeMs !== currentIdentity.ctimeMs
+  ) {
+    assertExpectedContent(
+      hashPublishedFileSync(filePath, expectedIdentity),
+      expectedContent,
+      filePath,
+    );
   }
 }
 
@@ -51,7 +80,16 @@ export function hashPublishedFileSync(
     const content = hashFileDescriptorSync(fileDescriptor);
     const finalStat = fsSync.fstatSync(fileDescriptor, { bigint: true });
     if (!sameFileMutationFingerprint(initialStat, finalStat)) {
-      throw new Error(`SQLite snapshot file changed while reading: ${filePath}`);
+      if (
+        initialStat.dev !== finalStat.dev ||
+        initialStat.ino !== finalStat.ino ||
+        initialStat.birthtimeNs !== finalStat.birthtimeNs ||
+        initialStat.size !== finalStat.size
+      ) {
+        throw new Error(`SQLite snapshot file changed while reading: ${filePath}`);
+      }
+      // FUSE may settle timestamps after publication; only matching bytes can admit that drift.
+      assertExpectedContent(hashFileDescriptorSync(fileDescriptor), content, filePath);
     }
     assertOpenFileIdentitySync(fileDescriptor, filePath, expectedIdentity);
     return content;

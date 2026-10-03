@@ -14,16 +14,5 @@ export function createEmbeddedAgentResourceLoader(
     | "appendSystemPromptTransform"
   >,
 ): DefaultResourceLoader {
-  return new DefaultResourceLoader({
-    ...options,
-    noExtensions: true,
-    noSkills: true,
-    noPromptTemplates: true,
-    noThemes: true,
-    noContextFiles: true,
-    // Explicit empty sources bypass SYSTEM.md/APPEND_SYSTEM.md discovery before any reads.
-    // Runtime-owned prompt text and bounded context are supplied by the caller.
-    systemPrompt: "",
-    appendSystemPrompt: [],
-  });
+  return new DefaultResourceLoader(options);
 }

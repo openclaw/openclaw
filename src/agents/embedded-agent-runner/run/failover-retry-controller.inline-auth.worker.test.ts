@@ -234,14 +234,22 @@ async function fixture(state: OpenClawTestState, owner: Owner, empty = false) {
   return { agentDir, initial, store, database, controller, sharedBefore, derived };
 }
 
-it.each(["local-agent", "legacy-main", "main-with-shared-base"] as const)(
-  "persists %s inline-key failure through the real retry controller without host data SQL",
-  async (owner) => {
+it.each<[Owner, boolean]>([
+  ["local-agent", false],
+  ["legacy-main", false],
+  ["main-with-shared-base", false],
+  ["local-agent", true],
+])(
+  "persists %s inline-key failure without host data SQL (empty credentials: %s)",
+  async (owner, empty) => {
     await withOpenClawTestState(
       { label: "inline-auth-worker", scenario: "minimal" },
       async (state) => {
         const { agentDir, initial, store, database, controller, sharedBefore, derived } =
-          await fixture(state, owner);
+          await fixture(state, owner, empty);
+        if (empty) {
+          expect(inspectPersistedAuthProfileStoreRaw(agentDir).status).toBe("missing");
+        }
         const sql = observeHostDataSql();
         let counts: number[];
         try {
@@ -254,11 +262,18 @@ it.each(["local-agent", "legacy-main", "main-with-shared-base"] as const)(
           sql.restore();
         }
         const persisted = loadPersistedAuthProfileStore(agentDir);
+        if (empty) {
+          expect(inspectPersistedAuthProfileStoreRaw(agentDir).status).toBe("readable");
+        }
         expect(persisted?.usageStats?.[usageId]).toMatchObject({
-          errorCount: 3,
-          failureCounts: { auth: 3 },
-          cooldownReason: "auth",
-          cooldownUntil: initial.usageStats?.[usageId]?.cooldownUntil,
+          errorCount: empty ? 1 : 3,
+          failureCounts: { auth: empty ? 1 : 3 },
+          ...(!empty
+            ? {
+                cooldownReason: "auth",
+                cooldownUntil: initial.usageStats?.[usageId]?.cooldownUntil,
+              }
+            : {}),
         });
         expect(store.usageStats).toEqual(persisted?.usageStats);
         expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.usageStats).toEqual(
@@ -537,28 +552,6 @@ it.each(["local", "inherited"] as const)(
     );
   },
 );
-
-it("creates an empty credential anchor when a fresh agent records an inline-key failure", async () => {
-  await withOpenClawTestState(
-    { label: "inline-auth-empty", scenario: "minimal" },
-    async (state) => {
-      const { agentDir, store, controller } = await fixture(state, "local-agent", true);
-      expect(inspectPersistedAuthProfileStoreRaw(agentDir).status).toBe("missing");
-      await controller.maybeMarkAuthProfileFailure({ reason: "auth" });
-      expect(inspectPersistedAuthProfileStoreRaw(agentDir).status).toBe("readable");
-      const persisted = loadPersistedAuthProfileStore(agentDir);
-      expect(persisted?.profiles).toEqual({});
-      expect(persisted?.usageStats?.[usageId]).toMatchObject({
-        errorCount: 1,
-        failureCounts: { auth: 1 },
-      });
-      expect(store.usageStats).toEqual(persisted?.usageStats);
-      expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.usageStats).toEqual(
-        persisted?.usageStats,
-      );
-    },
-  );
-});
 
 it.each(["local-agent", "legacy-main"] as const)(
   "keeps a confirmed %s inline-health commit after owner close and a throwing invalidation observer",

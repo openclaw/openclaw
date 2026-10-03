@@ -80,6 +80,7 @@ import {
   createUnexpectedUpdateFailureResult,
   recordHandoffFailure,
   resolveGatewayUpdateAdmission,
+  reportImmutableGatewayUpdateRefusal,
 } from "./update-admission.js";
 import { recordGatewayUpdateOutcome } from "./update-outcome-observation.js";
 import { updateReportHandler } from "./update-report.js";
@@ -295,6 +296,10 @@ export const updateHandlers: GatewayRequestHandlers = {
         steps: [],
         durationMs: 0,
       });
+      if (installSurface.kind === "immutable") {
+        reportImmutableGatewayUpdateRefusal(runId, installSurface, respond);
+        return;
+      }
       const effectiveChannel = resolveEffectiveUpdateChannel({
         configChannel,
         currentVersion: VERSION,

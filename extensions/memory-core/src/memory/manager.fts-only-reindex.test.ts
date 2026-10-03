@@ -13,7 +13,6 @@ import {
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
-import { closeAllMemoryIndexManagers } from "./manager-runtime.js";
 import type { MemoryIndexManager } from "./manager.js";
 import "./test-runtime-mocks.js";
 
@@ -204,7 +203,6 @@ describe("memory manager FTS-only reindex", () => {
     expect(indexed.status().chunks).toBeGreaterThan(0);
     await indexed.close();
     await closeAllMemorySearchManagers();
-    await closeAllMemoryIndexManagers();
     createEmbeddingProviderMock.mockClear();
 
     const reopened = await createManager({ provider: "openai", purpose: "status" });
@@ -323,7 +321,6 @@ describe("memory manager FTS-only reindex", () => {
       await expect(firstManager.probeVectorAvailability()).resolves.toBe(true);
       await firstManager.close();
       await closeAllMemorySearchManagers();
-      await closeAllMemoryIndexManagers();
       providerAvailable = false;
       providerConstructionError = missingProviderAuth();
       const memoryManager = await createManager();
@@ -594,7 +591,6 @@ describe("memory manager FTS-only reindex", () => {
     await memoryManager.sync({ force: true });
     await memoryManager.close();
     await closeAllMemorySearchManagers();
-    await closeAllMemoryIndexManagers();
 
     const reopened = await createManager({ provider: "none", purpose: "status" });
     expect(reopened.status()).toMatchObject({

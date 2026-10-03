@@ -96,70 +96,50 @@ describe("local agent avatar files", () => {
     expect(read).not.toHaveBeenCalled();
   });
 
-  it("retains the admitted inode when the path is replaced during the read", () => {
-    const { workspace } = createWorkspace();
-    const avatarPath = path.join(workspace, "avatar.png");
-    const replacement = path.join(workspace, "replacement.png");
-    fs.writeFileSync(avatarPath, "original");
-    fs.writeFileSync(replacement, "replacement");
-    const readSync = fs.readSync;
-    const read = vi.spyOn(fs, "readSync").mockImplementationOnce((...args) => {
-      fs.renameSync(replacement, avatarPath);
-      return Reflect.apply(readSync, fs, args);
-    });
-    const close = vi.spyOn(fs, "closeSync");
-    const result = readLocalAgentAvatarSnapshot({
-      workspaceDir: workspace,
-      source: "avatar.png",
-      readBody: true,
-    });
-    expect(result).toMatchObject({
-      ok: true,
-      file: { body: Uint8Array.from(Buffer.from("original")) },
-    });
-    expect(read).toHaveBeenCalled();
-    expect(close).toHaveBeenCalledOnce();
-  });
-
-  it("bounds growth after admission and closes the pinned descriptor", () => {
-    const { workspace } = createWorkspace();
-    const avatarPath = path.join(workspace, "avatar.png");
-    fs.writeFileSync(avatarPath, "avatar");
-    const readSync = fs.readSync;
-    let readFd: number | undefined;
-    vi.spyOn(fs, "readSync").mockImplementationOnce((...args) => {
-      readFd = args[0];
-      fs.appendFileSync(avatarPath, Buffer.alloc(AVATAR_MAX_BYTES));
-      return Reflect.apply(readSync, fs, args);
-    });
-    const close = vi.spyOn(fs, "closeSync");
-    expect(
-      readLocalAgentAvatarSnapshot({
+  it.each(["replacement", "growth", "failure"] as const)(
+    "keeps reads pinned and closes the descriptor after %s",
+    (change) => {
+      const { workspace } = createWorkspace();
+      const avatarPath = path.join(workspace, "avatar.png");
+      const replacement = path.join(workspace, "replacement.png");
+      fs.writeFileSync(avatarPath, "original");
+      fs.writeFileSync(replacement, "replacement");
+      const readSync = fs.readSync;
+      let readFd: number | undefined;
+      const read = vi.spyOn(fs, "readSync").mockImplementationOnce((...args) => {
+        readFd = args[0];
+        if (change === "failure") {
+          throw new Error("read failed");
+        }
+        if (change === "replacement") {
+          fs.renameSync(replacement, avatarPath);
+        } else {
+          fs.appendFileSync(avatarPath, Buffer.alloc(AVATAR_MAX_BYTES));
+        }
+        return Reflect.apply(readSync, fs, args);
+      });
+      const close = vi.spyOn(fs, "closeSync");
+      const result = readLocalAgentAvatarSnapshot({
         workspaceDir: workspace,
         source: "avatar.png",
         readBody: true,
-      }),
-    ).toEqual({ ok: false, reason: "unreadable" });
-    expect(readFd).toBeTypeOf("number");
-    expect(close.mock.calls.filter(([fd]) => fd === readFd)).toHaveLength(1);
-  });
-
-  it("closes the descriptor after a failed read", () => {
-    const { workspace } = createWorkspace();
-    fs.writeFileSync(path.join(workspace, "avatar.png"), "avatar");
-    vi.spyOn(fs, "readSync").mockImplementationOnce(() => {
-      throw new Error("read failed");
-    });
-    const close = vi.spyOn(fs, "closeSync");
-    expect(
-      readLocalAgentAvatarSnapshot({
-        workspaceDir: workspace,
-        source: "avatar.png",
-        readBody: true,
-      }),
-    ).toEqual({ ok: false, reason: "unreadable" });
-    expect(close).toHaveBeenCalledOnce();
-  });
+      });
+      if (change === "replacement") {
+        expect(result).toMatchObject({
+          ok: true,
+          file: { body: Uint8Array.from(Buffer.from("original")) },
+        });
+      } else {
+        expect(result).toEqual({ ok: false, reason: "unreadable" });
+      }
+      expect(read).toHaveBeenCalled();
+      expect(readFd).toBeTypeOf("number");
+      expect(close.mock.calls.filter(([fd]) => fd === readFd)).toHaveLength(1);
+      if (change !== "growth") {
+        expect(close).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
   it("rejects symlink escapes, hardlinks, oversized files, and unsupported extensions", () => {
     const { workspace } = createWorkspace();

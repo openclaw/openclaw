@@ -5,18 +5,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretProviderConfig } from "../config/types.secrets.js";
 import { withSecureTestNodeCommand } from "../secrets/test-node-command.test-support.js";
+import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import {
-  CORE_HEALTH_CHECKS,
-  createCoreHealthChecks,
-  type CoreHealthCheckDeps,
-} from "./doctor-core-checks.js";
+import { CORE_HEALTH_CHECKS, createCoreHealthChecks } from "./doctor-core-checks.js";
 import type { HealthCheck } from "./health-checks.js";
 
 const mocks = vi.hoisted(() => ({
   loadModelCatalog: vi.fn(async () => []),
   callGateway: vi.fn(),
+  detectUnavailableSkills: vi.fn<() => Promise<SkillStatusEntry[]>>(async () => []),
+  collectSecurityWarnings: vi.fn<() => Promise<SecurityAuditFinding[]>>(async () => []),
+  collectWorkspaceSuggestionNotes: vi.fn<() => string[]>(() => []),
   collectClawStateHealthFindings: vi.fn(
     async (_options?: {
       cronGateway?: {
@@ -24,6 +24,20 @@ const mocks = vi.hoisted(() => ({
       };
     }) => [],
   ),
+}));
+
+vi.mock("./doctor-core-checks.runtime.js", () => ({
+  detectUnavailableSkills: mocks.detectUnavailableSkills,
+}));
+
+vi.mock("../commands/doctor-security.js", () => ({
+  collectSecurityWarnings: mocks.collectSecurityWarnings,
+}));
+
+vi.mock("../commands/doctor-workspace-suggestions.js", () => ({
+  async *collectWorkspaceSuggestionNotes() {
+    yield* mocks.collectWorkspaceSuggestionNotes();
+  },
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
@@ -88,21 +102,6 @@ function createSkill(): SkillStatusEntry {
   };
 }
 
-function createDeps(overrides: Partial<CoreHealthCheckDeps> = {}): CoreHealthCheckDeps {
-  return {
-    detectUnavailableSkills: async () => [],
-    collectSecurityWarnings: async () => [],
-    collectWorkspaceSuggestionNotes: async () => [],
-    collectRuntimeToolSchemaFindings: async () => [],
-    collectProviderCatalogProjectionFindings: async () => [],
-    collectLocalAudioAccelerationFindings: async () => [],
-    collectGatewayHealthFindings: async () => [],
-    collectGatewayDaemonFindings: async () => [],
-    listGatewayCronJobs: async () => [],
-    ...overrides,
-  };
-}
-
 function getCheck(checks: readonly HealthCheck[], id: string): HealthCheck {
   const check = checks.find((entry) => entry.id === id);
   if (!check) {
@@ -119,6 +118,9 @@ describe("CORE_HEALTH_CHECKS", () => {
     mocks.callGateway.mockReset();
     mocks.collectClawStateHealthFindings.mockReset();
     mocks.collectClawStateHealthFindings.mockResolvedValue([]);
+    mocks.detectUnavailableSkills.mockReset();
+    mocks.collectSecurityWarnings.mockReset();
+    mocks.collectWorkspaceSuggestionNotes.mockReset();
     tmp = undefined;
   });
 
@@ -175,7 +177,9 @@ describe("CORE_HEALTH_CHECKS", () => {
   );
 
   it("converts unavailable skills into scoped repair-capable findings", async () => {
-    const detectUnavailableSkills = vi.fn(async () => [createSkill()]);
+    const detectUnavailableSkills = mocks.detectUnavailableSkills.mockResolvedValue([
+      createSkill(),
+    ]);
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -184,10 +188,7 @@ describe("CORE_HEALTH_CHECKS", () => {
         },
       },
     };
-    const check = getCheck(
-      createCoreHealthChecks(createDeps({ detectUnavailableSkills })),
-      "core/doctor/skills-readiness",
-    );
+    const check = getCheck(createCoreHealthChecks(), "core/doctor/skills-readiness");
     expect(check).toMatchObject({ defaultEnabled: false, repair: expect.any(Function) });
     await expect(
       check.detect({
@@ -223,24 +224,18 @@ describe("CORE_HEALTH_CHECKS", () => {
     );
   });
   it("keeps one structured security condition as one health finding", async () => {
-    const check = getCheck(
-      createCoreHealthChecks(
-        createDeps({
-          collectSecurityWarnings: async () => [
-            {
-              checkId: "gateway.bind_no_auth",
-              severity: "critical",
-              title: "CRITICAL",
-              detail:
-                'Gateway bound to "lan" (0.0.0.0) without authentication.\nAnyone on your network can fully control your agent.',
-              remediation:
-                "Fix: openclaw config set gateway.bind loopback\nFix: openclaw doctor --fix to generate a token",
-            },
-          ],
-        }),
-      ),
-      "core/doctor/security",
-    );
+    mocks.collectSecurityWarnings.mockResolvedValue([
+      {
+        checkId: "gateway.bind_no_auth",
+        severity: "critical",
+        title: "CRITICAL",
+        detail:
+          'Gateway bound to "lan" (0.0.0.0) without authentication.\nAnyone on your network can fully control your agent.',
+        remediation:
+          "Fix: openclaw config set gateway.bind loopback\nFix: openclaw doctor --fix to generate a token",
+      },
+    ]);
+    const check = getCheck(createCoreHealthChecks(), "core/doctor/security");
     expect(
       await check.detect({
         mode: "lint",
@@ -260,10 +255,7 @@ describe("CORE_HEALTH_CHECKS", () => {
     ]);
   });
   it("reports disabled Codex plugin routes as core health findings", async () => {
-    const check = getCheck(
-      createCoreHealthChecks(createDeps()),
-      "core/doctor/codex-session-routes",
-    );
+    const check = getCheck(createCoreHealthChecks(), "core/doctor/codex-session-routes");
     const codex = {
       enabled: false,
       config: { appServer: { command: "node -e process.exit(99)" } },
@@ -300,7 +292,7 @@ describe("CORE_HEALTH_CHECKS", () => {
 
   it("uses the read-only model catalog for hooks.gmail.model checks", async () => {
     const cfg: OpenClawConfig = { hooks: { gmail: { model: "openai/gpt-5.5" } } };
-    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/hooks-model");
+    const check = getCheck(createCoreHealthChecks(), "core/doctor/hooks-model");
     await check.detect({ mode: "lint", runtime, cfg });
     expect(mocks.loadModelCatalog).toHaveBeenCalledWith({
       config: cfg,
@@ -432,17 +424,11 @@ describe("CORE_HEALTH_CHECKS", () => {
   });
 
   it("converts workspace suggestions into info findings", async () => {
-    const check = getCheck(
-      createCoreHealthChecks(
-        createDeps({
-          collectWorkspaceSuggestionNotes: async () => [
-            "- Back up the workspace.",
-            "Memory system not found in workspace.",
-          ],
-        }),
-      ),
-      "core/doctor/workspace-suggestions",
-    );
+    mocks.collectWorkspaceSuggestionNotes.mockReturnValue([
+      "- Back up the workspace.",
+      "Memory system not found in workspace.",
+    ]);
+    const check = getCheck(createCoreHealthChecks(), "core/doctor/workspace-suggestions");
     const findings = await check.detect({
       mode: "lint",
       runtime,

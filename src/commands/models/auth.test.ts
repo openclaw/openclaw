@@ -74,7 +74,7 @@ const mocks = vi.hoisted(() => ({
   isImplicitLocalGatewayTarget: vi.fn(() => Promise.resolve(true)),
   resolvePluginSetupProviderCore: vi.fn(),
   resolvePluginSetupRegistry: vi.fn(),
-  readSecretStoreValue: vi.fn(() => ({
+  readSecretStoreValue: vi.fn(async () => ({
     ok: false as const,
     error: { code: "SECRET_STORE_NOT_FOUND", message: "missing" },
   })),

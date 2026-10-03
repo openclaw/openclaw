@@ -4185,7 +4185,7 @@ describe("main-session-restart-recovery", () => {
     try {
       await dispatchEntered.promise;
       expect(isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId])).toBe(true);
-      mutation = runExclusiveSessionLifecycleMutation({
+      mutation = runExclusiveSessionLifecycleMutation("recover", {
         scope: storePath,
         identities: [sessionKey, sessionId],
         prepare: async () => {

@@ -1132,7 +1132,7 @@ describe("handleControlUiHttpRequest", () => {
 
   it.each([
     ["", "/__openclaw__/control-ui-config.json"],
-    ["/openclaw", "/openclaw/__openclaw/control-ui-config.json"],
+    ["/openclaw", "/openclaw/control-ui-config.json"],
   ])("serves bootstrap with basePath=%s at %s", async (basePath, url) => {
     const tmp = await createControlUiRoot();
     const { res, end, handled } = await runControlUiRequest(tmp, url, {

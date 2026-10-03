@@ -1,5 +1,6 @@
 import {
   applyReplyPayloadTargetPolicy,
+  addReplyPayloadMediaFailures,
   copyReplyPayloadMetadata,
   formatBtwTextForExternalDelivery,
   isRenderablePayload,
@@ -203,6 +204,10 @@ function normalizeRawOutboundPayload(
       audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
     }),
   );
+  addReplyPayloadMediaFailures(normalizedPayload, [
+    ...(parsed.mediaFailures ?? []),
+    ...(strippedParsed === parsed ? [] : (strippedParsed.mediaFailures ?? [])),
+  ]);
   return suppressedText && !hasReplyPayloadContent(normalizedPayload) ? null : normalizedPayload;
 }
 

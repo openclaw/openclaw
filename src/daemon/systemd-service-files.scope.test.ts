@@ -19,6 +19,7 @@ vi.mock("./systemd-scope.js", () => ({ findInstalledSystemdGatewayScope: findSco
 import {
   readSystemdServiceCommandLocation,
   readSystemdServiceExecStart,
+  readSystemdServiceExecStartAsRoot,
 } from "./systemd-service-files.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -119,6 +120,36 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("system-scope effective command", () => {
+  it("lets root inspect an explicitly selected nonroot account with effective environment files", async () => {
+    vi.spyOn(process, "geteuid").mockReturnValue(0);
+    const environmentFile = path.join(path.dirname(target.unitPath), "gateway.env");
+    await fs.writeFile(environmentFile, "OPENCLAW_STATE_DIR=/var/lib/example\n");
+    fileSpecs = [[environmentFile, false]];
+    vi.spyOn(os, "userInfo").mockReturnValue({
+      username: "root",
+      uid: 0,
+      gid: 0,
+      homedir: "/root",
+      shell: "/bin/sh",
+    });
+
+    await expect(readSystemdServiceExecStartAsRoot(env, target, "gateway")).resolves.toMatchObject({
+      environment: { OPENCLAW_STATE_DIR: "/var/lib/example", OPENCLAW_SERVICE_KIND: "gateway" },
+    });
+    expect(systemBus.mock.calls.some(([args]) => args.includes("LoadUnit"))).toBe(false);
+    await expect(readSystemdServiceExecStartAsRoot(env, target, "other")).rejects.toMatchObject({
+      reason: "systemd-account-refused",
+    });
+  });
+
+  it("refuses cross-account inspection before manager reads without root", async () => {
+    vi.spyOn(process, "geteuid").mockReturnValue(2001);
+    await expect(readSystemdServiceExecStartAsRoot(env, target, "gateway")).rejects.toMatchObject({
+      reason: "systemd-account-refused",
+    });
+    expect(systemBus).not.toHaveBeenCalled();
+  });
+
   it("reads loaded artifact location without resolving protected service credentials", async () => {
     const protectedFile = path.join(path.dirname(target.unitPath), "protected-service.env");
     fileSpecs = [[protectedFile, false]];

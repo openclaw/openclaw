@@ -15,6 +15,7 @@ import {
   createPluginNativeAdmission,
   type PluginNativeRecovery,
 } from "./plugin-native-admission.js";
+import { createPluginNativeImportPattern } from "./plugin-native-resolution.js";
 import {
   capturePluginPackageMetadata,
   capturePluginDependencies,
@@ -491,10 +492,11 @@ export function capturePluginGenerationArtifact(
           return dependencyPrepared ? { retryNative: true } : undefined;
         }
         if (dependencyPrepared === "package-map") {
-          const filename = resolvePluginPackageMapTarget(specifier, target, conditions);
-          if (!filename) {
+          const selected = resolvePluginPackageMapTarget(specifier, target, conditions);
+          if (!selected) {
             return undefined;
           }
+          const filename = fileURLToPath(selected);
           if (inPackage(destination, filename)) {
             const original = path.join(boundary, path.relative(destination, filename));
             if (packageMap.hasMissingTarget(original)) {
@@ -525,12 +527,12 @@ export function capturePluginGenerationArtifact(
         }
         return { target: capturedPluginModuleUrl(captured, specifier, conditions) };
       };
-      const nativeScope = getNativeScope(source, scope?.manifest);
       const moduleCapture: PluginModuleCapture = {
+        isNativeImportPattern: createPluginNativeImportPattern(scope?.manifest.imports),
         isRequireReference: (specifier) =>
           observed.has(`require\0${specifier}`) && !observed.has(`import\0${specifier}`),
         prepareDependency,
-        nativeScope,
+        nativeScope: getNativeScope(source, scope?.manifest),
         capture: captureModule,
       };
       moduleCaptures.set(target, moduleCapture);
@@ -627,12 +629,8 @@ export function capturePluginGenerationArtifact(
         nativeAdmission.reconcileSourceInputs(inputs);
       },
       sourceForCaptured: (file: string) => originalSources.get(path.resolve(file)),
-      isRequireReference: (importer: string, specifier: string) =>
-        moduleCaptures.get(importer)?.isRequireReference(specifier) ?? false,
-      isRequirePreview: (importer: string, specifier: string) => {
-        const imports = moduleCaptures.get(importer)?.staticImports;
-        return imports !== undefined && !imports.has(specifier);
-      },
+      moduleFacts: (importer: string): Readonly<PluginModuleCapture> | undefined =>
+        moduleCaptures.get(importer),
       boundaryRoot: directory,
       // The receipt attests the initial snapshot; first-demand inputs extend only its identity ledger.
       sourceDigest: initialReceipt.sourceDigest,

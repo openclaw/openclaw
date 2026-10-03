@@ -104,8 +104,9 @@ OPENCLAW_VITEST_RUNTIME=bun pnpm test <path-or-filter>
 Install the exact Bun fork build pinned by `.github/actions/setup-test-bun/action.yml`
 for comparable results. This selects the
 actual Vitest process and workers while retaining Node for orchestration and
-compiler preparation. It does not use Bun's native test runner. `bun run` alone
-does not select Bun for tests. Node remains the local default.
+compiler preparation. Source-runner CLI fixtures also use the selected runtime
+after Node completes build preparation. This does not use Bun's native test runner.
+`bun run` alone does not select Bun for tests. Node remains the local default.
 
 For the CI Control UI comparison, run the full selection on Node followed by Bun:
 

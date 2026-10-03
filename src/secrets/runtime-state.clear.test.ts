@@ -98,18 +98,33 @@ it("isolates snapshot owners while exposing the active config pair for hot paths
     degradedOwners: snapshot.degradedOwners,
     secretOwners: snapshot.secretOwners,
   });
+  const refreshContext: state.SecretsRuntimeRefreshContext = {
+    env: { SNAPSHOT_FIXTURE: "original" },
+    explicitAgentDirs: ["original"],
+    includeAuthStoreRefs: true,
+    loadablePluginOrigins: new Map(),
+  };
 
   state.activateSecretsRuntimeSnapshotState({
     snapshot,
-    refreshContext: null,
+    refreshContext,
     refreshHandler: null,
   });
+  refreshContext.env.SNAPSHOT_FIXTURE = "caller edit";
 
   snapshot.degradedOwners![0]!.paths.push("changed-at-source");
   snapshot.degradedOwners![0]!.providerFailures![0]!.provider = "changed-at-source";
   resolvedValue.nested.push("changed-at-source");
   const configSnapshot = state.getActiveSecretsRuntimeConfigSnapshot();
   const fullSnapshot = state.getActiveSecretsRuntimeSnapshotState();
+  const readerContext = state.getPreparedSecretsRuntimeSnapshotRefreshContext(fullSnapshot!);
+  expect(readerContext?.env.SNAPSHOT_FIXTURE).toBe("original");
+  readerContext!.env.SNAPSHOT_FIXTURE = "reader edit";
+  readerContext!.explicitAgentDirs!.push("reader edit");
+  expect(state.getActiveSecretsRuntimeRefreshContext()).toMatchObject({
+    env: { SNAPSHOT_FIXTURE: "original" },
+    explicitAgentDirs: ["original"],
+  });
 
   expect(configSnapshot?.config).not.toBe(fullSnapshot?.config);
   expect(configSnapshot?.sourceConfig).not.toBe(fullSnapshot?.sourceConfig);

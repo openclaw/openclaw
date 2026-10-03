@@ -23,10 +23,12 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     mixed,
     yielded,
     single,
+    marked = true,
   }: {
     mixed: boolean;
     yielded: boolean;
     single: boolean;
+    marked?: boolean;
   }) =>
     (single ? ["run-b"] : ["run-a", "run-b"]).map((runId, index) =>
       makeSettledChild({
@@ -46,7 +48,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
                 afterRequesterYield: true,
                 requesterYieldBatch: true,
                 rearmGeneration: 1,
-                yieldedFinalDeliverable: true,
+                ...(marked ? { yieldedFinalDeliverable: true as const } : {}),
               }
             : {}),
         },
@@ -54,113 +56,86 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     );
 
   it.each([
-    { name: "delivered private pair", mixed: false },
-    { name: "delivered mixed pair", mixed: true },
-  ])("keeps settled private results internal: $name", async ({ mixed }) => {
+    { name: "delivered private pair", mixed: false, single: false, yielded: false },
+    { name: "delivered mixed pair", mixed: true, single: false, yielded: false },
+    { name: "yielded private child", mixed: false, single: true, yielded: true },
+    { name: "yielded mixed pair", mixed: true, single: false, yielded: true },
+  ])("preserves the admitted reply policy: $name", async ({ mixed, single, yielded }) => {
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(
-      settledPrivateChildren({ mixed, yielded: false, single: false }),
+      settledPrivateChildren({ mixed, yielded, single }),
     );
     expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
     expect(deliverSpy).toHaveBeenCalledOnce();
-    expect(deliveredCallArg()).toMatchObject({
-      completionTarget: "parent",
+    const call = deliveredCallArg();
+    expect(call).toMatchObject({
       completionRequesterSessionId: "sess-main",
       requireDirectDelivery: true,
     });
-    expect(deliveredCallArg().requireVisibleReply).toBeUndefined();
-    expect(String(deliveredCallArg().triggerMessage)).toContain("private marker");
-    expect(String(deliveredCallArg().triggerMessage)).toContain(
-      "send it through an available, permitted messaging tool",
-    );
-    expect(String(deliveredCallArg().triggerMessage)).toContain(
-      "briefly record the reviewed outcome and any remaining work",
-    );
-    expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
-    expect(deliverSpy).toHaveBeenCalledOnce();
-    expect(completeBatchSpy.mock.calls[0]?.[2]).not.toHaveProperty(
-      "requesterVisibleFinalDelivered",
-    );
-  });
-
-  // A yield hands continuation back to the requester. A private continuation
-  // cannot deliver, so its final answer would be discarded silently.
-  it.each([
-    { name: "yielded private child", mixed: false, single: true },
-    { name: "yielded mixed pair", mixed: true, single: false },
-  ])("resumes a yielded requester with a deliverable reply: $name", async ({ mixed, single }) => {
-    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(
-      settledPrivateChildren({ mixed, yielded: true, single }),
-    );
-    expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
-    expect(deliverSpy).toHaveBeenCalledOnce();
-    expect(deliveredCallArg()).toMatchObject({
-      requireDirectDelivery: true,
-      completionRequesterSessionId: "sess-main",
-    });
-    expect(deliveredCallArg().completionTarget).toBeUndefined();
     // The conversation's reply policy decides whether a visible update is owed.
-    expect(deliveredCallArg().requireVisibleReply).toBeUndefined();
-    const trigger = String(deliveredCallArg().triggerMessage);
+    expect(call.requireVisibleReply).toBeUndefined();
+    expect(call.completionTarget).toBe(yielded ? undefined : "parent");
+    const trigger = String(call.triggerMessage);
     expect(trigger).toContain("private marker");
-    expect(trigger).not.toContain("Your final reply stays internal");
-    expect(trigger).toContain("under its normal reply rules");
-    expect(trigger).toContain("must go through the message tool, send your answer with it");
-    expect(trigger).toContain("avoid repeating an update already delivered");
-    expect(transitionBatchSpy.mock.calls.at(0)?.[1]).toMatchObject({
-      status: "dispatching",
-      yieldedFinalDeliverable: true,
-    });
+    if (yielded) {
+      expect(trigger).not.toContain("Your final reply stays internal");
+      expect(trigger).toContain("under its normal reply rules");
+      expect(trigger).toContain("must go through the message tool, send your answer with it");
+      expect(trigger).toContain("avoid repeating an update already delivered");
+      expect(transitionBatchSpy.mock.calls.at(0)?.[1]).toMatchObject({
+        status: "dispatching",
+        yieldedFinalDeliverable: true,
+      });
+    } else {
+      expect(trigger).toContain("send it through an available, permitted messaging tool");
+      expect(trigger).toContain("briefly record the reviewed outcome and any remaining work");
+      expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
+      expect(deliverSpy).toHaveBeenCalledOnce();
+      expect(completeBatchSpy.mock.calls[0]?.[2]).not.toHaveProperty(
+        "requesterVisibleFinalDelivered",
+      );
+    }
   });
 
   // The released yield writer stored private batches without the marker, including
   // unattempted ones; after an upgrade they keep their admitted private policy.
   it.each([
-    { status: "dispatching", attemptCount: 1 },
-    { status: "pending", attemptCount: 1 },
-    { status: "pending", attemptCount: 0 },
+    { status: "dispatching", attemptCount: 1, marked: false },
+    { status: "pending", attemptCount: 1, marked: false },
+    { status: "pending", attemptCount: 0, marked: false },
+    { status: "pending", attemptCount: 1, marked: true },
   ] as const)(
-    "keeps the private policy for a markerless $status batch, attempts=$attemptCount",
-    async ({ status, attemptCount }) => {
-      const children = settledPrivateChildren({ mixed: false, yielded: true, single: true });
-      const { yieldedFinalDeliverable: _marker, ...released } = children[0]!.requesterSettleWake!;
+    "preserves a $status batch's policy and retry identity (marked=$marked, attempts=$attemptCount)",
+    async ({ status, attemptCount, marked }) => {
+      const children = settledPrivateChildren({
+        mixed: false,
+        yielded: true,
+        single: true,
+        marked,
+      });
       children[0]!.requesterSettleWake = {
-        ...released,
+        ...children[0]!.requesterSettleWake!,
         status,
         attemptCount,
         batchRunIds: ["run-b"],
       };
       registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
       expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
-      expect(deliveredCallArg()).toMatchObject({
-        completionTarget: "parent",
-        completionRequesterSessionId: "sess-main",
-      });
-      // Private inputs keep the unsuffixed identity across attempts.
-      expect(deliveredCallArg().directIdempotencyKey).toBe(requesterSettleKey("run-b:yield-1"));
+      const call = deliveredCallArg();
+      expect(call.completionTarget).toBe(marked ? undefined : "parent");
+      // Deliverable retries rotate keys; private inputs retain their admitted identity.
+      expect(call.directIdempotencyKey).toBe(
+        requesterSettleKey(marked ? "run-b:yield-1:retry-1" : "run-b:yield-1"),
+      );
+      if (marked) {
+        expect(transitionBatchSpy.mock.calls.at(0)?.[1]).toMatchObject({
+          status: "dispatching",
+          yieldedFinalDeliverable: true,
+        });
+      } else {
+        expect(call.completionRequesterSessionId).toBe("sess-main");
+      }
     },
   );
-
-  it("keeps the deliverable policy for a marked batch after a failed attempt", async () => {
-    const children = settledPrivateChildren({ mixed: false, yielded: true, single: true });
-    Object.assign(children[0]!.requesterSettleWake!, {
-      status: "pending",
-      attemptCount: 1,
-      batchRunIds: ["run-b"],
-      yieldedFinalDeliverable: true,
-    });
-    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
-    expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
-    expect(deliveredCallArg().completionTarget).toBeUndefined();
-    // A deliverable retry needs a fresh key: the Gateway caches terminal outcomes
-    // per key, so reusing the first attempt's key would replay its failure.
-    expect(deliveredCallArg().directIdempotencyKey).toBe(
-      requesterSettleKey("run-b:yield-1:retry-1"),
-    );
-    expect(transitionBatchSpy.mock.calls.at(0)?.[1]).toMatchObject({
-      status: "dispatching",
-      yieldedFinalDeliverable: true,
-    });
-  });
 
   // `/new` keeps the session id and rotates its lifecycle revision. A deliverable
   // retry after either replacement would post the old findings into a fresh session.

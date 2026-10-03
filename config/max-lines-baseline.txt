@@ -34,7 +34,6 @@ extensions/codex/src/app-server/plugin-thread-config.test.ts
 extensions/codex/src/app-server/run-attempt.test.ts
 extensions/codex/src/app-server/runtime-artifact.ts
 extensions/codex/src/app-server/session-binding.test.ts
-extensions/codex/src/app-server/session-binding.ts
 extensions/codex/src/app-server/shared-client.test.ts
 extensions/codex/src/app-server/shared-client.ts
 extensions/codex/src/app-server/side-question.test.ts
@@ -288,7 +287,6 @@ src/agents/sessions/extensions/runner.ts
 src/agents/sessions/extensions/types.ts
 src/agents/sessions/model-registry.ts
 src/agents/sessions/package-manager.ts
-src/agents/sessions/resource-loader.ts
 src/agents/subagents/announce/subagent-announce-delivery.test.ts
 src/agents/subagents/announce/subagent-announce.format.e2e.test.ts
 src/agents/subagents/registry/subagent-control.test.ts
@@ -360,7 +358,6 @@ src/cli/gateway-cli/run-loop.test.ts
 src/cli/gateway-cli/run-loop.ts
 src/cli/gateway-cli/run.option-collisions.test.ts
 src/cli/gateway-cli/run.ts
-src/cli/logs-cli.ts
 src/cli/mcp-cli.ts
 src/cli/plugins-authoring-command.ts
 src/cli/plugins-cli-test-helpers.ts

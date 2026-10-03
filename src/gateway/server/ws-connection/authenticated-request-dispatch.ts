@@ -274,6 +274,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           }
           diagnostics?.response(
             sendResult.kind === "sent" ? (responseOk ? "ok" : "error") : "unavailable",
+            sendResult.kind === "sent" ? sendResult.bytes : undefined,
           );
           const unauthorizedRoleError = isUnauthorizedRoleError(responseError);
           let logMeta = meta;
@@ -310,6 +311,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
             errorCode: responseError?.code,
             errorMessage: responseError?.message,
             ...logMeta,
+            bytes: sendResult.kind === "sent" ? sendResult.bytes : undefined,
           });
         } finally {
           // ws queues frames in order: send the result before starting its close handshake.

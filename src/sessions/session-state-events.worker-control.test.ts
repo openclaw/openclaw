@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
   recordSessionGoalChanged,
   recordSessionHumanDirectMessage,
@@ -12,9 +13,14 @@ import type { SessionStateEventRow, SessionStateNotice } from "./session-state-e
 const edge = vi.hoisted(() => {
   const phases: string[] = [];
   const context = {
-    identity: "captured-shared-state",
-    admission: { databasePath: "/synthetic/state.sqlite", assertCurrent: vi.fn() },
-  };
+    environment: { OPENCLAW_STATE_DIR: "/synthetic" },
+    admission: {
+      databasePath: "/synthetic/state.sqlite",
+      coordinationKey: "captured-shared-state",
+      identity: { key: "file:1:1", canonicalPath: "/synthetic/state.sqlite" },
+      assertCurrent: vi.fn(),
+    },
+  } satisfies OpenClawStateWorkerContext;
   const execute = vi.fn<(command: { type: string; input: unknown }) => Promise<unknown>>();
   return {
     phases,
@@ -64,7 +70,9 @@ vi.mock("../infra/node-sqlite.js", () => ({
   requireNodeSqlite: edge.forbidden,
   openNodeSqliteDatabase: edge.forbidden,
 }));
-vi.mock("../infra/kysely-sync.js", () => ({
+// Schema owners create query caches at import time; keep factories real and SQL calls forbidden.
+vi.mock("../infra/kysely-sync.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/kysely-sync.js")>()),
   getNodeSqliteKysely: edge.forbidden,
   executeSqliteQuerySync: edge.forbidden,
   executeSqliteQueryTakeFirstSync: edge.forbidden,
@@ -81,6 +89,7 @@ vi.mock("../state/openclaw-state-db.js", () => ({
 }));
 vi.mock("../state/openclaw-state-worker-context.js", () => ({
   captureOpenClawStateWorkerContext: edge.capture,
+  captureOpenClawStateReadWorkerContext: edge.capture,
 }));
 vi.mock("../state/openclaw-state-worker-store.js", () => ({
   runOpenClawStateWorkerOperation: edge.run,

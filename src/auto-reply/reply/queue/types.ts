@@ -114,6 +114,11 @@ export type FollowupRun = {
   sourceTurnId?: string;
   /** Original operator capability retained by this turn's queue/run lifecycle. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  /**
+   * Source turn's trusted owner status for memory audience resolution only. System-owned
+   * maintenance copies keep `run.senderIsOwner: false`, so they never gain owner tool authority.
+   */
+  memoryAudienceSenderIsOwner?: boolean;
   /** Latest session to claim without rewriting the queued run before store refresh. */
   admissionSessionId?: string;
   /** User-visible prompt body persisted to transcript; excludes runtime-only prompt context. */

@@ -316,7 +316,7 @@ export function createWorkerPlacementMoveService(options: {
         }
         return;
       }
-      options.placements.fail({
+      await options.placements.fail({
         sessionId: placement.sessionId,
         expectedGeneration: placement.generation,
         recoveryError: RESTART_AUTHORITY_EXPIRED,

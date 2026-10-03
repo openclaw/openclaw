@@ -3036,7 +3036,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
     const { resolve: signalMutationStarted, promise: mutationStarted } = createDeferred();
     const { resolve: releaseMutation, promise: mutationGate } = createDeferred();
-    const blockingMutation = runExclusiveSessionLifecycleMutation({
+    const blockingMutation = runExclusiveSessionLifecycleMutation("rollover", {
       scope: storePath,
       identities: [sessionKey, staleSessionId],
       run: async () => {

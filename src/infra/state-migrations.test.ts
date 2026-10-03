@@ -2367,11 +2367,9 @@ describe("state migrations", () => {
     } as OpenClawConfig;
     const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
     const realSaveSessionStore = sessionStore.saveLegacySessionStore;
-    let sawRequiredWrite = false;
     const saveSpy = vi
       .spyOn(sessionStore, "saveLegacySessionStore")
       .mockImplementation(async (storePath, store, options) => {
-        sawRequiredWrite ||= options?.requireWriteSuccess === true;
         if (storePath === targetStorePath) {
           throw new Error("simulated alias write failure");
         }
@@ -2388,7 +2386,6 @@ describe("state migrations", () => {
       saveSpy.mockRestore();
     }
 
-    expect(sawRequiredWrite).toBe(true);
     await expect(fs.readFile(legacyStorePath, "utf8")).resolves.toContain("legacy");
   });
 

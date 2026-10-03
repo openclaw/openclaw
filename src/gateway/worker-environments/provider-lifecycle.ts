@@ -360,7 +360,11 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       const detail = boundedError(error);
       const permanent =
         error instanceof WorkerProviderError || options.isServiceError(error, "invalid_profile");
-      if (record.state === "requested" || (preparationComplete && permanent)) {
+      // A current refusal cannot disprove allocation by an earlier attempt.
+      if (
+        record.state === "requested" ||
+        (provisioningTransition !== undefined && preparationComplete && permanent)
+      ) {
         await move(record, "failed", { lastError: detail });
         throw serviceError(
           permanent ? "invalid_profile" : "provider_failure",

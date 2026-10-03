@@ -143,9 +143,13 @@ async function applyWorkerTranscriptCommit(params: {
         { moduleUrl, input: undefined },
       );
       const value = await worker.run(async (writer): Promise<ApplyTranscriptCommitResult> => {
+        const databaseIdentity = execution.fileIdentity;
+        if (!databaseIdentity) {
+          throw new Error("Worker transcript has no prepared database identity");
+        }
         const plan = await writer.execute({
           type: "transcript.prepare",
-          input: { ...input, scope: { ...scope, storePath: execution.path } },
+          input: { ...input, scope: { ...scope, storePath: databaseIdentity.nativeLocation } },
         });
         assertCurrent();
         if (!plan.ok || plan.messages.length === input.messages.length) {
@@ -156,16 +160,12 @@ async function applyWorkerTranscriptCommit(params: {
           return { ok: false, reason: "invalid-batch" };
         }
         assertCurrent();
-        const databaseIdentity = execution.fileIdentity?.physicalIdentity;
-        if (!databaseIdentity) {
-          throw new Error("Worker transcript has no prepared database identity");
-        }
         const committed = await writer.execute({ type: "transcript.commit", input: { messages } });
         if (committed.result.ok && committed.result.messages.some((message) => message.appended)) {
           publishSessionEntryWorkerMetadataInvalidation({
             agentId: target.agentId,
             storePath: execution.path,
-            databaseIdentity,
+            databaseIdentity: databaseIdentity.physicalIdentity,
             sessionKey: target.sessionKey,
           });
         }

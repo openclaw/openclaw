@@ -3,8 +3,17 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { resolveCommandEnv } from "../process/exec-spawn.js";
-import { clearGitHubCredentialVerificationCache } from "./github-oauth-client.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import {
+  clearGitHubCredentialVerificationCache,
+  pollGitHubOAuthDeviceToken,
+  refreshGitHubOAuthToken,
+} from "./github-oauth-client.js";
 
 const commands = vi.hoisted(() => ({ run: vi.fn() }));
 vi.mock("../process/exec.js", () => ({ runCommandBuffered: commands.run }));
@@ -45,9 +54,144 @@ describe("managed credential isolation", () => {
     );
   });
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
+
+  it("keeps OAuth installation, rotation and personal publication at their public issuer", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", dirs.make("github-oauth-issuer-"));
+    setRuntimeConfigSnapshot({
+      gateway: {
+        github: { host: "ghe.example.test", apiBaseUrl: "https://ghe.example.test/api/v3" },
+      },
+    });
+    const profileId = "ghp_66666666666666666666666666666666";
+    const profileDir = resolveManagedGitHubProfileDir({
+      agentId: "",
+      scope: "personal",
+      profileId,
+    });
+    const initialToken = "synthetic-public-oauth-initial";
+    const rotatedToken = "synthetic-public-oauth-rotated";
+    const requests: Array<{ url: string; publicCredential: boolean }> = [];
+    vi.mocked(fetch).mockImplementation(async (url, init) => {
+      const requestUrl = url instanceof Request ? url.url : String(url);
+      const authorization = new Headers(init?.headers).get("Authorization");
+      requests.push({
+        url: requestUrl,
+        publicCredential: [initialToken, rotatedToken].some(
+          (token) => authorization === `Bearer ${token}`,
+        ),
+      });
+      if (init?.method === "POST") {
+        const refresh =
+          init.body instanceof URLSearchParams && init.body.get("grant_type") === "refresh_token";
+        return Response.json({
+          access_token: refresh ? rotatedToken : initialToken,
+          token_type: "bearer",
+          scope: "repo workflow read:org gist",
+          expires_in: 28_800,
+          refresh_token: "synthetic-public-refresh",
+          refresh_token_expires_in: 86400,
+        });
+      }
+      return Response.json(account);
+    });
+    const authorization = await pollGitHubOAuthDeviceToken({ deviceCode: "a".repeat(40) });
+    if (authorization.status !== "authorized") {
+      throw new Error("The OAuth fixture did not authorize its public token");
+    }
+    const commitConfig = vi.fn(async () => {});
+    await installManagedGitHubProfile({
+      profileDir,
+      token: authorization.tokens.accessToken,
+      commitConfig,
+    });
+    const refreshed = await refreshGitHubOAuthToken({
+      refreshToken: authorization.tokens.refreshToken,
+    });
+    if (refreshed.status !== "refreshed") {
+      throw new Error("The OAuth fixture did not rotate its public token");
+    }
+    await refreshManagedGitHubProfile({
+      profileDir,
+      token: refreshed.tokens.accessToken,
+      expectedAccountId: account.id,
+    });
+    clearGitHubCredentialVerificationCache();
+    const identity = await preparePersonalGitHubPublicationIdentity({
+      profileId,
+      accountId: account.id,
+      assertCurrent: () => {},
+    });
+    expect(requests).toEqual([
+      { url: "https://github.com/login/oauth/access_token", publicCredential: false },
+      { url: "https://api.github.com/user", publicCredential: true },
+      { url: "https://github.com/login/oauth/access_token", publicCredential: false },
+      { url: "https://api.github.com/user", publicCredential: true },
+      { url: "https://api.github.com/user", publicCredential: true },
+    ]);
+    expect(commitConfig).toHaveBeenCalledOnce();
+    expect(identity.host).toBe("github.com");
+    expect(identity.env.GH_TOKEN).toBe(rotatedToken);
+    const hosts = parseYaml(await fs.readFile(path.join(profileDir, "hosts.yml"), "utf8"));
+    expect(hosts["github.com"].oauth_token).toBe(rotatedToken);
+    expect(commands.run).not.toHaveBeenCalled();
+  });
+
+  it.each(["unchanged", "host", "API"])(
+    "pins personal publication endpoints during verification (%s)",
+    async (change) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", dirs.make("personal-host-admission-"));
+      const profileId = "ghp_55555555555555555555555555555555";
+      const config = {
+        gateway: {
+          github: { host: "a.ghe.example.test", apiBaseUrl: "https://a.ghe.example.test/api/v3" },
+        },
+      };
+      setRuntimeConfigSnapshot(config);
+      await installManagedGitHubProfile({
+        profileDir: resolveManagedGitHubProfileDir({ agentId: "", scope: "personal", profileId }),
+        token: "synthetic-personal-host-token",
+        commitConfig: async () => {},
+      });
+      clearGitHubCredentialVerificationCache();
+      const started = createDeferredCore();
+      const release = createDeferredCore<Response>();
+      vi.mocked(fetch).mockImplementation(async (url) => {
+        const requestUrl = url instanceof Request ? url.url : url;
+        expect(requestUrl).toBe("https://api.github.com/user");
+        started.resolve();
+        return await release.promise;
+      });
+      const prepared = preparePersonalGitHubPublicationIdentity({
+        profileId,
+        accountId: 202,
+        assertCurrent: () => {},
+      }).then((identity) => ({ host: identity.host, accountId: identity.account.accountId }));
+      const outcome =
+        change === "unchanged"
+          ? expect(prepared).resolves.toMatchObject({
+              host: "github.com",
+              accountId: 202,
+            })
+          : expect(prepared).rejects.toThrow("GitHub identity changed");
+      await started.promise;
+      if (change !== "unchanged") {
+        setRuntimeConfigSnapshot({
+          gateway: {
+            github: {
+              host: change === "host" ? "b.ghe.example.test" : config.gateway.github.host,
+              apiBaseUrl: "https://b.ghe.example.test/api/v3",
+            },
+          },
+        });
+      }
+      release.resolve(new Response(JSON.stringify(account)));
+      await outcome;
+    },
+  );
 
   it.each(["system", "agent", "personal", "native"] as const)(
     "pins the verified %s credential for broker children across profile retirement and host changes",
@@ -92,6 +236,18 @@ describe("managed credential isolation", () => {
               assertCurrent: () => {},
             })
           : await prepareGitHubPublicationIdentity({ config, agentId: "main" });
+      if (scope === "system" || scope === "agent") {
+        setRuntimeConfigSnapshot({
+          gateway: {
+            github: { host: "ghe.example.test", apiBaseUrl: "https://ghe.example.test/api/v3" },
+          },
+        });
+        const probes = vi.mocked(fetch).mock.calls.length;
+        await expect(
+          prepareGitHubPublicationIdentity({ config, agentId: "main" }).then(() => undefined),
+        ).rejects.toMatchObject({ reason: "unavailable" });
+        expect(fetch).toHaveBeenCalledTimes(probes);
+      }
       if (profileDir) {
         await fs.rm(profileDir, { recursive: true });
       }
@@ -106,7 +262,11 @@ describe("managed credential isolation", () => {
       expect(child.GH_TOKEN).toBe(
         scope === "native" ? "synthetic-native-before" : "synthetic-managed-before",
       );
+      expect(child.GH_ENTERPRISE_TOKEN).toBe(
+        scope === "native" ? "synthetic-native-before" : "synthetic-managed-before",
+      );
       expect(child.GITHUB_TOKEN).toBeUndefined();
+      expect(child.GITHUB_ENTERPRISE_TOKEN).toBeUndefined();
       const ordinary = prepareGitHubToolEnvironment({ config, agentId: "main" });
       expect(JSON.stringify(ordinary)).not.toContain("synthetic-");
       if (scope === "system" || scope === "agent") {

@@ -48,6 +48,7 @@ import {
   isSessionTranscriptValidationErrorMessage,
   isTimeoutErrorMessage,
   matchesFormatErrorPattern,
+  resolveExecutionApprovalFailureMessage,
 } from "./message-patterns.js";
 import type { classifyProviderPluginError } from "./provider-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./signal.js";
@@ -265,6 +266,9 @@ export function classifyFailoverSignalCore(
   signal: FailoverSignal,
   classifyProviderError?: ProviderErrorClassifier,
 ): FailoverClassification | null {
+  if (resolveExecutionApprovalFailureMessage(signal.message)) {
+    return null;
+  }
   const inferredStatus = inferSignalStatus(signal);
   const explicitStatus =
     typeof signal.status === "number" && Number.isFinite(signal.status) ? signal.status : undefined;

@@ -16,6 +16,7 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
+import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
 import { consumePendingToolMediaIntoReply } from "../../agents/embedded-agent-subscribe.handlers.messages.replies.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
@@ -197,6 +198,40 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
   async function expectOutboundMediaMissing(stateDir: string): Promise<void> {
     await expectPathMissing(path.join(stateDir, "media", "outbound"));
   }
+
+  it.each([
+    "http://192.168.1.138:64384/movie.mp4?openclaw_portal=synthetic-test-token",
+    "https://127.0.0.1/movie.mp4",
+    "https://user:synthetic-password@example.com/movie.mp4",
+  ])("reports a rejected final MEDIA directive without exposing its URL: %s", async (source) => {
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [`Here is the movie.\nMEDIA:${source}`],
+      lastAssistant: undefined,
+      sessionKey: TEST_SESSION_KEY,
+    });
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toContain("public HTTPS URL without credentials");
+    expect(payloads[0]?.text).not.toContain(source);
+    expect(payloads[0]?.text).not.toContain("MEDIA:");
+    expect(payloads[0]?.mediaUrls).toBeUndefined();
+
+    const { assistantContent, persistedAssistantContent } = await buildAssistantReplyContent({
+      sessionKey: TEST_SESSION_KEY,
+      payloads,
+    });
+    expect(assistantContent).toEqual([
+      { type: "text", text: "Here is the movie." },
+      {
+        type: "attachment_error",
+        attachment: {
+          code: "invalid-reference",
+          kind: "document",
+          label: "Media not attached",
+        },
+      },
+    ]);
+    expect(persistedAssistantContent).toEqual(assistantContent);
+  });
 
   it.each(["directive", "structured"])(
     "publishes a canonical inbound image from a %s reply",

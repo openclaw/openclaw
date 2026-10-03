@@ -14,6 +14,7 @@ extension ChatSessionSidebar {
         let owner = self.viewModel.sidebarData
         let rows = data?.rowsIncludingLoadedDescendants ?? self.viewModel.sessions
         var options = self.filterOptions
+        options.selectedAgentID = self.viewModel.selectedAgentID
         if self.showsAllAgents { options.grouping = .none }
         let sections = ChatSessionSidebarModel.sections(
             sessions: rows,

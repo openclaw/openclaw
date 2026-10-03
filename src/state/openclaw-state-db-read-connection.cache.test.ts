@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeSqliteReadSql,
+  trackSqliteStatementExecutions,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as executionIdentityContext from "../audit/execution-identity-context.js";
 import * as sqlite from "../infra/node-sqlite.js";
@@ -106,18 +109,46 @@ function fixture() {
 }
 
 it("reuses one reader in registered worker commands, refreshes idle, and reopens after eviction", () => {
-  const { workerValue: value, countOpens } = fixture();
+  const { workerValue: value, countOpens, pathname } = fixture();
+  const native = sqlite.requireNodeSqlite();
+  const prepare = vi.spyOn(native.DatabaseSync.prototype, "prepare");
+  const observation = observeSqliteReadSql(native.StatementSync.prototype);
+  const configSelect = /^select "value_json", "updated_at_ms" from "config_machine_state"/iu;
+  const contentVersionSelect = /^select "value_json" from "config_machine_state"/iu;
+  const dataVersion = /^PRAGMA data_version$/iu;
+  expect(value()).toBe(1);
+  expect(value()).toBe(1);
+  prepare.mockClear();
+  observation.queries.length = 0;
   for (let index = 0; index < 10; index++) {
     expect(value()).toBe(1);
   }
+  expect(prepare).not.toHaveBeenCalled();
+  expect(observation.queries.filter((sql) => configSelect.test(sql))).toHaveLength(10);
+  expect(observation.queries.filter((sql) => contentVersionSelect.test(sql))).toHaveLength(10);
+  expect(observation.queries.filter((sql) => dataVersion.test(sql))).toHaveLength(20);
   expect(countOpens()).toBe(1);
+  const peer = new native.DatabaseSync(pathname);
+  try {
+    peer.exec("UPDATE config_machine_state SET value_json = '2', updated_at_ms = 2");
+    expect(value()).toBe(2);
+    expect(prepare.mock.calls.filter(([sql]) => configSelect.test(sql))).toHaveLength(0);
+    expect(prepare.mock.calls.filter(([sql]) => dataVersion.test(sql))).toHaveLength(0);
+  } finally {
+    peer.close();
+  }
   vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
-  expect(value()).toBe(1);
+  expect(value()).toBe(2);
   vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
   expect(countOpens()).toBe(1);
+  prepare.mockClear();
   vi.advanceTimersByTime(1);
-  expect(value()).toBe(1);
+  expect(value()).toBe(2);
   expect(countOpens()).toBe(2);
+  expect(prepare.mock.calls.filter(([sql]) => configSelect.test(sql))).toHaveLength(1);
+  expect(prepare.mock.calls.filter(([sql]) => contentVersionSelect.test(sql))).toHaveLength(1);
+  expect(prepare.mock.calls.filter(([sql]) => dataVersion.test(sql))).toHaveLength(2);
+  observation.restore();
 });
 
 it("observes peer commits and closes only the invalidated physical identity", () => {

@@ -159,55 +159,65 @@ function requireMigrationResult(
 }
 
 describe("legacy sandbox registry migration", () => {
-  it("migrates legacy monolithic container and browser registry files after explicit repair", async () => {
-    seedRegistry(SANDBOX_REGISTRY_PATH, [
-      containerEntry({
-        containerName: "legacy-container",
-        sessionKey: "agent:legacy",
-        lastUsedAtMs: 7,
-        configHash: "legacy-container-hash",
-      }),
-    ]);
-    seedRegistry(SANDBOX_BROWSER_REGISTRY_PATH, [
-      browserEntry({
-        containerName: "legacy-browser",
-        sessionKey: "agent:legacy",
-        cdpPort: 9333,
-        noVncPort: 6081,
-        configHash: "legacy-browser-hash",
-      }),
-    ]);
-    await seedStaleLock(`${SANDBOX_REGISTRY_PATH}.lock`);
-    await seedStaleLock(`${SANDBOX_BROWSER_REGISTRY_PATH}.lock`);
+  it.each(["monolithic", "sharded"] as const)(
+    "migrates legacy %s registries after explicit repair",
+    async (source) => {
+      const seed = source === "monolithic" ? seedRegistry : seedShardedRegistry;
+      const containerPath =
+        source === "monolithic" ? SANDBOX_REGISTRY_PATH : SANDBOX_CONTAINERS_DIR;
+      const browserPath =
+        source === "monolithic" ? SANDBOX_BROWSER_REGISTRY_PATH : SANDBOX_BROWSERS_DIR;
+      seed(containerPath, [
+        containerEntry({
+          containerName: "legacy-container",
+          sessionKey: "agent:legacy",
+          lastUsedAtMs: 7,
+          configHash: "legacy-container-hash",
+        }),
+      ]);
+      seed(browserPath, [
+        browserEntry({
+          containerName: "legacy-browser",
+          sessionKey: "agent:legacy",
+          cdpPort: 9333,
+          noVncPort: 6081,
+          configHash: "legacy-browser-hash",
+        }),
+      ]);
+      if (source === "monolithic") {
+        await seedStaleLock(`${SANDBOX_REGISTRY_PATH}.lock`);
+        await seedStaleLock(`${SANDBOX_BROWSER_REGISTRY_PATH}.lock`);
+      }
 
-    const migrationResults = await migrateLegacySandboxRegistryFiles();
-    expect(migrationResults).toEqual([
-      { kind: "containers", status: "migrated", entries: 1 },
-      { kind: "browsers", status: "migrated", entries: 1 },
-    ]);
+      const migrationResults = await migrateLegacySandboxRegistryFiles();
+      expect(migrationResults).toEqual([
+        { kind: "containers", status: "migrated", entries: 1 },
+        { kind: "browsers", status: "migrated", entries: 1 },
+      ]);
 
-    await expectPathMissing(SANDBOX_REGISTRY_PATH);
-    await expectPathMissing(SANDBOX_BROWSER_REGISTRY_PATH);
-    await expectPathMissing(`${SANDBOX_REGISTRY_PATH}.lock`);
-    await expectPathMissing(`${SANDBOX_BROWSER_REGISTRY_PATH}.lock`);
-    const containerRegistry = await readRegistry();
-    expect(containerRegistry.entries).toHaveLength(1);
-    const [container] = containerRegistry.entries;
-    expect(container?.containerName).toBe("legacy-container");
-    expect(container?.backendId).toBe("docker");
-    expect(container?.runtimeLabel).toBe("legacy-container");
-    expect(container?.configLabelKind).toBe("Image");
-    expect(container?.sessionKey).toBe("agent:legacy");
-    expect(container?.configHash).toBe("legacy-container-hash");
-    const browserRegistry = await readBrowserRegistry();
-    expect(browserRegistry.entries).toHaveLength(1);
-    const [browser] = browserRegistry.entries;
-    expect(browser?.containerName).toBe("legacy-browser");
-    expect(browser?.sessionKey).toBe("agent:legacy");
-    expect(browser?.cdpPort).toBe(9333);
-    expect(browser?.noVncPort).toBe(6081);
-    expect(browser?.configHash).toBe("legacy-browser-hash");
-  });
+      await expectPathMissing(containerPath);
+      await expectPathMissing(browserPath);
+      await expectPathMissing(`${SANDBOX_REGISTRY_PATH}.lock`);
+      await expectPathMissing(`${SANDBOX_BROWSER_REGISTRY_PATH}.lock`);
+      const containerRegistry = await readRegistry();
+      expect(containerRegistry.entries).toHaveLength(1);
+      const [container] = containerRegistry.entries;
+      expect(container?.containerName).toBe("legacy-container");
+      expect(container?.backendId).toBe("docker");
+      expect(container?.runtimeLabel).toBe("legacy-container");
+      expect(container?.configLabelKind).toBe("Image");
+      expect(container?.sessionKey).toBe("agent:legacy");
+      expect(container?.configHash).toBe("legacy-container-hash");
+      const browserRegistry = await readBrowserRegistry();
+      expect(browserRegistry.entries).toHaveLength(1);
+      const [browser] = browserRegistry.entries;
+      expect(browser?.containerName).toBe("legacy-browser");
+      expect(browser?.sessionKey).toBe("agent:legacy");
+      expect(browser?.cdpPort).toBe(9333);
+      expect(browser?.noVncPort).toBe(6081);
+      expect(browser?.configHash).toBe("legacy-browser-hash");
+    },
+  );
 
   it("imports without application-thread SQLite and keeps the captured database across filesystem awaits", async () => {
     seedRegistry(SANDBOX_REGISTRY_PATH, [containerEntry()]);
@@ -348,101 +358,71 @@ describe("legacy sandbox registry migration", () => {
     await expectPathMissing(SANDBOX_REGISTRY_PATH);
   });
 
-  it("migrates legacy sharded container and browser registry files after explicit repair", async () => {
-    seedShardedRegistry(SANDBOX_CONTAINERS_DIR, [
-      containerEntry({
-        containerName: "legacy-container",
-        sessionKey: "agent:legacy",
-        lastUsedAtMs: 7,
-        configHash: "legacy-container-hash",
-      }),
-    ]);
-    seedShardedRegistry(SANDBOX_BROWSERS_DIR, [
-      browserEntry({
-        containerName: "legacy-browser",
-        sessionKey: "agent:legacy",
-        cdpPort: 9333,
-        noVncPort: 6081,
-        configHash: "legacy-browser-hash",
-      }),
-    ]);
-
-    const migrationResults = await migrateLegacySandboxRegistryFiles();
-    expect(requireMigrationResult(migrationResults, "containers").status).toBe("migrated");
-    expect(requireMigrationResult(migrationResults, "browsers").status).toBe("migrated");
-    await expectPathMissing(SANDBOX_CONTAINERS_DIR);
-    await expectPathMissing(SANDBOX_BROWSERS_DIR);
-    expect((await readRegistry()).entries[0]?.containerName).toBe("legacy-container");
-    expect((await readBrowserRegistry()).entries[0]?.containerName).toBe("legacy-browser");
-  });
-
-  it("does not overwrite newer SQLite entries during legacy migration", async () => {
-    await updateRegistry(
-      containerEntry({
-        containerName: "container-a",
-        sessionKey: "new-session",
-        lastUsedAtMs: 10,
-      }),
-    );
-    seedRegistry(SANDBOX_REGISTRY_PATH, [
-      containerEntry({
-        containerName: "container-a",
-        sessionKey: "legacy-session",
-        lastUsedAtMs: 1,
-      }),
-    ]);
-
-    await migrateLegacySandboxRegistryFiles();
-
-    const entry = await readRegistryEntry("container-a");
-    expect(entry?.sessionKey).toBe("new-session");
-    expect(entry?.lastUsedAtMs).toBe(10);
-  });
-
-  it("prefers newer sharded entries over stale monolithic entries during legacy migration", async () => {
-    seedRegistry(SANDBOX_REGISTRY_PATH, [
-      containerEntry({
-        containerName: "container-a",
-        sessionKey: "legacy-session",
-        lastUsedAtMs: 1,
-      }),
-    ]);
-    seedShardedRegistry(SANDBOX_CONTAINERS_DIR, [
-      containerEntry({
-        containerName: "container-a",
-        sessionKey: "sharded-session",
-        lastUsedAtMs: 10,
-      }),
-    ]);
-
-    await migrateLegacySandboxRegistryFiles();
-
-    const entry = await readRegistryEntry("container-a");
-    expect(entry?.sessionKey).toBe("sharded-session");
-    expect(entry?.lastUsedAtMs).toBe(10);
-  });
-
-  it("quarantines malformed legacy registry files during migration", async () => {
-    await fs.writeFile(SANDBOX_REGISTRY_PATH, "{bad json", "utf-8");
-    await fs.writeFile(SANDBOX_BROWSER_REGISTRY_PATH, "{bad json", "utf-8");
-    const results = await migrateLegacySandboxRegistryFiles();
-
-    await expectPathMissing(SANDBOX_REGISTRY_PATH);
-    await expectPathMissing(SANDBOX_BROWSER_REGISTRY_PATH);
-    expect(results.map((result) => result.status)).toEqual([
-      "quarantined-invalid",
-      "quarantined-invalid",
-    ]);
-    for (const { kind, registryPath } of registryTargets) {
-      const result = requireMigrationResult(results, kind);
-      if (result.status !== "quarantined-invalid") {
-        throw new Error(`Expected a quarantine result for ${kind}`);
+  it.each(["SQLite", "sharded"] as const)(
+    "preserves newer %s entries over stale monolithic entries",
+    async (source) => {
+      const sessionKey = source === "SQLite" ? "new-session" : "sharded-session";
+      const newer = containerEntry({ sessionKey, lastUsedAtMs: 10 });
+      if (source === "SQLite") {
+        await updateRegistry(newer);
+      } else {
+        seedShardedRegistry(SANDBOX_CONTAINERS_DIR, [newer]);
       }
-      expect(result.path).toBe(registryPath);
-      expect(await fs.readFile(result.quarantinePath, "utf8")).toBe("{bad json");
-      await expectPathMissing(`${registryPath}.lock`);
-    }
-  });
+      seedRegistry(SANDBOX_REGISTRY_PATH, [
+        containerEntry({ sessionKey: "legacy-session", lastUsedAtMs: 1 }),
+      ]);
+      await migrateLegacySandboxRegistryFiles();
+      const entry = await readRegistryEntry("container-a");
+      expect(entry?.sessionKey).toBe(sessionKey);
+      expect(entry?.lastUsedAtMs).toBe(10);
+    },
+  );
+
+  it.each(["malformed", "invalid-entry", "sharded"] as const)(
+    "quarantines %s legacy registries while preserving valid entries",
+    async (source) => {
+      const bytes =
+        source === "invalid-entry" ? '{"entries":[{"sessionKey":"agent:main"}]}' : "{bad json";
+      if (source === "sharded") {
+        seedShardedRegistry(SANDBOX_CONTAINERS_DIR, [
+          containerEntry({ containerName: "valid-container", sessionKey: "agent:valid" }),
+        ]);
+        seedShardedRegistry(SANDBOX_BROWSERS_DIR, [
+          browserEntry({ containerName: "valid-browser", sessionKey: "agent:valid" }),
+        ]);
+        await fs.writeFile(path.join(SANDBOX_CONTAINERS_DIR, "bad.json"), bytes, "utf-8");
+        await fs.writeFile(path.join(SANDBOX_BROWSERS_DIR, "bad.json"), bytes, "utf-8");
+      } else {
+        await fs.writeFile(SANDBOX_REGISTRY_PATH, bytes, "utf-8");
+        await fs.writeFile(SANDBOX_BROWSER_REGISTRY_PATH, bytes, "utf-8");
+      }
+      const results = await migrateLegacySandboxRegistryFiles();
+      expect(results.map((result) => result.status)).toEqual([
+        "quarantined-invalid",
+        "quarantined-invalid",
+      ]);
+      for (const { kind } of registryTargets) {
+        expect(requireMigrationResult(results, kind).status).toBe("quarantined-invalid");
+      }
+      if (source === "sharded") {
+        expect((await readRegistry()).entries[0]?.containerName).toBe("valid-container");
+        expect((await readBrowserRegistry()).entries[0]?.containerName).toBe("valid-browser");
+        await expectPathMissing(SANDBOX_CONTAINERS_DIR);
+        await expectPathMissing(SANDBOX_BROWSERS_DIR);
+      } else {
+        for (const { kind, registryPath } of registryTargets) {
+          const result = requireMigrationResult(results, kind);
+          if (result.status !== "quarantined-invalid") {
+            throw new Error(`Expected a quarantine result for ${kind}`);
+          }
+          expect(result.path).toBe(registryPath);
+          expect(await fs.readFile(result.quarantinePath, "utf8")).toBe(bytes);
+          await expectPathMissing(registryPath);
+          await expectPathMissing(`${registryPath}.lock`);
+        }
+      }
+    },
+  );
 
   it.each(registryTargets)(
     "keeps malformed $kind bytes when quarantine rename fails",
@@ -505,38 +485,5 @@ describe("legacy sandbox registry migration", () => {
     await expectPathMissing(path.join(TEST_STATE_DIR, "state", "openclaw.sqlite"));
     expect((await readRegistry()).entries).toEqual([]);
     expect((await readBrowserRegistry()).entries).toEqual([]);
-  });
-
-  it("quarantines legacy registry files with invalid entries during migration", async () => {
-    const invalidEntries = `{"entries":[{"sessionKey":"agent:main"}]}`;
-    await fs.writeFile(SANDBOX_REGISTRY_PATH, invalidEntries, "utf-8");
-    await fs.writeFile(SANDBOX_BROWSER_REGISTRY_PATH, invalidEntries, "utf-8");
-    const migrationResults = await migrateLegacySandboxRegistryFiles();
-    expect(requireMigrationResult(migrationResults, "containers").status).toBe(
-      "quarantined-invalid",
-    );
-    expect(requireMigrationResult(migrationResults, "browsers").status).toBe("quarantined-invalid");
-  });
-
-  it("quarantines malformed sharded registry directories during migration", async () => {
-    seedShardedRegistry(SANDBOX_CONTAINERS_DIR, [
-      containerEntry({ containerName: "valid-container", sessionKey: "agent:valid" }),
-    ]);
-    seedShardedRegistry(SANDBOX_BROWSERS_DIR, [
-      browserEntry({ containerName: "valid-browser", sessionKey: "agent:valid" }),
-    ]);
-    await fs.writeFile(path.join(SANDBOX_CONTAINERS_DIR, "bad.json"), "{bad json", "utf-8");
-    await fs.writeFile(path.join(SANDBOX_BROWSERS_DIR, "bad.json"), "{bad json", "utf-8");
-
-    const migrationResults = await migrateLegacySandboxRegistryFiles();
-
-    expect(requireMigrationResult(migrationResults, "containers").status).toBe(
-      "quarantined-invalid",
-    );
-    expect(requireMigrationResult(migrationResults, "browsers").status).toBe("quarantined-invalid");
-    expect((await readRegistry()).entries[0]?.containerName).toBe("valid-container");
-    expect((await readBrowserRegistry()).entries[0]?.containerName).toBe("valid-browser");
-    await expectPathMissing(SANDBOX_CONTAINERS_DIR);
-    await expectPathMissing(SANDBOX_BROWSERS_DIR);
   });
 });

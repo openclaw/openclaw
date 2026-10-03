@@ -1,17 +1,12 @@
-import { isDeepStrictEqual } from "node:util";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { isMainSessionRecoveryReconciliationCandidate } from "../../agents/main-session-recovery/main-session-recovery-state.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SessionGoalOperationError } from "../../config/sessions/goals-operations.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
-import {
-  loadExactSessionEntryCandidates,
-  readSessionSubmittedInput,
-} from "../../config/sessions/session-accessor.js";
+import { loadExactSessionEntryCandidates } from "../../config/sessions/session-accessor.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
@@ -43,6 +38,11 @@ import {
 } from "./chat-send-active-leaf.js";
 import { prepareGoalChatSendRetry } from "./chat-send-goal-retry.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
+import {
+  compareChatSendSubmittedInput,
+  readChatSendRetryComparison,
+  type ChatSendRetryComparison,
+} from "./chat-send-retry-comparison.js";
 import {
   captureAdmittedChatSendSessionSettings,
   SESSION_SETTINGS_CHANGED_ERROR_REASON,
@@ -163,11 +163,11 @@ export function readChatSendDedupeResponse(
     : entry;
 }
 
-export function resolveChatSendRequestConflict({
-  request,
-  session,
-  context,
-}: Omit<ChatSendRetryParams, "respond">) {
+export function resolveChatSendRequestConflict(
+  { request, session, context }: Omit<ChatSendRetryParams, "respond">,
+  comparison?: ChatSendRetryComparison,
+  ownPendingAttemptId?: string,
+) {
   if (request.goalOperation) {
     return undefined;
   }
@@ -206,11 +206,23 @@ export function resolveChatSendRequestConflict({
   ) {
     return conflict(true);
   }
-  if (entries.some((entry) => entry?.requestIdentity === request.requestIdentity)) {
+  const retryEntries =
+    ownPendingAttemptId !== undefined &&
+    readPreRegisteredRun({
+      key: session.pendingChatSendKey,
+      entry: entries[1],
+      keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
+    })?.payload.attemptId === ownPendingAttemptId
+      ? entries.slice(0, 1)
+      : entries;
+  if (
+    !comparison &&
+    retryEntries.some((entry) => entry?.requestIdentity === request.requestIdentity)
+  ) {
     return undefined;
   }
   const knownRetry =
-    entries.some(Boolean) ||
+    retryEntries.some(Boolean) ||
     sameDurableSource ||
     hasRestartRecoveryTerminalRun(session.entry, session.clientRunId) ||
     context.chatRunState.hasAbortMarker(session.clientRunId) ||
@@ -219,50 +231,46 @@ export function resolveChatSendRequestConflict({
   if (!knownRetry) {
     return undefined;
   }
-  // Terminal tombstones outlive the RAM fingerprint. Read the exact submitted source,
-  // including collected inputs, never infer mention identity from aggregate history.
-  const submitted = session.entry?.sessionId
-    ? readSessionSubmittedInput(
-        {
-          agentId: session.agentId,
-          sessionId: session.entry.sessionId,
-          sessionKey: session.sessionKey,
-          storePath: session.storePath,
-        },
-        `${session.clientRunId}:user`,
-      )
-    : undefined;
-  if (!submitted) {
-    return request.mentions?.length || request.workContext ? conflict(true) : undefined;
-  }
-  const storedMentions = submitted["__openclaw"]?.humanMentions;
-  const storedContext = submitted["__openclaw"]?.workContext;
-  if (
-    !request.mentions?.length &&
-    !storedMentions?.length &&
-    !request.workContext &&
-    !storedContext
-  ) {
-    return undefined;
-  }
-  const storedText =
-    extractTextFromChatContent(submitted.content, {
-      joinWith: "\n",
-      normalizeText: (text) => text,
-    }) ?? "";
-  return storedText !== request.rawMessage ||
-    !isDeepStrictEqual(storedMentions ?? [], request.mentions ?? []) ||
-    !isDeepStrictEqual(storedContext, request.workContext)
-    ? conflict()
-    : undefined;
+  const mismatch = compareChatSendSubmittedInput(request, session, comparison);
+  return mismatch ? conflict(mismatch === "unverifiable") : undefined;
 }
 
-/** Recheck at each admission yield before accepting a cached or concurrent request. */
-export function respondChatSendRetry(params: ChatSendRetryParams): boolean {
+export function prepareChatSendRetryComparison(
+  params: Omit<ChatSendRetryParams, "respond">,
+  ownPendingAttemptId?: string,
+): Promise<ChatSendRetryComparison> | undefined {
+  try {
+    resolveChatSendRequestConflict(params, undefined, ownPendingAttemptId);
+    return undefined;
+  } catch (error) {
+    if (!isSessionTranscriptProjectionUnavailableError(error)) {
+      throw error;
+    }
+    return readChatSendRetryComparison(params.session, params.assertCurrent);
+  }
+}
+
+async function respondPreparedChatSendRetry(params: ChatSendRetryParams): Promise<boolean> {
+  try {
+    return respondChatSendRetry(params, await prepareChatSendRetryComparison(params));
+  } catch (error) {
+    if (!isSessionTranscriptProjectionUnavailableError(error)) {
+      throw error;
+    }
+    respondChatSendAdmissionError(error, params.respond);
+    return true;
+  }
+}
+
+/** Consume prepared comparison and current RAM ownership without yielding before reservation. */
+export function respondChatSendRetry(
+  params: ChatSendRetryParams,
+  comparison?: ChatSendRetryComparison,
+): boolean {
   params.assertCurrent?.();
   const { session, context, respond } = params;
   const { clientRunId, pendingChatSendKey } = session;
-  const conflict = resolveChatSendRequestConflict(params);
+  const conflict = resolveChatSendRequestConflict(params, comparison);
   if (conflict) {
     respond(false, undefined, conflict);
     return true;
@@ -567,7 +575,7 @@ export async function runChatSendPreAdmission(
     return false;
   }
 
-  if (respondChatSendRetry(params)) {
+  if (await respondPreparedChatSendRetry(params)) {
     return false;
   }
 
@@ -580,6 +588,10 @@ export async function runChatSendPreAdmission(
     try {
       const recoveryEntry = loadSessionEntry(sessionLoadKey, sessionLoadOptions).entry;
       if (recoveryEntry) {
+        const comparison = await prepareChatSendRetryComparison({
+          ...params,
+          session: { ...session, entry: recoveryEntry },
+        });
         await reconcileOrphanedGatewaySessionRecovery({
           cfg,
           target: resolveGatewaySessionStoreTarget({
@@ -595,10 +607,10 @@ export async function runChatSendPreAdmission(
               throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
             }
             const current = loadSessionEntry(sessionLoadKey, sessionLoadOptions);
-            const conflict = resolveChatSendRequestConflict({
-              ...params,
-              session: { ...session, entry: current.entry },
-            });
+            const conflict = resolveChatSendRequestConflict(
+              { ...params, session: { ...session, entry: current.entry } },
+              comparison,
+            );
             if (conflict) {
               throw new Error(conflict.message);
             }
@@ -660,7 +672,7 @@ export async function runChatSendPreAdmission(
         ? durableClaim.entry
         : loadSessionEntry(sessionLoadKey, sessionLoadOptions).entry,
   };
-  if (respondChatSendRetry({ ...params, session: retrySession })) {
+  if (await respondPreparedChatSendRetry({ ...params, session: retrySession })) {
     return false;
   }
   if (durableClaim.kind === "pending" || durableClaim.kind === "rejected") {

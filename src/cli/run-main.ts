@@ -141,11 +141,10 @@ async function tryRunGatewayRunFastPath(
         await import("./gateway-cli/pre-bootstrap.js");
       const prepared = await prepareGatewayRunBootstrap({ opts, runtime: defaultRuntime });
       if (prepared) {
-        beforeStatePreparation = (snapshot, committedWrite) =>
+        beforeStatePreparation = (snapshot) =>
           recheckGatewayRunBootstrap({
             opts,
             runtime: defaultRuntime,
-            committedWrite,
             ...(snapshot ? { snapshot } : {}),
           });
       }

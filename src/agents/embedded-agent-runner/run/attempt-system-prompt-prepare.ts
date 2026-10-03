@@ -27,7 +27,7 @@ import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { toolPolicyRestrictsTools } from "../../tool-policy.js";
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
 import { buildToolSchemaDirectoryPrompt } from "../../tool-search.js";
-import { prepareWatchedSessionsPrompt } from "../../watched-sessions-prompt.js";
+import { prepareWatchedSessionsPromptAsync } from "../../watched-sessions-prompt.js";
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "../sandbox-info.js";
 import { buildEmbeddedSystemPrompt } from "../system-prompt.js";
 import type { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
@@ -208,11 +208,15 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         agentId: runtimeInfo.agentId,
         agentSessionKey: runtimeInfo.sessionKey,
       }),
-      preparedWatchedSessions: prepareWatchedSessionsPrompt({
+      preparedWatchedSessions: await prepareWatchedSessionsPromptAsync({
         ...toolContext,
         enabled: effectivePromptMode === "full",
         config: attempt.config,
         sessionKey: attempt.sessionKey,
+        assertCurrent: () => {
+          policyPreparation.signal?.throwIfAborted();
+          policyPreparation.assertCurrent?.();
+        },
       }),
     };
   };

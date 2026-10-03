@@ -809,7 +809,7 @@ describe("exec approvals CLI", () => {
       throw new Error(`Expected ${agentKey} exec approval agent entry`);
     }
     expect(readBestEffortConfig).toHaveBeenCalledTimes(agentKey === "main" ? 1 : 0);
-    expect(loggedOutput()).toContain("Writing local approvals.");
+    expect(loggedOutput()).toContain("Writing approvals for this state root.");
   });
 
   it("keeps --json output parseable when the allowlist write happens locally", async () => {
@@ -824,7 +824,7 @@ describe("exec approvals CLI", () => {
       expect.objectContaining({ baseHash: "hash-local" }),
     );
     expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
-    expect(loggedOutput()).not.toContain("Writing local approvals.");
+    expect(loggedOutput()).not.toContain("Writing approvals for this state root.");
   });
 
   it("rejects an unknown agent before allowlist add persistence", async () => {
@@ -848,7 +848,7 @@ describe("exec approvals CLI", () => {
     ]);
     expect(updateExecApprovals).not.toHaveBeenCalled();
     expect(localSnapshot.file.agents).toEqual({});
-    expect(loggedOutput()).not.toContain("Writing local approvals.");
+    expect(loggedOutput()).not.toContain("Writing approvals for this state root.");
   });
 
   it("rejects a blank agent before allowlist remove persistence", async () => {
@@ -887,7 +887,7 @@ describe("exec approvals CLI", () => {
 
     const output = loggedOutput();
     expect(output).toContain(outcome);
-    expect(output).not.toContain("Writing local approvals.");
+    expect(output).not.toContain("Writing approvals for this state root.");
     expect(updateExecApprovals).not.toHaveBeenCalled();
     // Idempotent add/remove leave the requested end state satisfied: no failure exit.
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
@@ -917,7 +917,7 @@ describe("exec approvals CLI", () => {
       version: 1,
       agents: {},
     });
-    expect(loggedOutput()).toContain("Writing local approvals.");
+    expect(loggedOutput()).toContain("Writing approvals for this state root.");
     expect(runtimeErrors).toHaveLength(0);
   });
 

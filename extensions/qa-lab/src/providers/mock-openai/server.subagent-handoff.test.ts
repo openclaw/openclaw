@@ -69,28 +69,6 @@ const settleProvenance = [
 ].join("\n");
 
 describe("mock subagent handoff completion", () => {
-  it("reports admission errors without waiting for a child", async () => {
-    const server = await startMockServer();
-    const reply = await expectNonStreamingResponsesJson(server, {
-      model: "gpt-5.6-luna",
-      tools,
-      input: [
-        user(kickoff),
-        { type: "function_call", name: "sessions_spawn", call_id: "spawn", arguments: "{}" },
-        makeToolOutputWithCallId(
-          "spawn",
-          JSON.stringify({ status: "error", error: "Child admission denied" }),
-        ),
-      ],
-    });
-    expect(outputItems(reply)).toMatchObject([
-      {
-        type: "message",
-        content: [{ type: "output_text", text: "Failed to delegate: Child admission denied" }],
-      },
-    ]);
-  });
-
   it.each([
     { name: "protected event", completion: carrier, ok: true },
     {
@@ -211,6 +189,7 @@ const metadataCarrier = user(
 
 describe("mock terminal subagents through structured Tool Search", () => {
   it.each([
+    { name: "direct admission error", wireName: "sessions_spawn", nested: false, unwrap: true },
     { name: "matching dispatcher details", unwrap: true },
     { name: "matching dispatcher text", details: false, unwrap: true },
     { name: "mismatched target", target: "read" },
@@ -224,38 +203,51 @@ describe("mock terminal subagents through structured Tool Search", () => {
       callId = "dispatch",
       details = true,
       unwrap = false,
+      nested = true,
     }) => {
       const server = await startMockServer();
-      const failure = { status: "forbidden", error: "Child admission denied" };
+      const failure = { status: nested ? "forbidden" : "error", error: "Child admission denied" };
       const reply = await expectNonStreamingResponsesJson(server, {
         model: "gpt-5.6-luna",
-        tools: structuredTools,
+        tools: nested ? structuredTools : tools,
         input: [
           user(kickoff),
           {
             type: "function_call",
             name: wireName,
             call_id: "dispatch",
-            arguments: JSON.stringify({ id: "sessions_spawn", args: { task: "Bounded task" } }),
+            arguments: JSON.stringify(
+              nested ? { id: "sessions_spawn", args: { task: "Bounded task" } } : {},
+            ),
           },
           makeToolOutputWithCallId(
             callId,
-            JSON.stringify({
-              tool: {
-                id: `openclaw:${target}`,
-                name: target,
-                source: "openclaw",
-              },
-              result: {
-                content: [{ type: "text", text: JSON.stringify(failure) }],
-                ...(details ? { details: failure } : {}),
-              },
-            }),
+            JSON.stringify(
+              nested
+                ? {
+                    tool: {
+                      id: `openclaw:${target}`,
+                      name: target,
+                      source: "openclaw",
+                    },
+                    result: {
+                      content: [{ type: "text", text: JSON.stringify(failure) }],
+                      ...(details ? { details: failure } : {}),
+                    },
+                  }
+                : failure,
+            ),
           ),
         ],
       });
       if (unwrap) {
         expect(outputText(reply)).toBe("Failed to delegate: Child admission denied");
+        expect(outputItems(reply)).toMatchObject([
+          {
+            type: "message",
+            content: [{ type: "output_text", text: "Failed to delegate: Child admission denied" }],
+          },
+        ]);
       } else {
         expect(outputToolCall(reply, "sessions_yield")).toBeDefined();
       }

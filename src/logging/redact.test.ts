@@ -46,33 +46,28 @@ afterEach(() => {
 });
 
 describe("bounded replacement output", () => {
+  const firstChunk = "a".repeat(16_384);
+  const remainingChunks = "b".repeat(16_384) + "c".repeat(16_384);
   it.each<[RegExp, string, string]>([
-    [/none/g, "blue", "aaaabbbbcccc"],
-    [/aaaa/g, "", "bbbbcccc"],
+    [/none/g, "blue", firstChunk + remainingChunks],
+    [/a+/g, "", remainingChunks],
   ])("preserves complete output for %s", (pattern, replacement, expected) => {
-    expect(
-      replacePatternBounded("aaaabbbbcccc", pattern, () => replacement, {
-        chunkThreshold: 4,
-        chunkSize: 4,
-      }),
-    ).toBe(expected);
+    expect(replacePatternBounded(firstChunk + remainingChunks, pattern, () => replacement)).toBe(
+      expected,
+    );
   });
 
   it("keeps calling a stateful replacer after unchanged results", () => {
     const calls: Array<{ match: string; offset: number; input: string }> = [];
-    const output = replacePatternBounded(
-      "red red red",
-      /red/g,
-      (match, offset, input) => {
-        calls.push({ match, offset, input });
-        return calls.length === 3 ? "blue" : match;
-      },
-      { chunkThreshold: 4, chunkSize: 4 },
-    );
-    expect(output).toBe("red red blue");
+    const chunk = "red" + " ".repeat(16_384 - 3);
+    const output = replacePatternBounded(chunk + chunk + "red", /red/g, (match, offset, input) => {
+      calls.push({ match, offset, input });
+      return calls.length === 3 ? "blue" : match;
+    });
+    expect(output).toBe(chunk + chunk + "blue");
     expect(calls).toEqual([
-      { match: "red", offset: 0, input: "red " },
-      { match: "red", offset: 0, input: "red " },
+      { match: "red", offset: 0, input: chunk },
+      { match: "red", offset: 0, input: chunk },
       { match: "red", offset: 0, input: "red" },
     ]);
   });

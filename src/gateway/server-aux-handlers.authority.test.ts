@@ -421,21 +421,21 @@ describe("gateway auxiliary authority lifecycle", () => {
       ownerEpoch: 7,
     });
     let placement = await placements.startDispatch(identity);
-    placement = placements.transition({
+    placement = await placements.transition({
       sessionId: identity.sessionId,
       from: "requested",
       to: "provisioning",
       expectedGeneration: placement.generation,
       patch: { environmentId: "worker-env" },
     });
-    placement = placements.transition({
+    placement = await placements.transition({
       sessionId: identity.sessionId,
       from: "provisioning",
       to: "syncing",
       expectedGeneration: placement.generation,
       patch: { workerBundleHash: "a".repeat(64) },
     });
-    placement = placements.transition({
+    placement = await placements.transition({
       sessionId: identity.sessionId,
       from: "syncing",
       to: "starting",
@@ -445,7 +445,7 @@ describe("gateway auxiliary authority lifecycle", () => {
         remoteWorkspaceDir: "/workspace/worker-close",
       },
     });
-    placement = placements.transition({
+    placement = await placements.transition({
       sessionId: identity.sessionId,
       from: "starting",
       to: "active",

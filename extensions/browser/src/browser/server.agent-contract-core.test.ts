@@ -366,7 +366,7 @@ describe("browser control server", () => {
     });
 
     expect(response.ok).toBe(true);
-    const chromeMcp = await vi.importMock<typeof import("./chrome-mcp.js")>("./chrome-mcp.js");
+    const chromeMcp = await import("./chrome-mcp.js");
     expect(chromeMcp.navigateChromeMcpPage).toHaveBeenCalledWith(
       expect.objectContaining({
         profileName: "openclaw",

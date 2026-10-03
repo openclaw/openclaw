@@ -12,7 +12,6 @@ import {
   splitSetupEntries,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-policy";
 import { isPrivateOrLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -472,11 +471,12 @@ async function runMatrixConfigure(params: {
   });
   const requiresAllowPrivateNetwork = requiresMatrixPrivateNetworkOptIn(homeserver);
   const shouldPromptAllowPrivateNetwork =
-    requiresAllowPrivateNetwork || isPrivateNetworkOptInEnabled(existing);
+    requiresAllowPrivateNetwork || existing.network?.dangerouslyAllowPrivateNetwork === true;
   const allowPrivateNetwork = shouldPromptAllowPrivateNetwork
     ? await params.prompter.confirm({
         message: "Allow private/internal Matrix homeserver traffic for this account?",
-        initialValue: isPrivateNetworkOptInEnabled(existing) || requiresAllowPrivateNetwork,
+        initialValue:
+          existing.network?.dangerouslyAllowPrivateNetwork === true || requiresAllowPrivateNetwork,
       })
     : false;
   if (requiresAllowPrivateNetwork && !allowPrivateNetwork) {

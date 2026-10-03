@@ -802,7 +802,7 @@ describe("session message-cut methods", () => {
     const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
     const mutationEntered = createDeferredCore();
     const releaseMutation = createDeferredCore();
-    const archiving = runExclusiveSessionLifecycleMutation({
+    const archiving = runExclusiveSessionLifecycleMutation("archive", {
       scope: storePath,
       identities: [sourceSessionId],
       run: async () => {

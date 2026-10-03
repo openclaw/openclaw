@@ -7,6 +7,9 @@ import {
   searchInstalledSkills,
   type InstalledSkill,
 } from "../installed-skill-catalog.js";
+import * as ranking from "../tool-search-ranking.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 
@@ -21,6 +24,7 @@ function skill(name: string, description: string, content = "Whole instructions"
 
 describe("installed skill catalog", () => {
   it("ranks an exact identity first and searches the entire prepared catalog", async () => {
+    const build = vi.spyOn(ranking, "buildLexicalIndex");
     const skills = [
       skill("alpha", "Release checks"),
       skill("releases", "Prepare a software release"),
@@ -35,6 +39,18 @@ describe("installed skill catalog", () => {
       hasMore: false,
       coverage: { bodyIndexed: 0, metadataOnly: 3, truncatedBodies: 0 },
     });
+    expect(build).toHaveBeenCalledTimes(1);
+    const refreshed = skills.map(({ name, description }) => skill(name, description));
+    for (const item of refreshed) {
+      item.location = `/current/${item.name}`;
+    }
+    expect((await searchInstalledSkills(refreshed, "database migration")).skills[0]?.location).toBe(
+      "/current/zulu",
+    );
+    expect(build).toHaveBeenCalledTimes(1);
+    refreshed[2]!.description = "Inspect nebulae";
+    expect((await searchInstalledSkills(refreshed, "nebulae")).skills[0]?.name).toBe("zulu");
+    expect(build).toHaveBeenCalledTimes(2);
   });
 
   it.each([

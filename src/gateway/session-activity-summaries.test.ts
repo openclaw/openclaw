@@ -597,7 +597,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     };
     const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: target.agentId });
     const capturedEntry = read();
-    const deletion = runExclusiveSessionLifecycleMutation({
+    const deletion = runExclusiveSessionLifecycleMutation("delete", {
       scope: storePath,
       identities: [target.key, scope.sessionId],
       run: () =>

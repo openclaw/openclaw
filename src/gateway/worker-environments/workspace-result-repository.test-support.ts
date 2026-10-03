@@ -255,7 +255,7 @@ export function useRepositoryWorkspaceResultFixture() {
       environments,
       workspaceOperations,
       runReclaimBarrier: async ({ begin, reclaim }) =>
-        await reclaim(await resolveWorkspace(), begin()),
+        await reclaim(await resolveWorkspace(), await begin()),
       withPreparedRecovery: createWorkerWorkspaceRecoveryFixture({ resolveWorkspace })
         .withPreparedRecovery,
     });

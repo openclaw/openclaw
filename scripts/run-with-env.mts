@@ -63,14 +63,8 @@ export function resolveSpawnCommand(
   const normalizedCommand = platform === "win32" ? command.toLowerCase() : command;
   const isNodeCommand =
     normalizedCommand === "node" || (platform === "win32" && normalizedCommand === "node.exe");
-  if (isNodeCommand) {
-    return {
-      command: execPath,
-      args,
-    };
-  }
   return {
-    command,
+    command: isNodeCommand ? execPath : command,
     args,
   };
 }
@@ -95,15 +89,9 @@ function main(argv: string[] = process.argv.slice(2)) {
   }
 
   let parsed: ReturnType<typeof parseRunWithEnvArgs>;
+  let forceKillDelayMs: number;
   try {
     parsed = parseRunWithEnvArgs(argv);
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(2);
-  }
-
-  let forceKillDelayMs;
-  try {
     forceKillDelayMs = resolveForceKillDelayMs();
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

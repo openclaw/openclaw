@@ -166,6 +166,63 @@ describe("controlUi.githubPreview", () => {
     },
   );
 
+  it.each(["controlUi.githubPreview", "controlUi.githubDetail"])(
+    "keeps public GitHub targets on their public API with Enterprise selected (%s)",
+    async (method) => {
+      const cfg: OpenClawConfig = {
+        agents: { entries: { main: {} } },
+        gateway: {
+          github: { host: "ghe.example.test", apiBaseUrl: "https://ghe.example.test/api/v3" },
+          controlUi: {
+            github: { host: "ghe.example.test", token: "synthetic-enterprise-service" },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+        const url = input instanceof Request ? input.url : input.toString();
+        return new Response(
+          JSON.stringify(
+            url.includes("/issues/")
+              ? {
+                  created_at: "2026-09-01T08:00:00Z",
+                  updated_at: "2026-09-01T09:00:00Z",
+                  repository_url: "https://api.github.com/repos/openclaw/public-routing",
+                  state: "open",
+                  title: "Public issue",
+                  body: "Public body",
+                  comments: 0,
+                  user: { login: "octocat" },
+                }
+              : { id: 125, private: false, visibility: "public" },
+          ),
+        );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const respond = vi.fn<RespondFn>();
+      await expectDefined(
+        createControlUiHandlers()[method],
+        "GitHub public read handler",
+      )(
+        requestOptions(
+          { kind: "issue", number: 88121, owner: "openclaw", repo: "public-routing" },
+          respond,
+          { context: { getRuntimeConfig: () => cfg } },
+        ),
+      );
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ title: "Public issue" }),
+        undefined,
+      );
+      expect(fetchMock).toHaveBeenCalled();
+      for (const [url, options] of fetchMock.mock.calls) {
+        expect(url).toMatch(/^https:\/\/api.github.com\//);
+        expect(new Headers(options?.headers).get("Authorization")).toBeNull();
+      }
+    },
+  );
+
   it("loads reader content with the configured service credential when anonymous quota is exhausted", async () => {
     vi.stubEnv("GH_TOKEN", "different-ambient-token");
     const cfg: OpenClawConfig = {
@@ -275,7 +332,7 @@ describe("controlUi.githubPreview", () => {
     expect(respond).toHaveBeenCalledWith(false, undefined, {
       code: "UNAVAILABLE",
       message:
-        "The configured Control UI GitHub credential is unavailable. Resolve gateway.controlUi.github.token and retry.",
+        "The configured Control UI GitHub credential is unavailable. Check gateway.controlUi.github.token and its host binding, then retry.",
       retryable: false,
     });
     expect(fetchMock).toHaveBeenCalledTimes(3);
@@ -485,7 +542,7 @@ describe("controlUi.githubPreview", () => {
         reason: "secret reference was not found",
       }),
       message:
-        "The configured Control UI GitHub credential is unavailable. Resolve gateway.controlUi.github.token and retry.",
+        "The configured Control UI GitHub credential is unavailable. Check gateway.controlUi.github.token and its host binding, then retry.",
       retryable: false,
     },
   ])(

@@ -63,32 +63,36 @@ async function rotate(storePath: string, active: ReplyOperation) {
 }
 
 it.each([
-  { beforeRead: false, rekey: false },
-  { beforeRead: true, rekey: false },
-  { beforeRead: false, rekey: true },
+  { stage: "after-read", rekey: false },
+  { stage: "before-read", rekey: false },
+  { stage: "after-read", rekey: true },
+  { stage: "before-admission", rekey: false },
 ])(
-  "revalidates rotation during admission: beforeRead=$beforeRead, rekey=$rekey",
-  async ({ beforeRead, rekey }) => {
+  "revalidates rotation during admission: stage=$stage, rekey=$rekey",
+  async ({ stage, rekey }) => {
     const storePath = createSessionStoreFor(sessionKey, sessionId);
     const snapshotRead = deferred();
     const returnAdmission = deferred();
-    const beginAdmission = sessionAdmissions.beginSessionWorkAdmission;
-    vi.spyOn(sessionAdmissions, "beginSessionWorkAdmission").mockImplementationOnce(
-      async (params) => {
-        if (beforeRead) {
-          snapshotRead.resolve();
-          await returnAdmission.promise;
-        }
-        const lease = await beginAdmission(params);
-        if (!beforeRead) {
-          snapshotRead.resolve();
-          await returnAdmission.promise;
-        }
-        return lease;
-      },
-    );
-    const pending = admit(storePath, { expectedSessionId: sessionId });
-    await snapshotRead.promise;
+    let pending: ReturnType<typeof admit> | undefined;
+    if (stage !== "before-admission") {
+      const beginAdmission = sessionAdmissions.beginSessionWorkAdmission;
+      vi.spyOn(sessionAdmissions, "beginSessionWorkAdmission").mockImplementationOnce(
+        async (params) => {
+          if (stage === "before-read") {
+            snapshotRead.resolve();
+            await returnAdmission.promise;
+          }
+          const lease = await beginAdmission(params);
+          if (stage === "after-read") {
+            snapshotRead.resolve();
+            await returnAdmission.promise;
+          }
+          return lease;
+        },
+      );
+      pending = admit(storePath, { expectedSessionId: sessionId });
+      await snapshotRead.promise;
+    }
     const { operation: active } = owned(await admit(storePath));
     if (!rekey) {
       active.setPhase("preflight_compacting");
@@ -97,9 +101,16 @@ it.each([
     if (rekey) {
       active.updateSessionKey("agent:main:telegram:topic:other-compaction");
     } else {
+      if (stage === "before-admission") {
+        active.fail("run_failed");
+      }
       active.complete();
     }
     returnAdmission.resolve();
+    pending ??= admit(storePath, {
+      expectedSessionId: sessionId,
+      expectedActiveOperations: [active],
+    });
     if (rekey) {
       await expect(pending).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
       return;
@@ -165,18 +176,4 @@ it("retries after an admitted owner enters and leaves during one read", async ()
   expect(readAfterTransientOwnerCompletion).toBe(true);
   expect(result.operation.sessionId).toBe(sessionId);
   result.operation.complete();
-});
-
-it("accepts a rotation published before the expected run failed", async () => {
-  const storePath = createSessionStoreFor(sessionKey, sessionId);
-  const { operation: active } = owned(await admit(storePath));
-  active.setPhase("preflight_compacting");
-  await rotate(storePath, active);
-  active.fail("run_failed");
-  active.complete();
-  const result = await admit(storePath, {
-    expectedSessionId: sessionId,
-    expectedActiveOperations: [active],
-  });
-  expect(owned(result).operation.sessionId).toBe(nextSessionId);
 });

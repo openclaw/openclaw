@@ -155,11 +155,12 @@ describe("session branch diff stats", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it.each(["loose", "packed", "detached", "linked"])(
+  it.each(["loose", "packed", "detached", "linked", "enterprise"])(
     "reads %s HEAD and remote refs without probes and preserves checkout context",
     async (layout) => {
       await initializeRepo();
-      await git("remote", "add", "origin", "https://github.com/openclaw/openclaw.git");
+      const host = layout === "enterprise" ? "ghe.example.test" : "github.com";
+      await git("remote", "add", "origin", `https://${host}/openclaw/openclaw.git`);
       await trackRemote("main");
       await git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
       let cwd = root;
@@ -178,10 +179,11 @@ describe("session branch diff stats", () => {
       try {
         await expect(
           runGitReadOperation(
-            { type: "checkout.context", input: { root: cwd } },
+            { type: "checkout.context", input: { root: cwd, githubHost: host } },
             { refresh: true },
           ),
         ).resolves.toEqual({
+          ...(layout === "enterprise" ? { host } : {}),
           owner: "openclaw",
           repo: "openclaw",
           root: cwd,
@@ -203,7 +205,7 @@ describe("session branch diff stats", () => {
         reads.mockClear();
         expect(
           await runGitReadOperation(
-            { type: "checkout.context", input: { root: cwd } },
+            { type: "checkout.context", input: { root: cwd, githubHost: host } },
             { refresh: true },
           ),
         ).toMatchObject({ defaultBranch: "release" });
@@ -212,7 +214,7 @@ describe("session branch diff stats", () => {
         reads.mockClear();
         expect(
           await runGitReadOperation(
-            { type: "checkout.context", input: { root: cwd } },
+            { type: "checkout.context", input: { root: cwd, githubHost: host } },
             { refresh: true },
           ),
         ).not.toHaveProperty("defaultBranch");

@@ -967,7 +967,6 @@ export async function saveSessionStoreStrict(
   store: Record<string, SessionEntry>,
 ): Promise<void> {
   await saveLegacySessionStore(storePath, store, {
-    requireWriteSuccess: true,
     skipMaintenance: true,
   });
 }

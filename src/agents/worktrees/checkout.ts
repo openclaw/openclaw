@@ -398,11 +398,10 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
   }
   const rollbackGuard = input.rollbackGuard ?? input.commitGuard;
   const rollbackOptions = { beforeRun: rollbackGuard, killProcessTree: true };
-  // Capture through allocation authority even when the caller just cancelled.
-  // During a partial clone the destination's .git may point at the template.
-  const gitDir = normalizeGitPathForFilesystem(
-    await requireGit(input.destination, ["rev-parse", "--absolute-git-dir"], rollbackOptions),
-  );
+  // Capture rollback-owned metadata before cloning replaces .git; keep relative Git env paths anchored.
+  const absolute = await resolveGitMetadataPath(input.destination, ".", rollbackOptions);
+  const relative = path.relative(input.repoRoot, absolute);
+  const gitDir = Buffer.byteLength(relative) < Buffer.byteLength(absolute) ? relative : absolute;
   const readRegistration = (commandOptions: Parameters<typeof requireGit>[2]) =>
     requireGit(
       input.repoRoot,
