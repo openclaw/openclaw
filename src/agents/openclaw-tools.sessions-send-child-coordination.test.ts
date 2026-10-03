@@ -24,7 +24,7 @@ const { config, callGatewayMock, readAcpSessionMetaMock, readAcpSessionMetaForEn
     config: {
       session: { mainKey: "main", scope: "per-sender" },
       agents: {
-        list: [{ id: "main", default: true }, { id: "peer" }],
+        entries: { main: {}, peer: {} },
       },
       tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
     } as OpenClawConfig,

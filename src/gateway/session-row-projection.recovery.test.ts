@@ -41,7 +41,12 @@ it.each(["background", "capture"] as const)(
   "keeps %s projection reads outside borrowed startup admission and admits completed recovery",
   async (read) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = { agents: { list: [{ id: "main", default: true }, { id: "worker" }] } };
+      const cfg = {
+        agents: {
+          entries: { main: {}, worker: {} },
+          defaults: { sessionStore: { agentId: "main" } },
+        },
+      };
       const query = { agentId: "worker", key: "agent:worker:recovering" };
       const unaffected = { agentId: "main", key: "agent:main:unchanged" };
       replaceSessionEntrySync(
@@ -88,7 +93,7 @@ it.each(["background", "capture"] as const)(
 
 it("refreshes previews after reconciliation without metadata mutation or clean-read SQLite", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const scope = {
       agentId: "main",
@@ -185,7 +190,7 @@ it("refreshes previews after reconciliation without metadata mutation or clean-r
 
 it("captures the committed replacement before background materialization", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const query = { agentId: "main", key: "agent:main:replaced" };
     const target = { agentId: query.agentId, sessionKey: query.key };
     replaceSessionEntrySync(target, { sessionId: "previous", updatedAt: 1 });

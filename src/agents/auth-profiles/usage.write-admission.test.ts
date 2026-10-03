@@ -73,7 +73,7 @@ it.each(["current", "relocated", "closed"] as const)(
     await withOpenClawTestState(
       { label: "auth-health-cold-owner", scenario: "minimal" },
       async (state) => {
-        const cfg = { agents: { list: [{ id: "main", default: true }, { id: "voice" }] } };
+        const cfg = { agents: { entries: { main: {}, voice: {} } } };
         setRuntimeConfigSnapshot(cfg, cfg);
         const agentDir = state.agentDir("voice");
         const options = { agentId: "voice", env: state.env };
@@ -160,7 +160,7 @@ it.each(["local", "legacy-shared"] as const)(
     await withOpenClawTestState(
       { label: "auth-health-admission", scenario: "minimal" },
       async (state) => {
-        const cfg = { agents: { list: [{ id: "main", default: true }, { id: "voice" }] } };
+        const cfg = { agents: { entries: { main: {}, voice: {} } } };
         setRuntimeConfigSnapshot(cfg, cfg);
         const agentId = owner === "local" ? "voice" : "main";
         const agentDir = state.agentDir(agentId);
@@ -229,7 +229,7 @@ it.each(["warm", "cold"] as const)(
     await withOpenClawTestState(
       { label: "auth-health-relocation", scenario: "minimal" },
       async (state) => {
-        const cfg = { agents: { list: [{ id: "main", default: true }, { id: "voice" }] } };
+        const cfg = { agents: { entries: { main: {}, voice: {} } } };
         setRuntimeConfigSnapshot(cfg, cfg);
         const agentDir = state.agentDir("voice");
         const store = createStore();
@@ -280,7 +280,7 @@ it.each(["shared", "other-agent"] as const)(
       { label: "auth-health-owner", scenario: "minimal" },
       async (state) => {
         const cfg = {
-          agents: { list: [{ id: "main", default: true }, { id: "voice" }, { id: "other" }] },
+          agents: { entries: { main: {}, voice: {}, other: {} } },
         };
         setRuntimeConfigSnapshot(cfg, cfg);
         const ownerDir = owner === "shared" ? undefined : state.agentDir("other");
@@ -328,7 +328,7 @@ it("does not recreate health after an earlier admitted writer removes the profil
   await withOpenClawTestState(
     { label: "auth-health-removal", scenario: "minimal" },
     async (state) => {
-      const cfg = { agents: { list: [{ id: "main", default: true }, { id: "voice" }] } };
+      const cfg = { agents: { entries: { main: {}, voice: {} } } };
       setRuntimeConfigSnapshot(cfg, cfg);
       const agentDir = state.agentDir("voice");
       const store = createStore();
@@ -420,7 +420,7 @@ it.each(["raw", "precloned"] as const)(
       async (state) => {
         const cfg = {
           agents: {
-            list: [{ id: "main", default: true }, { id: "voice" }, { id: "shared-auth" }],
+            entries: { main: {}, voice: {}, "shared-auth": {} },
           },
         };
         setRuntimeConfigSnapshot(cfg, cfg);

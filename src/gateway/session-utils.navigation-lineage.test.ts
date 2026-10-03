@@ -34,7 +34,7 @@ describe("session list navigation lineage", () => {
 
   const cfg = {
     session: { mainKey: "main" },
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
   } as OpenClawConfig;
 
   test.each(["idle", "fork", "visible spawn"] as const)(

@@ -233,7 +233,7 @@ describe("handleTtsCommands status fallback reporting", () => {
 
   it("resolves status config for the active agent", async () => {
     const cfg = {
-      agents: { list: [{ id: "reader", tts: { provider: "elevenlabs" } }] },
+      agents: { entries: { reader: { tts: { provider: "elevenlabs" } } } },
     } as OpenClawConfig;
 
     const result = await handleTtsCommands(buildTtsParams("/tts status", cfg, "reader"), true);
@@ -254,7 +254,7 @@ describe("handleTtsCommands status fallback reporting", () => {
       voiceCompatible: true,
     });
     const cfg = {
-      agents: { list: [{ id: "reader", tts: { provider: PRIMARY_TTS_PROVIDER } }] },
+      agents: { entries: { reader: { tts: { provider: PRIMARY_TTS_PROVIDER } } } },
     } as OpenClawConfig;
 
     const result = await handleTtsCommands(

@@ -8,7 +8,7 @@ import { readSessionListSelectionFacts } from "./session-list-target.js";
 import { createSessionRowProjectionContext } from "./session-row-projection-context.js";
 
 it("benchmarks warm identity filtering across viewers", () => {
-  const cfg = { agents: { list: [{ id: "main", default: true }] } };
+  const cfg = { agents: { entries: { main: {} } } };
   const owner = createSessionRowProjectionContext(
     createSubagentSessionListReadView({ env: process.env }),
   );

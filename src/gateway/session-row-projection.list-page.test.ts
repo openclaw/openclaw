@@ -27,7 +27,7 @@ afterEach(() => vi.restoreAllMocks());
 
 it("retries failed catalog renewal without blocking lists on its replacement", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const key = "agent:main:dashboard:catalog-retry";
     const catalog = [
@@ -83,7 +83,7 @@ it("retries failed catalog renewal without blocking lists on its replacement", a
 
 it("retains prepared child metadata across a parent presentation refresh", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const parent = "agent:main:dashboard:prepared-parent";
     const child = "agent:main:dashboard:prepared-child";
@@ -124,7 +124,7 @@ it("retains prepared child metadata across a parent presentation refresh", async
 
 it("materializes only concurrent selected pages after a catalog publication", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     for (let index = 0; index < 80; index++) {
       replaceSessionEntrySync(
@@ -172,7 +172,7 @@ it("materializes only concurrent selected pages after a catalog publication", as
 
 it("yields between cold page slices shared by concurrent list handlers", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const keys = Array.from({ length: 7 }, (_, index) => `agent:main:dashboard:yield-${index}`);
     for (const [index, key] of keys.entries()) {
@@ -230,7 +230,7 @@ it("yields between cold page slices shared by concurrent list handlers", async (
 
 it("selects fresh metadata and board facts without materializing the unselected roster", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     for (let index = 0; index < 70; index++) {
       replaceSessionEntrySync(

@@ -86,11 +86,10 @@ function projectSystemAgentExecutionConfig(
       ...(routeAgent?.tools !== undefined ? { tools: structuredClone(routeAgent.tools) } : {}),
     },
   ];
-  const { list: _legacyList, ...agentsConfig } = config.agents ?? {};
   const projected = {
     ...config,
     agents: {
-      ...agentsConfig,
+      ...config.agents,
       entries: toAgentEntriesRecord(projectedAgents),
     },
   };

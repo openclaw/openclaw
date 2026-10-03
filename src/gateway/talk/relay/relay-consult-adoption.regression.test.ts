@@ -60,7 +60,7 @@ describe("Talk relay keyed consult adoption", () => {
   });
 
   async function createConsult(excludeFromContext = true) {
-    const cfg = { agents: { entries: { main: { default: true } } } };
+    const cfg = { agents: { entries: { main: {} } } };
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
     const session = createTalkRealtimeRelaySession({
       cfg,

@@ -181,7 +181,7 @@ describe("required maintenance with restart-safe admitted input", () => {
         const scope = { agentId: "main", sessionKey, sessionId, storePath };
         const cfg: OpenClawConfig = {
           agents: {
-            list: [{ id: "main", default: true, workspace: state.workspaceDir }],
+            entries: { main: { workspace: state.workspaceDir } },
             defaults: {
               workspace: state.workspaceDir,
               model: { primary: "test-provider/test-model" },

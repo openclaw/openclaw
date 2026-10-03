@@ -207,7 +207,7 @@ export async function copyPackagePathEntry(
   destination: string,
   assertCaller = () => {},
   beforePublish?: (staged: string) => void,
-): Promise<{ ownershipPreserved: boolean }> {
+): Promise<void> {
   const assertCurrent = retainMutationAuthority(assertCaller);
   assertCurrent();
   const sourceIdentity = fsSync.lstatSync(source, { bigint: true });
@@ -236,7 +236,6 @@ export async function copyPackagePathEntry(
     assertParent();
     assertPackagePathIdentity(staging, stagingIdentity);
   };
-  let ownershipPreserved = true;
   let failure: { error: unknown } | undefined;
   try {
     const stagedRoot = await fsSafeRoot(staging, { assertBeforeMutation: assertStaging });
@@ -320,7 +319,6 @@ export async function copyPackagePathEntry(
               ) {
                 throw error;
               }
-              ownershipPreserved &&= field !== "ownership";
               log.warn(
                 `Could not preserve launcher symlink ${field} from ${source}; continuing with the copied link`,
               );
@@ -424,7 +422,6 @@ export async function copyPackagePathEntry(
   if (failure) {
     throw failure.error;
   }
-  return { ownershipPreserved };
 }
 
 export type PackageLauncherBackup = {
@@ -481,16 +478,12 @@ export async function capturePackageLaunchers(
         : null;
       let fingerprint = backup && !native ? await reader.launcher(destination) : undefined;
       if (backup) {
-        const copied = await copyPackagePathEntry(destination, backup);
+        await copyPackagePathEntry(destination, backup);
         if (fingerprint) {
           // Keep failed verification evidence even when activation never starts.
           snapshot.failedCopy = backup;
           const actual = await reader.launcher(backup);
-          const differences = packageLauncherDifferences(
-            fingerprint,
-            actual,
-            copied.ownershipPreserved,
-          );
+          const differences = packageLauncherDifferences(fingerprint, actual);
           if (differences.length > 0) {
             throw new Error(
               `Package rollback launcher backup changed: ${destination}; differing fields: ${differences.join(", ")}`,

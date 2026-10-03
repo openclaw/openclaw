@@ -28,7 +28,7 @@ it("prepares dirty persistent row facts independently of history reads and the G
     const key = "agent:main:worker-row";
     const cfg = {
       agents: {
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
         defaults: { utilityModel: "unit-test/small" },
       },
     };
@@ -106,7 +106,7 @@ it("prepares dirty persistent row facts independently of history reads and the G
 
 it("keeps child links ordered after a keyed child refresh", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const parent = "agent:main:parent";
     const children = ["agent:main:child-a", "agent:main:child-b"] as const;
     replaceSessionEntrySync(
@@ -147,7 +147,7 @@ it("resolves agent-scoped legacy locators from resident topology for reads and d
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const locator = state.statePath("shared", "sessions.json");
     const cfg = {
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      agents: { entries: { main: {}, work: {} }, defaults: { sessionStore: { agentId: "main" } } },
       session: { store: locator },
     };
     for (const agentId of ["main", "work"]) {
@@ -202,7 +202,9 @@ it("resolves agent-scoped legacy locators from resident topology for reads and d
 
 it("retains current rows across agent scopes without SQLite and refreshes only the committed key", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }, { id: "work" }] } };
+    const cfg = {
+      agents: { entries: { main: {}, work: {} }, defaults: { sessionStore: { agentId: "main" } } },
+    };
     for (const agentId of ["main", "work"]) {
       for (const name of ["parent", "child"]) {
         replaceSessionEntrySync(
@@ -275,7 +277,7 @@ it("retains current rows across agent scopes without SQLite and refreshes only t
 
 it("keeps session-ID aliases out of exact-key describe", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: "agent:main:actual" },
       { sessionId: "agent:main:missing", updatedAt: 1 },
@@ -304,7 +306,7 @@ it("keeps session-ID aliases out of exact-key describe", async () => {
 
 it("refreshes dirty canonical rows before presenting their main alias", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: "agent:main:main" },
       { sessionId: "main-session-id", updatedAt: 1, label: "before" },
@@ -327,7 +329,7 @@ it("refreshes dirty canonical rows before presenting their main alias", async ()
 it("keeps the committed same-key row after a same-ID reset", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const key = "agent:main:session";
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: key },
       { sessionId: "old", lifecycleRevision: "original", updatedAt: 1 },
@@ -358,7 +360,7 @@ it("settles a committed write queued while the previous materialization is finis
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const key = "agent:main:finishing-write";
     const scope = { agentId: "main", sessionKey: key };
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const entry = { sessionId: "finishing-write", updatedAt: 1 };
     replaceSessionEntrySync(scope, entry);
     const projection = await createSessionRowProjection({ cfg });
@@ -390,7 +392,7 @@ it("settles a committed write queued while the previous materialization is finis
 it("retains dirty work after a failed materialization and retries the same committed row", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const key = "agent:main:retry";
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: key },
       { sessionId: "retry", updatedAt: 1 },
@@ -417,7 +419,7 @@ it("retains dirty work after a failed materialization and retries the same commi
 
 it("invalidates parent links when a child moves and when deletion crosses a materialization batch", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const parent = "agent:main:a-parent";
     const nextParent = "agent:main:b-parent";
     const child = "agent:main:z-child";
@@ -482,7 +484,7 @@ it("normalizes parent lineage after configuration publication", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const key = "agent:main:child";
     let cfg = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       session: { scope: "per-sender" as "per-sender" | "global" },
     };
     replaceSessionEntrySync(
@@ -505,8 +507,8 @@ it("reprocesses activity-summary policy when config changes during materializati
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     let cfg = {
       agents: {
-        list: [{ id: "main", default: true }, { id: "work" }],
-        defaults: { utilityModel: "unit-test/small" },
+        entries: { main: {}, work: {} },
+        defaults: { sessionStore: { agentId: "main" }, utilityModel: "unit-test/small" },
       },
     };
     const targets = ["main", "work"].flatMap((agentId) =>
@@ -533,7 +535,10 @@ it("reprocesses activity-summary policy when config changes during materializati
       }
       const readInputs = rowInputs.readSessionRowInputs;
       vi.spyOn(rowInputs, "readSessionRowInputs").mockImplementationOnce((params) => {
-        cfg = { ...cfg, agents: { ...cfg.agents, defaults: { utilityModel: "" } } };
+        cfg = {
+          ...cfg,
+          agents: { ...cfg.agents, defaults: { ...cfg.agents.defaults, utilityModel: "" } },
+        };
         sessionChanges.emit({ all: true, scope: "config" });
         return readInputs(params);
       });
@@ -543,7 +548,13 @@ it("reprocesses activity-summary policy when config changes during materializati
       for (const target of targets) {
         expect(projection.snapshot(target).row?.activitySummary?.state).toBe("unavailable");
       }
-      cfg = { ...cfg, agents: { ...cfg.agents, defaults: { utilityModel: "unit-test/small" } } };
+      cfg = {
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults: { ...cfg.agents.defaults, utilityModel: "unit-test/small" },
+        },
+      };
       sessionChanges.emit({ all: true, scope: "config" });
       await projection.ensureMaterialized();
       for (const target of targets) {
@@ -561,7 +572,7 @@ it.each(["static", "array", "unowned-map", "empty-map"] as const)(
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = {
         agents: {
-          list: [{ id: "main", default: true }],
+          entries: { main: {} },
           defaults: { model: "fixture/primary" },
         },
       };
@@ -645,7 +656,7 @@ it.each(["static", "array", "unowned-map", "empty-map"] as const)(
 it("keeps cross-agent inheritance bound to a stored qualified parent", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = {
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      agents: { entries: { main: {}, work: {} }, defaults: { sessionStore: { agentId: "main" } } },
       session: { scope: "global" as const },
     };
     for (const [agentId, sessionKey, label] of [
@@ -796,7 +807,7 @@ it("inherits a raw sentinel parent from its physical store and refreshes its dep
 
 it("keeps a committed insertion when topology publishes before the refresh", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: "agent:main:existing" },
       { sessionId: "existing", updatedAt: 1 },
@@ -820,7 +831,7 @@ it("keeps a committed insertion when topology publishes before the refresh", asy
 
 it("refreshes thread model inheritance when its implicit parent changes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const parentKey = "agent:main:discord:channel:root";
     const key = `${parentKey}:thread:child`;
     const parent = {
@@ -891,7 +902,7 @@ it.each(["global", "unknown"])(
 
 it("accepts a completed catalog when only session data changed during preparation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const key = "agent:main:catalog-write";
     const entry = { sessionId: "catalog-write", updatedAt: 1 };
     replaceSessionEntrySync({ agentId: "main", sessionKey: key }, entry);

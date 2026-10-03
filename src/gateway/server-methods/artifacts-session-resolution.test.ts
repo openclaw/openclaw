@@ -89,7 +89,7 @@ describe("artifact session authorization", () => {
   it("denies direct and indirect incognito selectors while preserving admin access", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:dashboard:incognito-artifacts";
-      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+      const cfg = { agents: { entries: { main: {} } } };
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {

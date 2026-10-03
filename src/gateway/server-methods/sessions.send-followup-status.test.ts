@@ -239,7 +239,7 @@ describe("sessions.send completed subagent follow-up status", () => {
   });
 
   it("steers the selected global agent with committed receipt and interrupt facts", async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }, { id: "work" }] } };
+    const cfg = { agents: { entries: { main: {}, work: {} } } };
     loadSession("global", "sess-work-global", "/tmp/work/sessions.json", cfg);
     const payload = {
       runId: "run-work",

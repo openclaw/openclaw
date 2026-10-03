@@ -156,7 +156,11 @@ it("keeps retained global progress separate from an ordinary qualified global ro
   const stateDir = tempDirs.make("openclaw-gateway-retained-global-progress-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const cfg = {
-    agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+    agents: {
+      ownership: "explicit" as const,
+      defaults: { systemAgent: { agentId: "main" } },
+      entries: { main: {}, work: {} },
+    },
     session: { scope: "per-sender" as const },
   };
   setRuntimeConfigSnapshot(cfg, cfg);
@@ -239,7 +243,11 @@ it("reopens separate boards and progress cards in a shared database owned by ano
   const storePath = path.join(stateDir, "shared.sqlite");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const cfg = {
-    agents: { entries: { alpha: { default: true }, beta: {} } },
+    agents: {
+      ownership: "explicit" as const,
+      defaults: { sessionStore: { agentId: "alpha" } },
+      entries: { alpha: {}, beta: {} },
+    },
     session: { store: storePath },
   };
   setRuntimeConfigSnapshot(cfg, cfg);

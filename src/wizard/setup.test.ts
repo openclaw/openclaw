@@ -166,14 +166,14 @@ function remotePromptCalls() {
 }
 
 function modelConfig(primary: string): OpenClawConfig {
-  return { agents: { defaults: { model: { primary } }, entries: { main: { default: true } } } };
+  return { agents: { defaults: { model: { primary } }, entries: { main: {} } } };
 }
 
 function modelConfigWithApiKey(apiKey: string, agentDir: string): OpenClawConfig {
   return {
     agents: {
       defaults: { model: { primary: "openai/gpt-5.5" } },
-      entries: { main: { default: true, agentDir } },
+      entries: { main: { agentDir } },
     },
     auth: {
       profiles: { "openai:default": { provider: "openai", mode: "api_key" } },
@@ -903,21 +903,14 @@ describe("runSetupWizard", () => {
     async (accepted) => {
       const currentWorkspace = await makeCaseDir("fleet-current-");
       const requestedWorkspace = await makeCaseDir("fleet-requested-");
-      const config: OpenClawConfig = accepted
-        ? {
-            wizard: { securityAcknowledgedAt: "2026-06-30T00:00:00.000Z" },
-            agents: {
-              defaults: { workspace: currentWorkspace },
-              list: [{ id: "main", default: true }, { id: "ops" }],
-            },
-          }
-        : {
-            agents: {
-              ownership: "explicit",
-              defaults: { workspace: currentWorkspace, systemAgent: { agentId: "main" } },
-              entries: { main: {}, ops: {} },
-            },
-          };
+      const config: OpenClawConfig = {
+        ...(accepted ? { wizard: { securityAcknowledgedAt: "2026-06-30T00:00:00.000Z" } } : {}),
+        agents: {
+          ownership: "explicit",
+          defaults: { workspace: currentWorkspace, systemAgent: { agentId: "main" } },
+          entries: { main: {}, ops: {} },
+        },
+      };
       if (accepted) {
         readConfigFileSnapshot.mockResolvedValueOnce(configSnapshot(config));
       } else {
@@ -1192,7 +1185,7 @@ describe("runSetupWizard", () => {
       if (flow === "quickstart") {
         readConfigFileSnapshot.mockResolvedValueOnce(
           configSnapshot({
-            agents: { entries: { main: { default: true } } },
+            agents: { entries: { main: {} } },
             gateway: {
               port: 19111,
               bind: "loopback",

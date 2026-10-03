@@ -253,7 +253,7 @@ test.each(["identity", "label", "alias", "cleared-selection"] as const)(
           change === "alias"
             ? {
                 session: { mainKey: "work" },
-                agents: { list: [{ id: "main", default: true }] },
+                agents: { entries: { main: {} } },
               }
             : {},
         ),
@@ -377,7 +377,7 @@ test("patchMany prepares singleton agent groups without blocking another session
     const context = patchContext(loadGatewayModelCatalog, {
       agents: {
         defaults: { model: "anthropic/claude-sonnet-4-6" },
-        list: [{ id: "main" }, { id: "secondary" }],
+        entries: { main: {}, secondary: {} },
       },
     });
     const respond = vi.fn();

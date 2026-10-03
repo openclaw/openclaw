@@ -27,8 +27,7 @@ vi.mock("./isolated-agent/run-model-selection.runtime.js", () => ({
     typeof raw === "string" ? raw.trim() || undefined : undefined,
   publishedModelCatalogOwnerMatchesAgent: (owner: { agentId: string }, agentId: string) =>
     owner.agentId === agentId.trim().toLowerCase(),
-  resolveAgentConfig: (cfg: OpenClawConfig, agentId: string) =>
-    cfg.agents?.list?.find((agent) => agent.id === agentId),
+  resolveAgentConfig: (cfg: OpenClawConfig, agentId: string) => cfg.agents?.entries?.[agentId],
 }));
 
 import { resolveCronModelSelection } from "./isolated-agent/model-selection.js";
@@ -116,7 +115,7 @@ describe("cron model selection", () => {
     },
     {
       error: "model not allowed: openai/gpt-4.1-mini",
-      cfg: { agents: { list: [{ id: "ops", modelPolicy: { allow: ["anthropic/*"] } }] } },
+      cfg: { agents: { entries: { ops: { modelPolicy: { allow: ["anthropic/*"] } } } } },
       agentId: "ops",
       expected:
         "rejected by agents.entries.*.modelPolicy.allow: openai/gpt-4.1-mini is not in [anthropic/*]",
@@ -138,7 +137,7 @@ describe("cron model selection", () => {
           models: { "openai/gpt-4.1-mini": { alias: "approved" } },
           modelPolicy: { allow: ["approved"] },
         },
-        list: [{ id: "worker", models: { "anthropic/claude-sonnet-4-6": { alias: "approved" } } }],
+        entries: { worker: { models: { "anthropic/claude-sonnet-4-6": { alias: "approved" } } } },
       },
     };
     await select({ cfg, agentId: "worker", payload: { ...payload, model: "approved" } });
@@ -151,13 +150,13 @@ describe("cron model selection", () => {
     const cfg = {
       agents: {
         defaults: { model: "anthropic/caller-model" },
-        list: [{ id: "worker", default: true }],
+        entries: { worker: {} },
       },
     };
     const ownerConfig = {
       agents: {
         defaults: { model: "openai/owner-default", modelPolicy: { allow: ["openai/*"] } },
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
       },
     };
     const catalog = [{ id: "gpt-4.1-mini", name: "Owner Model", provider: "openai" }];

@@ -386,7 +386,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
             codeMode: { enabled: false },
           },
           agents: {
-            list: [{ id: "ops", tools: { codeMode: true } }],
+            entries: { ops: { tools: { codeMode: true } } },
           },
         } as OpenClawConfig,
         model: {

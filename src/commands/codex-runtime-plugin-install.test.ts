@@ -361,14 +361,12 @@ describe("Codex runtime plugin install repair", () => {
     });
     const cfg = {
       agents: {
-        list: [
-          {
-            id: "ops",
-            default: true,
+        entries: {
+          ops: {
             model: { primary: "openai/gpt-5.5" },
             models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
           },
-        ],
+        },
       },
       models: {
         providers: {

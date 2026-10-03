@@ -109,7 +109,7 @@ function createTestOpenClawTools(
     ...options,
     config: {
       ...options.config,
-      agents: options.config?.agents ?? { entries: { main: { default: true } } },
+      agents: options.config?.agents ?? { entries: { main: {} } },
     } satisfies OpenClawConfig,
     wrapBeforeToolCallHook: false,
   });
@@ -162,7 +162,7 @@ describe("requester yield ownership", () => {
     const sessionKey = "agent:main:" + key;
     const runId = "envelope-run";
     const config: OpenClawConfig = {
-      agents: { entries: { main: { default: true, workspace } } },
+      agents: { entries: { main: { workspace } } },
       session: { store: storePath },
       tools: { profile: "coding" },
     };
@@ -583,7 +583,7 @@ describe("requester yield ownership", () => {
       const workspace = sessionDirs.make();
       const storePath = path.join(workspace, "sessions.json");
       const config: OpenClawConfig = {
-        agents: { entries: { main: { default: true, workspace } } },
+        agents: { entries: { main: { workspace } } },
         session: { store: storePath },
         tools: policy,
       };

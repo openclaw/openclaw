@@ -216,7 +216,8 @@ describe("models-config write serialization", () => {
       );
       const cfg = {
         agents: {
-          list: [{ id: "main" }, { id: "ops", default: true }],
+          defaults: { systemAgent: { agentId: "ops" } },
+          entries: { main: {}, ops: {} },
         },
       };
 

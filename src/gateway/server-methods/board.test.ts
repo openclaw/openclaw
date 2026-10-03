@@ -70,7 +70,7 @@ describe("board gateway methods", () => {
   it("scopes bare boards by explicit owner and rejects ambiguous ownerless requests", async () => {
     const { invoke, store } = createHarness(undefined, undefined, undefined, {
       getRuntimeConfig: () => ({
-        agents: { ownership: "explicit", list: [{ id: "main" }, { id: "work" }] },
+        agents: { ownership: "explicit", entries: { main: {}, work: {} } },
       }),
     });
     const work = await invoke("board.widget.put", {

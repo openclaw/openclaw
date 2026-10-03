@@ -32,7 +32,7 @@ vi.mock("../../infra/session-cost-usage.js", async () => ({
 import { usageHandlers } from "./usage.js";
 
 function fixture(rows: Record<string, SessionEntry>, tokens: Record<string, number>) {
-  const config: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
+  const config: OpenClawConfig = { agents: { entries: { main: {} } } };
   mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
     store: rows,
     targetsBySessionKey: new Map(
@@ -266,7 +266,7 @@ describe("usage creator attribution", () => {
         authenticatedUserProfile: { profileId: ada.id },
       } as GatewayClient;
       const restrictedConfig: OpenClawConfig = {
-        agents: { entries: { main: { default: true } } },
+        agents: { entries: { main: {} } },
         gateway: {
           roles: {
             default: "guest",

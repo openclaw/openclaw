@@ -44,8 +44,11 @@ describe("tool access diagnostics", () => {
       toolsPath: "agents.entries.assistant.tools",
     },
     {
-      agents: { list: [{ id: "other" }, { id: " Assistant ", tools: { profile: "messaging" } }] },
-      toolsPath: "agents.list[1].tools",
+      agents: {
+        ownership: "explicit",
+        entries: { other: {}, " Assistant ": { tools: { profile: "messaging" } } },
+      },
+      toolsPath: 'agents.entries[" Assistant "].tools',
     },
     {
       agents: { entries: { " Assistant ": { tools: { profile: "messaging" } } } },

@@ -1,6 +1,10 @@
 import path from "node:path";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import {
+  listAgentEntries,
+  tryResolveRawLegacyDefaultAgentId,
+} from "../../../../src/agents/agent-roster.js";
+import {
   resolveDefaultAgentWorkspaceDir,
   resolveStateDir,
   resolveUserPath,
@@ -62,8 +66,6 @@ type SecretInput =
 
 /** Agent-level config fields consumed by memory host helpers. */
 type AgentConfig = {
-  id?: string;
-  default?: boolean;
   workspace?: string;
   memory?: {
     search?: MemorySearchConfig;
@@ -79,8 +81,7 @@ export type OpenClawConfig = {
       workspace?: string;
       contextLimits?: AgentContextLimitsConfig;
     };
-    entries?: Record<string, Omit<AgentConfig, "id">>;
-    list?: AgentConfig[];
+    entries?: Record<string, AgentConfig>;
   };
   session?: {
     dmScope?: DmScope;
@@ -129,24 +130,11 @@ export const MEMORY_HOST_ROOT_FILENAME = "MEMORY.md";
 
 const DEFAULT_AGENT_ID = "main";
 
-/** Return configured agent entries after dropping nullish placeholders. */
-function listAgentEntries(cfg: OpenClawConfig): AgentConfig[] {
-  if (cfg.agents?.entries) {
-    return Object.entries(cfg.agents.entries).map(([id, entry]) => Object.assign({ id }, entry));
-  }
-  return Array.isArray(cfg.agents?.list)
-    ? cfg.agents.list.filter((entry): entry is AgentConfig => Boolean(entry))
-    : [];
-}
-
-/** Resolve the default agent id from explicit default marker or first agent entry. */
+/** Preserve raw default-marker, then first-agent, workspace inheritance. */
 function resolveDefaultAgentId(cfg: OpenClawConfig): string {
-  const agents = listAgentEntries(cfg);
-  if (agents.length === 0) {
-    return DEFAULT_AGENT_ID;
-  }
-  const chosen = (agents.find((agent) => agent.default) ?? agents[0])?.id;
-  return normalizeAgentId(chosen || DEFAULT_AGENT_ID);
+  return normalizeAgentId(
+    tryResolveRawLegacyDefaultAgentId(cfg) ?? listAgentEntries(cfg)[0]?.id ?? DEFAULT_AGENT_ID,
+  );
 }
 
 /** Find one agent config by canonical id. */
@@ -172,7 +160,7 @@ export function resolveMemoryHostAgentWorkspaceDir(
     return stripNullBytes(resolveUserPath(configured, env));
   }
   const fallback = cfg.agents?.defaults?.workspace?.trim();
-  // Legacy reader inputs keep first-agent inheritance. Explicit ownership uses
+  // Legacy reader inputs keep default-marker, then first-agent inheritance. Explicit ownership uses
   // the same legacy data owner as search, independently of the runtime default.
   const inheritedWorkspaceAgentId =
     cfg.agents?.ownership === "explicit"

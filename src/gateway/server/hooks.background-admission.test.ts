@@ -33,7 +33,7 @@ vi.mock("../../infra/system-events.js", () => ({
 const { createGatewayHooksRequestHandler } = await import("./hooks.js");
 
 const config: OpenClawConfig = {
-  agents: { entries: { main: { default: true } } },
+  agents: { entries: { main: {} } },
   hooks: {
     enabled: true,
     token: "hook-secret",

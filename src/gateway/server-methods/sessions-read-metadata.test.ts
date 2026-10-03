@@ -54,7 +54,7 @@ async function seedMetadataReads(prepareProjection = false) {
     },
   } satisfies Record<string, GatewayOperatorRoleDefinition>;
   let cfg: OpenClawConfig = {
-    agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+    agents: { defaults: { sessionStore: { agentId: "main" } }, entries: { main: {}, work: {} } },
     session: { store: storePath },
     gateway: {
       roles: {

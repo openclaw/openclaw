@@ -37,7 +37,8 @@ const LIST_PARAMS = {
 
 test("sessions.list keeps warm roster enumeration bounded as ordinary rows grow", async () => {
   await createSessionStoreDir();
-  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+  testState.agentsConfig = { entries: { main: {}, work: {} } };
+  testState.agentConfig = { sessionStore: { agentId: "main" } };
   const rosterReads: number[] = [];
   for (const rows of [20, 2_001]) {
     const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {
@@ -80,7 +81,7 @@ test("sessions.list retains stored titles and transcript previews beyond the dat
   const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json");
   testState.sessionConfig = { store: storeTemplate };
   testState.agentsConfig = {
-    list: agentIds.map((id, index) => ({ id, default: index === 0 })),
+    entries: Object.fromEntries(agentIds.map((id) => [id, {}])),
   };
 
   for (const [index, agentId] of agentIds.entries()) {
@@ -201,7 +202,7 @@ test("sessions.list projects out prompt snapshots without changing full entry re
   const readonly = vi.spyOn(sessionEntryReader, "listSessionEntriesReadOnly");
   const decode = vi.spyOn(sessionEntryStatus, "parseSessionEntryJson");
   const cfg = {
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
     session: { store: storePath },
   };
   let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;

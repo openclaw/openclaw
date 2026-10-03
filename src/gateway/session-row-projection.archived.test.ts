@@ -39,7 +39,7 @@ function preparedSnapshot(projection: Projection, query: SnapshotQuery) {
 
 it("keeps archived rows cold at hydration and across broad refreshes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const live = 3;
     const archived = 8;
     const placements = createWorkerSessionPlacementStore();
@@ -105,7 +105,10 @@ it("keeps archived rows cold at hydration and across broad refreshes", async () 
 it("reindexes cold lineage when a literal parent appears and disappears", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg = {
-      agents: { entries: { alpha: { default: true }, main: {} } },
+      agents: {
+        entries: { alpha: {}, main: {} },
+        defaults: { sessionStore: { agentId: "alpha" } },
+      },
       session: { scope: "global" as const },
     };
     await state.writeConfig(cfg);
@@ -239,7 +242,7 @@ it("reindexes cold lineage when a literal parent appears and disappears", async 
 
 it("promotes unarchived rows, demotes archived rows, and refreshes only requested archives", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const key = "agent:main:archive-transition";
     const target = { agentId: "main", sessionKey: key };
     const entry = { sessionId: "archive-transition", updatedAt: 1 };
@@ -295,7 +298,7 @@ it("bounds archived residency across pages and evicts the least recently read ro
   onTestFinished,
 }) => {
   const run = withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     for (let index = 0; index < 128; index++) {
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: `agent:main:archive-${index}` },
@@ -450,7 +453,7 @@ it("bounds archived residency across pages and evicts the least recently read ro
 
 it("backfills only requested archives and discards enrichment after demotion", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const completion = createDeferredCore();
     const backfill = vi
       .spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields")
@@ -493,7 +496,7 @@ it("backfills only requested archives and discards enrichment after demotion", a
 
 it("refreshes cold metadata and promotes unarchived rows through committed keyed publications", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const target = { agentId: "main", sessionKey: "agent:main:broad-archive" };
     replaceSessionEntrySync(target, { sessionId: "before", updatedAt: 1, archivedAt: 1 });
     const release = retainSessionListForegroundWork();
@@ -519,7 +522,7 @@ it("refreshes cold metadata and promotes unarchived rows through committed keyed
 
 it("expires archives read while a newer catalog is still loading", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const key = "agent:main:catalog-archive";
     const catalog = [
       {
@@ -580,7 +583,7 @@ it("expires archives read while a newer catalog is still loading", async () => {
 
 it("withdraws in-flight live backfill authority when its row is archived", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const completion = createDeferredCore();
     const backfill = vi
       .spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields")
@@ -608,7 +611,7 @@ it("discards backfill superseded by a same-lifecycle publication after remateria
   onTestFinished,
 }) => {
   const run = withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const target = { agentId: "main", sessionKey: "agent:main:backfill-successor" };
     const query = { agentId: "main", key: target.sessionKey };
     const entry = {

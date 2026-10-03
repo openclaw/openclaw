@@ -147,7 +147,7 @@ async function request(
 beforeEach(async () => {
   stateDir = tempDirs.make("openclaw-reset-cleanup-");
   setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-  cfg = { agents: { list: [{ id: "main", default: true, workspace: stateDir }] } };
+  cfg = { agents: { entries: { main: { workspace: stateDir } } } };
   setRuntimeConfigSnapshot(cfg);
   await resetSubagentRegistryForTests({ persist: false });
   attempts = 0;
@@ -498,10 +498,10 @@ test.each([false, true])(
     const agentId = "worker";
     cfg = {
       agents: {
-        list: [
-          { id: "main", default: true, workspace: stateDir },
-          { id: "worker", workspace: stateDir },
-        ],
+        entries: {
+          main: { workspace: stateDir },
+          worker: { workspace: stateDir },
+        },
       },
       session: { store: path.join(stateDir, "custom-sessions.json") },
     };

@@ -216,15 +216,15 @@ it("charges captured discovery paths to queue capacity and recovers after refusa
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const subject = await placement();
     replaceSessionEntrySync(subject, { sessionId: subject.sessionId, updatedAt: 1 });
-    const small: OpenClawConfig = { agents: { list: [{ id: "main" }] } };
+    const small: OpenClawConfig = { agents: { entries: { main: {} } } };
     const large: OpenClawConfig = {
       agents: {
-        list: [
-          { id: "main" },
-          ...Array.from({ length: 1000 }, (_, index) => ({
-            id: `configured-worker-${index}`,
-          })),
-        ],
+        entries: {
+          main: {},
+          ...Object.fromEntries(
+            Array.from({ length: 1000 }, (_, index) => [`configured-worker-${index}`, {}]),
+          ),
+        },
       },
     };
     setRuntimeConfigSnapshot(large, large);
@@ -607,7 +607,7 @@ it("keeps the fixed physical owner and current precedence across canonical and m
     const store = state.statePath("shared.sqlite");
     const database = openOpenClawAgentDatabase({ agentId: "main", path: store });
     const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "ops", default: true }] },
+      agents: { entries: { ops: {} } },
       session: { store },
     };
     setRuntimeConfigSnapshot(cfg, cfg);

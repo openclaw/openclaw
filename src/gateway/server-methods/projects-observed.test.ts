@@ -5,6 +5,7 @@ import {
   PROJECTS_LIST_MAX_IDENTITY_PROBES,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createProjectsHandlers } from "./projects.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -79,7 +80,7 @@ async function listObservedProjects(params: {
       ),
   } as never);
   const responses: Parameters<RespondFn>[] = [];
-  const cfg = { agents: { list: [{ id: "main", default: true }] } };
+  const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
   await handlers["projects.list"]?.({
     params: { includeObserved: true },
     respond: (...response: Parameters<RespondFn>) => responses.push(response),

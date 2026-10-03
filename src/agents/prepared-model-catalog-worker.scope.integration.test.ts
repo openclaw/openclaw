@@ -155,7 +155,7 @@ describe("prepared model catalog worker plugin scope", () => {
             "published-fixture/published-model": { agentRuntime: { id: "openclaw" } },
           },
         },
-        list: [{ id: "main", default: true, agentDir, workspace: workspaceDir }],
+        entries: { main: { agentDir, workspace: workspaceDir } },
       },
       models: {
         providers: {
@@ -342,15 +342,7 @@ describe("prepared model catalog worker plugin scope", () => {
               ...config,
               agents: {
                 ...config.agents,
-                list: [
-                  {
-                    id: "main",
-                    default: true,
-                    agentDir,
-                    workspace: workspaceDir,
-                    name: "Updated agent",
-                  },
-                ],
+                entries: { main: { agentDir, workspace: workspaceDir, name: "Updated agent" } },
               },
             },
           };

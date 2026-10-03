@@ -159,7 +159,8 @@ it.for([
       (process.platform !== "win32" &&
         !process.versions.bun &&
         ["recover", "shutdown", "shutdown-preparation"].includes(outcome));
-    testState.agentsConfig = { entries: { main: { default: true }, worker: {} } };
+    testState.agentsConfig = { ownership: "explicit", entries: { main: {}, worker: {} } };
+    testState.agentConfig = { systemAgent: { agentId: "main" } };
     const recoverySecret = "synthetic-startup-recovery-secret";
     if (outcome === "recover") {
       vi.stubEnv("OPENCLAW_TEST_RECOVERY_SECRET", recoverySecret);
@@ -543,8 +544,10 @@ it.for([
 
 it("recovers queued agents after both inspection slots expire without refusing an absent database", async () => {
   testState.agentsConfig = {
-    entries: { a: {}, b: {}, main: { default: true }, absent: {} },
+    ownership: "explicit",
+    entries: { a: {}, b: {}, main: {}, absent: {} },
   };
+  testState.agentConfig = { systemAgent: { agentId: "main" } };
   const env = { ...process.env };
   const cfg = loadGatewayTestConfig();
   const agentIds = ["a", "b", "main"];

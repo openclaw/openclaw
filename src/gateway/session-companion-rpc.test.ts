@@ -24,7 +24,7 @@ async function invoke(
   },
   client: { connId?: string } = { connId: "conn-1" },
   signal?: AbortSignal,
-  config: Record<string, unknown> = { agents: { list: [{ id: "main" }] } },
+  config: Record<string, unknown> = { agents: { entries: { main: {} } } },
 ) {
   const respond = vi.fn();
   await sessionCompanionHandlers[method]?.({
@@ -358,7 +358,7 @@ describe("session companion RPC", () => {
   });
 
   it("threads an explicit owner for a bare key and returns typed selection errors", async () => {
-    const config = { agents: { ownership: "explicit", list: [{ id: "main" }, { id: "work" }] } };
+    const config = { agents: { ownership: "explicit", entries: { main: {}, work: {} } } };
     const state = vi.fn(() => ({ exchanges: [] }));
     const selected = await invoke(
       "sessions.companion.state",

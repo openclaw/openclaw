@@ -81,7 +81,7 @@ function requireTool(tools: ReturnType<typeof createOpenClawTools>, name: string
 
 function sessionPolicyConfig(visibility: "all" | "self" = "all") {
   return {
-    agents: { list: [{ id: "main", default: true }, { id: "research" }] },
+    agents: { entries: { main: {}, research: {} } },
     tools: {
       sessions: { visibility },
       agentToAgent: visibility === "all" ? { enabled: true, allow: ["*"] } : { enabled: false },
@@ -234,7 +234,7 @@ describe("openclaw session lookup context", () => {
     const runSessionKey = "agent:research:main";
     setEmbeddedMode(true);
     const tools = createTools(
-      { agents: { list: [{ id: "main", default: true }, { id: "research" }] } },
+      { agents: { entries: { main: {}, research: {} } } },
       { sandboxed: true },
     );
 
