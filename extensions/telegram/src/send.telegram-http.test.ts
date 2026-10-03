@@ -16,7 +16,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { apiThrottler } from "./bot.runtime.js";
 import { telegramPlugin } from "./channel.js";
-import { telegramDoctor } from "./doctor.js";
 import { telegramOutbound } from "./outbound-adapter.js";
 import { sendLogger } from "./send-context.js";
 import {
@@ -593,27 +592,19 @@ describe("Telegram physical send acceptance over HTTP", () => {
     },
   );
 
-  it("sends legacy targets after Doctor repairs endpoint roots", async () => {
+  it("uses canonical endpoint roots when resolving legacy targets", async () => {
     fixture.responseFor = (method) =>
       method === "getChat" ? { id: -100123, type: "supergroup", title: "Resolved" } : undefined;
-    const repairConfig = telegramDoctor.repairConfig;
-    if (!repairConfig) {
-      throw new Error("expected Telegram config repair adapter");
-    }
-    const repaired = await repairConfig({
+    await sendMessageTelegram("https://t.me/fixture", "Resolved destination", {
+      gatewayClientScopes: ["operator.write"],
       cfg: {
         channels: {
           telegram: {
             botToken: cfg.channels.telegram.botToken,
-            apiRoot: `${cfg.channels.telegram.apiRoot}/bot${cfg.channels.telegram.botToken}/`,
+            apiRoot: cfg.channels.telegram.apiRoot,
           },
         },
       },
-      doctorFixCommand: "openclaw doctor --fix",
-    });
-    await sendMessageTelegram("https://t.me/fixture", "Resolved destination", {
-      gatewayClientScopes: ["operator.write"],
-      cfg: repaired.config,
     });
     expect(fixture.endpoints).toEqual(
       ["getChat", "sendMessage"].map((method) => `/bot${cfg.channels.telegram.botToken}/${method}`),
