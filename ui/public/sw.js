@@ -385,6 +385,10 @@ self.addEventListener("push", (event) => {
     badge: "./favicon-32.png",
     tag: data.tag || "openclaw-notification",
     renotify: data.renotify === true,
+    // macOS defaults Web Push sound to off, so an audible attention alert must
+    // request it explicitly; omitting `silent` keeps that platform default.
+    // System notification settings stay authoritative.
+    silent: false,
     data: {
       url: data.url || self.registration.scope,
       explicitUrl: Boolean(data.url),
