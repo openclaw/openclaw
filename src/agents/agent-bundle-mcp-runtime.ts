@@ -36,7 +36,7 @@ import type {
 } from "./agent-bundle-mcp-types.js";
 import { readMcpAppIcons, readMcpAppSettingsCapability } from "./mcp-app-extension-metadata.js";
 import { listAllMcpTools, MCP_CATALOG_LIST_LIMITS } from "./mcp-catalog-listing.js";
-import { bindMcpClientElicitation } from "./mcp-client-elicitation.js";
+import { bindMcpClientElicitation, MCP_ELICITATION_TIMEOUT_MS } from "./mcp-client-elicitation.js";
 import {
   connectMcpClient,
   disposeMcpClient,
@@ -542,7 +542,7 @@ function createServerMcpRuntime(
   const localRequestTimeouts = new WeakSet<object>();
   const runMcpRequest = async <T>(
     session: BundleMcpSession,
-    request: (signal: AbortSignal) => Promise<T>,
+    request: (signal: AbortSignal, holdForHumanInput: () => () => void) => Promise<T>,
     parentSignal?: AbortSignal,
   ): Promise<T> => {
     const requestSignal = parentSignal ?? getSessionMcpRequestSignal();
@@ -556,21 +556,47 @@ function createServerMcpRuntime(
     const timeoutError = new McpError(ErrorCode.RequestTimeout, "Request timed out", {
       timeout: session.requestTimeoutMs,
     });
-    const timeout = setTimeout(() => {
+    const onTimeout = () => {
       localRequestTimeouts.add(timeoutError);
       abortController.abort(timeoutError);
-    }, session.requestTimeoutMs);
+    };
+    let deadline = Date.now() + session.requestTimeoutMs;
+    let humanInputRemainingMs = MCP_ELICITATION_TIMEOUT_MS;
+    let humanInputStartedAt = 0;
+    let humanInputWaits = 0;
+    let finished = false;
+    let timeout = setTimeout(onTimeout, session.requestTimeoutMs);
     timeout.unref?.();
+    const armTimeout = (expiresAt: number) => {
+      clearTimeout(timeout);
+      timeout = setTimeout(onTimeout, Math.max(0, expiresAt - Date.now()));
+      timeout.unref?.();
+    };
+    const holdForHumanInput = () => {
+      if (humanInputWaits++ === 0) {
+        humanInputStartedAt = Date.now();
+        armTimeout(deadline + humanInputRemainingMs);
+      }
+      return () => {
+        if (--humanInputWaits === 0 && !finished && !abortController.signal.aborted) {
+          const elapsed = Math.min(Date.now() - humanInputStartedAt, humanInputRemainingMs);
+          humanInputRemainingMs -= elapsed;
+          deadline += elapsed;
+          armTimeout(deadline);
+        }
+      };
+    };
     try {
       const signal = abortController.signal;
       signal.throwIfAborted();
-      const result = await request(signal);
+      const result = await request(signal, holdForHumanInput);
       requestSignal?.throwIfAborted();
       return result;
     } catch (error) {
       requestSignal?.throwIfAborted();
       throw error;
     } finally {
+      finished = true;
       requestSignal?.removeEventListener("abort", onParentAbort);
       clearTimeout(timeout);
     }
@@ -636,7 +662,7 @@ function createServerMcpRuntime(
   };
   const runGuardedMcpRequest = <T>(
     session: BundleMcpSession,
-    request: (signal: AbortSignal) => Promise<T>,
+    request: (signal: AbortSignal, holdForHumanInput: () => () => void) => Promise<T>,
     options?: McpRequestOptions,
   ) => runGuardedServerRequest(session, () => runMcpRequest(session, request), options);
   const collectServerItems = (session: BundleMcpSession, kind: "prompts" | "resources") => {
@@ -1010,7 +1036,7 @@ function createServerMcpRuntime(
     async callTool(requestedServer, toolName, input, options) {
       const session = await getActiveSession(requestedServer);
       const validateResult = session.toolMetadata?.validatorForCall(toolName);
-      const result = (await runGuardedMcpRequest(session, (signal) => {
+      const result = (await runGuardedMcpRequest(session, (signal, holdForHumanInput) => {
         options?.assertCurrent?.();
         const call = () =>
           session.client.callTool(
@@ -1020,9 +1046,18 @@ function createServerMcpRuntime(
               ...(options?._meta ? { _meta: options._meta } : {}),
             },
             undefined,
-            { timeout: session.requestTimeoutMs, signal },
+            {
+              // The local deadline owns active work; the SDK bounds the total
+              // call, including one shared allowance for pending human input.
+              timeout:
+                session.requestTimeoutMs +
+                (session.withElicitation ? MCP_ELICITATION_TIMEOUT_MS : 0),
+              signal,
+            },
           );
-        return session.withElicitation ? session.withElicitation(signal, call) : call();
+        return session.withElicitation
+          ? session.withElicitation(signal, call, holdForHumanInput)
+          : call();
       })) as CallToolResult;
       validateResult?.(result);
       return result;
