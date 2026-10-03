@@ -34,6 +34,15 @@ by LM Studio:
 - Brand guidelines:
   https://lmstudio.ai/brand
 
+## FlexAI icon
+
+`ProviderIcon-flexai.svg` is the official FlexAI brand mark, contributed by
+FlexAI:
+
+- Original branding: https://flex.ai
+- The mark is recolored to `currentColor` so it renders on both light and
+  dark themes; the geometry otherwise matches the contributed vector.
+
 ## LongCat icon
 
 `ProviderIcon-longcat.svg` is a metadata-cleaned copy of the official LongCat

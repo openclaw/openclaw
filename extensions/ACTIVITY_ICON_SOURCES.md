@@ -35,6 +35,7 @@ The following defaults reuse the corresponding files in [`ui/public/provider-ico
 | `fal`                   | `ProviderIcon-fal.svg`         |
 | `featherless`           | `ProviderIcon-featherless.svg` |
 | `fireworks`             | `ProviderIcon-fireworks.svg`   |
+| `flexai`                | `ProviderIcon-flexai.svg`      |
 | `github-copilot`        | `ProviderIcon-copilot.svg`     |
 | `google`                | `ProviderIcon-gemini.svg`      |
 | `groq`                  | `ProviderIcon-groq.svg`        |

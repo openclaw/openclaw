@@ -40,6 +40,7 @@ const PROVIDER_ICON_NAMES = new Set([
   "factory",
   "fal",
   "featherless",
+  "flexai",
   "fireworks",
   "gemini",
   "grok",

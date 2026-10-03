@@ -2191,6 +2191,7 @@
                       "providers/deepinfra",
                       "providers/deepseek",
                       "providers/featherless",
+                      "providers/flexai",
                       "providers/fireworks",
                       "providers/github-copilot",
                       "providers/gmi",

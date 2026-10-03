@@ -26,6 +26,7 @@ const MANIFEST_DERIVED_PLUGIN_IDS = new Set([
   "cohere",
   "deepseek",
   "featherless",
+  "flexai",
   "fireworks",
   "gmi",
   "groq",

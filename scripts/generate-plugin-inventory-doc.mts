@@ -176,6 +176,7 @@ function humanizeId(value: string) {
     ["exa", "Exa"],
     ["fal", "fal"],
     ["feishu", "Feishu"],
+    ["flexai", "FlexAI"],
     ["github", "GitHub"],
     ["googlechat", "Google Chat"],
     ["gpt", "GPT"],

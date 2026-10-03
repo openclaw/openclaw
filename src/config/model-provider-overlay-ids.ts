@@ -22,6 +22,7 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "deepseek",
   "fal",
   "fireworks",
+  "flexai",
   "github-copilot",
   "gmi",
   "gmi-cloud",

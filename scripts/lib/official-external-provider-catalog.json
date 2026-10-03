@@ -717,6 +717,55 @@
       }
     },
     {
+      "name": "@openclaw/flexai-provider",
+      "description": "OpenClaw FlexAI provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "flexai",
+          "label": "FlexAI"
+        },
+        "providers": [
+          {
+            "id": "flexai",
+            "name": "FlexAI",
+            "docs": "/providers/flexai",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "FLEXAI_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "flexai-api-key",
+                "choiceLabel": "FlexAI API key",
+                "groupId": "flexai",
+                "groupLabel": "FlexAI",
+                "groupHint": "OpenAI-compatible open-weight inference",
+                "optionKey": "flexaiApiKey",
+                "cliFlag": "--flexai-api-key",
+                "cliOption": "--flexai-api-key <key>",
+                "cliDescription": "FlexAI API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/flexai-provider",
+          "npmSpec": "@openclaw/flexai-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.7"
+        }
+      }
+    },
+    {
       "name": "@openclaw/gmi-provider",
       "description": "OpenClaw GMI Cloud provider plugin",
       "source": "official",

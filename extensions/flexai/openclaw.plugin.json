@@ -1,0 +1,321 @@
+{
+  "id": "flexai",
+  "categories": [
+    "models"
+  ],
+  "name": "FlexAI",
+  "description": "OpenClaw FlexAI provider plugin.",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": [
+    "flexai"
+  ],
+  "providerRequest": {
+    "providers": {
+      "flexai": {
+        "family": "flexai"
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "flexai",
+        "envVars": [
+          "FLEXAI_API_KEY"
+        ]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "flexai",
+      "method": "api-key",
+      "choiceId": "flexai-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "FlexAI API key",
+      "groupId": "flexai",
+      "groupLabel": "FlexAI",
+      "groupHint": "OpenAI-compatible open-weight inference",
+      "optionKey": "flexaiApiKey",
+      "cliFlag": "--flexai-api-key",
+      "cliOption": "--flexai-api-key <key>",
+      "cliDescription": "FlexAI API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "modelCatalog": {
+    "providers": {
+      "flexai": {
+        "baseUrl": "https://api.flex.ai/v1",
+        "api": "openai-completions",
+        "defaultModel": "Qwen3.6-35B-A3B-FP8",
+        "defaultUtilityModel": "gpt-oss-20b",
+        "models": [
+          {
+            "id": "Qwen3.6-35B-A3B-FP8",
+            "name": "Qwen3.6 35B A3B",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 262144,
+            "cost": {
+              "input": 0.1,
+              "output": 0.9,
+              "cacheRead": 0.015,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true,
+              "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "Qwen3-Coder-30B-A3B-Instruct-FP8",
+            "name": "Qwen3 Coder 30B A3B",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 262144,
+            "cost": {
+              "input": 0.07,
+              "output": 0.26,
+              "cacheRead": 0.0105,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable"
+            }
+          },
+          {
+            "id": "DeepSeek-V4-Flash-0731",
+            "name": "DeepSeek V4 Flash 0731",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 1048576,
+            "cost": {
+              "input": 0.06,
+              "output": 0.18,
+              "cacheRead": 0.009,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true,
+              "supportedReasoningEfforts": [
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "max"
+              ]
+            }
+          },
+          {
+            "id": "DeepSeek-V4.1-Flash",
+            "name": "DeepSeek V4.1 Flash",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 1048576,
+            "cost": {
+              "input": 0.14,
+              "output": 0.42,
+              "cacheRead": 0.021,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true,
+              "supportsJsonSchemaResponseFormat": false,
+              "supportsStrictMode": false
+            }
+          },
+          {
+            "id": "GLM-5.3-Flash",
+            "name": "GLM 5.3 Flash",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 1048576,
+            "cost": {
+              "input": 0.09,
+              "output": 0.28,
+              "cacheRead": 0.0135,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true,
+              "supportsJsonSchemaResponseFormat": false,
+              "supportsStrictMode": false,
+              "codeMode": "preferred",
+              "supportedReasoningEfforts": [
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "max"
+              ]
+            }
+          },
+          {
+            "id": "gpt-oss-120b",
+            "name": "GPT-OSS 120B",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 0.03,
+              "output": 0.17,
+              "cacheRead": 0.0045,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true,
+              "supportedReasoningEfforts": [
+                "low",
+                "medium",
+                "high"
+              ]
+            }
+          },
+          {
+            "id": "gpt-oss-20b",
+            "name": "GPT-OSS 20B",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 0.02,
+              "output": 0.1,
+              "cacheRead": 0.003,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true,
+              "supportedReasoningEfforts": [
+                "low",
+                "medium",
+                "high"
+              ]
+            }
+          },
+          {
+            "id": "gemma-4-31b-it",
+            "name": "Gemma 4 31B IT",
+            "reasoning": false,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 262144,
+            "cost": {
+              "input": 0.1,
+              "output": 0.34,
+              "cacheRead": 0.015,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "Qwen3-30B-A3B-Thinking-2507-FP8",
+            "name": "Qwen3 30B A3B Thinking",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 262144,
+            "cost": {
+              "input": 0.2,
+              "output": 2.4,
+              "cacheRead": 0.03,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "MiniMax-M2.7",
+            "name": "MiniMax M2.7",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 204800,
+            "maxTokens": 204800,
+            "cost": {
+              "input": 0.24,
+              "output": 0.96,
+              "cacheRead": 0.036,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "Llama-3.3-70B-Instruct-FP8",
+            "name": "Llama 3.3 70B Instruct",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 0.135,
+              "output": 0.4,
+              "cacheRead": 0.0203,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "flexai": "refreshable"
+    }
+  }
+}

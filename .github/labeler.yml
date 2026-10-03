@@ -861,6 +861,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/firecrawl/**"
+"extensions: flexai":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/flexai/**"
+          - "docs/providers/flexai.md"
 "extensions: fireworks":
   - changed-files:
       - any-glob-to-any-file:

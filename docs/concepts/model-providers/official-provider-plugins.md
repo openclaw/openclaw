@@ -197,6 +197,7 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
 | DeepInfra                               | `deepinfra`                      | `DEEPINFRA_API_KEY`                            | `deepinfra/deepseek-ai/DeepSeek-V4-Flash`                  |
 | DeepSeek                                | `deepseek`                       | `DEEPSEEK_API_KEY`                             | `deepseek/deepseek-v4-flash`                               |
 | Featherless AI                          | `featherless`                    | `FEATHERLESS_API_KEY`                          | `featherless/Qwen/Qwen3-32B`                               |
+| [FlexAI](/providers/flexai)             | `flexai`                         | `FLEXAI_API_KEY`                               | `flexai/Qwen3.6-35B-A3B-FP8`                               |
 | GitHub Copilot                          | `github-copilot`                 | `COPILOT_GITHUB_TOKEN`                         | -                                                          |
 | GMI Cloud                               | `gmi`                            | `GMI_API_KEY`                                  | `gmi/google/gemini-3.1-flash-lite`                         |
 | Groq                                    | `groq`                           | `GROQ_API_KEY`                                 | `groq/llama-3.3-70b-versatile`                             |

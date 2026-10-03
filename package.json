@@ -309,6 +309,7 @@
     "!dist/extensions/exa/**",
     "!dist/extensions/facetime/**",
     "!dist/extensions/featherless/**",
+    "!dist/extensions/flexai/**",
     "!dist/extensions/feishu/**",
     "!dist/extensions/firecrawl/**",
     "!dist/extensions/fireworks/**",
