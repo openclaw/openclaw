@@ -37,7 +37,6 @@ import {
   hasInboundHistoryBody,
   hasReplyTargetContext,
 } from "./get-reply-run-helpers.js";
-import { resolvePromptSourceReplyMode } from "./get-reply-run-source-mode.js";
 import type { RunPreparedReplyParams } from "./get-reply-run.types.js";
 import { buildDirectChatContext, buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { hasInboundMedia } from "./inbound-media.js";
@@ -55,7 +54,10 @@ import {
   resolveBareSessionResetPromptState,
 } from "./session-reset-prompt.js";
 import { resolveSessionStableReplyMode } from "./session-stable-reply-mode.js";
-import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
+import {
+  isInternalSourceReplyChannel,
+  resolveSourceReplyExpectation,
+} from "./source-reply-delivery-mode.js";
 import { shouldApplyStartupContext, buildSessionStartupContextPrelude } from "./startup-context.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -113,10 +115,13 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     copyChannelParticipantAdmissionEvidence(sessionCtx, promptSessionCtx);
   }
   const inboundEventKind = promptSessionCtx.InboundEventKind;
-  const { sourceReplyDeliveryMode, injectedSessionStableMode } = resolvePromptSourceReplyMode({
-    promptSessionCtx,
-    opts,
-  });
+  const isInternalPromptChannel = isInternalSourceReplyChannel(promptSessionCtx);
+  const sourceReplyDeliveryMode =
+    inboundEventKind === "room_event" && !isInternalPromptChannel
+      ? "message_tool_only"
+      : isInternalPromptChannel && opts?.sourceReplyDeliveryMode === undefined
+        ? "automatic"
+        : opts?.sourceReplyDeliveryMode;
   // Direct resolver callers (heartbeat wakes, system events) skip dispatch's
   // stable-mode injection; resolve the same session-stable fact here so their
   // binding facts and messageToolPolicyHash match dispatched chat turns —
@@ -129,7 +134,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     isHeartbeat,
   });
   const sessionPromptSourceReplyDeliveryMode =
-    injectedSessionStableMode ??
+    opts?.sessionPromptSourceReplyDeliveryMode ??
     (isSyntheticTurn && sessionEntry
       ? resolveSessionStableReplyMode({
           cfg,
