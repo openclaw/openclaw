@@ -152,6 +152,18 @@ the same widget `id`, and its `requiredScopes`. The Gateway advertises widget
 kinds for the current connection's scopes; a native view renders only when its
 matching backend descriptor is advertised.
 
+Use `host.ui.openPanel("editor", { sessionKey, agentId })` to open one of your
+registered panels beside a session. Omitting the session uses the currently
+selected session. The host owns navigation and sidebar presentation, including
+opening from a plugin page before the session pane has mounted. Only the same
+plugin's registered panels can be opened; retained handles expire with their
+view or activation.
+
+For a document link, use `host.navigation.pageHref(...)` to build a link to a
+registered plugin page. That page can resolve its document and call `openPanel`
+with the target session. This does not intercept ordinary file links or change
+the Files plugin's ownership.
+
 Use `host.ui.invalidate()` when plugin-owned state changes the presentation of
 an action or another contribution. Namespace custom elements and CSS with the
 plugin id so independently bundled plugins can coexist.

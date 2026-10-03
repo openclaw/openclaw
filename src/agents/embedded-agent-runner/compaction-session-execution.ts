@@ -571,6 +571,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             sessionKey: params.sessionKey,
             sessionId: params.sessionId,
             agentId: sessionAgentId,
+            memoryAudience: params.memoryAudience,
+            sandboxed: sandbox?.enabled === true,
             sessionFile: activeSessionFile,
             assertActive,
           });

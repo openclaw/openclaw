@@ -3,7 +3,6 @@ import { shouldManageGatewayService } from "../commands/doctor-service-repair-po
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
-import { runCoreContributionHealth } from "./doctor-health-contribution-core.js";
 import { runWriteConfigHealth } from "./doctor-health-contribution-runners.config.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import { resolveDoctorMode } from "./doctor-health-contribution-utils.js";
@@ -126,7 +125,6 @@ export async function runGitHubProjectHealth(ctx: DoctorHealthFlowContext): Prom
 
 export async function runBrowserHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteChromeMcpBrowserReadiness } = await import("../commands/doctor-browser.js");
-  await runCoreContributionHealth(ctx, ["core/doctor/browser-clawd-profile-residue"]);
   await noteChromeMcpBrowserReadiness(ctx.cfg);
 }
 

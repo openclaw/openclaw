@@ -14,7 +14,10 @@ import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { expandUpdateFirstHopCompatLanes } from "../../scripts/lib/update-first-hop-lanes.mjs";
+import {
+  UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE,
+  expandUpdateFirstHopCompatLanes,
+} from "../../scripts/lib/update-first-hop-lanes.mjs";
 import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -527,7 +530,13 @@ describe("frozen admission upgrade Docker aliases", () => {
       const result = f.run({ docker: { lanes: requestedLanes } });
       expect(result.status, result.stderr).toBe(0);
       const record = JSON.parse(result.stdout);
-      expect(record.docker).toEqual({ lanes: requestedLanes, omitted: [], status: "ADMITTED" });
+      const omitted =
+        lane === "update-first-hop-compat" ? [UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE] : [];
+      expect(record.docker).toEqual({
+        lanes: requestedLanes.filter((requested) => !omitted.includes(requested)),
+        omitted,
+        status: "ADMITTED",
+      });
       expect(record.selection.consumers).toEqual(lane === "plugins-offline" ? ["plugins"] : []);
       expect(record.contracts.map((contract: { consumer: string }) => contract.consumer)).toEqual(
         record.selection.consumers,

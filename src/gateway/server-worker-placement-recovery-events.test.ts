@@ -189,7 +189,7 @@ async function withRecoveryRuntime(
         },
         pruneOrphanedWorkspaceReconciliations: async () => [],
         listWorkspaceReconciliationOwners: async () => [],
-        listPendingWorkspaceResults: () => [],
+        listPendingWorkspaceResultsAsync: async () => [],
       } as never,
       environments: environments as never,
       gatewayNamespace: "gateway-test",

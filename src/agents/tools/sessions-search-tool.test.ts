@@ -7,6 +7,7 @@ import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
 import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
+import { normalizeToolParameters } from "../agent-tools.schema.js";
 import { describeSessionLinkRule } from "../tool-description-presets.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { createSessionsSearchTool } from "./sessions-search-tool.js";
@@ -201,6 +202,25 @@ describe("sessions_search tool", () => {
       "query must not exceed 4096 characters",
     );
   });
+
+  it("rejects an empty query in the schema while accepting keywords", () => {
+    const tool = createTool({});
+    expect(Value.Check(tool.parameters, { query: "" })).toBe(false);
+    expect(Value.Check(tool.parameters, { query: "loan" })).toBe(true);
+    expect(Value.Check(tool.parameters, { query: "  loan  " })).toBe(true);
+  });
+
+  it.each(["openai", "google"])(
+    "rejects blank execution with retry guidance after %s schema normalization",
+    async (modelProvider) => {
+      const tool = normalizeToolParameters(createTool({}), { modelProvider });
+      for (const query of ["", "   "]) {
+        await expect(tool.execute!("blank-query", { query })).rejects.toThrow(
+          /query must not be empty; retry with non-empty keywords/,
+        );
+      }
+    },
+  );
 
   it("filters invisible hits before applying the limit", async () => {
     const requests: CallGatewayRequest[] = [];

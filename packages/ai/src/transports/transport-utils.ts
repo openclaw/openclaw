@@ -13,7 +13,7 @@ const NON_LATIN_RE =
   /[\u2E80-\u9FFF\uA000-\uA4FF\uAC00-\uD7AF\uF900-\uFAFF\uFF01-\uFF60\uFFE0-\uFFE6\u{20000}-\u{2FA1F}]/gu;
 const CJK_SURROGATE_HIGH_RE = /[\uD840-\uD87E][\uDC00-\uDFFF]/g;
 
-export function redactSensitiveText(text: string, _options?: unknown): string {
+export function redactSensitiveText(text: string): string {
   return getAiTransportHost().redactToolPayloadText(text);
 }
 

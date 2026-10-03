@@ -237,6 +237,7 @@ export type GatewayCloseParams = {
   }>;
   finishRequestEntries?: () => Promise<void>;
   drainSdkWork?: () => Promise<void>;
+  stopScheduler: () => Promise<void>;
   closeSdkResources?: () => Promise<void>;
   wss?: WebSocketServer;
   httpServer?: HttpServer;
@@ -601,6 +602,8 @@ async function closeGatewayResources(
     if (swarmOwner) {
       await closeSwarmScheduler(swarmOwner).catch(recordResourceCleanupFailure);
     }
+    // Owner cleanup releases scheduled work; join it before retiring shared dependencies.
+    await params.stopScheduler();
     // A sibling Gateway retains metadata before its registry exists. Only the
     // final owner may retire shared state and process-wide plugin caches.
     try {

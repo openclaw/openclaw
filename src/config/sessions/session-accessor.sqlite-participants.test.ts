@@ -5,6 +5,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
@@ -624,6 +625,7 @@ describe("SQLite session participants", () => {
         identity: remote("same-id", "other-workspace"),
         promptedAt: 40,
       });
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       const records = listSessionParticipantsReadOnly(scope).get(scope.sessionKey) ?? [];
       expect(records).toHaveLength(4);

@@ -1593,9 +1593,10 @@ if (hybridHostedEligible) {
         "dependencies",
       ].includes(row.group) || !row.runner.startsWith("blacksmith-"),
   ).length;
-  const hostedControlJobs =
-    process.env.OPENCLAW_CI_RUNNER_BACKEND === "runson" ||
-    nodeRunnerBackend === "runson" ||
+  const hostedPlanner =
+    process.env.OPENCLAW_CI_RUNNER_BACKEND === "runson" || nodeRunnerBackend === "runson";
+  const hostedRatchets =
+    hostedPlanner ||
     (workflowEventName === "pull_request" &&
       process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY);
   // Include control jobs, every emitted matrix row and native hosted jobs.
@@ -1604,7 +1605,7 @@ if (hybridHostedEligible) {
   // Qualification authenticates on hosted preflight before paid admission.
   hybridHostedBaseRows = Object.values({
     preflight: count(ciQualification),
-    "check-plan": count(hostedControlJobs && runCheckPlan),
+    "check-plan": count(hostedPlanner && runCheckPlan),
     "pr-fail-fast": count(
       workflowEventName === "pull_request" &&
         manifest.run_checks_node_core_nondist &&
@@ -1614,7 +1615,7 @@ if (hybridHostedEligible) {
     "published-driver-update": count(manifest.run_published_driver_update),
     "native-i18n": count(manifest.run_native_i18n),
     "control-ui-i18n": count(manifest.run_control_ui_i18n),
-    "checks-baseline-ratchets": count(hostedControlJobs && manifest.run_baseline_ratchets),
+    "checks-baseline-ratchets": count(hostedRatchets && manifest.run_baseline_ratchets),
     "checks-fast-core": count(
       manifest.run_checks_fast_core,
       manifest.checks_fast_core_matrix.include.length,

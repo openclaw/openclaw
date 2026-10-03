@@ -54,13 +54,15 @@ extension ChatSessionSidebarModel {
             let key = session.key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let automation = key.range(of: #"^(?:cron:|agent::*[^:]+:+cron:+[^:])"#, options: .regularExpression) != nil
             if automation { return self.showAutomation }
+            let named = [session.label, session.displayName, session.subject]
+                .contains { ChatPayloadDecoding.trimmedNonEmptyString($0) != nil }
+            // src/shared/session-list-visibility.ts:27: a named heartbeat outranks system provenance.
+            if session.classification == "heartbeat" { return self.showSystem || named }
             let system: Bool
             if session.createdActor?.type == "system" {
                 system = true
             } else {
                 let internalSource = session.createdVia == "run" || session.createdVia == "internal"
-                let named = [session.label, session.displayName, session.subject]
-                    .contains { ChatPayloadDecoding.trimmedNonEmptyString($0) != nil }
                 system = internalSource && session.createdActor?.type != "human" && !named
             }
             return self.showSystem || !system

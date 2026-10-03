@@ -6,6 +6,7 @@ import {
 } from "./plugin-sdk-subpath-records.js";
 import { SESSION_PERSISTENCE_COMPAT_RECORDS } from "./session-persistence-records.js";
 import type { PluginCompatRecord } from "./types.js";
+import { WORKSPACE_MUTATION_GUARD_COMPAT_RECORD } from "./workspace-mutation-guard.js";
 
 const ACTIVATION_HINT_METADATA = {
   status: "active",
@@ -17,7 +18,39 @@ const ACTIVATION_HINT_METADATA = {
 } as const;
 
 export const PLUGIN_COMPAT_RECORDS = [
+  WORKSPACE_MUTATION_GUARD_COMPAT_RECORD,
   ...SESSION_PERSISTENCE_COMPAT_RECORDS,
+  {
+    code: "gateway-placement-sync-results",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-09-07",
+    deprecated: "2026-10-02",
+    warningStarts: "2026-10-02",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await listPendingWorkspaceResultsAsync, getWorkspaceResultReconcilingSessionIdsAsync, and deferOrphanedRequestsAsync on the Gateway context. Released synchronous methods retain their return values and completion timing until the next Plugin SDK major and explicit breaking-release approval.",
+    docsPath:
+      "/plugins/sdk-migration/compatibility-policy#gateway-placement-and-publication-readers",
+    surfaces: [
+      "GatewayRequestHandlerOptions.context.workerSessionPlacementService.listPendingWorkspaceResults",
+      "GatewayRequestHandlerOptions.context.workerSessionPlacementService.getWorkspaceResultReconcilingSessionIds",
+      "GatewayRequestHandlerOptions.context.githubPublicationService.deferOrphanedRequests",
+      "getPluginRuntimeGatewayRequestScope().context",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
+    ],
+    tests: [
+      "src/plugin-sdk/gateway-placement-compat.test.ts",
+      "src/gateway/worker-environments/placement-store.test.ts",
+      "src/gateway/github-publication-boundaries.test.ts",
+      "src/gateway/github-repository-publication.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Placement result readers and GitHub orphan deferral expose awaited methods while retaining the synchronous Gateway-context contracts shipped to plugins in 2026.9.7. Internal placement readers use the SQLite worker; stored data and update behavior are unchanged.",
+  },
   {
     code: "memory-session-sync-inventory",
     status: "deprecated",

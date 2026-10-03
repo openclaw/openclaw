@@ -205,8 +205,8 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       if (!current || current.state === "local") {
         return await runLocalTurn();
       }
-      const hasPendingWorkspaceResultToSettle = (sessionId: string, runId: string) =>
-        options.placements.listPendingWorkspaceResults(sessionId).some(
+      const hasPendingWorkspaceResultToSettle = async (sessionId: string, runId: string) =>
+        (await options.placements.listPendingWorkspaceResultsAsync(sessionId)).some(
           (pending) =>
             pending.sessionId === sessionId &&
             // A restarted run has no live claim, even when it reuses the retained run ID.
@@ -280,7 +280,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             routablePlacement,
           );
         }
-        if (hasPendingWorkspaceResultToSettle(identity.sessionId, claim.runId)) {
+        if (await hasPendingWorkspaceResultToSettle(identity.sessionId, claim.runId)) {
           await waitForPendingWorkerResult({
             placements: options.placements,
             sessionId: identity.sessionId,
@@ -354,7 +354,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             }
             if (
               !(error instanceof ActiveTurnClaimError) ||
-              !hasPendingWorkspaceResultToSettle(identity.sessionId, claim.runId)
+              !(await hasPendingWorkspaceResultToSettle(identity.sessionId, claim.runId))
             ) {
               throw error;
             }
@@ -532,12 +532,13 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             error instanceof WorkerRuntimeRefreshPendingError ||
             disconnectedBeforeHandoff
           ) {
+            const pendingResults = await options.placements.listPendingWorkspaceResultsAsync(
+              placement.sessionId,
+            );
             const canRecoverAdmission =
               !handedOff &&
               options.placements.validateTurnClaim(turnClaim) &&
-              !options.placements
-                .listPendingWorkspaceResults(placement.sessionId)
-                .some((pending) => pending.sessionId === placement.sessionId);
+              !pendingResults.some((pending) => pending.sessionId === placement.sessionId);
             if (canRecoverAdmission) {
               // This claim never launched work. Release it so runtime refresh does not
               // mistake admission for an executing turn that must finish first.
@@ -565,6 +566,9 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                   waitTimeoutMs,
                 );
                 timeout.unref?.();
+                const admissionFacts = await options.placements.prepareRuntimeRefresh(
+                  placement.sessionId,
+                );
                 try {
                   markDiagnosticRunProgress({
                     sessionId: placement.sessionId,
@@ -579,6 +583,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                     assertCurrent: () => {
                       reconnectSignal.throwIfAborted();
                       assertAdmissionCurrent();
+                      admissionFacts.assertCurrent();
                       const waitingPlacement = options.placements.get(placement.sessionId);
                       if (
                         !matchesWorkerPlacementTarget(waitingPlacement, placement) ||
@@ -586,8 +591,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                         waitingPlacement?.sessionKey !== identity.sessionKey ||
                         waitingPlacement?.agentId !== identity.agentId ||
                         waitingPlacement?.executionMode !== placement.executionMode ||
-                        options.placements.listPendingWorkspaceResults(placement.sessionId).length >
-                          0
+                        admissionFacts.pendingResult
                       ) {
                         throw new Error(
                           "Worker placement changed while waiting for node admission",
@@ -597,6 +601,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                     },
                   });
                 } finally {
+                  admissionFacts.release();
                   clearTimeout(timeout);
                 }
               }
@@ -641,7 +646,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
               requireActivePlacement(reconciled);
             }
           }
-          const pendingWorkspaceResult = findPendingWorkerWorkspaceResult(
+          const pendingWorkspaceResult = await findPendingWorkerWorkspaceResult(
             options.placements,
             turnClaim,
           );
@@ -653,7 +658,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             } else {
               // A recovery sweep owns the still-live worker claim. Teardown here
               // could discard the terminal event's durably fenced file results.
-              options.placements.handoffWorkspaceResultRecovery(turnClaim);
+              await options.placements.handoffWorkspaceResultRecovery(turnClaim);
             }
             await options.reconcileActivePlacement(placement.environmentId);
             throw error;

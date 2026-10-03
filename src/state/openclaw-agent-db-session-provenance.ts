@@ -1,12 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
-import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
-
-function readMigratedEntry(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "string" ? safeParseJsonRecord(value) : asOptionalRecord(value);
-}
 
 export function addSessionProvenanceColumns(
   db: DatabaseSync,
@@ -28,46 +21,6 @@ export function addSessionProvenanceColumns(
   if (columns && !columns.has("hook_external_content_source")) {
     db.exec(
       "ALTER TABLE sessions ADD COLUMN hook_external_content_source TEXT CHECK (hook_external_content_source IS NULL OR hook_external_content_source IN ('gmail', 'webhook'));",
-    );
-  }
-}
-
-export function backfillSessionEntryProvenance(db: DatabaseSync, previousVersion: number): void {
-  if (previousVersion >= 8) {
-    return;
-  }
-  const hasSessionEntries = tableExists(db, "session_entries");
-  const hasSessions = tableExists(db, "sessions");
-  if (!hasSessionEntries || !hasSessions) {
-    return;
-  }
-  const rows = db
-    .prepare(
-      `SELECT se.session_id, se.entry_json
-       FROM session_entries AS se
-       INNER JOIN sessions AS s
-         ON s.session_id = se.session_id AND s.session_key = se.session_key;`,
-    )
-    .all();
-  const update = db.prepare(`
-    UPDATE sessions
-    SET session_entry_provenance = 1, acp_owned = ?, plugin_owner_id = ?,
-        hook_external_content_source = ?
-    WHERE session_id = ?;
-  `);
-  update.setReadBigInts(true);
-  for (const row of rows) {
-    const sessionId = normalizeNullableString(row.session_id);
-    const entry = readMigratedEntry(row.entry_json);
-    if (!sessionId || !entry) {
-      continue;
-    }
-    const hookSource = normalizeNullableString(entry.hookExternalContentSource);
-    update.run(
-      isRecord(entry.acp) ? 1 : 0,
-      normalizeNullableString(entry.pluginOwnerId),
-      hookSource === "gmail" || hookSource === "webhook" ? hookSource : null,
-      sessionId,
     );
   }
 }

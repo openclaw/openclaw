@@ -185,6 +185,7 @@ describe("trusted in-process Gateway session creation", () => {
 
     mocks.callGatewayTool.mockImplementationOnce(async () => {
       expect(getGatewaySessionSpawnContext()).toEqual({
+        requesterSenderIsOwner: true,
         completionOwnerSessionKey: "agent:main:discord:direct:alice",
         inheritedToolPolicy,
         resolvedModel,
@@ -205,6 +206,7 @@ describe("trusted in-process Gateway session creation", () => {
         via: "spawn",
         actor: { type: "agent", id: "main" },
         requesterSessionKey: "agent:main:main",
+        requesterSenderIsOwner: true,
         completionOwnerSessionKey: "agent:main:discord:direct:alice",
         inheritedToolPolicy,
         resolvedModel,

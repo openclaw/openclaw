@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import * as logging from "../../logging/logger.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -26,6 +25,7 @@ import {
 } from "./session-accessor.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
+import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
 import * as reclamationDiagnostics from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
@@ -356,6 +356,15 @@ it("coalesces automatic maintenance through native planning and finalization", a
       finalized.resolve(result);
       return result;
     });
+    const deadlineRead = createDeferredCore();
+    const reclaim = reclamationRun.runSqliteSessionReclamation;
+    vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation(async (params) => {
+      const result = await reclaim(params);
+      if (params.plan.kind === "maintenance-age" && params.plan.expected === undefined) {
+        deadlineRead.resolve();
+      }
+      return result;
+    });
     const workerOutcomes: Parameters<
       typeof reclamationDiagnostics.logSqliteReclamationWorkerOutcome
     >[0][] = [];
@@ -382,8 +391,9 @@ it("coalesces automatic maintenance through native planning and finalization", a
       kickSessionEntryMaintenanceAfterWrite(request);
       kickSessionEntryMaintenanceAfterWrite(request);
       await finalized.promise;
-      await yieldToEventLoop();
-      // Metadata uses the canonical actor; only archive finalization uses reclamation admission.
+      await deadlineRead.promise;
+      // Planning and deadlines use the canonical actor; only archive finalization uses
+      // reclamation write admission.
       expect(operations).toEqual([
         "session.maintenance.plan",
         "session.reclamation.retain",
@@ -391,11 +401,13 @@ it("coalesces automatic maintenance through native planning and finalization", a
         "session.reclamation.retain",
         "session.reclamation.retain",
         "session.reclamation.worker-commit",
+        "session.reclamation.retain",
       ]);
       expect(workerOutcomes.map(({ kind }) => kind)).toEqual([
         "maintenance-plan",
         "maintenance-plan",
         "maintenance-finalize",
+        "maintenance-age",
       ]);
       for (const outcome of workerOutcomes) {
         expect(outcome.outcome).toBe("resolved");

@@ -1,7 +1,7 @@
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./server-context.chrome-test-harness.js";
 import { setChromeMcpProcessCleanupDepsForTest } from "./chrome-mcp-process.js";
 import {
@@ -9,6 +9,7 @@ import {
   setChromeMcpSessionFactoryForTest,
 } from "./chrome-mcp-session.js";
 import { listChromeMcpTabs } from "./chrome-mcp-tabs.js";
+import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import * as chromeModule from "./chrome.js";
 import { registerBrowserBasicRoutes } from "./routes/basic.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./routes/test-helpers.js";
@@ -16,7 +17,12 @@ import { createBrowserRouteContext } from "./server-context.js";
 import { beginProfileTransition } from "./server-context.lifecycle.js";
 import { makeBrowserProfile, makeBrowserServerState } from "./server-context.test-harness.js";
 
+beforeEach(() => {
+  getChromeMcpModule.clear();
+});
+
 afterEach(async () => {
+  getChromeMcpModule.clear();
   await resetChromeMcpSessionsForTest();
   vi.clearAllMocks();
   vi.restoreAllMocks();

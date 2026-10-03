@@ -180,8 +180,11 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       currentSettledEntry,
     );
   }
-  // A watched steer may reclaim a pending wake until its requester turn settles.
-  if (settledBatch.length === 0 || settledBatch.some((entry) => entry.requesterTurnRunId)) {
+  // Required completions stay with their requester turn; other rows keep its ID for cancellation.
+  if (
+    settledBatch.length === 0 ||
+    settledBatch.some((run) => run.expectsCompletionMessage === true && run.requesterTurnRunId)
+  ) {
     return false;
   }
 

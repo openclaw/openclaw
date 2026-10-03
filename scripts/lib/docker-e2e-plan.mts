@@ -25,8 +25,9 @@ import officialExternalProviderCatalog from "./official-external-provider-catalo
 import { isRecord } from "./record-shared.mjs";
 import {
   UPDATE_FIRST_HOP_COMPAT_LANE,
+  UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE,
   isUpdateFirstHopCompatLane,
-  listRecordedFirstHopSourceVersions,
+  listUpdateFirstHopCompatLaneNames,
   updateFirstHopCompatLaneName,
 } from "./update-first-hop-lanes.mjs";
 import {
@@ -100,10 +101,7 @@ export function parseLaneSelection(raw: string | undefined): string[] {
   }
   const laneAliases = new Map([
     ["install-e2e", ["install-e2e-openai", "install-e2e-anthropic"]],
-    [
-      UPDATE_FIRST_HOP_COMPAT_LANE,
-      listRecordedFirstHopSourceVersions().map(updateFirstHopCompatLaneName),
-    ],
+    [UPDATE_FIRST_HOP_COMPAT_LANE, listUpdateFirstHopCompatLaneNames()],
     [
       "bundled-plugin-install-uninstall",
       Array.from(
@@ -428,7 +426,19 @@ function supportsUpdateFirstHopCompatForTarget(
   frozenTarget?: InertTargetContract,
 ): boolean {
   if (!targetRoot && !frozenTarget) {
+    // Untargeted planning runs this checkout's matching lane and package; this lane
+    // entered the catalog with candidate admission protocol 1.
     return true;
+  }
+  if (laneName === UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE) {
+    // Release targets are full pinned checkouts. A missing manifest is an incomplete
+    // target contract, so never infer candidate admission from sibling metadata.
+    const manifest = readTargetMetadata(targetRoot, "package.json", frozenTarget);
+    return (
+      manifest !== null &&
+      (JSON.parse(manifest) as { openclaw?: { updateAdmissionProtocol?: number } }).openclaw
+        ?.updateAdmissionProtocol === 1
+    );
   }
   // A target that records its own inventory only proves the hops it lists.
   const inventory = readTargetMetadata(
@@ -436,13 +446,13 @@ function supportsUpdateFirstHopCompatForTarget(
     "scripts/lib/update-compat-inventory.json",
     frozenTarget,
   );
-  if (
-    inventory !== null &&
-    !(JSON.parse(inventory).releases as { version: string }[]).some(
-      (release) => updateFirstHopCompatLaneName(release.version) === laneName,
-    )
-  ) {
-    return false;
+  if (inventory !== null) {
+    const releases = (JSON.parse(inventory).releases as { version: string }[]).map((release) =>
+      updateFirstHopCompatLaneName(release.version),
+    );
+    if (!releases.includes(laneName)) {
+      return false;
+    }
   }
   const source = readTargetMetadata(targetRoot, "scripts/runtime-postbuild.mts", frozenTarget);
   if (source === null) {

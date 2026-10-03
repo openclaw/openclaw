@@ -5,6 +5,7 @@ import { listUsageCountedTranscriptStats } from "../../infra/session-cost-usage-
 import { configureSqliteConnectionPragmas } from "../../infra/sqlite-wal.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
@@ -18,6 +19,7 @@ import {
   listSessionTranscriptInstances,
   loadSessionEntry,
   openSessionEntryReadView,
+  replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
@@ -142,6 +144,7 @@ describe("exact session entry read lifetimes", () => {
   it("keeps identical canonical facts current after an external delete/recreate", async () => {
     const scope = await seed("selected-read-aba");
     const database = openOpenClawAgentDatabase(scope);
+    expect(loadSessionEntry(scope)?.sessionId).toBe("selected-read-aba");
     const read = captureSessionEntryRead(database, scope.sessionKey);
     const connection = new DatabaseSync(database.path);
     try {
@@ -420,6 +423,9 @@ describe("SQLite session entry cache", () => {
 
   it("does not revalidate session nodes after a same-connection transcript write", async () => {
     const { scope, sibling } = await seedPair("transcript-write");
+    // Seed maintenance must settle before measuring a same-connection cache write.
+    await closeOpenClawAgentDatabasesAsync(scope.env.OPENCLAW_STATE_DIR);
+    openOpenClawAgentDatabase(scope);
     const first = listingEntries(scope);
 
     await appendTranscriptMessage(
@@ -469,8 +475,8 @@ describe("SQLite session entry cache", () => {
 
   it("reloads added and removed keys after an untracked connection write", async () => {
     const { scope, sibling } = await seedPair("raw-keys");
-    const keptProjection = listingEntries(scope).get(scope.sessionKey);
     const database = openOpenClawAgentDatabase(scope);
+    const keptProjection = listingEntries(scope).get(scope.sessionKey);
     const insertedKey = "agent:main:inserted";
     const insertedEntry = sessionEntry("inserted", "new", 2);
     insertRaw(database.db, insertedKey, insertedEntry);
@@ -484,12 +490,15 @@ describe("SQLite session entry cache", () => {
     expect(parseSessionEntryCalls).toHaveBeenCalledTimes(2);
   });
 
-  it("patches only the tracked row after a same-process upsert", async () => {
+  it("patches only the tracked row after a native replacement", async () => {
     const { scope, sibling } = await seedPair("write-through");
+    openOpenClawAgentDatabase(scope);
+    const before = loadSessionEntry(scope)!;
     const siblingBefore = listingEntries(scope).get(sibling.sessionKey);
 
     parseSessionEntryCalls.mockClear();
-    await upsertSessionEntryCore(scope, {
+    replaceSessionEntrySync(scope, {
+      ...before,
       label: "after",
       updatedAt: 2,
       skillsSnapshot: { prompt: "updated skill prompt", skills: [] },
@@ -503,11 +512,12 @@ describe("SQLite session entry cache", () => {
     expect(loadSessionEntry(scope)?.skillsSnapshot?.prompt).toBe("updated skill prompt");
   });
 
-  it("adds a tracked upsert to a warm snapshot without reparsing siblings", async () => {
+  it("adds a native insertion to a warm snapshot without reparsing siblings", async () => {
     const scope = await seed("write-through-insert");
+    openOpenClawAgentDatabase(scope);
     const existing = listingEntries(scope).get(scope.sessionKey);
     const inserted = { ...scope, sessionKey: "agent:main:inserted" };
-    await upsertSessionEntryCore(inserted, sessionEntry("inserted", "new", 2));
+    replaceSessionEntrySync(inserted, sessionEntry("inserted", "new", 2));
     parseSessionEntryCalls.mockClear();
     const after = listingEntries(scope);
     expect([...after.keys()]).toEqual([scope.sessionKey, inserted.sessionKey].toSorted());
@@ -593,6 +603,7 @@ describe("SQLite session entry cache", () => {
 
   it("bypasses the cache in a transaction and reuses the persisted snapshot after rollback", async () => {
     const scope = await seed("transaction-rollback", sessionEntry("rollback", "before"));
+    expect(loadSessionEntry(scope)?.label).toBe("before");
     const borrowedBefore = listSessionEntriesCore({ ...scope, clone: false })[0]!.entry;
     expect(borrowedBefore.label).toBe("before");
 

@@ -26,7 +26,10 @@ export async function openNativeSessionMenu(params: {
       };
       const observer = new MutationObserver(check);
       const cancelled = () => finish(null);
-      observer.observe(pane, { childList: true, subtree: true });
+      // Removal is recorded on the pane's former ancestors, not the pane itself.
+      // A retained pane loses its selection through its own attributes.
+      observer.observe(pane.getRootNode(), { childList: true, subtree: true });
+      observer.observe(pane, { attributes: true });
       signal.addEventListener("abort", cancelled, { once: true });
       check();
     },

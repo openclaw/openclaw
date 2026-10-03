@@ -3,7 +3,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.entry.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import { listSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
+import {
+  listSessionMembersInWorker,
+  removeSessionMember,
+} from "../../config/sessions/session-sharing-store.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -21,7 +24,7 @@ import {
 
 afterEach(() => vi.restoreAllMocks());
 
-it("adds, lists, and removes session members without caller-thread SQL", async () => {
+it("adds, lists, and removes session members without caller-thread SQL after collaboration admission", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const sessionKey = "agent:main:sharing-authority";
     await upsertSessionEntryCore(
@@ -32,6 +35,8 @@ it("adds, lists, and removes session members without caller-thread SQL", async (
         createdActor: { type: "human", source: "profile", id: "owner" },
       },
     );
+    // Collaboration owns its cold admission; the worker-only entry seed does not admit it.
+    await removeSessionMember({ agentId: "main", sessionKey }, "absent-admission-fixture-member");
     const manager = identifiedClient("owner");
     const requestContext = context(vi.fn());
     await initializeSessionReadContext(requestContext);

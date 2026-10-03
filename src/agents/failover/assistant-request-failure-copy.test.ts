@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { formatUserFacingAssistantErrorText } from "../embedded-agent-helpers/error-text.js";
+import { isNonProviderRuntimeCoordinationError } from "../failover-error.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import {
   renderAssistantRequestFailureCopy,
@@ -91,7 +92,8 @@ describe("renderAssistantRequestFailureCopy", () => {
     ],
   ])("renders bounded guidance for typed runtime code %s", (name, code, expected) => {
     const error = Object.assign(new Error("private runtime diagnostic"), { name, code });
-    expect(renderRuntimeCoordinationFailureCopy(error, code)).toBe(expected);
+    const runtimeCode = isNonProviderRuntimeCoordinationError(error) ? code : undefined;
+    expect(renderRuntimeCoordinationFailureCopy(runtimeCode)).toBe(expected);
   });
 
   it("gives recovery guidance after a tool-result request is rejected", () => {

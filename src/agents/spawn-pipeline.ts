@@ -6,6 +6,7 @@ type SpawnPipelinePhase = "initialize" | "dispatch" | "register";
 
 export type SpawnBackendAdapter<TState> = {
   initialize(): Promise<TState>;
+  retainRegistrationScope?(scope: SubagentRegistrationScope): void;
   dispatchTurn(state: TState): Promise<{ runId: string }>;
   cleanupOnFailure(params: {
     phase: SpawnPipelinePhase;
@@ -77,6 +78,7 @@ export async function runSpawnPipeline<TState>(
         assertCurrent: params.assertActive,
         retainOwnership: (scope) => {
           registrationScope = scope;
+          params.adapter.retainRegistrationScope?.(scope);
         },
       });
       // Release launch admission only after any authority preparation and registry acknowledgement.

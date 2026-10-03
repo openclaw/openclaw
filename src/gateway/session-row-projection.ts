@@ -170,6 +170,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       creators.update(row);
       records.index(row, indexes, true);
       rows.delete(id);
+      revisions.publishSelection(row, true);
       // Cold dependents reselect only after the removed parent is absent from the inventory.
       markRelated(row);
       if (row.entry && !byKey.has(`id:${row.entry.sessionId}`)) {
@@ -181,7 +182,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   }
   function put(row: records.Row) {
     const previous = rows.get(records.identity(row));
-    revisions.replace(previous, row);
     creators.update(previous, row);
     if (previous) {
       if (previous.generation !== row.generation) {
@@ -195,6 +195,8 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     placementFacts.update(row, previous, (sessionId) =>
       [...(byKey.get(`id:${sessionId}`) ?? [])].flatMap((id) => rows.get(id) ?? []),
     );
+    // Index updates are synchronous; publish only after the accepted row is installed.
+    revisions.replace(previous, row);
   }
   function acquireEntry(row: records.Row, storedEntry: SessionEntry | undefined) {
     if (storedEntry?.archivedAt !== undefined) {
@@ -287,7 +289,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
         new Map([...stores].map(([locator, source]) => [source.filename, locator])),
         discovery,
       );
-      revisions.invalidate(true);
+      revisions.publishSelection();
       topologyDirty = epoch !== revision;
     }).finally(() => {
       preparingTopology = undefined;
@@ -325,11 +327,11 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     }
     epoch++;
     const presentationOnly = metadata.invalidate(change) && !change.factsInvalidated;
+    const catalogOnly = "all" in change && change.scope === "catalog" && !change.factsInvalidated;
     if (!presentationOnly) {
-      revisions.invalidate(true);
+      revisions.invalidate(!catalogOnly);
     }
     if ("all" in change) {
-      const catalogOnly = change.scope === "catalog" && !change.factsInvalidated;
       if (!presentationOnly && !catalogOnly) {
         databaseRevision++;
       }
@@ -416,11 +418,12 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     if (!isIncognitoSessionKey(row.key)) {
       placementFacts.register(row.entry.sessionId);
     }
-    revisions.invalidate(row.hasBoard !== prepared.hasBoard);
+    const previousBoard = row.hasBoard;
     Object.assign(row, prepared, {
       materializedSequence: ++materializedCount,
       ...metadata.materializedRevisions,
     });
+    revisions.materialized(row, previousBoard);
     return true;
   }
   const {
@@ -546,8 +549,8 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     },
   });
   function dispose() {
-    revisions.invalidate(true);
     disposed = true;
+    revisions.dispose();
     registryRead.dispose();
     generations.invalidate();
     disposeRefresh();
@@ -612,6 +615,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       prepareRowFacts: rowFacts.prepare,
     });
   const projection = {
+    onSelectionChange: revisions.onSelectionChange,
     observeGeneration: generations.observeGeneration,
     readPreparedRowContext: () =>
       disposed ? undefined : inOwnerContext(() => metadata.readPrepared(epoch)),

@@ -55,6 +55,7 @@ describe("OpenClaw shell Control UI refresh", () => {
   let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
   beforeEach(() => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
     stubGatewayStoreTestGlobals();
     replace = vi.fn();
     const location = Object.assign(new URL("http://127.0.0.1:18789/chat/main"), { replace });

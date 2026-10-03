@@ -105,7 +105,9 @@ An open tab checks the active UI build when it returns to the foreground, comes 
 or is restored from browser history. If an update finished while the tab was suspended, it
 can recover without receiving the original update notification or opening a new tab.
 
-Automatic reloads wait for the page to be reachable and respect unsaved-work protection.
+Automatic build-recovery reloads spread their first page probe over up to two seconds
+and reload only once per target build. Reloads wait for the page to be reachable
+and respect unsaved-work protection.
 The current route and stored drafts survive the reload. If browser storage is unavailable
 or reload protection blocks recovery, reload the tab after saving your work;
 do not clear site data while drafts or queued messages still need recovery.
@@ -154,7 +156,8 @@ Server retry hints remain minimum waits and can extend beyond that normal cap, w
 intervals of silence before reconnecting. An individual request timeout does not
 reset a socket that is still receiving traffic. Reconnecting does not replay
 arbitrary requests; read owners retry their reads, and write owners reconcile
-uncertain outcomes. Gateway startup hints keep their separate bounded timing.
+uncertain outcomes. Gateway startup hints keep their separate bounded timing
+(100–2000 ms), with up to 20% additional spread across reconnecting tabs.
 If the browser provides no reason for the disconnect, the connection tooltip explains that
 the connection was interrupted and whether automatic reconnection is underway. It retains
 the WebSocket close code for troubleshooting; specific Gateway errors keep their explanation.

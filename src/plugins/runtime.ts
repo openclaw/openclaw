@@ -478,7 +478,11 @@ export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir
           };
           let memoryErrors: readonly unknown[] = [];
           try {
-            if (previous.memoryCapabilities.some(({ capability }) => capability.runtime)) {
+            if (
+              previous.memoryCapabilities.some(
+                ({ capability }) => capability.runtime || capability.providerRuntime,
+              )
+            ) {
               const { prepareMemoryRuntimeReload } = await loadMemoryRuntime();
               const memory = prepareMemoryRuntimeReload(previous, retainedMemory());
               memoryErrors = (await memory.close()).errors;

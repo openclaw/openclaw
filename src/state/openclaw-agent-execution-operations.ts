@@ -131,6 +131,17 @@ export async function loadAgentEntryReadOperations() {
   } satisfies Handlers;
 }
 
+export async function loadAgentEntryPatchOperations() {
+  const kernel = await import("../config/sessions/session-entry-patch.worker.js");
+  return {
+    "session.entry.patch.prepare": (
+      input: Parameters<typeof kernel.readSessionEntryPatchSnapshot>[1],
+      { open },
+    ) => kernel.readSessionEntryPatchSnapshot(open(), input),
+    "session.entry.patch.commit": kernel.commitSessionEntryPatch,
+  } satisfies Handlers;
+}
+
 export async function loadAgentTrajectoryOperations() {
   const kernel = await import("../trajectory/runtime-store.sqlite.js");
   return {
@@ -333,6 +344,7 @@ export type RegisteredAgentWorkerOperations = WorkerOperations<
     Awaited<ReturnType<typeof loadAgentTranscriptOperations>> &
     Awaited<ReturnType<typeof loadAgentReplacementOperations>> &
     Awaited<ReturnType<typeof loadAgentEntryReadOperations>> &
+    Awaited<ReturnType<typeof loadAgentEntryPatchOperations>> &
     Awaited<ReturnType<typeof loadAgentRestartRecoveryOperations>> &
     Awaited<ReturnType<typeof loadAgentTrajectoryOperations>> &
     Awaited<ReturnType<typeof loadAgentArchiveOperations>> &

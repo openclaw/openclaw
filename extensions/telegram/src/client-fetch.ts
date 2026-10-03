@@ -89,34 +89,25 @@ export function createTelegramClientFetch(params: {
     const runFetch = async (allowMisdirectedFallback = false): Promise<Response> => {
       assertTelegramRequestAuthority(assertCurrent);
       const controller = new AbortController();
-      const abortWith = (signal: Pick<TelegramAbortSignalLike, "reason">) =>
-        controller.abort(signal.reason);
-      const onShutdown = () => {
-        if (shutdownSignal) {
-          abortWith(shutdownSignal);
-        }
-      };
       let requestTimeout: ReturnType<typeof setTimeout> | undefined;
-      let onRequestAbort: (() => void) | undefined;
       let requestTimedOut = false;
       const timeoutError =
         requestTimeoutMs !== undefined
           ? new Error(`Telegram ${method} timed out after ${requestTimeoutMs}ms`)
           : undefined;
 
-      if (shutdownSignal?.aborted) {
-        abortWith(shutdownSignal);
-      } else if (shutdownSignal) {
-        shutdownSignal.addEventListener("abort", onShutdown, { once: true });
-      }
-      if (requestSignal) {
-        if (requestSignal.aborted) {
-          abortWith(requestSignal);
-        } else {
-          onRequestAbort = () => abortWith(requestSignal);
-          requestSignal.addEventListener("abort", onRequestAbort);
+      const abortListeners = [shutdownSignal, requestSignal].flatMap((signal) => {
+        if (!signal) {
+          return [];
         }
-      }
+        const abort = () => controller.abort(signal.reason);
+        if (signal.aborted) {
+          abort();
+        } else {
+          signal.addEventListener("abort", abort, { once: true });
+        }
+        return [{ signal, abort }];
+      });
       if (requestTimeoutMs && timeoutError) {
         requestTimeout = setTimeout(() => {
           requestTimedOut = true;
@@ -129,9 +120,8 @@ export function createTelegramClientFetch(params: {
         if (requestTimeout) {
           clearTimeout(requestTimeout);
         }
-        shutdownSignal?.removeEventListener("abort", onShutdown);
-        if (requestSignal && onRequestAbort) {
-          requestSignal.removeEventListener("abort", onRequestAbort);
+        for (const { signal, abort } of abortListeners) {
+          signal.removeEventListener("abort", abort);
         }
       };
 

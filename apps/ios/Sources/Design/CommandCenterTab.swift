@@ -1,4 +1,5 @@
 import OpenClawChatUI
+import OpenClawKit
 import SwiftUI
 
 struct CommandCenterTab: View {
@@ -461,8 +462,8 @@ struct CommandCenterTab: View {
     }
 
     private var gatewayAddressText: String {
-        Self.normalized(self.appModel.gatewayRemoteAddress)
-            ?? Self.normalized(self.appModel.gatewayServerName)
+        self.appModel.gatewayRemoteAddress?.trimmedNonEmpty
+            ?? self.appModel.gatewayServerName?.trimmedNonEmpty
             ?? String(localized: "Unknown")
     }
 
@@ -585,16 +586,16 @@ struct CommandCenterTab: View {
     }
 
     static func sessionTitle(_ session: OpenClawChatSessionEntry) -> String {
-        if let label = self.normalized(session.label) {
+        if let label = session.label?.trimmedNonEmpty {
             return label
         }
-        if let displayName = self.normalized(session.displayName) {
+        if let displayName = session.displayName?.trimmedNonEmpty {
             return Self.redactedSessionTitle(for: displayName) ?? displayName
         }
-        if let autoLabel = self.normalized(session.autoLabel) {
+        if let autoLabel = session.autoLabel?.trimmedNonEmpty {
             return autoLabel
         }
-        if let subject = self.normalized(session.subject) {
+        if let subject = session.subject?.trimmedNonEmpty {
             return Self.redactedSessionTitle(for: subject) ?? subject
         }
         // Generic key placeholders only after real topic names are absent.
@@ -707,25 +708,19 @@ struct CommandCenterTab: View {
     }
 
     private var gatewaySubtitle: String {
-        if let server = Self.normalized(appModel.gatewayServerName) {
+        if let server = appModel.gatewayServerName?.trimmedNonEmpty {
             return String(
                 format: String(localized: "%@ on %@"),
                 self.appModel.activeAgentName,
                 server)
         }
-        if let address = Self.normalized(appModel.gatewayRemoteAddress) {
+        if let address = appModel.gatewayRemoteAddress?.trimmedNonEmpty {
             return String(
                 format: String(localized: "%@ via %@"),
                 self.appModel.activeAgentName,
                 address)
         }
         return self.appModel.gatewayDisplayStatusText
-    }
-
-    private static func normalized(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 }
 

@@ -1,7 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionsFilesRevealResult,
-  SystemInfoResult,
   WorktreesBranchesResult,
   WorktreesListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
@@ -18,7 +17,6 @@ import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { openEditor } from "../../lib/editor-links.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -35,11 +33,11 @@ import {
   resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
 import { runSessionNavigationAction } from "../../lib/sessions/session-menu-navigation.ts";
+import { readSystemInfo } from "../../lib/system-info.ts";
 import { showToast } from "../../lib/toast.ts";
 import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
 import { ChatPaneContext } from "./chat-pane-context.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
-import { headerPlatformByClient } from "./chat-pane-shared.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
@@ -153,19 +151,15 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     client: GatewayBrowserClient,
     generation: number,
   ): Promise<void> {
-    if (!isGatewayMethodAdvertised(this.context.gateway.snapshot, "system.info")) {
-      return;
-    }
-    let platformRequest = headerPlatformByClient.get(client);
-    if (!platformRequest) {
-      platformRequest = client
-        .request<SystemInfoResult>("system.info", {})
-        .then((result) => result.platform)
-        .catch(() => null);
-      headerPlatformByClient.set(client, platformRequest);
-    }
-    const platform = await platformRequest;
-    if (this.connectedClient === client && this.connectionGeneration === generation) {
+    const gateway = this.context.gateway;
+    const platform = await readSystemInfo(gateway)
+      .then((sample) => sample.value.platform)
+      .catch(() => null);
+    if (
+      this.context.gateway === gateway &&
+      this.connectedClient === client &&
+      this.connectionGeneration === generation
+    ) {
       this.headerPlatform = platform;
     }
   }
@@ -574,7 +568,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     if (!client) {
       return;
     }
-    const loads: Promise<void>[] = [];
+    const loads = [this.loadHeaderPlatform(client, this.connectionGeneration)];
     // Same precedence as resolveChatPaneWorkspace/loadSessionFileRoot.
     const immediateRoot =
       (row.execNode ? row.execCwd?.trim() : undefined) ||

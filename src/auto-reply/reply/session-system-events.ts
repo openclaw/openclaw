@@ -96,6 +96,7 @@ export async function drainFormattedSystemEvents(params: {
   isMainSession: boolean;
   isNewSession: boolean;
   events?: readonly SystemEvent[];
+  deferredEventIds?: readonly string[];
 }): Promise<string | undefined> {
   const systemLines: string[] = [];
   const queueKey = resolveSystemEventQueueKey(params.sessionKey, params.agentId);
@@ -106,6 +107,7 @@ export async function drainFormattedSystemEvents(params: {
     (params.events ?? peekSystemEventEntries(queueKey)).filter(
       (event) => !isExecCompletionEvent(event.text),
     ),
+    { deferredEventIds: params.deferredEventIds },
   );
   const sessionStateNotices = queued.flatMap((event) => {
     const targetSessionKey = event.contextKey

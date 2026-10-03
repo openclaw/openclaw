@@ -13,7 +13,7 @@ beforeEach(() => {
   container = document.createElement("div");
   onDismiss.mockReset();
   document.body.append(container);
-  render(renderCommunityInviteCard(onDismiss), container);
+  render(renderCommunityInviteCard(onDismiss, "dark"), container);
 });
 
 afterEach(() => {
@@ -50,13 +50,16 @@ describe("community invite card", () => {
 
   it("opens each community destination without dismissing the invitation", () => {
     const links = [...container.querySelectorAll<HTMLAnchorElement>(".invite__cta")];
-    expect(links.map((link) => [link.textContent?.trim(), link.href])).toEqual([
-      ["Reddit", "https://www.reddit.com/r/openclaw/"],
-      ["Discord", "https://discord.gg/clawd"],
-      ["X", "https://x.com/openclaw"],
+    expect(
+      links.map((link) => [link.textContent?.trim(), link.getAttribute("aria-label"), link.href]),
+    ).toEqual([
+      ["Join", "Join the OpenClaw community on Reddit", "https://www.reddit.com/r/openclaw/"],
+      ["Join", "Join the OpenClaw community on Discord", "https://discord.gg/clawd"],
+      ["Follow", "Follow OpenClaw on X", "https://x.com/openclaw"],
     ]);
     for (const link of links) {
       expect(link.target).toBe("_blank");
+      expect(link.title).toBe(link.getAttribute("aria-label"));
       expect(link.rel.split(/\s+/u)).toEqual(expect.arrayContaining(["noopener", "noreferrer"]));
       link.click();
     }

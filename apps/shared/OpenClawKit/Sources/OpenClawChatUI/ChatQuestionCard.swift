@@ -335,7 +335,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
 struct OpenClawQuestionCard: View {
     @Bindable private var model: OpenClawQuestionCardModel
     private let onSubmit: @MainActor @Sendable (OpenClawQuestionCardModel) async -> Void
-    private let onSkip: (@MainActor @Sendable (OpenClawQuestionCardModel) async -> Void)?
+    private let onSkip: @MainActor @Sendable (OpenClawQuestionCardModel) async -> Void
     #if os(macOS)
     @FocusState private var focusedQuestionID: String?
     #endif
@@ -547,21 +547,19 @@ struct OpenClawQuestionCard: View {
                     .font(OpenClawChatTypography.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                if let onSkip = self.onSkip {
-                    Button {
-                        Task { await onSkip(self.model) }
-                    } label: {
-                        if self.model.isSkipping {
-                            Text("Skipping…")
-                                .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .callout))
-                        } else {
-                            Text("Skip")
-                                .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .callout))
-                        }
+                Button {
+                    Task { await self.onSkip(self.model) }
+                } label: {
+                    if self.model.isSkipping {
+                        Text("Skipping…")
+                            .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .callout))
+                    } else {
+                        Text("Skip")
+                            .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .callout))
                     }
-                    .buttonStyle(.bordered)
-                    .disabled(status == .submitting)
                 }
+                .buttonStyle(.bordered)
+                .disabled(status == .submitting)
                 Button {
                     Task { await self.onSubmit(self.model) }
                 } label: {

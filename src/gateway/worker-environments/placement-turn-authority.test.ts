@@ -188,7 +188,7 @@ it.each(["local", "worker-turn", "remote-exec"] as const)(
         if (claim.owner.kind === "worker") {
           await store.updateAckCursors({ claim, liveEvent: 2 });
           expect(authority.isCurrent()).toBe(true);
-          store.startWorkspaceResultDrain(claim);
+          await store.startWorkspaceResultDrain(claim);
         } else {
           store.startDrain({
             sessionId: claim.sessionId,
@@ -423,7 +423,13 @@ it("retains the original transcript and prompt cache facts while claim authority
     expectedWriterRunId: claim.runId,
   };
   const requested = { ...expected };
-  const promptCacheContext = { boundaryCount: 2, promptCacheKey: "gateway-cache" };
+  const promptCacheContext = {
+    boundaryCount: 2,
+    promptCacheKey: "gateway-cache",
+    fastMode: true,
+    fastModeStartedAtMs: 123,
+    fastModeAutoOnSeconds: 30,
+  };
   const binding = bindWorkerTurnOwner(
     store,
     claim,
@@ -450,6 +456,9 @@ it("retains the original transcript and prompt cache facts while claim authority
   };
   promptCacheContext.boundaryCount = 99;
   promptCacheContext.promptCacheKey = "replacement-cache";
+  promptCacheContext.fastMode = false;
+  promptCacheContext.fastModeStartedAtMs = 456;
+  promptCacheContext.fastModeAutoOnSeconds = 60;
   requested.sessionId = "replacement-session";
   requested.storePath = path.join(root, "replacement.json");
   requested.expectedLifecycleRevision = "replacement-lifecycle";
@@ -463,6 +472,9 @@ it("retains the original transcript and prompt cache facts while claim authority
     expect(readWorkerTurnPromptCacheContext(connection)).toEqual({
       boundaryCount: 2,
       promptCacheKey: "gateway-cache",
+      fastMode: true,
+      fastModeStartedAtMs: 123,
+      fastModeAutoOnSeconds: 30,
     });
     expect(
       readWorkerTurnPromptCacheContext({ ...connection, runId: "another-run" }),

@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
-import { withTestTimeout } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withTestTimeout } from "../../test/helpers/promise.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
@@ -49,6 +50,57 @@ function placementSnapshot(reconciling: readonly string[]): WorkerSessionPlaceme
     workspaceRecoveryPendingSessionIds: new Set(),
   };
 }
+
+it.each(["facts", "rows"] as const)(
+  "releases exact preparation after the requesting observation closes during %s readiness",
+  async (phase) => {
+    const { projection, query, lookup } = placementReadView();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const work = new AsyncWorkScope();
+    const cancelled = new Error("Requesting connection closed");
+    let preparations = 0;
+    let consumed = false;
+    const prepare = () => {
+      preparations++;
+      if (preparations === 1) {
+        entered.resolve();
+        return release.promise;
+      }
+      return undefined;
+    };
+    const owner = createSessionRowPlacementProjection(
+      undefined,
+      phase === "facts" ? prepare : () => undefined,
+    );
+    const reading = work.track(() =>
+      owner.withPreparedRows(
+        projection,
+        () => true,
+        lookup,
+        () => [query("cancelled-exact-read")],
+        phase === "rows" ? prepare : () => undefined,
+        () => {
+          consumed = true;
+        },
+      ),
+    );
+    const settled = Promise.allSettled([reading]);
+    try {
+      await awaitGateBeforeSettlement(entered.promise, reading, "Read did not enter preparation");
+      work.beginClose(cancelled);
+      release.resolve();
+      await expect(reading).rejects.toBe(cancelled);
+      expect(preparations).toBe(1);
+      expect(consumed).toBe(false);
+    } finally {
+      release.resolve();
+      owner.dispose();
+      await settled;
+      await work.drain();
+    }
+  },
+);
 
 it("refreshes placement facts invalidated after the read settles but before consumption", async () => {
   const { projection, query, lookup } = placementReadView();

@@ -422,13 +422,8 @@ export function collectUpdateDeferredPluginIds(params: {
 }): Set<string> {
   const pluginIds = new Set(params.configuredPluginIds);
   for (const candidate of collectDownloadableInstallCandidates({
-    cfg: params.cfg,
-    env: params.env,
+    ...params,
     missingPluginIds: new Set(),
-    configuredPluginIds: params.configuredPluginIds,
-    configuredChannelIds: params.configuredChannelIds,
-    configuredChannelOwnerPluginIds: params.configuredChannelOwnerPluginIds,
-    blockedPluginIds: params.blockedPluginIds,
   })) {
     pluginIds.add(candidate.pluginId);
   }
@@ -485,33 +480,6 @@ function collectInstalledPluginIdsWithRepairablePackageDiagnostics(params: {
   return pluginIds;
 }
 
-function resolveInstalledRuntimePackageVersion(params: {
-  pluginId: string;
-  snapshot: PluginMetadataSnapshot;
-  record: PluginInstallRecord;
-}): string | undefined {
-  const plugin =
-    params.snapshot.byPluginId?.get(params.pluginId) ??
-    params.snapshot.plugins.find((entry) => entry.id === params.pluginId);
-  return normalizeOptionalLowercaseString(
-    params.record.resolvedVersion ??
-      params.record.version ??
-      plugin?.packageVersion ??
-      plugin?.version,
-  );
-}
-
-function installedRuntimePackageVersionIsStale(params: {
-  installedVersion: string | undefined;
-  currentVersion: string;
-}): boolean {
-  if (!params.installedVersion) {
-    return false;
-  }
-  const comparison = compareOpenClawReleaseVersions(params.installedVersion, params.currentVersion);
-  return comparison === null ? params.installedVersion !== params.currentVersion : comparison < 0;
-}
-
 function collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages(params: {
   snapshot: PluginMetadataSnapshot;
   installRecords: Record<string, PluginInstallRecord>;
@@ -534,17 +502,17 @@ function collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages(params: {
     if (!record) {
       continue;
     }
-    const installedVersion = resolveInstalledRuntimePackageVersion({
-      pluginId: candidate.pluginId,
-      snapshot: params.snapshot,
-      record,
-    });
-    if (
-      installedRuntimePackageVersionIsStale({
-        installedVersion,
-        currentVersion,
-      })
-    ) {
+    const plugin =
+      params.snapshot.byPluginId?.get(candidate.pluginId) ??
+      params.snapshot.plugins.find((entry) => entry.id === candidate.pluginId);
+    const installedVersion = normalizeOptionalLowercaseString(
+      record.resolvedVersion ?? record.version ?? plugin?.packageVersion ?? plugin?.version,
+    );
+    if (!installedVersion) {
+      continue;
+    }
+    const comparison = compareOpenClawReleaseVersions(installedVersion, currentVersion);
+    if (comparison === null ? installedVersion !== currentVersion : comparison < 0) {
       pluginIds.add(candidate.pluginId);
     }
   }
@@ -582,25 +550,15 @@ function collectOfficialReplacementInstallCandidates(params: {
 }): Map<string, DownloadableInstallCandidate> {
   const repairableConfiguredPluginIds = new Set(
     [...params.repairablePluginIds].filter((pluginId) =>
-      isConfiguredPluginRepairTarget({
-        pluginId,
-        configuredPluginIds: params.configuredPluginIds,
-        configuredChannelIds: params.configuredChannelIds,
-        configuredChannelOwnerPluginIds: params.configuredChannelOwnerPluginIds,
-      }),
+      isConfiguredPluginRepairTarget({ ...params, pluginId }),
     ),
   );
   if (repairableConfiguredPluginIds.size === 0) {
     return new Map();
   }
   const candidates = collectDownloadableInstallCandidates({
-    cfg: params.cfg,
-    env: params.env,
+    ...params,
     missingPluginIds: repairableConfiguredPluginIds,
-    configuredPluginIds: params.configuredPluginIds,
-    configuredChannelIds: params.configuredChannelIds,
-    configuredChannelOwnerPluginIds: params.configuredChannelOwnerPluginIds,
-    blockedPluginIds: params.blockedPluginIds,
   });
   return new Map(
     candidates

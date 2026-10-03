@@ -137,6 +137,21 @@ export function getPluginRegistryGatewayOwner(
   return gatewayOwners.get(getPluginRegistryResourceOwner(registry)) ?? undefined;
 }
 
+/** Prepared views inherit the publication snapshot, not a successor generation. */
+export function isPluginRegistryGatewayViewOf(
+  registry: PluginRegistry,
+  published: PluginRegistry,
+): boolean {
+  const owner = getPluginRegistryGatewayOwner(registry);
+  const admitted = gatewayChannels.get(getPluginRegistryResourceOwner(registry));
+  return (
+    owner !== undefined &&
+    admitted !== undefined &&
+    admitted === gatewayChannels.get(getPluginRegistryResourceOwner(published)) &&
+    owner === getPluginRegistryGatewayOwner(published)
+  );
+}
+
 /** Publication-time identity survives teardown; the live Gateway owner still admits every send. */
 export function getPluginRegistryGatewayChannelRegistration(
   registry: PluginRegistry,

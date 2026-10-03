@@ -522,6 +522,44 @@ describe("plugin management Gateway handlers", () => {
     });
   });
 
+  it.each([{}, { query: "memory" }, { category: "memory" }])(
+    "starts remote discovery while inventory is pending: %j",
+    async (params) => {
+      const inventory = Promise.withResolvers<{
+        plugins: (typeof workboard)[];
+        diagnostics: [];
+        mutationAllowed: boolean;
+      }>();
+      managementMocks.list.mockReturnValue(inventory.promise);
+      catalogMocks.overview.mockResolvedValue({ items: [], categories: [] });
+      catalogMocks.browse.mockResolvedValue({ items: [] });
+      const request = callHandler("plugins.catalog.browse", params);
+      try {
+        expect(
+          catalogMocks.overview.mock.calls.length + catalogMocks.browse.mock.calls.length,
+        ).toBe(1);
+      } finally {
+        inventory.resolve({ plugins: [workboard], diagnostics: [], mutationAllowed: true });
+        await request;
+      }
+      expect(await request).toMatchObject({ ok: true });
+    },
+  );
+
+  it("reports inventory failure without waiting for the observed remote request", async () => {
+    const remote = Promise.withResolvers<{ items: [] }>();
+    catalogMocks.overview.mockReturnValue(remote.promise);
+    managementMocks.list.mockRejectedValue(new Error("inventory unavailable"));
+    const result = await callHandler("plugins.catalog.browse", {});
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "UNAVAILABLE", message: expect.stringContaining("inventory unavailable") },
+    });
+    expect(catalogMocks.overview).toHaveBeenCalledOnce();
+    remote.reject(new Error("remote also failed"));
+    await Promise.resolve();
+  });
+
   it("returns canonical ClawHub categories unchanged", async () => {
     const categories = [
       {

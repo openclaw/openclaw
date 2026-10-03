@@ -288,12 +288,6 @@ describe("check-deadcode-exports", () => {
         "tsdown.ai.config.ts!",
       ]),
     );
-    expect(knipConfig.workspaces["extensions/acpx"].entry).toEqual(
-      expect.arrayContaining([
-        "src/runtime-internals/mcp-command-line.mjs!",
-        "src/runtime-internals/mcp-proxy.mjs!",
-      ]),
-    );
     expect(knipConfig.workspaces["extensions/canvas"].entry).toEqual(
       expect.arrayContaining([
         "src/host/a2ui-app/bootstrap.js!",

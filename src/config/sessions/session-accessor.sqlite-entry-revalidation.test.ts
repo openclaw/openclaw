@@ -14,11 +14,12 @@ import {
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { onSessionIdentityMutation } from "./session-accessor.js";
 import { createSessionEntryRevisionGuard } from "./session-accessor.sqlite-entry-revision.js";
 import {
@@ -44,9 +45,10 @@ import { readSessionEntryCurrentFacts } from "./session-entry-read.worker.js";
 const tempDirs = createTempDirTracker();
 const sessionKey = "agent:main:entry-revalidation";
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   tempDirs.cleanup();
 });
 
@@ -131,6 +133,8 @@ describe("SQLite session entry patch commit revalidation", () => {
   });
 
   it("restores the connection's commit wait after admitting a rollback-journal patch", async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    database = openOpenClawAgentDatabase({ agentId: "main", env });
     expect(database.db.prepare("PRAGMA journal_mode = DELETE").get()?.journal_mode).toBe("delete");
     database.db.exec("PRAGMA busy_timeout = 37");
     const reader = new DatabaseSync(database.path);

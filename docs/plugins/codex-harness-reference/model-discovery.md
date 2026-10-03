@@ -40,8 +40,9 @@ require the native owner's supported reload/restart and a catalog refresh;
 OpenClaw does not poll native home files for readiness. Authored host routes and
 explicit profile selections retain their existing auth and compatibility checks.
 
-The composer shows **Ultrafast** only when authenticated account discovery
-advertises that service tier for the selected model, account, route, and runtime.
+For the Codex runtime, the composer shows **Ultrafast** only when authenticated
+account discovery advertises that service tier for the selected model, account,
+route, and runtime.
 The OpenAI provider's existing account-scoped discovery supplies this observation;
 static catalog hints and the native app-server's fallback list do not establish
 access. Selecting a managed personal account prepares that account's catalog
@@ -54,6 +55,12 @@ that cannot use model discovery, and catalogs without explicit service-tier
 metadata leave this capability unknown. The composer hides Ultrafast in those
 cases rather than offering a disabled option. Discovery support describes
 availability, not a guarantee that an upstream request will receive that tier.
+
+The embedded OpenClaw runtime uses the available API-key OpenAI Responses route
+to offer Ultrafast without catalog metadata, subject to observed provider
+downgrades; see [Fast mode](/providers/openai/advanced#fast-mode).
+Codex-runtime Ultrafast with API-key authentication still requires the native
+catalog, including a pinned `model_catalog_json`, to list the tier for that model.
 
 Native catalog identifiers are runtime identifiers, not privacy labels. A
 deployment using a broker-owned alias must supply an alias-safe native catalog

@@ -813,7 +813,7 @@ function countAutomaticSelection(events) {
 const server = http.createServer((req, res) => {
   void (async () => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
-    if (req.method === "GET" && url.pathname === "/health") {
+    if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/health") {
       writeJson(res, 200, { ok: true, requests });
       return;
     }

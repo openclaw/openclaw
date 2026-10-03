@@ -2,11 +2,7 @@
 import OpenClawProtocol
 import SwiftUI
 
-struct ChatSessionIconPicker: View, Identifiable {
-    nonisolated var id: String {
-        self.session.key
-    }
-
+struct ChatSessionIconPicker: View {
     let session: OpenClawChatSessionEntry
     let connection: OpenClawSessionMenuConnection
     let viewModel: OpenClawChatViewModel
@@ -19,15 +15,6 @@ struct ChatSessionIconPicker: View, Identifiable {
 
     // ui/src/components/session-icon-picker.ts:13 and session-agent-status.ts:16 define the stored choices.
     private let emoji = ["🦞", "🚀", "🐛", "✅", "🔥", "📦", "🧪", "📝", "🔍", "⚡", "🎯"]
-    private let glyphs = [
-        ("braces", "curlybraces"),
-        ("book", "book"),
-        ("monitor", "desktopcomputer"),
-        ("bot", "cpu"),
-        ("kanban", "rectangle.split.3x1"),
-        ("coins", "dollarsign.circle"),
-    ]
-
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Icon & color").font(OpenClawChatTypography.headline)
@@ -39,7 +26,7 @@ struct ChatSessionIconPicker: View, Identifiable {
                     Button(emoji) { self.save(["icon": .init(emoji)]) }.font(.title2)
                         .tint(self.selectedIcon == emoji ? OpenClawChatTheme.accent : .primary)
                 }
-                ForEach(self.glyphs, id: \.0) { glyph in
+                ForEach(ChatSessionSidebarRowFacts.iconGlyphs, id: \.0) { glyph in
                     Button { self.save(["icon": .init(glyph.0)]) } label: { Image(systemName: glyph.1) }
                         .accessibilityLabel(glyph.0)
                         .tint(self.selectedIcon == glyph.0 ? OpenClawChatTheme.accent : .primary)

@@ -589,10 +589,9 @@ export function runServiceChildGroupAnchor(): void {
     };
     for (const stream of ["stdout", "stderr"] as const) {
       pipeline(command[stream]!, process[stream], () => {
-        // Mirror Node's uv_shutdown until Bun stdio end() shuts down inherited socketpairs.
-        if (shutdownOutput?.(stream === "stdout" ? 1 : 2, 1) === -1) {
-          void requestCleanup("lineage-lost");
-        }
+        // Older Bun needs this half-close; newer Bun can report ENOTCONN after its own.
+        // Shutdown completion is not lineage loss; the host still requires output EOF.
+        shutdownOutput?.(stream === "stdout" ? 1 : 2, 1);
         pendingOutput.delete(stream);
         void settleRoot();
       });

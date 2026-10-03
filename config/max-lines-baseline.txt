@@ -63,7 +63,6 @@ extensions/discord/src/monitor/model-picker.test.ts
 extensions/discord/src/monitor/model-picker.view.ts
 extensions/discord/src/monitor/native-command.model-picker.test.ts
 extensions/discord/src/monitor/native-command.plugin-dispatch.test.ts
-extensions/discord/src/monitor/native-command.ts
 extensions/discord/src/outbound-adapter.test.ts
 extensions/discord/src/send.sends-basic-channel-messages.test.ts
 extensions/fal/image-generation-provider.ts
@@ -73,7 +72,6 @@ extensions/feishu/src/channel.test.ts
 extensions/feishu/src/channel.ts
 extensions/feishu/src/doctor.ts
 extensions/feishu/src/docx.ts
-extensions/feishu/src/media.ts
 extensions/feishu/src/monitor.comment.ts
 extensions/feishu/src/outbound.test.ts
 extensions/feishu/src/outbound.ts
@@ -471,7 +469,6 @@ src/gateway/server-methods/config.ts
 src/gateway/server-methods/cron.ts
 src/gateway/server-methods/cron.validation.test.ts
 src/gateway/server-methods/doctor.test.ts
-src/gateway/server-methods/doctor.ts
 src/gateway/server-methods/models-auth-status.test.ts
 src/gateway/server-methods/models.test.ts
 src/gateway/server-methods/nodes.invoke-wake.test.ts
@@ -527,7 +524,6 @@ src/infra/update-managed-service-handoff.ts
 src/infra/update-startup.test.ts
 src/infra/update-startup.ts
 src/interactive/payload.ts
-src/llm/providers/stream-wrappers/openai.ts
 src/logging/diagnostic-stability-bundle.ts
 src/logging/diagnostic-stability.ts
 src/logging/diagnostic-support-export.ts
@@ -542,9 +538,7 @@ src/media/web-media.ts
 src/node-host/invoke-system-run-plan.test.ts
 src/node-host/invoke-system-run.test.ts
 src/node-host/invoke-system-run.ts
-src/node-host/invoke.ts
 src/plugin-sdk/core.ts
-src/plugin-sdk/provider-auth.test.ts
 src/plugin-sdk/test-helpers/plugin-runtime-mock.ts
 src/plugin-sdk/test-helpers/provider-discovery-contract.ts
 src/plugin-sdk/test-helpers/provider-runtime-contract.ts

@@ -31,6 +31,7 @@ import {
 } from "./command-formatters.js";
 import {
   CODEX_NATIVE_CONTROL_SUBCOMMANDS,
+  controlConversationTurn,
   handleComputerUseCommand,
   handleNativeGoal,
   isReadOnlyCodexGoalCommand,
@@ -40,8 +41,6 @@ import {
   setConversationModel,
   setConversationPermissions,
   startThreadAction,
-  steerConversationTurn,
-  stopConversationTurn,
 } from "./command-handler-actions.js";
 import {
   buildCodexComputerUseMenuReply,
@@ -273,13 +272,8 @@ export async function handleCodexSubcommand(
   if (normalized === "binding") {
     return { text: await describeConversationBinding(deps, ctx) };
   }
-  if (normalized === "stop") {
-    return { text: await stopConversationTurn(deps, ctx) };
-  }
-  if (normalized === "steer") {
-    return {
-      text: await steerConversationTurn(deps, ctx, rest.join(" ")),
-    };
+  if (normalized === "stop" || normalized === "steer") {
+    return { text: await controlConversationTurn(deps, ctx, normalized, rest.join(" ")) };
   }
   if (normalized === "model") {
     return { text: await setConversationModel(deps, ctx, rest) };

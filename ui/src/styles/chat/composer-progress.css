@@ -683,10 +683,25 @@
 }
 
 .session-progress-card--composer .session-progress-card__heading-actions {
+  min-width: 0;
+  overflow: hidden;
   color: var(--muted);
   font-size: 12px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.session-progress-card--composer .session-progress-card__heading-actions > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 400px) {
+  .session-progress-card--composer .session-progress-card__summary-title {
+    display: none;
+  }
 }
 
 .session-progress-card--composer .session-progress-card__step,

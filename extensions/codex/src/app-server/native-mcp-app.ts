@@ -9,9 +9,6 @@ import {
   createHarnessMcpFormResourceContext,
   captureMcpClientElicitation,
   normalizeMcpCodexToolAnnotations,
-  readMcpAppIcons,
-  readMcpAppSettingsCapability,
-  readMcpAppToolExtensions,
   requiresMcpCodexToolApproval,
   resolveProjectedMcpCodexToolApprovalMode,
 } from "openclaw/plugin-sdk/codex-mcp-projection";
@@ -21,10 +18,14 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
-import { parseCodexPluginMarketplaceId } from "../plugin-marketplace-discovery.js";
 import { protectCodexAppServerLiveThread } from "./client-runtime.js";
 import { getCodexAppServerClientInstanceId, type CodexAppServerClient } from "./client.js";
-import { readCodexMcpToolConnectorId, readCodexMcpToolUiVisibility } from "./mcp-tool-metadata.js";
+import {
+  projectCodexMcpServerMetadata,
+  projectCodexMcpToolMetadata,
+  readCodexMcpToolConnectorId,
+  readCodexMcpToolUiVisibility,
+} from "./mcp-tool-metadata.js";
 import { requestPluginApprovalOutcome } from "./plugin-approval-roundtrip.js";
 import type { ToolCallResult } from "./protocol-mcp.js";
 import type { CodexMcpServerStatus, CodexThreadItem, JsonObject, JsonValue } from "./protocol.js";
@@ -154,24 +155,7 @@ export function createNativeMcpRuntime(params: {
       version: 1,
       generatedAt: Date.now(),
       servers: Object.fromEntries(
-        loaded.map((status) => [
-          status.name,
-          {
-            serverName: status.name,
-            launchSummary: "Codex native MCP connection",
-            ...(status.pluginId
-              ? {
-                  pluginId:
-                    parseCodexPluginMarketplaceId(status.pluginId)?.pluginName ?? status.pluginId,
-                  marketplace: parseCodexPluginMarketplaceId(status.pluginId)?.marketplaceName,
-                }
-              : {}),
-            title: status.serverInfo?.title ?? undefined,
-            icons: readMcpAppIcons(status.serverInfo?.icons),
-            settings: readMcpAppSettingsCapability(status.serverCapabilities),
-            toolCount: Object.keys(status.tools).length,
-          },
-        ]),
+        loaded.map((status) => [status.name, projectCodexMcpServerMetadata(status)]),
       ),
       tools: loaded.flatMap((status) =>
         statusTools(status).map((tool) => {
@@ -181,17 +165,9 @@ export function createNativeMcpRuntime(params: {
               serverName: status.name,
               safeServerName: status.name,
               toolName: String(tool.name),
-              title:
-                normalizeOptionalString(tool.title) ??
-                normalizeOptionalString(asOptionalRecord(tool.annotations)?.title),
-              appExtensions: readMcpAppToolExtensions(tool),
-              codexAnnotations: normalizeMcpCodexToolAnnotations(tool.annotations),
-              uiResourceUri: normalizeOptionalString(
-                asOptionalRecord(asOptionalRecord(tool._meta)?.ui)?.resourceUri,
-              ),
               inputSchema: (asOptionalRecord(tool.inputSchema) ?? { type: "object" }) as never,
-              fallbackDescription: normalizeOptionalString(tool.description) ?? String(tool.name),
             },
+            projectCodexMcpToolMetadata(String(tool.name), tool),
             uiVisibility ? { uiVisibility } : {},
           );
         }),

@@ -1,14 +1,24 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { createRequire, registerHooks } from "node:module";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveConfiguredModulesDir } from "./tsx-cli-shim.mjs";
 
+function isWithin(root, target) {
+  const rel = relative(root, target);
+  return (
+    rel !== "" &&
+    rel !== ".." &&
+    !rel.startsWith("../") &&
+    !rel.startsWith("..\\") &&
+    !isAbsolute(rel)
+  );
+}
+
 function contained(root, target) {
   const physical = realpathSync(target);
-  const rel = relative(root, physical);
-  if (!rel || rel === ".." || rel.startsWith("../") || rel.startsWith("..\\") || isAbsolute(rel)) {
+  if (!isWithin(root, physical)) {
     throw new Error("Tooling package escapes its installed dependency owner.");
   }
   return physical;
@@ -147,7 +157,7 @@ if (root) {
     resolve(specifier, context, nextResolve) {
       let resolved;
       try {
-        return nextResolve(specifier, context);
+        resolved = nextResolve(specifier, context);
       } catch (error) {
         if (
           error?.code !== "ERR_MODULE_NOT_FOUND" ||
@@ -156,8 +166,40 @@ if (root) {
         ) {
           throw error;
         }
-        resolved = nextResolve(specifier, { ...context, parentURL });
       }
+      if (resolved) {
+        const importer = context.parentURL?.startsWith("file:")
+          ? fileURLToPath(context.parentURL)
+          : undefined;
+        const target = resolved.url.startsWith("file:") ? fileURLToPath(resolved.url) : undefined;
+        if (
+          !importer ||
+          !target ||
+          isAbsolute(specifier) ||
+          /^(?:\.{1,2}(?:\/|$)|[a-z][a-z\d+.-]*:|#)/i.test(specifier) ||
+          !isWithin(checkout, importer) ||
+          relative(checkout, importer).split(sep).includes("node_modules") ||
+          isWithin(checkout, target) ||
+          !target.split(sep).includes("node_modules")
+        ) {
+          return resolved;
+        }
+        const name = specifier
+          .split("/")
+          .slice(0, specifier.startsWith("@") ? 2 : 1)
+          .join("/");
+        const manifest = JSON.parse(readFileSync(join(checkout, "package.json"), "utf8"));
+        if (
+          !manifest.dependencies?.[name] &&
+          !manifest.devDependencies?.[name] &&
+          !manifest.optionalDependencies?.[name]
+        ) {
+          return resolved;
+        }
+        // Candidate source must not inherit an ancestor install before donor qualification.
+        // Dependency-owned imports retain their own private versions above.
+      }
+      resolved = nextResolve(specifier, { ...context, parentURL });
       const directory = qualifiedPackage(checkout, root, specifier, consumer);
       contained(directory, fileURLToPath(resolved.url));
       return resolved;

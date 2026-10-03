@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { StringDecoder } from "node:string_decoder";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { formatSessionArchiveTimestamp } from "../config/sessions/artifacts.js";
@@ -39,39 +40,16 @@ type HeartbeatMainSessionRepairDeclined = {
   reason?: undefined;
 };
 
-function parseTranscriptMessageLine(line: string): { role: string; content?: unknown } | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(line);
-  } catch {
-    return null;
-  }
-  const record = asNullableObjectRecord(parsed);
-  if (!record) {
-    return null;
-  }
-  const nested = asNullableObjectRecord(record.message);
-  const message = nested ?? record;
-  const role = message.role;
-  if (typeof role !== "string") {
-    return null;
-  }
-  return { role, content: message.content };
-}
-
 function accumulateTranscriptHeartbeatMessage(
   summary: TranscriptHeartbeatSummary,
   line: string,
 ): void {
-  const trimmed = line.trim();
-  if (!trimmed) {
-    return;
-  }
-  const message = parseTranscriptMessageLine(trimmed);
+  const record = asNullableObjectRecord(safeParseJson(line.trim()));
+  const message = asNullableObjectRecord(record?.message) ?? record;
   if (message?.role !== "user") {
     return;
   }
-  if (isHeartbeatUserMessage(message)) {
+  if (isHeartbeatUserMessage({ role: message.role, content: message.content })) {
     summary.heartbeatUserMessages += 1;
   } else {
     summary.nonHeartbeatUserMessages += 1;

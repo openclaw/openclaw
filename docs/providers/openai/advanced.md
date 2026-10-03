@@ -153,6 +153,15 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     calls without fast mode. The cutoff defaults to 60 seconds; set
     `params.fastAutoOnSeconds` on the active model to change it.
 
+    For the embedded OpenClaw runtime, available API-key OpenAI Responses
+    routes that support Fast mode offer Standard, Fast, and Ultrafast in the
+    Control UI without requiring a catalog to advertise the tier. If a response
+    to an Ultrafast request echoes a different `service_tier`, OpenClaw records
+    the downgrade for that profile and model and removes Ultrafast from later
+    model-list results until account discovery refreshes, credentials change, or
+    the prepared runtime retires. ChatGPT-account
+    availability remains based on authenticated account catalog discovery.
+
     ```json5
     {
       agents: {
@@ -215,9 +224,9 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     <Warning>
     `params.serviceTier` is an authored embedded-provider setting, not native
     Codex app-server configuration. It is forwarded only by the embedded
-    runtime to native OpenAI endpoints (`api.openai.com`) and native ChatGPT
-    endpoints (`chatgpt.com/backend-api`). If you route either provider through
-    a proxy, OpenClaw leaves `service_tier` untouched. Configure the native
+    runtime on OpenAI Responses routes, including compatible base URLs, and native
+    ChatGPT endpoints (`chatgpt.com/backend-api`). Compatible endpoints must honor
+    the requested tier; a saved preference does not guarantee fulfillment. Configure the native
     harness separately with `plugins.entries.codex.config.appServer.serviceTier`;
     the shared Fast-mode run control can supersede that value.
     </Warning>

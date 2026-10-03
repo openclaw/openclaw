@@ -321,6 +321,7 @@ export function renderSessionProgressCard(
   collapseComposerByDefault = false,
   composerDisclosureContext?: ComposerProgressDisclosureContext,
   refreshAction?: SessionProgressCardRefreshAction,
+  onClearSaved?: (card: ProgressCard) => void,
 ) {
   if (!card) {
     return nothing;
@@ -378,6 +379,21 @@ export function renderSessionProgressCard(
         }}
       >
         ${icons.x}
+      </button>`
+    : nothing;
+  const clearSaved = onClearSaved
+    ? html`<button
+        class="rail-header__action session-progress-card__clear-saved"
+        type="button"
+        aria-label=${t("sessionProgressCard.clearSaved")}
+        title=${t("sessionProgressCard.clearSaved")}
+        @click=${(event: MouseEvent) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onClearSaved(card);
+        }}
+      >
+        ${icons.trash}
       </button>`
     : nothing;
   if (placement === "composer") {
@@ -456,7 +472,7 @@ export function renderSessionProgressCard(
           >
         </span>
         <span class="session-progress-card__summary-controls">
-          ${renderRefresh(card, refreshAction)} ${dismiss}
+          ${renderRefresh(card, refreshAction)} ${clearSaved} ${dismiss}
           <span
             class="session-progress-card__summary-chevron session-progress-card__chevron"
             aria-hidden="true"

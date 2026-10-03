@@ -312,11 +312,15 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         assertActive: connection.assertCurrent,
       },
     });
-  const resolveShiftedPromptInputRange = (
+  const resolveShiftedPromptRanges = (
     prompt: string,
     promptInputRange: { start: number; end: number } | undefined,
     turnPromptText: string,
-  ): CodexProjectedContextRange | undefined => {
+  ): {
+    inputRange?: CodexProjectedContextRange;
+    contextRange?: CodexProjectedContextRange;
+    requestRange?: CodexProjectedContextRange;
+  } => {
     if (
       !promptInputRange ||
       promptInputRange.start < 0 ||
@@ -324,51 +328,35 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       promptInputRange.end > prompt.length ||
       !turnPromptText.endsWith(prompt)
     ) {
-      return undefined;
+      return {};
     }
     const turnPromptOffset = turnPromptText.length - prompt.length;
-    return {
+    const inputRange = {
       start: turnPromptOffset + promptInputRange.start,
       end: turnPromptOffset + promptInputRange.end,
     };
-  };
-  const resolveShiftedPromptContextRange = (
-    prompt: string,
-    promptInputRange: { start: number; end: number } | undefined,
-    turnPromptText: string,
-  ) => {
-    const promptTextInputOffset = promptInputRange
-      ? promptInputRange.end - promptState.promptText.length
-      : undefined;
+    const promptTextInputOffset = promptInputRange.end - promptState.promptText.length;
     if (
       !promptState.promptContextRange ||
-      !promptInputRange ||
-      promptTextInputOffset === undefined ||
-      promptInputRange.start < 0 ||
-      promptInputRange.end < promptInputRange.start ||
-      promptInputRange.end > prompt.length ||
       promptTextInputOffset < promptInputRange.start ||
-      prompt.slice(promptTextInputOffset, promptInputRange.end) !== promptState.promptText ||
-      !turnPromptText.endsWith(prompt)
+      prompt.slice(promptTextInputOffset, promptInputRange.end) !== promptState.promptText
     ) {
-      return undefined;
+      return { inputRange };
     }
     const promptTextOffset = prompt.endsWith(promptState.promptText)
       ? prompt.length - promptState.promptText.length
       : promptTextInputOffset;
-    if (promptTextOffset < 0) {
-      return undefined;
-    }
-    const turnPromptOffset = turnPromptText.length - prompt.length + promptTextOffset;
+    const contextOffset = turnPromptOffset + promptTextOffset;
     const contextRange = {
-      start: turnPromptOffset + promptState.promptContextRange.start,
-      end: turnPromptOffset + promptState.promptContextRange.end,
+      start: contextOffset + promptState.promptContextRange.start,
+      end: contextOffset + promptState.promptContextRange.end,
     };
     return {
+      inputRange,
       contextRange,
       requestRange: {
         start: contextRange.end,
-        end: turnPromptOffset + promptState.promptText.length,
+        end: contextOffset + promptState.promptText.length,
       },
     };
   };
@@ -388,31 +376,29 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           params.bootstrapContextRunKind === "cron",
       },
     );
-    const projectedRanges = resolveShiftedPromptContextRange(
+    const projectedRanges = resolveShiftedPromptRanges(
       promptBuildResult.prompt,
       promptBuildResult.promptInputRange,
       turnPromptText,
     );
     const preservedRange =
-      resolveShiftedPromptInputRange(
-        promptBuildResult.prompt,
-        promptBuildResult.promptInputRange,
-        turnPromptText,
-      ) ??
+      projectedRanges.inputRange ??
       resolveCodexDeliveryHintPreservedInputRange({
         prompt: promptBuildResult.prompt,
         promptInputRange: promptBuildResult.promptInputRange,
         decoratedPrompt: turnPromptText,
       });
     const imageOffset =
-      projectedRanges && promptState.promptContextRange
+      projectedRanges.contextRange && promptState.promptContextRange
         ? projectedRanges.contextRange.start - promptState.promptContextRange.start
         : undefined;
     const inputLimit =
       CODEX_TURN_START_TEXT_INPUT_MAX_CHARS - (nativeHistoryProvenancePrefix?.length ?? 0);
     const requiredInputChars =
       turnPromptText.length -
-      (projectedRanges ? projectedRanges.contextRange.end - projectedRanges.contextRange.start : 0);
+      (projectedRanges.contextRange
+        ? projectedRanges.contextRange.end - projectedRanges.contextRange.start
+        : 0);
     // Optional paths may consume projected history, never current inbound or hook context.
     const attachmentNote =
       inputAttachmentNote && requiredInputChars + inputAttachmentNote.length + 2 <= inputLimit

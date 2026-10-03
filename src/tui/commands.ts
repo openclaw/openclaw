@@ -244,11 +244,6 @@ export function parseCommand(input: string): ParsedCommand {
   };
 }
 
-/** Whether a slash input belongs to the shared Gateway command registry. */
-export function isSharedTextCommand(input: string): boolean {
-  return resolveTextCommand(input) !== null;
-}
-
 export function getSlashCommands(options: SlashCommandOptions = {}): SlashCommand[] {
   const thinkLevels = resolveThinkingLevelLabels(options);
   const commands: SlashCommand[] = [];

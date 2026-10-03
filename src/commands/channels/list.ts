@@ -4,7 +4,7 @@ import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.j
 import { isChannelVisibleInConfiguredLists } from "../../channels/plugins/exposure.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { resolveChannelAccountSnapshot } from "../../channels/plugins/status.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import {
   normalizeRuntimeChannelAccountSnapshots,

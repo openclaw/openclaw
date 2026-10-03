@@ -7,7 +7,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import type {
-  SessionTranscriptContextVersion,
+  SessionTranscriptBoundedActiveContext,
   SessionTranscriptReadScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
@@ -36,21 +36,6 @@ import {
   transcriptEventNavigationSql,
   transcriptEventResetNavigationSql,
 } from "./transcript-payload.js";
-
-export type SessionTranscriptBoundedActiveContext = {
-  activeLeafEntryId: string | null;
-  version: SessionTranscriptContextVersion;
-  opaqueParents: Map<string, string | null>;
-  parents: Map<string, string | null>;
-  firstKeptRanges: Map<string, { startIndex: number; endIndex: number }>;
-  persistedSuffixStartSeq: number;
-  boundaryCount: number;
-  events: TranscriptEvent[];
-  serializedBytes: number;
-  totalEvents: number;
-  transcriptMutationAt: number | null;
-  truncated: boolean;
-};
 
 function readBoundedRetentionRanges(
   projection: CurrentTranscriptProjection,

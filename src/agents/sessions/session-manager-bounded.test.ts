@@ -233,42 +233,61 @@ it("accepts a prepared assistant whose parent is the admitted user", async () =>
   expect(reads.counts.identity).toBeLessThanOrEqual(2);
 });
 
-it("keeps a fenced assistant after rebasing over a concurrent assistant", async () => {
-  const { dir, scope } = await createSessionScope("fenced-assistant-rebase");
-  const seed = SessionManager.open(scope, dir);
-  const admission = seed.appendMessageWithTranscriptAnchor({
-    role: "user",
-    content: "current",
-    timestamp: 1,
-  });
-  if (!admission.anchor) {
-    throw new Error("missing admission anchor");
-  }
+it.each(["sync", "async"] as const)(
+  "rebases a fenced %s append without reading the obsolete payloads",
+  async (mode) => {
+    const { dir, scope } = await createSessionScope("fenced-assistant-rebase");
+    const seed = SessionManager.open(scope, dir);
+    const earlierUserId = seed.appendMessage(makeUserMessage("earlier retained payload", 0));
+    const admission = seed.appendMessageWithTranscriptAnchor({
+      role: "user",
+      content: "current",
+      timestamp: 1,
+    });
+    if (!admission.anchor) {
+      throw new Error("missing admission anchor");
+    }
 
-  runWithSessionTranscriptReadFence(
-    { ...admission.anchor, logicalTurnId: "current", role: "user" },
-    () => {
-      const fenced = SessionManager.open(scope, dir);
-      expect(
-        appendTranscriptMessageSync(scope, {
-          eventId: "concurrent-assistant",
-          message: buildAssistantMessage("concurrent"),
-          now: 2,
-        }).ok,
-      ).toBe(true);
-      const replyId = fenced.appendMessage(buildAssistantMessage("reply"));
-      expect(fenced.getBranch().map((entry) => entry.id)).toEqual([
-        admission.entryId,
-        "concurrent-assistant",
-        replyId,
-      ]);
-      expect(fenced.buildSessionContext().messages.at(-1)).toMatchObject({
-        role: "assistant",
-        content: [{ text: "reply" }],
-      });
-    },
-  );
-});
+    await runWithSessionTranscriptReadFence(
+      { ...admission.anchor, logicalTurnId: "current", role: "user" },
+      async () => {
+        const fenced = SessionManager.open(scope, dir);
+        expect(
+          appendTranscriptMessageSync(scope, {
+            eventId: "concurrent-assistant",
+            message: buildAssistantMessage("concurrent"),
+            now: 2,
+          }).ok,
+        ).toBe(true);
+        const retained = fenced.getEntry(earlierUserId);
+        if (retained?.type !== "message" || retained.message.role !== "user") {
+          throw new Error("missing retained user");
+        }
+        const content = retained.message.content;
+        const readObsoletePayload = vi.fn(() => content);
+        Object.defineProperty(retained.message, "content", {
+          enumerable: true,
+          get: readObsoletePayload,
+        });
+        const reply = buildAssistantMessage("reply");
+        const replyId =
+          mode === "sync" ? fenced.appendMessage(reply) : await fenced.appendMessageAsync(reply);
+        // Reload already carries canonical rows; walking the old payloads copies discarded history.
+        expect(readObsoletePayload).not.toHaveBeenCalled();
+        expect(fenced.getBranch().map((entry) => entry.id)).toEqual([
+          earlierUserId,
+          admission.entryId,
+          "concurrent-assistant",
+          replyId,
+        ]);
+        expect(fenced.buildSessionContext().messages.at(-1)).toMatchObject({
+          role: "assistant",
+          content: [{ text: "reply" }],
+        });
+      },
+    );
+  },
+);
 
 it("adopts a fenced assistant when another append commits before its reload", async () => {
   const { dir, scope } = await createSessionScope("post-commit-append");

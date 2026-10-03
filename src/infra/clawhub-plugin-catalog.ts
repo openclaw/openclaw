@@ -3,11 +3,15 @@ import type {
   ClawHubDownloadability,
   ClawHubSelectedRelease,
 } from "../../packages/gateway-protocol/src/schema/clawhub-listing.js";
-import type { PluginInstallTrust } from "../../packages/gateway-protocol/src/schema/plugins.js";
+import type {
+  PluginDiscoveryDetail,
+  PluginInstallTrust,
+} from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { validatePluginCategories } from "../../packages/plugin-package-contract/src/index.js";
 import {
   fetchClawHubJson,
   isClawHubTelemetryDisabled,
+  isDefaultClawHubBaseUrl,
   readClawHubStringArrayField,
   readClawHubStringField,
   readRequiredClawHubBooleanField as readRequiredBoolean,
@@ -19,6 +23,7 @@ import {
 } from "./clawhub-client.js";
 import {
   parseClawHubPluginCapabilities,
+  parseClawHubPluginMcpServer,
   parseClawHubPluginCompatibility,
   type ClawHubPluginCompatibility,
   type ClawHubPluginCapabilities,
@@ -60,6 +65,7 @@ export type ClawHubPluginDetail = ClawHubPluginCatalogEntry &
     compatibility?: ClawHubPluginCompatibility;
     configFields: ClawHubPluginConfigField[];
     mcpServers: string[];
+    mcpServerDetails?: PluginDiscoveryDetail["mcpServerDetails"];
     skills: Array<{ name: string; description?: string }>;
     versions: ClawHubPluginVersion[];
     registry: string;
@@ -338,7 +344,12 @@ function parseManifest(
   value: Record<string, unknown> | undefined,
 ): Pick<
   ClawHubPluginDetail,
-  "compatibility" | "configFields" | "mcpServers" | "skills" | keyof ClawHubPluginCapabilities
+  | "compatibility"
+  | "configFields"
+  | "mcpServers"
+  | "mcpServerDetails"
+  | "skills"
+  | keyof ClawHubPluginCapabilities
 > {
   if (!value) {
     return { configFields: [], mcpServers: [], skills: [] };
@@ -351,6 +362,7 @@ function parseManifest(
     readOptionalRecord(value, "compatibility", "plugin manifest summary"),
     "plugin manifest compatibility",
   );
+  const mcpServerDetails = mcpServers.map(parseClawHubPluginMcpServer);
   return {
     ...(compatibility ? { compatibility } : {}),
     ...parseClawHubPluginCapabilities(value),
@@ -373,12 +385,8 @@ function parseManifest(
       }
       return field;
     }),
-    mcpServers: mcpServers.map((entry, index) => {
-      if (!isRecord(entry)) {
-        throw new Error(`Malformed ClawHub plugin MCP server ${index}: expected an object.`);
-      }
-      return readRequiredClawHubStringField(entry, "name", `plugin MCP server ${index}`);
-    }),
+    mcpServers: mcpServerDetails.map(({ name }) => name),
+    ...(mcpServerDetails.length ? { mcpServerDetails } : {}),
     skills: bundledSkills.map((entry, index) => {
       if (!isRecord(entry)) {
         throw new Error(`Malformed ClawHub bundled skill ${index}: expected an object.`);
@@ -498,6 +506,8 @@ export async function fetchClawHubPluginOverview(
 ): Promise<{ items: ClawHubPluginCatalogEntry[]; categories: ClawHubPluginCategory[] }> {
   const value = await fetchClawHubJson<unknown>({
     ...options,
+    // This viewer-independent snapshot uses the public CDN; ambient auth bypasses its cache.
+    skipAuth: options.skipAuth ?? (!options.token && isDefaultClawHubBaseUrl(options.baseUrl)),
     path: "/api/v1/plugins/overview",
   });
   if (!isRecord(value) || !Array.isArray(value.items)) {
@@ -516,6 +526,7 @@ export async function fetchClawHubPluginCategories(
 ): Promise<ClawHubPluginCategory[]> {
   const value = await fetchClawHubJson<unknown>({
     ...options,
+    skipAuth: options.skipAuth ?? (!options.token && isDefaultClawHubBaseUrl(options.baseUrl)),
     path: "/api/v1/plugins/categories",
   });
   return parsePluginCategories(value);

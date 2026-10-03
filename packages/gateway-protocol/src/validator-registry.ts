@@ -285,6 +285,7 @@ export const validateSessionsDescribeParams = compile(S.SessionsDescribeParamsSc
 export const validateSessionsResolveParams = compile(S.SessionsResolveParamsSchema);
 export const validateSessionsFilesListParams = compile(S.SessionsFilesListParamsSchema);
 export const validateSessionsFilesGetParams = compile(S.SessionsFilesGetParamsSchema);
+export const validateSessionsFilesAssetsParams = compile(S.SessionsFilesAssetsParamsSchema);
 export const validateSessionsFilesSetParams = compile(S.SessionsFilesSetParamsSchema);
 export const validateSessionsFilesRevealParams = compile(S.SessionsFilesRevealParamsSchema);
 export const validateSessionsDiffParams = compile(S.SessionsDiffParamsSchema);

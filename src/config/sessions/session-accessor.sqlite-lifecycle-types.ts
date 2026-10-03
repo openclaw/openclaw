@@ -28,7 +28,8 @@ import type {
   SqliteSessionArtifactPreparationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
-import type { SessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite-maintenance-age.js";
+import type { SqliteSessionEntryRevision } from "./session-accessor.sqlite-entry-revision.js";
+import type { SessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
 import type {
   SessionEntryCommitContext,
   SessionEntryCreateWithTranscriptOptions,
@@ -183,7 +184,6 @@ export type SqliteSessionDeletionScope =
   | { kind: "entry"; phase: "plan" | "commit" }
   | { kind: "historical-generation"; phase: "plan" | "commit"; sessionId: string };
 export type SessionEntryMaintenanceInput = {
-  ageFact?: SessionEntryMaintenanceAgeFact;
   activeSessionKey?: string;
   activeSessionKeys?: readonly string[];
   archiveDirectory: string;
@@ -191,6 +191,12 @@ export type SessionEntryMaintenanceInput = {
   maintenance: ResolvedSessionMaintenanceConfig;
   preservation: SessionMaintenancePreservationSnapshot | null;
   storePath: string;
+};
+
+type SessionMaintenanceAgeSnapshot = {
+  incarnation: string;
+  revision: SqliteSessionEntryRevision;
+  capture: number;
 };
 
 export type SessionMaintenanceLiveProtection = Pick<
@@ -207,16 +213,28 @@ type SessionReclamationPlanBase = {
 
 export type SessionMaintenanceMetadataCommand =
   | { kind: "maintenance-statistics" }
-  | { kind: "maintenance-plan"; input: SessionEntryMaintenanceInput };
+  | {
+      kind: "maintenance-age";
+      ageChanges?: readonly SessionEntryMaintenanceAgeChange[];
+      maintenance: ResolvedSessionMaintenanceConfig;
+      expected?: SessionMaintenanceAgeSnapshot;
+    }
+  | {
+      kind: "maintenance-plan";
+      ageOwner?: string;
+      ageChanges?: readonly SessionEntryMaintenanceAgeChange[];
+      input: SessionEntryMaintenanceInput;
+    };
 
 export type SessionMaintenanceMetadataResult =
   | { kind: "maintenance-statistics"; value: true }
+  | { kind: "maintenance-age"; nextAt: number | undefined }
   | { kind: "maintenance-preservation-required" }
   | { kind: "maintenance-plan-stale" }
   | {
       kind: "maintenance-plan";
       value: SessionEntryMaintenancePlan;
-      ageFact?: SessionEntryMaintenanceAgeFact;
+      ageSnapshot: SessionMaintenanceAgeSnapshot;
     };
 
 export type SqliteSessionReclamationPlan =
