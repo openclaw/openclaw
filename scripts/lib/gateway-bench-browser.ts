@@ -266,26 +266,14 @@ export async function startGatewayBrowserProbe(params: {
           activeLoadAtFinish: isActive(),
           ...timing,
           // Freeze each window; later replies belong to the next click's inherited records.
-          requests: observedRequests.map((request) => ({
-            socketId: request.socketId,
-            method: request.method,
-            sessionKey: request.sessionKey,
-            latencyMs: request.latencyMs,
-            responseBytes: request.responseBytes,
-            ok: request.ok,
-            error: request.error,
-            inherited: request.startedAt < sampleStartedAt,
-            windowStartMs: request.startedAt - sampleStartedAt,
+          requests: observedRequests.map(({ startedAt, ...request }) => ({
+            ...request,
+            inherited: startedAt < sampleStartedAt,
+            windowStartMs: startedAt - sampleStartedAt,
           })),
-          connections: connections.map((connection) => ({
-            socketId: connection.socketId,
-            event: connection.event,
-            reason: connection.reason,
-            tickIntervalMs: connection.tickIntervalMs,
-            inboundSilenceMs: connection.inboundSilenceMs,
-            expectedSeq: connection.expectedSeq,
-            receivedSeq: connection.receivedSeq,
-            windowStartMs: connection.observedAt - sampleStartedAt,
+          connections: connections.map(({ observedAt, ...connection }) => ({
+            ...connection,
+            windowStartMs: observedAt - sampleStartedAt,
           })),
         };
       },
