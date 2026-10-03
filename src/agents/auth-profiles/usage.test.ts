@@ -20,11 +20,13 @@ import {
 import { createFailedOAuthRefreshFence, createOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import * as oauth from "./oauth.js";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
-import type { AuthProfileUsageReceipt } from "./usage-kernel.js";
 import {
-  reduceAuthProfileFailure,
-  type PersonalAuthProfileUsageReduction,
-} from "./usage-reduction.js";
+  mockLockedUpdateForStore,
+  mockLockedUpdatesForStore,
+  resetAuthProfileUsageMocks,
+  storeMocks,
+  usageMocks,
+} from "./usage-fixture.test-support.js";
 import {
   clearExpiredCooldowns,
   isProfileInCooldown,
@@ -36,26 +38,6 @@ import {
 } from "./usage.js";
 import { testing as authProfileUsageTesting } from "./usage.test-support.js";
 
-const storeMocks = vi.hoisted(() => ({
-  resolvePersistedAuthProfileOwnerAgentDir: vi.fn(
-    (params: { agentDir?: string }) => params.agentDir,
-  ),
-  saveAuthProfileStore: vi.fn(),
-  loadAuthProfileStoreWithoutExternalProfiles: vi.fn(),
-  updateAuthProfileStoreWithLock: vi.fn().mockResolvedValue(null),
-}));
-const usageMocks = vi.hoisted(() => ({
-  withAuthProfileUsage: vi.fn<typeof import("./usage-write.js").withAuthProfileUsage>(),
-  readFresh: vi.fn<() => AuthProfileStore | undefined>(),
-  record:
-    vi.fn<
-      (
-        store: AuthProfileStore,
-        profileId: string,
-        reduction: PersonalAuthProfileUsageReduction,
-      ) => Promise<AuthProfileUsageReceipt | null>
-    >(),
-}));
 const fetchMock = vi.hoisted(() => vi.fn());
 const resolveApiKeyForProfileMock = vi.hoisted(() =>
   vi.fn<typeof import("./oauth.js").resolveApiKeyForProfile>(),
@@ -65,15 +47,22 @@ let resolveApiKeyForProfileSpy: MockInstance<typeof oauth.resolveApiKeyForProfil
 
 vi.mock("./store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./store.js")>()),
-  resolvePersistedAuthProfileOwnerAgentDir: storeMocks.resolvePersistedAuthProfileOwnerAgentDir,
+  resolvePersistedAuthProfileOwnerAgentDir: (await import("./usage-fixture.test-support.js"))
+    .storeMocks.resolvePersistedAuthProfileOwnerAgentDir,
 }));
-vi.mock("./usage-write.js", () => ({ withAuthProfileUsage: usageMocks.withAuthProfileUsage }));
-vi.mock("./store-runtime.js", () => ({
-  loadAuthProfileStoreWithoutExternalProfiles:
-    storeMocks.loadAuthProfileStoreWithoutExternalProfiles,
-  updateAuthProfileStoreWithLock: storeMocks.updateAuthProfileStoreWithLock,
-  saveAuthProfileStore: storeMocks.saveAuthProfileStore,
+vi.mock("./usage-write.js", async () => ({
+  withAuthProfileUsage: (await import("./usage-fixture.test-support.js")).usageMocks
+    .withAuthProfileUsage,
 }));
+vi.mock("./store-runtime.js", async () => {
+  const { storeMocks } = await import("./usage-fixture.test-support.js");
+  return {
+    loadAuthProfileStoreWithoutExternalProfiles:
+      storeMocks.loadAuthProfileStoreWithoutExternalProfiles,
+    updateAuthProfileStoreWithLock: storeMocks.updateAuthProfileStoreWithLock,
+    saveAuthProfileStore: storeMocks.saveAuthProfileStore,
+  };
+});
 
 beforeEach(() => {
   storeMocks.resolvePersistedAuthProfileOwnerAgentDir.mockReset();
@@ -83,41 +72,7 @@ beforeEach(() => {
   storeMocks.saveAuthProfileStore.mockReset();
   storeMocks.loadAuthProfileStoreWithoutExternalProfiles.mockReset();
   storeMocks.updateAuthProfileStoreWithLock.mockReset();
-  usageMocks.readFresh.mockReset();
-  usageMocks.withAuthProfileUsage
-    .mockReset()
-    .mockImplementation(async (store, profileId, _agentDir, consume) =>
-      consume({
-        observed: structuredClone(usageMocks.readFresh() ?? store),
-        inherited: false,
-        record: (reduction) => usageMocks.record(store, profileId, reduction),
-      }),
-    );
-  usageMocks.record.mockReset().mockImplementation(async (store, profileId, reduction) => {
-    if (reduction.kind !== "failure") {
-      throw new Error("Failure planning fixture received a success reduction");
-    }
-    const fresh = structuredClone(usageMocks.readFresh() ?? store);
-    const previous = fresh.usageStats?.[profileId];
-    const now = Date.now();
-    // Only transport is replaced: provider observations feed the same worker reducer.
-    const next = reduceAuthProfileFailure(fresh.profiles[profileId], previous, reduction, now);
-    if (next) {
-      fresh.usageStats = { ...fresh.usageStats, [profileId]: next };
-      store.usageStats = { ...store.usageStats, [profileId]: next };
-    }
-    return {
-      store: fresh,
-      result: next ? { previous, next, now } : undefined,
-      publication: {
-        credentialsChanged: false,
-        profileSetChanged: false,
-        stateChanged: Boolean(next),
-        selectionChanged: Boolean(next),
-        profileIds: [],
-      },
-    };
-  });
+  resetAuthProfileUsageMocks();
   fetchMock.mockReset();
   resolveApiKeyForProfileMock.mockReset();
   // Vitest can bypass manual factories during concurrent lazy imports. Keep both
@@ -140,30 +95,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
-
-function mockLockedUpdateForStore(store: AuthProfileStore): void {
-  usageMocks.readFresh.mockReturnValue(store);
-  storeMocks.loadAuthProfileStoreWithoutExternalProfiles.mockImplementation(() => store);
-  storeMocks.updateAuthProfileStoreWithLock.mockImplementationOnce(
-    async (lockParams: { updater: (store: AuthProfileStore) => boolean }) => {
-      const freshStore = structuredClone(store);
-      lockParams.updater(freshStore);
-      return freshStore;
-    },
-  );
-}
-
-function mockLockedUpdatesForStore(store: AuthProfileStore): void {
-  usageMocks.readFresh.mockReturnValue(store);
-  storeMocks.loadAuthProfileStoreWithoutExternalProfiles.mockImplementation(() => store);
-  storeMocks.updateAuthProfileStoreWithLock.mockImplementation(
-    async (lockParams: { updater: (store: AuthProfileStore) => boolean }) => {
-      const freshStore = structuredClone(store);
-      lockParams.updater(freshStore);
-      return freshStore;
-    },
-  );
-}
 
 describe("markAuthProfileFailure — active windows do not extend on retry", () => {
   // Regression for https://github.com/openclaw/openclaw/issues/23516

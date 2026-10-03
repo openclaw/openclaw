@@ -47,12 +47,12 @@ import {
 } from "./sqlite-read.js";
 import { resolveAuthProfileDatabaseOwnerId, resolveAuthProfileDatabasePath } from "./sqlite.js";
 import { getScopedAuthProfileEnv, resolveRuntimeAuthProfileAgentDir } from "./store.js";
-import type { AuthProfileRowRead, AuthProfileStore } from "./types.js";
 import type {
   AuthProfileUsageInput,
   AuthProfileUsageReceipt,
   AuthProfileUsageResult,
-} from "./usage-kernel.js";
+} from "./store.worker-contract.js";
+import type { AuthProfileRowRead, AuthProfileStore } from "./types.js";
 import { reserveAuthProfileUsagePreparation } from "./usage-lifecycle.js";
 import type { PersonalAuthProfileUsageReduction } from "./usage-reduction.js";
 

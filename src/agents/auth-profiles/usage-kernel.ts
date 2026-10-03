@@ -1,46 +1,15 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { mergeAuthProfileStores, mergePersistedAuthProfileState } from "./persisted.js";
 import { pruneAuthProfileStoreReferences } from "./runtime-snapshot-owner.js";
 import { readAuthProfileJsonCellText, writeAuthProfileJsonCell } from "./sqlite-json.js";
 import { prepareAuthProfileStateMutation } from "./store-mutation.js";
 import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
-import type { AuthProfileStore } from "./types.js";
-import {
-  reduceAuthProfileFailure,
-  type PersonalAuthProfileUsageReduction,
-  type PersonalAuthProfileUsageResult,
-} from "./usage-reduction.js";
+import type { AuthProfileUsageInput, AuthProfileUsageReceipt } from "./store.worker-contract.js";
+import { reduceAuthProfileFailure } from "./usage-reduction.js";
 import { resetAuthProfileFailureState } from "./usage-state.js";
-
-export type AuthProfileUsageInput = {
-  profileId: string;
-  reduction: PersonalAuthProfileUsageReduction;
-  inherited: boolean;
-  providerKey?: string;
-  providerAliases?: Record<string, string>;
-  expectedCredentials: unknown;
-  scopedSharedStore?: AuthProfileStore;
-};
-
-export type AuthProfileUsageReceipt = {
-  store: AuthProfileStore;
-  result: PersonalAuthProfileUsageResult | undefined;
-  publication: {
-    credentialsChanged: boolean;
-    profileSetChanged: boolean;
-    stateChanged: boolean;
-    selectionChanged: boolean;
-    profileIds: string[];
-  };
-};
-
-export type AuthProfileUsageResult =
-  | { ok: true; receipt: AuthProfileUsageReceipt }
-  | { ok: false; error: OpenClawStateWorkerErrorPayload };
 
 /** Reduce the authoritative health row without rewriting credential bytes. */
 export function recordAuthProfileUsageInDatabase(

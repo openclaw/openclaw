@@ -13,12 +13,9 @@ import {
 import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
 import { readAuthProfileRows, SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
 import { isMissingDatabasePath } from "./sqlite-read-pool.js";
+import type { AuthProfileUsageInput, AuthProfileUsageResult } from "./store.worker-contract.js";
 import type { AuthProfileRowRead } from "./types.js";
-import {
-  recordAuthProfileUsageInDatabase,
-  type AuthProfileUsageInput,
-  type AuthProfileUsageResult,
-} from "./usage-kernel.js";
+import { recordAuthProfileUsageInDatabase } from "./usage-kernel.js";
 import type {
   PersonalAuthProfileUsageReduction,
   PersonalAuthProfileUsageResult,

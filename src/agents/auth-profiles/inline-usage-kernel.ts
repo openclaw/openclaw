@@ -6,9 +6,9 @@ import { mergePersistedAuthProfileState } from "./persisted.js";
 import { inspectAuthProfileJsonCell, writeAuthProfileJsonCell } from "./sqlite-json.js";
 import { prepareAuthProfileStateMutation } from "./store-mutation.js";
 import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
+import type { AuthProfileUsageInput, AuthProfileUsageResult } from "./store.worker-contract.js";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 import { computeNextProfileUsageStats } from "./usage-failure-state.js";
-import type { AuthProfileUsageInput, AuthProfileUsageResult } from "./usage-kernel.js";
 import { resolveInlineProviderApiKeyUsageId } from "./usage-state.js";
 
 export type InlineAuthFailureInput = {

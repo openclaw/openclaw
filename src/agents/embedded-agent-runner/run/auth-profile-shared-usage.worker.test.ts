@@ -86,7 +86,7 @@ async function fixture(state: OpenClawTestState, owner: Owner = "shared") {
     owner === "agent"
       ? openOpenClawAgentDatabase({ agentId: "voice", env: state.env })
       : openOpenClawStateDatabase();
-  const kind = owner === "agent" ? "agent" : "shared-state";
+  const kind: "agent" | "shared-state" = owner === "agent" ? "agent" : "shared-state";
   const credentials = readAuthProfileJsonCellText(database.db, "store", kind);
   const controller = createEmbeddedRunFailoverRetryController({
     runParams: {

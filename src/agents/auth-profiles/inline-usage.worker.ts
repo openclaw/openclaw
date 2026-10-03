@@ -13,7 +13,8 @@ import {
   type InlineAuthFailureReceipt,
 } from "./inline-usage-kernel.js";
 import { inspectAuthProfileJsonCell } from "./sqlite-json.js";
-import { recordAuthProfileUsageInDatabase, type AuthProfileUsageReceipt } from "./usage-kernel.js";
+import type { AuthProfileUsageReceipt } from "./store.worker-contract.js";
+import { recordAuthProfileUsageInDatabase } from "./usage-kernel.js";
 
 /** The canonical agent executor lends its connection and transaction/commit admission. */
 export function bindSqliteWorkerBackend(
