@@ -186,7 +186,7 @@ function runMantisEvidenceReader(
     `set -euo pipefail\nroot=${quoteShell(path.join(root, "evidence"))}\nworktree_root=lanes\n${script.slice(start, end)}\n${functionName} baseline\n`,
     {
       cwd: root,
-      env: { ...process.env, GITHUB_WORKSPACE: root },
+      env: { ...process.env, FORCE_COLOR: "1", GITHUB_WORKSPACE: root },
       tempDir: evidenceCompilerTempDir,
     },
   );

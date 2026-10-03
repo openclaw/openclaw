@@ -16,9 +16,13 @@ import type { DiagnosticTracePropagationBridge as DiagnosticTracePropagationBrid
 import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { PluginLogger } from "./logger-types.js";
+import type { PluginServiceSchedulerV1 } from "./service-scheduler.types.js";
 import type { OpenClawPluginNodeWorkspace } from "./types.node-host.js";
 
+export type { PluginServiceSchedulerV1 } from "./service-scheduler.types.js";
+
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
+type AnyChannelPlugin = import("../channels/plugins/types.plugin.js").AnyChannelPlugin;
 type DiagnosticTracePropagationBridge = DiagnosticTracePropagationBridgeContract<
   DiagnosticEventPayload,
   DiagnosticEventMetadata
@@ -373,6 +377,8 @@ export type OpenClawPluginServiceContext = {
   stateDir: string;
   logger: PluginLogger;
   serviceHealth?: OpenClawPluginServiceHealth;
+  /** Gateway-owned timed work; required by the version 2 service contract. */
+  scheduler?: PluginServiceSchedulerV1;
   /** Gateway-owned scheduler access, revoked when this service stops. */
   getCron?: () =>
     | (import("./hook-gateway.types.js").PluginHookGatewayCronService & {
@@ -422,6 +428,7 @@ export type OpenClawPluginServiceContext = {
 
 /** Background service registered by a plugin during `register(api)`. */
 export type OpenClawPluginService = {
+  apiVersion?: 1;
   id: string;
   /** Restart this service with committed config when one of these paths changes. */
   reload?: { configPrefixes: readonly string[] };
@@ -429,8 +436,22 @@ export type OpenClawPluginService = {
   stop?: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
 };
 
-export type OpenClawPluginChannelRegistration = {
-  plugin: ChannelPlugin;
+export type OpenClawPluginServiceContextV2 = OpenClawPluginServiceContext & {
+  scheduler: PluginServiceSchedulerV1;
+};
+
+/** A service whose host must provide scheduling bound to its lifetime. */
+export type OpenClawPluginServiceV2 = Omit<
+  OpenClawPluginService,
+  "apiVersion" | "start" | "stop"
+> & {
+  apiVersion: 2;
+  start: (ctx: OpenClawPluginServiceContextV2) => void | Promise<void>;
+  stop?: (ctx: OpenClawPluginServiceContextV2) => void | Promise<void>;
+};
+
+export type OpenClawPluginChannelRegistration<Plugin extends AnyChannelPlugin = ChannelPlugin> = {
+  plugin: Plugin;
 };
 
 /**

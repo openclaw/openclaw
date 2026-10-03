@@ -1028,8 +1028,6 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
     private let conversationController: NativeConversationController?
     private let viewModel: OpenClawChatViewModel
     private let contentController: NSViewController
-    private let speech: OpenClawChatSpeechController
-    private let voiceNoteRecorder: OpenClawVoiceNoteRecorder
     private var routingIdentityTask: Task<Void, Never>?
     private var window: ExperienceWindow?
     var onBecameKey: (() -> Void)?
@@ -1126,14 +1124,12 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         voiceNoteRecorder.setCaptureAdmissionHandler {
             !AppStateStore.shared.talkEnabled
         }
-        self.voiceNoteRecorder = voiceNoteRecorder
         let speech = OpenClawChatSpeechController { text in
             guard let transport = transport as? MacGatewayChatTransport else {
                 throw MacChatMessageSpeechError.unsupportedTransport
             }
             return try await transport.synthesizeSpeech(text: text)
         }
-        self.speech = speech
         let sessionKeyRelay = WebChatSessionKeyRelay()
         let conversationOwner: OpenClawWebConversation? = gatewayTarget != nil &&
             !AppDefaults.standard.bool(forKey: nativeConversationForcedKey) ? OpenClawWebConversation() : nil

@@ -356,6 +356,7 @@ describe("tsdown config", () => {
       entry: {
         [entryName]: "extensions/imap/index.ts",
         "plugin-sdk/plugin-state-store-runtime": "src/plugin-sdk/plugin-state-store-runtime.ts",
+        "plugin-sdk/plugin-test-api": "src/plugin-sdk/plugin-test-api.ts",
       },
       outDir: path.join(root, "dist"),
       dts: false,

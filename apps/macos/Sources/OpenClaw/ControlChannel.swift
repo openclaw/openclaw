@@ -29,12 +29,10 @@ struct ControlAgentEvent: Codable, Identifiable {
 }
 
 enum ControlChannelError: Error, LocalizedError {
-    case disconnected
     case badResponse(String)
 
     var errorDescription: String? {
         switch self {
-        case .disconnected: "Control channel disconnected"
         case let .badResponse(msg): msg
         }
     }
@@ -355,9 +353,7 @@ final class ControlChannel {
         ifCurrentServerLease lease: GatewayConnection.ServerLease? = nil) async throws -> Data
     {
         try await self.performRequest(ifCurrentServerLease: lease) {
-            let rawParams = params?.reduce(into: [String: OpenClawKit.AnyCodable]()) {
-                $0[$1.key] = OpenClawKit.AnyCodable($1.value.base)
-            }
+            let rawParams = params?.mapValues { OpenClawKit.AnyCodable($0.base) }
             if let lease {
                 return try await self.gateway.request(
                     method: method, params: rawParams, timeoutMs: timeoutMs, ifCurrentServerLease: lease)
@@ -437,7 +433,6 @@ final class ControlChannel {
     }
 
     static func friendlyGatewayMessage(_ error: Error, configRoot: [String: Any]) -> String {
-        // Map URLSession/WS errors into user-facing, actionable text.
         if let ctrlErr = error as? ControlChannelError, let desc = ctrlErr.errorDescription {
             return desc
         }
@@ -476,11 +471,6 @@ final class ControlChannel {
                 "Gateway rejected token; set \(tokenKey) or clear it on the gateway. Reason: \(reason)"
         }
 
-        // Common misfire: we connected to the configured localhost port but it is occupied
-        // by some other process (e.g. a local dev gateway or a stuck SSH forward).
-        // The gateway handshake returns something we can't parse, which currently
-        // surfaces as "hello failed (unexpected response)". Give the user a pointer
-        // to free the port instead of a vague message.
         let nsError = error as NSError
         if nsError.domain == "Gateway",
            nsError.localizedDescription.contains("hello failed (unexpected response)")
@@ -753,8 +743,6 @@ final class ControlChannel {
     }
 
     private func routeWorkActivity(from event: ControlAgentEvent) {
-        // We currently treat VoiceWake as the "main" session for UI purposes.
-        // In the future, the gateway can include a sessionKey to distinguish runs.
         let sessionKey = (event.data["sessionKey"]?.value as? String) ?? "main"
 
         switch event.stream.lowercased() {

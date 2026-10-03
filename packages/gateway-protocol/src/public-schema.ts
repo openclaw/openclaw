@@ -185,6 +185,8 @@ export {
   SessionFileRelevanceSchema,
   SessionsFilesGetParamsSchema,
   SessionsFilesGetResultSchema,
+  SessionsFilesAssetsParamsSchema,
+  SessionsFilesAssetsResultSchema,
   SessionsFilesSetParamsSchema,
   SessionsFilesSetResultSchema,
   SessionsFilesListParamsSchema,

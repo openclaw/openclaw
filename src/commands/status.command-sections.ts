@@ -26,8 +26,9 @@ import { formatDeliveryQueueHealthLine, formatHealthChannelLines } from "./healt
 import type { HealthSummary } from "./health.js";
 import { formatSqliteWalHealthWarning } from "./sqlite-wal-health.js";
 import type { AgentLocalStatus } from "./status.agent-local.js";
-import { formatPromptCacheCompact, formatTokensCompact, shortenText } from "./status.format.js";
+import { formatPromptCacheCompact, formatTokensCompact } from "./status.format.js";
 import type { MemoryStatusSnapshot } from "./status.scan.shared.js";
+import { shortenText } from "./text-format.js";
 
 type AgentStatusLike = {
   defaultId?: string | null;
@@ -117,6 +118,16 @@ export function buildStatusMemoryValue(params: {
   if (!params.memory) {
     const slot = params.memoryPlugin.slot ? `plugin ${params.memoryPlugin.slot}` : "plugin";
     return theme.muted(`enabled (${slot}) · ${params.memoryUnavailableLabel ?? "unavailable"}`);
+  }
+  if ("health" in params.memory) {
+    const detail = params.memory.health.message ? ` · ${params.memory.health.message}` : "";
+    const status =
+      params.memory.health.status === "ready"
+        ? theme.success("ready")
+        : params.memory.health.status === "degraded"
+          ? theme.warn("degraded")
+          : theme.warn("unavailable");
+    return `plugin ${params.memory.provider} · ${status}${detail}`;
   }
   const parts: string[] = [];
   const dirtySuffix = params.memory.dirty ? ` · ${theme.warn("dirty")}` : "";

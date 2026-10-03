@@ -36,6 +36,107 @@ function captureReaderLogs() {
 }
 
 describe("package verification bounds", () => {
+  it.each(["settled", "racy", "journal"] as const)(
+    "reuses only settled in-process file digests (%s observation)",
+    async (observation) => {
+      await withTestDir({ prefix: "openclaw-integrity-reuse-" }, async (base) => {
+        const clock = Date.now.bind(Date);
+        let now = clock();
+        vi.spyOn(Date, "now").mockImplementation(() => now);
+        const { packageRoot } = await createPackageSwapFixture(base);
+        const empty = path.join(packageRoot, "empty");
+        await fs.writeFile(empty, "");
+        if (observation !== "racy") {
+          now = clock() + 6_000;
+        }
+        const open = vi.spyOn(fs, "open");
+        const packageOpens = () =>
+          open.mock.calls
+            .map(([file]) => String(file))
+            .filter((file) => file.startsWith(`${packageRoot}${path.sep}`));
+        const reader = createPackageIntegrityReader();
+        const first = await reader.tree(packageRoot);
+        const files = packageOpens();
+        expect(files).toContain(empty);
+        open.mockClear();
+        const journal = JSON.stringify(first);
+        const reuse = observation === "journal" ? JSON.parse(journal) : first;
+        expect(await reader.tree(packageRoot, packageRoot, reuse)).toEqual(first);
+        // The version read still opens the manifest once, independently of its digest.
+        expect(packageOpens()).toEqual(
+          observation === "settled" ? [path.join(packageRoot, "package.json")] : files,
+        );
+        if (observation === "racy") {
+          // Aging alone cannot turn an earlier racy read into settled evidence.
+          now = clock() + 6_000;
+          open.mockClear();
+          expect(await reader.tree(packageRoot, packageRoot, first)).toEqual(first);
+          expect(packageOpens()).toEqual(files);
+        }
+      });
+    },
+  );
+
+  it.for([1, 4])(
+    "rehashes %i changed files in DFS order without charging reused entries a hash slot",
+    async (changedCount, { signal }) => {
+      await withTestDir({ prefix: "openclaw-integrity-mixed-reuse-" }, async (base) => {
+        const { packageRoot } = await createPackageSwapFixture(base);
+        const files = Array.from({ length: 4 }, (_, index) =>
+          path.join(packageRoot, "dist", `reuse-${index}-a.js`),
+        );
+        for (const file of files) {
+          await fs.writeFile(file, "before");
+          await fs.writeFile(file.replace("-a.js", "-b.js"), "");
+        }
+        vi.spyOn(Date, "now").mockReturnValue(Date.now() + 6_000);
+        const reader = createPackageIntegrityReader();
+        const first = await reader.tree(packageRoot);
+        const changed = files.slice(0, changedCount);
+        for (const file of changed) {
+          await fs.writeFile(file, "changed content");
+        }
+        const release = createDeferredCore();
+        const admitted = createDeferredCore();
+        const opened: string[] = [];
+        const realOpen = fs.open.bind(fs);
+        const open = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+          const file = String(args[0]);
+          if (file.startsWith(`${packageRoot}${path.sep}`)) {
+            opened.push(file);
+          }
+          if (changed.includes(file)) {
+            if (opened.length === changed.length) {
+              admitted.resolve();
+            }
+            await release.promise;
+          }
+          return realOpen(...args);
+        });
+        const walking = reader.tree(packageRoot, packageRoot, first);
+        try {
+          await withinTest(
+            awaitGateBeforeSettlement(
+              admitted.promise,
+              walking,
+              "The walk settled before admitting its changed files",
+            ),
+            signal,
+          );
+          release.resolve();
+          const second = await withinTest(walking, signal);
+          expect(opened).toEqual([...changed, path.join(packageRoot, "package.json")]);
+          expect(second.digest).not.toBe(first.digest);
+          open.mockRestore();
+          expect(second).toEqual(await reader.tree(packageRoot));
+        } finally {
+          release.resolve();
+          await Promise.allSettled([walking]);
+        }
+      });
+    },
+  );
+
   it("distinguishes entry and byte budget exhaustion from integrity failures", async () => {
     await withTestDir({ prefix: "openclaw-integrity-budget-type-" }, async (base) => {
       const { packageRoot, launcher } = await createPackageSwapFixture(base);
@@ -237,13 +338,13 @@ describe("package verification bounds", () => {
     },
   );
 
-  it.each(
+  it.for(
     (
       ["activation", "rollback", "changed identity", "changed version", "launcher limit"] as const
     ).flatMap((outcome) => (["time", "byte"] as const).map((budget) => ({ outcome, budget }))),
   )(
     "handles $outcome after the baseline fingerprint exhausts its $budget budget",
-    async ({ outcome, budget }) => {
+    async ({ outcome, budget }, { signal }) => {
       await withTestDir({ prefix: "openclaw-fingerprint-advisory-" }, async (base) => {
         const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
         const original = await fs.stat(packageRoot);
@@ -251,6 +352,7 @@ describe("package verification bounds", () => {
           await fs.truncate(launcher, 1024 * 1024 + 1);
         }
         const open = fs.open.bind(fs);
+        const stalled = createDeferredCore();
         const blocked = createDeferredCore();
         let entered = false;
         if (budget === "byte") {
@@ -261,6 +363,7 @@ describe("package verification bounds", () => {
           vi.spyOn(fs, "open").mockImplementation(async (...args) => {
             if (!entered && String(args[0]) === path.join(packageRoot, "dist", "index.js")) {
               entered = true;
+              stalled.resolve();
               await blocked.promise;
             }
             return open(...args);
@@ -268,15 +371,30 @@ describe("package verification bounds", () => {
         }
         let transaction: PackageUpdateTransaction | undefined;
         const beforeActivate = vi.fn();
+        // Reader budgets run on the wall clock. Freeze it so host load cannot expire the
+        // launcher capture or a later reader; only the stalled baseline spends its budget.
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+        const update = swapStagedPackageInstall({
+          ...params,
+          ...(budget === "time" ? { timeoutMs: 200 } : {}),
+          beforeActivate,
+          onTransaction: (value) => {
+            transaction = value;
+          },
+        });
         try {
-          const result = await swapStagedPackageInstall({
-            ...params,
-            ...(budget === "time" ? { timeoutMs: 200 } : {}),
-            beforeActivate,
-            onTransaction: (value) => {
-              transaction = value;
-            },
-          });
+          if (budget === "time") {
+            await withinTest(
+              awaitGateBeforeSettlement(
+                stalled.promise,
+                update,
+                "Baseline fingerprint settled before its walk stalled",
+              ),
+              signal,
+            );
+            await vi.advanceTimersByTimeAsync(200);
+          }
+          const result = await withinTest(update, signal);
           expect(entered).toBe(budget === "time");
           if (outcome === "launcher limit") {
             expect(result.status).toBe("failed");
@@ -342,6 +460,7 @@ describe("package verification bounds", () => {
           ).toBeUndefined();
         } finally {
           blocked.resolve();
+          vi.useRealTimers();
         }
       });
     },

@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginLogger, PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   assertRealtimeVoiceAgentConsultModelSelectionUnlocked,
   consultRealtimeVoiceAgent,
@@ -256,6 +256,7 @@ async function createRealtimeInstructionsResolver(params: {
 }
 
 export async function createVoiceCallRuntime(params: {
+  scheduler: PluginServiceSchedulerV1;
   config: VoiceCallConfig;
   coreConfig: OpenClawConfig;
   fullConfig?: OpenClawConfig;
@@ -264,6 +265,7 @@ export async function createVoiceCallRuntime(params: {
   ttsRuntime?: TelephonyTtsRuntime;
   logger?: PluginLogger;
 }): Promise<VoiceCallRuntime> {
+  params.scheduler.signal.throwIfAborted();
   const {
     config: rawConfig,
     coreConfig,
@@ -306,6 +308,7 @@ export async function createVoiceCallRuntime(params: {
   const manager = new CallManager(config, undefined, cfg.session, stateRuntime);
   const realtimeVoiceRuntime = config.realtime.enabled ? await loadRealtimeVoiceRuntime() : null;
   const webhookServer = new VoiceCallWebhookServer(
+    params.scheduler,
     config,
     manager,
     provider,

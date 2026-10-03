@@ -1932,9 +1932,10 @@ describe("startGatewayPostAttachRuntime", () => {
       const registry = createEmptyPluginRegistry();
       const service = { id: "admission", start: vi.fn(), stop: vi.fn() };
       registry.services.push(createServiceRegistration(service, { pluginId: "admission" }));
+      const scheduler = createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined);
       const replacementHandle =
         transition === "commit" || transition === "recovery"
-          ? await actualServices.startPluginServices({ registry, config: {} })
+          ? await actualServices.startPluginServices({ registry, config: {}, scheduler })
           : null;
       hoisted.startPluginServices.mockImplementationOnce(actualServices.startPluginServices);
       const owner = createPluginServicesOwner();
@@ -1948,6 +1949,7 @@ describe("startGatewayPostAttachRuntime", () => {
       const trace = createStartupTraceRecorder();
       const runtime = await startGatewayPostAttachRuntime(
         createPostAttachParams({
+          scheduler,
           sidecarStartup: "defer",
           pluginRegistry: registry,
           pluginRuntimeClaim: startupClaim,
@@ -1998,9 +2000,7 @@ describe("startGatewayPostAttachRuntime", () => {
       } finally {
         reservation?.reject();
         await runtime.startupSettled;
-        await owner.currentServices()?.stop();
-        await replacementHandle?.stop();
-        for (const [handle] of onPluginServices.mock.calls) {
+        for (const handle of new Set([replacementHandle, ...onPluginServices.mock.calls.flat()])) {
           await handle?.stop();
         }
       }

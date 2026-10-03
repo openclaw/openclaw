@@ -339,7 +339,7 @@ describe("worker environment service", () => {
       });
       const recoveryCredential = await preRestartService.acquireTurnCredential(claim);
       await preRestartService.stop();
-      store.handoffWorkspaceResultRecovery(claim);
+      await store.handoffWorkspaceResultRecovery(claim);
 
       const restartedStore = createWorkerSessionPlacementStore({
         database: support.testState.stateDb,
@@ -377,7 +377,7 @@ describe("worker environment service", () => {
       };
 
       expect(restartedStore.validateTurnClaim(claim)).toBe(true);
-      expect(restartedStore.listPendingWorkspaceResults()).toHaveLength(1);
+      expect(await restartedStore.listPendingWorkspaceResultsAsync()).toHaveLength(1);
       await expect(workerService.admitWorker(admission)).resolves.toEqual({
         ok: false,
         reason: "placement-mismatch",

@@ -89,7 +89,8 @@ describe("SQLite lifecycle cleanup races", () => {
       ...options,
       sessionKey: options.sessionKey ?? `agent:main:cleanup-race-${sessionId}`,
     };
-    await replaceSessionEntry(scope, { sessionId, updatedAt: now, ...entry });
+    // Automatic maintenance must not consume the explicit cleanup's archive hooks.
+    replaceSessionEntrySync(scope, { sessionId, updatedAt: now, ...entry });
     if (events) {
       await replaceTranscriptEvents(scope, events);
     }
@@ -138,27 +139,24 @@ describe("SQLite lifecycle cleanup races", () => {
       await release.promise;
     };
     const operation = start();
+    const operations: Promise<unknown>[] = [operation];
+    onTestFinished(async () => {
+      release.resolve();
+      await Promise.allSettled(operations);
+    });
     await entered.promise;
     const write = replaceSessionEntry(writer, {
       sessionId: writer.sessionId,
       updatedAt: now + 1,
       label: "progressed",
     });
-    let progressed: boolean;
+    operations.push(write);
     try {
-      progressed = await Promise.race([
-        write.then(() => true),
-        new Promise<false>((resolve) => {
-          setTimeout(() => resolve(false), 500);
-        }),
-      ]);
+      await expect(write).resolves.toMatchObject({ label: "progressed" });
     } finally {
       release.resolve();
     }
-    const result = await operation;
-    await expect(write).resolves.toMatchObject({ label: "progressed" });
-    expect(progressed).toBe(true);
-    return result;
+    return await operation;
   }
 
   it("reclaims only aged rows while preserving fresh admission with or without old transcripts", async () => {

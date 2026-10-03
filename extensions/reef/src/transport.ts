@@ -415,7 +415,7 @@ export function createReefWebSocket(
   });
 }
 
-export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise<void>((resolve) => {
     if (signal?.aborted) {
       resolve();

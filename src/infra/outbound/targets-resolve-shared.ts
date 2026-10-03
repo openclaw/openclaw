@@ -1,7 +1,7 @@
 // Shared target resolution applies plugin defaults, allowlists, prefixes, and
 // fallback errors for direct and loaded-channel send paths.
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

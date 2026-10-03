@@ -5,7 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createCapturedPluginRegistration,
   createPluginRuntimeMock,
@@ -196,14 +197,20 @@ describe("Logbook service disposal", () => {
     });
     const captured = createCapturedPluginRegistration({ id: "logbook" });
     captured.api.pluginConfig = { captureEnabled: false };
-    const services: OpenClawPluginService[] = [];
+    const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
     captured.api.registerService = (service) => services.push(service);
     plugin.register({ ...captured.api, runtimeSource });
     const service = services[0]!;
-    const context = { config: {}, stateDir, logger: quietLogger };
+    const context = {
+      config: {},
+      stateDir,
+      logger: quietLogger,
+      scheduler: createTestPluginServiceScheduler(),
+    };
     const starting = service.start(context);
     await opened.promise;
     const completed = vi.fn();
+    context.scheduler.beginClose();
     const stopping = Promise.all(
       captured.runtimeLifecycles.map(async (lifecycle) => {
         await lifecycle.cleanup?.({ reason: "disable" });
@@ -218,6 +225,7 @@ describe("Logbook service disposal", () => {
       releaseOpen.resolve();
       releaseClose.resolve();
       await Promise.all([starting, stopping]);
+      await context.scheduler.stop();
     }
     await expect(store.lastFrame()).rejects.toThrow();
   });
@@ -501,7 +509,7 @@ describe("Logbook service disposal", () => {
       const stateDir = realpathSync(mkdtempSync(path.join(tmpdir(), "logbook-runtime-drain-")));
       const captured = createCapturedPluginRegistration({ id: "logbook" });
       captured.api.pluginConfig = { captureEnabled: false };
-      const services: OpenClawPluginService[] = [];
+      const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
       captured.api.registerService = (service) => services.push(service);
       const handlers = new Map<string, Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]>();
       captured.api.registerGatewayMethod = (name, handler) => handlers.set(name, handler);
@@ -514,7 +522,12 @@ describe("Logbook service disposal", () => {
       };
       plugin.register({ ...captured.api, runtimeSource });
       const service = services[0]!;
-      const context = { config: {}, stateDir, logger: quietLogger };
+      const context = {
+        config: {},
+        stateDir,
+        logger: quietLogger,
+        scheduler: createTestPluginServiceScheduler(),
+      };
       await service.start(context);
       const call = async (name: string, params = {}) => {
         const respond = vi.fn();
@@ -543,6 +556,7 @@ describe("Logbook service disposal", () => {
         const standup = call("logbook.standup");
         await entered.promise;
         const retired = vi.fn();
+        context.scheduler.beginClose();
         const retiring = cleanup({ reason }).then(retired);
         await setImmediate();
         expect.soft(retired).not.toHaveBeenCalled();
@@ -559,7 +573,9 @@ describe("Logbook service disposal", () => {
         }
       } finally {
         release.resolve();
+        context.scheduler.beginClose();
         await service.stop?.(context);
+        await context.scheduler.stop();
         rmSync(stateDir, { recursive: true, force: true });
       }
     },
@@ -569,10 +585,15 @@ describe("Logbook service disposal", () => {
     const stateDir = realpathSync(mkdtempSync(path.join(tmpdir(), "logbook-retired-start-")));
     const captured = createCapturedPluginRegistration({ id: "logbook" });
     captured.api.pluginConfig = { captureEnabled: false };
-    const services: OpenClawPluginService[] = [];
+    const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
     captured.api.registerService = (service) => services.push(service);
     plugin.register({ ...captured.api, runtimeSource });
-    const context = { config: {}, stateDir, logger: quietLogger };
+    const context = {
+      config: {},
+      stateDir,
+      logger: quietLogger,
+      scheduler: createTestPluginServiceScheduler(),
+    };
     try {
       for (const lifecycle of captured.runtimeLifecycles) {
         await lifecycle.cleanup?.({ reason: "restart" });
@@ -580,7 +601,9 @@ describe("Logbook service disposal", () => {
       await expect(services[0]!.start(context)).rejects.toThrow("runtime has been retired");
       expect(existsSync(path.join(stateDir, "logbook", "logbook.sqlite"))).toBe(false);
     } finally {
+      context.scheduler.beginClose();
       await services[0]!.stop?.(context);
+      await context.scheduler.stop();
       rmSync(stateDir, { recursive: true, force: true });
     }
   });

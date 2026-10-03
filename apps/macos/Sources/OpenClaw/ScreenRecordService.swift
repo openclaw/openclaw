@@ -173,27 +173,29 @@ private final class StreamRecorder: NSObject, SCStreamOutput, SCStreamDelegate, 
     {
         guard CMSampleBufferDataIsReady(sampleBuffer) else { return }
         // Callback runs on `sampleHandlerQueue` (`self.queue`).
+        let input: AVAssetWriterInput
         switch type {
         case .screen:
-            self.handleVideo(sampleBuffer: sampleBuffer)
+            input = self.input
         case .audio:
-            self.handleAudio(sampleBuffer: sampleBuffer)
+            guard let audioInput else { return }
+            input = audioInput
         case .microphone:
-            break
+            return
         @unknown default:
-            break
+            return
         }
         _ = stream
-    }
-
-    private func handleVideo(sampleBuffer: CMSampleBuffer) {
         if let msg = self.pendingErrorMessage {
-            self.logger.error("screen record aborting due to prior error: \(msg, privacy: .public)")
+            let source = type == .audio ? "audio " : ""
+            self.logger
+                .error("screen record \(source, privacy: .public)aborting due to prior error: \(msg, privacy: .public)")
             return
         }
         if self.didFinish { return }
 
         if !self.started {
+            guard type == .screen else { return }
             guard self.writer.startWriting() else {
                 self.pendingErrorMessage = self.writer.error?.localizedDescription ?? "Failed to start writer"
                 return
@@ -203,20 +205,8 @@ private final class StreamRecorder: NSObject, SCStreamOutput, SCStreamDelegate, 
             self.started = true
         }
 
-        if self.input.isReadyForMoreMediaData {
-            _ = self.input.append(sampleBuffer)
-        }
-    }
-
-    private func handleAudio(sampleBuffer: CMSampleBuffer) {
-        guard let audioInput else { return }
-        if let msg = self.pendingErrorMessage {
-            self.logger.error("screen record audio aborting due to prior error: \(msg, privacy: .public)")
-            return
-        }
-        if self.didFinish || !self.started { return }
-        if audioInput.isReadyForMoreMediaData {
-            _ = audioInput.append(sampleBuffer)
+        if input.isReadyForMoreMediaData {
+            _ = input.append(sampleBuffer)
         }
     }
 

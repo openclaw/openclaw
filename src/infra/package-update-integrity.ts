@@ -12,14 +12,16 @@ const MAX_TREE_BYTES = 1024 * 1024 * 1024;
 const MAX_TREE_ENTRIES = 50_000;
 const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_LAUNCHER_BYTES = 1024 * 1024;
+const SETTLED_CTIME_MARGIN_MS = 5_000;
+const SETTLED_CTIME_MARGIN_NS = BigInt(SETTLED_CTIME_MARGIN_MS) * 1_000_000n;
 const log = createSubsystemLogger("update/package-integrity");
 let readerSequence = 0;
 
 export type PackageIntegrityFingerprint = { digest: string; identity: string; version: string };
 export type PackageDirectoryIdentity = Pick<PackageIntegrityFingerprint, "identity" | "version">;
 
-type EntryObservation = { fields: Map<string, string>; retained: string };
-// Diagnostics live only as long as the in-process baseline; journal fingerprints stay compact.
+type EntryObservation = { fields: Map<string, string>; retained: string; reusable: boolean };
+// Observations live only as long as their in-process fingerprint; journals stay compact.
 const observations = new WeakMap<PackageIntegrityFingerprint, Map<string, EntryObservation>>();
 
 export class PackageIntegrityMismatchError extends Error {
@@ -282,6 +284,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       const buffer = readBuffer ?? Buffer.allocUnsafe(64 * 1024);
       const size = Number(stat.size);
       let position = 0;
+      const readStartedAtNs = BigInt(Date.now()) * 1_000_000n;
       // The final stat detects growth; an extra EOF read costs one OS call per file.
       while (position < size) {
         const { bytesRead } = await read(() =>
@@ -296,13 +299,26 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       if (!unchanged(stat, await read(() => handle.stat({ bigint: true })))) {
         throw new Error("Package rollback file changed while reading");
       }
-      return { digest: hash.digest("hex"), bytes: position };
+      // Userspace cannot set ctime, but coarse filesystem clocks can hide same-tick
+      // writes, so reuse only bytes read well after the last change. Like the final
+      // sweep, this observes rather than excludes writers: a store to an already
+      // dirty shared mapping need not update timestamps.
+      return {
+        digest: hash.digest("hex"),
+        bytes: position,
+        reusable: stat.ctimeNs + SETTLED_CTIME_MARGIN_NS <= readStartedAtNs,
+      };
     } finally {
       await close(handle);
     }
   }
 
-  async function tree(root: string, originalRoot = root): Promise<PackageIntegrityFingerprint> {
+  async function tree(
+    root: string,
+    originalRoot = root,
+    reuse?: PackageIntegrityFingerprint,
+  ): Promise<PackageIntegrityFingerprint> {
+    const prior = reuse ? observations.get(reuse) : undefined;
     const digest = createHash("sha256");
     const observed: Array<{ file: string; stat: BigIntStats }> = [];
     const entriesObserved = new Map<string, EntryObservation>();
@@ -310,18 +326,26 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     let remainingEntries = MAX_TREE_ENTRIES - 1;
     let device: bigint | undefined;
     let rootIdentity = "";
-    type HashedEntry = { relative: string; fields: Map<string, string>; retained: string[] };
-    const pendingFiles: Array<Promise<{ entry: HashedEntry } | { error: unknown }>> = [];
+    type HashedEntry = {
+      relative: string;
+      fields: Map<string, string>;
+      retained: string[];
+      reusable: boolean;
+    };
+    type FileOutcome = { entry: HashedEntry } | { error: unknown };
+    const pendingFiles: Array<Promise<FileOutcome>> = [];
+    let pendingHashes = 0;
     const buffers: Buffer[] = [];
     let fileFailed = false;
-    const appendEntry = ({ relative, fields, retained }: HashedEntry) => {
+    const appendEntry = ({ relative, fields, retained, reusable }: HashedEntry) => {
       const retainedEntry = JSON.stringify([relative, retained]);
       digest.update(retainedEntry);
-      entriesObserved.set(relative, { fields, retained: retainedEntry });
+      entriesObserved.set(relative, { fields, retained: retainedEntry, reusable });
     };
     const drainFiles = async () => {
       const outcomes = await Promise.all(pendingFiles);
       pendingFiles.length = 0;
+      pendingHashes = 0;
       // Journal digests and refusal precedence follow DFS order, not IO completion order.
       for (const outcome of outcomes) {
         if ("error" in outcome) {
@@ -399,13 +423,31 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
           throw new PackageIntegrityLimitError("byte");
         }
         bytes += Number(stat.size);
-        const buffer = (buffers[pendingFiles.length] ??= Buffer.allocUnsafe(64 * 1024));
+        const previous = prior?.get(relative);
+        const previousDigest = previous?.fields.get("sha256");
+        if (
+          previous?.reusable &&
+          previousDigest !== undefined &&
+          Object.entries(info).every(([field, value]) => previous.fields.get(field) === value)
+        ) {
+          fields.set("sha256", previousDigest);
+          retained.push("file", previousDigest);
+          const entry = { relative, fields, retained, reusable: true };
+          // Keep reused entries behind earlier hashes without consuming a hash slot.
+          if (pendingFiles.length) {
+            pendingFiles.push(Promise.resolve({ entry }));
+          } else {
+            appendEntry(entry);
+          }
+          return;
+        }
+        const buffer = (buffers[pendingHashes++] ??= Buffer.allocUnsafe(64 * 1024));
         pendingFiles.push(
           hashFile(file, stat, remainingBytes, buffer).then(
             (contents) => {
               fields.set("sha256", contents.digest);
               retained.push("file", contents.digest);
-              return { entry: { relative, fields, retained } };
+              return { entry: { relative, fields, retained, reusable: contents.reusable } };
             },
             (error: unknown) => {
               fileFailed = true;
@@ -413,7 +455,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
             },
           ),
         );
-        if (pendingFiles.length === 4) {
+        if (pendingHashes === 4) {
           await drainFiles();
         }
         return;
@@ -430,7 +472,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       } else {
         throw new Error("Package rollback contains a non-file entry");
       }
-      appendEntry({ relative, fields, retained });
+      appendEntry({ relative, fields, retained, reusable: false });
     }
 
     try {

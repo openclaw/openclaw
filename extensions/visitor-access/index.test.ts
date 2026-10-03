@@ -6,8 +6,7 @@ import type {
   AnyAgentTool,
   OpenClawConfig,
   OpenClawPluginApi,
-  OpenClawPluginService,
-  OpenClawPluginServiceContext,
+  OpenClawPluginServiceContextV2,
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -15,7 +14,10 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
@@ -166,7 +168,7 @@ describe("visitor-access plugin lifecycle", () => {
     githubProfiles: Parameters<typeof visitorProfileFixture>[1] = [],
   ) {
     const tools = new Map<string, AnyAgentTool>();
-    const services: OpenClawPluginService[] = [];
+    const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
     const accessPolicies: PluginGatewayAccessPolicy[] = [];
     const on = vi.fn<OpenClawPluginApi["on"]>();
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
@@ -221,8 +223,17 @@ describe("visitor-access plugin lifecycle", () => {
     if (!accessPolicy) {
       throw new Error("Plugin did not register its Gateway access policy");
     }
-    const context: OpenClawPluginServiceContext = { config: {}, stateDir, logger };
-    cleanups.push(() => service.stop?.(context));
+    const scheduler = createTestPluginServiceScheduler();
+    const context: OpenClawPluginServiceContextV2 = { config: {}, stateDir, logger, scheduler };
+    const stop = async () => {
+      scheduler.beginClose();
+      try {
+        await service.stop?.(context);
+      } finally {
+        await scheduler.stop();
+      }
+    };
+    cleanups.push(stop);
     const store = createPluginStateKeyedStoreForTests<VisitorGrant>("visitor-access", {
       namespace: "visitor-grants",
       maxEntries: 500,
@@ -241,7 +252,7 @@ describe("visitor-access plugin lifecycle", () => {
       ) => accessPolicy.authorize({ config, profile, requiredByRole }),
       toolContext,
       start: () => service.start(context),
-      stop: () => service.stop?.(context),
+      stop,
       gatewayStart: () => {
         const hook = on.mock.calls.find(([name]) => name === "gateway_start")?.[1];
         if (!hook) {

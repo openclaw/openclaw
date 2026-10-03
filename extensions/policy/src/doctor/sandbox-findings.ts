@@ -39,15 +39,7 @@ export function sandboxPostureFindings(
   }
   for (const target of agentScopedPolicyTargets(policy)) {
     const scopedSandboxPolicy = target.overlay.sandbox;
-    if (
-      posturePolicyShapeFinding("sandbox", scopedSandboxPolicy, {
-        policyDocName,
-        policyPath,
-        targetPrefix: `scopes/${ocPathSegment(target.scopeName)}/sandbox`,
-        propertyPrefix: `scopes.${target.scopeName}.sandbox`,
-      }) !== undefined ||
-      !isRecord(scopedSandboxPolicy)
-    ) {
+    if (!isRecord(scopedSandboxPolicy)) {
       continue;
     }
     findings.push(

@@ -853,7 +853,7 @@ test.each(["worker-turn", "remote-exec"] as const)(
     expect(retireSessionPlacement).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
     expect(placementStore.get(REQUEST.sessionId)).toBeUndefined();
-    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(loadSessionEntry(REQUEST.sessionKey).entry).toBeUndefined();
   },
 );
@@ -899,7 +899,7 @@ test.each(["worker-turn", "remote-exec"] as const)(
       workspaceBaseManifestRef: harness.reconciledManifestRef,
       turnClaim: { owner: executionMode === "remote-exec" ? "local" : "worker" },
     });
-    expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toMatchObject([
       { workspaceAcceptedAtMs: null },
     ]);
   },

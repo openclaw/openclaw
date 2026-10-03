@@ -548,7 +548,10 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnly<T>(
 /** Publication guards need current rows, never an inherited discovery snapshot. */
 export function withExistingOpenClawStateDatabaseCurrentReadOnly<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions & {
+    /** Existing host mutation guards may read natively outside worker admission grants. */
+    allowNativeRead?: true;
+  } = {},
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
 ): T | undefined {
   const pathname = resolveReadOnlyPath(options);
@@ -570,7 +573,9 @@ export function withExistingOpenClawStateDatabaseCurrentReadOnly<T>(
     return withOpenClawStateReadOnlyLocation(
       operation,
       pathname,
-      prepareSqliteReadOnlyLocationSync(pathname),
+      options.allowNativeRead && !isArtifactPreservingStateRead() && !openStateSchemaReadAdmission
+        ? pathname
+        : prepareSqliteReadOnlyLocationSync(pathname),
       openStateSchemaReadAdmission,
     );
   });

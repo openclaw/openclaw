@@ -131,6 +131,15 @@ struct DebugSettings: View {
             .frame(width: self.labelColumnWidth, alignment: .leading)
     }
 
+    private func pathLabel(_ path: String) -> some View {
+        Text(path)
+            .font(.caption2.monospaced())
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+            .lineLimit(1)
+            .truncationMode(.middle)
+    }
+
     private var appInfoSection: some View {
         Section("App") {
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
@@ -158,12 +167,7 @@ struct DebugSettings: View {
                 }
                 GridRow {
                     self.gridLabel("Binary path")
-                    Text(Bundle.main.bundlePath)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    self.pathLabel(Bundle.main.bundlePath)
                 }
             }
         }
@@ -187,12 +191,7 @@ struct DebugSettings: View {
                     Text("Key")
                         .foregroundStyle(.secondary)
                         .frame(width: self.labelColumnWidth, alignment: .leading)
-                    Text(key)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    self.pathLabel(key)
                     Button("Copy") {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(key, forType: .string)
@@ -251,12 +250,7 @@ struct DebugSettings: View {
                         HStack(spacing: 8) {
                             Button("Open") { DebugActions.openLog() }
                                 .buttonStyle(.bordered)
-                            Text(DebugActions.pinoLogPath())
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
+                            self.pathLabel(DebugActions.pinoLogPath())
                         }
                     }
                 }
@@ -289,12 +283,7 @@ struct DebugSettings: View {
                             }
                             .buttonStyle(.bordered)
                         }
-                        Text(DiagnosticsFileLog.logFileURL().path)
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                        self.pathLabel(DiagnosticsFileLog.logFileURL().path)
                     }
                 }
             }
@@ -533,7 +522,7 @@ struct DebugSettings: View {
                 HStack(spacing: 8) {
                     Button("Restart app") { DebugActions.restartApp() }
                     Button("Restart onboarding") { DebugActions.restartOnboarding() }
-                    Button("Reveal app in Finder") { self.revealApp() }
+                    Button("Reveal app in Finder") { AppActivation.shared.revealFiles([Bundle.main.bundleURL]) }
                     Spacer(minLength: 0)
                 }
                 .buttonStyle(.bordered)
@@ -681,25 +670,13 @@ struct DebugSettings: View {
         self.testNotificationOutcome = await TestNotificationAction.send()
     }
 
-    private func revealApp() {
-        let url = Bundle.main.bundleURL
-        AppActivation.shared.revealFiles([url])
-    }
-
     private func saveRelayRoot() {
         CommandResolver.setProjectRoot(self.gatewayRootInput)
     }
 
     private func loadSessionStorePath() {
-        let parsed = OpenClawConfigFile.loadDict()
-        guard
-            let session = parsed["session"] as? [String: Any],
-            let path = session["store"] as? String
-        else {
-            self.sessionStorePath = SessionLoader.defaultStorePath
-            return
-        }
-        self.sessionStorePath = path
+        let session = OpenClawConfigFile.loadDict()["session"] as? [String: Any]
+        self.sessionStorePath = session?["store"] as? String ?? SessionLoader.defaultStorePath
     }
 
     private func saveSessionStorePath() {

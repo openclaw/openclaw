@@ -246,8 +246,9 @@ export async function prepareSessionLifecycleDrain(
     params.authorize?.();
     if (params.sessionId) {
       const placements = params.context.workerSessionPlacementService;
+      const pending = (await placements?.listPendingWorkspaceResultsAsync?.(params.sessionId))?.[0];
+      params.authorize?.();
       const placement = placements?.getMany([params.sessionId]).get(params.sessionId);
-      const pending = placements?.listPendingWorkspaceResults?.(params.sessionId)[0];
       if (
         pending &&
         pending.workspaceAcceptedAtMs === null &&

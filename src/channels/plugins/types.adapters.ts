@@ -12,6 +12,7 @@ import type {
   PluginApprovalResolved,
 } from "../../infra/plugin-approvals.js";
 import type { SystemAgentApprovalRequest } from "../../infra/system-agent-approvals.js";
+import type { PluginServiceSchedulerV1 } from "../../plugins/service-scheduler.types.js";
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { ResolverContext, SecretDefaults } from "../../secrets/runtime-shared.js";
@@ -191,6 +192,8 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
   account: ResolvedAccount;
   runtime: RuntimeEnv;
   abortSignal: AbortSignal;
+  /** Account-owned timed work; required by the version 2 Gateway adapter. */
+  scheduler?: PluginServiceSchedulerV1;
   log?: ChannelLogSink;
   getStatus: () => ChannelAccountSnapshot;
   setStatus: (next: ChannelAccountSnapshot) => void;
@@ -204,6 +207,9 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
    */
   channelRuntime?: ChannelRuntimeSurface;
 };
+
+export type ChannelGatewayContextV2<ResolvedAccount = unknown> =
+  ChannelGatewayContext<ResolvedAccount> & { scheduler: PluginServiceSchedulerV1 };
 
 type ChannelLogoutResult = {
   cleared: boolean;
@@ -233,6 +239,7 @@ type ChannelLogoutContext<ResolvedAccount = unknown> = {
 };
 
 export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
+  apiVersion?: 1;
   startAccount?: (ctx: ChannelGatewayContext<ResolvedAccount>) => Promise<unknown>;
   stopAccount?: (ctx: ChannelGatewayContext<ResolvedAccount>) => Promise<void>;
   /** Keep gateway auth bypass resolution mirrored through a lightweight top-level `gateway-auth-api.ts` artifact. */
@@ -250,6 +257,15 @@ export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
     currentQrDataUrl?: string;
   }) => Promise<ChannelLoginWithQrWaitResult>;
   logoutAccount?: (ctx: ChannelLogoutContext<ResolvedAccount>) => Promise<ChannelLogoutResult>;
+};
+
+export type ChannelGatewayAdapterV2<ResolvedAccount = unknown> = Omit<
+  ChannelGatewayAdapter<ResolvedAccount>,
+  "apiVersion" | "startAccount" | "stopAccount"
+> & {
+  apiVersion: 2;
+  startAccount?: (ctx: ChannelGatewayContextV2<ResolvedAccount>) => Promise<unknown>;
+  stopAccount?: (ctx: ChannelGatewayContextV2<ResolvedAccount>) => Promise<void>;
 };
 
 export type ChannelAuthAdapter = {

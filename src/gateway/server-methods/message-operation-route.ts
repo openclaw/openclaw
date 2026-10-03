@@ -2,7 +2,7 @@
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { normalizeOptionalAccountId } from "../../routing/session-key.js";

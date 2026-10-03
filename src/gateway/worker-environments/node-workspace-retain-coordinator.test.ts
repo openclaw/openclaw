@@ -99,7 +99,10 @@ function createHarness(
   params: {
     environments?: unknown[];
     placements?: unknown[];
-    pendingResults?: ReturnType<WorkerSessionPlacementStore["listPendingWorkspaceResults"]>;
+    pendingResults?: Awaited<
+      ReturnType<WorkerSessionPlacementStore["listPendingWorkspaceResultsAsync"]>
+    >;
+    assertPreparedResultCurrent?: () => void;
     results?: Array<{
       applied: boolean;
       deleted: number;
@@ -151,15 +154,24 @@ function createHarness(
     invoke,
   };
   const warn = vi.fn();
+  const placements: Pick<WorkerSessionPlacementStore, "list" | "prepareRuntimeRefresh"> = {
+    list: () => (params.placements ?? [placement()]) as never,
+    prepareRuntimeRefresh: async (sessionId) => ({
+      placement: structuredClone(placements.list().find((row) => row.sessionId === sessionId)),
+      pendingResult: structuredClone(
+        params.pendingResults?.find((row) => row.sessionId === sessionId),
+      ),
+      move: undefined,
+      assertCurrent: () => params.assertPreparedResultCurrent?.(),
+      release: () => {},
+    }),
+  };
   const coordinator = createNodeWorkspaceRetainCoordinator({
     gatewayNamespace: "gateway-test",
     environments: {
       list: () => (params.environments ?? [environment()]) as never,
     } as Pick<WorkerEnvironmentService, "list">,
-    placements: {
-      list: () => (params.placements ?? [placement()]) as never,
-      listPendingWorkspaceResults: () => params.pendingResults ?? [],
-    } as Pick<WorkerSessionPlacementStore, "list" | "listPendingWorkspaceResults">,
+    placements,
     bundleRetention: params.bundleRetention,
     additionalManifestRefs: params.additionalManifestRefs,
     warn,
@@ -668,7 +680,7 @@ describe("node workspace retain coordinator", () => {
     }
   });
 
-  it.each(["current", "placement", "environment", "session", "pending"] as const)(
+  it.each(["current", "placement", "environment", "session", "pending", "result"] as const)(
     "rechecks %s ownership after repository manifest preparation",
     async (change) => {
       const baseManifest = `sha256:${"1".repeat(64)}`;
@@ -676,10 +688,12 @@ describe("node workspace retain coordinator", () => {
       const environments = [environment()];
       const entered = createDeferredCore();
       const release = createDeferredCore();
+      const assertPreparedResultCurrent = vi.fn();
       let sessionCurrent = true;
       const { coordinator, invoke } = createHarness({
         placements,
         environments,
+        assertPreparedResultCurrent,
         additionalManifestRefs: async () => {
           entered.resolve();
           await release.promise;
@@ -696,6 +710,10 @@ describe("node workspace retain coordinator", () => {
           environments[0] = environment({ ownerEpoch: 8 });
         } else if (change === "session") {
           sessionCurrent = false;
+        } else if (change === "result") {
+          assertPreparedResultCurrent.mockImplementation(() => {
+            throw new Error("Prepared workspace result custody changed");
+          });
         } else if (change === "pending") {
           placements[0] = placement({
             turnClaim: {
@@ -827,7 +845,10 @@ describe("node workspace retain coordinator", () => {
     const coordinator = createNodeWorkspaceRetainCoordinator({
       gatewayNamespace: "gateway-test",
       environments: { list: () => [] },
-      placements: { list: () => [], listPendingWorkspaceResults: () => [] },
+      placements: {
+        list: () => [],
+        prepareRuntimeRefresh: vi.fn<WorkerSessionPlacementStore["prepareRuntimeRefresh"]>(),
+      },
       warn: vi.fn(),
     });
     coordinator.bindTransport(transport);

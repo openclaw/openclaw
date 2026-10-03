@@ -84,19 +84,6 @@ function validateProviderOptionsAgainstDeclaration(params: {
   return undefined;
 }
 
-function buildNoVideoGenerationModelConfiguredMessage(
-  cfg: OpenClawConfig,
-  deps: VideoGenerationRuntimeDeps,
-): string {
-  const listProviders = deps.listProviders ?? listVideoGenerationProviders;
-  return buildNoCapabilityModelConfiguredMessage({
-    capabilityLabel: "video-generation",
-    modelConfigKey: "mediaModels.video",
-    providers: listProviders(cfg),
-    getProviderEnvVars: deps.getProviderEnvVars,
-  });
-}
-
 export function listRuntimeVideoGenerationProviders(
   params?: { config?: OpenClawConfig },
   deps: VideoGenerationRuntimeDeps = {},
@@ -141,7 +128,14 @@ async function runVideoGeneration(
     autoProviderFallback: params.autoProviderFallback,
   });
   if (candidates.length === 0) {
-    throw new Error(buildNoVideoGenerationModelConfiguredMessage(params.cfg, deps));
+    throw new Error(
+      buildNoCapabilityModelConfiguredMessage({
+        capabilityLabel: "video-generation",
+        modelConfigKey: "mediaModels.video",
+        providers: listProviders(params.cfg),
+        getProviderEnvVars: deps.getProviderEnvVars,
+      }),
+    );
   }
 
   let skipWarnEmitted = false;

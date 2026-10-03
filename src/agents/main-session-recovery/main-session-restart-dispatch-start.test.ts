@@ -30,13 +30,15 @@ const globalLane = "recovery-capacity-global";
 const startTurn = vi.hoisted(() => vi.fn<(params: { io: AgentTurnIo }) => Promise<void>>());
 
 vi.mock("../../gateway/server-methods.js", () => ({
-  authorizeGatewayRequestPreDispatch: async () => ({ error: null }),
   createRequestGatewayMethodRegistry: () => ({ isControlPlaneWrite: () => false }),
   runWithGatewayRequestEnvelope: async (
     _method: string,
     _client: unknown,
     run: () => Promise<unknown>,
   ) => await run(),
+}));
+vi.mock("../../gateway/server-methods/request-authorization.js", () => ({
+  authorizeGatewayRequestPreDispatch: async () => ({ error: null }),
 }));
 vi.mock("../../gateway/agent-turn/agent-request-preflight.js", () => ({
   prepareAgentRequestPreflight: ({ request }: { request: unknown }) => ({ request }),

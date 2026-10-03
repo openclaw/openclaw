@@ -16,7 +16,7 @@ import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import { resolveChannelDmPolicy } from "../../channels/plugins/dm-access.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { notifyPairingApproved } from "../../channels/plugins/pairing.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { hasConfiguredCommandOwners } from "../../commands/doctor-command-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bootstrapCommandOwnerFromPairing } from "../../pairing/command-owner.js";

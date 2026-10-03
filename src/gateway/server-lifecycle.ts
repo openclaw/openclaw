@@ -233,7 +233,6 @@ export async function prepareGatewayLifecycle(params: {
     gatewayMethods: listActiveGatewayMethods(pluginRuntime.baseGatewayMethods),
   });
   const runtimeState = runtimeStateRef.current;
-  runtimeState.gatewayLifetimeSidecars.publish({ stop: () => runtime.scheduler.stop() });
   const pluginRuntimeGeneration = createGatewayPluginRuntimeGeneration({
     getServices: () => runtimeState.pluginServices,
     setServices: (services) => {
@@ -574,6 +573,7 @@ export async function prepareGatewayLifecycle(params: {
               clients,
               finishRequestEntries: () => requestEntryLifetime.sealAndJoin(),
               drainSdkWork: () => params.sdkResourceHost.drainWork(),
+              stopScheduler: () => runtime.scheduler.stop(),
               closeSdkResources: () => params.sdkResourceHost.close(),
               ...(transport
                 ? {

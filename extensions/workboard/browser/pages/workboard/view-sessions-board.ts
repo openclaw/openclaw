@@ -114,16 +114,6 @@ export function renderSessionsBoard(props: {
         <div class="workboard-heading__actions settings-section__actions">
           ${host.connection.canWrite ? html`<button class="btn workboard-new-board" type="button" ?disabled=${!writable} @click=${props.onNewBoard}>${icons.plus}${t("workboard.newBoard")}</button>` : nothing}
           ${controller.hasDock ? html`<button class="btn workboard-board-agent" type="button" ?disabled=${!writable || !snapshot} @click=${() => controller.openAgent()}>${icons.messageSquare}${t("workboard.sessionsBoard.agent")}</button>` : nothing}
-          <button
-            class="btn btn--icon btn--ghost workboard-refresh"
-            type="button"
-            aria-label=${t("common.refresh")}
-            aria-busy=${controller.loading || controller.busy}
-            ?disabled=${!host.connection.connected || controller.loading || controller.busy}
-            @click=${() => (host.connection.canWrite ? controller.refresh() : controller.read())}
-          >
-            ${icons.refresh}
-          </button>
         </div>
       </header>
       <div class="workboard-toolbar">
@@ -134,7 +124,6 @@ export function renderSessionsBoard(props: {
       ${visibleError ? html`<div class="workboard-sessions__warning" role="alert">${visibleError}</div>` : nothing}
       ${snapshot?.warning ? html`<div class="workboard-sessions__warning" role="status">${snapshot.warning}</div>` : nothing}
       ${!snapshot && controller.loading ? html`<div role="status">${t("workboard.sessionsBoard.loading")}</div>` : nothing}
-      ${snapshot?.classifying && !visibleSessions.length ? html`<div role="status">${t("workboard.sessionsBoard.classifying")}</div>` : nothing}
       <div class="workboard-board-viewport">
         <div
           ${ref(boardScrollEdgesRef())}

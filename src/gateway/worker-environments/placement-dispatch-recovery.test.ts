@@ -67,8 +67,8 @@ describe("worker placement restart recovery", () => {
             },
           });
           if (scenario === "pending result") {
-            placements.markWorkspaceResultPending(claim);
-            placements.handoffWorkspaceResultRecovery(claim);
+            await placements.markWorkspaceResultPending(claim);
+            await placements.handoffWorkspaceResultRecovery(claim);
           }
         }
 
@@ -98,7 +98,7 @@ describe("worker placement restart recovery", () => {
             turnClaim: null,
           });
         }
-        expect(placements.listPendingWorkspaceResults()).toEqual([]);
+        expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       },
     );
   });
@@ -722,7 +722,7 @@ describe("worker placement restart recovery", () => {
         ownerEpoch: active.activeOwnerEpoch,
       },
     });
-    placements.markWorkspaceResultPending(claim);
+    await placements.markWorkspaceResultPending(claim);
 
     const restartedStore = createWorkerSessionPlacementStore({
       database: support.testState.stateDb,
@@ -738,7 +738,7 @@ describe("worker placement restart recovery", () => {
       state: "failed",
       recoveryError: "Pending cloud workspace result lost its worker: session-1",
     });
-    expect(restartedStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await restartedStore.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(restartedHarness.environments.startTunnel).not.toHaveBeenCalled();
   });
 
@@ -836,8 +836,8 @@ describe("worker placement restart recovery", () => {
           ownerEpoch: active.activeOwnerEpoch,
         },
       });
-      placements.markWorkspaceResultPending(claim);
-      placements.handoffWorkspaceResultRecovery(claim);
+      await placements.markWorkspaceResultPending(claim);
+      await placements.handoffWorkspaceResultRecovery(claim);
       currentBundle = { ...support.BUNDLE_ARTIFACT, bundleHash: "c".repeat(64) };
       recoveryState.started = true;
 
@@ -847,7 +847,7 @@ describe("worker placement restart recovery", () => {
         state: "active",
         turnClaim: { claimId: claim.claimId, runId: claim.runId },
       });
-      expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
       expect(workerService.get(active.environmentId)).toMatchObject({
         state: "attached",
         destroyRequestedAtMs: null,

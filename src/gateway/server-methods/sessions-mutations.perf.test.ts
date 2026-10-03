@@ -4,6 +4,7 @@ import {
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
+  loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { CronJob } from "../../cron/types.js";
@@ -198,7 +199,8 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
         return readsTranscriptPayload && !boundedPayloadLookup ? "transcript-full-hydration" : null;
       },
     );
-    await loadTranscriptEvents({
+    // Calibrate the host SQL observer through the synchronous compatibility reader.
+    loadTranscriptEventsSync({
       agentId: "main",
       sessionId: "session-archive-perf-0",
       sessionKey: targets[0]!.key,

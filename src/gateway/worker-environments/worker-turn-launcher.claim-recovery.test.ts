@@ -324,7 +324,7 @@ describe("worker pre-launch claim recovery", () => {
       request.onDispatchReady?.();
       if (blockSecond) {
         if (stage === "pending result") {
-          placements.markWorkspaceResultPending(request.turnClaim);
+          await placements.markWorkspaceResultPending(request.turnClaim);
         }
         entered.resolve();
         await resume.promise;
@@ -356,7 +356,7 @@ describe("worker pre-launch claim recovery", () => {
         transcriptSeq: 2,
         liveSeq: 1,
       });
-      placements.markWorkspaceResultPending(request.turnClaim);
+      await placements.markWorkspaceResultPending(request.turnClaim);
       return {
         stdout: JSON.stringify({
           status: "completed",
@@ -539,7 +539,7 @@ describe("worker pre-launch claim recovery", () => {
         }),
       ).resolves.toMatchObject({ payloads: [{ text: "First turn complete" }] });
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       blockSecond = true;
       if (stage === "GitHub binding") {
         github = vi
@@ -563,7 +563,7 @@ describe("worker pre-launch claim recovery", () => {
       await entered.promise;
       const oldClaim = placements.get(SESSION_ID)?.turnClaim;
       expect(oldClaim?.runId).toBe("blocked-second");
-      expect(placements.listPendingWorkspaceResults()).toHaveLength(
+      expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(
         stage === "pending result" ? 1 : 0,
       );
       const dispatched =
@@ -635,7 +635,7 @@ describe("worker pre-launch claim recovery", () => {
       }
       if (stage === "pending result") {
         expect(placements.get(SESSION_ID)?.turnClaim).toEqual(oldClaim);
-        const pending = placements.listPendingWorkspaceResults()[0]!;
+        const pending = (await placements.listPendingWorkspaceResultsAsync())[0]!;
         expect(pending.claimId).toBe(oldClaim?.claimId);
         expect(pending.recoveryRequestedAtMs).not.toBeNull();
         expect(environments.destroy).not.toHaveBeenCalled();

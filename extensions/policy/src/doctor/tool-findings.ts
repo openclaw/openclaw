@@ -35,16 +35,6 @@ export function toolPostureFindings(
       continue;
     }
     const requirementBase = `scopes/${ocPathSegment(target.scopeName)}/tools`;
-    if (
-      posturePolicyShapeFinding("tools", target.overlay.tools, {
-        policyDocName,
-        policyPath,
-        targetPrefix: requirementBase,
-        propertyPrefix: `scopes.${target.scopeName}.tools`,
-      }) !== undefined
-    ) {
-      continue;
-    }
     findings.push(
       ...toolPostureFindingsForRule(
         target.overlay.tools,

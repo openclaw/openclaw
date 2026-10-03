@@ -218,6 +218,7 @@ describe("conversation registry", () => {
       routeContext: { guildId: "guild-a" },
     });
 
+    await closeOpenClawAgentDatabasesAsync(tempDir);
     const resolved = resolveSqliteReadScope(scope);
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     database.db
@@ -289,6 +290,7 @@ describe("conversation registry", () => {
       { target: "channel:alpha", routeContext: { guildId: "guild-alpha" } },
       { target: "channel:beta", routeContext: { guildId: "guild-beta" } },
     ]);
+    await closeOpenClawAgentDatabasesAsync(tempDir);
     const resolved = resolveSqliteReadScope(scope);
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     executeSqliteQuerySync(
@@ -385,6 +387,7 @@ describe("conversation registry", () => {
       chatType: "direct",
       deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-a" },
     });
+    await closeOpenClawAgentDatabasesAsync(tempDir);
     const resolved = resolveSqliteReadScope(scope);
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     executeSqliteQuerySync(
@@ -454,6 +457,7 @@ describe("conversation registry", () => {
         },
       );
     }
+    await closeOpenClawAgentDatabasesAsync(tempDir);
     const resolved = resolveSqliteReadScope({ agentId: "main", storePath });
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     const db = getSessionKysely(database.db);

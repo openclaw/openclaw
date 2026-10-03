@@ -5,7 +5,7 @@ import { modeBits } from "@openclaw/fs-safe/permissions";
 import { walkDirectory } from "@openclaw/fs-safe/walk";
 import { listAgentIds, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveAuthProfileDatabaseFilePaths } from "../agents/auth-profiles/sqlite.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { createConfigIO, replaceConfigFile } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveConfigPath, resolveOAuthDir, resolveStateDir } from "../config/paths.js";

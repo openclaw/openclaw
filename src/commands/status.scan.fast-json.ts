@@ -84,7 +84,6 @@ export async function scanStatusJsonFast(
     : [];
   return await executeStatusScanFromOverview({
     overview,
-    runtime,
     resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) => {
       if (!opts.all) {
         return null;
@@ -98,8 +97,6 @@ export async function scanStatusJsonFast(
         requireDefaultDatabasePath: resolveDefaultMemoryDatabasePath,
       });
     },
-    channelIssues: overview.channelIssues,
-    channels: overview.channels,
     pluginCompatibility,
   });
 }

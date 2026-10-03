@@ -22,7 +22,7 @@ import {
   getActivePluginRegistry,
   setActivePluginRegistry,
 } from "./runtime.js";
-import { startPluginServices } from "./services.js";
+import { startPluginServices } from "./services.test-support.js";
 
 afterEach(resetPluginLoaderTestStateForTest);
 afterAll(cleanupPluginLoaderFixturesForTest);

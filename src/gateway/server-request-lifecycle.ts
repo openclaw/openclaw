@@ -1,5 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  type ErrorShape,
+} from "../../packages/gateway-protocol/src/index.js";
 import {
   GATEWAY_RESTART_UNAVAILABLE_REASON,
   GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS,
@@ -9,10 +13,27 @@ import {
   getGatewayRestartDrainSignal,
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDraining,
+  retainGatewayRootWorkAdmissionContinuation,
 } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { canSelectQuestion } from "./question-access.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
+
+const SUSPEND_CONTROL_METHODS = new Set([
+  "gateway.suspend.prepare",
+  "gateway.suspend.status",
+  "gateway.suspend.resume",
+  "gateway.suspend.handoff",
+]);
+
+export function isGatewayRootlessRequestAllowed(method: string): boolean {
+  return (
+    SUSPEND_CONTROL_METHODS.has(method) ||
+    (method === "update.runs.get" &&
+      getGatewayRestartDrainSignal().aborted &&
+      getGatewaySuspendAdmissionPhase() === "accepting")
+  );
+}
 
 export function runGatewayPendingWorkContinuation<T>(params: {
   method: string;
@@ -105,11 +126,18 @@ export function workAdmissionUnavailableError(method: string) {
 
 /** Cancels passive waiters without abandoning their owner's admitted writes. */
 export async function runWithGatewayObservationScope<T>(
-  run: () => T | Promise<T>,
+  method: string,
+  run: (retainRoot: () => void) => T | Promise<T>,
   requestSignals: (AbortSignal | undefined)[],
-  cancelled: () => T | Promise<T>,
+  cancelled: (error: ErrorShape) => T | Promise<T>,
 ): Promise<T> {
   const work = new AsyncWorkScope();
+  const rootHold: { release: (() => void) | null } = { release: null };
+  // Authorization precedes admission; the envelope hands off its root before invoking work.
+  const retainRoot = () => {
+    work.signal.throwIfAborted();
+    rootHold.release ??= retainGatewayRootWorkAdmissionContinuation();
+  };
   const signal = AbortSignal.any(
     [getGatewayRestartDrainSignal(), getAsyncWorkSignal(), ...requestSignals].filter(
       (candidate): candidate is AbortSignal => candidate !== undefined,
@@ -122,16 +150,26 @@ export async function runWithGatewayObservationScope<T>(
   }
   try {
     work.signal.throwIfAborted();
-    const result = await work.track(run);
+    const result = await work.track(() => run(retainRoot));
     work.signal.throwIfAborted();
     return result;
   } catch (error) {
     if (!work.signal.aborted) {
       throw error;
     }
-    return await cancelled();
+    return await cancelled(
+      getGatewayRestartDrainSignal().aborted
+        ? workAdmissionUnavailableError(method)
+        : errorShape(ErrorCodes.UNAVAILABLE, `${method} observation cancelled`, {
+            retryable: true,
+          }),
+    );
   } finally {
     signal.removeEventListener("abort", close);
-    await work.drain();
+    try {
+      await work.drain();
+    } finally {
+      rootHold.release?.();
+    }
   }
 }

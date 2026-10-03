@@ -180,8 +180,13 @@ describe("memory capability ownership", () => {
 
   it("merges sidecar consolidation without lending its recall authorization to the slot owner", async () => {
     const { config, add, selected } = fixture();
-    add("acme-memory", { runtime: createStubMemoryRuntime() }, { memorySlotSelected: true });
+    add(
+      "acme-memory",
+      { runtime: createStubMemoryRuntime(), recallToolNames: ["acme_recall"] },
+      { memorySlotSelected: true },
+    );
     add("memory-core", {
+      recallToolNames: ["memory_search", "memory_get"],
       deterministicRecallToolName: "memory_search",
       supportsPrivateTranscriptRecall: true,
       promptBuilder: () => ["sidecar prompt"],
@@ -192,6 +197,7 @@ describe("memory capability ownership", () => {
     expect(owner?.pluginId).toBe("acme-memory");
     expect(owner?.memorySlotSelected).toBe(true);
     expect(owner?.capability.deterministicRecallToolName).toBeUndefined();
+    expect(owner?.capability.recallToolNames).toEqual(["acme_recall"]);
     expect(owner?.capability.supportsPrivateTranscriptRecall).toBeUndefined();
     await expect(
       owner?.capability.runtime?.getMemorySearchManager({ cfg: config, agentId: "main" }),

@@ -122,26 +122,6 @@ const loadExecApprovalForwarderRuntime = createLazyRuntimeModule(
   () => import("./exec-approval-forwarder.runtime.js"),
 );
 
-function shouldForwardRoute(params: {
-  config?: {
-    enabled?: boolean;
-    agentFilter?: string[];
-    sessionFilter?: string[];
-  };
-  routeRequest: ApprovalRouteRequest;
-}): boolean {
-  const config = params.config;
-  if (!config?.enabled) {
-    return false;
-  }
-  return matchesApprovalRequestFilters({
-    request: params.routeRequest,
-    agentFilter: config.agentFilter,
-    sessionFilter: config.sessionFilter,
-    fallbackAgentIdFromSessionKey: true,
-  });
-}
-
 function buildTargetKey(target: ExecApprovalForwardTarget): string {
   const channel = normalizeMessageChannel(target.channel) ?? target.channel;
   return channelRouteDedupeKey({
@@ -413,7 +393,15 @@ function createApprovalHandlers<
     routeRequest: ApprovalRouteRequest;
     approvalRequest?: ApprovalRequestInput;
   }): Promise<ForwardTarget[]> => {
-    if (!shouldForwardRoute(paramsForRoute)) {
+    if (
+      !paramsForRoute.config?.enabled ||
+      !matchesApprovalRequestFilters({
+        request: paramsForRoute.routeRequest,
+        agentFilter: paramsForRoute.config.agentFilter,
+        sessionFilter: paramsForRoute.config.sessionFilter,
+        fallbackAgentIdFromSessionKey: true,
+      })
+    ) {
       return [];
     }
     if (params.strategy.liveOriginOnly) {

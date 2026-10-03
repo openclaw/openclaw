@@ -5,7 +5,7 @@ import { expect, it, vi } from "vitest";
 import { prepareDoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
-import { readAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.js";
+import { readAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.kernel.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawStateDatabaseForTest,

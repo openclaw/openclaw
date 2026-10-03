@@ -409,7 +409,7 @@ it("accepts editor bytes and Git-normalized publication before acknowledging the
       ).toBe("saved\n");
     },
   );
-  expect(accepted.placements.listPendingWorkspaceResults()).toEqual([]);
+  expect(await accepted.placements.listPendingWorkspaceResultsAsync()).toEqual([]);
   expect(accepted.placements.get(identity.sessionId)?.turnClaim).toBeNull();
 });
 
@@ -432,7 +432,7 @@ it("reports failed editor checkpoint capture and retains the durable recovery ow
     checkpointRef: source.checkpointRef,
     manifestHash: source.manifestHash,
   });
-  expect(accepted.placements.listPendingWorkspaceResults()).toEqual([
+  expect(await accepted.placements.listPendingWorkspaceResultsAsync()).toEqual([
     expect.objectContaining({
       sessionId: identity.sessionId,
       workspaceAcceptedAtMs: null,

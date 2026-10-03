@@ -58,9 +58,11 @@ whichever is longer). These retained counts govern `/subagents list`,
 status summaries, descendant completion gating, and per-session concurrency
 checks; they are not proof that an executor is live.
 
-During a graceful restart, an already-admitted replacement run can finish
-refreshing a deferred child result before shutdown. The refresh remains tracked
-until capture and persistence finish; it does not admit a new run.
+During a graceful restart or Gateway suspension, lifecycle events from
+already-admitted runs remain tracked through restart preservation and completion
+processing. An already-admitted replacement run can finish refreshing a deferred
+child result before shutdown. The refresh remains tracked until capture and
+persistence finish; it does not admit a new run.
 
 After a Gateway restart, the parent owns continuation of the user's task.
 Interrupted sub-agents are finalized through their normal completion path instead

@@ -55,6 +55,7 @@ import {
 import { createAgentsSupportVitestConfig } from "../vitest/vitest.agents-support.config.ts";
 import { createAgentsToolsVitestConfig } from "../vitest/vitest.agents-tools.config.ts";
 import { createAgentsVitestConfig } from "../vitest/vitest.agents.config.ts";
+import { createAutoReplyReplyVitestConfig } from "../vitest/vitest.auto-reply-reply.config.ts";
 import { cliProcessTestFiles } from "../vitest/vitest.cli-process-paths.mjs";
 import { createCliProcessVitestConfig } from "../vitest/vitest.cli-process.config.ts";
 import { createCommandsVitestConfig } from "../vitest/vitest.commands.config.ts";
@@ -3761,6 +3762,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(infra.test?.setupFiles).toEqual(support.test?.setupFiles);
     const admitted = new Set(listMatchedTestFiles(infra));
     for (const file of [
+      "src/agents/embedded-agent-runner/run/attempt-bootstrap-prepare.test.ts",
+      "src/auto-reply/reply/session-reset-prompt.test.ts",
       "src/agents/prepared-model-runtime.hot-reload-dispatch.test.ts",
       "src/agents/subagents/registry/subagent-registry.session-failure.test.ts",
       "src/plugin-sdk/session-transcript-runtime.test.ts",
@@ -3781,6 +3784,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         support,
         createAgentsToolsVitestConfig({}),
         createAgentsVitestConfig({}),
+        createAutoReplyReplyVitestConfig({}),
         createPluginSdkLightVitestConfig({}),
         createPluginSdkVitestConfig({}),
         createPluginsVitestConfig({}),

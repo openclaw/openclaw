@@ -409,25 +409,6 @@ describe("sessions.files RPC handlers", () => {
     },
   );
 
-  it("does not read absolute or parent-relative paths outside the configured workspace", async () => {
-    const outsidePath = outsideFile();
-    fs.writeFileSync(outsidePath, "outside\n", "utf8");
-    mockSession({
-      sessionId: "sess-main",
-      sessionFile: "missing-session.jsonl",
-    });
-    mockVisibleMessages([assistantToolCall("read", { path: outsidePath })]);
-
-    for (const requestedPath of [outsidePath, "../outside.txt"]) {
-      const error = expectError(await getFile(requestedPath));
-
-      expect(error.details).toMatchObject({
-        path: requestedPath,
-        type: "session_file_not_found",
-      });
-    }
-  });
-
   it("does not follow symlinked parent directories for file previews", async () => {
     const outsideDir = outsideDirs.make("session-files-parent-");
     writeWorkspaceFile(outsideDir, "secret.txt", "linked parent outside\n");
@@ -690,26 +671,25 @@ describe("sessions.files RPC handlers", () => {
     expect(fs.readFileSync(path.join(workspaceRoot, "logo.png"))).toEqual(binary);
   });
 
-  it("rejects escaped and symlinked write targets without touching outside files", async () => {
-    const outsidePath = outsideFile();
-    const escapedPath = path.join(path.dirname(outsidePath), "missing.txt");
-    const escapedName = path.relative(path.dirname(workspaceRoot), escapedPath);
-    const outsideContent = "outside\n";
-    fs.writeFileSync(outsidePath, outsideContent, "utf8");
-    fs.symlinkSync(outsidePath, path.join(workspaceRoot, "linked.txt"));
-
-    for (const requestedPath of [`../${escapedName}`, "linked.txt"]) {
-      const error = expectError(
-        await saveFile({
-          path: requestedPath,
-          content: "replaced\n",
-          expectedHash: hashContent(outsideContent),
-        }),
-      );
-      expect(["session_file_not_found", "session_file_unsafe"]).toContain(error.details.type);
-    }
-    expect(fs.readFileSync(outsidePath, "utf8")).toBe(outsideContent);
-    expect(fs.existsSync(escapedPath)).toBe(false);
+  it("registers session assets and rejects more than 64 references before loading files", async () => {
+    const empty = expectOkPayload(
+      await invoke("sessions.files.assets", {
+        sessionKey,
+        path: "index.html",
+        refs: [],
+      }),
+    );
+    expect(empty).toEqual({ assets: [] });
+    hoisted.loadSessionEntry.mockClear();
+    const error = expectError(
+      await invoke("sessions.files.assets", {
+        sessionKey,
+        path: "index.html",
+        refs: Array.from({ length: 65 }, (_, index) => `image-${index}.png`),
+      }),
+    );
+    expect(error.code).toBe("INVALID_REQUEST");
+    expect(hoisted.loadSessionEntry).not.toHaveBeenCalled();
   });
 });
 

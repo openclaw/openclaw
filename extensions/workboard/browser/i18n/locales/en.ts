@@ -110,7 +110,6 @@ export default {
       writeUnavailable:
         "Board appearance was saved. Reconnect with write access to save the session columns.",
       loading: "Loading sessions…",
-      classifying: "Classifying sessions…",
       empty: "No sessions in this column",
       columns: "Columns",
       columnLabel: "Column label",
@@ -122,10 +121,8 @@ export default {
       newColumn: "New column",
       moveUp: "Move up",
       moveDown: "Move down",
-      instructions: "Classification instructions",
-      instructionsHelp:
-        "Descriptions guide the utility model. Instructions can refine placement across every column. The Board agent can also edit deterministic rules and session scope.",
-      source: { state: "by rule", model: "by model", operator: "pinned" },
+      rulesHelp: "The Board agent can edit column rules and session scope.",
+      source: { state: "by rule", operator: "pinned" },
       run: { active: "Working", idle: "Idle", failed: "Failed" },
       pullRequest: { open: "Open", draft: "Draft", merged: "Merged", closed: "Closed" },
       color: {

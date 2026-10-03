@@ -124,9 +124,7 @@ final class DashboardBrowserMessageHandler: NSObject, WKScriptMessageHandlerWith
 
     nonisolated static func url(_ value: Any?) throws -> URL {
         guard let string = value as? String, let url = URL(string: string),
-              string == "about:blank" ||
-              ((url.scheme?.lowercased() == "http" || url.scheme?.lowercased() == "https") &&
-                  url.host?.isEmpty == false)
+              string == "about:blank" || ControlUIDocumentHost.isHTTPURL(url)
         else { throw DashboardBrowserError.invalidRequest }
         return url
     }

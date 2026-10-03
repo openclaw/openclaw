@@ -2,16 +2,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  AgentSelectionRequiredError,
-  tryResolveAmbientOwnerAgentId,
-} from "../../agents/agent-scope-config.js";
-import {
-  listAgentIds,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import {
@@ -26,20 +16,27 @@ import {
   type ShortTermDreamingStatsEntry,
 } from "../../memory-host-sdk/dreaming.js";
 import * as defaultMemoryCoreRuntime from "../../plugin-sdk/memory-core-bundled-runtime.js";
-import { getActiveMemorySearchManagerCore } from "../../plugins/memory-runtime.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import type { MemoryHealth } from "../../plugins/memory-provider-types.js";
+import {
+  getActiveMemorySearchManagerCore,
+  resolveActiveMemoryBackendConfig,
+} from "../../plugins/memory-runtime.js";
 import { sortAndLimitBy } from "../../shared/sort-and-limit.js";
 import {
   listWorkspaceDailyFiles,
   readDreamDiary,
   type DoctorMemoryDreamDiaryPayload,
 } from "./doctor-memory-files.js";
-import type {
-  GatewayRequestContext,
-  GatewayRequestHandler,
-  GatewayRequestHandlers,
-  RespondFn,
-} from "./types.js";
+import {
+  respondProviderMemoryStatus,
+  SKIPPED_MEMORY_EMBEDDING_PROBE,
+} from "./doctor-memory-provider-status.js";
+import {
+  memoryActionHandler,
+  resolveDoctorMemoryAgent,
+  resolveDoctorMemoryTarget,
+} from "./doctor-memory-target.js";
+import type { GatewayRequestHandlers } from "./types.js";
 
 export type { DoctorMemoryDreamDiaryPayload } from "./doctor-memory-files.js";
 
@@ -109,6 +106,7 @@ export type DoctorMemoryStatusPayload = {
   agentId: string;
   searchRuntimeRegistered?: boolean;
   provider?: string;
+  health?: MemoryHealth;
   embedding: {
     ok: boolean;
     error?: string;
@@ -132,30 +130,7 @@ export type DoctorMemoryEmbeddingRuntimePayload = {
   loadError?: string;
 };
 
-export type DoctorMemoryDreamActionPayload = {
-  agentId: string;
-  action:
-    | "backfill"
-    | "reset"
-    | "resetGroundedShortTerm"
-    | "repairDreamingArtifacts"
-    | "dedupeDreamDiary";
-  path?: string;
-  found?: boolean;
-  scannedFiles?: number;
-  written?: number;
-  replaced?: number;
-  removedEntries?: number;
-  removedShortTermEntries?: number;
-  changed?: boolean;
-  archiveDir?: string;
-  archivedDreamsDiary?: boolean;
-  archivedSessionCorpus?: boolean;
-  archivedSessionIngestion?: boolean;
-  warnings?: string[];
-  dedupedEntries?: number;
-  keptEntries?: number;
-};
+export type { DoctorMemoryDreamActionPayload } from "./doctor-memory-target.js";
 
 function extractIsoDayFromPath(filePath: string): string | null {
   const match = filePath.replaceAll("\\", "/").match(/(\d{4}-\d{2}-\d{2})(?:-[^/]+)?\.md$/i);
@@ -449,101 +424,36 @@ function shouldProbeMemoryEmbeddings(params: unknown): boolean {
   return record.probe === true || record.deep === true;
 }
 
-function resolveDoctorMemoryAgent(
-  context: GatewayRequestContext,
-  params: unknown,
-  respond: RespondFn,
-): {
-  cfg: OpenClawConfig;
-  agentId: string;
-  requestedAgentId?: string;
-} | null {
-  const cfg = context.getRuntimeConfig();
-  const record = asOptionalRecord(params);
-  const rawAgentId = record?.agentId;
-  // Validate before resolving workspace or manager state; both paths can create agent storage.
-  if (rawAgentId !== undefined && typeof rawAgentId !== "string") {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "agentId must be a string"));
-    return null;
-  }
-  const requestedAgentId =
-    typeof rawAgentId === "string" ? normalizeAgentId(rawAgentId) : undefined;
-  let agentId = requestedAgentId ?? tryResolveAmbientOwnerAgentId(cfg);
-  if (!agentId) {
-    try {
-      agentId = resolveDefaultAgentId(cfg, {
-        surface: "doctor memory",
-        hint: "Pass agentId to select a configured agent.",
-      });
-    } catch (error) {
-      if (!(error instanceof AgentSelectionRequiredError)) {
-        throw error;
-      }
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
-      return null;
-    }
-  }
-  if (requestedAgentId && !listAgentIds(cfg).includes(agentId)) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${requestedAgentId}"`),
-    );
-    return null;
-  }
-  return { cfg, agentId, ...(requestedAgentId ? { requestedAgentId } : {}) };
-}
-
-function resolveDoctorMemoryTarget(
-  context: GatewayRequestContext,
-  params: unknown,
-  respond: RespondFn,
-): {
-  cfg: OpenClawConfig;
-  agentId: string;
-  workspaceDir: string;
-} | null {
-  const resolved = resolveDoctorMemoryAgent(context, params, respond);
-  if (!resolved) {
-    return null;
-  }
-  return {
-    cfg: resolved.cfg,
-    agentId: resolved.agentId,
-    workspaceDir: resolveAgentWorkspaceDir(resolved.cfg, resolved.agentId),
-  };
-}
-
-function memoryActionHandler(
-  action: DoctorMemoryDreamActionPayload["action"],
-  run: (
-    target: NonNullable<ReturnType<typeof resolveDoctorMemoryTarget>>,
-  ) => Promise<Omit<DoctorMemoryDreamActionPayload, "agentId" | "action">>,
-): GatewayRequestHandler {
-  return async ({ respond, context, params }) => {
-    const target = resolveDoctorMemoryTarget(context, params, respond);
-    if (!target) {
-      return;
-    }
-    respond(true, { agentId: target.agentId, action, ...(await run(target)) }, undefined);
-  };
-}
-
-const SKIPPED_MEMORY_EMBEDDING_PROBE = {
-  ok: false,
-  checked: false,
-  error: "memory embedding readiness not checked; run `openclaw memory status --deep` to probe",
-} as const;
-
 export const createDoctorHandlers = (
   memoryCoreRuntime: DoctorMemoryCoreRuntime = defaultMemoryCoreRuntime,
 ): GatewayRequestHandlers => ({
-  "doctor.memory.status": async ({ respond, context, params }) => {
+  "doctor.memory.status": async ({
+    respond,
+    context,
+    params,
+    client,
+    signal,
+    hasCurrentClientAuthority,
+  }) => {
     const resolved = resolveDoctorMemoryAgent(context, params, respond);
     if (!resolved) {
       return;
     }
     const { cfg, agentId, requestedAgentId } = resolved;
+    const backend = resolveActiveMemoryBackendConfig({ cfg, agentId });
+    if (backend?.backend === "provider-runtime") {
+      await respondProviderMemoryStatus({
+        cfg,
+        agentId,
+        providerId: backend.providerId,
+        respond,
+        context,
+        client,
+        signal,
+        hasCurrentClientAuthority,
+      });
+      return;
+    }
     const { manager, error, searchRuntimeRegistered } = await getActiveMemorySearchManagerCore({
       cfg,
       agentId,
@@ -753,4 +663,3 @@ export const createDoctorHandlers = (
     },
   ),
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

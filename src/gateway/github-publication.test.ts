@@ -708,7 +708,7 @@ describe("Gateway GitHub publication", () => {
       agentId: REQUEST.agentId,
       idempotencyKey: "accepted-snapshot",
     });
-    placements.markWorkspaceResultPending(claim);
+    await placements.markWorkspaceResultPending(claim);
 
     await runtime.prepareAcceptedWorkspacePublication(claim);
 
@@ -982,9 +982,9 @@ describe("Gateway GitHub publication", () => {
       idempotencyKey: "accepted-workspace-publication",
       title: "Publish the accepted workspace",
     });
-    placements.markWorkspaceResultPending(claim);
+    await placements.markWorkspaceResultPending(claim);
     await runtime.prepareAcceptedWorkspacePublication(claim);
-    placements.acceptWorkspaceResult(claim);
+    await placements.acceptWorkspaceResult(claim);
     const processClaim = vi
       .spyOn(runtime.coordinator, "processClaim")
       .mockRejectedValueOnce(new Error("transient publication failure"));

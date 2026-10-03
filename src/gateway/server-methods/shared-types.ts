@@ -527,6 +527,11 @@ export type GatewayRequestHandlerOptions = Omit<
 > & {
   params: Record<string, unknown>;
   sessionMutationAuthorization?: SessionMutationAuthorization;
+  /** Synchronously consume current chat.send authority without starting a turn. */
+  withSessionTurnAuthority?: <T>(
+    target: { sessionKey: string; agentId?: string; sessionId: string },
+    consume: (entry: import("../../config/sessions/types.js").InternalSessionEntry) => T,
+  ) => Promise<T>;
   markSessionSubscribePhase?: (
     phase: import("../slow-request-diagnostics.js").SessionSubscribePhase,
   ) => void;

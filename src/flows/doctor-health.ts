@@ -34,6 +34,7 @@ import {
 } from "../infra/update-doctor-result.js";
 import { formatUpdateFailureFact } from "../infra/update-failure-facts-format.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
+import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withPluginLoadDiagnostics } from "../plugins/load-diagnostics.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
@@ -72,19 +73,26 @@ export async function runDoctorHealthFlow(
   const run = () =>
     withDeferredDebugProxyCapture(async (resumeCapture) => {
       let preparedPreflight = databasePreflight;
+      const preCaptureRehearsalRoot =
+        !writeAuthority?.postCoreSchemaRepair && (options.repair === true || options.yes === true)
+          ? resolveUpdateRehearsalRoot(process.env)
+          : undefined;
       if (
         process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" &&
         !writeAuthority?.postCoreSchemaRepair
       ) {
         const { guardUpdateDoctorSchemaUpgrade, rehearseDeferredUpdateDoctorSchema } =
           await import("../commands/doctor-update-schema-guard.js");
-        preparedPreflight =
-          (await guardUpdateDoctorSchemaUpgrade({
-            schemas: preparedPreflight,
-            runtime,
-            json: options.json,
-          })) ?? preparedPreflight;
-        if (preparedPreflight?.updateSchemaRehearsal) {
+        const guarded = await guardUpdateDoctorSchemaUpgrade({
+          schemas: preparedPreflight,
+          runtime,
+          json: options.json,
+          statePublicationOnly: preCaptureRehearsalRoot !== undefined,
+        });
+        if (!preCaptureRehearsalRoot) {
+          preparedPreflight = guarded ?? preparedPreflight;
+        }
+        if (!preCaptureRehearsalRoot && preparedPreflight?.updateSchemaRehearsal) {
           await rehearseDeferredUpdateDoctorSchema(preparedPreflight, runtime);
           return;
         }
@@ -100,6 +108,7 @@ export async function runDoctorHealthFlow(
             resultPath && capture ? { resultPath, capture } : undefined,
             writeAuthority,
             resumeCapture,
+            preCaptureRehearsalRoot,
           );
         return resultPath
           ? captureUpdateDoctorConfigWrites(resolveConfigPath(), runDoctor, writeAuthority)
@@ -117,6 +126,7 @@ async function runDoctorHealthFlowWithResult(
   updateResult?: { resultPath: string; capture: DoctorConfigCapture },
   writeAuthority?: UpdateDoctorWriteAuthority,
   resumeCapture?: () => void,
+  preCaptureRehearsalRoot?: string,
 ) {
   const effectiveRuntime = runtime ?? (await import("../runtime.js")).defaultRuntime;
   const repairRuntime: RuntimeEnv = {
@@ -194,7 +204,10 @@ async function runDoctorHealthFlowWithResult(
       // Keep an accepted signal during preparation ahead of service custody.
       await waitForCliSignalExit();
     }
-    const { beginDoctorMaintenance } = await import("../commands/doctor-maintenance.js");
+    const [{ beginDoctorMaintenance }, { createDoctorOriginalCaptureHook }] = await Promise.all([
+      import("../commands/doctor-maintenance.js"),
+      import("../commands/doctor-original-capture-admission.js"),
+    ]);
     maintenance = await measureGatewayBootstrapStep("doctor.maintenance.begin", () =>
       beginDoctorMaintenance({
         options,
@@ -202,27 +215,13 @@ async function runDoctorHealthFlowWithResult(
         runtime: repairRuntime,
         assertCurrent: writeAuthority?.assertCurrent,
         databaseGenerations: writeAuthority?.databaseGenerations,
-        beforeStateMutation: async ({ env, signal }) => {
-          const [{ preserveDoctorOriginalState }, { getOpenClawDatabaseMaintenanceScope }] =
-            await Promise.all([
-              import("../commands/doctor-original-capture.js"),
-              import("../state/openclaw-state-db-async-lifecycle.js"),
-            ]);
-          const scope = getOpenClawDatabaseMaintenanceScope();
-          if (!scope) {
-            throw new Error("Original state capture requires Doctor's admitted maintenance scope.");
-          }
-          await measureGatewayBootstrapStep("doctor.maintenance.preserve-original-state", () =>
-            preserveDoctorOriginalState({
-              root,
-              env,
-              runtime: repairRuntime,
-              signal,
-              assertCurrent: () => scope.assertOwnerCurrent(),
-              writeAuthority,
-            }),
-          );
-        },
+        beforeStateMutation: createDoctorOriginalCaptureHook({
+          root,
+          runtime: repairRuntime,
+          writeAuthority,
+          rehearsalRoot: preCaptureRehearsalRoot,
+          json: options.json,
+        }),
       }),
     );
     const runChecks = async () => {

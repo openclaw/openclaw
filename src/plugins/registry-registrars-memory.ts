@@ -34,6 +34,7 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
       !memorySlotSelected &&
       (capability.runtime !== undefined ||
         capability.providerRuntime !== undefined ||
+        capability.recallToolNames !== undefined ||
         capability.deterministicRecallToolName !== undefined ||
         capability.supportsPrivateTranscriptRecall !== undefined);
     if (dropsSlotOwnerFacts) {
@@ -45,6 +46,7 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
     const {
       runtime: _droppedRuntime,
       providerRuntime: _droppedProviderRuntime,
+      recallToolNames: _droppedRecallToolNames,
       deterministicRecallToolName: _droppedRecallToolName,
       supportsPrivateTranscriptRecall: _droppedPrivateRecall,
       ...consolidationCapability

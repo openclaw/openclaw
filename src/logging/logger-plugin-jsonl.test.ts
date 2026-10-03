@@ -4,7 +4,7 @@ import { createSubsystemLogger, getChildLogger } from "../plugin-sdk/logging-cor
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
-import { startPluginServices } from "../plugins/services.js";
+import { startPluginServices } from "../plugins/services.test-support.js";
 import { readConfiguredLogTail } from "./log-tail.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { applyLoggingConfig, flushLogger, resetLogger } from "./logger.js";

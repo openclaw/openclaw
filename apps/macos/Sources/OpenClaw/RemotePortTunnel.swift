@@ -393,35 +393,16 @@ final class RemotePortTunnel: @unchecked Sendable {
     }
 
     private static func canBindIPv4(_ port: UInt16) -> Bool {
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else { return false }
-        defer { _ = Darwin.close(fd) }
-
-        var one: Int32 = 1
-        _ = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout.size(ofValue: one)))
-
         var addr = sockaddr_in()
         addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         addr.sin_family = sa_family_t(AF_INET)
         addr.sin_port = port.bigEndian
         addr.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
 
-        let result = withUnsafePointer(to: &addr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                Darwin.bind(fd, sa, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-        return result == 0
+        return self.canBind(&addr, family: AF_INET)
     }
 
     private static func canBindIPv6(_ port: UInt16) -> Bool {
-        let fd = socket(AF_INET6, SOCK_STREAM, 0)
-        guard fd >= 0 else { return false }
-        defer { _ = Darwin.close(fd) }
-
-        var one: Int32 = 1
-        _ = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout.size(ofValue: one)))
-
         var addr = sockaddr_in6()
         addr.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
         addr.sin6_family = sa_family_t(AF_INET6)
@@ -431,12 +412,21 @@ final class RemotePortTunnel: @unchecked Sendable {
             inet_pton(AF_INET6, "::1", ptr)
         }
         addr.sin6_addr = loopback
+        return self.canBind(&addr, family: AF_INET6)
+    }
 
-        let result = withUnsafePointer(to: &addr) { ptr in
+    private static func canBind<Address>(_ address: inout Address, family: Int32) -> Bool {
+        let fd = socket(family, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { _ = Darwin.close(fd) }
+
+        var one: Int32 = 1
+        _ = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout.size(ofValue: one)))
+
+        return withUnsafePointer(to: &address) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                Darwin.bind(fd, sa, socklen_t(MemoryLayout<sockaddr_in6>.size))
+                Darwin.bind(fd, sa, socklen_t(MemoryLayout<Address>.size)) == 0
             }
         }
-        return result == 0
     }
 }

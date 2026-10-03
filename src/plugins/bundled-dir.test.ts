@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as openClawRoot from "../infra/openclaw-root.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
   isForeignBundledPluginRoot,
   resolveBundledDirFromPackageRoot,
@@ -16,10 +17,12 @@ import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
-const originalBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-const originalDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-const originalTrustBundledPlugins = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
-const originalVitest = process.env.VITEST;
+const originalEnv = captureEnv([
+  "OPENCLAW_BUNDLED_PLUGINS_DIR",
+  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+  "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR",
+  "VITEST",
+]);
 const originalArgv1 = process.argv[1];
 const originalExecArgv = [...process.execArgv];
 
@@ -175,26 +178,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  if (originalBundledDir === undefined) {
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-  } else {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledDir;
-  }
-  if (originalDisableBundledPlugins === undefined) {
-    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-  } else {
-    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = originalDisableBundledPlugins;
-  }
-  if (originalTrustBundledPlugins === undefined) {
-    delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
-  } else {
-    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTrustBundledPlugins;
-  }
-  if (originalVitest === undefined) {
-    delete process.env.VITEST;
-  } else {
-    process.env.VITEST = originalVitest;
-  }
+  originalEnv.restore();
   if (originalArgv1 === undefined) {
     process.argv.splice(1, 1);
   } else {

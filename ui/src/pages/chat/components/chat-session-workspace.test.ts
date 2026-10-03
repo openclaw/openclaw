@@ -1,6 +1,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../../api/gateway.ts";
 import type { SessionWorkspaceGetResult } from "../../../api/types.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import {
@@ -377,6 +378,88 @@ describe("session workspace state", () => {
 });
 
 describe("openSessionWorkspaceFile", () => {
+  it("keeps same-path sender files distinct and sends every file operation to its owner", async () => {
+    const path = "index.html";
+    const owner = "agent:research:report";
+    const getFile = vi.fn<SessionWorkspaceHost["sessions"]["getFile"]>(async (sessionKey) => ({
+      sessionKey,
+      root: "/shared",
+      file: {
+        path,
+        workspacePath: path,
+        name: path,
+        kind: "read",
+        missing: false,
+        previewKind: "text",
+        contentEncoding: "utf8",
+        content: "hello",
+        hash: "old",
+      },
+    }));
+    const setFile = vi.fn<SessionWorkspaceHost["sessions"]["setFile"]>(
+      async (sessionKey, savedPath, content) => ({
+        sessionKey,
+        root: "/shared",
+        file: {
+          path: savedPath,
+          name: savedPath,
+          content,
+          hash: "new",
+          kind: "modified",
+          missing: false,
+        },
+      }),
+    );
+    let completed = createDeferred();
+    const state: SessionWorkspaceHost = {
+      client: createGatewayBrowserClientFixture(),
+      connected: true,
+      connectionEpoch: 1,
+      handleOpenSidebar: createSidebarContentRecorder(),
+      hello: gatewayHelloForMethods(["sessions.files.set"]),
+      sessionKey: "agent:main:viewer",
+      sidebarContent: null,
+      requestUpdate: () => {
+        const workspace = state.sessionWorkspaceState;
+        if (
+          workspace?.previews.find((entry) => entry.id === workspace.activePreviewId)?.content
+            .kind === "file"
+        ) {
+          completed.resolve();
+        }
+      },
+      sessions: createSessionCapabilityFixture({ getFile, setFile }),
+    };
+    openSessionWorkspaceFile(state, { path, sessionKey: owner });
+    await completed.promise;
+    const workspace = state.sessionWorkspaceState;
+    const file = workspace?.previews[0]?.content;
+    expect(getFile).toHaveBeenCalledExactlyOnceWith(owner, path, { agentId: "research" });
+    expect(workspace?.sessionKey).toBe(state.sessionKey);
+    if (file?.kind !== "file" || !file.edit) {
+      throw new Error("Expected an editable sender file");
+    }
+    expect(file.sessionFileSource).toEqual({ sessionKey: owner, agentId: "research", path });
+    await file.edit.fetchLatest();
+    expect(getFile).toHaveBeenLastCalledWith(owner, path, { agentId: "research" });
+    await file.edit.save({ content: "changed", expectedHash: "old" });
+    expect(setFile).toHaveBeenCalledExactlyOnceWith(owner, path, "changed", {
+      agentId: "research",
+      expectedHash: "old",
+    });
+
+    completed = createDeferred();
+    openSessionWorkspaceFile(state, { path });
+    await completed.promise;
+    expect(workspace?.previews).toHaveLength(2);
+    const viewerFile = workspace?.previews[1]?.content;
+    expect(viewerFile?.kind).toBe("file");
+    if (viewerFile?.kind === "file") {
+      expect(viewerFile.draftKey).not.toBe(file.draftKey);
+    }
+    expect(getFile).toHaveBeenLastCalledWith(state.sessionKey, path, { agentId: "main" });
+  });
+
   it.each([
     { client: null, connected: true, label: "no Gateway client exists" },
     { client: {}, connected: false, label: "the Gateway is disconnected" },
@@ -827,8 +910,19 @@ describe("openSessionWorkspaceFile", () => {
     }
   });
 
-  it("keeps a rejected file open as an unavailable file tab", async () => {
+  it.each([
+    { error: new Error("session file not found"), message: "session file not found" },
+    {
+      error: new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "session file not found",
+        details: { type: "session_file_not_found", reason: "outside_session_boundary" },
+      }),
+      message: "This file is outside Main Session's workspace, and you can't open it.",
+    },
+  ])("keeps a rejected file open with its reason: $message", async ({ error, message }) => {
     const handleOpenSidebar = createSidebarContentRecorder();
+    const completed = createDeferred();
     const state: SessionWorkspaceHost = {
       client: createGatewayBrowserClientFixture(),
       connected: true,
@@ -837,20 +931,27 @@ describe("openSessionWorkspaceFile", () => {
       hello: gatewayHelloForMethods([]),
       sessionKey: "agent:main:current",
       sidebarContent: null,
+      requestUpdate: () => {
+        if (state.sessionWorkspaceState?.previews.at(-1)?.content.kind === "unavailable") {
+          completed.resolve();
+        }
+      },
       sessions: createSessionCapabilityFixture({
-        getFile: vi.fn().mockRejectedValue(new Error("session file not found")),
+        getFile: vi.fn().mockRejectedValue(error),
       }),
     };
 
-    openSessionWorkspaceFile(state, { path: "/outside/workspace/chat.md" });
+    openSessionWorkspaceFile(state, {
+      path: "/outside/workspace/chat.md",
+      sessionKey: "agent:research:main",
+    });
 
-    await vi.waitFor(() =>
-      expect(state.sessionWorkspaceState?.previews.at(-1)?.content).toEqual({
-        kind: "unavailable",
-        message: "session file not found",
-      }),
-    );
-    expect(createSessionWorkspaceProps(state).error).toBe("session file not found");
+    await completed.promise;
+    expect(state.sessionWorkspaceState?.previews.at(-1)?.content).toEqual({
+      kind: "unavailable",
+      message,
+    });
+    expect(createSessionWorkspaceProps(state).error).toBe(message);
     expect(handleOpenSidebar).toHaveBeenCalledOnce();
   });
 

@@ -35,6 +35,34 @@ function abortReasonAsError(signal: AbortSignal | undefined): Error {
 }
 
 describe("Buzz bus lifecycle", () => {
+  it("joins the active presence publish before bus close settles", async () => {
+    vi.useFakeTimers();
+    relayMocks.auth.mockResolvedValue("ok");
+    const publication = createDeferred<string>();
+    relayMocks.publish.mockImplementation((event) =>
+      event.kind === 20_001 ? publication.promise : Promise.resolve(""),
+    );
+    const bus = await startTestBus();
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(relayMocks.publish).toHaveBeenCalledOnce();
+      let closed = false;
+      const closing = bus.close().then(() => {
+        closed = true;
+      });
+      await Promise.resolve();
+      expect(closed).toBe(false);
+      publication.resolve("");
+      await closing;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(relayMocks.publish).toHaveBeenCalledOnce();
+    } finally {
+      publication.resolve("");
+      await bus.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("closes the relay and aborts NIP-11 discovery when authentication fails", async () => {
     let fetchSignal: AbortSignal | undefined;
     vi.stubGlobal(

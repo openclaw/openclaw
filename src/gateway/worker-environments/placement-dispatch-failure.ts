@@ -62,11 +62,14 @@ export type WorkerDispatchPlacementStore = Pick<
   | "abortWorkspaceReconciliation"
   | "listWorkspaceReconciliationOwners"
   | "list"
-  | "listPendingWorkspaceResults"
+  | "listPendingWorkspaceResultsAsync"
   | "markWorkspaceResultPending"
   | "handoffWorkspaceResultRecovery"
   | "workspaceResultInstanceId"
   | "validateWorkspaceResultClaim"
+  | "prepareWorkspaceResultClaim"
+  | "preparedWorkspaceResult"
+  | "preparedWorkspaceResultPlacement"
   | "recordStagedWorkspaceResult"
   | "recordWorkspaceResultConflict"
   | "acceptWorkspaceResult"
@@ -394,9 +397,9 @@ export function createPlacementFailureActions(deps: {
       environment?.state === "failed" &&
       environment.error === STALE_WORKER_BUILD_REASON &&
       environment.leaseId === null &&
-      !placements
-        .listPendingWorkspaceResults(placement.sessionId)
-        .some((result) => result.sessionId === placement.sessionId)
+      !(await placements.listPendingWorkspaceResultsAsync(placement.sessionId)).some(
+        (result) => result.sessionId === placement.sessionId,
+      )
     ) {
       // Retained conflict reports and staged refs survive redispatch; only pending results
       // block idle retirement. Reclaim and publication still consult retained conflicts.

@@ -17,7 +17,10 @@ import { isGatewayRpcUnavailableError } from "../../../gateway/transport-error.j
 import type { WorkerTurnExecutionIdentity } from "../../../gateway/worker-environments/placement-turn-claim-events.js";
 import { getActiveAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
-import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  resolveGatewayToolOperatorSelection,
+} from "../../tools/gateway-caller-context.js";
 import { runWithGatewaySessionSpawnContext } from "../../tools/gateway-session-spawn-context.js";
 import { runWithGatewaySessionSpawnParentExecutionIdentity } from "../../tools/gateway-session-spawn-execution-identity.js";
 import { callGatewayTool } from "../../tools/gateway.js";
@@ -39,6 +42,20 @@ const SUBAGENT_AGENT_RECONCILE_TIMEOUT_MS = 6_400;
 
 type SubagentGatewayResponse = Awaited<ReturnType<typeof callGateway>>;
 type SubagentGatewayDispatchMode = "in_process" | "out_of_process";
+
+/** Captures the request's Gateway binding and operator owner before spawn preparation awaits. */
+export function captureSubagentSpawnGatewayContext() {
+  const gatewayCaller = getGatewayToolCallerIdentity();
+  const gatewayScope = getPluginRuntimeGatewayRequestScope();
+  const gatewayContextResolver =
+    gatewayCaller?.gatewayContextResolver ??
+    gatewayScope?.resolveGatewayContext ??
+    gatewayScope?.context?.resolveGatewayContext;
+  const operatorAuthority =
+    resolveGatewayToolOperatorSelection().operatorAuthority ??
+    gatewayScope?.client?.internal?.operatorRunAuthority;
+  return { gatewayContextResolver, operatorAuthority };
+}
 
 async function callSubagentGatewayWithDispatchMode(
   params: Parameters<typeof callGateway>[0],

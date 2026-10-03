@@ -87,7 +87,6 @@ const providerMonitorTestMocks: ProviderMonitorTestMocks = vi.hoisted(() => {
       start: vi.fn(),
       stop: vi.fn(),
       refresh: vi.fn(),
-      runNow: vi.fn(),
     })),
     createDiscordExecApprovalButtonContextMock: vi.fn(() => ({
       getApprovers: () => [],
@@ -204,7 +203,6 @@ export function resetDiscordProviderMonitorMocks(params?: {
     start: vi.fn(),
     stop: vi.fn(),
     refresh: vi.fn(),
-    runNow: vi.fn(),
   }));
   createDiscordExecApprovalButtonContextMock.mockClear().mockImplementation(() => ({
     getApprovers: () => [],

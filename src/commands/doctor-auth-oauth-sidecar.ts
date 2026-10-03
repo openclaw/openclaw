@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
+import { isLegacyOAuthRef, type LegacyOAuthRef } from "../agents/auth-profiles/legacy-oauth-ref.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOAuthDir } from "../config/paths.js";
@@ -16,12 +17,9 @@ import {
 } from "./doctor-auth-legacy-paths.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
-  isLegacyOAuthRef,
   isLegacyOAuthSidecarPayload,
   loadLegacyOAuthSidecarMaterial,
   resolveLegacyOAuthSidecarPath,
-  type LegacyOAuthRef,
-  type LegacyOAuthSecretMaterial,
 } from "./doctor/shared/legacy-oauth-sidecar.js";
 
 const LEGACY_OAUTH_SECRET_DIRNAME = "auth-profiles";
@@ -30,6 +28,7 @@ type LegacyOAuthSidecarProfile = {
   profileId: string;
   provider: string;
   ref: LegacyOAuthRef;
+  entry: Record<string, unknown>;
 };
 
 type LegacyOAuthSidecarStore = AuthProfileRepairCandidate & {
@@ -62,7 +61,7 @@ function resolveLegacyOAuthSidecarStore(
     if (!ref || readNonEmptyString(value.provider) !== ref.provider) {
       continue;
     }
-    profiles.push({ profileId, provider: ref.provider, ref });
+    profiles.push({ profileId, provider: ref.provider, ref, entry: value });
   }
   return profiles.length > 0
     ? {
@@ -97,31 +96,6 @@ function listUnreferencedLegacyOAuthSidecars(
       ? [sidecarPath]
       : [];
   });
-}
-
-function applyLegacyOAuthSidecarMaterial(params: {
-  raw: Record<string, unknown>;
-  profile: LegacyOAuthSidecarProfile;
-  material: LegacyOAuthSecretMaterial;
-}): boolean {
-  if (!isRecord(params.raw.profiles)) {
-    return false;
-  }
-  const entry = params.raw.profiles[params.profile.profileId];
-  if (!isRecord(entry)) {
-    return false;
-  }
-  delete entry.oauthRef;
-  if (params.material.access) {
-    entry.access = params.material.access;
-  }
-  if (params.material.refresh) {
-    entry.refresh = params.material.refresh;
-  }
-  if (params.material.idToken) {
-    entry.idToken = params.material.idToken;
-  }
-  return true;
 }
 
 /**
@@ -200,15 +174,13 @@ export async function maybeRepairLegacyOAuthSidecarProfiles(params: {
         );
         continue;
       }
-      if (applyLegacyOAuthSidecarMaterial({ raw: store.raw, profile, material })) {
-        migratedCount += 1;
-        storeMigratedSidecarsByRefId.set(
-          profile.ref.id,
-          resolveLegacyOAuthSidecarPath(profile.ref, env),
-        );
-      } else {
-        unresolvedRefIds.add(profile.ref.id);
-      }
+      delete profile.entry.oauthRef;
+      Object.assign(profile.entry, material);
+      migratedCount += 1;
+      storeMigratedSidecarsByRefId.set(
+        profile.ref.id,
+        resolveLegacyOAuthSidecarPath(profile.ref, env),
+      );
     }
 
     if (migratedCount === 0) {

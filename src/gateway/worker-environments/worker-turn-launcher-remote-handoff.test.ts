@@ -111,7 +111,7 @@ describe("worker turn launcher remote handoff", () => {
         }
         expect(request.source.stagedResult).toBeDefined();
         await request.source.stagedResult!.record(request.source.stagedResult!.ref);
-        expect(placements.listPendingWorkspaceResults()).toMatchObject([
+        expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
           { stagedResultRef: request.source.stagedResult!.ref, workspaceAcceptedAtMs: null },
         ]);
         await request.source.journal.commit(MANIFEST_REF);
@@ -139,7 +139,7 @@ describe("worker turn launcher remote handoff", () => {
             owner: "worker",
             runId: "run-worker-turn",
           });
-          expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
         }),
       })),
       launchTurn: vi.fn(async (request): Promise<SpawnResult> => {

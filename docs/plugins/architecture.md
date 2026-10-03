@@ -168,7 +168,7 @@ The snapshot and lookup table keep repeated startup decisions on the fast path:
 
 Startup and hot replacement share one prepared registry publisher and the same inventory across all configured agent workspaces. Reload preserves workspace provenance so an unchanged linked plugin is not replaced when another plugin changes. Replacement retains unchanged plugin instances and validates candidate metadata before draining affected services and channels. Reordering object keys in equivalent metadata or settings does not replace a registration; changed values, ordered lists, and explicit reload requests still do. It stops and disposes the previous registration before registering its replacement, then publishes runtime methods and metadata together. Connected clients refresh their plugin capabilities after publication. If replacement fails before publication and cleanup succeeds, recovery registers captured previous code and configuration with fresh resource ownership. A failure after publication reports the committed generation. Plugin runtime imports remain lazy; retaining metadata does not activate every discovered plugin.
 
-Durable final channel replies can use the admitting Gateway's current registry after an unrelated reload only when their exact channel registration is retained. The handoff also requires unchanged channel settings, shared channel defaults, and owning-plugin settings, plus channel-owned validation that preserves the admitted sender. Telegram checks its resolved bot credential and pins it for the final send; changed token-file contents, environment tokens, and SecretRef values cannot select another bot. Channels without sender preparation, new or replaced channel registrations, changed settings, and closing Gateways remain blocked. This never falls back to another Gateway or retries a send that may already have reached the provider.
+Durable final channel replies can use the admitting Gateway's current registry after an unrelated reload only when their exact channel registration is retained. The handoff also requires unchanged channel settings, shared channel defaults, and owning-plugin settings. Channels may add sender preparation for credentials that can change outside config: Telegram checks its resolved bot credential and pins it for the final send, so changed token-file contents, environment tokens, and SecretRef values cannot select another bot. Channels without sender preparation deliver with the unchanged successor config. New or replaced channel registrations, changed settings, and closing Gateways remain blocked. This never falls back to another Gateway or retries a send that may already have reached the provider.
 
 Replacement reserves the affected instance even when agent turns or unfinished cleanup retain it. The prepared-model replacement gate holds new runs while already admitted runs finish using their original callbacks. New top-level retained work cannot acquire the old instance; already admitted consumers can still derive work needed to finish their runs. Detailed readiness and logs report the retained-work count and drain deadline; the final RPC receipt reports application and any drain notices. Reload from the instance's own active callback still fails during preparation to avoid waiting on itself. Idle prepared publications do not block replacement.
 
@@ -249,6 +249,14 @@ directory snapshot per admitted identity, preserving old binary and companion
 bytes through in-place edits. Files in this namespace are prepared at admission;
 module execution remains on demand. Registrations share admission facts without
 sharing their runtime authority.
+Managed npm plugins support capture storage on another filesystem, including a
+`tmpfs` mount, and npm roots reached through symlinks. Retained native
+directories validate the admitting plugin's OpenClaw peer against the selected
+host's canonical package root. A hoisted native dependency does not need its own
+host link, but any host it resolves must match. A mismatch names the peer path,
+resolved target, and selected host; run `openclaw doctor --fix` with that host,
+then reload the affected plugin. The loader records the failure for that plugin
+and continues loading unrelated plugins.
 Private Doctor inspections keep their native admission facts separate from the
 operator's state. Their temporary captures never become deferred writes to the
 installed index after inspection ends; ordinary deferred writes retain their

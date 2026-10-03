@@ -227,8 +227,11 @@ export function createWorkboardSqliteStores(options: {
       listPlacements: bindOperation((connection, args) =>
         execute("sessionsBoard.listPlacements", { connection, args }),
       ),
-      writePlacements: bindOperation((connection, args) =>
-        execute("sessionsBoard.writePlacements", { connection, args }, true),
+      repairPlacements: bindOperation((connection, args) =>
+        execute("sessionsBoard.repairPlacements", { connection, args }, true),
+      ),
+      writePlacement: bindOperation((connection, args) =>
+        execute("sessionsBoard.writePlacement", { connection, args }, true),
       ),
     },
     subscriptions: {

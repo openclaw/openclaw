@@ -22,7 +22,12 @@ enum OpenClawConfigFile {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "config")
     private static let configAuditFileName = "config-audit.jsonl"
     private static let fileLock = NSRecursiveLock()
-    private nonisolated(unsafe) static var configHealthState: [String: Any] = [:]
+    private struct ConfigHealthEntry {
+        let lastKnownGood: [String: Any]
+        var lastObservedSuspiciousSignature: String?
+    }
+
+    private nonisolated(unsafe) static var configHealthEntries: [String: ConfigHealthEntry] = [:]
     /// Config reads are serialized by fileLock. Keep only the latest canonical
     /// identity so polling callers do not rebuild the same forensic fingerprint.
     private nonisolated(unsafe) static var lastObservedConfigRead: ConfigReadIdentity?
@@ -331,9 +336,7 @@ extension OpenClawConfigFile {
             return root
         }
         let decoder = JSONDecoder()
-        if #available(macOS 12.0, *) {
-            decoder.allowsJSON5 = true
-        }
+        decoder.allowsJSON5 = true
         if let decoded = try? decoder.decode([String: AnyCodable].self, from: data) {
             self.logger.notice("config parsed with JSON5 decoder")
             return decoded.mapValues { $0.foundationValue }
@@ -483,23 +486,6 @@ extension OpenClawConfigFile {
             .appendingPathComponent(self.configAuditFileName, isDirectory: false)
     }
 
-    private static func configHealthEntry(state: [String: Any], configPath: String) -> [String: Any] {
-        let entries = state["entries"] as? [String: Any]
-        return entries?[configPath] as? [String: Any] ?? [:]
-    }
-
-    private static func setConfigHealthEntry(
-        state: [String: Any],
-        configPath: String,
-        entry: [String: Any]) -> [String: Any]
-    {
-        var next = state
-        var entries = next["entries"] as? [String: Any] ?? [:]
-        entries[configPath] = entry
-        next["entries"] = entries
-        return next
-    }
-
     private static func isUpdateChannelOnlyRoot(_ root: [String: Any]) -> Bool {
         let keys = Array(root.keys)
         guard keys.count == 1, keys.first == "update" else { return false }
@@ -574,22 +560,6 @@ extension OpenClawConfigFile {
             linkCount: self.fileAttributeInt(attributes?[.referenceCount]),
             ownerID: self.fileAttributeInt(attributes?[.ownerAccountID]),
             groupID: self.fileAttributeInt(attributes?[.groupOwnerAccountID]))
-    }
-
-    private static func sameFingerprint(_ left: [String: Any]?, _ right: [String: Any]) -> Bool {
-        guard let left else { return false }
-        return (left["hash"] as? String) == (right["hash"] as? String) &&
-            (left["bytes"] as? Int) == (right["bytes"] as? Int) &&
-            (left["mtimeMs"] as? Double) == (right["mtimeMs"] as? Double) &&
-            (left["ctimeMs"] as? Double) == (right["ctimeMs"] as? Double) &&
-            (left["dev"] as? String) == (right["dev"] as? String) &&
-            (left["ino"] as? String) == (right["ino"] as? String) &&
-            (left["mode"] as? Int) == (right["mode"] as? Int) &&
-            (left["nlink"] as? Int) == (right["nlink"] as? Int) &&
-            (left["uid"] as? Int) == (right["uid"] as? Int) &&
-            (left["gid"] as? Int) == (right["gid"] as? Int) &&
-            (left["hasMeta"] as? Bool) == (right["hasMeta"] as? Bool) &&
-            (left["gatewayMode"] as? String) == (right["gatewayMode"] as? String)
     }
 
     private static func observeSuspiciousReasons(
@@ -672,9 +642,8 @@ extension OpenClawConfigFile {
         #endif
         let observedAt = ISO8601DateFormatter().string(from: Date())
         let current = self.configFingerprint(root: root, identity: identity, observedAt: observedAt)
-        var state = self.configHealthState
-        let entry = self.configHealthEntry(state: state, configPath: configURL.path)
-        let lastKnownGood = entry["lastKnownGood"] as? [String: Any]
+        let entry = self.configHealthEntries[configURL.path]
+        let lastKnownGood = entry?.lastKnownGood
         let suspicious = self.observeSuspiciousReasons(
             root: root,
             bytes: current["bytes"] as? Int ?? 0,
@@ -682,19 +651,12 @@ extension OpenClawConfigFile {
 
         if suspicious.isEmpty {
             guard valid else { return }
-            let nextEntry: [String: Any] = [
-                "lastKnownGood": current,
-                "lastObservedSuspiciousSignature": NSNull(),
-            ]
-            if !self.sameFingerprint(lastKnownGood, current) || entry["lastObservedSuspiciousSignature"] != nil {
-                state = self.setConfigHealthEntry(state: state, configPath: configURL.path, entry: nextEntry)
-                self.configHealthState = state
-            }
+            self.configHealthEntries[configURL.path] = ConfigHealthEntry(lastKnownGood: current)
             return
         }
 
         let signature = "\((current["hash"] as? String) ?? ""):\(suspicious.joined(separator: ","))"
-        if (entry["lastObservedSuspiciousSignature"] as? String) == signature {
+        if entry?.lastObservedSuspiciousSignature == signature {
             return
         }
 
@@ -747,10 +709,7 @@ extension OpenClawConfigFile {
             "backupGatewayMode": backup?["gatewayMode"] ?? NSNull(),
             "clobberedPath": clobberedPath ?? NSNull(),
         ])
-        var nextEntry = entry
-        nextEntry["lastObservedSuspiciousSignature"] = signature
-        state = self.setConfigHealthEntry(state: state, configPath: configURL.path, entry: nextEntry)
-        self.configHealthState = state
+        self.configHealthEntries[configURL.path]?.lastObservedSuspiciousSignature = signature
     }
 
     private static func appendConfigWriteAudit(
@@ -776,7 +735,7 @@ extension OpenClawConfigFile {
             "argv": Array(ProcessInfo.processInfo.arguments.prefix(8)),
         ]
         for (key, value) in fields {
-            record[key] = value is NSNull ? NSNull() : value
+            record[key] = value
         }
         guard JSONSerialization.isValidJSONObject(record),
               let data = try? JSONSerialization.data(withJSONObject: record)

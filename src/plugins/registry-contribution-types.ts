@@ -305,6 +305,8 @@ export type MemoryPluginCapability = {
   /** Provider-neutral host integration; preferred over runtime when present. */
   providerRuntime?: MemoryProviderRuntime;
   publicArtifacts?: MemoryPluginPublicArtifactsProvider;
+  /** Agent-facing tools Active Memory may use for provider-owned deep recall. */
+  recallToolNames?: readonly string[];
   /** Local deterministic recall tool required by provider-owned direct lookup. */
   deterministicRecallToolName?: string;
   /** Whether recall may read protected same-agent private session transcripts. */

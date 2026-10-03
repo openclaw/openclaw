@@ -5,6 +5,7 @@ import { listUsageCountedTranscriptStats } from "../../infra/session-cost-usage-
 import { configureSqliteConnectionPragmas } from "../../infra/sqlite-wal.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
@@ -422,6 +423,8 @@ describe("SQLite session entry cache", () => {
 
   it("does not revalidate session nodes after a same-connection transcript write", async () => {
     const { scope, sibling } = await seedPair("transcript-write");
+    // Seed maintenance must settle before measuring a same-connection cache write.
+    await closeOpenClawAgentDatabasesAsync(scope.env.OPENCLAW_STATE_DIR);
     openOpenClawAgentDatabase(scope);
     const first = listingEntries(scope);
 

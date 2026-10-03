@@ -178,10 +178,11 @@ Set `deliveryDefaults.visibleReplies` to `"automatic"` or `"message_tool"`
 when a harness needs a default visible-reply policy. Explicit message config
 still takes precedence.
 
-The former `sourceVisibleReplies` alias was deprecated on July 25, 2026 and
-removed after its October 1 compatibility window. Update plugins that still
-use the alias before updating OpenClaw. This changes a live plugin declaration;
-persisted sessions and transcript formats are unchanged.
+The deprecated `sourceVisibleReplies` field remains supported for published
+harness plugins, including July 2026 versions of `@openclaw/codex`. When both
+fields are present, `visibleReplies` takes precedence. Plugin authors should
+migrate to that field. The October 1 removal date does not retire a contract
+while supported published plugins still produce it.
 
 ## Terminal tool outcomes
 

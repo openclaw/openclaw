@@ -9,14 +9,14 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { withRuntimePreload } from "../../../test/helpers/runtime-preload.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
-import {
-  REMOTE_WORKSPACE_QUIESCE_JS,
-  REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
-  REMOTE_WORKSPACE_RESUME_JS,
-} from "./workspace-quiescence-scripts.js";
+import { workspaceQuiescenceArgv } from "./workspace-quiescence-scripts.js";
 import { createWorkerWorkspaceQuiescence } from "./workspace-quiescence.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function quiescenceCommand(...args: Parameters<typeof workspaceQuiescenceArgv>) {
+  return [process.execPath, ...workspaceQuiescenceArgv(...args).slice(1)];
+}
 const PADDED_PROCESS_START = "Thu Oct  1 00:11:43 2026";
 
 async function fixture(
@@ -144,14 +144,11 @@ async function quiesce(
   watchdogTimeoutMs = "10000",
 ) {
   const result = await runCommandWithTimeout(
-    [
-      process.execPath,
-      "-e",
-      REMOTE_WORKSPACE_QUIESCE_JS,
+    quiescenceCommand(
       input.workspace,
-      watchdogTimeoutMs,
+      { action: "acquire", nonce: "", timeoutMs: Number(watchdogTimeoutMs) },
       sharedHost ? "shared-host" : "dedicated",
-    ],
+    ),
     { timeoutMs: 10_000, baseEnv: input.env },
   );
   expect(result.code, JSON.stringify(result)).toBe(0);
@@ -212,7 +209,7 @@ async function stopIdleWorker(child: ReturnType<typeof spawnIdleWorker>) {
 
 async function resume(input: Awaited<ReturnType<typeof fixture>>, nonce: string) {
   const result = await runCommandWithTimeout(
-    [process.execPath, "-e", REMOTE_WORKSPACE_RESUME_JS, input.workspace, nonce],
+    quiescenceCommand(input.workspace, { action: "release", nonce }, "dedicated"),
     { timeoutMs: 10_000, baseEnv: input.env },
   );
   expect(result.code, JSON.stringify(result)).toBe(0);
@@ -224,16 +221,11 @@ async function renew(
   sharedHost = false,
 ) {
   const result = await runCommandWithTimeout(
-    [
-      process.execPath,
-      "-e",
-      REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
+    quiescenceCommand(
       input.workspace,
-      nonce,
-      "20000",
-      "final",
+      { action: "renew", nonce, timeoutMs: 20_000, validationMode: "final" },
       sharedHost ? "shared-host" : "dedicated",
-    ],
+    ),
     { timeoutMs: 10_000, baseEnv: input.env },
   );
   expect(result.code).toBe(0);
@@ -263,14 +255,11 @@ describe("remote workspace quiescence scripts", () => {
     async (probe) => {
       const input = await fixture(probe);
       const result = await runCommandWithTimeout(
-        [
-          process.execPath,
-          "-e",
-          REMOTE_WORKSPACE_QUIESCE_JS,
+        quiescenceCommand(
           input.workspace,
-          "10000",
+          { action: "acquire", nonce: "", timeoutMs: 10_000 },
           "dedicated",
-        ],
+        ),
         { timeoutMs: 10_000, baseEnv: input.env },
       );
       expect(result.code, JSON.stringify(result)).toBe(0);
@@ -376,16 +365,11 @@ require("node:child_process").execFileSync("/bin/ps", process.argv.slice(2), { s
     );
     try {
       const result = await runCommandWithTimeout(
-        [
-          process.execPath,
-          "-e",
-          REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
+        quiescenceCommand(
           input.workspace,
-          nonce,
-          "20000",
-          "heartbeat",
+          { action: "renew", nonce, timeoutMs: 20_000, validationMode: "heartbeat" },
           "shared-host",
-        ],
+        ),
         { timeoutMs: 10_000, baseEnv: input.env },
       );
       expect(result.code, JSON.stringify(result)).toBe(1);
@@ -407,23 +391,25 @@ require("node:child_process").execFileSync("/bin/ps", process.argv.slice(2), { s
     expect(child.pid).toBeDefined();
     await fs.writeFile(input.extraProcessPath, `${child.pid}\n`);
 
+    // Omit the host argument to retain coverage of the standalone dedicated default.
     const heartbeat = await runCommandWithTimeout(
-      [
-        process.execPath,
-        "-e",
-        REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
+      quiescenceCommand(
         input.workspace,
-        nonce,
-        "20000",
-        "heartbeat",
-      ],
+        { action: "renew", nonce, timeoutMs: 20_000, validationMode: "heartbeat" },
+        "dedicated",
+      ).slice(0, 7),
       { timeoutMs: 10_000, baseEnv: input.env },
     );
     expect(heartbeat.code).toBe(0);
 
     try {
+      // Omit all optional renewal arguments to exercise the standalone defaults.
       const result = await runCommandWithTimeout(
-        [process.execPath, "-e", REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS, input.workspace, nonce],
+        quiescenceCommand(
+          input.workspace,
+          { action: "renew", nonce, timeoutMs: 20_000, validationMode: "final" },
+          "dedicated",
+        ).slice(0, 5),
         { timeoutMs: 10_000, baseEnv: input.env },
       );
 
@@ -479,7 +465,11 @@ require("node:child_process").execFileSync("/bin/ps", process.argv.slice(2), { s
     await resume(input, nonce);
 
     const result = await runCommandWithTimeout(
-      [process.execPath, "-e", REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS, input.workspace, nonce],
+      quiescenceCommand(
+        input.workspace,
+        { action: "renew", nonce, timeoutMs: 20_000, validationMode: "final" },
+        "dedicated",
+      ).slice(0, 5),
       { timeoutMs: 10_000, baseEnv: input.env },
     );
     expect(result.code).not.toBe(0);
@@ -505,7 +495,11 @@ esac
     await fs.chmod(path.join(input.bin, "ps"), 0o755);
 
     const result = await runCommandWithTimeout(
-      [process.execPath, "-e", REMOTE_WORKSPACE_QUIESCE_JS, input.workspace, "10000", "dedicated"],
+      quiescenceCommand(
+        input.workspace,
+        { action: "acquire", nonce: "", timeoutMs: 10_000 },
+        "dedicated",
+      ),
       {
         timeoutMs: 10_000,
         baseEnv: { ...input.env, OPENCLAW_TEST_WATCHDOG_PID: watchdogPidPath },
@@ -537,7 +531,7 @@ esac
 
     try {
       const result = await runCommandWithTimeout(
-        [process.execPath, "-e", REMOTE_WORKSPACE_RESUME_JS, input.workspace, nonce],
+        quiescenceCommand(input.workspace, { action: "release", nonce }, "dedicated"),
         { timeoutMs: 15_000, baseEnv: input.env },
       );
 
@@ -581,14 +575,11 @@ esac
 
     try {
       const result = await runCommandWithTimeout(
-        [
-          process.execPath,
-          "-e",
-          REMOTE_WORKSPACE_QUIESCE_JS,
+        quiescenceCommand(
           input.workspace,
-          "10000",
+          { action: "acquire", nonce: "", timeoutMs: 10_000 },
           "shared-host",
-        ],
+        ),
         { timeoutMs: 15_000, baseEnv: input.env },
       );
 
@@ -622,14 +613,11 @@ esac
     await fs.chmod(path.join(input.bin, "ps"), 0o755);
     try {
       const failed = await runCommandWithTimeout(
-        [
-          process.execPath,
-          "-e",
-          REMOTE_WORKSPACE_QUIESCE_JS,
+        quiescenceCommand(
           input.workspace,
-          "10000",
+          { action: "acquire", nonce: "", timeoutMs: 10_000 },
           "dedicated",
-        ],
+        ),
         { timeoutMs: 15_000, baseEnv: input.env },
       );
 
@@ -732,7 +720,7 @@ esac
       await fs.chmod(path.join(input.bin, "ps"), 0o755);
 
       const result = await runCommandWithTimeout(
-        [process.execPath, "-e", REMOTE_WORKSPACE_RESUME_JS, input.workspace, nonce],
+        quiescenceCommand(input.workspace, { action: "release", nonce }, "dedicated"),
         { timeoutMs: 15_000, baseEnv: input.env },
       );
 
@@ -941,7 +929,7 @@ esac
       await fs.chmod(path.join(input.bin, "ps"), 0o755);
 
       const failed = await runCommandWithTimeout(
-        [process.execPath, "-e", REMOTE_WORKSPACE_RESUME_JS, input.workspace, nonce],
+        quiescenceCommand(input.workspace, { action: "release", nonce }, "dedicated"),
         { timeoutMs: 15_000, baseEnv: input.env },
       );
       expect(failed.code).not.toBe(0);

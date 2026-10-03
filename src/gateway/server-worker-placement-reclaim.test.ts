@@ -401,7 +401,7 @@ async function scenario(
     expect(oldResult.ok).toBe(false);
     expect(harness.environments.get(active.environmentId!)?.state).toBe("destroying");
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
-    expect(placements.listPendingWorkspaceResults()).toEqual([
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([
       expect.objectContaining({ workspaceAcceptedAtMs: expect.any(Number) }),
     ]);
     await coordinated.reconcileActive();
@@ -444,7 +444,7 @@ async function scenario(
     finalPlacementState: finalPlacement?.state,
     environmentState: environment?.state,
     providerDestroyAttempts: vi.mocked(harness.environments.destroy).mock.calls.length,
-    pendingWorkspaceResults: placements.listPendingWorkspaceResults().length,
+    pendingWorkspaceResults: (await placements.listPendingWorkspaceResultsAsync()).length,
     preexistingAdmissionAccepted: oldResult.ok,
     preexistingResponses: old.respond.mock.calls,
     explicitNewAdmissionAccepted: freshResult.ok,

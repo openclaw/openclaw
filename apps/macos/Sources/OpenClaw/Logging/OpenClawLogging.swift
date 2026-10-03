@@ -21,10 +21,6 @@ enum AppLogSettings {
     static func setLogLevel(_ level: Logger.Level) {
         AppDefaults.standard.set(level.rawValue, forKey: self.logLevelKey)
     }
-
-    static func fileLoggingEnabled() -> Bool {
-        AppDefaults.standard.bool(forKey: debugFileLogEnabledKey)
-    }
 }
 
 extension Logger.Level {
@@ -186,7 +182,7 @@ struct OpenClawFileLogHandler: AppLogLevelBackedHandler {
     var metadata: Logger.Metadata = [:]
 
     func log(event: LogEvent) {
-        guard AppLogSettings.fileLoggingEnabled() else { return }
+        guard DiagnosticsFileLog.isEnabled() else { return }
         let (subsystem, category) = OpenClawLogging.parseLabel(self.label)
         var fields: [String: String] = [
             "subsystem": subsystem,

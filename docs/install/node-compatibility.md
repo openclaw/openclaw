@@ -43,6 +43,10 @@ The **SQLite WAL-reset corruption bug** requires a safe loaded library: SQLite *
 
 Separately, the **`node:sqlite` TEXT decoder** in Node 22.23.x, 24.15.0, 25.9.0, and 26.0.0 silently truncates values at embedded NUL characters. The first fixed releases are Node 24.16.0 and 26.1.0; a WAL-safe SQLite library does not fix this decoder. Node 23 was excluded earlier for incompatible `node:sqlite` behavior.
 
+## V8 compiler settings
+
+On Node 24 and 26, `process.exit()` can hang forever after a command has printed its output: Node joins V8's background threads while a Maglev or concurrent Sparkplug compile job waits for a garbage collection the exiting main thread never runs ([nodejs/node#64274](https://github.com/nodejs/node/issues/64274)). OpenClaw's CLI, Gateway, hook relay, and macOS node worker therefore start with Maglev and concurrent Sparkplug turned off, the tiering Node 22 used; TurboFan still optimizes hot code. Passing `--maglev` or `--concurrent-sparkplug` to `node` keeps that compiler enabled.
+
 ## Platform consequences
 
 Official Node 24+ macOS binaries are built for **macOS 13.5+**, the oldest release Node supports. macOS does not block them on older releases, and the CLI and Gateway have been observed running on macOS 12 with official Node 24. OpenClaw does not test or support macOS 11 through 13.4, so features that ship their own native binaries can still fail there. The companion app has separate [macOS requirements](/platforms/macos).

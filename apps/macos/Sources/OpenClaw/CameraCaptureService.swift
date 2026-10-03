@@ -65,9 +65,7 @@ actor CameraCaptureService {
         let prepared = try CameraCapturePipelineSupport.preparePhotoSession(
             preferFrontCamera: facing == .front,
             deviceId: deviceId,
-            pickCamera: { preferFrontCamera, deviceId in
-                try Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
-            },
+            pickCamera: Self.pickCamera,
             mapSetupError: { setupError in
                 CameraError.captureFailed(setupError.localizedDescription)
             })
@@ -129,7 +127,7 @@ actor CameraCaptureService {
         outPath: String?) async throws -> (path: String, durationMs: Int, hasAudio: Bool)
     {
         let facing = facing ?? .front
-        let durationMs = Self.clampDurationMs(durationMs)
+        let durationMs = CaptureRateLimits.clampDurationMs(durationMs, defaultMs: 3000)
         let deviceId = deviceId?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         try await self.ensureAccess(for: .video)
@@ -155,10 +153,13 @@ actor CameraCaptureService {
                 deviceId: deviceId,
                 includeAudio: includeAudio,
                 durationMs: durationMs),
-            pickCamera: { preferFrontCamera, deviceId in
-                try Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
+            pickCamera: Self.pickCamera,
+            mapSetupError: { setupError in
+                CameraCapturePipelineSupport.mapMovieSetupError(
+                    setupError,
+                    microphoneUnavailableError: CameraError.microphoneUnavailable,
+                    captureFailed: CameraError.captureFailed)
             },
-            mapSetupError: Self.mapMovieSetupError,
             operation: { output in
                 // Replace the export destination only after camera setup succeeds.
                 try? FileManager().removeItem(at: outputURL)
@@ -189,14 +190,14 @@ actor CameraCaptureService {
     }
 
     private nonisolated static func pickCamera(
-        facing: CameraFacing,
+        preferFrontCamera: Bool,
         deviceId: String?) throws -> AVCaptureDevice
     {
         try CameraCapturePipelineSupport.selectCamera(
             deviceId: deviceId,
             matching: CameraDeviceResolver.camera,
             fallback: {
-                let position: AVCaptureDevice.Position = facing == .front ? .front : .back
+                let position: AVCaptureDevice.Position = preferFrontCamera ? .front : .back
                 // Many macOS cameras report `unspecified` position; fall back only without an explicit device.
                 return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) ??
                     AVCaptureDevice.default(for: .video)
@@ -205,29 +206,12 @@ actor CameraCaptureService {
             deviceNotFoundError: { CameraPTZError.deviceNotFound($0) })
     }
 
-    private nonisolated static func clampQuality(_ quality: Double?) -> Double {
-        let q = quality ?? 0.9
-        return min(1.0, max(0.05, q))
-    }
-
     nonisolated static func normalizeSnap(maxWidth: Int?, quality: Double?) -> (maxWidth: Int, quality: Double) {
         // Default to a reasonable max width to keep downstream payload sizes manageable.
         // If you need full-res, explicitly request a larger maxWidth.
         let maxWidth = maxWidth.flatMap { $0 > 0 ? $0 : nil } ?? 1600
-        let quality = Self.clampQuality(quality)
+        let quality = min(1.0, max(0.05, quality ?? 0.9))
         return (maxWidth: maxWidth, quality: quality)
-    }
-
-    private nonisolated static func clampDurationMs(_ ms: Int?) -> Int {
-        let v = ms ?? 3000
-        return min(60000, max(250, v))
-    }
-
-    private nonisolated static func mapMovieSetupError(_ setupError: CameraSessionConfigurationError) -> CameraError {
-        CameraCapturePipelineSupport.mapMovieSetupError(
-            setupError,
-            microphoneUnavailableError: .microphoneUnavailable,
-            captureFailed: { .captureFailed($0) })
     }
 
     private nonisolated static func exportToMP4(inputURL: URL, outputURL: URL) async throws {

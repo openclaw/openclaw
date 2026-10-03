@@ -242,8 +242,8 @@ const resolveDiscordAllowlistNames = createAccountScopedAllowlistNameResolver({
     (await loadDiscordResolveUsersModule()).resolveDiscordUserAllowlist({ token, entries }),
 });
 
-export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> =
-  createChatChannelPlugin<ResolvedDiscordAccount, DiscordProbe>({
+export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, unknown, 2> =
+  createChatChannelPlugin<ResolvedDiscordAccount, DiscordProbe, unknown, 2>({
     base: {
       ...createDiscordPluginBase({
         setupContract: discordSetupContract,
@@ -595,6 +595,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         },
       }),
       gateway: {
+        apiVersion: 2,
         startAccount: async (ctx) => {
           const readConfig = createRuntimeConfigReader(ctx.cfg);
           const account = ctx.account;
@@ -634,6 +635,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             );
           }
           return (await loadDiscordProviderRuntime()).monitorDiscordProvider({
+            scheduler: ctx.scheduler,
             token,
             accountId: account.accountId,
             config: ctx.cfg,

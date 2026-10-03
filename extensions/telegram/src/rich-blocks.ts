@@ -18,6 +18,7 @@ import {
   measureInputRichBlocks,
   normalizeInputRichBlocks,
   normalizeRichText,
+  richTextLink,
   type InputRichBlock,
   type InputRichBlockParagraph,
   type RichBlockTableCell,
@@ -249,7 +250,7 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
           ? item.wrap(container)
           : item.kind === "link"
             ? item.target.kind === "url"
-              ? { type: "url", text: container, url: item.target.href }
+              ? richTextLink(container, item.target.href)
               : { type: "anchor_link", text: container, anchor_name: item.target.name }
             : { type: item.kind === "annotation" ? "code" : item.style, text: container };
       frameStack.at(-1)?.push(node);

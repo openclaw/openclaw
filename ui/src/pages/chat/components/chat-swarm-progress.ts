@@ -62,7 +62,7 @@ function collectSwarmTasks(
       phaseRank: row.swarmPhaseRank ?? Number.MAX_SAFE_INTEGER,
       dot: {
         key: row.key,
-        label: resolveSessionDisplayName(row.key, row, { includeSubagentPrefix: false }),
+        label: resolveSessionDisplayName(row.key, row),
         status,
         duration: swarmDuration(row, status),
       },

@@ -220,7 +220,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.messages.unsubscribe", "sessions-subscriptions", "operator.read", "<=2026.7"],
   ["sessions.viewers.set", "sessions-subscriptions", "operator.read", "2026.7"],
   ["sessions.preview", "sessions-read", "operator.read", "<=2026.7"],
-  ["sessions.describe", "sessions-read", "operator.read", "<=2026.7"],
+  ["sessions.describe", "sessions-read", "operator.read", "<=2026.7", { lifetime: "observation" }],
   ["sessions.branches.list", "sessions-rewind", "operator.read", "<=2026.7"],
   ["sessions.branches.switch", "sessions-rewind", "operator.admin", "<=2026.7"],
   ["sessions.rewind", "sessions-rewind", "operator.admin", "<=2026.7"],
@@ -345,7 +345,13 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["channels.pairing.approve", "channel-pairing", "dynamic", "2026.7"],
   ["channels.pairing.dismiss", "channel-pairing", "operator.pairing", "2026.7"],
   ["assistant.media.get", null, "operator.read", "<=2026.7", { advertise: false }],
-  ["sessions.get", "sessions-read", "operator.read", "<=2026.7", { advertise: false }],
+  [
+    "sessions.get",
+    "sessions-read",
+    "operator.read",
+    "<=2026.7",
+    { advertise: false, lifetime: "observation" },
+  ],
   ["sessions.resolve", "sessions-read", "operator.read", "<=2026.7", { advertise: false }],
   ["sessions.usage", "usage", "operator.read", "<=2026.7", { advertise: false }],
   ["sessions.usage.timeseries", "usage", "operator.read", "<=2026.7", { advertise: false }],
@@ -699,4 +705,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   // Provider-neutral reads append without changing legacy method indices or payloads.
   ["memory.get", "memory-search", "operator.read", "2026.9"],
   ["memory.status", "memory-search", "operator.read", "2026.9"],
+  ["sessions.files.assets", "sessions-files", "operator.read", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
