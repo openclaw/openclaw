@@ -249,7 +249,11 @@ async function hasSkipBootstrapWorkspaceContentEvidence(dir: string): Promise<bo
   try {
     const entries = await fs.readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
-      if (entry.name === ".DS_Store" || entry.name === LEGACY_WORKSPACE_STATE_CURRENT_FILENAME) {
+      if (
+        entry.name === ".DS_Store" ||
+        entry.name === ".openclaw" ||
+        entry.name === LEGACY_WORKSPACE_STATE_CURRENT_FILENAME
+      ) {
         continue;
       }
       if (entry.name === "skills" && entry.isDirectory()) {
