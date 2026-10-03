@@ -1,5 +1,5 @@
 import { validateToolCall } from "@openclaw/llm-core/validation";
-import { Type } from "typebox";
+import { Type, type TSchema } from "typebox";
 import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
 import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
@@ -108,34 +108,53 @@ describe("compact OpenAI tool references", () => {
     },
   );
 
-  it.each(["$defs", "definitions"])(
-    "inlines malformed %s tables instead of preserving them",
-    (key) => {
-      const schema = {
-        type: "object",
-        properties: { value: { $ref: `#/${key}/0` } },
-        [key]: [{ type: "string" }],
-      };
-      expect(normalizeToolParameterSchema(schema, { modelProvider: "openai" })).toEqual({
-        type: "object",
-        properties: { value: { type: "string" } },
-      });
-    },
-  );
-
-  it("drops unused definitions even when they contain references", () => {
-    const schema = {
-      type: "object",
-      properties: { value: { type: "string" } },
-      $defs: {
-        unused: { type: "object", properties: { next: { $ref: "#/$defs/large" } } },
-        large: { ...detail, description: "Unused definition".repeat(400) },
+  it("inlines malformed and encoded references and removes unused definitions", () => {
+    const value = { type: "object", properties: { limit: { type: "number" } } };
+    const cases = [
+      ...["$defs", "definitions"].map((key) => ({
+        schema: {
+          type: "object",
+          properties: { value: { $ref: `#/${key}/0` } },
+          [key]: [{ type: "string" }],
+        },
+        options: { modelProvider: "openai" },
+        expected: { type: "object", properties: { value: { type: "string" } } },
+      })),
+      {
+        schema: {
+          type: "object",
+          properties: { value: { type: "string" } },
+          $defs: {
+            unused: { type: "object", properties: { next: { $ref: "#/$defs/large" } } },
+            large: { ...detail, description: "Unused definition".repeat(400) },
+          },
+        },
+        options: { modelProvider: "openai" },
+        expected: { type: "object", properties: { value: { type: "string" } } },
       },
-    };
-    expect(normalizeToolParameterSchema(schema, { modelProvider: "openai" })).toEqual({
-      type: "object",
-      properties: schema.properties,
-    });
+      ...[
+        { modelProvider: "google", modelId: "gemini-2.5-pro" },
+        { modelProvider: "anthropic", modelId: "claude-sonnet-4-6" },
+      ].flatMap((options) =>
+        [
+          "#/definitions/Partial<Filter>",
+          "#/definitions/Partial%3CFilter%3E",
+          "#%2Fdefinitions%2FPartial%3CFilter%3E",
+        ].map((ref) => ({
+          schema: {
+            type: "object",
+            properties: { filter: { $ref: ref } },
+            required: ["filter"],
+            definitions: { "Partial<Filter>": value },
+          },
+          options,
+          expected: { type: "object", properties: { filter: value }, required: ["filter"] },
+        })),
+      ),
+    ];
+    for (const { schema, options, expected } of cases) {
+      expect(normalizeToolParameterSchema(schema, options)).toEqual(expected);
+    }
   });
 
   it.each([false, true])("retains Responses payload inlining with strict=%s", (strict) => {
@@ -194,17 +213,6 @@ describe("compact OpenAI tool references", () => {
     expect(JSON.stringify(normalized)).not.toContain('"$ref"');
   });
 
-  it("keeps root refs and unions on the existing inline path", () => {
-    for (const schema of [
-      { $ref: "#/$defs/input", $defs: { input: detail } },
-      { anyOf: [{ $ref: "#/$defs/input" }], $defs: { input: detail } },
-    ]) {
-      expect(normalizeToolParameterSchema(schema, { modelProvider: "openai" })).toEqual(
-        normalizeToolParameterSchema(schema),
-      );
-    }
-  });
-
   it("inlines mixed OpenAPI refs rather than leaving dangling components", () => {
     const schema = {
       ...batch,
@@ -239,45 +247,26 @@ describe("compact OpenAI tool references", () => {
     expect(normalized).toHaveProperty("definitions.node.properties.label.type", ["string", "null"]);
   });
 
-  it.each([
-    { $id: "https://example.invalid/schema", properties: {} },
-    { $defs: { local: { type: "string" } }, properties: { label: { $ref: "#/$defs/local" } } },
-    { properties: { label: { $ref: "#/$defs/missing" } } },
-    { properties: { label: { $ref: "#/$defs/input", nullable: true } } },
-  ])("keeps scoped or unresolved refs on the existing path: %j", (nested) => {
-    const schema = {
-      ...batch,
-      properties: { ...batch.properties, extra: { type: "object", ...nested } },
-    };
-    expect(normalizeToolParameterSchema(schema, { modelProvider: "openai" })).toEqual(
-      normalizeToolParameterSchema(schema),
-    );
-  });
-});
-
-describe("percent-encoded local references", () => {
-  const filter = { type: "object", properties: { limit: { type: "number" } } };
-
-  it.each([
-    { modelProvider: "google", modelId: "gemini-2.5-pro" },
-    { modelProvider: "anthropic", modelId: "claude-sonnet-4-6" },
-  ])("inlines encoded definition references for $modelProvider", (options) => {
-    for (const ref of [
-      "#/definitions/Partial<Filter>",
-      "#/definitions/Partial%3CFilter%3E",
-      "#%2Fdefinitions%2FPartial%3CFilter%3E",
+  it("uses the inline path for root, scoped, nullable, and unresolved references", () => {
+    const schemas: unknown[] = [
+      { $ref: "#/$defs/input", $defs: { input: detail } },
+      { anyOf: [{ $ref: "#/$defs/input" }], $defs: { input: detail } },
+    ];
+    for (const nested of [
+      { $id: "https://example.invalid/schema", properties: {} },
+      { $defs: { local: { type: "string" } }, properties: { label: { $ref: "#/$defs/local" } } },
+      { properties: { label: { $ref: "#/$defs/missing" } } },
+      { properties: { label: { $ref: "#/$defs/input", nullable: true } } },
     ]) {
-      const schema = {
-        type: "object",
-        properties: { filter: { $ref: ref } },
-        required: ["filter"],
-        definitions: { "Partial<Filter>": filter },
-      };
-      expect(normalizeToolParameterSchema(schema, options)).toEqual({
-        type: "object",
-        properties: { filter },
-        required: ["filter"],
+      schemas.push({
+        ...batch,
+        properties: { ...batch.properties, extra: { type: "object", ...nested } },
       });
+    }
+    for (const schema of schemas) {
+      expect(normalizeToolParameterSchema(schema, { modelProvider: "openai" })).toEqual(
+        normalizeToolParameterSchema(schema),
+      );
     }
   });
 });
@@ -317,82 +306,80 @@ describe("root unions with preset and custom strings", () => {
     }
   });
 
-  it("retains a root enum when a branch allows arbitrary strings", () => {
-    const schema = {
-      type: "object",
-      properties: { value: Type.Union([Type.Literal("compact"), Type.Literal("wide")]) },
-      anyOf: Type.Union([presets, custom]).anyOf,
-    };
-    const normalized = normalizeToolParameterSchema(schema);
-    expect(Compile(normalized).Check({ action: "custom", value: "compact" })).toBe(true);
-    expect(Compile(normalized).Check({ action: "custom", value: "customer-layout" })).toBe(false);
-  });
-
-  it("does not replace a preset with a constrained string or a different type", () => {
-    for (const value of [
-      Type.String({ pattern: "^custom-" }),
-      Type.String({ minLength: 20 }),
-      Type.Number(),
-    ]) {
-      for (const branches of [
-        [presets, Type.Object({ action: Type.Literal("custom"), value })],
-        [Type.Object({ action: Type.Literal("custom"), value }), presets],
-      ]) {
-        const schema = { type: "object", anyOf: Type.Union(branches).anyOf };
-        const normalized = normalizeToolParameterSchema(schema, { modelProvider: "google" });
-        expect(Compile(schema).Check({ action: "preset", value: "compact" })).toBe(true);
-        expect(Compile(normalized).Check({ action: "preset", value: "compact" })).toBe(true);
+  it("preserves root-union constraints, alternative types, and annotations", () => {
+    const values = (...alternatives: TSchema[]) =>
+      Type.Union(alternatives.map((value) => Type.Object({ value })));
+    const cases: Array<{
+      schema: TSchema | Record<string, unknown>;
+      modelProvider?: string;
+      accepted: unknown[];
+      rejected?: unknown[];
+      valueSchema?: Record<string, unknown>;
+    }> = [
+      {
+        schema: {
+          type: "object",
+          properties: { value: Type.Union([Type.Literal("compact"), Type.Literal("wide")]) },
+          anyOf: Type.Union([presets, custom]).anyOf,
+        },
+        accepted: [{ action: "custom", value: "compact" }],
+        rejected: [{ action: "custom", value: "customer-layout" }],
+      },
+      ...[
+        Type.String({ pattern: "^custom-" }),
+        Type.String({ minLength: 20 }),
+        Type.Number(),
+      ].flatMap((value) =>
+        [
+          [presets, Type.Object({ action: Type.Literal("custom"), value })],
+          [Type.Object({ action: Type.Literal("custom"), value }), presets],
+        ].map((branches) => ({
+          schema: { type: "object", anyOf: Type.Union(branches).anyOf },
+          modelProvider: "google",
+          accepted: [{ action: "preset", value: "compact" }],
+        })),
+      ),
+      {
+        schema: values(
+          Type.Literal("compact", { description: "Layout name" }),
+          Type.String({ description: "Custom name", default: "custom", examples: ["custom"] }),
+          Type.Literal("wide"),
+        ),
+        accepted: [{ value: "customer-layout" }],
+        valueSchema: {
+          type: "string",
+          description: "Layout name",
+          default: "custom",
+          examples: ["custom"],
+        },
+      },
+      { schema: values(Type.Literal(42), Type.String()), accepted: [{ value: 42 }] },
+      {
+        schema: values(Type.Literal("compact"), Type.String(), Type.Literal(42)),
+        accepted: [{ value: "compact" }, { value: 42 }],
+      },
+      {
+        schema: values(
+          Type.Union([Type.Literal("compact"), Type.Literal("wide")]),
+          Type.Union([Type.Literal("custom"), Type.Literal("compact")]),
+        ),
+        accepted: ["compact", "wide", "custom"].map((value) => ({ value })),
+        rejected: [{ value: "unknown" }],
+      },
+    ];
+    for (const { schema, modelProvider, accepted, rejected = [], valueSchema } of cases) {
+      const normalized = normalizeToolParameterSchema(schema, { modelProvider });
+      const validator = Compile(normalized);
+      for (const input of accepted) {
+        expect(Compile(schema).Check(input)).toBe(true);
+        expect(validator.Check(input)).toBe(true);
+      }
+      for (const input of rejected) {
+        expect(validator.Check(input)).toBe(false);
+      }
+      if (valueSchema) {
+        expect(normalized).toHaveProperty("properties.value", valueSchema);
       }
     }
-  });
-
-  it("keeps an annotated custom string open when a third preset follows it", () => {
-    const schema = Type.Union([
-      Type.Object({ value: Type.Literal("compact", { description: "Layout name" }) }),
-      Type.Object({
-        value: Type.String({ description: "Custom name", default: "custom", examples: ["custom"] }),
-      }),
-      Type.Object({ value: Type.Literal("wide") }),
-    ]);
-    const normalized = normalizeToolParameterSchema(schema);
-    expect(normalized).toHaveProperty("properties.value", {
-      type: "string",
-      description: "Layout name",
-      default: "custom",
-      examples: ["custom"],
-    });
-    expect(Compile(normalized).Check({ value: "customer-layout" })).toBe(true);
-  });
-
-  it("retains numeric presets when the other branch accepts strings", () => {
-    const normalized = normalizeToolParameterSchema(
-      Type.Union([Type.Object({ value: Type.Literal(42) }), Type.Object({ value: Type.String() })]),
-    );
-    expect(Compile(normalized).Check({ value: 42 })).toBe(true);
-  });
-
-  it("keeps earlier string presets when a numeric alternative follows a free string", () => {
-    const normalized = normalizeToolParameterSchema(
-      Type.Union([
-        Type.Object({ value: Type.Literal("compact") }),
-        Type.Object({ value: Type.String() }),
-        Type.Object({ value: Type.Literal(42) }),
-      ]),
-    );
-    expect(Compile(normalized).Check({ value: "compact" })).toBe(true);
-    expect(Compile(normalized).Check({ value: 42 })).toBe(true);
-  });
-
-  it("continues to merge two finite string enums", () => {
-    const schema = Type.Union([
-      Type.Object({ value: Type.Union([Type.Literal("compact"), Type.Literal("wide")]) }),
-      Type.Object({ value: Type.Union([Type.Literal("custom"), Type.Literal("compact")]) }),
-    ]);
-    const normalized = normalizeToolParameterSchema(schema);
-    const validator = Compile(normalized);
-    for (const value of ["compact", "wide", "custom"]) {
-      expect(validator.Check({ value })).toBe(true);
-    }
-    expect(validator.Check({ value: "unknown" })).toBe(false);
   });
 });
