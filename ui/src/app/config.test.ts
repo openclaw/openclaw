@@ -292,3 +292,43 @@ describe("createApplicationConfigCapability", () => {
     expect(config.current.cliAgentsEnabled).toBe(true);
   });
 });
+
+it("accepts only the Cloudflare logout contract and clears it after a non-Cloudflare bootstrap", async () => {
+  const fetchMock = vi.fn<typeof fetch>();
+  vi.stubGlobal("fetch", fetchMock);
+  const config = createApplicationConfigCapability({ resourceBasePath: "/nested" });
+  expect(config.current.logout).toBeUndefined();
+  for (const logout of [
+    { provider: "cloudflare-access", path: "/cdn-cgi/access/logout" },
+    { provider: "cloudflare-access", path: "https://elsewhere.example/logout" },
+    { provider: "other", path: "/cdn-cgi/access/logout" },
+    undefined,
+  ]) {
+    fetchMock.mockResolvedValueOnce(Response.json({ logout, terminalEnabled: false }));
+    await config.refresh();
+    expect(config.current.logout).toEqual(
+      logout?.provider === "cloudflare-access" && logout.path === "/cdn-cgi/access/logout"
+        ? logout
+        : undefined,
+    );
+  }
+});
+
+it("does not offer origin-relative logout through a development Gateway proxy", async () => {
+  vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", {
+    gatewayUrl: "wss://gateway.example/mount",
+    proxyPath: "/dev-gateway",
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      Response.json({
+        terminalEnabled: false,
+        logout: { provider: "cloudflare-access", path: "/cdn-cgi/access/logout" },
+      }),
+    ),
+  );
+  const config = createApplicationConfigCapability({ resourceBasePath: "/dev-gateway/mount" });
+  await config.refresh();
+  expect(config.current.logout).toBeUndefined();
+});

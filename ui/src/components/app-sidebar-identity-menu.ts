@@ -30,12 +30,14 @@ type SidebarIdentityMenuParams = {
   updateAttentionDismissed: boolean;
   profileViewer?: PresenceViewer;
   canRetryConnection: boolean;
+  logoutAvailable: boolean;
   themeMode: ThemeMode;
   triggerWidth: number;
   onTabAway: () => void;
   onClose: (restoreFocus?: boolean) => void;
   onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
   onPairMobile: () => void;
+  onLogout: () => void;
   onRetryConnect?: () => void;
 };
 
@@ -181,6 +183,9 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
           case `${COMMAND_VALUE_PREFIX}debug-overlay`:
             requestDebugOverlayToggle();
             break;
+          case `${COMMAND_VALUE_PREFIX}logout`:
+            params.onLogout();
+            break;
           case `${COMMAND_VALUE_PREFIX}retry-connect`:
             params.onRetryConnect?.();
             break;
@@ -243,6 +248,20 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
 
       <div class="sidebar-customize-menu__separator" role="separator"></div>
       ${renderSidebarHelpMenu()}
+      ${
+        params.logoutAvailable
+          ? html`<div class="sidebar-customize-menu__separator" role="separator"></div>
+              <wa-dropdown-item
+                class="sidebar-customize-menu__item sidebar-identity-menu__logout"
+                value="command:logout"
+              >
+                <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.logOut}</span>
+                <span class="sidebar-customize-menu__text"
+                  >${t("nav.cloudflareLogout.action")}</span
+                >
+              </wa-dropdown-item>`
+          : nothing
+      }
       ${
         params.canRetryConnection
           ? html`<div class="sidebar-customize-menu__separator" role="separator"></div>

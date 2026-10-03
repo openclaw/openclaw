@@ -259,20 +259,27 @@ function resolveGitHubUserIdentityById(
   return promise.then((identity) => ({ identity, refreshed: true }));
 }
 
+/** The configured header contract that identifies Cloudflare Access ingress. */
+export function isCloudflareAccessTrustedProxyAuth(authConfig?: GatewayAuthConfig): boolean {
+  return (
+    authConfig?.mode === "trusted-proxy" &&
+    normalizeLowercaseStringOrEmpty(authConfig.trustedProxy?.userHeader) ===
+      CLOUDFLARE_ACCESS_USER_HEADER &&
+    authConfig.trustedProxy?.requiredHeaders?.some(
+      (header) => normalizeLowercaseStringOrEmpty(header) === CLOUDFLARE_ACCESS_ASSERTION_HEADER,
+    ) === true
+  );
+}
+
 function cloudflareAccessAssertion(params: {
   authResult: GatewayAuthResult;
   authConfig?: GatewayAuthConfig;
   requestHeaders?: IncomingHttpHeaders;
 }): { assertion: string; principal: string } | undefined {
-  const trustedProxy = params.authConfig?.trustedProxy;
   if (
     !params.authResult.ok ||
     params.authResult.method !== "trusted-proxy" ||
-    params.authConfig?.mode !== "trusted-proxy" ||
-    normalizeLowercaseStringOrEmpty(trustedProxy?.userHeader) !== CLOUDFLARE_ACCESS_USER_HEADER ||
-    !trustedProxy?.requiredHeaders?.some(
-      (header) => normalizeLowercaseStringOrEmpty(header) === CLOUDFLARE_ACCESS_ASSERTION_HEADER,
-    )
+    !isCloudflareAccessTrustedProxyAuth(params.authConfig)
   ) {
     return undefined;
   }

@@ -177,6 +177,21 @@ an explicit allowlist for a different browser policy; that list replaces the
 default rather than adding to it. For profile, role, GitHub, and operations setup,
 see [Deploy a team server](/gateway/team-server).
 
+## Log out of the Control UI
+
+Open the user menu in the lower-left corner and select **Log out**. The action
+appears when the Control UI bootstrap request authenticates through the Cloudflare
+trusted-proxy configuration above. After confirmation, it opens
+`/cdn-cgi/access/logout` at the application origin, outside any Control UI base path.
+Cloudflare owns this endpoint; OpenClaw does not clear or revoke connected GitHub
+or model-provider credentials.
+
+[Cloudflare logout](https://developers.cloudflare.com/cloudflare-one/access-controls/access-settings/session-management/#log-out-as-a-user)
+clears the application cookie immediately and revokes the user's Access session
+across protected applications. Previously issued tokens stop being accepted in
+20–30 seconds. This does not sign the user out of GitHub itself; signing in again
+can reuse an existing identity-provider session.
+
 ## Step 4: Decide how nodes and workers get in
 
 Access protects every route on the hostname, including the ones nodes use. A node can

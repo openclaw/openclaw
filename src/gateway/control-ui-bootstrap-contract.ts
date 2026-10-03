@@ -42,6 +42,8 @@ export type ControlUiPluginFrameGrantAck = {
 /** Runtime config consumed by the browser Control UI during bootstrap. */
 export type ControlUiBootstrapConfig = {
   basePath: string;
+  /** Browser logout owned by the authenticated ingress, independent of the UI mount path. */
+  logout?: { provider: "cloudflare-access"; path: "/cdn-cgi/access/logout" };
   assistantName: string;
   assistantAvatar: string;
   assistantAvatarSource?: string | null;

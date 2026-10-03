@@ -938,7 +938,7 @@ export async function handleControlUiHttpRequest(
           ? (resolveRuntimeServiceBuildId() ?? undefined)
           : undefined,
       devGitBranch,
-      ...resolveControlUiBootstrapPresentation(config),
+      ...resolveControlUiBootstrapPresentation(config, requestAuth.authMethod, opts?.auth),
       terminalEnabled,
       cliAgentsEnabled: config?.gateway?.cliAgents?.enabled !== false,
       pluginAssetsRequireAuth: opts?.auth !== undefined && opts.auth.mode !== "none",

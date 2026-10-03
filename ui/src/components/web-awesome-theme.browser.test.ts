@@ -65,12 +65,14 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome theme inheritanc
           gatewayVersion: "test",
           updateAttentionDismissed: true,
           canRetryConnection: false,
+          logoutAvailable: false,
           themeMode: "dark",
           triggerWidth: 250,
           onTabAway() {},
           onClose() {},
           onNavigate() {},
           onPairMobile() {},
+          onLogout() {},
         })}
         <wa-select label="Language" with-clear value="en">
           <wa-option value="en">English</wa-option>

@@ -8,12 +8,13 @@ import {
   type ControlUiEnvironment,
   type ControlUiPluginFrameGrantAck,
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
-import { uiDevGatewayResourceUrl } from "../dev-gateway.ts";
+import { configuredUiDevGateway, uiDevGatewayResourceUrl } from "../dev-gateway.ts";
 import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
 import { resolveControlUiAuthCandidates, type ControlUiAuthSource } from "./control-ui-auth.ts";
 import { canReloadControlUiDocument } from "./document-reload-guard.ts";
 
 type ApplicationConfig = {
+  logout?: ControlUiBootstrapConfig["logout"];
   assistantIdentity: ReturnType<typeof normalizeAssistantIdentity>;
   serverVersion: string | null;
   serverBuildId?: string | null;
@@ -99,6 +100,13 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
       avatarStatus: parsed.assistantAvatarStatus,
       avatarReason: parsed.assistantAvatarReason,
     }),
+    // A development proxy does not own the browser's Access cookie.
+    logout:
+      !configuredUiDevGateway() &&
+      parsed.logout?.provider === "cloudflare-access" &&
+      parsed.logout.path === "/cdn-cgi/access/logout"
+        ? parsed.logout
+        : undefined,
     serverVersion: parsed.serverVersion ?? null,
     serverBuildId: parsed.serverBuildId ?? null,
     devGitBranch: parsed.devGitBranch?.trim() || null,

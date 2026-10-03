@@ -1804,6 +1804,13 @@ export const en: TranslationMap & {
     settingsSearchNoResults: "No matching settings.",
     settingsSearchClear: "Clear settings search",
     settingsLoadFailed: "Settings navigation could not load.",
+    cloudflareLogout: {
+      action: "Log out",
+      confirmTitle: "Log out of Cloudflare Access?",
+      confirmMessage:
+        "This signs you out of Cloudflare Access across all protected applications. Your GitHub sign-in and connected OpenClaw accounts stay unchanged.",
+      confirmLabel: "Log out everywhere",
+    },
     exitSettings: "Back to app",
     expand: "Expand sidebar",
     collapse: "Collapse sidebar",

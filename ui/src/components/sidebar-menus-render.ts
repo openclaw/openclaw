@@ -39,6 +39,7 @@ import {
   renderSidebarSessionGroupMenu,
   renderSidebarSessionSortMenu,
 } from "./app-sidebar-session-menu-renderers.ts";
+import { showConfirmDialog } from "./confirm-dialog.ts";
 import { canRetryGatewayStatus } from "./gateway-status.ts";
 import "../styles/sidebar-menus.css";
 import { sessionMenuReasons } from "./session-menu-access.ts";
@@ -186,6 +187,7 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusC
     updateAttentionDismissed,
     profileViewer: selfUser ? { ...selfUser, watchedSessions: [] } : undefined,
     canRetryConnection: canRetryGatewayStatus(host.connectionStatus),
+    logoutAvailable: context?.config.current.logout !== undefined,
     themeMode: host.themeMode,
     triggerWidth: position.width,
     onTabAway: () => trigger?.focus(),
@@ -197,6 +199,30 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusC
     },
     onNavigate: (routeId, options) => host.onNavigate?.(routeId, options),
     onPairMobile: () => host.onPairMobile?.(),
+    onLogout: () => {
+      const selectedContext = host.sessionDataContext;
+      const selectedLogout = selectedContext?.config.current.logout;
+      if (!selectedContext || !selectedLogout) {
+        return;
+      }
+      void showConfirmDialog({
+        title: t("nav.cloudflareLogout.confirmTitle"),
+        message: t("nav.cloudflareLogout.confirmMessage"),
+        confirmLabel: t("nav.cloudflareLogout.confirmLabel"),
+        danger: true,
+      }).then((confirmed) => {
+        const currentContext = host.sessionDataContext;
+        const currentLogout = currentContext?.config.current.logout;
+        if (
+          confirmed &&
+          currentContext === selectedContext &&
+          currentLogout?.provider === selectedLogout.provider &&
+          currentLogout.path === selectedLogout.path
+        ) {
+          window.location.assign(currentLogout.path);
+        }
+      });
+    },
     onRetryConnect: host.onRetryConnect,
   });
 }
