@@ -1,7 +1,12 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
 import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
+import { observeWarmComparisonAdmission } from "./crabbox-worker-warm-image-admission.test-support.js";
 import {
   listCrabboxWarmImages,
   openCrabboxWarmImageStore,
@@ -42,28 +47,62 @@ function recordAllocation(availableImage?: typeof image) {
   });
 }
 
-function observeComparisons(before: () => void | Promise<void>, after?: () => void) {
+function observeComparisons(
+  before: () => void | Promise<void>,
+  after?: () => void | Promise<void>,
+) {
   const open = crabboxState.openKeyedStore;
   let attempts = 0;
   vi.spyOn(crabboxState, "openKeyedStore").mockImplementation(
     <T>(options: OpenAsyncKeyedStoreOptions) => {
-      const store = open<T>(options);
-      const compareAndApply = store.compareAndApply!;
-      return {
-        ...store,
-        compareAndApply: async (...args: Parameters<typeof compareAndApply>) => {
-          attempts += 1;
-          if (attempts === 1) {
-            await before();
-          }
-          const result = await compareAndApply(...args);
-          after?.();
-          return result;
-        },
+      const decorate = <View extends PluginStateKeyedStore<T>>(view: View): View => {
+        const compareAndApply = view.compareAndApply!;
+        return {
+          ...view,
+          compareAndApply: async (...args: Parameters<typeof compareAndApply>) => {
+            attempts += 1;
+            if (attempts === 1) {
+              await before();
+            }
+            const result = await compareAndApply.apply(view, args);
+            await after?.();
+            return result;
+          },
+        };
       };
+      const store = open<T>(options);
+      const withCurrent = store.withCurrent;
+      const decorated = decorate(store);
+      if (withCurrent) {
+        // Decorate the real action view, not the unbound comparison: its original
+        // authority and receiver must still reach native write admission.
+        decorated.withCurrent = (authority) => decorate(withCurrent.call(store, authority));
+      }
+      return decorated;
     },
   );
   return () => attempts;
+}
+
+const snapshotRecord: WarmProfileRecord = {
+  version: 3,
+  image,
+  previous: { ...image, checkpointId: "chk_previous", createdAtMs: 0 },
+  allocations: {
+    sibling: { ...allocation, choice: { kind: "cold" }, imageGeneration: null },
+  },
+};
+
+function afterComparisonGrant(afterGrant: () => void) {
+  return observeWarmComparisonAdmission({
+    key: "profile",
+    afterAdmit: (stage) => {
+      if (stage === "commit") {
+        // Disposal joins this operation; start it without awaiting in the native callback.
+        afterGrant();
+      }
+    },
+  });
 }
 
 describe("Crabbox asynchronous warm-image mutations", () => {
@@ -284,43 +323,156 @@ describe("Crabbox asynchronous warm-image mutations", () => {
   );
 
   it.each(["pin", "rollback"] as const)(
-    "drains an admitted %s write before provider disposal settles",
+    "refuses and drains a %s held before comparison dispatch when disposed",
     async (action) => {
-      const { provider } = createWarmProvider();
-      const record: WarmProfileRecord = {
-        version: 3,
-        image,
-        previous: { ...image, checkpointId: "chk_previous" },
-        allocations: {},
-      };
-      openWarmImageStore().register("profile", record);
-      const admitted = createDeferred<void>();
+      const { provider, calls } = createWarmProvider();
+      openWarmImageStore().register("profile", snapshotRecord);
+      const prepared = createDeferred<void>();
       const complete = createDeferred<void>();
-      observeComparisons(async () => {
-        admitted.resolve();
+      const attempts = observeComparisons(async () => {
+        prepared.resolve();
         await complete.promise;
       });
       const mutation =
         action === "pin"
           ? provider.images.pin(image.checkpointId, true)
           : provider.images.rollback("chk_previous");
-      await admitted.promise;
-      let disposed = false;
-      const disposal = provider.dispose().then(() => {
-        disposed = true;
-      });
-      await Promise.resolve();
-      expect(disposed).toBe(false);
-      complete.resolve();
-      await mutation;
-      await disposal;
-      expect(disposed).toBe(true);
-      expect(openWarmImageStore().lookup("profile")?.image).toMatchObject(
-        action === "pin"
-          ? { pinned: { atMs: expect.any(Number) } }
-          : { checkpointId: "chk_previous" },
+      // Observe rejection before disposal can revoke the retained operation.
+      const settled = mutation.then(
+        (value) => ({ status: "fulfilled" as const, value }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
       );
-      await expect(provider.images.pin(image.checkpointId, false)).rejects.toThrow();
+      let disposed = false;
+      let disposal: Promise<void> | undefined;
+      try {
+        expect(
+          await Promise.race([
+            prepared.promise.then(() => "prepared"),
+            settled.then(() => "settled without the comparison hold"),
+          ]),
+        ).toBe("prepared");
+        disposal = provider.dispose().then(() => {
+          disposed = true;
+        });
+        await expect(provider.images.pin(image.checkpointId, false)).rejects.toThrow();
+        expect(disposed).toBe(false);
+        complete.resolve();
+        expect.soft(await settled).toMatchObject({
+          status: "rejected",
+          error: { name: "AbortError" },
+        });
+        await disposal;
+        expect(disposed).toBe(true);
+        expect(attempts()).toBe(1);
+        expect(calls).toEqual([]);
+        await expect(provider.images.pin(image.checkpointId, false)).rejects.toThrow();
+        await closeOpenClawStateDatabaseAsync();
+        expect.soft(openWarmImageStore().lookup("profile")).toEqual(snapshotRecord);
+      } finally {
+        complete.resolve();
+        await settled;
+        await disposal;
+        await provider.dispose();
+        // Drain/close before the shared fixture's temp-directory cleanup, even on failure.
+        await closeOpenClawStateDatabaseAsync();
+      }
+    },
+  );
+
+  it.each(["pin", "rollback"] as const)(
+    "preserves and drains a %s granted before provider disposal",
+    async (action) => {
+      const { provider, calls } = createWarmProvider();
+      openWarmImageStore().register("profile", snapshotRecord);
+      const compared = createDeferred<void>();
+      const complete = createDeferred<void>();
+      const attempts = observeComparisons(
+        () => {},
+        async () => {
+          compared.resolve();
+          await complete.promise;
+        },
+      );
+      let disposed = false;
+      let disposal: Promise<void> | undefined;
+      const gate = afterComparisonGrant(() => {
+        disposal = provider.dispose().then(() => {
+          disposed = true;
+        });
+      });
+      const mutation =
+        action === "pin"
+          ? provider.images.pin(image.checkpointId, true)
+          : provider.images.rollback("chk_previous");
+      const settled = mutation.then(
+        (value) => ({ status: "fulfilled" as const, value }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
+      );
+      const expected =
+        action === "pin"
+          ? { ...snapshotRecord, image: { ...image, pinned: { atMs: expect.any(Number) } } }
+          : {
+              version: 3,
+              image: snapshotRecord.previous,
+              allocations: snapshotRecord.allocations,
+              operation: { type: "retire", checkpointId: image.checkpointId },
+            };
+      try {
+        expect(
+          await Promise.race([
+            compared.promise.then(() => "compared"),
+            settled.then(() => "settled without the comparison hold"),
+          ]),
+        ).toBe("compared");
+        expect(gate.stages).toEqual(["transaction", "commit"]);
+        const submissions = gate.submissions();
+        expect(submissions).toHaveLength(1);
+        const valueJson = submissions[0]?.valueJson;
+        if (typeof valueJson !== "string") {
+          throw new Error("Expected the native snapshot comparison payload");
+        }
+        const submitted: unknown = JSON.parse(valueJson);
+        expect(submitted).toEqual(expected);
+        expect(disposal).toBeDefined();
+        await expect(provider.images.pin(image.checkpointId, false)).rejects.toThrow();
+        expect(disposed).toBe(false);
+        complete.resolve();
+        expect(await settled).toMatchObject({
+          status: "fulfilled",
+          value:
+            action === "pin"
+              ? {
+                  profileKey: "profile",
+                  checkpointId: image.checkpointId,
+                  pinned: { atMs: expect.any(Number) },
+                  previous: { checkpointId: "chk_previous", createdAtMs: 0 },
+                  allocations: snapshotRecord.allocations,
+                }
+              : {
+                  profileKey: "profile",
+                  checkpointId: "chk_previous",
+                  createdAtMs: 0,
+                  previous: undefined,
+                  retirement: { checkpointId: image.checkpointId },
+                  allocations: snapshotRecord.allocations,
+                },
+        });
+        await disposal;
+        expect(disposed).toBe(true);
+        expect(attempts()).toBe(1);
+        expect(calls).toEqual([]);
+        await expect(provider.images.pin(image.checkpointId, false)).rejects.toThrow();
+        gate.restore();
+        await closeOpenClawStateDatabaseAsync();
+        expect(openWarmImageStore().lookup("profile")).toEqual(expected);
+      } finally {
+        complete.resolve();
+        await settled;
+        await disposal;
+        await provider.dispose();
+        gate.restore();
+        await closeOpenClawStateDatabaseAsync();
+      }
     },
   );
 });

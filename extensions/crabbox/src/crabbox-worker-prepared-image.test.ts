@@ -466,6 +466,7 @@ describe("Crabbox prepared image demand and custody", () => {
         { preparationKey: preparation.key, demandAtMs: now },
       );
       await provider.destroy({ leaseId: source.leaseId, profile });
+      const original = (await listCrabboxWarmImages(crabboxState))[0]!;
       calls.length = 0;
       const controller = new AbortController();
       current = projectOptions(events, controller, {
@@ -492,7 +493,7 @@ describe("Crabbox prepared image demand and custody", () => {
           allocations: { [reserveId]: { phase: "prepared" } },
         });
         expect(current.options.beginNodeEnrollment).not.toHaveBeenCalled();
-        expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
+        expect(calls.some(({ argv }) => argv[1] === "stop" || argv[2] === "delete")).toBe(false);
       } finally {
         settle.resolve();
         await provision;
@@ -502,35 +503,64 @@ describe("Crabbox prepared image demand and custody", () => {
       });
       expect(current.options.beginNodeEnrollment).not.toHaveBeenCalled();
       const recorded = (await listCrabboxWarmImages(crabboxState))[0]!;
+      // Settled native custody cannot replace the image after source authority expires.
+      expect(recorded).toEqual({
+        ...original,
+        allocations: {
+          [reserveId]: {
+            phase: "prepared",
+            machineClass: "standard",
+            os: "linux",
+            preparationKey: "e".repeat(64),
+            cacheKey: preparation.cacheKey,
+            purpose: "reserve",
+            demandAtMs: now,
+            baseCommit: BASE_COMMIT,
+            runtimeIdentity: current.options.nodeRuntimeIdentity,
+            choice: { kind: "checkpoint", checkpointId: CHECKPOINT_ID },
+            imageGeneration: { checkpointId: CHECKPOINT_ID, createdAtMs: original.createdAtMs },
+          },
+        },
+        capture:
+          outcome === "success"
+            ? undefined
+            : expect.objectContaining({ leaseId: reserveId, phase: "uncertain" }),
+        retirement: outcome === "success" ? { checkpointId: "chk_late_capture" } : undefined,
+      });
       expect(recorded.lastDemandAtMs).toBe(now);
-      expect(recorded.allocations[reserveId]?.phase).toBe("prepared");
-      if (outcome === "success") {
-        expect(recorded).toMatchObject({
-          checkpointId: "chk_late_capture",
-          retirement: { checkpointId: CHECKPOINT_ID },
-          allocations: { [reserveId]: { imageGeneration: { checkpointId: "chk_late_capture" } } },
-        });
-        expect(recorded.capture).toBeUndefined();
-      } else {
-        expect(recorded).toMatchObject({
-          checkpointId: CHECKPOINT_ID,
-          capture: { leaseId: reserveId, phase: "uncertain" },
-        });
-      }
+      expect(calls.some(({ argv }) => argv[1] === "stop" || argv[2] === "delete")).toBe(false);
+      const commandCount = calls.length;
+      await expect(provider.provision(profile, operationId, current.options)).rejects.toMatchObject(
+        {
+          name: "AbortError",
+          message: "Prepared worker expired",
+        },
+      );
+      expect(calls).toHaveLength(commandCount);
+      expect(current.options.project.prepare).toHaveBeenCalledOnce();
+      expect(current.options.prepareNodeRuntime).toHaveBeenCalledOnce();
+      expect(current.options.beginNodeEnrollment).not.toHaveBeenCalled();
       await provider.notePreparedDemand!(
         { leaseId: reserveId, profile },
         { preparationKey: "e".repeat(64), demandAtMs: expiresAtMs + 1 },
       );
-      expect((await listCrabboxWarmImages(crabboxState))[0]?.lastDemandAtMs).toBe(now);
+      expect((await listCrabboxWarmImages(crabboxState))[0]).toEqual(recorded);
       warn.mockClear();
+      const cleanupStart = calls.length;
       await expect(provider.destroy({ leaseId: reserveId, profile })).resolves.toBeUndefined();
-      if (outcome === "success") {
-        expect(calls.some(({ argv }) => argv[2] === "delete" && argv[3] === CHECKPOINT_ID)).toBe(
-          true,
-        );
-      } else {
+      const cleaned = (await listCrabboxWarmImages(crabboxState))[0]!;
+      expect(cleaned).toEqual({
+        ...original,
+        capture: recorded.capture,
+      });
+      expect(calls.filter(({ argv }) => argv[2] === "delete").map(({ argv }) => argv[3])).toEqual(
+        outcome === "success" ? ["chk_late_capture"] : [],
+      );
+      expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
+      expect(calls.slice(cleanupStart).some(({ argv }) => argv[1] === "run")).toBe(false);
+      if (outcome === "ambiguous") {
         expect(warn).toHaveBeenCalledWith(expect.stringContaining(recorded.capture!.selector));
-        expect((await listCrabboxWarmImages(crabboxState))[0]?.capture).toEqual(recorded.capture);
+        expect(cleaned.capture).toEqual(recorded.capture);
       }
       expect(
         calls.filter(({ argv }) => argv[1] === "stop" && argv.includes(reserveId)),
@@ -538,6 +568,30 @@ describe("Crabbox prepared image demand and custody", () => {
       expect(
         (await listCrabboxWarmImages(crabboxState))[0]?.allocations[reserveId],
       ).toBeUndefined();
+      current = projectOptions(events, new AbortController(), preparation);
+      current.options.project.baseCommit = "a".repeat(40);
+      const reuseStart = calls.length;
+      const reused = await provider.provision(profile, "capture-expiry-reuse", current.options);
+      expect(
+        calls
+          .slice(reuseStart)
+          .filter(({ argv }) => argv[2] === "fork")
+          .map(({ argv }) => argv[3]),
+      ).toEqual([CHECKPOINT_ID]);
+      expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
+      expect(current.options.prepareNodeRuntime).not.toHaveBeenCalled();
+      expect(current.options.beginNodeEnrollment).toHaveBeenCalledOnce();
+      expect((await listCrabboxWarmImages(crabboxState))[0]).toMatchObject({
+        checkpointId: CHECKPOINT_ID,
+        lastDemandAtMs: now,
+        allocations: {
+          [reused.leaseId]: {
+            phase: "enrolled",
+            choice: { kind: "checkpoint", checkpointId: CHECKPOINT_ID },
+            imageGeneration: { checkpointId: CHECKPOINT_ID, createdAtMs: original.createdAtMs },
+          },
+        },
+      });
     },
   );
 

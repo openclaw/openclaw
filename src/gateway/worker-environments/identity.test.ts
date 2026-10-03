@@ -1,13 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import type { WorkerProvider, WorkerSshIdentity } from "../../plugins/types.js";
+import type { WorkerProviderV1, WorkerSshIdentity } from "../../plugins/types.js";
 import { resolveWorkerSshIdentity } from "./identity.js";
 
 const KEY_REF = { source: "file", provider: "worker", id: "/lease" } as const;
 const PROFILE = { provider: "example" };
 
-function provider(overrides: Partial<WorkerProvider> = {}): WorkerProvider {
+function provider(overrides: Partial<WorkerProviderV1> = {}): WorkerProviderV1 {
   return {
     id: "example",
+    liveAuthorityVersion: 1,
     resolveAllocation: vi.fn(),
     provision: vi.fn(),
     inspect: vi.fn(),

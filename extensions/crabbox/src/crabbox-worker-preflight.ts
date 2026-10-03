@@ -15,7 +15,9 @@ async function loadCrabboxConfigShow(params: {
   binary: string;
   runCommand: CrabboxCommandRunner;
   signal?: AbortSignal;
+  assertCurrent: () => void;
 }): Promise<unknown> {
+  params.assertCurrent();
   const result = await runCrabboxCommand({
     action: "config show",
     args: ["config", "show", "--json"],
@@ -24,6 +26,7 @@ async function loadCrabboxConfigShow(params: {
     signal: params.signal,
     timeoutMs: CRABBOX_CONFIG_TIMEOUT_MS,
   });
+  params.assertCurrent();
   return parseCrabboxJson(crabboxCommandOutput("config show", result), "config show");
 }
 
@@ -31,6 +34,7 @@ export async function assertAwsWorkerHasNoInstanceProfile(params: {
   binary: string;
   runCommand: CrabboxCommandRunner;
   signal?: AbortSignal;
+  assertCurrent: () => void;
 }): Promise<void> {
   const config = await loadCrabboxConfigShow(params);
   const instanceProfile =
@@ -47,6 +51,7 @@ export async function assertHetznerDesktopHasManagedCoordinator(params: {
   binary: string;
   runCommand: CrabboxCommandRunner;
   signal?: AbortSignal;
+  assertCurrent: () => void;
 }): Promise<void> {
   const config = await loadCrabboxConfigShow(params);
   const view = isRecord(config) ? config : undefined;

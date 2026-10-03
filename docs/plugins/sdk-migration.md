@@ -12,6 +12,8 @@ OpenClaw replaced a broad backwards-compatibility layer with a modern plugin
 architecture built from small, focused imports. If your plugin predates that
 change, this guide gets it onto the current contracts.
 
+Worker provider authors can migrate to `WorkerProvider<1>` with required host invocation guards; the [compatibility record](/plugins/sdk-migration/compatibility-policy#worker-provider-invocation-guards) preserves the legacy default.
+
 ## What changed
 
 Several wide-open import surfaces used to let plugins reach almost anything

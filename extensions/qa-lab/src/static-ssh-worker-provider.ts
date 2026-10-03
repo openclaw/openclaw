@@ -67,7 +67,7 @@ function parseStaticSshWorkerSettings(profile: WorkerProfile): WorkerSshEndpoint
   };
 }
 
-export function createStaticSshWorkerProvider(): WorkerProvider {
+export function createStaticSshWorkerProvider(): WorkerProvider<1> {
   const resolveAllocation: WorkerProvider["resolveAllocation"] = async (_profile, opId) => {
     if (!opId.trim()) {
       throw new Error("static-ssh provision operation id must be non-empty");
@@ -76,6 +76,7 @@ export function createStaticSshWorkerProvider(): WorkerProvider {
   };
   return {
     id: STATIC_SSH_WORKER_PROVIDER_ID,
+    liveAuthorityVersion: 1,
     supportedExecutionModes: ["remote-exec"],
     resolveAllocation,
     async provision(profile, opId, options) {

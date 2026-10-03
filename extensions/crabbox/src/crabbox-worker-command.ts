@@ -50,28 +50,35 @@ export async function runCrabboxCommand(params: {
   args: string[];
   binary: string;
   runCommand: CrabboxCommandRunner;
+  onDispatch?: () => void;
   env?: NodeJS.ProcessEnv;
   input?: string | Uint8Array;
   signal?: AbortSignal;
   timeoutMs: number;
 }): Promise<SpawnResult> {
-  params.signal?.throwIfAborted();
+  const { runCommand, signal, onDispatch } = params;
+  const argv = [params.binary, ...params.args];
+  const options = {
+    timeoutMs: params.timeoutMs,
+    maxOutputBytes: MAX_OUTPUT_BYTES,
+    killProcessTree: true,
+    ...(params.env === undefined ? {} : { env: params.env }),
+    ...(params.input === undefined ? {} : { input: params.input }),
+    ...(signal ? { signal } : {}),
+  };
+  signal?.throwIfAborted();
+  // Custody starts at this synchronous handoff, not at an earlier stored intent.
+  // Runner rejection can follow an effect, so observers cannot attest submission success.
+  onDispatch?.();
   let result: SpawnResult;
   try {
-    result = await params.runCommand([params.binary, ...params.args], {
-      timeoutMs: params.timeoutMs,
-      maxOutputBytes: MAX_OUTPUT_BYTES,
-      killProcessTree: true,
-      ...(params.env === undefined ? {} : { env: params.env }),
-      ...(params.input === undefined ? {} : { input: params.input }),
-      ...(params.signal ? { signal: params.signal } : {}),
-    });
+    result = await runCommand(argv, options);
   } catch (error) {
-    params.signal?.throwIfAborted();
+    signal?.throwIfAborted();
     throw crabboxExecutionError(params.action, error);
   }
   // The runner owns child/tree settlement; cancellation must not release that custody early.
-  params.signal?.throwIfAborted();
+  signal?.throwIfAborted();
   return result;
 }
 

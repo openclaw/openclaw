@@ -132,6 +132,8 @@ describe("type suppression inventory", () => {
         "test/type-contracts/kysely-sync.ts:@ts-expect-error Kysely checks order references and selected aliases.",
         "src/infra/net/fetch-guard.socks.test.ts:@ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.",
         "src/infra/net/fetch-guard.socks.test.ts:@ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.",
+        "src/plugin-sdk/worker-provider.contract.test.ts:@ts-expect-error V1 requires host-owned invocation options.",
+        "src/plugin-sdk/worker-provider.contract.test.ts:@ts-expect-error V1 cannot provision without a live invocation guard.",
         "test/type-contracts/plugin-entry-hook-options.ts:@ts-expect-error Trigger eligibility is only supported for before_agent_reply.",
         "test/type-contracts/plugin-entry-hook-options.ts:@ts-expect-error An empty trigger list cannot prove that a hook is inactive.",
         "test/type-contracts/plugin-entry-hook-options.ts:@ts-expect-error Tool authority is only supported for before_prompt_build.",

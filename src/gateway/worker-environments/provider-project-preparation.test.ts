@@ -5,7 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
 import type {
-  WorkerProvider,
+  WorkerProviderV1,
   WorkerNodeRuntimePreparation,
   WorkerNodeEnrollment,
 } from "../../plugins/types.js";
@@ -17,7 +17,7 @@ import * as support from "./service.test-support.js";
 import * as workspaceGitBase from "./workspace-git-base.js";
 
 type ProjectPreparation = NonNullable<
-  NonNullable<Parameters<WorkerProvider["provision"]>[2]>["project"]
+  NonNullable<Parameters<WorkerProviderV1["provision"]>[2]>["project"]
 >;
 
 async function repository(name: string) {
@@ -33,9 +33,9 @@ async function repository(name: string) {
 }
 
 function createService(
-  provision: WorkerProvider["provision"],
+  provision: WorkerProviderV1["provision"],
   providerCallTimeoutMs?: number,
-  supportsProjectPreparation: WorkerProvider["supportsProjectPreparation"] = () => true,
+  supportsProjectPreparation: WorkerProviderV1["supportsProjectPreparation"] = () => true,
 ) {
   let credentialIndex = 0;
   return support.createService(
@@ -317,7 +317,7 @@ describe("worker provider project preparation ownership", () => {
         await release.promise;
         return await original(params);
       });
-    const provision = vi.fn<WorkerProvider["provision"]>(async () => ({
+    const provision = vi.fn<WorkerProviderV1["provision"]>(async () => ({
       leaseId: "unexpected-project-lease",
       ssh: support.SSH_ENDPOINT,
     }));
@@ -424,7 +424,7 @@ describe("worker provider project preparation ownership", () => {
       ]);
       const projects: ProjectPreparation[] = [];
       const operationIds: string[] = [];
-      const provision: WorkerProvider["provision"] = async (_profile, operationId, options) => {
+      const provision: WorkerProviderV1["provision"] = async (_profile, operationId, options) => {
         const project = expectDefined(options?.project, "provider project preparation");
         projects.push(project);
         operationIds.push(operationId);
@@ -499,7 +499,7 @@ describe("worker provider project preparation ownership", () => {
   it("rejects another project root using the same idempotency key before calling the provider", async () => {
     const first = await repository("first-project");
     const second = await repository("second-project");
-    const provision = vi.fn<WorkerProvider["provision"]>(async () => ({
+    const provision = vi.fn<WorkerProviderV1["provision"]>(async () => ({
       leaseId: "lease-project",
       ssh: support.SSH_ENDPOINT,
     }));

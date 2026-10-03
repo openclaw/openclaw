@@ -173,6 +173,7 @@ describe("desktop resize fixture provenance and carrier", () => {
     for (const provider of providers) {
       await expect(
         provider.resolveSshIdentity!({
+          assertCurrent: () => {},
           leaseId: "fixture",
           profile: { executionMode: "remote-exec", settings: {} },
           keyRef: fixture().ssh.keyRef,

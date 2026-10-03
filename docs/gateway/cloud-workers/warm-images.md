@@ -156,9 +156,13 @@ worker counted until the provider confirms release.
 
 Each reserve expires from the successful activation or explicit build that
 created its demand, using the provider's existing idle timeout. Refill and Gateway restart do not
-extend that window. An already-admitted capture can finish within its provider
-budget after expiry, while its worker remains counted. Expiry blocks subsequent
-enrollment, readiness, and consumption; cleanup follows settled capture custody.
+extend that window. An already-dispatched native capture can finish within its provider
+budget after expiry, while its worker remains counted. Making its result reusable
+still requires live source authority at the final state admission. A result refused
+publication stays owned for independent cleanup or recovery; completion alone does
+not make it eligible for another worker. A publication already admitted is not undone
+by later source closure. Expiry blocks subsequent enrollment, readiness, and
+consumption; cleanup follows settled capture custody.
 Provider TTL and idle-timeout settings remain unchanged. A failed dispatch does
 not create fresh demand. Claiming a worker and assigning its placement commit
 together; failed attachment or placement deletion cannot make that worker

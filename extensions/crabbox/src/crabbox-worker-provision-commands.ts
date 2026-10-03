@@ -31,7 +31,8 @@ import {
 
 /** Allocation retains host and project authority independently of cancellation or cleanup. */
 export function createCrabboxProvisionAuthority(
-  options: Parameters<WorkerProvider["provision"]>[2],
+  options: Parameters<WorkerProvider<1>["provision"]>[2],
+  serviceSignal: AbortSignal,
 ): { signal?: AbortSignal; assertCurrent: () => void } {
   const assertHostCurrent = options?.assertCurrent;
   if (!assertHostCurrent) {
@@ -43,6 +44,7 @@ export function createCrabboxProvisionAuthority(
   const project = options?.project;
   const assertCurrent = () => {
     signal?.throwIfAborted();
+    serviceSignal.throwIfAborted();
     assertHostCurrent();
     project?.assertCurrent();
   };
@@ -57,6 +59,7 @@ type ProvisionInspectContext = Omit<LeaseCommandContext, "id"> & {
   stopLease: (context: LeaseCommandContext) => Promise<void>;
   signal?: AbortSignal;
   sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
+  assertCurrent: () => void;
 };
 
 // Crabbox states describe lease usability, not proven cleanup: released leases can retain
@@ -81,10 +84,12 @@ export async function inspectWithContext(
     timeoutMs?: number;
     waitForReady?: boolean;
     signal?: AbortSignal;
+    assertCurrent?: () => void;
     sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
   },
 ): Promise<ParsedInspect | undefined> {
   const action = params.waitForReady ? "status" : "inspect";
+  params.assertCurrent?.();
   const result = await runCrabboxCommandWithCoordinatorRetry({
     action,
     args: [
@@ -102,10 +107,12 @@ export async function inspectWithContext(
     ],
     binary: params.binary,
     runCommand: params.runCommand,
+    onDispatch: params.assertCurrent,
     signal: params.signal,
     sleep: params.sleep,
     timeoutMs: params.timeoutMs ?? resolveCrabboxLifecycleTimeoutMs(params.provider),
   });
+  params.assertCurrent?.();
   if (result.termination === "exit" && result.code === 0) {
     // A successful but malformed response cannot attest the fixed lease. Provision callers
     // must preserve cleanup uncertainty so Gateway replay can inspect the lease later.
@@ -145,8 +152,11 @@ export async function runProvisionWarmup(
     runCommand: CrabboxCommandRunner;
     timeoutMs: () => number;
     signal?: AbortSignal;
+    assertCurrent?: () => void;
+    onDispatch?: () => void;
   },
 ): Promise<void> {
+  params.assertCurrent?.();
   const result = await runCrabboxCommand({
     ...params,
     action: "warmup",
@@ -218,11 +228,13 @@ export async function waitForProvisionReady(
     return replay;
   };
   try {
+    params.assertCurrent();
     inspect = params.refresh ? await inspectAgain() : params.inspect;
     params.signal?.throwIfAborted();
     // Reject forbidden state immediately; omitted AWS metadata is pending only until ready.
     assertProvisionSecurityPolicy({ inspect, provider: params.provider });
     while (inspect.ready !== true && !isNonRunnableState(inspect.state)) {
+      params.assertCurrent();
       params.signal?.throwIfAborted();
       const remaining = remainingProvisionTimeout(params.deadline, CRABBOX_LIFECYCLE_TIMEOUT_MS);
       await params.sleep(
@@ -241,6 +253,11 @@ export async function waitForProvisionReady(
     return inspect;
   } catch (error) {
     params.signal?.throwIfAborted();
+    try {
+      params.assertCurrent();
+    } catch (closed) {
+      return await failProvisionAfterCleanup({ ...params, id: inspect.id }, closed);
+    }
     if (error instanceof WorkerProviderError) {
       return await failProvisionAfterCleanup({ ...params, id: inspect.id }, error);
     }
@@ -276,6 +293,7 @@ export async function runProvisionSetup(
           env: childEnv,
           input: params.setup,
           runCommand: params.runCommand,
+          onDispatch: params.assertCurrent,
           signal: params.signal,
           sleep: params.sleep,
           timeoutMs: remainingProvisionTimeout(
@@ -283,7 +301,9 @@ export async function runProvisionSetup(
             params.timeoutMs ?? CRABBOX_SETUP_TIMEOUT_MS,
           ),
         }),
+      params.assertCurrent,
     );
+    params.assertCurrent();
     crabboxCommandOutput(params.phase, result);
   } catch (error) {
     params.signal?.throwIfAborted();
@@ -328,6 +348,14 @@ export async function failProvisionAfterCleanup(
   params: LeaseCommandContext & { stopLease: (context: LeaseCommandContext) => Promise<void> },
   provisionError: unknown,
 ): Promise<never> {
+  // Nested setup/capture adapters forward the same settled cleanup, never stop twice.
+  if (
+    (WorkerProviderError.isCleanupComplete(provisionError) ||
+      WorkerProviderError.isCleanupIndeterminate(provisionError)) &&
+    provisionError.leaseId === params.id
+  ) {
+    throw provisionError;
+  }
   try {
     await params.stopLease(params);
   } catch (cleanupError) {

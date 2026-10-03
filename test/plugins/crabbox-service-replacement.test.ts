@@ -76,7 +76,7 @@ describe("Crabbox service replacement", () => {
         };
       });
     const registry = createEmptyPluginRegistry();
-    let provider!: WorkerProvider;
+    let provider!: WorkerProvider<0 | 1>;
     crabboxPlugin.register(
       createTestPluginApi({
         id: "crabbox",

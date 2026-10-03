@@ -5,7 +5,7 @@ import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { WorkerProviderError, type WorkerProvider } from "../../plugins/types.js";
+import { WorkerProviderError, type WorkerProviderV1 } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
@@ -23,7 +23,7 @@ describe("worker environment service provision replay", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
   it("retains an indeterminate node lease when runtime preflight fails after restart", async () => {
-    const provision = vi.fn<WorkerProvider["provision"]>(async () => {
+    const provision = vi.fn<WorkerProviderV1["provision"]>(async () => {
       throw new Error("node allocation response was lost");
     });
     const destroy = vi.fn(async () => {});

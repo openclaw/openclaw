@@ -9,6 +9,7 @@ import {
 } from "./crabbox-worker-profile.js";
 import { commandResult } from "./crabbox-worker-provider.test-support.js";
 import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.js";
+import { currentAuthority } from "./crabbox-worker-warm-image-sibling-admission.test-support.js";
 import {
   listCrabboxWarmImages,
   type WarmProfileRecord,
@@ -86,7 +87,7 @@ function fixture(
     slug: id,
     profile: resolveCrabboxProvisionProfile(PROFILE, undefined).profile,
     nodeRuntimeIdentity: NODE_RUNTIME_IDENTITY,
-    ...(projectKey ? { projectKey } : {}),
+    ...(projectKey ? { projectKey, ...currentAuthority("project") } : {}),
     timeoutMs: () => 60_000,
   });
   const projectContext = (id: string, cacheKey = "b".repeat(64)) => ({
@@ -676,24 +677,17 @@ describe("Crabbox durable allocation admission", () => {
   });
 
   it("does not begin a native capture after project authority closes during scrub", async () => {
-    let active = true;
     const { manager, context, calls } = fixture(false, (argv) => {
       if (argv[1] === "run") {
-        active = false;
+        project.close?.();
       }
     });
     const owner = manager();
-    const project = {
-      ...context("cbx_project", "project-a"),
-      assertCurrent: () => {
-        if (!active) {
-          throw new Error("project authority closed");
-        }
-      },
-    };
+    const project = context("cbx_project", "project-a");
     await owner.allocate(project);
     await owner.markPrepared(project.id, "a".repeat(40));
     await expect(owner.capture(project)).rejects.toThrow("project authority closed");
+    expect(project.signal?.aborted).toBe(false);
     expect(calls.some((argv) => argv[2] === "create")).toBe(false);
     expect(openWarmImageStore().entries()[0]?.value.operation).toBeUndefined();
     expect((await owner.lookupLease(project.id))?.phase).toBe("prepared");

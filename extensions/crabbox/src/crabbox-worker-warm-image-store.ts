@@ -245,13 +245,18 @@ async function compareProfile<T>(
   store: PluginStateKeyedStore<T>,
   key: string,
   prepare: (current: T | undefined) => PluginStateCompareIntent<T>,
+  assertCurrent?: () => void,
 ): Promise<boolean> {
-  if (!store.observe || !store.compareAndApply) {
-    throw new Error("Crabbox warm images require atomic asynchronous plugin state support.");
+  // Binding also checks plugin lifetime; independent result and cleanup custody stays unbound.
+  const action = assertCurrent ? store.withCurrent?.({ assertCurrent }) : store;
+  if (!action?.observe || !action.compareAndApply) {
+    throw new Error(
+      "Crabbox warm images require current asynchronous plugin state support; update OpenClaw.",
+    );
   }
-  let observation = await store.observe(key);
+  let observation = await action.observe(key);
   for (;;) {
-    const result = await store.compareAndApply(
+    const result = await action.compareAndApply(
       key,
       observation.comparison,
       prepare(observation.value),
@@ -292,13 +297,19 @@ export function openCrabboxWarmImageStore(state: CrabboxState, env?: NodeJS.Proc
     update(
       key: string,
       update: (current: WarmProfileRecord | undefined) => WarmProfileRecord | undefined,
+      assertCurrent?: () => void,
     ) {
-      return compareProfile(store, key, (current) => {
-        const value = update(requireCanonicalProfile(current));
-        return value === undefined
-          ? { operation: "update", action: "keep" }
-          : { operation: "update", action: "set", value };
-      });
+      return compareProfile(
+        store,
+        key,
+        (current) => {
+          const value = update(requireCanonicalProfile(current));
+          return value === undefined
+            ? { operation: "update", action: "keep" }
+            : { operation: "update", action: "set", value };
+        },
+        assertCurrent,
+      );
     },
   };
   const lookupLease = async (id: string) => {
@@ -333,38 +344,41 @@ export function openCrabboxWarmImageStore(state: CrabboxState, env?: NodeJS.Proc
       throw new Error("Crabbox project preparation requires a verified Git commit.");
     }
     let rejection: string | undefined;
-    await canonical.update(owner.key, (record) => {
-      assertCurrent?.();
-      rejection = undefined;
-      const allocation = record?.allocations[id];
-      if (!record || !allocation) {
-        rejection = "Crabbox allocation closed before preparation completed.";
-        return undefined;
-      }
-      if (record.operation?.type === "capture" && record.operation.leaseId === id) {
-        rejection = "Crabbox allocation cannot enroll while its image capture is unresolved.";
-        return undefined;
-      }
-      if (baseCommit && allocation.baseCommit && baseCommit !== allocation.baseCommit) {
-        rejection = "Crabbox provision retry changed its prepared Git commit.";
-        return undefined;
-      }
-      if (phase === "enrolled" && record.projectKey && allocation.phase === "pending") {
-        rejection = "Crabbox project allocation must be prepared before enrollment.";
-        return undefined;
-      }
-      return {
-        ...record,
-        allocations: {
-          ...record.allocations,
-          [id]: {
-            ...allocation,
-            phase: allocation.phase === "enrolled" ? "enrolled" : phase,
-            ...(baseCommit ? { baseCommit } : {}),
+    await canonical.update(
+      owner.key,
+      (record) => {
+        rejection = undefined;
+        const allocation = record?.allocations[id];
+        if (!record || !allocation) {
+          rejection = "Crabbox allocation closed before preparation completed.";
+          return undefined;
+        }
+        if (record.operation?.type === "capture" && record.operation.leaseId === id) {
+          rejection = "Crabbox allocation cannot enroll while its image capture is unresolved.";
+          return undefined;
+        }
+        if (baseCommit && allocation.baseCommit && baseCommit !== allocation.baseCommit) {
+          rejection = "Crabbox provision retry changed its prepared Git commit.";
+          return undefined;
+        }
+        if (phase === "enrolled" && record.projectKey && allocation.phase === "pending") {
+          rejection = "Crabbox project allocation must be prepared before enrollment.";
+          return undefined;
+        }
+        return {
+          ...record,
+          allocations: {
+            ...record.allocations,
+            [id]: {
+              ...allocation,
+              phase: allocation.phase === "enrolled" ? "enrolled" : phase,
+              ...(baseCommit ? { baseCommit } : {}),
+            },
           },
-        },
-      };
-    });
+        };
+      },
+      assertCurrent,
+    );
     if (rejection) {
       throw new Error(rejection);
     }
@@ -384,71 +398,74 @@ export function openCrabboxWarmImageStore(state: CrabboxState, env?: NodeJS.Proc
     }) {
       let rejection: string | undefined;
       let acceptedOwnerJson: string | undefined;
-      await canonical.update(params.key, (current) => {
-        params.assertCurrent();
-        rejection = undefined;
-        acceptedOwnerJson = undefined;
-        const record = withCrabboxWarmImageDisplayFacts(
-          current ?? {
-            version: 3,
-            allocations: {},
-            ...(params.projectKey ? { projectKey: params.projectKey } : {}),
-          },
-          params.displayFacts,
-        );
-        if (Object.hasOwn(record.allocations, params.id)) {
+      await canonical.update(
+        params.key,
+        (current) => {
+          rejection = undefined;
+          acceptedOwnerJson = undefined;
+          const record = withCrabboxWarmImageDisplayFacts(
+            current ?? {
+              version: 3,
+              allocations: {},
+              ...(params.projectKey ? { projectKey: params.projectKey } : {}),
+            },
+            params.displayFacts,
+          );
+          if (Object.hasOwn(record.allocations, params.id)) {
+            acceptedOwnerJson = JSON.stringify({
+              key: params.key,
+              projectKey: record.projectKey,
+              ...record.allocations[params.id],
+            });
+            return params.displayFacts ? record : undefined;
+          }
+          if (Object.keys(record.allocations).length >= WARM_IMAGE_MAX_ALLOCATIONS) {
+            rejection =
+              "Crabbox warm-image allocation capacity is full; stop outstanding workers before retrying.";
+            return undefined;
+          }
+          // Verification happened before this transaction; its image may have changed or retired.
+          const choice: WarmAllocationRecord["choice"] =
+            params.availableImage &&
+            record.image &&
+            sameCrabboxWarmImageGeneration(record.image, params.availableImage) &&
+            !(
+              record.operation?.type === "retire" &&
+              record.operation.checkpointId === record.image.checkpointId
+            )
+              ? { kind: "checkpoint", checkpointId: record.image.checkpointId }
+              : { kind: "cold" };
+          const next = {
+            ...record,
+            allocations: {
+              ...record.allocations,
+              [params.id]: {
+                choice,
+                ...params.allocation,
+                imageGeneration:
+                  choice.kind === "checkpoint"
+                    ? { checkpointId: choice.checkpointId, createdAtMs: record.image!.createdAtMs }
+                    : null,
+                ...(choice.kind === "cold" && record.image?.pinned
+                  ? {
+                      publicationBase: {
+                        checkpointId: record.image.checkpointId,
+                        createdAtMs: record.image.createdAtMs,
+                      },
+                    }
+                  : {}),
+              },
+            },
+          };
           acceptedOwnerJson = JSON.stringify({
             key: params.key,
-            projectKey: record.projectKey,
-            ...record.allocations[params.id],
+            projectKey: next.projectKey,
+            ...next.allocations[params.id],
           });
-          return params.displayFacts ? record : undefined;
-        }
-        if (Object.keys(record.allocations).length >= WARM_IMAGE_MAX_ALLOCATIONS) {
-          rejection =
-            "Crabbox warm-image allocation capacity is full; stop outstanding workers before retrying.";
-          return undefined;
-        }
-        // Verification happened before this transaction; its image may have changed or retired.
-        const choice: WarmAllocationRecord["choice"] =
-          params.availableImage &&
-          record.image &&
-          sameCrabboxWarmImageGeneration(record.image, params.availableImage) &&
-          !(
-            record.operation?.type === "retire" &&
-            record.operation.checkpointId === record.image.checkpointId
-          )
-            ? { kind: "checkpoint", checkpointId: record.image.checkpointId }
-            : { kind: "cold" };
-        const next = {
-          ...record,
-          allocations: {
-            ...record.allocations,
-            [params.id]: {
-              choice,
-              ...params.allocation,
-              imageGeneration:
-                choice.kind === "checkpoint"
-                  ? { checkpointId: choice.checkpointId, createdAtMs: record.image!.createdAtMs }
-                  : null,
-              ...(choice.kind === "cold" && record.image?.pinned
-                ? {
-                    publicationBase: {
-                      checkpointId: record.image.checkpointId,
-                      createdAtMs: record.image.createdAtMs,
-                    },
-                  }
-                : {}),
-            },
-          },
-        };
-        acceptedOwnerJson = JSON.stringify({
-          key: params.key,
-          projectKey: next.projectKey,
-          ...next.allocations[params.id],
-        });
-        return next;
-      });
+          return next;
+        },
+        params.assertCurrent,
+      );
       // Publish only the rejection from the observation accepted by the store.
       if (rejection) {
         throw new Error(rejection);
