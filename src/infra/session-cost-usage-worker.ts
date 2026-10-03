@@ -480,6 +480,7 @@ export async function executeUsageCostWorker(
       const request = { marker, afterSeq, throughSeq, readId: ++readId };
       const events: Array<{ seq: number; event: unknown }> = [];
       let chunks: Uint8Array[] = [];
+      let bytes = 0;
       for (;;) {
         const frame = await host("memory-transcript", request);
         if (frame.type === "source-unavailable") {
@@ -489,12 +490,18 @@ export async function executeUsageCostWorker(
           return events;
         }
         chunks.push(frame.bytes);
+        bytes += frame.bytes.byteLength;
         if (frame.final) {
           events.push({
             seq: frame.seq,
             event: JSON.parse(Buffer.concat(chunks).toString("utf8")),
           });
           chunks = [];
+          // Finish the event before paging: UTF-8 and JSON may span multiple frames.
+          // A page can exceed the byte budget by one event, including an oversized first row.
+          if (events.length >= 1_024 || bytes >= 8 * 1024 * 1024) {
+            return events;
+          }
         }
       }
     }
