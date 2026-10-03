@@ -451,7 +451,9 @@ export function clearGatewayRestartIntentSync(
       { env },
       { schemaSql: schema, operationLabel: "gateway.restart-intent.clear" },
     );
-  } catch {}
+  } catch (err) {
+    restartLog.warn(`failed to clear gateway restart intent: ${String(err)}`);
+  }
 }
 
 function readGatewayRestartIntentPayloadSync(

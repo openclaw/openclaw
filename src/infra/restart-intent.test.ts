@@ -3,12 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { acquireFileLockSync } from "./file-lock-manager.js";
 import { resolveGatewayStateOwnerPath } from "./gateway-state-owner.js";
 import {
@@ -22,6 +23,18 @@ import {
   consumeGatewayRestartIntentSync,
   writeGatewayRestartIntentSync,
 } from "./restart-intent.js";
+
+const restartLogs = vi.hoisted(() => ({ warn: vi.fn() }));
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => ({
+      ...actual.createSubsystemLogger(subsystem),
+      ...(subsystem === "restart" ? restartLogs : {}),
+    }),
+  };
+});
 
 const tempDirs: string[] = [];
 type GatewayRestartIntentDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_intent">;
@@ -90,6 +103,21 @@ describe("gateway restart intent", () => {
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { force: true, recursive: true });
     }
+  });
+
+  it("warns instead of staying silent when clearing the intent fails", () => {
+    const env = createIntentEnv(false);
+    const databasePath = resolveOpenClawStateSqlitePath(env);
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    fs.writeFileSync(databasePath, "not a sqlite database");
+    restartLogs.warn.mockClear();
+
+    expect(() => clearGatewayRestartIntentSync(env)).not.toThrow();
+
+    expect(restartLogs.warn).toHaveBeenCalledOnce();
+    expect(restartLogs.warn.mock.calls[0]?.[0]).toMatch(
+      /^failed to clear gateway restart intent: /,
+    );
   });
 
   it("consumes a fresh intent for the current process", () => {
