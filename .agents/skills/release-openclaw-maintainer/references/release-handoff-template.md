@@ -22,7 +22,6 @@ operator steering. Do not preserve superseded scope.
 - tag: `v<version>`
 - main closeout SHA: `<exact merged closeout commit | pending>`
 - main closeout version: `<package.json version at that exact commit | pending>`
-- main deployment source status: `<blocked-pending-closeout | core-ready-at-recorded-closeout-sha>`
 - validation workflow ref: `<release-ci ref | canonical branch>`
 - publication tooling ref: `<release-publish/tooling-sha12-epoch | track-specific ref>`
 - tooling tag: `<tag verified via gh api git/ref/tags | created by hand after ruleset warning>`
