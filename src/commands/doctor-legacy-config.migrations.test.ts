@@ -277,8 +277,8 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toStrictEqual([]);
   });
 
-  it("preserves inherited WhatsApp access policy when seeding accounts.default", () => {
-    const res = normalizeCompatibilityConfigValues({
+  it("preserves WhatsApp shared access policy without seeding accounts.default", () => {
+    const config: OpenClawConfig = {
       channels: {
         whatsapp: {
           enabled: true,
@@ -294,29 +294,16 @@ describe("normalizeCompatibilityConfigValues", () => {
           },
         },
       },
-    });
+    };
+    const res = normalizeCompatibilityConfigValues(config);
 
-    expect(res.config.channels?.whatsapp?.dmPolicy).toBeUndefined();
-    expect(res.config.channels?.whatsapp?.allowFrom).toBeUndefined();
-    expect(res.config.channels?.whatsapp?.groupPolicy).toBeUndefined();
-    expect(res.config.channels?.whatsapp?.groupAllowFrom).toBeUndefined();
-    expect(res.config.channels?.whatsapp?.accounts?.default).toEqual({
-      dmPolicy: "allowlist",
-      allowFrom: ["+15550001111"],
-      groupPolicy: "open",
-      groupAllowFrom: [],
-    });
+    expect(res.config).toEqual(config);
+    expect(res.config.channels?.whatsapp?.accounts?.default).toBeUndefined();
     expect(res.config.channels?.whatsapp?.accounts?.work).toEqual({
       enabled: true,
       authDir: "/tmp/wa-work",
-      dmPolicy: "allowlist",
-      allowFrom: ["+15550001111"],
-      groupPolicy: "open",
-      groupAllowFrom: [],
     });
-    expect(res.changes).toContain(
-      "Moved channels.whatsapp single-account top-level values into channels.whatsapp.accounts.default.",
-    );
+    expect(res.changes).toEqual([]);
   });
 
   it("defers the whole promotion for uncovered keys on an undeclared channel", () => {

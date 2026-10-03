@@ -186,6 +186,7 @@ function buildCatalogEntry(packageJson: unknown, pluginManifest: unknown): Catal
   }
   const version = trimString(packageJson.version);
   const description = trimString(packageJson.description);
+  const setupFeatures = isRecord(manifest?.setupFeatures) ? manifest.setupFeatures : null;
   return {
     name: packageName,
     ...(version ? { version } : {}),
@@ -194,6 +195,9 @@ function buildCatalogEntry(packageJson: unknown, pluginManifest: unknown): Catal
     kind: "channel",
     openclaw: {
       ...toCatalogManifestFields(pluginManifest),
+      ...(setupFeatures?.configPromotion === "preserve-root"
+        ? { setupFeatures: { configPromotion: "preserve-root" } }
+        : {}),
       channel,
       install,
     },

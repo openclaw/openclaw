@@ -270,3 +270,32 @@ it.each([
   expect(second.config).toEqual(first.config);
   expect(second.changes).toEqual([]);
 });
+
+it.each([true, false, undefined])(
+  "preserves WhatsApp shared policy without inventing a default account (enabled=%s)",
+  async (enabled) => {
+    state = await createOpenClawTestState({ label: "doctor-whatsapp-policy", applyEnv: true });
+    const bundledDir = state.path("empty-bundled");
+    await fs.mkdir(bundledDir, { recursive: true });
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledDir);
+    vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
+    const cfg: OpenClawConfig = {
+      plugins: { entries: { whatsapp: { enabled } } },
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          allowFrom: ["+15550001111"],
+          groupPolicy: "disabled",
+          accounts: { work: { authDir: "/synthetic/work" } },
+        },
+      },
+    };
+    const before = structuredClone(cfg);
+    const first = normalizeCompatibilityConfigValues(cfg);
+    expect(first.config).toEqual(before);
+    expect(first.changes).toEqual([]);
+    expect(first.config.channels?.whatsapp?.accounts).toEqual(before.channels?.whatsapp?.accounts);
+    expect(normalizeCompatibilityConfigValues(first.config).config).toEqual(before);
+    expect(cfg).toEqual(before);
+  },
+);

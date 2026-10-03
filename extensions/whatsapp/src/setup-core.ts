@@ -17,6 +17,8 @@ export const whatsappSetupAdapter: ChannelSetupAdapter = {
     alwaysUseAccounts: true,
     buildPatch: (input) => (input.authDir ? { authDir: input.authDir } : {}),
   }),
+  // Root fields are shared defaults; account credentials are always written under accounts.
+  configPromotion: "preserve-root",
   singleAccountKeysToMove: ["authDir"],
 };
 
