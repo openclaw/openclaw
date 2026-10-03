@@ -115,7 +115,7 @@ function prepareDeviceTokenMutation(
       : undefined;
   if (denial) {
     deny(denial);
-    return;
+    return undefined;
   }
   // Other roles passed the admin guard; only operator tokens inherit the caller's scope cap.
   const callerScopes = role.trim() === "operator" ? authz.callerScopes : undefined;

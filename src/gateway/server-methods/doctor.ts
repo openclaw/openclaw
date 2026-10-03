@@ -337,7 +337,7 @@ async function resolveManagedDreamingCronStatus(
     const managed = jobs.filter(isManagedDreamingJob);
     let nextRunAtMs: number | undefined;
     for (const job of managed) {
-      if (job.enabled !== true) {
+      if (!job.enabled) {
         continue;
       }
       const candidate = job.state?.nextRunAtMs;
