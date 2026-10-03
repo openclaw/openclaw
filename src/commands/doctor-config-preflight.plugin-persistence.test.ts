@@ -270,7 +270,7 @@ describe("startup plugin persistence", () => {
           }
         });
         const metadataScope = createDoctorPluginMetadataSnapshotScope({
-          baseSnapshot: aggregate,
+          getBaseSnapshot: () => aggregate,
         });
         // Unqualified Doctor work inherits its prepared view, not the system-agent workspace.
         metadataScope.run({ config: sourceConfig }, () => {
