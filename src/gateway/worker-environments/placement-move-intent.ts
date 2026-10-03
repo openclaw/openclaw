@@ -180,30 +180,17 @@ function targetValues(target: WorkerPlacementMoveTarget): {
   target_machine_class: MoveRow["target_machine_class"];
   target_os: MoveRow["target_os"];
 } {
-  switch (target.kind) {
-    case "gateway":
-      return {
-        target_kind: target.kind,
-        target_id: null,
-        target_machine_class: null,
-        target_os: null,
-      };
-    case "profile":
-      return {
-        target_kind: target.kind,
-        target_id: target.profileId,
-        target_machine_class: target.machineClass ?? null,
-        target_os: target.os ?? null,
-      };
-    case "device":
-      return {
-        target_kind: target.kind,
-        target_id: target.deviceId,
-        target_machine_class: null,
-        target_os: null,
-      };
-  }
-  throw new Error("Worker placement move target is invalid");
+  return {
+    target_kind: target.kind,
+    target_id:
+      target.kind === "profile"
+        ? target.profileId
+        : target.kind === "device"
+          ? target.deviceId
+          : null,
+    target_machine_class: target.kind === "profile" ? (target.machineClass ?? null) : null,
+    target_os: target.kind === "profile" ? (target.os ?? null) : null,
+  };
 }
 
 function normalizeAbandonSource(value: number | null): boolean {

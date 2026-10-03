@@ -209,9 +209,12 @@ export async function listChannelPairingRequests(
   channel: PairingChannel,
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string,
+  assertCurrent?: () => void,
 ): Promise<PairingRequest[]> {
+  assertCurrent?.();
   return runOpenClawStateWriteTransaction(
     (database) => {
+      assertCurrent?.();
       const state = readChannelPairingStateFromDatabase(database, channel);
       const expired = pruneExpiredRequests(state.requests, Date.now());
       const capped = pruneExcessRequestsByAccount(expired.requests);
@@ -220,7 +223,7 @@ export async function listChannelPairingRequests(
         writeChannelPairingStateToDatabase(database, channel, state);
       }
       const normalizedAccountId = normalizeLowercaseStringOrEmpty(accountId);
-      return capped.requests
+      const requests = capped.requests
         .filter((entry) => requestMatchesAccountId(entry, normalizedAccountId))
         .toSorted((left, right) => {
           const createdOrder = left.createdAt.localeCompare(right.createdAt);
@@ -232,6 +235,8 @@ export async function listChannelPairingRequests(
           );
           return accountOrder || left.id.localeCompare(right.id);
         });
+      assertCurrent?.();
+      return requests;
     },
     { env },
   );
@@ -314,14 +319,17 @@ type ResolvePairingRequestParams = {
   pairingAdapter?: ChannelPairingAdapter;
   matches: (request: PairingRequest) => boolean;
   approve: boolean;
+  assertCurrent?: () => void;
 };
 
 async function resolveChannelPairingRequest(
   params: ResolvePairingRequestParams,
 ): Promise<{ id: string; entry: PairingRequest } | null> {
   const env = params.env ?? process.env;
+  params.assertCurrent?.();
   return runOpenClawStateWriteTransaction(
     (database) => {
+      params.assertCurrent?.();
       const state = readChannelPairingStateFromDatabase(database, params.channel);
       const pruned = pruneExpiredRequests(state.requests, Date.now());
       const accountId = normalizeLowercaseStringOrEmpty(params.accountId);
@@ -333,6 +341,7 @@ async function resolveChannelPairingRequest(
           state.requests = pruned.requests;
           writeChannelPairingStateToDatabase(database, params.channel, state);
         }
+        params.assertCurrent?.();
         return null;
       }
       const entry = pruned.requests[index];
@@ -368,6 +377,7 @@ async function resolveChannelPairingRequest(
       }
 
       writeChannelPairingStateToDatabase(database, params.channel, state);
+      params.assertCurrent?.();
       return { id: entry.id, entry };
     },
     { env },
@@ -380,6 +390,7 @@ export async function approveChannelPairingCode(params: {
   accountId?: string;
   env?: NodeJS.ProcessEnv;
   pairingAdapter?: ChannelPairingAdapter;
+  assertCurrent?: () => void;
 }): Promise<{ id: string; entry: PairingRequest } | null> {
   const code = (normalizeNullableString(params.code) ?? "").toUpperCase();
   if (!code) {

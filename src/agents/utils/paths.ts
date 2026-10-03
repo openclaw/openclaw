@@ -1,17 +1,8 @@
-/**
- * Agent path formatting helpers.
- *
- * Canonicalizes local paths and formats paths relative to a workspace when possible.
- */
 import { realpathSync } from "node:fs";
-import { isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
+import { relative, resolve as resolvePath, sep } from "node:path";
+import { isPathRelativeEscape } from "@openclaw/fs-safe/path";
 
-/**
- * Resolve a path to its canonical (real) form, following symlinks.
- * Falls back to the raw path if resolution fails (e.g. the target does
- * not exist yet), so that callers never crash on missing filesystem
- * entries.
- */
+/** Preserve the supplied spelling when the path cannot be resolved. */
 export function canonicalizePath(path: string): string {
   try {
     return realpathSync(path);
@@ -37,18 +28,11 @@ export function isLocalPath(value: string): boolean {
   );
 }
 
-function getCwdRelativePath(filePath: string, cwd: string): string | undefined {
+export function formatPathRelativeToCwdOrAbsolute(filePath: string, cwd: string): string {
   const resolvedCwd = resolvePath(cwd);
   const resolvedPath = resolvePath(resolvedCwd, filePath);
   const relativePath = relative(resolvedCwd, resolvedPath);
-  const isInsideCwd =
-    relativePath === "" ||
-    (relativePath !== ".." && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath));
-
-  return isInsideCwd ? relativePath || "." : undefined;
-}
-
-export function formatPathRelativeToCwdOrAbsolute(filePath: string, cwd: string): string {
-  const absolutePath = resolvePath(cwd, filePath);
-  return (getCwdRelativePath(absolutePath, cwd) ?? absolutePath).split(sep).join("/");
+  return (isPathRelativeEscape(relativePath) ? resolvedPath : relativePath || ".")
+    .split(sep)
+    .join("/");
 }

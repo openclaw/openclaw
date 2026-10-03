@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types.js";
 import type { createHookRunner } from "../plugins/hooks.js";
@@ -35,9 +36,7 @@ export async function runGatewayStartupObservers(params: {
   if (params.isClosing?.()) {
     return;
   }
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
+  await nextTurn();
   if (params.isClosing?.()) {
     return;
   }

@@ -52,6 +52,11 @@ import {
   scenarioRequiresIsolatedQaSuiteWorker,
 } from "./suite-planning.js";
 import { createQaSuiteProgressController } from "./suite-progress.js";
+import {
+  partitionSharedQaFlowScenarios,
+  resolveQaScenarioRuntimeRoute,
+  scenarioDeclaresQaRuntimeRoute,
+} from "./suite-runtime-route.js";
 import { rejectRemovedQaChannelDriverSelection } from "./suite-types.js";
 import {
   buildQaSuiteSummaryJson,
@@ -612,9 +617,7 @@ async function resolveSuiteExecutionPlan(
     channelGroups.some(
       (group) => group.channel !== undefined && group.channel !== params?.channelId,
     ) ||
-    flowScenarios.some(
-      (scenario) => scenario.execution.kind === "flow" && scenario.execution.runtime !== undefined,
-    ) ||
+    flowScenarios.some(scenarioDeclaresQaRuntimeRoute) ||
     (flowScenarios.length > 1 && flowScenarios.some(scenarioRequiresIsolatedQaSuiteWorker));
   if (testFileScenariosByKind.size === 0 && !requiresFlowPartitions) {
     return { kind: "flow", expectedCells, scenarios: selectedScenarios };
@@ -694,27 +697,6 @@ function rejectFlowOnlySuiteOptionsForUnifiedRun(runParams: QaSuiteRunParams | u
   if (runParams?.captureRuntimeParityCell) {
     throw new Error("runtime parity capture requires execution.kind: flow scenarios.");
   }
-}
-
-function partitionSharedFlowScenarios(
-  scenarios: readonly QaSeedScenarioWithSource[],
-  concurrency: number,
-  maxPartitions = MAX_SHARED_FLOW_PARTITIONS,
-) {
-  const partitionCount = Math.min(
-    Math.max(1, Math.floor(concurrency)),
-    Math.max(1, Math.floor(maxPartitions)),
-    scenarios.length,
-  );
-  const partitions = Array.from({ length: partitionCount }, (): QaSeedScenarioWithSource[] => []);
-  for (const [index, scenario] of scenarios.entries()) {
-    const partition = partitions[index % partitionCount];
-    if (!partition) {
-      throw new Error("failed to partition shared QA flow scenarios");
-    }
-    partition.push(scenario);
-  }
-  return partitions.filter((partition) => partition.length > 0);
 }
 
 async function runWeightedUnifiedPartitionTasks(
@@ -1020,9 +1002,7 @@ async function runUnifiedQaSuite(params: {
         scenarioRequiresIsolatedQaSuiteWorker,
       );
       const runtimeFlowScenarios = isolatedFlowScenarios.flatMap((scenario) =>
-        scenario.execution.kind === "flow" && scenario.execution.runtime
-          ? [{ runtime: scenario.execution.runtime, scenario }]
-          : [],
+        resolveQaScenarioRuntimeRoute(scenario, providerMode, params.runParams),
       );
       const runtimeScenarioSet = new Set(runtimeFlowScenarios.map(({ scenario }) => scenario));
       const ordinaryIsolatedFlowScenarios = isolatedFlowScenarios.filter(
@@ -1037,7 +1017,7 @@ async function runUnifiedQaSuite(params: {
         ? sharedFlowScenarios.map((scenario) => [scenario])
         : flowExclusiveKey
           ? [sharedFlowScenarios]
-          : partitionSharedFlowScenarios(
+          : partitionSharedQaFlowScenarios(
               sharedFlowScenarios,
               concurrency,
               channelGroup.isolatesAdapterInstances ? concurrency : MAX_SHARED_FLOW_PARTITIONS,
@@ -1124,6 +1104,11 @@ async function runUnifiedQaSuite(params: {
             if (unavailableDetails) {
               return buildCredentialUnavailableResult(unavailableDetails);
             }
+            const [partitionScenario] = partition.scenarios;
+            const [scenarioRuntimeRoute] =
+              partition.scenarios.length === 1
+                ? resolveQaScenarioRuntimeRoute(partitionScenario!, providerMode, params.runParams)
+                : [];
             const result = await runFlowSuite({
               ...params.runParams,
               ...owner.input(),
@@ -1141,11 +1126,9 @@ async function runUnifiedQaSuite(params: {
               primaryModel,
               alternateModel,
               fastMode,
-              forcedRuntime:
-                partition.scenarios.length === 1 &&
-                partition.scenarios[0]?.execution.kind === "flow"
-                  ? (partition.scenarios[0].execution.runtime ?? params.runParams?.forcedRuntime)
-                  : params.runParams?.forcedRuntime,
+              forcedRuntime: scenarioRuntimeRoute?.runtime ?? params.runParams?.forcedRuntime,
+              runtimeSelection:
+                scenarioRuntimeRoute?.runtimeSelection ?? params.runParams?.runtimeSelection,
               concurrency: partition.concurrency,
               channelId: channelGroup.channel,
               workerStartStaggerMs: isolatedPartition

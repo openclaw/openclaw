@@ -3,7 +3,6 @@
 import path from "node:path";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
-import { isPathInside } from "../infra/path-guards.js";
 
 // Legacy trajectory path helpers. Active runtime capture writes SQLite rows;
 // these paths remain for explicit legacy-file reads, export artifacts, and cleanup.
@@ -18,15 +17,6 @@ export function safeTrajectorySessionFileName(sessionId: string): string {
   return /[A-Za-z0-9]/u.test(safe) ? safe : "session";
 }
 
-function resolveContainedPath(baseDir: string, fileName: string): string {
-  const resolvedBase = path.resolve(baseDir);
-  const resolvedFile = path.resolve(resolvedBase, fileName);
-  if (resolvedFile === resolvedBase || !isPathInside(resolvedBase, resolvedFile)) {
-    throw new Error("Trajectory file path escaped its configured directory");
-  }
-  return resolvedFile;
-}
-
 export function resolveTrajectoryFilePath(params: {
   env?: NodeJS.ProcessEnv;
   sessionFile?: string;
@@ -35,7 +25,7 @@ export function resolveTrajectoryFilePath(params: {
   const env = params.env ?? process.env;
   const dirOverride = env.OPENCLAW_TRAJECTORY_DIR?.trim();
   if (dirOverride) {
-    return resolveContainedPath(
+    return path.join(
       resolveHomeRelativePath(dirOverride),
       `${safeTrajectorySessionFileName(params.sessionId)}.jsonl`,
     );

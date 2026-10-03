@@ -461,7 +461,7 @@ it.each(["replacement", "abort"] as const)(
           answers: { answers: { secret_value: ["test-secret-stale-requester"] } },
         });
         expect(resolved).toMatchObject(invalidRequest);
-        expect(listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
+        expect(await listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
         expect(reloadSecrets).not.toHaveBeenCalled();
         expect(manager.get(id)?.status).toBe("cancelled");
         await expect(waiting).resolves.toEqual({ status: "cancelled" });
@@ -564,7 +564,7 @@ it("diverts operator-entered credentials into the store and exposes only a store
     const safeAnswers = { answers: { secret_value: ["stored"] } };
 
     expect(resolved).toEqual([true, { status: "answered", answers: safeAnswers }, undefined]);
-    expect(listSecretStoreEntries({ scope: { kind: "team" } })).toMatchObject([
+    expect(await listSecretStoreEntries({ scope: { kind: "team" } })).toMatchObject([
       {
         name: "SERVICE_API_KEY",
         kind: "secret",
@@ -614,7 +614,7 @@ it("uses operator-edited hosts and keeps invalid store submissions pending for r
       secretStoreAllowedHosts: ["replacement.example.test"],
     });
     expect(retried[0]).toBe(true);
-    expect(listSecretStoreEntries({ scope: { kind: "team" } })[0]).toMatchObject({
+    expect((await listSecretStoreEntries({ scope: { kind: "team" } }))[0]).toMatchObject({
       allowedHosts: ["replacement.example.test"],
     });
   });
@@ -634,7 +634,7 @@ it.each([
       invalidRequest,
     );
     expect(manager.get(id)?.status).toBe("pending");
-    expect(listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
+    expect(await listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
   });
 });
 
@@ -653,7 +653,7 @@ it("rejects masked env requests while preserving ordinary question host validati
       ),
     ).toMatchObject(invalidRequest);
     expect(manager.list()).toEqual([]);
-    expect(listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
+    expect(await listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
     const ordinaryResponse = await call("question.request", requestParams);
     const ordinaryId = (ordinaryResponse[1] as { id: string }).id;
     expect(
@@ -856,7 +856,7 @@ it.each([
         updatedBy: "Previous Operator",
       };
       if (existing) {
-        writeSecretStoreEntry({ ...entry, allowedHosts: ["a.example.test"] });
+        await writeSecretStoreEntry({ ...entry, allowedHosts: ["a.example.test"] });
       }
       const id = await requestSecretQuestion({
         name: entry.name,
@@ -880,8 +880,8 @@ it.each([
       if (!existing) {
         expect(manager.get(id)?.questions[0]).not.toHaveProperty("secretStoreExisting");
       }
-      writeSecretStoreEntry({ ...entry, allowedHosts: ["b.example.test"] });
-      expect(listSecretStoreEntries({ scope: entry.scope })[0]?.allowedHosts).toEqual([
+      await writeSecretStoreEntry({ ...entry, allowedHosts: ["b.example.test"] });
+      expect((await listSecretStoreEntries({ scope: entry.scope }))[0]?.allowedHosts).toEqual([
         "b.example.test",
       ]);
       const value = "test-secret-consented-replacement";
@@ -893,7 +893,7 @@ it.each([
       const safeAnswers = { answers: { secret_value: ["stored"] } };
       expect(resolved).toEqual([true, { status: "answered", answers: safeAnswers }, undefined]);
       expect(manager.get(id)).toMatchObject({ status: "answered", answers: safeAnswers });
-      expect(listSecretStoreEntries({ scope: entry.scope })).toMatchObject([
+      expect(await listSecretStoreEntries({ scope: entry.scope })).toMatchObject([
         { name: entry.name, kind: "secret", allowedHosts: override ?? shown },
       ]);
       expect(readSecretStoreValue({ scope: entry.scope, name: entry.name })).toEqual({

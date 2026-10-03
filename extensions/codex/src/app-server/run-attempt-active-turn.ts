@@ -32,7 +32,7 @@ import {
 } from "./plan-compaction-state.js";
 import { isJsonObject } from "./protocol.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
-import { readBoundedCodexRemoteWorkspaceFile } from "./remote-workspace-media.js";
+import { createCodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 import { mapCodexAppServerRemoteWorkspacePath } from "./remote-workspace-path.js";
 import { restoreCodexAttemptCompactionContext } from "./run-attempt-compaction.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
@@ -113,7 +113,10 @@ export function activateCodexAttemptTurn(
     : dynamicToolParams;
   const hostPrepareReplyMedia = params.hostCapabilities.prepareReplyMedia;
   const remoteWorkspaceRoot = connection.appServer.remoteWorkspaceRoot;
-  const replyMediaClient = resourceState.client;
+  const readRemoteWorkspaceFile = createCodexRemoteWorkspaceFileReader(
+    resourceState.client,
+    connection.authority,
+  );
   const prepareReplyMedia =
     hostPrepareReplyMedia && remoteWorkspaceRoot
       ? async (
@@ -126,12 +129,8 @@ export function activateCodexAttemptTurn(
             ...content,
             workspaceRoot: remoteWorkspaceRoot,
             signal: runAbortController.signal,
-            readWorkspaceFile: async (relativePath, { maxBytes, signal }) => {
-              connection.assertCurrent();
-              const file = await readBoundedCodexRemoteWorkspaceFile({
-                client: replyMediaClient,
-                assertCurrent: connection.assertCurrent,
-                withCurrent: connection.withCurrent,
+            readWorkspaceFile: (relativePath, { maxBytes, signal }) =>
+              readRemoteWorkspaceFile({
                 path: mapCodexAppServerRemoteWorkspacePath({
                   value: path.resolve(params.workspaceDir, relativePath),
                   localWorkspaceRoot: params.workspaceDir,
@@ -141,10 +140,7 @@ export function activateCodexAttemptTurn(
                 maxBytes,
                 signal: transferSignal ? AbortSignal.any([signal, transferSignal]) : signal,
                 timeoutMs: connection.appServer.requestTimeoutMs,
-              });
-              connection.assertCurrent();
-              return Buffer.from(file.dataBase64, "base64");
-            },
+              }),
           })
       : undefined;
   const progressCardTool = toolBridge.availableTools.find((tool) => tool.name === "progress_card");
@@ -203,16 +199,7 @@ export function activateCodexAttemptTurn(
       runAbortSignal: runAbortController.signal,
       remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
       remoteWorkspaceRequestTimeoutMs: connection.appServer.requestTimeoutMs,
-      readRemoteWorkspaceFile: ({ path: remotePath, maxBytes, signal, timeoutMs }) =>
-        readBoundedCodexRemoteWorkspaceFile({
-          client: resourceState.client,
-          assertCurrent: connection.assertCurrent,
-          withCurrent: connection.withCurrent,
-          path: remotePath,
-          maxBytes,
-          signal,
-          timeoutMs,
-        }),
+      readRemoteWorkspaceFile,
       trajectoryRecorder,
       resolveDynamicToolResultContentSource: toolBridge.resultContentSourceForTool,
       onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,

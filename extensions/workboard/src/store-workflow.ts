@@ -140,7 +140,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       }
       const metadata = clearDiagnostics(guarded.metadata, ["stranded_ready"]);
       const card = await this.updateCard(
-        id,
+        await this.requireCard(id),
         {
           status:
             guarded.status === "backlog" || guarded.status === "todo" || guarded.status === "ready"
@@ -212,7 +212,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         assertClaimIdentity(claim, input);
       }
       return await this.updateCard(
-        id,
+        await this.requireCard(id),
         {
           status,
           metadata: { ...existing.metadata, claim: undefined },
@@ -282,7 +282,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         ? { ...existing.execution, status: "done" as const, updatedAt: now }
         : existing.execution;
     return await this.updateCard(
-      id,
+      await this.requireCard(id),
       {
         status: "done",
         ...(execution ? { execution } : {}),
@@ -369,7 +369,10 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       const reason =
         normalizeBoundedString(input.reason, undefined, 2000, "block reason") ??
         "Workboard card blocked.";
-      return await this.updateCard(id, this.buildBlockedCardPatch(existing, reason, now, options));
+      return await this.updateCard(
+        await this.requireCard(id),
+        this.buildBlockedCardPatch(existing, reason, now, options),
+      );
     });
   }
 
@@ -378,7 +381,10 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       const existing = await this.requireCard(id);
       assertCanMutateClaimedCard(existing, scope);
       const metadata = clearDiagnostics(existing.metadata, ["blocked_too_long"]);
-      return await this.updateCard(id, { status: "todo", metadata: { ...metadata, stale: null } });
+      return await this.updateCard(await this.requireCard(id), {
+        status: "todo",
+        metadata: { ...metadata, stale: null },
+      });
     });
   }
 
@@ -406,7 +412,11 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         ...(shouldResetFailures ? { failureCount: 0 } : {}),
         comments: appendComment(baseMetadata?.comments, reason),
       };
-      return await this.updateCard(id, { agentId, status, metadata }, { enforceStatusHolds: true });
+      return await this.updateCard(
+        await this.requireCard(id),
+        { agentId, status, metadata },
+        { enforceStatusHolds: true },
+      );
     });
   }
 
@@ -429,7 +439,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
             : existing.status
           : normalizeStatus(input.status, existing.status);
       const reclaimed = await this.updateCard(
-        id,
+        await this.requireCard(id),
         {
           status: targetStatus,
           execution: existing.execution?.status === "running" ? null : existing.execution,
@@ -486,7 +496,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       };
       const { summary: _summary, status: _status, ...cardPatch } = input;
       return await this.updateCard(
-        id,
+        await this.requireCard(id),
         {
           ...cardPatch,
           status: "todo",
@@ -559,7 +569,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
             : await (async () => {
                 const latestParent = (await this.get(parent.id)) ?? parent;
                 return await this.updateCard(
-                  parent.id,
+                  await this.requireCard(parent.id),
                   {
                     status:
                       latestParent.status === "triage" || latestParent.status === "backlog"
@@ -581,7 +591,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
                 );
               })();
           const decomposedParent = await this.updateCard(
-            updatedParent.id,
+            await this.requireCard(updatedParent.id),
             {},
             {
               event: { kind: "decomposed" },

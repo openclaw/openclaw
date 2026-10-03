@@ -95,22 +95,7 @@ function currentUid(overrideUid?: number | null): number | null {
   return process.getuid();
 }
 
-type CandidateBlockReason =
-  | "source_escapes_root"
-  | "path_stat_failed"
-  | "path_world_writable"
-  | "path_suspicious_ownership";
-
-type CandidateBlockIssue = {
-  reason: CandidateBlockReason;
-  sourcePath: string;
-  targetPath: string;
-  sourceRealPath?: string;
-  rootRealPath?: string;
-  modeBits?: number;
-  foundUid?: number;
-  expectedUid?: number;
-};
+type CandidateBlockIssue = Pick<PluginDiagnostic, "source" | "message">;
 
 function checkSourceEscapesRoot(params: {
   source: string;
@@ -125,11 +110,8 @@ function checkSourceEscapesRoot(params: {
     return null;
   }
   return {
-    reason: "source_escapes_root",
-    sourcePath: params.source,
-    targetPath: params.source,
-    sourceRealPath,
-    rootRealPath,
+    source: params.source,
+    message: `blocked plugin candidate: source escapes plugin root (${params.source} -> ${sourceRealPath}; root=${rootRealPath})`,
   };
 }
 
@@ -153,9 +135,8 @@ function checkPathStatAndPermissions(params: {
     let stat = pluginCacheStatSync(targetPath);
     if (!stat) {
       return {
-        reason: "path_stat_failed",
-        sourcePath: params.source,
-        targetPath,
+        source: targetPath,
+        message: `blocked plugin candidate: cannot stat path (${targetPath})`,
       };
     }
     let modeBits = stat.mode & 0o777;
@@ -168,9 +149,8 @@ function checkPathStatAndPermissions(params: {
         const repairedStat = refreshPluginCacheStat(targetPath);
         if (!repairedStat) {
           return {
-            reason: "path_stat_failed",
-            sourcePath: params.source,
-            targetPath,
+            source: targetPath,
+            message: `blocked plugin candidate: cannot stat path (${targetPath})`,
           };
         }
         stat = repairedStat;
@@ -181,10 +161,8 @@ function checkPathStatAndPermissions(params: {
     }
     if ((modeBits & 0o002) !== 0) {
       return {
-        reason: "path_world_writable",
-        sourcePath: params.source,
-        targetPath,
-        modeBits,
+        source: targetPath,
+        message: `blocked plugin candidate: world-writable path (${targetPath}, mode=${formatPosixMode(modeBits)})`,
       };
     }
     if (
@@ -195,51 +173,12 @@ function checkPathStatAndPermissions(params: {
       stat.uid !== 0
     ) {
       return {
-        reason: "path_suspicious_ownership",
-        sourcePath: params.source,
-        targetPath,
-        foundUid: stat.uid,
-        expectedUid: params.uid,
+        source: targetPath,
+        message: `blocked plugin candidate: suspicious ownership (${targetPath}, uid=${stat.uid}, expected uid=${params.uid} or root)`,
       };
     }
   }
   return null;
-}
-
-function formatCandidateBlockMessage(issue: CandidateBlockIssue): string {
-  if (issue.reason === "source_escapes_root") {
-    return `blocked plugin candidate: source escapes plugin root (${issue.sourcePath} -> ${issue.sourceRealPath}; root=${issue.rootRealPath})`;
-  }
-  if (issue.reason === "path_stat_failed") {
-    return `blocked plugin candidate: cannot stat path (${issue.targetPath})`;
-  }
-  if (issue.reason === "path_world_writable") {
-    return `blocked plugin candidate: world-writable path (${issue.targetPath}, mode=${formatPosixMode(issue.modeBits ?? 0)})`;
-  }
-  return `blocked plugin candidate: suspicious ownership (${issue.targetPath}, uid=${issue.foundUid}, expected uid=${issue.expectedUid} or root)`;
-}
-
-function isUnsafePluginCandidate(params: {
-  source: string;
-  rootDir: string;
-  origin: PluginOrigin;
-  pluginId?: string;
-  diagnostics: PluginDiagnostic[];
-  ownershipUid?: number | null;
-}): boolean {
-  const issue =
-    checkSourceEscapesRoot(params) ??
-    checkPathStatAndPermissions({ ...params, uid: currentUid(params.ownershipUid) });
-  if (!issue) {
-    return false;
-  }
-  params.diagnostics.push({
-    level: "warn",
-    ...(params.pluginId ? { pluginId: params.pluginId } : {}),
-    source: issue.targetPath,
-    message: formatCandidateBlockMessage(issue),
-  });
-  return true;
 }
 
 function isExtensionFile(filePath: string): boolean {
@@ -638,16 +577,20 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
       return;
     }
     const resolvedRoot = pluginCacheRealpathSync(params.rootDir) ?? path.resolve(params.rootDir);
-    if (
-      isUnsafePluginCandidate({
+    const issue =
+      checkSourceEscapesRoot({ source: resolved, rootDir: resolvedRoot }) ??
+      checkPathStatAndPermissions({
         source: resolved,
         rootDir: resolvedRoot,
         origin: params.origin,
-        pluginId: params.idHint,
-        diagnostics,
-        ownershipUid,
-      })
-    ) {
+        uid: currentUid(ownershipUid),
+      });
+    if (issue) {
+      diagnostics.push({
+        level: "warn",
+        ...(params.idHint ? { pluginId: params.idHint } : {}),
+        ...issue,
+      });
       attemptedSources.set(resolved, undefined);
       return;
     }

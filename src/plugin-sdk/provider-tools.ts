@@ -283,21 +283,14 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
       return literals === undefined || literals.includes(null);
     });
 
-  // Preserve string-const unions as a flat string enum so DeepSeek tool
-  // callers still see every allowed literal. Without this, a Typebox
-  // `Type.Union([Type.Literal("a"), Type.Literal("b"), ...])` collapses to
-  // only the first const and the model can never pick any other value.
+  // Keep every string literal selectable when flattening the unsupported union.
   if (nonNullVariants.length > 1 && nonNullVariants.every(isStringConstVariant)) {
-    const enumValues = nonNullVariants.map((entry) => entry.const);
-    const merged: Record<string, unknown> = {
+    return {
       ...normalized,
       type: "string",
-      enum: enumValues,
+      enum: nonNullVariants.map((entry) => entry.const),
+      ...(hasNullVariant ? { nullable: true } : {}),
     };
-    if (hasNullVariant) {
-      merged.nullable = true;
-    }
-    return merged;
   }
 
   // Selecting the first object would make valid later branches fail local validation.
@@ -345,20 +338,8 @@ function isObjectSchemaVariant(entry: unknown): entry is Record<string, unknown>
   );
 }
 
-/**
- * Flattens a union of object schemas into one object schema, keeping every
- * branch expressible: the union of the variants' properties, and the
- * intersection of their `required` lists.
- *
- * A property that discriminates the variants differs only by its literals
- * (`type: { enum: ["page_id"] }` in one variant, `["database_id"]` in another),
- * so its values are pooled into a single enum. Without that pooling the
- * flattened schema would still pin the discriminator to the first variant and
- * the tool would stay unusable for the others.
- *
- * Missing property maps retain the previous single-variant selection.
- * Conflicting property constraints retain their first definition.
- */
+// Union properties and intersect required keys so every branch remains expressible.
+// Pool discriminating literals; retain the first conflicting non-literal constraint.
 function flattenObjectVariants(
   variants: Record<string, unknown>[],
 ): Record<string, unknown> | undefined {
@@ -371,9 +352,7 @@ function flattenObjectVariants(
       return undefined;
     }
     for (const [key, value] of Object.entries(variantProperties)) {
-      // Own-property membership, not a prototype-chain read: a key named
-      // `constructor` or `toString` would otherwise look already present and
-      // its real definition would be dropped.
+      // Schema properties may be named `constructor` or `toString`.
       if (!Object.hasOwn(properties, key)) {
         properties[key] = value;
         continue;
@@ -400,10 +379,7 @@ function flattenObjectVariants(
         ? variantRequired
         : required.filter((key) => variantRequired.includes(key));
   }
-  // A variant that does not declare a key can still accept it, either by
-  // allowing additional properties or through a `patternProperties` pattern.
-  // Constraining such a key would reject calls the variant accepted, so keep
-  // what documents it and drop what constrains it.
+  // Undeclared keys accepted by another branch must retain annotations without constraints.
   for (const key of Object.keys(properties)) {
     if (variants.some((variant) => acceptsUndeclaredKey(variant, key))) {
       properties[key] = schemaAnnotationsOnly(properties[key]);
@@ -416,14 +392,7 @@ function flattenObjectVariants(
   return flattened;
 }
 
-/**
- * Whether a variant accepts a key it does not declare.
- *
- * `additionalProperties` only constrains keys that no `properties` entry and no
- * `patternProperties` pattern covers, so a pattern match widens acceptance even
- * when `additionalProperties` is false. Ignoring that would copy another
- * variant's constraint onto a key this variant accepted.
- */
+// Pattern properties can accept an undeclared key even with additionalProperties: false.
 function acceptsUndeclaredKey(variant: Record<string, unknown>, key: string): boolean {
   const declared = variant.properties;
   if (isSchemaRecord(declared) && Object.hasOwn(declared, key)) {
@@ -432,11 +401,7 @@ function acceptsUndeclaredKey(variant: Record<string, unknown>, key: string): bo
   if (variant.additionalProperties !== false) {
     return true;
   }
-  return matchesPatternProperty(variant.patternProperties, key);
-}
-
-/** Whether a variant's `patternProperties` covers the key. */
-function matchesPatternProperty(patternProperties: unknown, key: string): boolean {
+  const patternProperties = variant.patternProperties;
   if (!isSchemaRecord(patternProperties)) {
     return false;
   }

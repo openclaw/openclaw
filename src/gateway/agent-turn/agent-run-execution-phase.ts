@@ -299,8 +299,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
         let message = prepared.userTurn.message;
         let execApprovalContinuationPromptRange =
           prepared.userTurn.execApprovalContinuationPromptRange;
-        const execApprovalContinuationTranscriptPromptRange =
-          prepared.userTurn.execApprovalContinuationTranscriptPromptRange;
+        const execApprovalContinuationTranscriptPromptRange = execApprovalContinuationPromptRange;
 
         // Admission owns plugin/settlement adoption; other inter-session work
         // must leave the paused task's completion lifecycle with its owner.
@@ -431,7 +430,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
         const gatewayContext = params.context.resolveGatewayContext?.();
         const skillLibraryAuthoring =
           gatewayContext && params.resolvedSessionKey
-            ? prepareGatewaySkillAuthoring(
+            ? await prepareGatewaySkillAuthoring(
                 {
                   client: params.client,
                   context: gatewayContext,

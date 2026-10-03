@@ -466,29 +466,15 @@ extension OpenClawChatViewModel {
                 guard isCurrentMutation() else { return }
                 self.composerCapabilityState.notice = notice
             } catch {
-                await self.recordCapabilityPatchFailure(
-                    error,
-                    target: target,
-                    outboxScope: originalOutboxScope,
-                    updateVisibleState: isCurrentMutation())
+                self.capabilityPatchFailureRevisionsByTarget[target, default: 0] &+= 1
+                self.capabilityPatchFailureMessagesByTarget[target] = error.localizedDescription
+                if let outbox = self.outbox, let scope = originalOutboxScope {
+                    _ = await outbox.parkQueuedCommands(in: scope, lastError: error.localizedDescription)
+                }
+                guard isCurrentMutation() else { return }
+                self.composerCapabilityState.errorMessage = error.localizedDescription
+                self.errorText = error.localizedDescription
             }
-        }
-    }
-
-    func recordCapabilityPatchFailure(
-        _ error: Error,
-        target: ModelPatchTarget,
-        outboxScope: OpenClawChatOutboxScope?,
-        updateVisibleState: Bool) async
-    {
-        self.capabilityPatchFailureRevisionsByTarget[target, default: 0] &+= 1
-        self.capabilityPatchFailureMessagesByTarget[target] = error.localizedDescription
-        if let outbox = self.outbox, let scope = outboxScope {
-            _ = await outbox.parkQueuedCommands(in: scope, lastError: error.localizedDescription)
-        }
-        if updateVisibleState {
-            self.composerCapabilityState.errorMessage = error.localizedDescription
-            self.errorText = error.localizedDescription
         }
     }
 }

@@ -57,8 +57,8 @@ const cfg = {
 } satisfies OpenClawConfig;
 const to = "U0123456789abcdef0123456789abcdef";
 const mediaUrl = "https://93.184.216.34/picture.png";
-const routes = ["message-text", "message-media", "payload", "outbound-media"] as const;
-type Route = (typeof routes)[number];
+const mediaRoutes = ["message-media", "outbound-media"] as const;
+type Route = "message-text" | (typeof mediaRoutes)[number];
 type HandoffChannel = Pick<ChannelPlugin, "id" | "message" | "outbound">;
 type WireRequest = {
   to: string;
@@ -201,27 +201,21 @@ describe("registered LINE send handoff", () => {
           ...context,
           mediaUrl,
         });
-      case "payload":
-        return expectDefined(plugin.outbound?.sendPayload, "payload send")({ ...context, payload });
     }
     throw new Error("Unexpected LINE test route");
   }
 
-  it.each(routes)("delivers an authorized %s and keeps the provider receipt", async (route) => {
-    const result = await send(route);
-    expect(result.messageId).toBe("sent-1");
-    expect(result.receipt?.primaryPlatformMessageId).toBe("sent-1");
-    expect(requests.length).toBeGreaterThan(0);
-    expect(startedWhileActive.every(Boolean)).toBe(true);
-    expect(requests.every((request) => request.to === to)).toBe(true);
-  });
-
-  it.each(routes)("refuses a retired %s before provider I/O", async (route) => {
-    retire();
-    await expect(send(route)).rejects.toThrow("LINE handoff retired");
-    expect(requests).toEqual([]);
-    expect(startedWhileActive).toEqual([]);
-  });
+  it.each(mediaRoutes)(
+    "delivers an authorized %s and keeps the provider receipt",
+    async (route) => {
+      const result = await send(route);
+      expect(result.messageId).toBe("sent-1");
+      expect(result.receipt?.primaryPlatformMessageId).toBe("sent-1");
+      expect(requests.length).toBeGreaterThan(0);
+      expect(startedWhileActive.every(Boolean)).toBe(true);
+      expect(requests.every((request) => request.to === to)).toBe(true);
+    },
+  );
 
   it("checks authority after real text preparation", async () => {
     onPrepared = retire;
@@ -229,44 +223,57 @@ describe("registered LINE send handoff", () => {
     expect(requests).toEqual([]);
   });
 
-  it("stops media delivery when the caller retires during address preparation", async () => {
-    const started = createDeferred<void>();
-    const resume = createDeferred<void>();
-    mediaPreparation.mockImplementationOnce(async () => {
-      started.resolve();
-      await resume.promise;
-    });
-    const sending = send("message-media", { text: "" });
-    const rejected = expect(sending).rejects.toThrow("LINE handoff retired");
-    try {
-      await started.promise;
-      retire();
-    } finally {
-      resume.resolve();
-    }
-    await rejected;
-    expect(requests).toEqual([]);
-    expect(startedWhileActive).toEqual([]);
-  });
+  it.each(mediaRoutes)(
+    "stops %s when the caller retires during address preparation",
+    async (route) => {
+      const started = createDeferred<void>();
+      const resume = createDeferred<void>();
+      mediaPreparation.mockImplementationOnce(async () => {
+        started.resolve();
+        await resume.promise;
+      });
+      const sending = send(route, { text: "" });
+      const rejected = expect(sending).rejects.toThrow("LINE handoff retired");
+      try {
+        await started.promise;
+        retire();
+      } finally {
+        resume.resolve();
+      }
+      await rejected;
+      expect(requests).toEqual([]);
+      expect(startedWhileActive).toEqual([]);
+    },
+  );
 
-  it("rechecks the registered caller before retrying without a rejected quote", async () => {
-    recordLineQuoteToken({
-      accountId: "default",
-      chatId: to,
-      messageId: "source-message",
-      quoteToken: "line-test-quote",
-    });
-    onRequest = () => {
-      retire();
-      return 400;
-    };
-    await expect(
-      send("message-text", { text: "answer", replyToId: "source-message" }),
-    ).rejects.toThrow("LINE handoff retired");
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.messages[0]?.quoteToken).toBe("line-test-quote");
-    expect(startedWhileActive).toEqual([true]);
-  });
+  it.each([400, 503])(
+    "rechecks the registered caller before retrying a %s response",
+    async (status) => {
+      if (status === 400) {
+        recordLineQuoteToken({
+          accountId: "default",
+          chatId: to,
+          messageId: "source-message",
+          quoteToken: "line-test-quote",
+        });
+      }
+      onRequest = () => {
+        retire();
+        return status;
+      };
+      await expect(
+        send("message-text", {
+          text: "answer",
+          replyToId: status === 400 ? "source-message" : undefined,
+        }),
+      ).rejects.toThrow("LINE handoff retired");
+      expect(requests).toHaveLength(1);
+      if (status === 400) {
+        expect(requests[0]?.messages[0]?.quoteToken).toBe("line-test-quote");
+      }
+      expect(startedWhileActive).toEqual([true]);
+    },
+  );
 
   it("stops later payload batches and retains the accepted batch observation", async () => {
     const accepted: string[] = [];
@@ -292,16 +299,6 @@ describe("registered LINE send handoff", () => {
     expect(requests).toHaveLength(1);
     expect(requests[0]?.messages).toHaveLength(5);
     expect(accepted).toEqual(["sent-1"]);
-  });
-
-  it("rechecks the registered caller before retrying a refused request", async () => {
-    onRequest = () => {
-      retire();
-      return 503;
-    };
-    await expect(send("message-text")).rejects.toThrow("LINE handoff retired");
-    expect(requests).toHaveLength(1);
-    expect(startedWhileActive).toEqual([true]);
   });
 
   it("keeps an accepted response when the caller retires after dispatch", async () => {

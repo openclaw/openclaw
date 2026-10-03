@@ -74,28 +74,6 @@ export function resolveTlonAccount(
   const resolvedAccountId = normalizeAccountId(accountId);
   const base = resolveTlonChannelConfig(cfg);
 
-  if (!base) {
-    return {
-      accountId: resolvedAccountId,
-      name: null,
-      enabled: false,
-      configured: false,
-      ship: null,
-      url: null,
-      code: null,
-      dangerouslyAllowPrivateNetwork: null,
-      groupChannels: [],
-      dmAllowlist: [],
-      groupInviteAllowlist: [],
-      autoDiscoverChannels: null,
-      showModelSignature: null,
-      autoAcceptDmInvites: null,
-      autoAcceptGroupInvites: null,
-      defaultAuthorizedShips: [],
-      ownerShip: null,
-    };
-  }
-
   const merged = resolveMergedTlonAccountConfig(cfg, resolvedAccountId);
   const ship = merged.ship ?? null;
   const url = merged.url ?? null;
@@ -111,14 +89,18 @@ export function resolveTlonAccount(
   return {
     accountId: resolvedAccountId,
     name: merged.name ?? null,
-    enabled: merged.enabled !== false,
+    enabled: Boolean(base) && merged.enabled !== false,
     configured: Boolean(ship && url && code),
-    requireMentionInBotThreads: merged.requireMentionInBotThreads,
-    mediaMaxBytes: resolveChannelMediaMaxBytes({
-      cfg,
-      accountId: resolvedAccountId,
-      resolveChannelLimitMb: () => merged.mediaMaxMb,
-    }),
+    ...(base
+      ? {
+          requireMentionInBotThreads: merged.requireMentionInBotThreads,
+          mediaMaxBytes: resolveChannelMediaMaxBytes({
+            cfg,
+            accountId: resolvedAccountId,
+            resolveChannelLimitMb: () => merged.mediaMaxMb,
+          }),
+        }
+      : {}),
     ship,
     url,
     code,

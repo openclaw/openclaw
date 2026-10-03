@@ -217,13 +217,10 @@ function read\u0053tring() {}`;
       "export const VALUE = 1;",
     ].join("\n");
 
-    expect(
-      findExportedCallableNames(
-        source,
-        "src/owner.ts",
-        parser.createSourceFile("src/owner.ts", source),
-      ),
-    ).toEqual(["alias", "canonical"]);
+    expect(findExportedCallableNames(parser.createSourceFile("src/owner.ts", source))).toEqual([
+      "alias",
+      "canonical",
+    ]);
   });
 
   it("reports unclassified exports and stale, duplicate, or blank deferred entries", () => {

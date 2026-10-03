@@ -215,7 +215,6 @@ describe("Crabbox runtime preflight cleanup", () => {
       expect(restartedProvision).not.toHaveBeenCalled();
       expect(runCommand).not.toHaveBeenCalled();
       expect(prepareNodeEnrollment).not.toHaveBeenCalled();
-      expect(support.testState.prepareInstallation).not.toHaveBeenCalled();
       expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
       expect(support.testState.store.getCredential(original.environmentId)).toBeUndefined();
     },
@@ -371,7 +370,6 @@ describe("Crabbox runtime preflight cleanup", () => {
     expect(stops).toBe(2);
     expect(live).toBe(false);
     expect(prepareNodeEnrollment).not.toHaveBeenCalled();
-    expect(support.testState.prepareInstallation).not.toHaveBeenCalled();
     expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
   });
 

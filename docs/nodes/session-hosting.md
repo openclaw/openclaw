@@ -98,6 +98,10 @@ execution and other approved node commands retain their existing requirements.
 Updating a node first remains compatible with an older Gateway; the node
 advertises this support only when the Gateway understands it.
 
+When updating a node before a `2026.9.8` Gateway, the node preserves that
+Gateway's Skill Workshop launch binding for its supplied worker bundle.
+Ordinary attributed chat turns continue to work without updating both sides together.
+
 Turn completion uses a bounded status wait when both the Gateway and node host
 support `node-worker-status-wait-v1`. The node wakes the waiting request as soon
 as the exact turn's terminal result is journaled; transcript settlement and
@@ -128,12 +132,23 @@ bundle. If the complete admission response exceeds the control-frame limit, the
 turn fails explicitly instead of receiving a truncated catalog. The catalog grants
 no execution authority; every Gateway tool call still checks the live turn claim.
 
+Worker reply attachments inside the assigned workspace are copied through the
+node transport before workspace reconciliation. Relative and absolute `MEDIA:`
+paths use the worker's bytes, including completed live replies. Raw paths outside
+that workspace produce a remote-file attachment error; allowed managed media
+references and HTTP URLs retain their existing delivery policy. Final chat
+completion still waits for reconciliation and includes any conflict summary.
+
 By default, each node has one worker slot per available CPU core. Configure the slot count with
 `nodeHost.workerRuns.capacity`. Launches beyond capacity wait up to 10 seconds
 for a durable slot. A slot occupied only by an idle worker can be reclaimed for
 new work; active turns and background commands keep their slots. When no free
 or reclaimable slot remains, the node stays available for status and cancellation
 but is not selected for a new session turn.
+
+Capacity, host-stat, and skill-bin updates do not interrupt active node work or
+change its pairing authority. This behavior requires an updated Gateway; node
+configuration and stored pairings remain unchanged.
 
 After a turn settles, OpenClaw can retain its worker process for up to two
 minutes so an immediate follow-up avoids loading the runtime again. The timer
@@ -262,6 +277,11 @@ pairing, or removing only its node role invalidates clients first, then runs
 targeted environment and placement reconciliation; explicit removal waits for
 the credential fence before returning success, and the periodic sweep retries
 failed provider or placement cleanup.
+
+While a device runner is unavailable, including after session hosting is disabled,
+the Gateway pauses advisory disk-space probes and retains the last sample for
+that placement. Probes resume on the next scheduled sweep after the current
+runner reconnects. Disabling hosting does not discard the session's workspace.
 
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.

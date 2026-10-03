@@ -970,7 +970,6 @@ extensions/telegram/src/telegram-ingress-supersede.ts	7
 extensions/telegram/src/telegram-ingress-worker.runtime.ts	3
 extensions/telegram/src/thread-bindings-store.ts	1
 extensions/telegram/src/topic-name-cache.ts	1
-extensions/telegram/src/update-offset-store.ts	1
 extensions/telegram/src/webhook.ts	1
 extensions/tencent/stream.ts	1
 extensions/tlon/src/channel.runtime.ts	3
@@ -1168,7 +1167,7 @@ packages/gateway-client/src/pending-request.ts	2
 packages/gateway-client/src/protocol-client.ts	1
 packages/gateway-client/src/scope-upgrade.ts	4
 packages/gateway-protocol/src/client-info.ts	4
-packages/gateway-protocol/src/connect-error-details.ts	5
+packages/gateway-protocol/src/connect-error-details.ts	4
 packages/gateway-protocol/src/protocol-validator.ts	2
 packages/gateway-protocol/src/schema/audit-activity.ts	1
 packages/gateway-protocol/src/schema/devices.ts	1
@@ -1235,7 +1234,6 @@ src/acp/translator.session-list.ts	1
 src/acp/translator.session-state.ts	1
 src/agents/agent-bundle-lsp-runtime.ts	3
 src/agents/agent-bundle-mcp-combined.ts	1
-src/agents/agent-bundle-mcp-manager-lifecycle.ts	1
 src/agents/agent-bundle-mcp-materialize.ts	3
 src/agents/agent-bundle-mcp-runtime-shared.ts	2
 src/agents/agent-bundle-mcp-runtime.ts	3
@@ -1409,7 +1407,7 @@ src/agents/embedded-agent-subscribe.handlers.tools.completion.ts	1
 src/agents/embedded-agent-subscribe.handlers.tools.results.ts	2
 src/agents/embedded-agent-subscribe.handlers.tools.start.ts	6
 src/agents/embedded-agent-subscribe.tool-text-diagnostics.ts	6
-src/agents/embedded-agent-tool-media.ts	8
+src/agents/embedded-agent-tool-media.ts	5
 src/agents/embedded-agent-tool-results.ts	9
 src/agents/embedded-agent-utils.ts	3
 src/agents/exec-auto-reviewer.ts	1
@@ -1510,7 +1508,7 @@ src/agents/sessions/session-manager-codec.ts	5
 src/agents/sessions/session-manager-core.ts	1
 src/agents/sessions/session-manager-entries.ts	2
 src/agents/sessions/session-manager.ts	2
-src/agents/sessions/settings-manager.ts	11
+src/agents/sessions/settings-manager.ts	8
 src/agents/sessions/steering-message-identity.ts	2
 src/agents/sessions/tools/bash.ts	2
 src/agents/sessions/tools/edit.ts	10
@@ -2087,7 +2085,7 @@ src/gateway/chat-display-projection.core.ts	5
 src/gateway/chat-display-projection.history.ts	1
 src/gateway/chat-display-projection.sanitize.ts	5
 src/gateway/chat-sanitize.ts	3
-src/gateway/cli-session-history.claude.ts	6
+src/gateway/cli-session-history.claude.ts	5
 src/gateway/cli-session-history.merge.ts	6
 src/gateway/control-ui-plugin-auth-cookie.ts	1
 src/gateway/control-ui-session-pr-subscriptions.ts	2
@@ -2114,12 +2112,12 @@ src/gateway/openai-agent-run-usage.ts	1
 src/gateway/operator-approval-snapshot.ts	4
 src/gateway/plugin-activation-runtime-config.ts	2
 src/gateway/probe.ts	2
-src/gateway/restart-trace.ts	3
+src/gateway/restart-trace.ts	2
 src/gateway/secret-input-paths.ts	1
 src/gateway/server-broadcast.ts	1
 src/gateway/server-channels.ts	1
 src/gateway/server-chat-state.ts	1
-src/gateway/server-chat.ts	4
+src/gateway/server-chat.ts	3
 src/gateway/server-core-runtime.ts	1
 src/gateway/server-cron-reconciled.ts	1
 src/gateway/server-cron.ts	1
@@ -2149,14 +2147,13 @@ src/gateway/server-methods/chat-transcript-inject.ts	1
 src/gateway/server-methods/chat-transcript-persistence.ts	4
 src/gateway/server-methods/chat-tts-markers.ts	1
 src/gateway/server-methods/config-write-flow.ts	1
-src/gateway/server-methods/config.ts	4
+src/gateway/server-methods/config.ts	3
 src/gateway/server-methods/cron.ts	3
 src/gateway/server-methods/doctor.ts	2
-src/gateway/server-methods/exec-approvals.ts	2
+src/gateway/server-methods/exec-approvals.ts	1
 src/gateway/server-methods/memory-search.ts	3
 src/gateway/server-methods/migrations.ts	1
 src/gateway/server-methods/models-auth-status.ts	1
-src/gateway/server-methods/models-probe.ts	1
 src/gateway/server-methods/nodes.handlers.invoke-result.ts	1
 src/gateway/server-methods/nodes.helpers.ts	1
 src/gateway/server-methods/nodes.invoke-foreground.ts	1
@@ -2170,10 +2167,8 @@ src/gateway/server-methods/restart-request.ts	8
 src/gateway/server-methods/send.ts	1
 src/gateway/server-methods/session-create-initial-turn.ts	2
 src/gateway/server-methods/session-recovery-continuation.ts	1
-src/gateway/server-methods/sessions-abort.ts	3
 src/gateway/server-methods/sessions-compact.ts	1
 src/gateway/server-methods/sessions-create.ts	1
-src/gateway/server-methods/sessions-messaging.ts	3
 src/gateway/server-methods/sessions-patch-engine.ts	1
 src/gateway/server-methods/system-agent-chat-params.ts	2
 src/gateway/server-methods/system-changes.ts	9
@@ -2181,7 +2176,6 @@ src/gateway/server-methods/task-suggestions.ts	5
 src/gateway/server-methods/web.ts	1
 src/gateway/server-node-events.ts	1
 src/gateway/server-plugin-in-process-dispatch.ts	3
-src/gateway/server-plugin-subagent-runtime.ts	1
 src/gateway/server-plugins-node-runtime.ts	1
 src/gateway/server-plugins.ts	2
 src/gateway/server-reload-restart.ts	2
@@ -2358,7 +2352,7 @@ src/infra/sqlite-files.ts	1
 src/infra/sqlite-index-schema.ts	2
 src/infra/sqlite-integrity.ts	2
 src/infra/sqlite-readonly-location.ts	3
-src/infra/sqlite-schema-contract.ts	8
+src/infra/sqlite-schema-contract.ts	7
 src/infra/sqlite-snapshot.ts	2
 src/infra/sqlite-strict.ts	6
 src/infra/sqlite-wal.ts	3
@@ -2378,7 +2372,6 @@ src/infra/state-migrations.legacy-sessions.ts	1
 src/infra/state-migrations.mcp-oauth.ts	2
 src/infra/state-migrations.meeting-transcripts-detection.ts	4
 src/infra/state-migrations.meeting-transcripts-files.ts	5
-src/infra/state-migrations.meeting-transcripts-verify.ts	2
 src/infra/state-migrations.meeting-transcripts.ts	2
 src/infra/state-migrations.node-host.ts	2
 src/infra/state-migrations.runtime-state.ts	1
@@ -2390,13 +2383,12 @@ src/infra/state-migrations.update-check.ts	2
 src/infra/state-migrations.workspace-setup-store.ts	2
 src/infra/state-migrations.workspace-setup.ts	1
 src/infra/system-presence.ts	1
-src/infra/tailscale.ts	7
+src/infra/tailscale.ts	4
 src/infra/tmp-openclaw-dir.ts	3
 src/infra/unhandled-rejections.ts	2
 src/infra/update-check-package-target.ts	2
 src/infra/update-global.ts	3
 src/infra/update-package-manager.ts	1
-src/infra/voicewake-routing.ts	4
 src/infra/warning-filter.ts	4
 src/infra/windows-gateway-firewall-diagnostics.ts	2
 src/infra/windows-port-pids.ts	2
@@ -2518,7 +2510,7 @@ src/plugin-sdk/provider-auth-runtime.ts	1
 src/plugin-sdk/provider-catalog-shared.ts	1
 src/plugin-sdk/provider-entry.ts	3
 src/plugin-sdk/provider-onboard.ts	3
-src/plugin-sdk/provider-stream-shared.ts	14
+src/plugin-sdk/provider-stream-shared.ts	10
 src/plugin-sdk/provider-stream.ts	1
 src/plugin-sdk/provider-tools.ts	4
 src/plugin-sdk/qa-runtime.ts	5
@@ -2530,7 +2522,6 @@ src/plugin-sdk/session-transcript-runtime.ts	6
 src/plugin-sdk/setup-credential.ts	1
 src/plugin-sdk/ssrf-policy.ts	1
 src/plugin-sdk/status-helpers.ts	7
-src/plugin-sdk/tool-payload.ts	2
 src/plugin-sdk/tool-plugin.ts	10
 src/plugin-sdk/windows-spawn.ts	1
 src/plugin-state/plugin-state-store.ts	5
@@ -2661,7 +2652,7 @@ src/process/supervisor/adapters/child.ts	2
 src/process/supervisor/adapters/pty.ts	1
 src/process/terminal-pty.ts	1
 src/process/windows-command.ts	1
-src/provider-runtime/operation-retry.ts	2
+src/provider-runtime/operation-retry.ts	1
 src/proxy-capture/env.ts	1
 src/proxy-capture/store.sqlite.ts	2
 src/realtime-transcription/websocket-session.ts	2
@@ -2713,7 +2704,7 @@ src/shared/config-eval.ts	1
 src/shared/deferred.ts	1
 src/shared/frontmatter.ts	1
 src/shared/global-singleton.ts	4
-src/shared/json-schema-defaults.ts	21
+src/shared/json-schema-defaults.ts	20
 src/shared/message-content-blocks.ts	2
 src/shared/node-list-parse.ts	3
 src/shared/node-presence.ts	1
@@ -2750,7 +2741,6 @@ src/state/openclaw-state-db-legacy-backfills.ts	4
 src/state/openclaw-state-db-schema-helpers.ts	1
 src/state/openclaw-state-db-schema-repair.ts	2
 src/state/openclaw-state-ownership.ts	1
-src/status/summary.runtime.ts	1
 src/system-agent/agent-turn.ts	2
 src/system-agent/greeting.ts	1
 src/system-agent/hosted-setup.runtime.ts	1

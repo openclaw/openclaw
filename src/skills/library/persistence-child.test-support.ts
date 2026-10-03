@@ -116,7 +116,7 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
           );
         }
       }
-      const pins = selection.seedSkillLibrarySelection(authority, options);
+      const pins = await selection.seedSkillLibrarySelection(authority, options);
       sessions.replaceSessionEntrySync(scope, {
         sessionId: PERSISTENCE_SESSION_ID,
         updatedAt: Date.now(),
@@ -158,9 +158,9 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
           pins.map((pin) => selection.readSelectedSkillLibraryFiles(pin, options)),
         ),
         catalog: catalog.map((entry) => ({ name: entry.skill.name, baseDir: entry.skill.baseDir })),
-        available: service
-          .listSkillLibrary(authority, {}, options)
-          .entries.map((entry) => entry.skillId),
+        available: (await service.listSkillLibrary(authority, {}, options)).entries.map(
+          (entry) => entry.skillId,
+        ),
       };
     }
     if (command.action === "update-remove") {
@@ -232,7 +232,7 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
     return { kind: "complete" };
   } finally {
     agent?.closeOpenClawAgentDatabases();
-    state.closeOpenClawStateDatabase();
+    await state.closeOpenClawStateDatabaseAsync();
   }
 }
 

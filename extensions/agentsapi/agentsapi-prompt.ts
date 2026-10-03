@@ -177,22 +177,14 @@ export function buildAgentsApiTurnInput(
     prompt,
     attachmentNote,
     attachmentFeedback,
-    buildAgentsApiImageInputNotice(params.images, mappingText),
+    params.images?.length
+      ? mappingText
+        ? IMAGE_RECOVERY_WITH_PREPARED_ATTACHMENTS
+        : IMAGE_RECOVERY_WITHOUT_PREPARED_ATTACHMENTS
+      : undefined,
   ]
     .filter(Boolean)
     .join("\n\n");
-}
-
-function buildAgentsApiImageInputNotice(
-  images: AgentHarnessAttemptParamsV2["images"],
-  mappingText: string,
-): string | undefined {
-  if (!images?.length) {
-    return undefined;
-  }
-  return mappingText
-    ? IMAGE_RECOVERY_WITH_PREPARED_ATTACHMENTS
-    : IMAGE_RECOVERY_WITHOUT_PREPARED_ATTACHMENTS;
 }
 
 /** Current facts use the existing input carrier, not immutable session instructions. */

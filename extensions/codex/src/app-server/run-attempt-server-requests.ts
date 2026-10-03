@@ -201,6 +201,7 @@ export function createCodexAttemptServerRequestController(
       });
       projector?.recordDynamicToolCall({
         callId: call.callId,
+        namespace: call.namespace,
         tool: call.tool,
         arguments: call.arguments,
       });

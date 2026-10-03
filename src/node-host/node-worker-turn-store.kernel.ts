@@ -129,15 +129,11 @@ function pruneTerminal(database: DatabaseSync, nowMs: number, excludeTurnId: str
 
 /** Immutable turn outcomes attached to a separately supervised physical worker. */
 export class NodeWorkerTurnKernel {
-  private readonly databaseOptions: OpenClawStateDatabaseOptions;
-
   constructor(
-    options: OpenClawStateDatabaseOptions & {
+    private readonly databaseOptions: OpenClawStateDatabaseOptions & {
       database: NonNullable<OpenClawStateDatabaseOptions["database"]>;
     },
-  ) {
-    this.databaseOptions = options;
-  }
+  ) {}
 
   private write<T>(operationLabel: string, operation: (database: DatabaseSync) => T): T {
     let initialized: DatabaseSync | undefined;

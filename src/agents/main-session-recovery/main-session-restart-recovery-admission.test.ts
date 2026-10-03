@@ -128,7 +128,7 @@ describe("startup recovery admission", () => {
     const { storePath, sessionKey } = await makeMainSessionFixture();
     const mutationEntered = createDeferred();
     const releaseMutation = createDeferred();
-    const mutation = runExclusiveSessionLifecycleMutation({
+    const mutation = runExclusiveSessionLifecycleMutation("recover", {
       scope: storePath,
       identities: [sessionKey, "main-session"],
       run: async () => {

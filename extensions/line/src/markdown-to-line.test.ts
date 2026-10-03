@@ -1,7 +1,18 @@
 // Line tests cover markdown to line plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { processLineMessage } from "./markdown-to-line.js";
+import { processLineMessage as renderLineMessage } from "./markdown-to-line.js";
+
+function processLineMessage(text: string) {
+  const segments = renderLineMessage(text);
+  return {
+    segments,
+    text: segments
+      .flatMap((segment) => (segment.type === "text" ? [segment.text] : []))
+      .join("\n\n"),
+    flexMessages: segments.flatMap((segment) => (segment.type === "flex" ? [segment.message] : [])),
+  };
+}
 
 function requireEntry<T>(entries: readonly T[], index: number, context: string): T {
   return expectDefined(entries[index], context);

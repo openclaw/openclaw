@@ -88,7 +88,7 @@ vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => ({
   loadPluginMetadataSnapshot: () => ({ index: { plugins: [] }, byPluginId: new Map() }),
 }));
 vi.mock("./slot-selection.js", () => ({
-  applySlotSelectionForPlugin: (config: unknown) => ({ config, warnings: [] }),
+  applySlotSelectionForPlugin: (config: unknown) => config,
 }));
 vi.mock("./registry-refresh.js", () => ({
   refreshPluginRegistryAfterConfigMutation: async () => undefined,

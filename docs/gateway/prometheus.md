@@ -158,6 +158,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_payload_large_total`                       | counter   | `action`, `channel`, `plugin`, `reason`, `surface`                                        |
 | `openclaw_payload_large_bytes`                       | histogram | `action`, `channel`, `plugin`, `reason`, `surface`                                        |
 | `openclaw_memory_bytes`                              | gauge     | `kind`                                                                                    |
+| `openclaw_heap_space_bytes`                          | gauge     | `space`, `stat`                                                                           |
 | `openclaw_worker_count`                              | gauge     | none                                                                                      |
 | `openclaw_worker_heap_sampled_count`                 | gauge     | none                                                                                      |
 | `openclaw_worker_heap_used_bytes`                    | gauge     | `script`                                                                                  |

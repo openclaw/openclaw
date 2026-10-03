@@ -514,7 +514,7 @@ export function createHarness(
     runReclaimBarrier:
       options.runReclaimBarrier ??
       (async ({ sessionId, sessionKey, authorize, beforeDrain, begin, reclaim }) =>
-        await runExclusiveSessionLifecycleMutation({
+        await runExclusiveSessionLifecycleMutation("placement-reclaim", {
           scope: options.workspacePath ?? "/gateway/workspace",
           identities: [sessionId, sessionKey],
           run: async () => {
@@ -533,7 +533,7 @@ export function createHarness(
     runFailedReclaimBarrier:
       options.runFailedReclaimBarrier ??
       (async ({ sessionId, sessionKey, authorize, reclaim }) =>
-        await runExclusiveSessionLifecycleMutation({
+        await runExclusiveSessionLifecycleMutation("placement-failed-reclaim", {
           scope: options.workspacePath ?? "/gateway/workspace",
           identities: [sessionId, sessionKey],
           run: async () => {

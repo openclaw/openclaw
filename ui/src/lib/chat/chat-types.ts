@@ -229,6 +229,7 @@ export type ChatItem =
       tone?: "danger";
       /** Collapse the body behind a disclosure; the label line stays visible. */
       collapsedBody?: true;
+      sessionsYield?: "waiting" | "resumed";
     }
   | {
       kind: "divider";
@@ -419,7 +420,7 @@ export type MessageContentItem =
   | {
       type: "attachment_error";
       attachment: {
-        code: "file-not-found" | "unsupported-format" | "delivery-failed";
+        code: "file-not-found" | "unsupported-format" | "delivery-failed" | "invalid-reference";
         kind: Exclude<MediaKind, "sticker" | "unknown">;
         label: string;
         mimeType?: string;

@@ -7,7 +7,7 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 // Compiles plugin manifest schemas for validation without runtime loading.
 import { Format } from "typebox/format";
-import { Compile, Pointer, type Validator as TypeBoxValidator } from "typebox/schema";
+import { Check, Compile, Pointer, type Validator as TypeBoxValidator } from "typebox/schema";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
 import { LruCache } from "../infra/lru-cache.js";
@@ -151,21 +151,6 @@ function checkSchemaWithCurrentFormats(
   }
   // The schema-only compiler returns [valid, errors], without loading value codecs.
   return normalizeTypeBoxValidationErrors(validate.Errors(value)[1]);
-}
-
-function isDefaultActivatedConditionalFailure(params: {
-  schema: JsonSchemaValue;
-  validate: TypeBoxValidator;
-  originalValue: unknown;
-  defaultedValue: unknown;
-}): boolean {
-  const relaxedConditionalValidator = compileSchema(
-    relaxConditionalRequiredKeywords(params.schema),
-  );
-  if (checkSchemaWithCurrentFormats(relaxedConditionalValidator, params.defaultedValue)) {
-    return false;
-  }
-  return checkSchemaWithCurrentFormats(params.validate, params.originalValue) === null;
 }
 
 /**
@@ -419,12 +404,11 @@ export function validateJsonSchemaValue(params: {
       !(
         params.applyDefaults &&
         value !== originalValue &&
-        isDefaultActivatedConditionalFailure({
-          schema: params.schema,
-          validate: cached.validate,
-          originalValue,
-          defaultedValue: value,
-        })
+        Check(
+          normalizeJsonSchemaForTypeBox(relaxConditionalRequiredKeywords(params.schema)),
+          value,
+        ) &&
+        cached.validate.Check(originalValue)
       )
     ) {
       return { ok: false, errors: formatValidationErrors(errors) };

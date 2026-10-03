@@ -56,6 +56,7 @@ function createHarness(
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>,
 ) {
   let placement: WorkerSessionPlacementRecord = activePlacement();
+  let runnerStatus: "available" | "offline" = "available";
   const unexpected = async () => {
     throw new Error("unexpected workspace mutation during a disk probe");
   };
@@ -87,6 +88,9 @@ function createHarness(
       }),
     },
     environments: { startTunnel },
+    runnerAvailability: {
+      read: () => ({ kind: "device", deviceId: "node-1", status: runnerStatus }),
+    },
     warn,
     now: () => 1_000,
   });
@@ -96,6 +100,9 @@ function createHarness(
     warn,
     get placement() {
       return placement;
+    },
+    setRunnerStatus(next: "available" | "offline") {
+      runnerStatus = next;
     },
     setPlacement(next: WorkerSessionPlacementRecord) {
       placement = next;
@@ -229,6 +236,37 @@ describe("active worker placement disk-space monitoring", () => {
     expect(harness.warn).toHaveBeenCalledTimes(2);
     expect(harness.startTunnel).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["worker-turn", "remote-exec"] as const)(
+    "pauses offline %s device probes and records a fresh sample after reconnect",
+    async (executionMode) => {
+      let availableBytes = 400 * MIB;
+      const harness = createHarness(async () => result(availableBytes, 10 * GIB));
+      harness.setPlacement(activePlacement({ executionMode }));
+      await harness.monitor.sweep();
+      const previous = harness.monitor.read(harness.placement);
+
+      harness.setRunnerStatus("offline");
+      availableBytes = 6 * GIB;
+      await harness.monitor.sweep();
+      await harness.monitor.sweep();
+
+      expect(harness.startTunnel).toHaveBeenCalledTimes(1);
+      expect(harness.monitor.read(harness.placement)).toEqual(previous);
+      expect(harness.monitor.version()).toBe(1);
+
+      harness.setRunnerStatus("available");
+      await harness.monitor.sweep();
+
+      expect(harness.startTunnel).toHaveBeenCalledTimes(2);
+      expect(harness.monitor.read(harness.placement)).toMatchObject({
+        status: "ok",
+        availableBytes,
+      });
+      expect(harness.monitor.version()).toBe(2);
+      expect(harness.warn).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps the last exact-binding sample and warns on every failed advisory probe", async () => {
     let fail = false;

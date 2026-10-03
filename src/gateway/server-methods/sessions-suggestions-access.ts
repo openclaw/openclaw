@@ -174,14 +174,7 @@ export function suggestionScope(
   return { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath };
 }
 
-export function respondSessionSuggestionSessionChanged(
-  respond: RespondFn,
-  sessionKey: string,
-): void {
-  respond(false, undefined, sessionSuggestionSessionChangedError(sessionKey));
-}
-
-function sessionSuggestionSessionChangedError(sessionKey: string): ErrorShape {
+export function sessionSuggestionSessionChangedError(sessionKey: string): ErrorShape {
   return errorShape(
     ErrorCodes.UNAVAILABLE,
     "session changed before suggestion resolution could be finalized",

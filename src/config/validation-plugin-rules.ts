@@ -78,32 +78,28 @@ export function validatePreparedConfigWithPlugins(
   opts: ValidateConfigWithPluginsParams & {
     applyDefaults: boolean;
     installedPluginRecordIds?: ReadonlySet<string>;
-    onManifestRegistryResolved?: (registry: PluginManifestRegistry) => void;
     schemaValidations?: PreparedPluginSchemaValidations;
   },
 ): ValidateConfigWithPluginsResult {
-  const rememberRegistry = (registry: PluginManifestRegistry): RegistryInfo => {
-    opts.onManifestRegistryResolved?.(registry);
-    return { registry };
-  };
   let registryInfo: RegistryInfo | null = opts.pluginMetadataSnapshot
-    ? rememberRegistry(opts.pluginMetadataSnapshot.manifestRegistry)
+    ? { registry: opts.pluginMetadataSnapshot.manifestRegistry }
     : null;
   const ensureLoadedRegistryInfo = (): RegistryInfo => {
-    registryInfo ??= rememberRegistry(
-      opts.loadPluginMetadataSnapshot?.(parsedConfig)?.manifestRegistry ??
+    registryInfo ??= {
+      registry:
+        opts.loadPluginMetadataSnapshot?.(parsedConfig)?.manifestRegistry ??
         resolveConfigWidePluginManifestRegistry({
           config: parsedConfig,
           env: opts.env ?? process.env,
         }),
-    );
+    };
     return registryInfo;
   };
 
   if (opts.applyDefaults && !registryInfo && opts.pluginValidation !== "core-only") {
     const pluginMetadataSnapshot = opts.loadPluginMetadataSnapshot?.(parsedConfig);
     if (pluginMetadataSnapshot) {
-      registryInfo = rememberRegistry(pluginMetadataSnapshot.manifestRegistry);
+      registryInfo = { registry: pluginMetadataSnapshot.manifestRegistry };
     }
   }
   const config = opts.applyDefaults

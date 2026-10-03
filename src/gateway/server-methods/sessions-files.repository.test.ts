@@ -753,7 +753,7 @@ it("keeps a timed-out remote save owned until its physical write drains before S
   await draining.promise;
   let stopEntered = false;
   let contentAtStop: string | undefined;
-  const stopping = runExclusiveSessionLifecycleMutation({
+  const stopping = runExclusiveSessionLifecycleMutation("drain", {
     scope: path.join(gatewayRoot, "sessions.sqlite"),
     identities: [sessionKey, identity.sessionId],
     run: async () => {

@@ -16,6 +16,7 @@ import {
   stopCrabboxLease,
 } from "./crabbox-worker-command.js";
 import { createCrabboxHeartbeatManager } from "./crabbox-worker-heartbeat.js";
+import type { ParsedInspect } from "./crabbox-worker-inspect.js";
 import { createCrabboxMachineOptionsResolver } from "./crabbox-worker-machine-options.js";
 import { collectCrabboxNodeEnrollmentEvidence } from "./crabbox-worker-node-enrollment-diagnostics.js";
 import {
@@ -46,9 +47,7 @@ import {
   prepareProvisionDesktop,
   remainingProvisionTimeout,
   runProvisionSetup,
-  runProvisionSetupAndWaitReady,
   waitForProvisionReady,
-  type InspectCommandResult,
 } from "./crabbox-worker-provision-commands.js";
 import {
   createCrabboxSnapshotActions,
@@ -244,10 +243,9 @@ export function createCrabboxWorkerProvider(
     const setupDeadline =
       deadline +
       countCrabboxProvisionSetupPhases(parsed) * CRABBOX_SETUP_TIMEOUT_MS +
-      nodeBootstrapTimeoutMs +
+      2 * nodeBootstrapTimeoutMs +
       (project
         ? CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS +
-          nodeBootstrapTimeoutMs +
           resolveCrabboxWarmImageCaptureTimeoutMs(parsed.provider)
         : 0);
     const context = { binary, provider: parsed.provider };
@@ -280,11 +278,10 @@ export function createCrabboxWorkerProvider(
         slug: operationSlug(operationId),
         timeoutMs: () => remainingProvisionTimeout(deadline, warmupTimeoutMs),
       });
-      let inspected: InspectCommandResult;
+      let inspected: ParsedInspect | undefined;
       try {
         inspected = await inspectWithContext({
-          context,
-          expectedLeaseId: leaseId,
+          ...context,
           id: leaseId,
           runCommand,
           timeoutMs: remainingProvisionTimeout(
@@ -303,34 +300,39 @@ export function createCrabboxWorkerProvider(
         }
         throw error;
       }
-      if (inspected.status === "unknown") {
+      if (!inspected) {
         throw new Error("Crabbox warmup lease was not found during inspection");
       }
       const inspectedParams = {
         ...context,
         deadline,
-        inspect: inspected.inspect,
+        inspect: inspected,
         profile: parsed,
         runCommand,
         stopLease,
         signal: preparationSignal,
       };
-      if (isNonRunnableState(inspected.inspect.state)) {
+      if (isNonRunnableState(inspected.state)) {
         return await failProvisionAfterCleanup(
           { ...inspectedParams, id: leaseId },
           new WorkerProviderError(
-            `Crabbox warmup lease entered a terminal state${inspected.inspect.failureError ? `: ${inspected.inspect.failureError}` : ""}`,
+            `Crabbox warmup lease entered a terminal state${inspected.failureError ? `: ${inspected.failureError}` : ""}`,
           ),
         );
       }
       inspectedParams.inspect = await waitForProvisionReady({ ...inspectedParams, sleep });
       inspectedParams.deadline = setupDeadline;
       if (parsed.setup && !(project?.preparation && allocationChoice.kind === "checkpoint")) {
-        inspectedParams.inspect = await runProvisionSetupAndWaitReady({
+        await runProvisionSetup({
           ...inspectedParams,
           phase: "profile setup",
           setup: parsed.setup,
           forwardedEnv,
+        });
+        // Setup may restart SSH; refresh its endpoint and security attestation before bootstrap.
+        inspectedParams.inspect = await waitForProvisionReady({
+          ...inspectedParams,
+          refresh: true,
           sleep,
         });
       }
@@ -449,11 +451,41 @@ export function createCrabboxWorkerProvider(
         );
       }
       let enrollment: CrabboxWorkerNodeEnrollment;
+      let runtimeSetupFailed = false;
       try {
+        if (!project && options?.prepareNodeRuntime) {
+          const runtime = await options.prepareNodeRuntime();
+          assertCurrent();
+          const setup = createCrabboxNodeRuntimeSetup({
+            nodeBootstrap: runtime.nodeBootstrap,
+            workerBundle: runtime.workerBundle,
+            leaseId,
+            target: parsed.target,
+          });
+          await runProvisionSetup({
+            ...inspectedParams,
+            phase: "node runtime preparation",
+            setup: setup.command,
+            forwardedEnv: setup.forwardedEnv,
+            timeoutMs: resolveCrabboxNodeEnrollmentTimeoutMs(runtime.bootstrapTimeoutMs),
+            signal:
+              preparationSignal && runtime.signal
+                ? AbortSignal.any([preparationSignal, runtime.signal])
+                : (preparationSignal ?? runtime.signal),
+          }).catch((error: unknown) => {
+            // Setup owns failure cleanup; the enrollment catch must not stop the lease twice.
+            runtimeSetupFailed = true;
+            throw error;
+          });
+          assertCurrent();
+        }
         enrollment = await beginNodeEnrollment();
         signal?.throwIfAborted();
       } catch (error) {
         signal?.throwIfAborted();
+        if (runtimeSetupFailed) {
+          throw error;
+        }
         if (error instanceof Error && error.name === "AbortError") {
           throw error;
         }
@@ -609,7 +641,6 @@ export function createCrabboxWorkerProvider(
         (parsed.warmImage === false
           ? 0
           : CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS +
-            resolveCrabboxNodeEnrollmentTimeoutMs(options?.nodeBootstrapTimeoutMs) +
             resolveCrabboxWarmImageCaptureTimeoutMs(parsed.provider))
       );
     },
@@ -632,12 +663,10 @@ export function createCrabboxWorkerProvider(
     async inspect(lease): Promise<WorkerLeaseStatus> {
       const { context } = await resolveLeaseContext(lease);
       const inspected = await inspectWithContext({
-        context,
-        expectedLeaseId: context.id,
-        id: context.id,
+        ...context,
         runCommand,
       });
-      if (inspected.status === "unknown" || isNonRunnableState(inspected.inspect.state)) {
+      if (!inspected || isNonRunnableState(inspected.state)) {
         await heartbeats.stop(context.id);
         return { status: "unknown" };
       }

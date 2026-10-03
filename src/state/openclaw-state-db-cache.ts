@@ -662,6 +662,9 @@ export const openClawStateDatabaseCache = {
   getOpenClawStateDatabaseIfOpenAtPath,
   getKnownOpenClawStateDatabaseIdentity: asyncResources.knownIdentity,
   isOpenClawStateDatabaseOpen,
+  /** Only the exact published, open owner carries canonical schema readiness. */
+  isOpenClawStateDatabaseSchemaReady: (database: OpenClawStateDatabase): boolean =>
+    cachedDatabases.get(database.path) === database && database.db.isOpen,
   publishOpenClawStateDatabase,
   recordOpenClawStateDatabaseOpenFailure,
   recordOpenClawStateDatabaseLifecycleOpenError,

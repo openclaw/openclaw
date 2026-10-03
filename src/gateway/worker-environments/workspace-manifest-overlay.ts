@@ -1,9 +1,9 @@
-import path from "node:path";
 import { changedPaths, hasPathAncestor, manifestNodes } from "./workspace-manifest-comparison.js";
 import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 
 export function applyWorkspaceSourceOverlay(
   source: WorkerWorkspaceManifest,
@@ -35,11 +35,7 @@ export function applyWorkspaceSourceOverlay(
   }
   // Retained children preserve their parents; incoming children replace setup-only ancestor files.
   for (const entryPath of nodes.keys()) {
-    for (
-      let parent = path.posix.dirname(entryPath);
-      parent !== ".";
-      parent = path.posix.dirname(parent)
-    ) {
+    for (const parent of [...workspacePathAncestors(entryPath)].toReversed()) {
       nodes.set(parent, { path: parent, type: "directory" });
     }
   }

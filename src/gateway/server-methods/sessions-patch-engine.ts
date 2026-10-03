@@ -205,9 +205,6 @@ export async function executeSessionPatchMutations(params: {
       outcomes[index] = invalidSessionRequest(initialPlacementPatchError);
       continue;
     }
-    const lifecycleIdentities = Array.from(
-      new Set([key, canonicalKey, ...candidateKeys, initialEntry?.sessionId]),
-    );
     const preparedTarget: PreparedPatchTarget = {
       archiveActor,
       canonicalKey,
@@ -216,7 +213,7 @@ export async function executeSessionPatchMutations(params: {
       ...(initialEntry ? { initialEntry } : {}),
       initialStoreKeys: [...candidateKeys],
       key,
-      lifecycleIdentities,
+      lifecycleIdentities: [key, canonicalKey, ...candidateKeys, initialEntry?.sessionId],
       ...(requestedAgentId ? { requestedAgentId } : {}),
       storePath: resolved.storePath,
       targetAgentId: resolved.agentId,
@@ -286,7 +283,9 @@ export async function executeSessionPatchMutations(params: {
           }),
       );
       timing?.mark("lifecycleAdmission");
-      await runExclusiveSessionLifecycleMutation({
+      const archived = params.patch.archived;
+      const operation = archived === undefined ? "patch" : archived ? "archive" : "restore";
+      await runExclusiveSessionLifecycleMutation(operation, {
         targets: activePrepared.map((target) => ({
           scope: target.storePath,
           identities: target.lifecycleIdentities,

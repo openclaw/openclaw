@@ -16,7 +16,7 @@ import {
   updateSecretStoreAllowedHosts,
 } from "../secrets/store/secret-store.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   persistProviderAuthProfileBatch,
@@ -26,10 +26,10 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeOpenClawStateDatabaseAsync();
 });
 
 describe("provider auth protected persistence", () => {
@@ -68,6 +68,7 @@ describe("provider auth protected persistence", () => {
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     let writes = 0;
+    const revoked = new Error("Login owner revoked");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       await expect(
         persistProviderAuthProfileBatch({
@@ -78,17 +79,22 @@ describe("provider auth protected persistence", () => {
           agentDir,
           beforeWrite: () => {
             if (++writes === revokeAt) {
-              throw new Error("Login owner revoked");
+              throw revoked;
             }
           },
         }),
-      ).rejects.toThrow("Login owner revoked");
+      ).rejects.toSatisfy(
+        (error: unknown) =>
+          error === revoked || (error instanceof Error && error.cause === revoked),
+      );
       expect(
         ensureAuthProfileStore(agentDir, { readOnly: true, syncExternalCli: false }).profiles[
           "openai:revoked"
         ],
       ).toBeUndefined();
-      expect(listSecretStoreEntries({ scope: { kind: "team" }, database: { env } })).toEqual([]);
+      expect(await listSecretStoreEntries({ scope: { kind: "team" }, database: { env } })).toEqual(
+        [],
+      );
     });
   });
 
@@ -369,7 +375,9 @@ describe("provider auth protected persistence", () => {
           database,
         }),
       ).toEqual({ ok: true, value: "candidate-a" });
-      expect(listSecretStoreEntries({ scope: { kind: "team" }, database })[0]).toMatchObject({
+      expect(
+        (await listSecretStoreEntries({ scope: { kind: "team" }, database }))[0],
+      ).toMatchObject({
         allowedHosts: ["api.example.test"],
       });
 
@@ -439,13 +447,13 @@ describe("provider auth protected persistence", () => {
     const stateDir = path.join(rootDir, "state");
     const persistenceError = new Error("synthetic protected write failure");
     const rollbackError = new Error("synthetic protected rollback failure");
-    const rollback = vi.fn(() => {
+    const rollback = vi.fn(async () => {
       throw rollbackError;
     });
     const write = vi
       .spyOn(secretStore, "writeSecretStoreEntryWithRollback")
-      .mockImplementationOnce(() => ({ rollback }))
-      .mockImplementationOnce(() => {
+      .mockResolvedValueOnce({ rollback })
+      .mockImplementationOnce(async () => {
         throw persistenceError;
       });
 

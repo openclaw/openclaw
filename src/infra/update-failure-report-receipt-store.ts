@@ -36,7 +36,7 @@ const ARTIFACT_SWEEP_STALE_AFTER_MS = 2 * 60_000;
 function isCanonicalGithubUrl(
   value: unknown,
   pathname: RegExp,
-  options: { allowSearch: boolean },
+  allowSearch: boolean,
 ): value is string {
   if (typeof value !== "string") {
     return false;
@@ -48,7 +48,7 @@ function isCanonicalGithubUrl(
       !parsed.username &&
       !parsed.password &&
       !parsed.hash &&
-      (options.allowSearch || !parsed.search) &&
+      (allowSearch || !parsed.search) &&
       pathname.test(parsed.pathname)
     );
   } catch {
@@ -74,18 +74,14 @@ function isValidTerminalReceipt(receipt: UpdateFailureReportReceipt): boolean {
     return (
       receipt.cleanup === "pending" &&
       receipt.fallbackUrl === undefined &&
-      isCanonicalGithubUrl(receipt.url, /^\/openclaw\/openclaw\/issues\/\d+$/u, {
-        allowSearch: false,
-      })
+      isCanonicalGithubUrl(receipt.url, /^\/openclaw\/openclaw\/issues\/\d+$/u, false)
     );
   }
   if (receipt.status === "fallback") {
     return (
       receipt.cleanup === undefined &&
       receipt.url === undefined &&
-      isCanonicalGithubUrl(receipt.fallbackUrl, /^\/openclaw\/openclaw\/issues\/new$/u, {
-        allowSearch: true,
-      })
+      isCanonicalGithubUrl(receipt.fallbackUrl, /^\/openclaw\/openclaw\/issues\/new$/u, true)
     );
   }
   return (
@@ -137,13 +133,9 @@ function parseReceipt(sentinel: RestartSentinel | null): UpdateFailureReportRece
       (typeof value.sweepSinceMs !== "number" || !Number.isFinite(value.sweepSinceMs))) ||
     (value.sweepOwnerId !== undefined && value.artifactSweep !== "pending") ||
     (value.status === "created" &&
-      !isCanonicalGithubUrl(value.url, /^\/openclaw\/openclaw\/issues\/\d+$/u, {
-        allowSearch: false,
-      })) ||
+      !isCanonicalGithubUrl(value.url, /^\/openclaw\/openclaw\/issues\/\d+$/u, false)) ||
     (value.status === "fallback" &&
-      !isCanonicalGithubUrl(value.fallbackUrl, /^\/openclaw\/openclaw\/issues\/new$/u, {
-        allowSearch: true,
-      })) ||
+      !isCanonicalGithubUrl(value.fallbackUrl, /^\/openclaw\/openclaw\/issues\/new$/u, true)) ||
     (value.cleanup !== undefined && value.status !== "created" && value.status !== "retryable") ||
     (value.status !== "created" && value.url !== undefined) ||
     (value.status !== "fallback" && value.fallbackUrl !== undefined)

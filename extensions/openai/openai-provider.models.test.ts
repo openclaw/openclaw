@@ -4,25 +4,7 @@ import { resolveThinkingProfile } from "./provider-policy-api.js";
 
 describe("OpenAI model materialization", () => {
   it.each(["gpt-daybreak-blue-latest", "gpt-daybreak-red-latest"])(
-    "materializes %s with its own capabilities without rewriting the alias",
-    (modelId) => {
-      const provider = buildOpenAIProvider();
-      const model = provider.resolveDynamicModel?.({
-        provider: "openai",
-        modelId,
-        modelRegistry: { find: () => null },
-      } as never);
-      expect(model).toMatchObject({
-        id: modelId,
-        provider: "openai",
-        api: "openai-responses",
-        compat: { supportedReasoningEfforts: expect.arrayContaining(["xhigh", "max"]) },
-      });
-    },
-  );
-
-  it.each(["gpt-daybreak-blue-latest", "gpt-daybreak-red-latest"])(
-    "preserves the registered %s row and its configured Ultra opt-out",
+    "materializes %s capabilities and preserves its registered Ultra opt-out",
     (modelId) => {
       const provider = buildOpenAIProvider();
       const initialModel = provider.resolveDynamicModel?.({
@@ -30,6 +12,12 @@ describe("OpenAI model materialization", () => {
         modelId,
         modelRegistry: { find: () => null },
       } as never);
+      expect(initialModel).toMatchObject({
+        id: modelId,
+        provider: "openai",
+        api: "openai-responses",
+        compat: { supportedReasoningEfforts: expect.arrayContaining(["xhigh", "max"]) },
+      });
       const registeredModel = {
         ...initialModel,
         contextWindow: 123_456,

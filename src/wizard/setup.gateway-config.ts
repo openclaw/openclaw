@@ -200,7 +200,7 @@ export async function configureGatewayForSetup(
         // Nothing exists for an env/file/exec ref to point at, so asking where the
         // token lives has no answerable option. Setup mints it into the shared
         // secret store instead and config keeps only the reference.
-        const provisioned = provisionGatewayTokenStoreRef({ config: nextConfig });
+        const provisioned = await provisionGatewayTokenStoreRef({ config: nextConfig });
         gatewayTokenInput = provisioned.ref;
         gatewayToken = provisioned.token;
         await prompter.note(

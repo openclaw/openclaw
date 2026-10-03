@@ -71,6 +71,14 @@ describe("channelToNpmTag", () => {
 describe("resolveEffectiveUpdateChannel", () => {
   it.each([
     {
+      name: "uses main for immutable generations independently of the package version",
+      params: {
+        currentVersion: "2026.5.2-beta.1",
+        installKind: "immutable" as const,
+      },
+      expected: { channel: "dev", source: "default" },
+    },
+    {
       name: "prefers config over git metadata",
       params: {
         configChannel: "beta" as const,

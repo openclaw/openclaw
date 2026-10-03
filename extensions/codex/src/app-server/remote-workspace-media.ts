@@ -1,247 +1,90 @@
 import path from "node:path";
-import { isPathStrictlyInside, root } from "openclaw/plugin-sdk/file-access-runtime";
+import { mapAgentHarnessMessagingMediaValues } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import {
+  createBoundedRemoteFileReader,
+  isPathStrictlyInside,
+  root,
+  type RemoteWorkspaceFileReader,
+} from "openclaw/plugin-sdk/file-access-runtime";
 import { getMediaDir } from "openclaw/plugin-sdk/media-runtime";
 import {
   normalizeMediaReferenceForComparison,
   saveMediaBuffer,
 } from "openclaw/plugin-sdk/media-store";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexCommandExecParams, CodexCommandExecResponse } from "./command-exec-protocol.js";
 import {
   isCodexPassThroughMediaSource,
   mapCodexAppServerLocalWorkspacePath,
   mapCodexAppServerRemoteWorkspacePath,
 } from "./remote-workspace-path.js";
+import type { CodexBindingAuthority } from "./session-binding.js";
 
 const REMOTE_WORKSPACE_MEDIA_TIMEOUT_MS = 60_000;
 const REMOTE_WORKSPACE_MEDIA_MAX_BYTES = 64 * 1024 * 1024;
 const REMOTE_WORKSPACE_MEDIA_MAX_ATTACHMENTS = 16;
-const CODEX_REMOTE_MEDIA_CHUNK_BYTES = 512 * 1024;
-// codex_utils_pty's native 1 MiB default is also the only output cap supported
-// by restricted Windows app-server commands.
-const CODEX_REMOTE_COMMAND_DEFAULT_OUTPUT_BYTES = 1024 * 1024;
-
-// Execute a fixed argv program, never a shell or model-provided script. Resolve
-// Linux paths through the opened descriptor so a swapped parent cannot escape
-// the workspace; every chunk binds to the same capped filesystem identity.
-const CODEX_BOUNDED_REMOTE_FILE_READER = [
-  "try{",
-  'const fs=require("node:fs");',
-  'const path=require("node:path");',
-  "const file=process.argv[1];",
-  "const max=Number(process.argv[2]);",
-  "const offset=Number(process.argv[3]);",
-  "const chunk=Number(process.argv[4]);",
-  "const workspace=process.argv[5];",
-  'if(!Number.isSafeInteger(max)||max<0)throw Error("invalid media byte limit");',
-  'if(!Number.isSafeInteger(offset)||offset<0||!Number.isSafeInteger(chunk)||chunk<=0)throw Error("invalid media chunk");',
-  'if(fs.lstatSync(file).isSymbolicLink())throw Error("symbolic links are not allowed");',
-  "const noFollow=fs.constants.O_NOFOLLOW??0;",
-  "const fd=fs.openSync(file,fs.constants.O_RDONLY|noFollow);",
-  "try{",
-  "const before=fs.fstatSync(fd);",
-  'if(!before.isFile())throw Error("not a regular file");',
-  "if(workspace){",
-  'const descriptor=process.platform==="linux"?fs.realpathSync(`/proc/self/fd/${fd}`):fs.realpathSync(file);',
-  "const relative=path.relative(fs.realpathSync(workspace),descriptor);",
-  'if(!relative||relative===".."||relative.startsWith(`..${path.sep}`)||path.isAbsolute(relative))throw Error("file escapes remote workspace");',
-  "const verified=fs.statSync(descriptor);",
-  'if(verified.dev!==before.dev||verified.ino!==before.ino)throw Error("file changed while being opened");',
-  "}",
-  "if(before.size>max)throw Error(`file exceeds limit of ${max} bytes`);",
-  'if(offset>before.size)throw Error("file changed while being read");',
-  "const expected=Math.min(chunk,before.size-offset);",
-  "const buffer=Buffer.allocUnsafe(expected);",
-  "let total=0;",
-  "while(total<buffer.length){",
-  "const count=fs.readSync(fd,buffer,total,buffer.length-total,offset+total);",
-  "if(count===0)break;total+=count;",
-  "}",
-  'if(total!==expected)throw Error("file changed while being read");',
-  "const after=fs.fstatSync(fd);",
-  'const revision=stat=>[stat.dev,stat.ino,stat.size,stat.mtimeMs,stat.ctimeMs].join(":");',
-  'if(!after.isFile()||revision(after)!==revision(before))throw Error("file changed while being read");',
-  'process.stdout.write(JSON.stringify({dataBase64:buffer.toString("base64"),size:before.size,revision:revision(before)}));',
-  "}finally{fs.closeSync(fd)}",
-  "}catch(error){process.stderr.write(error instanceof Error?error.message:String(error));process.exitCode=1}",
-].join("");
-
-const MESSAGE_MEDIA_KEYS = [
-  "media",
-  "mediaUrl",
-  "media_url",
-  "path",
-  "filePath",
-  "fileUrl",
-  "imageUrl",
-  "image_url",
-] as const;
-const MESSAGE_MEDIA_ARRAY_KEYS = ["mediaUrls", "media_urls", "imageUrls", "image_urls"] as const;
-const ATTACHMENT_MEDIA_KEYS = ["media", "mediaUrl", "path", "filePath", "fileUrl", "url"] as const;
-
-export function collectCodexMessageMediaUrls(record: Record<string, unknown>): string[] {
-  const urls: string[] = [];
-  mapMessageMediaValues(record, (value) => {
-    if (value.trim()) {
-      urls.push(value.trim());
-    }
-    return value;
-  });
-  return urls;
-}
-
-type CodexRemoteWorkspaceFileResponse = {
-  dataBase64: string;
-};
-
-export type CodexRemoteWorkspaceFileReader = (params: {
-  path: string;
-  maxBytes: number;
-  workspaceRoot?: string;
-  signal?: AbortSignal;
-  timeoutMs?: number;
-}) => Promise<CodexRemoteWorkspaceFileResponse>;
-
-type CodexBoundedRemoteCommandClient = {
-  request: (
-    method: "command/exec",
-    params: CodexCommandExecParams,
-    options: {
-      signal?: AbortSignal;
-      timeoutMs?: number;
-      assertCurrent?: () => void;
-      withCurrent?: (write: () => void) => Promise<void>;
-    },
-  ) => Promise<CodexCommandExecResponse>;
-};
-
-/** Reads actual remote bytes with a cap enforced by Codex before transport. */
-export async function readBoundedCodexRemoteWorkspaceFile(
-  params: Parameters<CodexRemoteWorkspaceFileReader>[0] & {
-    client: CodexBoundedRemoteCommandClient;
-    assertCurrent?: () => void;
-    withCurrent?: (write: () => void) => Promise<void>;
+/** Adapts the current app-server connection without changing its Windows output cap. */
+export function createCodexRemoteWorkspaceFileReader(
+  client: {
+    request: (
+      method: "command/exec",
+      params: CodexCommandExecParams,
+      options: {
+        signal?: AbortSignal;
+        timeoutMs?: number;
+        assertCurrent?: () => void;
+        withCurrent?: (write: () => void) => Promise<void>;
+      },
+    ) => Promise<CodexCommandExecResponse>;
   },
-): Promise<CodexRemoteWorkspaceFileResponse> {
-  if (!Number.isSafeInteger(params.maxBytes) || params.maxBytes < 0) {
-    throw new Error("Codex remote workspace upload requires a valid media byte limit.");
-  }
-  params.signal?.throwIfAborted();
-  const chunks: Buffer[] = [];
-  let offset = 0;
-  let expectedSize: number | undefined;
-  let expectedRevision: string | undefined;
-  const startedAt = performance.now();
-
-  do {
-    params.signal?.throwIfAborted();
-    const timeoutMs =
-      params.timeoutMs === undefined
-        ? undefined
-        : Math.floor(params.timeoutMs - (performance.now() - startedAt));
-    if (timeoutMs !== undefined && timeoutMs <= 0) {
-      throw new Error("Codex remote workspace file transfer timed out.");
-    }
-    let response: CodexCommandExecResponse;
-    try {
-      response = await params.client.request(
-        "command/exec",
-        {
-          command: [
-            "node",
-            "-e",
-            CODEX_BOUNDED_REMOTE_FILE_READER,
-            "--",
-            params.path,
-            String(params.maxBytes),
-            String(offset),
-            String(CODEX_REMOTE_MEDIA_CHUNK_BYTES),
-            ...(params.workspaceRoot ? [params.workspaceRoot] : []),
-          ],
-          // Prevent inherited Node preload hooks from changing the fixed reader.
-          env: { NODE_OPTIONS: null, NODE_PATH: null },
-          ...(timeoutMs === undefined ? {} : { timeoutMs }),
-        },
-        {
-          signal: params.signal,
-          timeoutMs,
-          assertCurrent: params.assertCurrent,
-          withCurrent: params.withCurrent,
-        },
-      );
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        /failed to spawn|executable.*not found|\bENOENT\b/iu.test(error.message)
-      ) {
+  authority: Pick<CodexBindingAuthority, "assertCurrent" | "withCurrent">,
+): RemoteWorkspaceFileReader {
+  const read = createBoundedRemoteFileReader({
+    outputBytesCap: 1024 * 1024,
+    assertCurrent: authority.assertCurrent,
+    execute: async (command, options) => {
+      const response = await client
+        .request(
+          "command/exec",
+          {
+            command,
+            // Prevent inherited Node preload hooks from changing the fixed reader.
+            env: { NODE_OPTIONS: null, NODE_PATH: null },
+            ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+          },
+          {
+            ...options,
+            assertCurrent: authority.assertCurrent,
+            withCurrent: authority.withCurrent,
+          },
+        )
+        .catch((error: unknown) => {
+          if (
+            error instanceof Error &&
+            /failed to spawn|executable.*not found|\bENOENT\b/iu.test(error.message)
+          ) {
+            throw new Error(
+              "Codex remote workspace file transfer requires Node.js on the remote app-server host.",
+              { cause: error },
+            );
+          }
+          throw error;
+        });
+      if (!response || response.exitCode !== 0) {
         throw new Error(
-          "Codex remote workspace file transfer requires Node.js on the remote app-server host.",
-          { cause: error },
+          `Codex remote workspace file read failed: ${response?.stderr ?? "no response"}`,
         );
       }
-      throw error;
-    }
-    if (!response || response.exitCode !== 0) {
-      const detail = typeof response?.stderr === "string" ? response.stderr.trim() : "";
-      throw new Error(
-        `Codex remote workspace artifact could not be read: ${params.path}${detail ? `: ${detail}` : ""}`,
-      );
-    }
-    if (
-      typeof response.stdout !== "string" ||
-      response.stdout.length > CODEX_REMOTE_COMMAND_DEFAULT_OUTPUT_BYTES
-    ) {
-      throw new Error("Codex remote workspace artifact exceeded the native command output cap.");
-    }
-    let chunk: unknown;
-    try {
-      chunk = JSON.parse(response.stdout);
-    } catch {
-      throw new Error("Codex remote workspace artifact returned invalid chunk data.");
-    }
-    if (!isRecord(chunk)) {
-      throw new Error("Codex remote workspace artifact returned invalid chunk data.");
-    }
-    if (
-      typeof chunk.dataBase64 !== "string" ||
-      typeof chunk.size !== "number" ||
-      !Number.isSafeInteger(chunk.size) ||
-      chunk.size < 0 ||
-      chunk.size > params.maxBytes ||
-      typeof chunk.revision !== "string" ||
-      !chunk.revision
-    ) {
-      throw new Error("Codex remote workspace artifact returned invalid or oversized chunk data.");
-    }
-    if (expectedSize === undefined) {
-      expectedSize = chunk.size;
-      expectedRevision = chunk.revision;
-    }
-    if (chunk.size !== expectedSize || chunk.revision !== expectedRevision) {
-      throw new Error("Codex remote workspace artifact changed during chunked transfer.");
-    }
-    const remainingBytes = expectedSize - offset;
-    const expectedChunkBytes = Math.min(CODEX_REMOTE_MEDIA_CHUNK_BYTES, remainingBytes);
-    if (chunk.dataBase64.length > Math.ceil(expectedChunkBytes / 3) * 4) {
-      throw new Error("Codex remote workspace artifact returned oversized chunk data.");
-    }
-    const buffer = Buffer.from(chunk.dataBase64, "base64");
-    if (
-      buffer.byteLength !== expectedChunkBytes ||
-      buffer.toString("base64") !== chunk.dataBase64
-    ) {
-      throw new Error("Codex remote workspace artifact returned invalid chunk data.");
-    }
-    chunks.push(buffer);
-    offset += buffer.byteLength;
-  } while (offset < (expectedSize ?? 0));
-
-  if (params.withCurrent) {
-    await params.withCurrent(() => params.assertCurrent?.());
-  } else {
-    params.assertCurrent?.();
-  }
-  return { dataBase64: Buffer.concat(chunks, offset).toString("base64") };
+      return response.stdout;
+    },
+  });
+  return async (params) => {
+    const bytes = await read(params);
+    // A final native response can arrive after the initiating lineage changes.
+    return authority.withCurrent(() => {
+      params.signal?.throwIfAborted();
+      return bytes;
+    });
+  };
 }
 
 /** Stages authoritative bounded remote bytes into immutable Gateway-owned media. */
@@ -249,7 +92,7 @@ export async function prepareCodexRemoteWorkspaceMessageMedia(params: {
   args: Record<string, unknown>;
   localWorkspaceRoot?: string;
   remoteWorkspaceRoot?: string;
-  readRemoteFile?: CodexRemoteWorkspaceFileReader;
+  readRemoteFile?: RemoteWorkspaceFileReader;
   signal?: AbortSignal;
   timeoutMs?: number;
   maxBytes?: number;
@@ -270,7 +113,7 @@ export async function prepareCodexRemoteWorkspaceMessageMedia(params: {
   const gatewayManagedPaths = new Set<string>();
   const gatewayMediaRoot = getMediaDir();
   let attachmentEntries = 0;
-  const mappedArgs = mapMessageMediaValues(params.args, (value) => {
+  const mappedArgs = mapAgentHarnessMessagingMediaValues(params.args, (value) => {
     if (path.isAbsolute(value) && isPathStrictlyInside(gatewayMediaRoot, value)) {
       attachmentEntries += 1;
       gatewayManagedPaths.add(value);
@@ -326,30 +169,13 @@ export async function prepareCodexRemoteWorkspaceMessageMedia(params: {
     if (remainingMs <= 0) {
       throw new Error("Codex remote workspace attachment batch timed out.");
     }
-    const response = await readRemoteFile({
+    const remoteBuffer = await readRemoteFile({
       path: remotePath,
       maxBytes: remainingBytes,
       workspaceRoot: remoteWorkspaceRoot,
       signal: params.signal,
       timeoutMs: remainingMs,
     });
-    if (!response || typeof response.dataBase64 !== "string") {
-      throw new Error(`Codex remote workspace artifact returned no file data: ${remotePath}`);
-    }
-    if (response.dataBase64.length > Math.ceil(remainingBytes / 3) * 4) {
-      throw new Error(
-        `Codex remote workspace artifact exceeds the limit of ${remainingBytes} bytes.`,
-      );
-    }
-    const remoteBuffer = Buffer.from(response.dataBase64, "base64");
-    if (
-      remoteBuffer.byteLength > remainingBytes ||
-      remoteBuffer.toString("base64") !== response.dataBase64
-    ) {
-      throw new Error(
-        `Codex remote workspace artifact returned invalid or oversized file data: ${remotePath}`,
-      );
-    }
     totalBytes += remoteBuffer.byteLength;
     const saved = await saveMediaBuffer(
       remoteBuffer,
@@ -362,7 +188,10 @@ export async function prepareCodexRemoteWorkspaceMessageMedia(params: {
     sourcePathsByStagedPath.set(normalizeMediaReferenceForComparison(saved.path), [...sourcePaths]);
   }
   return {
-    args: mapMessageMediaValues(mappedArgs, (value) => stagedPaths.get(value) ?? value),
+    args: mapAgentHarnessMessagingMediaValues(
+      mappedArgs,
+      (value) => stagedPaths.get(value) ?? value,
+    ),
     sourcePathsByStagedPath,
   };
 }
@@ -391,51 +220,4 @@ async function assertGatewayManagedMediaPath(value: string, mediaRoot: string): 
   } finally {
     await opened[Symbol.asyncDispose]();
   }
-}
-
-function mapMessageMediaValues(
-  args: Record<string, unknown>,
-  mapValue: (value: string) => string,
-): Record<string, unknown> {
-  const mapString = (value: unknown) => (typeof value === "string" ? mapValue(value) : value);
-  const mapArray = (values: unknown[], map: (value: unknown) => unknown) => {
-    const mapped = values.map(map);
-    return mapped.some((value, index) => value !== values[index]) ? mapped : values;
-  };
-  const mapRecord = (
-    record: Record<string, unknown>,
-    keys: readonly string[],
-    message = false,
-  ): Record<string, unknown> => {
-    let mapped = record;
-    const assign = (key: string, value: unknown) => {
-      if (value !== record[key]) {
-        if (mapped === record) {
-          mapped = { ...record };
-        }
-        mapped[key] = value;
-      }
-    };
-    for (const key of keys) {
-      assign(key, mapString(record[key]));
-    }
-    if (message) {
-      for (const key of MESSAGE_MEDIA_ARRAY_KEYS) {
-        const value = record[key];
-        if (Array.isArray(value)) {
-          assign(key, mapArray(value, mapString));
-        }
-      }
-      if (Array.isArray(record.attachments)) {
-        assign(
-          "attachments",
-          mapArray(record.attachments, (attachment) =>
-            isRecord(attachment) ? mapRecord(attachment, ATTACHMENT_MEDIA_KEYS) : attachment,
-          ),
-        );
-      }
-    }
-    return mapped;
-  };
-  return mapRecord(args, MESSAGE_MEDIA_KEYS, true);
 }

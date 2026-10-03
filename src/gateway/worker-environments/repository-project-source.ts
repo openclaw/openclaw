@@ -18,14 +18,7 @@ const Identity = z.discriminatedUnion("source", [
   z.object({ source: z.literal("system-detected"), accountId: AccountId }).strict(),
   z
     .object({
-      source: z.literal("system-configured"),
-      profileId: z.string().regex(MANAGED_GITHUB_PROFILE_ID_PATTERN),
-      accountId: AccountId,
-    })
-    .strict(),
-  z
-    .object({
-      source: z.literal("agent-override"),
+      source: z.enum(["system-configured", "agent-override"]),
       profileId: z.string().regex(MANAGED_GITHUB_PROFILE_ID_PATTERN),
       accountId: AccountId,
     })
