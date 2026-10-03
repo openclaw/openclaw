@@ -14,14 +14,20 @@ type PluginStoreValidationErrors = {
 
 type PluginStoreOptionSignature = Record<string, string | number | undefined>;
 
+type PluginStoreOptionPolicy<T extends PluginStoreOptionSignature> = {
+  resolveOverflowPolicy(value: unknown): "evict-oldest" | "reject-new";
+  assertConsistent(pluginId: string, namespace: string, signature: T): void;
+  clear(): void;
+};
+
 export function createPluginStoreOptionPolicy<T extends PluginStoreOptionSignature>(params: {
   label: string;
-  invalid(message: string): Error;
-}) {
+  invalid: (message: string) => Error;
+}): PluginStoreOptionPolicy<T> {
   const signatures = new Map<string, T>();
 
   return {
-    resolveOverflowPolicy(value: unknown): "evict-oldest" | "reject-new" {
+    resolveOverflowPolicy(value) {
       if (value === undefined || value === "evict-oldest") {
         return "evict-oldest";
       }
@@ -30,7 +36,7 @@ export function createPluginStoreOptionPolicy<T extends PluginStoreOptionSignatu
       }
       throw params.invalid(`${params.label} overflowPolicy must be evict-oldest or reject-new`);
     },
-    assertConsistent(pluginId: string, namespace: string, signature: T) {
+    assertConsistent(pluginId, namespace, signature) {
       const key = `${pluginId}\0${namespace}`;
       const existing = signatures.get(key);
       if (!existing) {
@@ -56,7 +62,7 @@ function assertMaxUtf8Bytes(params: {
   label: string;
   value: string;
   maxBytes: number;
-  invalid(message: string): Error;
+  invalid: (message: string) => Error;
 }): void {
   if (textEncoder.encode(params.value).byteLength > params.maxBytes) {
     throw params.invalid(`${params.label} must be <= ${params.maxBytes} bytes`);
@@ -66,7 +72,7 @@ function assertMaxUtf8Bytes(params: {
 export function validatePluginStoreNamespace(params: {
   value: string;
   label: string;
-  invalid(message: string): Error;
+  invalid: (message: string) => Error;
 }): string {
   const trimmed = params.value.trim();
   if (!NAMESPACE_PATTERN.test(trimmed)) {
@@ -84,7 +90,7 @@ export function validatePluginStoreNamespace(params: {
 export function validatePluginStoreKey(params: {
   value: string;
   label: string;
-  invalid(message: string): Error;
+  invalid: (message: string) => Error;
 }): string {
   const trimmed = params.value.trim();
   if (!trimmed) {
@@ -102,7 +108,7 @@ export function validatePluginStoreKey(params: {
 export function validatePluginStorePositiveInteger(params: {
   value: number;
   label: string;
-  invalid(message: string): Error;
+  invalid: (message: string) => Error;
 }): number {
   if (!Number.isSafeInteger(params.value) || params.value < 1) {
     throw params.invalid(`${params.label} must be a positive safe integer`);
@@ -113,7 +119,7 @@ export function validatePluginStorePositiveInteger(params: {
 export function validateOptionalPluginStoreTtlMs(params: {
   value: number | undefined;
   label: string;
-  invalid(message: string): Error;
+  invalid: (message: string) => Error;
 }): number | undefined {
   const value = params.value;
   if (value == null) {

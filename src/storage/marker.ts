@@ -1,5 +1,4 @@
 import { createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from "node:crypto";
-import { promisify } from "node:util";
 import { z } from "zod";
 import type { StorageBackend } from "./types.js";
 
@@ -44,7 +43,6 @@ export class StorageLocationError extends Error {
 
 const cacheFingerprintKey = randomBytes(32);
 const masterKeys = new Map<string, { fingerprint: string; key: Promise<Buffer> }>();
-const scryptAsync = promisify(scrypt);
 
 function deriveMasterKey(locationName: string, passphrase: string, salt: string): Promise<Buffer> {
   const fingerprint = createHmac("sha256", cacheFingerprintKey)
@@ -56,11 +54,20 @@ function deriveMasterKey(locationName: string, passphrase: string, salt: string)
   if (cached?.fingerprint === fingerprint) {
     return cached.key;
   }
-  const key = scryptAsync(passphrase, Buffer.from(salt, "base64"), 32, {
-    N: 32768,
-    r: 8,
-    p: 1,
-    maxmem: 64 * 1024 * 1024,
+  const key = new Promise<Buffer>((resolve, reject) => {
+    scrypt(
+      passphrase,
+      Buffer.from(salt, "base64"),
+      32,
+      { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 },
+      (error, derived) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve(derived);
+        }
+      },
+    );
   });
   masterKeys.set(locationName, { fingerprint, key });
   void key.catch(() => {

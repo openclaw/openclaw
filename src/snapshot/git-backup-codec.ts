@@ -12,6 +12,7 @@ import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { createPrivateSqliteTempDirectory } from "../infra/sqlite-private-directory.js";
 import {
   findSqlCharacter,
+  normalizeSqlWhitespace,
   quoteSqliteIdentifier as quoteIdentifier,
 } from "../infra/sqlite-schema-sql.js";
 import { publishVerifiedSqliteFile } from "../infra/sqlite-snapshot.js";
@@ -278,7 +279,7 @@ export async function dumpGitBackupDatabase(params: {
       existingTables.has("config_machine_state")
         ? [...STATE_SECRET_CONFIG_STATE_KEY_PREFIXES]
         : [];
-    const excluded = new Set([...excludedTables, ...GIT_BACKUP_PROJECTION_TABLES]);
+    const excluded = new Set<string>([...excludedTables, ...GIT_BACKUP_PROJECTION_TABLES]);
     const includedSchema = entries.filter(
       (entry) => !excluded.has(entry.name) && !excluded.has(entry.tableName),
     );
@@ -397,15 +398,25 @@ function splitSchemaStatements(schema: string): string[] {
     if (end === -1) {
       break;
     }
+    const segment = schema.slice(cursor, cursor + end + 1);
     cursor += end + 1;
     const candidate = schema.slice(start, cursor).trim();
-    if (/^CREATE\s+TRIGGER\b/iu.test(candidate) && !/\bEND\s*;$/iu.test(candidate)) {
+    // CASE expressions also end in END; a trigger needs a standalone END statement.
+    if (
+      /^CREATE\s+TRIGGER\b/iu.test(candidate) &&
+      !/^END\s*;$/iu.test(normalizeSqlWhitespace(segment))
+    ) {
       continue;
     }
     if (candidate && !candidate.startsWith("-- PRAGMA user_version")) {
       statements.push(candidate);
     }
     start = cursor;
+  }
+  const trailing = schema.slice(start).trim();
+  if (/^CREATE\s+TRIGGER\b/iu.test(trailing)) {
+    // Let SQLite reject an incomplete trigger instead of silently dropping it.
+    statements.push(trailing);
   }
   return statements;
 }

@@ -366,6 +366,8 @@ Git restore converges derived search state: it rebuilds content-backed FTS5
 indexes, leaves transcript projection state for Gateway startup reconciliation,
 and leaves vector tables for memory indexing to recreate. It then verifies
 table hashes, SQLite integrity, and foreign keys.
+Trigger bodies can contain `CASE` expressions and SQL comments. Incomplete
+trigger definitions fail the restore before the target file is published.
 
 ## Continuous replication with Litestream
 
