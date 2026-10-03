@@ -1,6 +1,8 @@
 // Gateway maintenance timers.
 // Starts periodic health, dedupe, abort, and media cleanup loops.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
 import { isActiveEmbeddedRunId } from "../agents/embedded-agent-runner/runs.js";
 import { formatWorktreeGcResult } from "../agents/worktrees/gc-result.js";
@@ -354,35 +356,24 @@ export function startGatewayMaintenanceTimers(params: {
     pruneExpiredArtifactDownloads(params.clients, now);
     params.chatRunState.toolEventRecipients.pruneExpired(now);
     const resolveDedupeRunId = (key: string, entry: DedupeEntry) => {
-      if (!key.startsWith("agent:") && !key.startsWith("chat:")) {
-        return undefined;
-      }
       const keyRunId = key.slice(key.indexOf(":") + 1);
-      if (keyRunId) {
-        if (params.chatAbortControllers.has(keyRunId) || params.chatQueuedTurns.has(keyRunId)) {
-          return keyRunId;
-        }
+      if (
+        keyRunId &&
+        (params.chatAbortControllers.has(keyRunId) || params.chatQueuedTurns.has(keyRunId))
+      ) {
+        return keyRunId;
       }
-      const payload = entry.payload;
-      return payload && typeof payload === "object" && !Array.isArray(payload)
-        ? typeof (payload as { runId?: unknown }).runId === "string"
-          ? (payload as { runId: string }).runId.trim() || undefined
-          : undefined
-        : undefined;
+      return normalizeOptionalString(asOptionalRecord(entry.payload)?.runId);
     };
     const isPendingAcceptedRunDedupeKey = (key: string, dedupeEntry: DedupeEntry) => {
       if (!key.startsWith("agent:") && !key.startsWith(PENDING_CHAT_SEND_DEDUPE_PREFIX)) {
         return false;
       }
-      const payload = dedupeEntry.payload;
-      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-        return false;
-      }
-      if ((payload as { status?: unknown }).status !== "accepted") {
-        return false;
-      }
-      const expiresAtMs = (payload as { expiresAtMs?: unknown }).expiresAtMs;
-      return isFutureDateTimestampMs(expiresAtMs, { nowMs: now });
+      const payload = asOptionalRecord(dedupeEntry.payload);
+      return (
+        payload?.status === "accepted" &&
+        isFutureDateTimestampMs(payload.expiresAtMs, { nowMs: now })
+      );
     };
     const isActiveRunDedupeKey = (key: string, dedupeEntry: DedupeEntry) => {
       // Keep idempotency records for active runs so retries cannot create

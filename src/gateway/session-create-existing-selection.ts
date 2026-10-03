@@ -9,7 +9,6 @@ import { resolveSessionPatchModelSelection } from "./server-methods/sessions-pat
 export async function existingSessionSelectionWouldChange(params: {
   agentId: string;
   cfg: OpenClawConfig;
-  catalogModel?: string;
   defaultModel: string;
   defaultProvider: string;
   existingEntry: SessionEntry;
@@ -21,12 +20,6 @@ export async function existingSessionSelectionWouldChange(params: {
   requestedThinkingLevel?: string;
   subagentModelHint?: string;
 }): Promise<boolean> {
-  if (params.catalogModel) {
-    // Public catalog creates cannot include a key, and the service rejects
-    // catalog targets for existing rows. If a trusted caller reaches this,
-    // keep catalog-owned model/runtime adoption fail-closed.
-    return true;
-  }
   if (
     params.requestedAgentRuntime !== undefined &&
     params.requestedAgentRuntime !== params.existingEntry.agentRuntimeOverride

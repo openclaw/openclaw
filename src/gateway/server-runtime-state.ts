@@ -1,7 +1,6 @@
 // Gateway HTTP/WebSocket runtime state factory.
 // Builds one server runtime with lazy plugin route handlers.
 import type { IncomingMessage, Server as HttpServer, ServerResponse } from "node:http";
-import type { WebSocketServer } from "ws";
 import { WebSocketServer as NpmWebSocketServer } from "../../packages/gateway-client/src/websocket.js";
 import { resolveSandboxHostPort } from "../agents/sandbox-host.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
@@ -27,7 +26,7 @@ import {
 } from "./ingress-attribution.js";
 import { createSandboxHostHttpServer } from "./mcp-app-sandbox-http.js";
 import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
-import { createGatewayPortalService, type GatewayPortalService } from "./portals/portal-service.js";
+import { createGatewayPortalService } from "./portals/portal-service.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import type { ControlUiRootState } from "./server-control-ui-root.js";
 import { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";
@@ -45,10 +44,7 @@ import {
 } from "./server/plugins-http/route-auth.js";
 import { findMatchingPluginNodeCapabilityRoute } from "./server/plugins-http/route-capability.js";
 import { findMatchingPluginHttpRoutes } from "./server/plugins-http/route-match.js";
-import {
-  createPreauthConnectionBudget,
-  type PreauthConnectionBudget,
-} from "./server/preauth-connection-budget.js";
+import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { ReadinessChecker, StartupChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import type { ArtifactTransferHttpCallback } from "./worker-environments/artifact-transfer-http.js";
@@ -115,22 +111,7 @@ export async function createGatewayHttpTransport(params: {
   clients: Set<GatewayWsClient>;
   tailscaleMode?: "off" | GatewayTailscaleIngressMode;
   prepareManagedTailscaleIngress?: (endpoint: GatewayTailscaleIngressEndpoint) => Promise<void>;
-}): Promise<{
-  httpServer: HttpServer;
-  httpServers: HttpServer[];
-  httpBindHosts: string[];
-  startListening: () => Promise<void>;
-  wss: WebSocketServer;
-  preauthConnectionBudget: PreauthConnectionBudget;
-  portalService: GatewayPortalService;
-  getTailscaleIngressEndpoint: () => GatewayTailscaleIngressEndpoint | undefined;
-  getMcpAppSandboxPort: () => number | undefined;
-  ensureSandboxHostPort: () => Promise<number>;
-  dispatchHookAgentTurn: (
-    pluginId: string,
-    params: Parameters<PluginRuntimeCore["hooks"]["dispatchHookAgentTurn"]>[0],
-  ) => ReturnType<PluginRuntimeCore["hooks"]["dispatchHookAgentTurn"]>;
-}> {
+}) {
   const spawnBroker = getSpawnBroker();
   const runWithReadOnlyWorkers = captureSqliteReadOnlyWorkerScope();
   if (params.testListener) {
@@ -589,7 +570,9 @@ export async function createGatewayHttpTransport(params: {
     getTailscaleIngressEndpoint: () => tailscaleIngressEndpoint,
     getMcpAppSandboxPort: () => mcpAppSandboxPort,
     ensureSandboxHostPort,
-    dispatchHookAgentTurn: async (pluginId, hookParams) =>
-      await (await getHookDispatcher()).dispatchHookAgentTurn(hookParams, pluginId),
+    dispatchHookAgentTurn: async (
+      pluginId: string,
+      hookParams: Parameters<PluginRuntimeCore["hooks"]["dispatchHookAgentTurn"]>[0],
+    ) => await (await getHookDispatcher()).dispatchHookAgentTurn(hookParams, pluginId),
   };
 }

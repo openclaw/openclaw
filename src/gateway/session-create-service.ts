@@ -9,6 +9,7 @@ import {
   missingScopeErrorShape,
   normalizeSessionColorValue,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
@@ -63,7 +64,10 @@ import {
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
+import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
+import { isUserModelAuthProfileOwner } from "../state/user-model-accounts.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { ModelAccountConnectAuthorityError } from "./model-account-connect.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import {
@@ -84,7 +88,6 @@ import {
 } from "./session-create-inheritance.js";
 import { buildDashboardSessionKey, resolveSessionCreateTargetKey } from "./session-create-key.js";
 import {
-  createSessionCreateCommitGuard,
   prepareSessionCreateDefaultAccount,
   prepareSessionCreateModelSelection,
   resolveSessionCreateModelInputError,
@@ -121,7 +124,7 @@ export async function createGatewaySession(
   params: CreateGatewaySessionParams,
 ): Promise<CreateGatewaySessionResult> {
   const { personalModelSelection, personalAccountDefaults, onPhase } = params;
-  let operatorAuthority: Parameters<typeof createSessionCreateCommitGuard>[0]["operatorAuthority"];
+  let operatorAuthority: AdmittedRunOperatorAuthority | undefined;
   let assertPreparedTargetCurrent: (() => void) | undefined;
   let creationOperation: SessionEntryCreationOperation | undefined;
   let createdTargetCommitted = false;
@@ -134,34 +137,41 @@ export async function createGatewaySession(
   // not just the final row. An inherited parent pin is not a new selection.
   let selectedDefaultProfile: string | undefined;
   let validateRuntimeSelection: (() => ErrorShape | undefined) | undefined;
+  const selections = [
+    params.activeParentFork,
+    params.preparedModelSelection,
+    params.preparedPermissionSelection,
+    personalModelSelection,
+    personalAccountDefaults,
+  ];
   const commitGuard =
-    personalModelSelection ||
     params.operatorAuthority ||
-    personalAccountDefaults ||
-    params.activeParentFork ||
-    params.preparedModelSelection ||
-    params.preparedPermissionSelection ||
+    selections.some(Boolean) ||
     typeof params.model === "string" ||
     params.agentRuntime !== undefined
-      ? createSessionCreateCommitGuard({
-          assertCallerCurrent: () => {
-            params.commitGuard?.();
-            assertPreparedTargetCurrent?.();
-          },
-          get operatorAuthority() {
-            return operatorAuthority;
-          },
-          selections: [
-            params.activeParentFork,
-            params.preparedModelSelection,
-            params.preparedPermissionSelection,
-            personalModelSelection,
-            personalAccountDefaults,
-          ],
-          personalAccountDefaults,
-          readDefaultProfile: () => selectedDefaultProfile,
-          validateSelection: () => validateRuntimeSelection?.(),
-        })
+      ? () => {
+          params.commitGuard?.();
+          assertPreparedTargetCurrent?.();
+          operatorAuthority?.assertCurrent();
+          const error = validateRuntimeSelection?.();
+          if (error) {
+            throw new Error(error.message);
+          }
+          for (const selection of selections) {
+            selection?.assertCurrent();
+          }
+          if (
+            personalAccountDefaults &&
+            selectedDefaultProfile &&
+            isUserModelAuthProfileId(selectedDefaultProfile) &&
+            !isUserModelAuthProfileOwner({
+              profileId: personalAccountDefaults.owner,
+              authProfileId: selectedDefaultProfile,
+            })
+          ) {
+            throw new ModelAccountConnectAuthorityError();
+          }
+        }
       : params.commitGuard;
   commitGuard?.();
   const displayName = truncateUtf16Safe(params.displayName?.trim() ?? "", 500).trimEnd();
@@ -375,17 +385,16 @@ export async function createGatewaySession(
     cfg: params.cfg,
     targets: authorityTargets,
     getCurrentConfig: params.getCurrentConfig,
-    ...(operatorReady && !incognito
-      ? {
-          creation: {
+    creation:
+      operatorReady && !incognito
+        ? {
             ready: operatorReady,
             assertCurrent: () => commitGuard?.(),
             selectTargetInLifecycle: Boolean(
               explicitTargetKey && !initialTargetEntry && !params.initialEntry,
             ),
-          },
-        }
-      : {}),
+          }
+        : undefined,
   });
   let preparedCreation:
     | Awaited<ReturnType<typeof targetCustody.prepareCreationTargets>>
@@ -429,35 +438,30 @@ export async function createGatewaySession(
       const execCwd = normalizeOptionalString(params.execCwd);
       const resetResult = await performGatewaySessionReset({
         key: canonicalParentSessionKey,
-        ...(parentSelectedAgentId ? { agentId: parentSelectedAgentId } : {}),
-        ...(params.requestingOperatorProfileId
-          ? { requestingOperatorProfileId: params.requestingOperatorProfileId }
-          : {}),
-        ...(params.operatorRoleActor ? { operatorRoleActor: params.operatorRoleActor } : {}),
+        agentId: parentSelectedAgentId,
+        requestingOperatorProfileId: params.requestingOperatorProfileId || undefined,
+        operatorRoleActor: params.operatorRoleActor,
         reason: "new",
         commandSource: params.commandSource,
-        ...(params.creation ? { creation: params.creation } : {}),
-        ...(spawnedCwd ? { spawnedCwd } : {}),
-        ...(params.sessionRoot ? { sessionRoot: params.sessionRoot } : {}),
-        ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}),
-        ...(params.fastMode !== undefined
-          ? {
-              fastModeSelection: {
+        creation: params.creation,
+        spawnedCwd,
+        sessionRoot: params.sessionRoot || undefined,
+        permissionMode: params.permissionMode,
+        fastModeSelection:
+          params.fastMode !== undefined
+            ? {
                 value: params.fastMode,
                 allowExistingChange: params.allowExistingModelSelection === true,
-              },
-            }
-          : {}),
-        ...(params.prepareLifecycle ? { prepareLifecycle: params.prepareLifecycle } : {}),
-        ...(params.onLifecycleCleanupError
-          ? { onLifecycleCleanupError: params.onLifecycleCleanupError }
-          : {}),
-        ...(params.execNode ? { execNode: params.execNode } : {}),
-        ...(execCwd ? { execCwd } : {}),
-        ...(params.clearExecBinding ? { clearExecBinding: true } : {}),
-        ...(params.clearSpawnedCwd && !spawnedCwd ? { clearSpawnedCwd: true } : {}),
-        ...(params.armSessionDiffBaselineCapture ? { armSessionDiffBaselineCapture: true } : {}),
-        ...(commitGuard ? { assertAuthorizedInstance: commitGuard } : {}),
+              }
+            : undefined,
+        prepareLifecycle: params.prepareLifecycle,
+        onLifecycleCleanupError: params.onLifecycleCleanupError,
+        execNode: params.execNode || undefined,
+        execCwd,
+        clearExecBinding: params.clearExecBinding,
+        clearSpawnedCwd: params.clearSpawnedCwd && !spawnedCwd,
+        armSessionDiffBaselineCapture: params.armSessionDiffBaselineCapture,
+        assertAuthorizedInstance: commitGuard,
       });
       if (!resetResult.ok) {
         return resetResult;
@@ -756,7 +760,6 @@ export async function createGatewaySession(
           const sessionSelectionWouldChange = await existingSessionSelectionWouldChange({
             agentId: target.agentId,
             cfg: params.cfg,
-            catalogModel,
             defaultModel: gateDefaultModel.model,
             defaultProvider: gateDefaultModel.provider,
             existingEntry,
@@ -932,10 +935,10 @@ export async function createGatewaySession(
           ...(authorizedPluginCreation && params.initialEntry?.cliSessionBindings
             ? { cliSessionBindings: structuredClone(params.initialEntry.cliSessionBindings) }
             : {}),
-          ...(params.initialEntry?.initializationPending === true
+          ...(params.initialEntry?.initializationPending === true ||
+          params.atomicInitialization === true
             ? { initializationPending: true }
             : {}),
-          ...(params.atomicInitialization === true ? { initializationPending: true } : {}),
           ...(params.initialEntry?.modelSelectionLocked === true
             ? { modelSelectionLocked: true }
             : {}),
@@ -1013,14 +1016,13 @@ export async function createGatewaySession(
           catalog: preparedModelCatalog?.entries,
           validateModelSelection:
             validateAccountModel ?? patched.validateModelSelection ?? modelSelection.validate,
-          ...(params.agentRuntime !== undefined || params.model !== undefined
-            ? {
-                placement: {
+          placement:
+            params.agentRuntime !== undefined || params.model !== undefined
+              ? {
                   context: resolveSessionWorkerPlacementContext(),
                   sessionKey: target.canonicalKey,
-                },
-              }
-            : {}),
+                }
+              : undefined,
         });
         if (!runtimeSelection.ok) {
           return runtimeSelection;
@@ -1049,14 +1051,13 @@ export async function createGatewaySession(
           await prepareSessionForkFromParent({
             parentEntry: currentParentSessionEntry,
             agentId: parentSessionTarget.agentId,
-            ...(commitGuard || assertSourceCurrent
-              ? {
-                  commitGuard: () => {
+            commitGuard:
+              commitGuard || assertSourceCurrent
+                ? () => {
                     commitGuard?.();
                     assertSourceCurrent?.();
-                  },
-                }
-              : {}),
+                  }
+                : undefined,
             parentSessionKey: forkParentSessionKey,
             sessionKey: target.canonicalKey,
             storePath: parentSessionTarget.storePath,
@@ -1108,22 +1109,18 @@ export async function createGatewaySession(
               requireWriteSuccess: true,
             }
           : {}),
-        ...(commitGuard ? { commitGuard } : {}),
-        ...(bindPreparedCreation
-          ? {
-              bindCreation: (operation) => {
-                commitGuard?.();
-                bindPreparedCreation?.(operation);
-                creationOperation = operation;
-              },
+        commitGuard,
+        bindCreation: bindPreparedCreation
+          ? (operation) => {
+              commitGuard?.();
+              bindPreparedCreation?.(operation);
+              creationOperation = operation;
             }
-          : {}),
-        ...(preparedLifecycle?.withCommit ? { withCommit: preparedLifecycle.withCommit } : {}),
-        ...(inheritedSpawnOwner
-          ? {
-              resolveOwnerAssignment: () => (createdNewEntry ? inheritedSpawnOwner : undefined),
-            }
-          : {}),
+          : undefined,
+        withCommit: preparedLifecycle?.withCommit,
+        resolveOwnerAssignment: inheritedSpawnOwner
+          ? () => (createdNewEntry ? inheritedSpawnOwner : undefined)
+          : undefined,
         afterCommitted: params.afterSessionCommitted,
         onLifecycleCommitted: (entry) => {
           onPhase?.("publication");
@@ -1139,7 +1136,7 @@ export async function createGatewaySession(
             });
           }
         },
-        ...(runtimeCwd ? { cwd: runtimeCwd } : {}),
+        cwd: runtimeCwd,
       },
     ).catch((error: unknown) => {
       if (error instanceof Error && error.name === "SessionLabelConflictError") {
@@ -1305,7 +1302,7 @@ export async function createGatewaySession(
         {
           preserveActivity: true,
           requireWriteSuccess: true,
-          ...(params.commitGuard ? { assertCommitAllowed: params.commitGuard } : {}),
+          assertCommitAllowed: params.commitGuard,
         },
       );
       if (!finalized) {
