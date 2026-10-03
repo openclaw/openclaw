@@ -78,4 +78,27 @@ describe("splitConfigSchemaByTier", () => {
     expect(split.advanced?.properties).toEqual({ enabled: { type: "boolean" } });
     expect(split.advanced?.additionalProperties).toBe(true);
   });
+  it("keeps typed map entries whole so drafts cannot reject cross-tier fields", () => {
+    const entrySchema = {
+      type: "object",
+      properties: {
+        enabled: { type: "boolean" },
+        clientId: { type: "string" },
+        clientSecret: { type: "string" },
+      },
+      additionalProperties: false,
+    };
+    const split = splitConfigSchemaByTier({
+      path: ["channels", "demo", "accounts"],
+      schema: {
+        type: "object",
+        additionalProperties: entrySchema,
+      },
+      hints: { "channels.demo.accounts.*.enabled": { advanced: false } },
+    });
+    // Entry fields hinted common must not shard the map into partial copies:
+    // the whole entry schema belongs to the map tier, and the other tier has no map.
+    expect(split.common).toBeNull();
+    expect(split.advanced?.additionalProperties).toEqual(entrySchema);
+  });
 });

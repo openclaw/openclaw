@@ -13,7 +13,14 @@ function projectSchemaTier(params: {
   hints: ConfigUiHints;
 }): JsonSchema | null {
   const { schema, path, advanced, hints } = params;
-  if (Array.isArray(schema.items) || schema.additionalProperties === true) {
+  // Maps (open-ended or typed) and tuples stay atomic: collection drafts add or
+  // edit whole entries, so sharding entry fields across tiers would hand each
+  // tier's draft a partial entry schema and reject cross-tier fields.
+  if (
+    Array.isArray(schema.items) ||
+    schema.additionalProperties === true ||
+    (typeof schema.additionalProperties === "object" && schema.additionalProperties !== null)
+  ) {
     return (hintForPath(path, hints)?.advanced ?? true) === advanced ? schema : null;
   }
   const properties: Record<string, JsonSchema> = {};
