@@ -36,7 +36,9 @@ export class ExecApprovalsMigrationRequiredError extends Error {
       operation === "doctor"
         ? formatDoctorStateRepairFailure(
             `${problem} at ${filePath}`,
-            "Stop the Gateway and node hosts, then reconcile this file with a verified copy of the intended exec policy; preserve existing SQLite policy.",
+            problem.startsWith("Conflicting legacy exec approvals")
+              ? "Inspect with `openclaw approvals reconcile` in this same profile. To preserve SQLite policy, stop the Gateway and node hosts, then reconcile this file with `openclaw approvals reconcile --keep-current`; the legacy file is archived."
+              : "Stop the Gateway and node hosts, then reconcile this file with a verified copy of the intended exec policy; preserve existing SQLite policy.",
           )
         : `${problem} at ${filePath}. ${doctorFixInstruction(filePath, env)} before using exec approvals.`,
     );

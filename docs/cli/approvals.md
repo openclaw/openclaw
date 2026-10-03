@@ -100,6 +100,35 @@ The CLI reads the unified approval record to select its kind, checks the request
 
 `--reason` adds a local note to the CLI confirmation. The current Gateway approval record has no free-text resolution-reason field, so this note is not persisted or sent to other approval surfaces.
 
+## Reconcile legacy approvals after an update
+
+When Doctor reports conflicting legacy exec approvals, inspect both policies locally:
+
+```bash
+openclaw approvals reconcile
+openclaw approvals reconcile --json
+```
+
+The preview reports policy defaults, agent and allowlist counts, and whether policy
+and socket settings match. It does not print socket credentials, agent names, or
+command patterns, and it does not modify either policy. Run it with the same
+`--profile` or `OPENCLAW_STATE_DIR` as the affected Gateway.
+
+If the current SQLite policy is the intended policy, stop the Gateway and node
+hosts for that state directory, then explicitly preserve it:
+
+```bash
+openclaw approvals reconcile --keep-current
+openclaw doctor --fix
+```
+
+This action requires a valid current SQLite policy. It saves a verified, private
+archive of the legacy JSON before removing the retired input under exclusive
+maintenance ownership. It leaves the current policy unchanged. Ordinary Doctor
+and update runs still refuse conflicting policies rather than selecting one.
+If you intend to change policy, review it and use `approvals set` after reconciliation.
+Restart the Gateway after completing the repairs.
+
 ## Replace approvals from a file
 
 ```bash

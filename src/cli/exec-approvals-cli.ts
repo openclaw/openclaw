@@ -1,6 +1,4 @@
 // CLI for reading and mutating exec approval allowlists locally, via gateway, or via node.
-import fs from "node:fs/promises";
-import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { expectDefined } from "@openclaw/normalization-core";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -30,7 +28,6 @@ import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
 import { readBestEffortConfig, type OpenClawConfig } from "../config/config.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, type OperatorScope } from "../gateway/method-scopes.js";
-import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   collectExecPolicyScopeSnapshots,
@@ -50,6 +47,8 @@ import {
 import { classifyExecAllowlistScope } from "../infra/exec-command-resolution.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
+import { readStdin, readApprovalsFile } from "./exec-approvals-cli.input.js";
+import { registerExecApprovalsReconcileCli } from "./exec-approvals-cli.reconcile.js";
 import { rethrowExpectedCliError } from "./failure-output.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { formatDocsHelp } from "./help-format.js";
@@ -93,7 +92,6 @@ type EffectivePolicyReport = {
   note?: string;
 };
 const APPROVALS_GET_DEFAULT_TIMEOUT_MS = 60_000;
-const EXEC_APPROVALS_STDIN_MAX_BYTES = 1024 * 1024;
 
 type ExecApprovalsCliOpts = NodesRpcOpts & {
   node?: string;
@@ -120,30 +118,6 @@ const PENDING_APPROVAL_SUMMARY_MAX_LENGTH = 96;
 const APPROVAL_ID_TOKEN_PREFIX = "id64_";
 const APPROVAL_TERMINAL_UNSAFE_CHAR =
   /^[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0]$/u;
-
-async function readStdin(
-  stream: NodeJS.ReadableStream = process.stdin,
-  maxBytes = EXEC_APPROVALS_STDIN_MAX_BYTES,
-): Promise<string> {
-  const bytes = await readByteStreamWithLimit(stream, {
-    maxBytes,
-    onOverflow: ({ maxBytes: limit }) => new Error(`Exec approvals stdin exceeds ${limit} bytes.`),
-  });
-  return bytes.toString("utf8");
-}
-
-async function readApprovalsFile(filePath: string): Promise<string> {
-  // Explicit CLI file inputs have historically followed symlinks and readable
-  // special files. Pin that opened target while bounding the bytes consumed.
-  const handle = await fs.open(filePath, "r");
-  try {
-    return (await readFileDescriptorBounded(handle.fd, EXEC_APPROVALS_STDIN_MAX_BYTES)).toString(
-      "utf8",
-    );
-  } finally {
-    await handle.close();
-  }
-}
 
 async function resolveTargetNodeId(opts: ExecApprovalsCliOpts): Promise<string | null> {
   if (opts.gateway) {
@@ -1268,6 +1242,8 @@ export function registerExecApprovalsCli(program: Command) {
       });
     });
   nodesCallOpts(grantsRevokeCmd);
+
+  registerExecApprovalsReconcileCli(approvals, failApprovalsCommand);
 
   const getCmd = approvals
     .command("get")

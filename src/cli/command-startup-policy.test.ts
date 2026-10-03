@@ -33,6 +33,8 @@ describe("command-startup-policy", () => {
       ["triage"],
       ["agents", "bindings"],
       ["approvals", "pending"],
+      ["approvals", "reconcile"],
+      ["exec-approvals", "reconcile"],
       ["skills"],
       ["skills", "list"],
       ["skills", "check"],
