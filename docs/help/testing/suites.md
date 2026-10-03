@@ -386,6 +386,9 @@ Maintainers can dispatch `openclaw-live-and-e2e-checks-reusable.yml` on `main`
 with `test_runtime=bun`. The manual input offers `node` and `bun`; reusable
 callers accept the same values as a string. Node remains the default, including
 the existing Release Checks and Full Release Validation callers.
+Reusable Bun callers must use the same repository and revision as the called
+workflow so the pin comes from that exact workflow source. Direct dispatches meet
+this requirement automatically.
 
 For the normal stable release repo/live selection:
 
