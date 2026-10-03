@@ -114,7 +114,7 @@ extension ChatSessionSidebar {
             }
             if !self.batch.errors.isEmpty {
                 Text(String(localized: "Some thread operations failed. See the affected rows and try again."))
-                    .foregroundStyle(.red)
+                    .foregroundStyle(OpenClawChatTheme.danger)
             }
             ForEach(self.batch.notices, id: \.self) { Text(verbatim: $0) }
         }
@@ -229,7 +229,7 @@ extension ChatSessionSidebar {
                     sessionID: session.sessionId))
             } else { content }
             if let error = self.batch.errors[self.interactionIdentity(session)] {
-                Text(verbatim: error).font(OpenClawChatTypography.caption).foregroundStyle(.red)
+                Text(verbatim: error).font(OpenClawChatTypography.caption).foregroundStyle(OpenClawChatTheme.danger)
             }
         }
         .modifier(ChatSidebarSectionInteraction(
