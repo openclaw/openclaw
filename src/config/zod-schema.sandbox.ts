@@ -1,7 +1,10 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
-import { isSandboxHostPathAbsolute } from "../agents/sandbox/host-paths.js";
+import {
+  isSandboxHostFilesystemRoot,
+  isSandboxHostPathAbsolute,
+} from "../agents/sandbox/host-paths.js";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 
 function validateSandboxBindEntries(
@@ -30,6 +33,45 @@ function validateSandboxBindEntries(
         message:
           `Sandbox security: bind mount "${bind}" uses a non-absolute source path "${source}". ` +
           "Only absolute POSIX or Windows drive-letter paths are supported for sandbox binds.",
+      });
+    }
+  }
+}
+
+function validateSandboxAllowedBindSources(
+  roots: readonly string[] | undefined,
+  ctx: z.RefinementCtx,
+): void {
+  if (!roots) {
+    return;
+  }
+  for (let i = 0; i < roots.length; i += 1) {
+    const root = roots[i] ?? "";
+    if (!root.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["allowedBindSources", i],
+        message: "Sandbox security: allowed bind source must be a non-empty string.",
+      });
+      continue;
+    }
+    if (!isSandboxHostPathAbsolute(root)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["allowedBindSources", i],
+        message:
+          `Sandbox security: allowed bind source "${root}" is not absolute. ` +
+          "Only absolute POSIX or Windows drive-letter paths can widen the bind allowlist.",
+      });
+      continue;
+    }
+    if (isSandboxHostFilesystemRoot(root)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["allowedBindSources", i],
+        message:
+          `Sandbox security: allowed bind source "${root}" names a filesystem root. ` +
+          "Choose a narrower shared directory.",
       });
     }
   }
@@ -74,12 +116,14 @@ export const SandboxDockerSchema = z
     dns: z.array(z.string()).optional(),
     extraHosts: z.array(z.string()).optional(),
     binds: z.array(z.string()).optional(),
+    allowedBindSources: z.array(z.string()).optional(),
     dangerouslyAllowReservedContainerTargets: z.boolean().optional(),
     dangerouslyAllowExternalBindSources: z.boolean().optional(),
     dangerouslyAllowContainerNamespaceJoin: z.boolean().optional(),
   })
   .superRefine((data, ctx) => {
     validateSandboxBindEntries(data.binds, ctx);
+    validateSandboxAllowedBindSources(data.allowedBindSources, ctx);
     const blockedNetworkReason = getBlockedNetworkModeReason({
       network: data.network,
       allowContainerNamespaceJoin: data.dangerouslyAllowContainerNamespaceJoin === true,

@@ -13,11 +13,13 @@ import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import {
   getSandboxHostPathPolicyKey,
+  isSandboxHostFilesystemRoot,
   isSandboxHostPathAbsolute,
   normalizeSandboxHostPath,
   resolveSandboxHostPathViaExistingAncestor,
 } from "./host-paths.js";
 import { getBlockedNetworkModeReason } from "./network-mode.js";
+import type { SandboxDockerConfig } from "./types.js";
 
 // Targeted denylist: host paths that should never be exposed inside sandbox containers.
 const BLOCKED_HOST_PATHS = [
@@ -87,7 +89,7 @@ function parseBindSourcePath(bind: string): string {
  * String-only blocked-path check (no filesystem I/O).
  * Blocks:
  * - binds that target blocked paths (equal or under)
- * - binds that cover the system root (mounting "/" is never safe)
+ * - binds that cover a filesystem root ("/" or a Windows drive root; mounting one is never safe)
  * - non-absolute source paths (relative / volume names) because they are hard to validate safely
  */
 export function getBlockedBindReason(bind: string): BlockedBindReason | null {
@@ -114,8 +116,8 @@ function getBlockedReasonForSourcePath(
   sourceNormalized: string,
   blockedHostPaths: string[],
 ): BlockedBindReason | null {
-  if (sourceNormalized === "/") {
-    return { kind: "covers", blockedPath: "/" };
+  if (isSandboxHostFilesystemRoot(sourceNormalized)) {
+    return { kind: "covers", blockedPath: sourceNormalized };
   }
   for (const blocked of blockedHostPaths) {
     if (isPathInsidePolicyPath(blocked, sourceNormalized)) {
@@ -268,7 +270,8 @@ function formatBindBlockedError(params: { bind: string; reason: BlockedBindReaso
   if (params.reason.kind === "outside_allowed_roots") {
     return new Error(
       `Sandbox security: bind mount "${params.bind}" source "${params.reason.sourcePath}" is outside allowed roots ` +
-        `(${params.reason.allowedRoots.join(", ")}). Use a dangerous override only when you fully trust this runtime.`,
+        `(${params.reason.allowedRoots.join(", ")}). Add the source's directory to ` +
+        "agents.*.sandbox.docker.allowedBindSources, or use a dangerous override only when you fully trust this runtime.",
     );
   }
   if (params.reason.kind === "reserved_target") {
@@ -387,6 +390,7 @@ function validateApparmorProfile(profile: string | undefined): void {
   }
 }
 
+/** @internal Test entry point; production callers go through validateSandboxCreateSecurity. */
 export function validateSandboxSecurity(
   cfg: {
     binds?: string[];
@@ -402,4 +406,57 @@ export function validateSandboxSecurity(
   });
   validateSeccompProfile(cfg.seccompProfile);
   validateApparmorProfile(cfg.apparmorProfile);
+}
+
+/**
+ * Widens the bind source allowlist with configured shared roots. An absent caller allowlist
+ * means the gate is off, so it must stay off: adding roots there would silently start gating.
+ */
+function resolveAllowedBindSourceRoots(
+  cfg: Pick<SandboxDockerConfig, "allowedBindSources">,
+  bindSourceRoots: string[] | undefined,
+): string[] | undefined {
+  if (!bindSourceRoots) {
+    return undefined;
+  }
+  const configured = cfg.allowedBindSources ?? [];
+  for (const root of configured) {
+    const canonicalRoot = resolveSandboxHostPathViaExistingAncestor(root);
+    const directRoot = isSandboxHostFilesystemRoot(root);
+    if (directRoot || isSandboxHostFilesystemRoot(canonicalRoot)) {
+      const reason = directRoot
+        ? "names a filesystem root"
+        : `resolves to filesystem root "${canonicalRoot}"`;
+      throw new Error(
+        `Sandbox security: allowedBindSources entry "${root}" ${reason}. ` +
+          "Filesystem roots cannot be allowlisted; choose a narrower shared directory.",
+      );
+    }
+  }
+  return configured.length ? [...bindSourceRoots, ...configured] : bindSourceRoots;
+}
+
+export type SandboxCreateSecurityParams = {
+  cfg: SandboxDockerConfig;
+  bindSourceRoots?: string[];
+  allowSourcesOutsideAllowedRoots?: boolean;
+  allowReservedContainerTargets?: boolean;
+  allowContainerNamespaceJoin?: boolean;
+};
+
+// Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
+export function validateSandboxCreateSecurity(params: SandboxCreateSecurityParams) {
+  validateSandboxSecurity({
+    ...params.cfg,
+    allowedSourceRoots: resolveAllowedBindSourceRoots(params.cfg, params.bindSourceRoots),
+    allowSourcesOutsideAllowedRoots:
+      params.allowSourcesOutsideAllowedRoots ??
+      params.cfg.dangerouslyAllowExternalBindSources === true,
+    allowReservedContainerTargets:
+      params.allowReservedContainerTargets ??
+      params.cfg.dangerouslyAllowReservedContainerTargets === true,
+    dangerouslyAllowContainerNamespaceJoin:
+      params.allowContainerNamespaceJoin ??
+      params.cfg.dangerouslyAllowContainerNamespaceJoin === true,
+  });
 }
