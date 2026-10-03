@@ -6,6 +6,7 @@ import { loadQaRuntimeModule as loadQaRunnerRuntimeModule } from "./qa-runner-ru
 import { fetchWithSsrFGuard } from "./ssrf-runtime.js";
 import { normalizeStringEntries } from "./string-coerce-runtime.js";
 
+export { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 export { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
 export {
   createLazyCliRuntimeLoader,
