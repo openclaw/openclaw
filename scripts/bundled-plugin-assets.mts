@@ -4,7 +4,6 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { pathExists } from "@openclaw/fs-safe/advanced";
 // Discovers and runs bundled plugin package asset hooks.
 import { collectSourceCheckoutPluginBuildEntries } from "./lib/bundled-plugin-build-entries.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
@@ -33,6 +32,15 @@ async function readJsonFile(filePath: string) {
     throw new Error(`${filePath} must contain a JSON object`);
   }
   return value;
+}
+
+async function pathExists(filePath: string) {
+  try {
+    await fs.stat(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function packagePluginAliases(packageName: unknown) {
