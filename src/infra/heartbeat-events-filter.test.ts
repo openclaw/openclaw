@@ -174,11 +174,16 @@ describe("heartbeat event classification", () => {
     { value: "Exec Finished (node=abc, code 1)", expected: true },
     { value: "Exec completed (rotate api keys)", expected: false },
     { value: "Exec failed: notify me if this happens", expected: false },
-    { value: "Exec failed (abc12345, signal SIGTERM)\n\nRemind me to retry tomorrow.", expected: false },
+    {
+      value: "Exec failed (abc12345, signal SIGTERM)\n\nRemind me to retry tomorrow.",
+      expected: false,
+    },
     {
       value:
-        appendExecTimeoutRetryGuidance("Exec failed (abc12345, signal SIGTERM)", "overall-timeout") +
-        "\n\nRemind me to retry tomorrow.",
+        appendExecTimeoutRetryGuidance(
+          "Exec failed (abc12345, signal SIGTERM)",
+          "overall-timeout",
+        ) + "\n\nRemind me to retry tomorrow.",
       expected: false,
     },
   ])("classifies exec completion events for %j", ({ value, expected }) => {
