@@ -3728,8 +3728,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(listMatchedTestFiles(worker)).toEqual(
       expect.arrayContaining([
         "src/gateway/github-publication-transcript.test.ts",
+        "src/gateway/server-worker-placement-session-evidence.test.ts",
+        "src/gateway/server-worker-placement-session-evidence.worker.test.ts",
         "src/gateway/session-lifecycle-run-failure.test.ts",
         "src/gateway/session-lifecycle-state.persistence.test.ts",
+        "src/gateway/talk/client-spoken-confirmation.test.ts",
         "src/gateway/worker-workspace-recovery-transcript.test.ts",
         "src/gateway/session-utils.queued-collector-admission.test.ts",
         "src/gateway/session-utils.queued-collector.test.ts",
@@ -3763,6 +3766,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const admitted = new Set(listMatchedTestFiles(infra));
     for (const file of [
       "src/agents/embedded-agent-runner/run/attempt-bootstrap-prepare.test.ts",
+      "src/agents/sandbox.context.github-identity.test.ts",
       "src/auto-reply/reply/session-reset-prompt.test.ts",
       "src/agents/prepared-model-runtime.hot-reload-dispatch.test.ts",
       "src/agents/subagents/registry/subagent-registry.session-failure.test.ts",
