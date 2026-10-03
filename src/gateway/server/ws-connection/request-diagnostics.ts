@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { isMainThread } from "node:worker_threads";
 import { WORKER_PROTOCOL_METHODS } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_INFERENCE_METHODS } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { hasInternalDiagnosticEventInterest } from "../../../infra/diagnostic-event-listener-presence.js";
@@ -19,10 +20,12 @@ type RpcEvent = Extract<DiagnosticEventInput, { type: "gateway.rpc" }>;
 type ResponseOutcome = Extract<RpcEvent, { phase: "response" }>["outcome"];
 type DispatchOutcome = Extract<RpcEvent, { phase: "dispatch" }>["outcome"];
 const workerMethods = new Set<string>([...WORKER_PROTOCOL_METHODS, ...WORKER_INFERENCE_METHODS]);
+let activeHandlers = 0;
+let exclusiveHandler: GatewayRpcDiagnostics | undefined;
 
 export type GatewayRpcQueueTiming = { receivedAt: number; dequeuedAt: number };
 
-class GatewayRpcDiagnostics {
+export class GatewayRpcDiagnostics {
   private trace = getActiveDiagnosticTraceContext();
   private queueStartedAt?: number;
   private queueWaitMs?: number;
@@ -59,9 +62,10 @@ class GatewayRpcDiagnostics {
     }
   }
 
-  response(outcome: ResponseOutcome): void {
+  response(outcome: ResponseOutcome, responseBytes?: number): void {
     const sent = outcome === "ok" || outcome === "error";
-    if (sent ? this.responseState === "sent" : this.deliveryFailureRecorded) {
+    const firstResponse = this.responseState !== "sent";
+    if (sent ? !firstResponse && responseBytes === undefined : this.deliveryFailureRecorded) {
       return;
     }
     if (sent) {
@@ -73,19 +77,33 @@ class GatewayRpcDiagnostics {
       }
     }
     // Acceptance and final frames can share one request and outlive its handler.
-    // Retain only the first successful send and first delivery failure separately.
+    // Keep first-response timing separate from each encoded frame's byte count.
     this.emit({
       type: "gateway.rpc",
       method: this.method,
       phase: "response",
       outcome,
+      firstResponse: sent ? firstResponse : undefined,
+      responseBytes,
       durationMs: performance.now() - this.startedAt,
     });
   }
 
-  async runHandler(invoke: () => Promise<void> | void): Promise<void> {
-    const startedAt = performance.now();
-    this.handlerStarted = true;
+  static async runHandler(
+    invoke: () => Promise<void> | void,
+    diagnostics?: GatewayRpcDiagnostics,
+  ): Promise<void> {
+    // All handler entries participate, including in-process calls without diagnostics.
+    // Another start permanently invalidates the sole candidate until all handlers settle.
+    exclusiveHandler = ++activeHandlers === 1 ? diagnostics : undefined;
+    const heapUsedAtStart =
+      diagnostics && exclusiveHandler === diagnostics && isMainThread
+        ? process.memoryUsage().heapUsed
+        : undefined;
+    const startedAt = diagnostics ? performance.now() : 0;
+    if (diagnostics) {
+      diagnostics.handlerStarted = true;
+    }
     let outcome: "returned" | "threw" = "returned";
     try {
       await invoke();
@@ -93,13 +111,20 @@ class GatewayRpcDiagnostics {
       outcome = "threw";
       throw error;
     } finally {
-      this.emit({
+      const heapDeltaBytes =
+        heapUsedAtStart !== undefined && exclusiveHandler === diagnostics
+          ? process.memoryUsage().heapUsed - heapUsedAtStart
+          : undefined;
+      activeHandlers--;
+      exclusiveHandler = undefined;
+      diagnostics?.emit({
         type: "gateway.rpc",
-        method: this.method,
+        method: diagnostics.method,
         phase: "handler",
         outcome,
         durationMs: performance.now() - startedAt,
-        admissionMs: startedAt - this.startedAt,
+        admissionMs: startedAt - diagnostics.startedAt,
+        heapDeltaBytes,
       });
     }
   }
@@ -120,8 +145,6 @@ class GatewayRpcDiagnostics {
     });
   }
 }
-
-export type { GatewayRpcDiagnostics };
 
 /** Capture receipt before a socket FIFO, without work when diagnostics are unused. */
 export function captureGatewayRpcReceivedAt(): number | undefined {

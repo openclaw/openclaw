@@ -17,7 +17,6 @@ import { NODE_WORKER_BUNDLE_TRANSFER_PATH } from "../../worker/node-bundle-insta
 import { createArtifactTransferHttpCallback } from "./artifact-transfer-http.js";
 import { handleNodeWorkerBundleTransferHttpRequest } from "./node-worker-bundle-transfer-http.js";
 import { createNodeWorkerBundleTransferService } from "./node-worker-bundle-transfer-service.js";
-import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 
 describe("node worker bundle transfer", () => {
   let root: string;
@@ -58,10 +57,8 @@ describe("node worker bundle transfer", () => {
       generateToken: () => "A".repeat(43),
     });
     onTestFinished(() => service.closeAll());
-    const node = createNodeWorkerBundleTestNode();
     const progress: number[] = [];
     const prepared = service.prepare({
-      node,
       gatewayNamespace: "gateway-test",
       artifact: {
         install: "bundle",

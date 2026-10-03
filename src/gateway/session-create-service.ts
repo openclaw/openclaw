@@ -1171,7 +1171,7 @@ export async function createGatewaySession(
     if (createdNewEntry) {
       // The created fact belongs to this row generation; record it before a
       // same-key delete can acquire the lifecycle fence and purge that state.
-      recordSessionCreated(params.cfg, {
+      await recordSessionCreated(params.cfg, {
         sessionKey: createdContext.key,
         agentId: createdContext.agentId,
         entry: createdContext.entry,

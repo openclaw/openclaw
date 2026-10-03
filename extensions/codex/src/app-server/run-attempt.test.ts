@@ -22,6 +22,7 @@ import { registerMemoryCapability } from "openclaw/plugin-sdk/memory-core-host-r
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
@@ -1326,29 +1327,24 @@ describe("runCodexAppServerAttempt", () => {
       const params = createParams(sessionFile, workspaceDir);
       await attachSqliteSessionTarget(params, storePath, "session-early-prompt");
       params.prompt = "external channel prompt";
-      const onUserMessagePersisted = vi.fn();
+      const userMessagePersisted = createDeferred<void>();
+      const onUserMessagePersisted = vi.fn(() => userMessagePersisted.resolve());
       params.onUserMessagePersisted = onUserMessagePersisted;
       const run = runCodexAppServerAttempt(params);
       await harness.waitForMethod("turn/start");
-      await vi.waitFor(async () => {
-        expect(await readTranscriptMessagesByIdentity(params)).toContainEqual(
-          expect.objectContaining({
-            role: "user",
-            content: "external channel prompt",
-            idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
-          }),
-        );
-      });
-      await vi.waitFor(() => {
-        expect(onUserMessagePersisted).toHaveBeenCalledWith(
-          expect.objectContaining({
-            role: "user",
-            content: "external channel prompt",
-            idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
-          }),
-        );
-      });
+      await awaitGateBeforeSettlement(
+        userMessagePersisted.promise,
+        run,
+        "Codex attempt settled before persisting its user prompt",
+      );
       const messagesBeforeCompletion = await readTranscriptMessagesByIdentity(params);
+      const expectedUserMessage = expect.objectContaining({
+        role: "user",
+        content: "external channel prompt",
+        idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
+      });
+      expect(messagesBeforeCompletion).toContainEqual(expectedUserMessage);
+      expect(onUserMessagePersisted).toHaveBeenCalledWith(expectedUserMessage);
       expect(messagesBeforeCompletion.some((message) => message.role === "assistant")).toBe(false);
       const commentary = {
         type: "agentMessage",

@@ -72,7 +72,7 @@ describe("createOpenClawTools context wiring", () => {
 
   it("passes the session agent and active account configuration into TTS", async () => {
     const config = {
-      agents: { list: [{ id: "reader" }, { id: "main" }] },
+      agents: { entries: { reader: {}, main: {} } },
       channels: { feishu: { accounts: { "feishu-main": { tts: { provider: "microsoft" } } } } },
     } satisfies OpenClawConfig;
     const tool = createTools({

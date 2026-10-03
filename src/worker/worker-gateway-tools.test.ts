@@ -6,11 +6,13 @@ import type {
 import { createDeferred } from "../../test/helpers/promise.js";
 import { toToolDefinitions } from "../agents/agent-tool-definition-adapter.js";
 import { prepareCoreToolPolicy } from "../agents/prepared-tool-surface.js";
+import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import { createWorkerGatewayToolProxies } from "./worker-gateway-tools.js";
 
 function fixture() {
   const surface: WorkerToolSurface = {
     generation: "generation-1",
+    presentation: createToolSurfacePresentationForTest(),
     policy: prepareCoreToolPolicy({}),
     tools: [
       {

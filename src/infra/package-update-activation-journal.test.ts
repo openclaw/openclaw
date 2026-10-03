@@ -4,11 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { assertReliabilityForcedExit } from "../../scripts/lib/sqlite-reliability-process.js";
 import {
   installPrivateUpdateHandoffStore,
   writePrivateUpdateHandoffChildGuard,
 } from "../../test/helpers/private-update-handoff-store.js";
+import { createHotSqliteRollbackJournal } from "../../test/helpers/sqlite-hot-journal.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   captureUpdateCommandExecutorAuthority,
@@ -304,53 +304,11 @@ function replaceField(
 }
 
 function createHotJournal(journalPath: string) {
-  const setup = new DatabaseSync(journalPath);
-  try {
-    setup.exec(`
-      PRAGMA journal_mode = DELETE;
-      PRAGMA synchronous = FULL;
-      CREATE TABLE hot_journal_pressure (
-        id INTEGER PRIMARY KEY,
-        value TEXT NOT NULL,
-        payload BLOB NOT NULL
-      ) STRICT;
-      WITH RECURSIVE rows(id) AS (
-        SELECT 1 UNION ALL SELECT id + 1 FROM rows WHERE id < 256
-      )
-      INSERT INTO hot_journal_pressure
-      SELECT id, 'committed', zeroblob(8192) FROM rows;
-    `);
-  } finally {
-    setup.close();
-  }
-  // Match the existing sqlite-snapshot crash fixture: spill a real uncommitted
-  // write, then join the exact child that leaves the native rollback journal.
-  const crashed = spawnSync(
-    process.execPath,
-    [
-      "--no-warnings",
-      "--input-type=module",
-      "-e",
-      `
-        import { DatabaseSync } from "node:sqlite";
-        const database = new DatabaseSync(process.argv[1]);
-        database.exec(
-          "PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; " +
-          "PRAGMA cache_size = 2; PRAGMA cache_spill = ON; BEGIN IMMEDIATE; " +
-          "UPDATE package_activation SET phase = 'publication-complete'; " +
-          "UPDATE hot_journal_pressure SET value = 'uncommitted';"
-        );
-        process.kill(process.pid, "SIGKILL");
-      `,
-      journalPath,
-    ],
-    { env: childGuardEnv({}), encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL" },
-  );
-  expect(crashed.error, crashed.stderr).toBeUndefined();
-  assertReliabilityForcedExit(
-    { code: crashed.status, signal: crashed.signal },
-    "activation hot-journal fixture",
-  );
+  createHotSqliteRollbackJournal({
+    path: journalPath,
+    mutationSql: "UPDATE package_activation SET phase = 'publication-complete'",
+    env: childGuardEnv({}),
+  });
 }
 
 describe.skipIf(process.platform === "win32")("package activation journal", () => {

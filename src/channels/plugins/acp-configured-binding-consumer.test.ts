@@ -33,7 +33,7 @@ function materializeThinking(cfg: OpenClawConfig): string | undefined {
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
   agents: {
-    list: [{ id: "codex", model: "ollama-cloud/glm-5.2:cloud" }],
+    entries: { codex: { model: "ollama-cloud/glm-5.2:cloud" } },
     defaults: {
       thinkingDefault: "adaptive",
       models: {
@@ -53,7 +53,7 @@ describe("acpConfiguredBindingConsumer thinking precedence", () => {
       ...baseCfg,
       agents: {
         ...baseCfg.agents,
-        list: [{ id: "codex", model: "ollama-cloud/glm-5.2:cloud", thinkingDefault: "high" }],
+        entries: { codex: { model: "ollama-cloud/glm-5.2:cloud", thinkingDefault: "high" } },
       },
     } satisfies OpenClawConfig;
 
@@ -87,14 +87,14 @@ describe("acpConfiguredBindingConsumer thinking precedence", () => {
   it.each([undefined, "anthropic/claude-sonnet-4-6"])(
     "leaves unconfigured thinking to the harness with model %s",
     (model) => {
-      expect(materializeThinking({ agents: { list: [{ id: "codex", model }] } })).toBeUndefined();
+      expect(materializeThinking({ agents: { entries: { codex: { model } } } })).toBeUndefined();
     },
   );
 
   it("forwards global thinking without requiring a configured model", () => {
     expect(
       materializeThinking({
-        agents: { list: [{ id: "codex" }], defaults: { thinkingDefault: "off" } },
+        agents: { entries: { codex: {} }, defaults: { thinkingDefault: "off" } },
       }),
     ).toBe("off");
   });

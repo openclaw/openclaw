@@ -688,7 +688,7 @@ describe("sessions.patchMany orchestration", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = {
         session: { mainKey: "work" },
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
       } satisfies OpenClawConfig;
       const canonicalKey = "agent:main:work";
       const conflictingAlias = "agent:main:main";
@@ -792,7 +792,7 @@ describe("sessions.patchMany orchestration", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = {
         session: { mainKey: "work" },
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
       } satisfies OpenClawConfig;
       const canonicalKey = "agent:main:work";
       const conflictingAlias = "agent:main:main";

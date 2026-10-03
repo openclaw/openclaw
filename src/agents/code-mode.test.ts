@@ -14,11 +14,7 @@ import { createFixtureSkillEntry } from "../skills/test-support/test-helpers.js"
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { createOpenClawReadTool } from "./agent-tools.read.js";
 import { resolveCodeModeSkills } from "./code-mode-skills.js";
-import {
-  addClientToolsToCodeModeCatalog,
-  applyCodeModeCatalog,
-  runCodeModeScriptHeadless,
-} from "./code-mode.js";
+import { applyCodeModeCatalog, runCodeModeScriptHeadless } from "./code-mode.js";
 import {
   createCodeModeHarness,
   fakeTool,
@@ -35,11 +31,13 @@ import { prepareInstalledSkillCatalog } from "./installed-skill-runtime.js";
 import { createReadTool, type ToolDefinition } from "./sessions/index.js";
 import { readToolInputSchema } from "./sessions/tools/tool-schemas.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
+import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "./tool-search.js";
+import { createToolSurfacePresentationForTest } from "./tool-surface-plan.test-support.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { createInstalledSkillTools } from "./tools/installed-skill-tools.js";
 
@@ -68,7 +66,8 @@ describe("Code Mode catalog and model-visible surface", () => {
   it("removes shell-computation guidance when a client shadows the shell tool", () => {
     const { ctx, exec } = catalog([fakeTool("exec", "Run shell command")]);
     expect(exec.description).toContain("Use the shell tool `exec` for heavier computation");
-    addClientToolsToCodeModeCatalog({
+    addClientToolsToToolCatalog({
+      enabled: true,
       ...ctx,
       tools: [
         {
@@ -207,7 +206,7 @@ describe("Code Mode search", () => {
       execute: clientExecute,
     };
     applyCodeModeCatalog({ tools: [...tools, plugin], config, catalogRef });
-    addClientToolsToCodeModeCatalog({ tools: [client], config, catalogRef });
+    addClientToolsToToolCatalog({ tools: [client], enabled: true, catalogRef });
     const code = `
       const found = [];
       for (const tool of catalog.all()) {
@@ -343,10 +342,11 @@ it("searches and reads eligible skills through the worker bridge and normal tool
   });
 });
 
-it.for([undefined, "skills_read", "skills_search", "shadowed", "revoked"] as const)(
+it.for([undefined, "transported", "skills_read", "skills_search", "shadowed", "revoked"] as const)(
   "keeps disk-backed skill discovery within the harness read authority: %s",
-  async (denied, { signal: testSignal }) =>
+  async (scenario, { signal: testSignal }) =>
     withTempDir("code-mode-skill-authority-", async (dir) => {
+      const denied = scenario === "transported" ? undefined : scenario;
       const filePath = path.join(dir, "SKILL.md");
       await writeFile(filePath, "Private instructions");
       const readStarted = createDeferred();
@@ -390,6 +390,19 @@ it.for([undefined, "skills_read", "skills_search", "shadowed", "revoked"] as con
           agents: { defaults: { experimental: { localModelLean: false } } },
           tools: { codeMode: true, toolSearch: false },
         },
+        presentation:
+          scenario === "transported"
+            ? {
+                ...createToolSurfacePresentationForTest({
+                  tools: { codeMode: true, toolSearch: false },
+                }),
+                skills: skills.map(({ name, description, location }) => ({
+                  name,
+                  description,
+                  location,
+                })),
+              }
+            : undefined,
         modelToolsEnabled: true,
         executeTool: async ({ toolName, toolCallId, input, signal, onUpdate }) => {
           const tool = effectiveTools.find((candidate) => candidate.name === toolName);
@@ -401,7 +414,10 @@ it.for([undefined, "skills_read", "skills_search", "shadowed", "revoked"] as con
       });
       try {
         const surface = runtime.compactTools(effectiveTools, {
-          prepared: { codeModeSkills: skills, preserveToolNames: [] },
+          prepared: {
+            codeModeSkills: scenario === "transported" ? undefined : skills,
+            preserveToolNames: [],
+          },
         });
         const exec = surface.tools.find((tool) => tool.name === "exec")!;
         const wait = surface.tools.find((tool) => tool.name === "wait")!;

@@ -1332,7 +1332,7 @@ describe("gateway startup config secret preflight", () => {
     vi.resetModules();
     const agentDir = autoCleanupTempDirs.make("openclaw-startup-fast-path-");
     const isolatedEnv = installIsolatedStartupFastPathEnv();
-    const startupConfig: OpenClawConfig = { agents: { list: [{ id: "default", agentDir }] } };
+    const startupConfig: OpenClawConfig = { agents: { entries: { default: { agentDir } } } };
     const runtimeImport = vi.fn();
     const prepareRuntimeSecretsSnapshot = vi.fn<PrepareRuntimeSecretsSnapshotForTest>(
       async ({ config }) => preparedSnapshot(config),
@@ -1388,7 +1388,7 @@ describe("gateway startup config secret preflight", () => {
     const config = (port: number) =>
       gatewayTokenConfig(
         asConfig({
-          agents: { list: [{ id: "default", agentDir }] },
+          agents: { entries: { default: { agentDir } } },
           gateway: { port },
         }),
       );
@@ -1528,7 +1528,7 @@ describe("gateway startup config secret preflight", () => {
       activateRuntimeSecretsSnapshot,
     });
     try {
-      await activateImportedStartupConfig({ agents: { list: [{ id: "default", agentDir }] } });
+      await activateImportedStartupConfig({ agents: { entries: { default: { agentDir } } } });
       expect(runtimeImport).toHaveBeenCalledTimes(1);
       expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
       expect(activateRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
@@ -1574,7 +1574,7 @@ describe("gateway startup config secret preflight", () => {
           await activateImportedStartupConfig(
             {
               agents: {
-                list: [{ id: "main", agentDir: "~/configured-agent" }],
+                entries: { main: { agentDir: "~/configured-agent" } },
               },
             },
             activationEnv,

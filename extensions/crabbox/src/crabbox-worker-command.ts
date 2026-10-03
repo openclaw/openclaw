@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { redactSensitiveText, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { escapeRegExp, sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -101,14 +102,23 @@ function crabboxCommandDetail(result: SpawnResult): string {
     : `: ${tailMarker}${sliceUtf16Safe(compressed, tailMarker.length - MAX_COMMAND_DETAIL_CHARS)}`;
 }
 
-export function crabboxCommandError(action: string, result: SpawnResult): Error {
+type CrabboxCommandResult = SpawnResult & {
+  coordinatorAttempts?: number;
+  coordinatorDetail?: string;
+};
+
+export function crabboxCommandError(action: string, result: CrabboxCommandResult): Error {
+  const attempts = result.coordinatorAttempts
+    ? ` (after ${result.coordinatorAttempts} attempts)`
+    : "";
+  const detail = crabboxCommandDetail(result) || result.coordinatorDetail || "";
   if (result.termination !== "exit") {
     return new Error(
-      `Crabbox ${action} did not exit normally (${result.termination})${crabboxCommandDetail(result)}`,
+      `Crabbox ${action} did not exit normally (${result.termination})${detail}${attempts}`,
     );
   }
   return new Error(
-    `Crabbox ${action} failed with exit code ${result.code ?? "unknown"}${crabboxCommandDetail(result)}`,
+    `Crabbox ${action} failed with exit code ${result.code ?? "unknown"}${detail}${attempts}`,
   );
 }
 
@@ -124,6 +134,74 @@ export function parseCrabboxJson(stdout: string, action: string): unknown {
     return JSON.parse(stdout);
   } catch {
     throw new Error(`Crabbox ${action} returned invalid JSON`);
+  }
+}
+
+function isCoordinatorTransportFailure(result: SpawnResult): boolean {
+  if (result.termination !== "exit" || result.code === null || result.code === 0) {
+    return false;
+  }
+  let hasLeaseTimeout = false;
+  const lines = `${result.stderr}\n${result.stdout}`.trim().split(/[\r\n]+/u);
+  return (
+    lines.every((line) => {
+      const diagnostic = line.replace(/^warning: could not inspect lease before release: /u, "");
+      if (
+        /^(?:context deadline exceeded\s+)?(?:Get|Post) "https:\/\/[^/\s"]+\/v1\/leases\/[^/\s"?]+(?:\/(?:release|heartbeat))?(?:\?[^\s"]*)?": context deadline exceeded$/u.test(
+          diagnostic,
+        )
+      ) {
+        hasLeaseTimeout = true;
+        return true;
+      }
+      // Any other output may be from a remote script that already started.
+      return (
+        diagnostic === "context deadline exceeded" ||
+        /^coordinator read retry \d+\/\d+ reason=timeout$/u.test(diagnostic)
+      );
+    }) && hasLeaseTimeout
+  );
+}
+
+export function isFixedLeaseIdUnsupported(result: SpawnResult, provider: string): boolean {
+  return (
+    result.termination === "exit" &&
+    result.code === 2 &&
+    result.stdout.trim() === "" &&
+    result.stderr.trim() === `provider=${provider} does not support fixed idempotent lease IDs`
+  );
+}
+
+/** Only fixed-lease callers opt in; allocation keeps Gateway replay ownership. */
+export async function runCrabboxCommandWithCoordinatorRetry(
+  params: Parameters<typeof runCrabboxCommand>[0] & {
+    sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
+  },
+): Promise<CrabboxCommandResult> {
+  const deadline = Date.now() + params.timeoutMs;
+  const sleep = params.sleep ?? ((ms, signal) => delay(ms, undefined, { signal }));
+  let timeoutMs = params.timeoutMs;
+  let coordinatorDetail: string | undefined;
+  for (let attempt = 1; ; attempt += 1) {
+    const result = await runCrabboxCommand({ ...params, timeoutMs });
+    const transient = isCoordinatorTransportFailure(result);
+    if (transient) {
+      coordinatorDetail = crabboxCommandDetail(result);
+    }
+    const observed =
+      transient || attempt > 1
+        ? { ...result, coordinatorAttempts: attempt, coordinatorDetail }
+        : result;
+    const backoffMs = 1_000 * 2 ** (attempt - 1);
+    if (!transient || attempt === 3 || deadline - Date.now() <= backoffMs) {
+      return observed;
+    }
+    await sleep(backoffMs, params.signal);
+    params.signal?.throwIfAborted();
+    timeoutMs = deadline - Date.now();
+    if (timeoutMs <= 0) {
+      return observed;
+    }
   }
 }
 
@@ -184,8 +262,11 @@ export function isUnrecognizedLease(
         /\b(?:points to|is bound to) (?:a )?missing (?:instance|sandbox)\b/iu.test(output) ||
         /\bdisappeared before release\b/iu.test(output) ||
         /\bunknown blacksmith testbox(?:\s|:)/iu.test(output) ||
-        /\bis not claimed by Crabbox\b/iu.test(output) ||
-        /\bwandb sandbox "[^"\r\n]+" has no matching local ownership claim\b/iu.test(output) ||
+        (action === "inspect" &&
+          (/\bis not claimed by Crabbox\b/iu.test(output) ||
+            /\bwandb sandbox "[^"\r\n]+" has no matching local ownership claim\b/iu.test(
+              output,
+            ))) ||
         /\bunknown lease(?:\s|:)/iu.test(output))) ||
     (action === "inspect" &&
       result.code === 5 &&
@@ -199,12 +280,15 @@ export async function stopCrabboxLease(params: {
   provider: string;
   runCommand: CrabboxCommandRunner;
   warn: (message: string) => void;
+  sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 }): Promise<void> {
-  const result = await runCrabboxCommand({
+  const deadline = Date.now() + CRABBOX_STOP_TIMEOUT_MS;
+  let result = await runCrabboxCommandWithCoordinatorRetry({
     action: "stop",
     args: ["stop", "--provider", params.provider, "--id", params.id],
     binary: params.binary,
     runCommand: params.runCommand,
+    sleep: params.sleep,
     timeoutMs: CRABBOX_STOP_TIMEOUT_MS,
   });
   if (isUnrecognizedLease(result, params.id, "stop")) {
@@ -212,6 +296,29 @@ export async function stopCrabboxLease(params: {
       `Crabbox lease ${params.id} (provider ${params.provider}) is absent; treating stop as already released`,
     );
     return;
+  }
+  const output = `${result.stderr}\n${result.stdout}`;
+  if (
+    params.provider === "azure" &&
+    result.termination === "exit" &&
+    result.code === 4 &&
+    output.includes("Azure fixed lease cannot be adopted without its create intent")
+  ) {
+    // Recovery shares the cleanup allowance reserved by the provider lifecycle.
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      throw new Error("Crabbox stop timed out before Azure fixed-lease recovery", {
+        cause: crabboxCommandError("stop", result),
+      });
+    }
+    result = await runCrabboxCommandWithCoordinatorRetry({
+      action: "stop recovery",
+      args: ["stop", "--provider", params.provider, "--id", params.id, "--force"],
+      binary: params.binary,
+      runCommand: params.runCommand,
+      sleep: params.sleep,
+      timeoutMs: remainingMs,
+    });
   }
   crabboxCommandOutput("stop", result);
 }

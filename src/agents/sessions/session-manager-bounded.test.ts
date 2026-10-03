@@ -407,6 +407,68 @@ it("excludes interleaved display payloads without inventing events or losing fen
   expect(SessionManager.open(scope, dir).getBranch().at(-1)?.id).toBe(appended.entryId);
 });
 
+it.each(["sync", "async"])(
+  "keeps appended display payloads out of a bounded view (%s)",
+  async (mode) => {
+    const { dir, scope } = await createSessionScope(`display-append-${mode}`);
+    const manager = await SessionManager.openBoundedAsync(scope, {
+      cwd: dir,
+      maxBytes: 4096,
+      maxEvents: 10,
+    });
+    const user = await manager.appendMessageWithTranscriptAnchorAsync(makeUserMessage("keep", 1));
+    const side = await manager.appendMessageWithTranscriptAnchorAsync(makeUserMessage("side", 2));
+    await manager.appendLeafControlAsync({
+      targetId: user.entryId,
+      appendParentId: side.entryId,
+      appendMode: "side",
+    });
+    const displayIds: string[] = [];
+    for (let index = 0; index < 3; index++) {
+      const message = {
+        role: "custom" as const,
+        customType: "display-test",
+        content: `display-${index}:` + "x".repeat(20_000),
+        display: true,
+        excludeFromContext: true as const,
+        timestamp: index + 2,
+      };
+      const appended =
+        mode === "async"
+          ? await manager.appendMessageWithTranscriptAnchorAsync(message)
+          : manager.appendMessageWithTranscriptAnchor(message);
+      displayIds.push(appended.entryId);
+      expect(manager.getEntry(appended.entryId)).toBeUndefined();
+      expect(manager.getAppendParentId()).toBe(appended.entryId);
+      expect(manager.getBranch().map((entry) => entry.id)).toEqual([user.entryId]);
+    }
+    const answer = await manager.appendMessageWithTranscriptAnchorAsync(
+      buildAssistantMessage("reply"),
+    );
+    expect(manager.getBranch().map((entry) => entry.id)).toEqual([user.entryId, answer.entryId]);
+    await waitForSessionTranscriptIndexReconcile({
+      agentId: scope.agentId,
+      path: resolveSessionTranscriptDatabasePath(scope),
+    });
+    const reopened = await SessionManager.openBoundedAsync(scope, {
+      maxBytes: 4096,
+      maxEvents: 10,
+    });
+    expect(manager.getBranch()).toEqual(reopened.getBranch());
+    const events = await loadTranscriptEvents(scope);
+    expect(
+      events.filter((entry) => displayIds.includes((entry as { id: string }).id)),
+    ).toHaveLength(3);
+    expect(
+      [...displayIds, answer.entryId].map((id) =>
+        events.find((entry) => (entry as { id: string }).id === id),
+      ),
+    ).toEqual(
+      [side.entryId, ...displayIds].map((parentId) => expect.objectContaining({ parentId })),
+    );
+  },
+);
+
 it("rejects a fenced assistant when a later hidden user has advanced the turn", async () => {
   const { dir, scope } = await createSessionScope("fenced-assistant");
   const manager = SessionManager.open(scope, dir);

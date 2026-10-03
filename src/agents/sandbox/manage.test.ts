@@ -123,7 +123,7 @@ describe("listSandboxBrowsers", () => {
             },
           },
         },
-        list: [],
+        entries: {},
       },
     });
     registryMocks.readBrowserRegistry.mockResolvedValue({

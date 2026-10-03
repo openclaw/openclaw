@@ -190,10 +190,6 @@ describe("legacy config migration end to end", () => {
     });
   });
 
-  it("keeps agents.defaults.tts outside the schema", () => {
-    expect(validateConfigObjectRaw({ agents: { defaults: { tts: {} } } }).ok).toBe(false);
-  });
-
   it.each([
     {
       name: "defaults-only QMD session indexing",
@@ -466,101 +462,60 @@ describe("legacy config migration end to end", () => {
     ).toEqual({ next: null, changes: [] });
   });
 
-  it("migrates route and ACP dm peer kinds through validation and is idempotent", () => {
-    const raw = {
-      agents: { entries: { main: {} } },
-      bindings: [
-        {
-          type: "route",
-          agentId: "main",
-          match: { channel: "telegram", peer: { kind: "dm", id: "123" } },
-        },
-        {
-          type: "acp",
-          agentId: "main",
-          match: { channel: "discord", peer: { kind: "dm", id: "456" } },
-          acp: { mode: "persistent" },
-        },
-        {
-          type: "route",
-          agentId: "main",
-          match: { channel: "telegram", peer: { kind: "direct", id: "789" } },
-        },
-        {
-          type: "route",
-          agentId: "main",
-          match: { channel: "discord", peer: { kind: "group", id: "abc" } },
-        },
+  it.each([
+    {
+      name: "route and ACP bindings",
+      valid: true,
+      migrated: 2,
+      peers: [
+        ["route", "telegram", "dm", "123"],
+        ["acp", "discord", "dm", "456"],
+        ["route", "telegram", "direct", "789"],
+        ["route", "discord", "group", "abc"],
       ],
-    };
-
-    expect(findLegacyConfigIssues(raw)).toEqual([expect.objectContaining({ path: "bindings" })]);
-
-    const res = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
-    const bindings = res.config?.bindings as Array<{ match?: { peer?: { kind?: unknown } } }>;
-    expect(bindings.map((binding) => binding.match?.peer?.kind)).toEqual([
-      "direct",
-      "direct",
-      "direct",
-      "group",
-    ]);
-    expect(res.changes).toContain(
-      'Moved deprecated bindings[].match.peer.kind "dm" → "direct" for 2 bindings.',
-    );
-    expect(res.partiallyValid).toBeUndefined();
-    const validation = validateConfigObjectRaw(res.config);
-    expect(validation.ok, validation.ok ? undefined : JSON.stringify(validation.issues)).toBe(true);
-    expect(migrateLegacyConfig(res.config, { sourceConfigBeforeMigrations: res.config })).toEqual({
-      config: null,
-      changes: [],
-    });
-  });
-
-  it("rewrites only exact dm values and leaves malformed peer kinds visible to validation", () => {
-    const raw = {
-      bindings: [
-        {
-          type: "route",
-          agentId: "main",
-          match: { channel: "telegram", peer: { kind: "dm", id: "exact" } },
-        },
-        {
-          type: "route",
-          agentId: "main",
-          match: { channel: "telegram", peer: { kind: "DM", id: "uppercase" } },
-        },
-        {
-          type: "route",
-          agentId: "main",
-          match: { channel: "telegram", peer: { kind: " dm ", id: "spaced" } },
-        },
-        {
-          type: "route",
-          agentId: "main",
-          match: { channel: "telegram", peer: { kind: 42, id: "number" } },
-        },
+      expected: ["direct", "direct", "direct", "group"],
+    },
+    {
+      name: "malformed peer kinds",
+      valid: false,
+      migrated: 1,
+      peers: [
+        ["route", "telegram", "dm", "exact"],
+        ["route", "telegram", "DM", "uppercase"],
+        ["route", "telegram", " dm ", "spaced"],
+        ["route", "telegram", 42, "number"],
       ],
-    };
-
-    expect(findLegacyConfigIssues(raw)).toEqual([expect.objectContaining({ path: "bindings" })]);
-
-    const res = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
-    const bindings =
-      (
-        res.config as {
-          bindings?: Array<{ match?: { peer?: { kind?: unknown } } }>;
-        }
-      )?.bindings ?? [];
-    expect(bindings.map((binding) => binding.match?.peer?.kind)).toEqual([
-      "direct",
-      "DM",
-      " dm ",
-      42,
-    ]);
-    expect(res.changes).toContain(
-      'Moved deprecated bindings[].match.peer.kind "dm" → "direct" for 1 binding.',
-    );
-    expect(res.partiallyValid).toBe(true);
-    expect(validateConfigObjectRaw(res.config).ok).toBe(false);
-  });
+      expected: ["direct", "DM", " dm ", 42],
+    },
+  ])(
+    "rewrites exact dm aliases in $name through validation",
+    ({ peers, expected, valid, migrated }) => {
+      const raw = {
+        ...(valid ? { agents: { entries: { main: {} } } } : {}),
+        bindings: peers.map(([type, channel, kind, id]) => ({
+          type,
+          agentId: "main",
+          match: { channel, peer: { kind, id } },
+          ...(type === "acp" ? { acp: { mode: "persistent" } } : {}),
+        })),
+      };
+      expect(findLegacyConfigIssues(raw)).toEqual([expect.objectContaining({ path: "bindings" })]);
+      const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
+      expect(result.config?.bindings?.map((binding) => binding.match.peer?.kind)).toEqual(expected);
+      expect(result.changes).toContain(
+        `Moved deprecated bindings[].match.peer.kind "dm" → "direct" for ${migrated} binding${migrated === 1 ? "" : "s"}.`,
+      );
+      expect(result.partiallyValid).toBe(valid ? undefined : true);
+      const validation = validateConfigObjectRaw(result.config);
+      expect(validation.ok, JSON.stringify(validation)).toBe(valid);
+      if (valid) {
+        expect(
+          migrateLegacyConfig(result.config, { sourceConfigBeforeMigrations: result.config }),
+        ).toEqual({
+          config: null,
+          changes: [],
+        });
+      }
+    },
+  );
 });

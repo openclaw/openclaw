@@ -44,6 +44,20 @@ It describes the preferred selection for the observed configured channel, not ca
 An explicit update invocation can select a different target or install method.
 Older installed status commands cannot acquire this observation from candidate code.
 
+For adopted immutable installations, the installation projection includes
+`activationEnabled` only when explicitly enabled. `activation` reports a
+retained operation's `operationId`, `phase`, `previousSha`, and `candidateSha`;
+`lastActivation` records the verified result and selected generation after
+retirement. Read these under `update.immutable` in CLI JSON or
+`schedule.install.immutable` in Gateway `update.status`. A prepared generation
+or `starting` phase is not activation success. Use
+[`openclaw update recover --root <installation-root>`](/cli/update#immutable-release-installations)
+to reconcile a retained operation.
+Once the Gateway recognizes an adopted immutable installation, ordinary
+`update.status` requests refresh its native activation facts; callers do not need
+`refreshCheckout: true` to observe phase changes. That installation's native
+record takes precedence over an external update manager.
+
 For Git installs, `update status --json` can include `update.git.artifacts`.
 `ready: true` includes the installed artifact `version` and immutable `buildId` after the native verifier checks the observed source commit, build stamps, runtime entry, and Control UI assets.
 `ready: false` means that verification failed; an absent field means artifact readiness is unknown.
@@ -213,6 +227,13 @@ user text, and show config key families instead of operator-defined names. Only
 catalog-confirmed public check and plugin IDs are included; unknown IDs and codes
 remain complete locally and are redacted publicly. Older runs cannot recover facts that their updater did not record. Existing history
 and report size limits still apply.
+
+Failed updates always retain a reason code and a failure fact, including failures
+before the first command runs. Git failures use codes such as `fetch-failed`,
+`git-root-unresolved`, `unsupported_git_channel`, and
+`snapshot-capacity-insufficient`. A refusal while recovery still owns the run uses
+`update-recovery-pending`; an otherwise unclassified failure uses `update-failed`.
+The check and code remain visible when private diagnostic text must be redacted.
 
 npm failure records keep the first five sanitized error lines in order. Lines over
 200 UTF-8 bytes retain a prefix followed by a space and an explicit `…[truncated]`

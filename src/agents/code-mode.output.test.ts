@@ -1,10 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  addClientToolsToCodeModeCatalog,
-  applyCodeModeCatalog,
-  runCodeModeScriptHeadless,
-} from "./code-mode.js";
+import { applyCodeModeCatalog, runCodeModeScriptHeadless } from "./code-mode.js";
 import {
   createCodeModeHarness,
   createHeadlessCodeModeHarness,
@@ -18,6 +14,7 @@ import {
   testing,
   waitUntilCompleted,
 } from "./code-mode.test-support.js";
+import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
 const fakeTool = pluginToolWithExecute;
@@ -305,7 +302,7 @@ describe("Code Mode direct metadata provenance", () => {
     const client = pluginTool("client_metadata", hostile);
     client.parameters = remote.parameters;
     applyCodeModeCatalog({ tools: [...tools, remote], config, catalogRef });
-    addClientToolsToCodeModeCatalog({ tools: [client], config, catalogRef });
+    addClientToolsToToolCatalog({ tools: [client], enabled: true, catalogRef });
     const exec = expectDefined(tools[0], "exec");
     const wait = expectDefined(tools[1], "wait");
     let result = await exec.execute("direct-metadata", { code });
@@ -341,7 +338,7 @@ describe("Code Mode direct metadata provenance", () => {
       const { catalogRef, config, tools } = createCodeModeHarness({ codeMode: { timeoutMs } });
       const client = pluginTool("client_metadata", hostile);
       applyCodeModeCatalog({ tools, config, catalogRef });
-      addClientToolsToCodeModeCatalog({ tools: [client], config, catalogRef });
+      addClientToolsToToolCatalog({ tools: [client], enabled: true, catalogRef });
       const result = await expectDefined(tools[0], "exec").execute("metadata-error", {
         code,
       });

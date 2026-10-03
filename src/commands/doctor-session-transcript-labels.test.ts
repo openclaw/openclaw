@@ -37,7 +37,7 @@ import { noteSessionTranscriptLabelHealth } from "./doctor-session-transcript-la
 const AGENT_ID = "main";
 const SESSION_ID = "legacy-label-session";
 const SESSION_KEY = "agent:main:legacy-label-session";
-const CFG: OpenClawConfig = { agents: { list: [{ id: AGENT_ID }] } };
+const CFG: OpenClawConfig = { agents: { entries: { [AGENT_ID]: {} } } };
 const SESSION_TIMESTAMP = "2026-04-25T00:00:00Z";
 
 type MessageFixture = {

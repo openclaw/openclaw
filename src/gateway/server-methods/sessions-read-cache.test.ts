@@ -34,7 +34,7 @@ import {
   unregisterOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db-registry.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
@@ -285,7 +285,7 @@ describe("resident sessions.list", () => {
           visibility: "shared",
         },
       );
-      closeOpenClawAgentDatabaseByPath(extraDatabasePath);
+      await closeOpenClawAgentDatabaseByPathAsync(extraDatabasePath);
       unregisterOpenClawAgentDatabase({ agentId: "main", env: state.env, path: extraDatabasePath });
 
       const context = requestContext(config);
@@ -353,7 +353,7 @@ describe("resident sessions.list", () => {
       const opened = await listSessions({ client, context, request });
       expect(opened.sessions.map((session) => session.key)).not.toContain(childKey);
 
-      expect(closeOpenClawAgentDatabaseByPath(incognitoPath)).toBe(true);
+      expect(await closeOpenClawAgentDatabaseByPathAsync(incognitoPath)).toBe(true);
       const closed = await listSessions({ client, context, request });
       expect(closed.sessions.map((session) => session.key)).not.toContain(childKey);
     });
@@ -781,7 +781,7 @@ describe("resident sessions.list", () => {
     "keeps administrator %s projections scoped to their authenticated profiles",
     async (projection) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const config: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+        const config: OpenClawConfig = { agents: { entries: { main: {} } } };
         const context = requestContext(config);
         const clients = ["ada@example.com", "bob@example.com"].map((email) => {
           const client = identifiedClient(ensureProfileForEmail(email).id);

@@ -81,61 +81,46 @@ describe("updating an adopted agent", () => {
     ).resolves.toMatchObject({ records: [{ agentState: "present" }] });
   });
 
-  it("restores the original authored entry when a later update step fails", async () => {
-    const current = await fixture();
-    let config = current.config;
-    let reachedCron = false;
-
-    await expect(
-      applyClawUpdatePlan(current.plan, current.target, {
-        config,
-        env: current.env,
-        sourceMcpServers: {},
-        consentPlanIntegrity: current.plan.planIntegrity,
-        commitConfig: async (transform) => {
-          config = transform(config);
-        },
-        applyCron: async () => {
-          reachedCron = true;
-          expect(config.agents?.entries?.worker?.name).toBe("Worker v2");
-          throw new Error("cron unavailable");
-        },
-      }),
-    ).rejects.toMatchObject({ code: "cron_update_failed" });
-
-    expect(reachedCron).toBe(true);
-    expect(config).toEqual(current.config);
-    expect(readClawInstallRecord("worker", { env: current.env })).toEqual(current.installed);
-    await expect(
-      readClawStatus("worker", { config, env: current.env, sourceMcpServers: {} }),
-    ).resolves.toMatchObject({ records: [{ agentState: "present" }] });
-  });
-
-  it("preserves a change to inherited settings made before rollback", async () => {
-    const current = await fixture();
-    let config = current.config;
-
-    await expect(
-      applyClawUpdatePlan(current.plan, current.target, {
-        config,
-        env: current.env,
-        sourceMcpServers: {},
-        consentPlanIntegrity: current.plan.planIntegrity,
-        commitConfig: async (transform) => {
-          config = transform(config);
-        },
-        applyCron: async () => {
-          config = {
-            ...config,
-            agents: { ...config.agents, defaults: { model: "provider/operator-change" } },
-          };
-          throw new Error("cron unavailable");
-        },
-      }),
-    ).rejects.toMatchObject({ code: "update_partial" });
-
-    expect(config.agents?.defaults?.model).toBe("provider/operator-change");
-    expect(config.agents?.entries?.worker?.name).toBe("Worker v2");
-    expect(readClawInstallRecord("worker", { env: current.env })?.status).toBe("partial");
-  });
+  it.each([false, true])(
+    "rolls back only an unchanged adopted agent (operator change=%s)",
+    async (changed) => {
+      const current = await fixture();
+      let config = current.config;
+      let reachedCron = false;
+      await expect(
+        applyClawUpdatePlan(current.plan, current.target, {
+          config,
+          env: current.env,
+          sourceMcpServers: {},
+          consentPlanIntegrity: current.plan.planIntegrity,
+          commitConfig: async (transform) => {
+            config = transform(config);
+          },
+          applyCron: async () => {
+            reachedCron = true;
+            expect(config.agents?.entries?.worker?.name).toBe("Worker v2");
+            if (changed) {
+              config = {
+                ...config,
+                agents: { ...config.agents, defaults: { model: "provider/operator-change" } },
+              };
+            }
+            throw new Error("cron unavailable");
+          },
+        }),
+      ).rejects.toMatchObject({ code: changed ? "update_partial" : "cron_update_failed" });
+      expect(reachedCron).toBe(true);
+      if (changed) {
+        expect(config.agents?.defaults?.model).toBe("provider/operator-change");
+        expect(config.agents?.entries?.worker?.name).toBe("Worker v2");
+        expect(readClawInstallRecord("worker", { env: current.env })?.status).toBe("partial");
+      } else {
+        expect(config).toEqual(current.config);
+        expect(readClawInstallRecord("worker", { env: current.env })).toEqual(current.installed);
+        await expect(
+          readClawStatus("worker", { config, env: current.env, sourceMcpServers: {} }),
+        ).resolves.toMatchObject({ records: [{ agentState: "present" }] });
+      }
+    },
+  );
 });

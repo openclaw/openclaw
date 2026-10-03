@@ -1837,7 +1837,7 @@ describe("session.message websocket events", () => {
     const storePath = await createSessionStoreFile();
     testState.agentsConfig = {
       ownership: "explicit",
-      list: [{ id: "main" }, { id: "work" }],
+      entries: { main: {}, work: {} },
     };
     testState.agentConfig = { sessionStore: { agentId: "work" } };
     const transcriptPath = path.join(path.dirname(storePath), "global-work.jsonl");
@@ -1953,7 +1953,7 @@ describe("session.message websocket events", () => {
     const storePath = await createSessionStoreFile();
     testState.agentsConfig = {
       ownership: "explicit",
-      list: [{ id: "main" }, { id: "work" }],
+      entries: { main: {}, work: {} },
     };
     testState.agentConfig = { sessionStore: { agentId: "work" } };
     await writeSessionStore({

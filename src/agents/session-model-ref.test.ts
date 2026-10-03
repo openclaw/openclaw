@@ -6,7 +6,7 @@ function modelConfig(primary: string, models?: Record<string, object>): OpenClaw
   return {
     agents: {
       defaults: { model: { primary }, ...(models ? { models } : {}) },
-      list: [{ id: "main", default: true }],
+      entries: { main: {} },
     },
   } as OpenClawConfig;
 }

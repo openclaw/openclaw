@@ -516,12 +516,12 @@ export async function runRuntimeToolFixture(
     : `agent:qa:runtime-tool:${toolName}`;
   const happySessionKey = await deps.createSession(
     env,
-    `Runtime tool fixture: ${toolName} happy`,
+    `Runtime tool fixture: ${nativeWorkspaceBehaviorId ?? toolName} happy`,
     stableSessionKeyPrefix ? `${stableSessionKeyPrefix}:happy` : undefined,
   );
   const failureSessionKey = await deps.createSession(
     env,
-    `Runtime tool fixture: ${toolName} failure`,
+    `Runtime tool fixture: ${nativeWorkspaceBehaviorId ?? toolName} failure`,
     stableSessionKeyPrefix ? `${stableSessionKeyPrefix}:failure` : undefined,
   );
   const sessionKeys = [happySessionKey, failureSessionKey] as const;

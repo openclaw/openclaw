@@ -67,6 +67,11 @@ signal, streaming updates where available, and trajectory/audit events.
 Completed nested calls persist as bounded, redacted display-only activity, retaining
 their original parent and invocation ids across history reloads. Provider replay
 contains only the actual model calls; child activity adds no synthetic model turns.
+Runtime transcript views omit these persisted payloads. Finalization and agent-end
+hooks read the accepted activity for their attempt from the transcript when needed.
+If a `before_message_write` hook suppresses a nested activity row, finalization and
+agent-end hooks omit that activity too. The successful tool still counts as completed
+for turn settlement; suppressing its display history does not undo its execution.
 Starts and partial updates remain transient. Older missing child history cannot be
 reconstructed from source code or outer results.
 

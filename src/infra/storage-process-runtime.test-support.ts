@@ -25,6 +25,11 @@ export const storageProcessTestEntrypoints = {
     sourceWorkerName: "sqlite-readonly-location",
     distWorkerPath: "infra/sqlite-readonly-location.js",
   },
+  sqliteReadRetention: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "sqlite-readonly-worker.retention.test-support",
+    distWorkerPath: "infra/sqlite-readonly-worker.retention.test-support.js",
+  },
   sharedStateIdleFixture: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "sqlite-worker-shared-state-idle-fixture.test-support",

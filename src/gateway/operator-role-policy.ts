@@ -16,10 +16,6 @@ import { readResidentUserProfileRevision } from "../state/user-profile-list.js";
 import { getUserProfileRole } from "../state/user-profiles.js";
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import type { GatewayClient, GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
-import {
-  resolveOperatorSessionCreation,
-  type TrustedSessionCreation,
-} from "./session-creation-provenance.js";
 
 const operatorRoleLog = createSubsystemLogger("gateway/operator-roles");
 const MAX_OPERATOR_ROLE_ASSIGNMENTS = 1_024;
@@ -318,15 +314,4 @@ export function authorizeGatewaySessionCreation(
     ErrorCodes.FORBIDDEN,
     `Your operator role cannot create sessions for agent "${params.agentId}"; choose an allowed agent or ask a gateway administrator to update your role.`,
   );
-}
-
-/** Leave ordinary creation attribution unchanged unless the authenticated person requires isolation. */
-export function resolveSandboxedSessionCreation(
-  client: Parameters<typeof resolveOperatorSessionCreation>[0],
-  cfg: OpenClawConfig,
-): TrustedSessionCreation | undefined {
-  const creation = resolveOperatorSessionCreation(client);
-  return resolveCreatorSandbox(cfg, creation) === "required"
-    ? { ...creation, sandbox: "required" }
-    : undefined;
 }

@@ -42,10 +42,9 @@ describe("agents_list tool", () => {
           agentRuntime: { id: "openclaw" },
           subagents: { allowAgents: ["codex"] },
         },
-        list: [
-          { id: "main", default: true },
-          {
-            id: "codex",
+        entries: {
+          main: {},
+          codex: {
             name: "Codex",
             model: "openai/gpt-5.5",
             agentRuntime: { id: "openclaw" },
@@ -53,7 +52,7 @@ describe("agents_list tool", () => {
               "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
             },
           },
-        ],
+        },
       },
     } as unknown as OpenClawConfig);
 
@@ -117,7 +116,7 @@ describe("agents_list tool", () => {
             },
             subagents: { allowAgents: ["main"] },
           },
-          list: [{ id: "main", default: true }],
+          entries: { main: {} },
         },
       } as unknown as OpenClawConfig);
 
@@ -148,13 +147,7 @@ describe("agents_list tool", () => {
     // not be presented as runnable subagents.
     loadConfigMock.mockReturnValue({
       agents: {
-        list: [
-          {
-            id: "main",
-            default: true,
-            subagents: { allowAgents: ["stale"] },
-          },
-        ],
+        entries: { main: { subagents: { allowAgents: ["stale"] } } },
       },
     } satisfies OpenClawConfig);
 
@@ -174,7 +167,7 @@ describe("agents_list tool", () => {
   it("returns requester as the only target when no subagent allowlist is configured", async () => {
     loadConfigMock.mockReturnValue({
       agents: {
-        list: [{ id: "main", default: true }, { id: "codex" }],
+        entries: { main: {}, codex: {} },
       },
     } satisfies OpenClawConfig);
 
@@ -208,7 +201,7 @@ describe("agents_list tool", () => {
         defaults: {
           model: "openai/gpt-5.5",
         },
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
       },
     } satisfies OpenClawConfig);
 
@@ -240,10 +233,7 @@ describe("agents_list tool", () => {
           agentRuntime: { id: "auto" },
           subagents: { allowAgents: ["strict"] },
         },
-        list: [
-          { id: "main", default: true },
-          { id: "strict", agentRuntime: { id: "codex" } },
-        ],
+        entries: { main: {}, strict: { agentRuntime: { id: "codex" } } },
       },
     } satisfies OpenClawConfig);
 

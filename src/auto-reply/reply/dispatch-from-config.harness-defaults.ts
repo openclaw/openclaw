@@ -137,14 +137,17 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
     return undefined;
   }
   try {
+    const allowPluginNormalization = params.cfg.plugins?.enabled !== false;
     const defaultModelRef = resolveDefaultModelForAgent({
       cfg: params.cfg,
       agentId: params.sessionAgentId,
+      allowPluginNormalization,
     });
     const aliasIndex = buildModelAliasIndex({
       cfg: params.cfg,
       agentId: params.sessionAgentId,
       defaultProvider: defaultModelRef.provider,
+      allowPluginNormalization,
     });
     const parentSessionKey =
       params.entry?.parentSessionKey ??
@@ -176,7 +179,10 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
     const channelModelCandidate = channelModelOverride
       ? resolveModelRefFromString({
           raw: channelModelOverride.model,
+          cfg: params.cfg,
+          agentId: params.sessionAgentId,
           defaultProvider: defaultModelRef.provider,
+          allowPluginNormalization,
           aliasIndex,
         })?.ref
       : undefined;
@@ -211,7 +217,10 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
     const turnModelCandidate = params.turnModelOverride
       ? resolveModelRefFromString({
           raw: params.turnModelOverride,
+          cfg: params.cfg,
+          agentId: params.sessionAgentId,
           defaultProvider: defaultModelRef.provider,
+          allowPluginNormalization,
           aliasIndex,
         })?.ref
       : undefined;

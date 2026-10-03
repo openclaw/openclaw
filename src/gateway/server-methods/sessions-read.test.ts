@@ -291,7 +291,7 @@ async function configureFixedSessionStore(label = "default"): Promise<string> {
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
   fs.writeFileSync(storePath, "{}\n", "utf8");
   testState.sessionStorePath = storePath;
-  await setAgentsConfig({ list: [{ id: "main", default: true }] });
+  await setAgentsConfig({ entries: { main: {} } });
   const { getRuntimeConfig } = await getGatewayConfigModule();
   expect(getRuntimeConfig().session?.store).toBe(storePath);
   return storePath;
@@ -580,7 +580,7 @@ test("sessions.describe reads a pre-existing store after its agent is removed fr
     },
     { sessionId: "session-ghost", updatedAt: 42 },
   );
-  await setAgentsConfig({ list: [{ id: "main", default: true }] });
+  await setAgentsConfig({ entries: { main: {} } });
   const registeredBefore = listOpenClawRegisteredAgentDatabases({
     env: { OPENCLAW_STATE_DIR: requireStateDir() },
   });
@@ -711,7 +711,7 @@ test("sessions.search searches a retired per-agent store without explicit sessio
     sessionKey,
     storePath,
   });
-  await setAgentsConfig({ list: [{ id: "main", default: true }] });
+  await setAgentsConfig({ entries: { main: {} } });
 
   const searched = await directSessionReq<{ results: Array<{ sessionKey: string }> }>(
     "sessions.search",
@@ -732,7 +732,7 @@ test("session reads find a retired store only reachable through its deterministi
   );
   const storePath = storeTemplate.replace("{agentId}", agentId);
   testState.sessionStorePath = storeTemplate;
-  await setAgentsConfig({ list: [{ id: "main", default: true }] });
+  await setAgentsConfig({ entries: { main: {} } });
   const { getRuntimeConfig } = await getGatewayConfigModule();
   expect(getRuntimeConfig().session?.store).toBe(storeTemplate);
   await replaceSessionEntry({ agentId, sessionKey, storePath }, { sessionId, updatedAt: 42 });
@@ -762,7 +762,7 @@ test("session reads find a retired store only reachable through its deterministi
 });
 
 test("session reads do not provision missing stores for default or configured agents", async () => {
-  await setAgentsConfig({ list: [{ id: "main", default: true }, { id: "work" }] });
+  await setAgentsConfig({ entries: { main: {}, work: {} } });
   for (const agentId of ["main", "work"]) {
     const result = await directSessionReq<{ session: unknown }>("sessions.describe", {
       key: `agent:${agentId}:missing`,
@@ -791,10 +791,10 @@ test("searches rich displayed fields before selecting a page across visible agen
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const config: OpenClawConfig = {
       agents: {
-        list: [
-          { id: "main", default: true },
-          { id: "work", identity: { name: "Orchid Navigator" } },
-        ],
+        entries: {
+          main: {},
+          work: { identity: { name: "Orchid Navigator" } },
+        },
       },
     };
     const client = identifiedClient("owner@example.com");

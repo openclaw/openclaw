@@ -38,6 +38,42 @@ afterEach(() => {
 });
 
 describe("legacy media persistence doctor migration", () => {
+  it("reports skipped embedding cache rows as recoverable Doctor warnings after a schema-21 upgrade", async () => {
+    const stateDir = makeTempDir(tempDirs, "memory-cache-migration-warning-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const pathname = createLegacyDatabaseFixture({ env, eventsBySession: {}, schemaVersion: 21 });
+    const database = new (requireNodeSqlite().DatabaseSync)(pathname);
+    try {
+      database.exec(`INSERT INTO memory_embedding_cache
+        (rowid, provider, model, provider_key, hash, embedding, dims, updated_at) VALUES
+        (7, 'p', 'm', 'k', 'oversized', '[1]' || replace(hex(zeroblob(524288)), '0', ' '), 1, 1),
+        (8, 'p', 'm', 'k', 'malformed', 'invalid', 1, 1),
+        (9, 'p', 'm', 'k', 'valid', '[1]', 1, 1)`);
+    } finally {
+      database.close();
+    }
+    const result = await migrateLegacyMediaPersistence({ env });
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(result.warnings).toEqual([
+      expect.stringContaining("Skipped 2 memory_embedding_cache rows"),
+    ]);
+    expect(result.warnings[0]).toContain("7, 8");
+    const migrated = new (requireNodeSqlite().DatabaseSync)(pathname, { readOnly: true });
+    try {
+      expect(migrated.prepare("PRAGMA user_version").get()?.user_version).toBe(
+        OPENCLAW_AGENT_SCHEMA_VERSION,
+      );
+      expect(
+        migrated
+          .prepare("SELECT rowid, typeof(embedding) AS storage FROM memory_embedding_cache")
+          .all(),
+      ).toEqual([{ rowid: 9, storage: "blob" }]);
+    } finally {
+      migrated.close();
+    }
+    expect(await migrateLegacyMediaPersistence({ env })).toEqual({ changes: [], warnings: [] });
+  });
+
   it("cancels pending integrity before migrating the agent schema", async () => {
     const stateDir = makeTempDir(tempDirs, "media-persistence-interruption-");
     const env = { OPENCLAW_STATE_DIR: stateDir };

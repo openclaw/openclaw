@@ -20,12 +20,10 @@ const mocks = vi.hoisted(() => ({
     sessionId: "facetime-consult-session",
   })),
   resolveAgentContext: vi.fn(),
-  resolveDefaultAgentId: vi.fn(
-    (config: { agents?: { list?: Array<{ id: string; default?: boolean }> } }) => {
-      const agents = config.agents?.list ?? [];
-      return agents.find((agent) => agent.default)?.id ?? agents[0]?.id ?? "main";
-    },
-  ),
+  resolveDefaultAgentId: vi.fn((config: { agents?: { entries?: Record<string, unknown> } }) => {
+    const agentIds = Object.keys(config.agents?.entries ?? {});
+    return agentIds[0] ?? "main";
+  }),
   resolveProvider: vi.fn(() => ({ provider: { id: "openai" }, providerConfig: {} })),
   hangupRequested: vi.fn(async () => {}),
   senderAuthVersion: 1 as number | undefined,

@@ -1,6 +1,10 @@
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { Selectable } from "kysely";
-import { executeSqliteQuerySync, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
+import {
+  createSqliteQueryCache,
+  executeSqliteQuerySync,
+  prepareSqliteQuerySync,
+} from "../../infra/kysely-sync.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -121,21 +125,13 @@ function createOperationQuery(database: OpenClawAgentReadOnlyDatabase["db"]) {
   );
 }
 
-const operationQueryByDatabase = new WeakMap<
-  OpenClawAgentReadOnlyDatabase["db"],
-  ReturnType<typeof createOperationQuery>
->();
+const operationQuery = createSqliteQueryCache(createOperationQuery);
 
 function selectOperation(
   database: OpenClawAgentReadOnlyDatabase,
   operationId: string,
 ): ConversationDeliveryRecord | undefined {
-  let query = operationQueryByDatabase.get(database.db);
-  if (!query) {
-    query = createOperationQuery(database.db);
-    operationQueryByDatabase.set(database.db, query);
-  }
-  const row = query(operationId).rows[0];
+  const row = operationQuery(database.db)(operationId).rows[0];
   return row ? mapRow(row) : undefined;
 }
 

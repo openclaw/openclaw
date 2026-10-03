@@ -38,7 +38,7 @@ import {
   type RuntimeConfigSnapshotRefreshHandler,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef, isSecretRef, type SecretRef } from "../config/types.secrets.js";
+import { parseSecretRef, isSecretRef, type SecretRef } from "../config/types.secrets.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { isRecord } from "../utils.js";
@@ -74,7 +74,7 @@ type LocatedSecretRef = {
   ref: SecretRef;
 };
 
-type SecretDefaults = Parameters<typeof coerceSecretRef>[1];
+type SecretDefaults = Parameters<typeof parseSecretRef>[1];
 
 function listLocatedSecretRefs(
   value: unknown,
@@ -82,7 +82,7 @@ function listLocatedSecretRefs(
   path: Array<string | number> = [],
   refs: LocatedSecretRef[] = [],
 ): LocatedSecretRef[] {
-  const ref = coerceSecretRef(value, defaults);
+  const ref = parseSecretRef(value, defaults);
   if (ref) {
     refs.push({ path, ref });
     return refs;
@@ -475,9 +475,9 @@ function preserveResolvedSecretRefValues(
   sourceConfig: OpenClawConfig,
   currentSourceConfig: OpenClawConfig,
 ): unknown {
-  const sourceRef = coerceSecretRef(source, sourceConfig.secrets?.defaults);
+  const sourceRef = parseSecretRef(source, sourceConfig.secrets?.defaults);
   if (sourceRef) {
-    const currentRef = coerceSecretRef(currentSource, currentSourceConfig.secrets?.defaults);
+    const currentRef = parseSecretRef(currentSource, currentSourceConfig.secrets?.defaults);
     return currentRef &&
       isDeepStrictEqual(sourceRef, currentRef) &&
       hasSameSecretProviderDefinition(sourceRef, [sourceConfig, currentSourceConfig])

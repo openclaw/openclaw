@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
+import type { AgentEntryConfig } from "../config/types.agents.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveUserPath } from "./home-dir.js";
 import { tryListenOnPort } from "./ports-probe.js";
@@ -43,13 +44,14 @@ export type UpdateCandidateRehearsal = {
 };
 
 function isolatedConfig(
-  config: OpenClawConfig,
+  config: OpenClawConfigWithLegacyRoster,
   sourceRoot: string,
   stateDir: string,
   port: number,
   sourceEnv: NodeJS.ProcessEnv,
   pluginPaths: Record<string, string>,
-): OpenClawConfig {
+  migrationPolicy?: "rehearse" | "startup-only",
+): OpenClawConfigWithLegacyRoster {
   const copied = structuredClone(config);
   const projectPluginPath = (value: string) => {
     const projected = pluginPaths[resolveUserPath(value, sourceEnv)];
@@ -72,30 +74,39 @@ function isolatedConfig(
   const workspace = path.join(stateDir, "workspace");
   const entries =
     copied.agents?.entries ??
-    Object.fromEntries((copied.agents?.list ?? []).map(({ id, ...agent }) => [id, agent]));
+    (migrationPolicy === "startup-only"
+      ? undefined
+      : Object.fromEntries((copied.agents?.list ?? []).map(({ id, ...agent }) => [id, agent])));
+  const isolateAgent = (id: string, agent: AgentEntryConfig): AgentEntryConfig => ({
+    ...agent,
+    workspace: path.join(workspace, id),
+    cwd: path.join(workspace, id),
+    agentDir: agent.agentDir
+      ? resolveUpdateCandidateStatePath(
+          sourceRoot,
+          stateDir,
+          resolveUserPath(agent.agentDir, sourceEnv),
+        )
+      : path.join(stateDir, "agents", id, "agent"),
+    heartbeat: { every: "0m" },
+  });
   copied.agents = {
     ...copied.agents,
     defaults: { ...copied.agents?.defaults, workspace, cwd: workspace, heartbeat: { every: "0m" } },
-    entries: Object.fromEntries(
-      Object.entries(entries).map(([id, agent]) => [
-        id,
-        {
-          ...agent,
-          workspace: path.join(workspace, id),
-          cwd: path.join(workspace, id),
-          agentDir: agent.agentDir
-            ? resolveUpdateCandidateStatePath(
-                sourceRoot,
-                stateDir,
-                resolveUserPath(agent.agentDir, sourceEnv),
-              )
-            : path.join(stateDir, "agents", id, "agent"),
-          heartbeat: { every: "0m" },
-        },
-      ]),
-    ),
+    ...(entries
+      ? {
+          entries: Object.fromEntries(
+            Object.entries(entries).map(([id, agent]) => [id, isolateAgent(id, agent)]),
+          ),
+        }
+      : {}),
+    ...(migrationPolicy === "startup-only" && copied.agents?.list
+      ? { list: copied.agents.list.map(({ id, ...agent }) => ({ id, ...isolateAgent(id, agent) })) }
+      : {}),
   };
-  delete copied.agents.list;
+  if (migrationPolicy !== "startup-only") {
+    delete copied.agents.list;
+  }
   // Copy effective config, never its include graph or ambient shell overrides.
   delete copied.env;
   delete copied.diagnostics;
@@ -129,7 +140,7 @@ function isolatedConfig(
 
 /** Prepare one disposable generation for candidate diagnostics. */
 export async function prepareUpdateCandidateRehearsal(params: {
-  config: OpenClawConfig;
+  config: OpenClawConfigWithLegacyRoster;
   candidateRoot: string;
   stateDir: string;
   env?: NodeJS.ProcessEnv;
@@ -138,6 +149,7 @@ export async function prepareUpdateCandidateRehearsal(params: {
   signal?: AbortSignal;
   assertCurrent?: () => void;
   onProgress?: (step: UpdateRunStep) => void | Promise<void>;
+  migrationPolicy?: "rehearse" | "startup-only";
 }): Promise<UpdateCandidateRehearsal> {
   const sourceEnv = params.env ?? process.env;
   const workerEnv = (tempDir: string): NodeJS.ProcessEnv => {
@@ -238,6 +250,7 @@ export async function prepareUpdateCandidateRehearsal(params: {
         port,
         sourceEnv,
         pluginPaths,
+        params.migrationPolicy,
       ),
     );
     params.signal?.throwIfAborted();

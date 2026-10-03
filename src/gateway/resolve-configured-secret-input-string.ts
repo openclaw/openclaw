@@ -123,7 +123,7 @@ async function resolveConfiguredSecretInput(params: ConfiguredSecretInputParams)
   }
 }
 
-export async function resolveConfiguredSecretInputString(
+export async function resolveCanonicalConfiguredSecretInputString(
   params: ConfiguredSecretInputParams,
 ): Promise<{
   value?: string;
@@ -134,7 +134,7 @@ export async function resolveConfiguredSecretInputString(
   return resolved;
 }
 
-export async function resolveConfiguredSecretInputWithFallback(
+export async function resolveCanonicalConfiguredSecretInputWithFallback(
   params: ConfiguredSecretInputParams & {
     readFallback?: () => string | undefined;
   },
@@ -183,7 +183,7 @@ export async function resolveConfiguredSecretInputWithFallback(
   };
 }
 
-export async function resolveRequiredConfiguredSecretRefInputString(
+export async function resolveCanonicalRequiredConfiguredSecretRefInputString(
   params: ConfiguredSecretInputParams,
 ): Promise<string | undefined> {
   const resolved = await resolveConfiguredSecretInput(params);

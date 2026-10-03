@@ -3,149 +3,102 @@ import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { makeClient } from "./server-broadcast.test-helpers.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 
-describe("read-capable operator event scope guards", () => {
-  it.each(["skills.changed", "users.prefs.changed", "plugins.changed"] as const)(
-    "delivers %s only to read-capable operators",
-    (event) => {
-      const pairing = makeClient("pairing", "operator", ["operator.pairing"]);
-      const node = makeClient("node", "node", ["operator.read"]);
-      const read = makeClient("read", "operator", ["operator.read"]);
-      const write = makeClient("write", "operator", ["operator.write"]);
-      const admin = makeClient("admin", "operator", ["operator.admin"]);
-      const clients = new GatewayClientRegistry(
-        [pairing, node, read, write, admin].map((entry) => entry.client),
-      );
-      const { broadcast } = createGatewayBroadcaster({ clients });
+const readScopes = ["read", "write", "admin"];
 
-      broadcast(
-        event,
-        event === "users.prefs.changed"
-          ? { profileId: "profile-1", keys: ["ui.accent"] }
-          : event === "plugins.changed"
-            ? { generation: 1 }
-            : { reason: "remote-node" },
-      );
-
-      expect(pairing.socket.events).toEqual([]);
-      expect(node.socket.events).toEqual([]);
-      expect(read.socket.events).toEqual([event]);
-      expect(write.socket.events).toEqual([event]);
-      expect(admin.socket.events).toEqual([event]);
+describe("operator event scope guards", () => {
+  it.each([
+    { event: "skills.changed", payload: { reason: "remote-node" }, allowed: readScopes },
+    {
+      event: "users.prefs.changed",
+      payload: { profileId: "profile-1", keys: ["ui.accent"] },
+      allowed: readScopes,
     },
-  );
-});
-
-describe("Talk voice event scope guards", () => {
-  it("delivers a voice change only to targeted Talk-capable operators", () => {
-    const owner = makeClient("owner", "operator", ["operator.talk"]);
-    const writer = makeClient("writer", "operator", ["operator.write"]);
-    const admin = makeClient("admin", "operator", ["operator.admin"]);
-    const observer = makeClient("observer", "operator", ["operator.talk"]);
-    const reader = makeClient("reader", "operator", ["operator.read"]);
-    const node = makeClient("node", "node", ["operator.talk"]);
-    const targets = [owner, writer, admin, reader, node];
-    const { broadcastToConnIds } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([...targets, observer].map((entry) => entry.client)),
-    });
-
-    broadcastToConnIds(
-      "talk.voice.change",
-      {
+    { event: "plugins.changed", payload: { generation: 1 }, allowed: readScopes },
+    { event: "mcp.app.resourceUpdated", payload: { reason: "remote-node" }, allowed: readScopes },
+    {
+      event: "mcp.app.hostContextChanged",
+      payload: { reason: "remote-node" },
+      allowed: readScopes,
+    },
+    {
+      event: "talk.voice.change",
+      payload: {
         phase: "requested",
         changeId: "change-1",
         voiceSessionId: "voice-1",
         sessionKey: "main",
         voice: "ember",
       },
-      new Set(targets.map((entry) => entry.client.connId)),
-    );
-
-    for (const allowed of [owner, writer, admin]) {
-      expect(allowed.socket.events).toEqual(["talk.voice.change"]);
-    }
-    for (const denied of [observer, reader, node]) {
-      expect(denied.socket.events).toEqual([]);
-    }
-  });
-});
-
-describe("update run event scope guards", () => {
-  it("delivers run identities only to administrators", () => {
-    const read = makeClient("read", "operator", ["operator.read"]);
-    const admin = makeClient("admin", "operator", ["operator.admin"]);
-    const node = makeClient("node", "node", ["operator.admin"]);
-    const { broadcast } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([read.client, admin.client, node.client]),
-    });
-    broadcast("update.run.changed", {
-      runId: "run",
-      phase: "staging",
-      status: "running",
-      updatedAtMs: 1,
-    });
-    expect(read.socket.events).toEqual([]);
-    expect(node.socket.events).toEqual([]);
-    expect(admin.socket.events).toEqual(["update.run.changed"]);
-  });
-});
-
-describe("plugin install progress scope guards", () => {
-  it("delivers progress only to targeted administrators", () => {
-    const admin = makeClient("admin", "operator", ["operator.admin"]);
-    const observer = makeClient("observer", "operator", ["operator.admin"]);
-    const read = makeClient("read", "operator", ["operator.read"]);
-    const write = makeClient("write", "operator", ["operator.write"]);
-    const session = makeClient("session", "operator", [
-      "operator.sessions.read",
-      "operator.sessions.write",
-    ]);
-    const node = makeClient("node", "node", ["operator.admin"]);
-    const targets = [admin, read, write, session, node];
-    const { broadcastToConnIds } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([...targets, observer].map((entry) => entry.client)),
-    });
-    const payload = { activityId: "install-activity", stage: "runtime", status: "started" };
-
-    broadcastToConnIds(
-      "plugins.install.progress",
-      { ...payload, requestId: "install-request" },
-      new Set(targets.map((entry) => entry.client.connId)),
-    );
-
-    expect(admin.socket.send).toHaveBeenCalledOnce();
-    expect(JSON.parse(admin.socket.send.mock.calls[0]![0] as string)).toEqual({
-      type: "event",
+      allowed: ["talk", "write", "admin"],
+      targeted: true,
+      nodeScope: "talk",
+    },
+    {
+      event: "update.run.changed",
+      payload: { runId: "run", phase: "staging", status: "running", updatedAtMs: 1 },
+      allowed: ["admin"],
+      nodeScope: "admin",
+    },
+    {
       event: "plugins.install.progress",
-      seq: 1,
-      payload: { ...payload, requestId: "install-request" },
-    });
-    for (const denied of [observer, read, write, session, node]) {
-      expect(denied.socket.send).not.toHaveBeenCalled();
-    }
-  });
-});
-
-describe("device setup event scope guards", () => {
-  it("delivers exact setup completion only to pairing-capable operators", () => {
-    const pairing = makeClient("pairing", "operator", ["operator.pairing"]);
-    const node = makeClient("node", "node", ["operator.read"]);
-    const read = makeClient("read", "operator", ["operator.read"]);
-    const admin = makeClient("admin", "operator", ["operator.admin"]);
-    const clients = new GatewayClientRegistry(
-      [pairing, node, read, admin].map((entry) => entry.client),
-    );
-    const { broadcast } = createGatewayBroadcaster({ clients });
-
-    broadcast("device.pair.setup.completed", {
-      setupId: "setup-123",
-      deviceId: "device-123",
-      access: "limited",
-      ts: 1,
-    });
-
-    expect(pairing.socket.events).toEqual(["device.pair.setup.completed"]);
-    expect(node.socket.events).toEqual([]);
-    expect(read.socket.events).toEqual([]);
-    expect(admin.socket.events).toEqual(["device.pair.setup.completed"]);
-  });
+      payload: {
+        activityId: "install-activity",
+        stage: "runtime",
+        status: "started",
+        requestId: "install-request",
+      },
+      allowed: ["admin"],
+      targeted: true,
+      nodeScope: "admin",
+    },
+    {
+      event: "device.pair.setup.completed",
+      payload: { setupId: "setup-123", deviceId: "device-123", access: "limited", ts: 1 },
+      allowed: ["pairing", "admin"],
+    },
+  ])(
+    "delivers $event only to authorized recipients",
+    ({ event, payload, allowed, targeted, nodeScope }) => {
+      const operators = ["pairing", "read", "write", "admin", "talk"].map((scope) =>
+        makeClient(scope, "operator", [`operator.${scope}`]),
+      );
+      const session = makeClient("session", "operator", [
+        "operator.sessions.read",
+        "operator.sessions.write",
+      ]);
+      const node = makeClient("node", "node", [`operator.${nodeScope ?? "read"}`]);
+      const targets = [...operators, session, node];
+      const observer = makeClient("observer", "operator", [`operator.${allowed[0]}`]);
+      const broadcaster = createGatewayBroadcaster({
+        clients: new GatewayClientRegistry(
+          (targeted ? [...targets, observer] : targets).map(({ client }) => client),
+        ),
+      });
+      if (targeted) {
+        broadcaster.broadcastToConnIds(
+          event,
+          payload,
+          new Set(targets.map(({ client }) => client.connId)),
+        );
+        expect(observer.socket.send).not.toHaveBeenCalled();
+      } else {
+        broadcaster.broadcast(event, payload);
+      }
+      for (const { client, socket } of targets) {
+        if (allowed.includes(client.connId)) {
+          expect(socket.events).toEqual([event]);
+          expect(socket.send).toHaveBeenCalledOnce();
+          expect(JSON.parse(socket.send.mock.calls[0]![0])).toEqual({
+            type: "event",
+            event,
+            seq: 1,
+            payload,
+          });
+        } else {
+          expect(socket.events).toEqual([]);
+          expect(socket.send).not.toHaveBeenCalled();
+        }
+      }
+    },
+  );
 });

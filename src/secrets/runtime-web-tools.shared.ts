@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
+import { coerceSecretRef, type SecretRef } from "../config/types.secrets.js";
 import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
 import type {
   PluginWebFetchProviderEntry,
@@ -116,7 +116,7 @@ function pushInactiveProviderCredentialWarnings<
       config: params.selection.sourceConfig,
       toolConfig: params.selection.toolConfig,
     });
-    if (!hasConfiguredSecretRef(value, params.selection.defaults)) {
+    if (!coerceSecretRef(value, params.selection.defaults)) {
       continue;
     }
     for (const path of params.selection.inactivePathsForProvider(provider)) {
@@ -137,18 +137,6 @@ function normalizeKnownProvider(
   return normalized && providers.some((provider) => provider.id === normalized)
     ? normalized
     : undefined;
-}
-
-/**
- * Returns whether a configured value or sibling ref field contains a SecretRef.
- */
-function hasConfiguredSecretRef(value: unknown, defaults: SecretDefaults | undefined): boolean {
-  return Boolean(
-    resolveSecretInputRef({
-      value,
-      defaults,
-    }).ref,
-  );
 }
 
 function getProviderEnvVars(provider: object): string[] {
@@ -397,7 +385,7 @@ export async function resolveRuntimeWebProviderSelection<
         const fallback = provider.getConfiguredCredentialFallback?.(params.sourceConfig);
         if (
           fallback?.value !== undefined &&
-          hasConfiguredSecretRef(fallback.value, params.defaults)
+          coerceSecretRef(fallback.value, params.defaults) !== null
         ) {
           const fallbackResolution = await params.resolveSecretInput({
             providerId: provider.id,

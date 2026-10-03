@@ -113,7 +113,7 @@ const ownedDirectory = (parent, target) => {
     if (repositoryUrl !== undefined) {
       const url = new URL(repositoryUrl);
       const segments = url.pathname.slice(1).split("/");
-      if (url.origin !== "https://github.com" || url.href !== repositoryUrl || url.username || url.password || url.search || url.hash || segments.length !== 2 || segments.some((segment) => !/^[A-Za-z0-9_.-]+$/.test(segment)) || !segments[1].endsWith(".git") || !/^[a-f0-9]{40}$/.test(input.baseCommit)) throw new Error("Project repository source is invalid");
+      if (url.protocol !== "https:" || (input.repository && url.origin !== "https://github.com") || url.href !== repositoryUrl || url.username || url.password || url.search || url.hash || segments.length !== 2 || segments.some((segment) => !/^[A-Za-z0-9_.-]+$/.test(segment)) || !segments[1].endsWith(".git") || !/^[a-f0-9]{40}$/.test(input.baseCommit)) throw new Error("Project repository source is invalid");
     }
     if (input.repository) {
       // Public fetches cannot use ambient credentials, helpers, or redirects.

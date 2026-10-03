@@ -12,7 +12,15 @@ import { clearGitHubCredentialVerificationCache } from "./github-oauth-client.js
 const mocks = vi.hoisted(() => ({ runCommandBuffered: vi.fn() }));
 vi.mock("../process/exec.js", () => ({ runCommandBuffered: mocks.runCommandBuffered }));
 
-import { createGitHubReadIdentity, readNativeGitHubToken } from "./github-read-identity.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
+  createGitHubReadIdentity,
+  readCachedNativeGitHubToken,
+  readNativeGitHubToken,
+} from "./github-read-identity.js";
 import {
   prepareGitHubPublicationIdentity,
   prepareGitHubReadIdentity,
@@ -41,6 +49,7 @@ describe("native GitHub identity absence", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+    clearRuntimeConfigSnapshot();
   });
 
   const launchFailure = (code = "ENOENT") => ({
@@ -137,6 +146,88 @@ describe("native GitHub identity absence", () => {
       readNativeGitHubToken({ GH_TOKEN: " \n", GITHUB_TOKEN: "synthetic-secondary" }, true),
     ).rejects.toThrow("one non-empty line");
     expect(mocks.runCommandBuffered).not.toHaveBeenCalled();
+  });
+
+  it("asks the native credential owner for the configured enterprise host", async () => {
+    setRuntimeConfigSnapshot({ gateway: { github: { host: "ghe.example.test" } } });
+    mocks.runCommandBuffered.mockResolvedValue(commandResult("enterprise-token", 0));
+    await expect(
+      readNativeGitHubToken({
+        GH_TOKEN: undefined,
+        GITHUB_TOKEN: undefined,
+      }),
+    ).resolves.toBe("enterprise-token");
+    expect(mocks.runCommandBuffered).toHaveBeenCalledWith(
+      ["gh", "auth", "token", "--hostname", "ghe.example.test"],
+      expect.any(Object),
+    );
+  });
+
+  it("does not pass public ambient credentials to a ghe.com tenant profile lookup", async () => {
+    setRuntimeConfigSnapshot({ gateway: { github: { host: "tenant.ghe.com" } } });
+    mocks.runCommandBuffered.mockImplementation(async (_argv, options) =>
+      commandResult(options.env.GH_TOKEN || options.env.GITHUB_TOKEN || "stored-tenant-token"),
+    );
+    await expect(
+      readNativeGitHubToken({
+        GH_TOKEN: "synthetic-public-token",
+        GITHUB_TOKEN: "synthetic-public-secondary",
+      }),
+    ).resolves.toBe("stored-tenant-token");
+  });
+
+  it("does not reuse a cached native token after the selected Enterprise host changes", async () => {
+    const env = {
+      GH_CONFIG_DIR: tempDirs.make("github-native-host-cache-"),
+      GH_TOKEN: undefined,
+      GITHUB_TOKEN: undefined,
+      GH_ENTERPRISE_TOKEN: undefined,
+      GITHUB_ENTERPRISE_TOKEN: undefined,
+    };
+    mocks.runCommandBuffered
+      .mockResolvedValueOnce(commandResult("host-a-token"))
+      .mockResolvedValueOnce(commandResult("host-b-token"));
+    setRuntimeConfigSnapshot({ gateway: { github: { host: "a.ghe.example.test" } } });
+    await expect(readCachedNativeGitHubToken(env)).resolves.toBe("host-a-token");
+    setRuntimeConfigSnapshot({ gateway: { github: { host: "b.ghe.example.test" } } });
+    await expect(readCachedNativeGitHubToken(env)).resolves.toBe("host-b-token");
+    expect(mocks.runCommandBuffered.mock.calls.map(([argv]) => argv)).toEqual([
+      ["gh", "auth", "token", "--hostname", "a.ghe.example.test"],
+      ["gh", "auth", "token", "--hostname", "b.ghe.example.test"],
+    ]);
+  });
+
+  it.each([undefined, "other.ghe.example.test"])(
+    "rejects an ambient Enterprise token bound to %s",
+    async (declaredHost) => {
+      setRuntimeConfigSnapshot({ gateway: { github: { host: "ghe.example.test" } } });
+      const env = { GH_ENTERPRISE_TOKEN: "synthetic-host-a-token", GH_HOST: declaredHost };
+      await expect(readCachedNativeGitHubToken(env)).rejects.toMatchObject({
+        reason: "unverified",
+      });
+      expect(mocks.runCommandBuffered).not.toHaveBeenCalled();
+    },
+  );
+
+  it("prefers the Enterprise token over a public GitHub token for an Enterprise host", async () => {
+    setRuntimeConfigSnapshot({ gateway: { github: { host: "ghe.example.test" } } });
+    const env = {
+      GH_TOKEN: "synthetic-public-token",
+      GH_ENTERPRISE_TOKEN: "synthetic-enterprise-token",
+      GH_HOST: "ghe.example.test",
+    };
+    await expect(readNativeGitHubToken(env)).resolves.toBe("synthetic-enterprise-token");
+    await expect(readCachedNativeGitHubToken(env)).resolves.toBe("synthetic-enterprise-token");
+    expect(mocks.runCommandBuffered).not.toHaveBeenCalled();
+
+    mocks.runCommandBuffered.mockResolvedValue(commandResult("native-enterprise-token", 0));
+    await expect(readNativeGitHubToken({ ...env, GH_ENTERPRISE_TOKEN: undefined })).resolves.toBe(
+      "native-enterprise-token",
+    );
+    expect(mocks.runCommandBuffered).toHaveBeenCalledWith(
+      ["gh", "auth", "token", "--hostname", "ghe.example.test"],
+      expect.any(Object),
+    );
   });
 
   it("preserves explicit undefined scrubs over inherited native environment tokens", async () => {
@@ -263,6 +354,7 @@ describe("prepared GitHub read authority", () => {
     });
   });
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
@@ -274,6 +366,31 @@ describe("prepared GitHub read authority", () => {
     getCurrentConfig: () => config,
     assertActive: () => {},
     refresh: async () => {},
+  });
+
+  it("keeps default read preparation bound to the configured Enterprise issuer", async () => {
+    const config = {
+      gateway: {
+        github: { host: "ghe.example.test", apiBaseUrl: "https://ghe.example.test/api/v3" },
+      },
+    };
+    const env = {
+      GH_HOST: "ghe.example.test",
+      GH_TOKEN: "synthetic-public-only",
+      GH_ENTERPRISE_TOKEN: "native-enterprise-only",
+    };
+    setRuntimeConfigSnapshot(config);
+    const identity = await prepareGitHubReadIdentity(readOptions(env, config));
+    expect(identity.token).toBe(env.GH_ENTERPRISE_TOKEN);
+    expect(fetch).toHaveBeenCalledWith(
+      "https://ghe.example.test/api/v3/user",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: `Bearer ${env.GH_ENTERPRISE_TOKEN}` }),
+      }),
+    );
+    await expect(identity.revalidate()).resolves.toBeUndefined();
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(mocks.runCommandBuffered).not.toHaveBeenCalled();
   });
 
   it("reuses the native credential across consecutive read preparations until invalidation", async () => {
@@ -303,6 +420,7 @@ describe("prepared GitHub read authority", () => {
     expect(mocks.runCommandBuffered).toHaveBeenCalledOnce();
     const publication = await prepareGitHubPublicationIdentity(options);
     expect(publication.env.GH_TOKEN).toBe(token);
+    expect(publication.env.GH_ENTERPRISE_TOKEN).toBe(token);
     expect(mocks.runCommandBuffered).toHaveBeenCalledTimes(2);
     now += 1;
     await expect(identity.revalidate()).rejects.toMatchObject({ reason: "changed" });
@@ -575,6 +693,7 @@ describe("prepared GitHub read authority", () => {
     env.GITHUB_TOKEN = "native-rotated";
     await expect(identity.revalidate()).rejects.toThrow("identity changed");
     expect(publication.env.GH_TOKEN).toBe("native-refreshed");
+    expect(publication.env.GH_ENTERPRISE_TOKEN).toBe("native-refreshed");
     expect(JSON.stringify(mocks.runCommandBuffered.mock.calls)).not.toContain("preview-only");
   });
 

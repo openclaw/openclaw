@@ -189,7 +189,7 @@ const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-host-hooks-scope
 async function withHostHookState(
   run: (fixture: HostHookStateFixture) => Promise<void>,
   createTempConfig: (storePath: string) => HostHookStateFixture["tempConfig"] = (storePath) => ({
-    agents: { entries: { main: { default: true } } },
+    agents: { entries: { main: {} } },
     session: { store: storePath },
   }),
 ): Promise<void> {

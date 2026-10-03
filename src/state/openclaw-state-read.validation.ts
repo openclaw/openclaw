@@ -32,6 +32,13 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
     ((input.command.type === "deliveryQueue.outbound" &&
       (input.command.id === undefined || typeof input.command.id === "string") &&
       (input.command.mode === "pending" || input.command.mode === "unfinished")) ||
+      (input.command.type === "sessionState.ambientTargets" &&
+        isRecord(input.command.input) &&
+        typeof input.command.input.watcherSessionKey === "string") ||
+      (input.command.type === "mentions.snapshot" &&
+        typeof input.command.input === "number" &&
+        Number.isSafeInteger(input.command.input) &&
+        input.command.input >= -1) ||
       (input.command.type === "sessionState.versions" &&
         Array.isArray(input.command.input) &&
         input.command.input.every(
@@ -187,9 +194,17 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       (input.command.type === "skillLibrary.read" &&
         isRecord(input.command.input) &&
         typeof input.command.input.kind === "string" &&
-        ["presentation", "list", "read", "seed", "change", "pins"].includes(
-          input.command.input.kind,
-        ) &&
+        [
+          "presentation",
+          "list",
+          "read",
+          "seed",
+          "change",
+          "pins",
+          "profile",
+          "entry",
+          "upload",
+        ].includes(input.command.input.kind) &&
         isRecord(input.command.input.authority) &&
         isStringArray(input.command.input.authority.scopes) &&
         isRecord(input.command.input.authority.config)) ||
@@ -321,6 +336,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       isTuiLastSessionReadCommand(input.command) ||
       input.command.type === "nodeHost.config" ||
       input.command.type === "operator.channelPolicy" ||
+      input.command.type === "preparedPoolPresence.read" ||
       (input.command.type === "onboardingRecommendations.read" &&
         typeof input.command.configKey === "string") ||
       input.command.type === "sandboxRegistry.list" ||

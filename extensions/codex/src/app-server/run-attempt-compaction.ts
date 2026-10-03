@@ -44,5 +44,6 @@ export async function restoreCodexAttemptCompactionContext(
     timeoutMs: connection.appServer.requestTimeoutMs,
     signal: runAbortController.signal,
     assertCurrent,
+    withCurrent: connection.withCurrent,
   });
 }

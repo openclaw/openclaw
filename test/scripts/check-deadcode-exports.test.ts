@@ -158,7 +158,6 @@ describe("check-deadcode-exports", () => {
         "scripts/check-openclaw-package-tarball.mts!",
         "scripts/crabbox-wrapper.mjs!",
         "scripts/crabbox-wrapper.mts!",
-        "scripts/check-live-cache.ts!",
         "scripts/lib/vitest-resource-reporter.mts!",
         "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",

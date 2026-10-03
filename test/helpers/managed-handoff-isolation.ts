@@ -146,7 +146,8 @@ export function installManagedHandoffTestBinding(binding: Binding) {
     assertManagedHandoffTestPath(binding);
     const phase = consumer === helperUrl ? "preload" : "consumer";
     const id = createHash("sha256").update(`${originalUrl}\0${consumer}`).digest("hex");
-    const shim = path.join(binding.directory, `fs-safe-temp-${id}.mjs`);
+    // Each execution context publishes its own shim; another worker may still be writing.
+    const shim = path.join(binding.directory, `fs-safe-temp-${process.pid}-${threadId}-${id}.mjs`);
     writeExactPrivateModule(
       shim,
       `export * from ${JSON.stringify(originalUrl)};\n` +

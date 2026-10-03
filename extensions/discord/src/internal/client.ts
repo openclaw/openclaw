@@ -104,22 +104,6 @@ export class Client {
     return this.plugins.find((plugin) => plugin.id === id);
   }
 
-  registerListener(listener: AnyListener): AnyListener {
-    if (!this.listeners.includes(listener)) {
-      this.listeners.push(listener);
-    }
-    return listener;
-  }
-
-  unregisterListener(listener: AnyListener): boolean {
-    const index = this.listeners.indexOf(listener);
-    if (index < 0) {
-      return false;
-    }
-    this.listeners.splice(index, 1);
-    return true;
-  }
-
   getRuntimeMetrics() {
     return {
       request: this.rest.getSchedulerMetrics(),

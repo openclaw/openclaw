@@ -22,6 +22,7 @@ import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { collectFeishuDoctorAgentIds } from "./doctor-agent-roster.js";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract.js";
 import { collectFeishuWebhookNotes } from "./webhook-route.js";
 
@@ -206,23 +207,6 @@ function isFeishuSessionEntry(key: string, value: unknown): boolean {
   );
 }
 
-function collectConfiguredAgentIds(cfg: OpenClawConfig): string[] {
-  const ids = new Set<string>();
-  ids.add(resolveConfiguredDefaultAgentId(cfg));
-  for (const agent of cfg.agents?.list ?? []) {
-    if (typeof agent.id === "string" && agent.id.trim()) {
-      ids.add(normalizeAgentId(agent.id));
-    }
-  }
-  return [...ids].toSorted();
-}
-
-function resolveConfiguredDefaultAgentId(cfg: OpenClawConfig): string {
-  const agents = cfg.agents?.list ?? [];
-  const chosen = agents.find((agent) => agent?.default) ?? agents[0];
-  return normalizeAgentId(typeof chosen?.id === "string" && chosen.id.trim() ? chosen.id : "main");
-}
-
 function collectFeishuSessionTargets(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -238,7 +222,7 @@ function collectFeishuSessionTargets(params: {
     });
   };
 
-  for (const agentId of collectConfiguredAgentIds(params.cfg)) {
+  for (const agentId of collectFeishuDoctorAgentIds(params.cfg)) {
     addTarget({
       agentId,
       storePath: resolveStorePath(params.cfg.session?.store, { agentId, env: params.env }),

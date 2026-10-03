@@ -7,6 +7,7 @@ import {
   findNormalizedProviderValue,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
+import { raceWithTimeout } from "@openclaw/retry";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isUnresolvedSecretInputError } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -148,9 +149,9 @@ async function resolvePluginImplicitProviders(
   ctx: ImplicitProviderContext,
   providers: import("../plugins/types.js").ProviderPlugin[],
   order: import("../plugins/types.js").ProviderCatalogOrder,
-  preparedStaticResults?: ReadonlyMap<
-    import("../plugins/types.js").ProviderPlugin,
-    PreparedProviderStaticCatalog["entries"][number]["result"]
+  preparedStaticConfigs?: ReadonlyMap<
+    string,
+    PreparedProviderStaticCatalog["entries"][number]["providerConfigs"]
   >,
 ): Promise<Record<string, ProviderConfig> | undefined> {
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
@@ -245,16 +246,14 @@ async function resolvePluginImplicitProviders(
       (ctx.providerDiscoveryEntriesOnly === true || !hasRuntimeProviderCatalog(provider));
     // Static catalogs are preferred for entries-only discovery and as a fallback
     // when runtime discovery produces no usable provider config.
-    const hasPreparedStaticResult = preparedStaticResults?.has(provider) === true;
+    const preparedStatic = preparedStaticConfigs?.get(
+      `${provider.pluginId ?? ""}\0${normalizeProviderId(provider.id)}`,
+    );
     let acceptedRuntimeCatalog = false;
     const normalizedResult = await withProviderCatalogExpiry(
       async () => {
         let result;
-        if (useStaticCatalog) {
-          result = hasPreparedStaticResult
-            ? preparedStaticResults.get(provider)
-            : await runProviderStaticCatalog({ provider });
-        } else {
+        if (!useStaticCatalog) {
           result = await runProviderCatalogWithTimeout({
             provider,
             normalizeProviderForScope: ctx.normalizeProviderForScope,
@@ -273,7 +272,10 @@ async function resolvePluginImplicitProviders(
           });
           acceptedRuntimeCatalog = Boolean(result);
         }
-        if (!result && !useStaticCatalog && provider.staticCatalog) {
+        if (useStaticCatalog || (!result && provider.staticCatalog)) {
+          if (preparedStatic) {
+            return preparedStatic;
+          }
           result = await runProviderStaticCatalog({ provider });
         }
         return result ? normalizePluginDiscoveryResult({ provider, result }) : undefined;
@@ -331,7 +333,6 @@ export async function runProviderCatalogWithTimeout(
   },
 ): Promise<Awaited<ReturnType<typeof runProviderCatalog>> | undefined> {
   const timeoutMs = params.timeoutMs ?? undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
   let active = true;
   const catalogParams = {
     ...params,
@@ -360,18 +361,15 @@ export async function runProviderCatalogWithTimeout(
     const catalogRun = runCatalog();
     // Live discovery should not hang startup; a timeout skips this provider while
     // preserving the rest of the prepared catalog.
-    return await Promise.race([
+    return await raceWithTimeout(
       catalogRun,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          active = false;
-          reject(
-            new Error(`provider catalog timed out after ${timeoutMs}ms: ${params.provider.id}`),
-          );
-        }, timeoutMs);
-        timer.unref?.();
-      }),
-    ]);
+      timeoutMs,
+      () => {
+        active = false;
+        throw new Error(`provider catalog timed out after ${timeoutMs}ms: ${params.provider.id}`);
+      },
+      { ref: false },
+    );
   } catch (error) {
     if (isUnresolvedSecretInputError(error)) {
       throw error;
@@ -388,9 +386,6 @@ export async function runProviderCatalogWithTimeout(
   } finally {
     // A timed-out hook can still finish; its late reports no longer own this publication.
     active = false;
-    if (timer) {
-      clearTimeout(timer);
-    }
   }
 }
 
@@ -488,13 +483,12 @@ export async function prepareImplicitProviderStaticCatalog(
         const providerConfigs = Object.fromEntries(eligible);
         return {
           provider: entry.provider,
-          result: { providers: providerConfigs },
           providerConfigs,
         };
       }),
       ...providers
         .filter((provider) => provider.staticCatalog && !eligibleProviders.includes(provider))
-        .map((provider) => ({ provider, result: { providers: {} }, providerConfigs: {} })),
+        .map((provider) => ({ provider, providerConfigs: {} })),
     ]),
   });
 }
@@ -635,22 +629,12 @@ export async function resolveImplicitProviders(
       await import("./models-config.providers.discovery-auth.runtime.js");
     Object.assign(context, await prepareProviderDiscoveryAuth(context, discoveryAuthConfig));
   }
-  const preparedStaticResultsByProvider = new Map(
-    preparedStaticEntries?.map(({ provider, result }) => [
+  const preparedStaticConfigs = new Map(
+    preparedStaticEntries?.map(({ provider, providerConfigs }) => [
       `${provider.pluginId ?? ""}\0${normalizeProviderId(provider.id)}`,
-      result,
+      providerConfigs,
     ]) ?? [],
   );
-  const preparedStaticResults = params.preparedStaticProviderCatalog
-    ? new Map(
-        discoveryProviders.flatMap((provider) => {
-          const key = `${provider.pluginId ?? ""}\0${normalizeProviderId(provider.id)}`;
-          return preparedStaticResultsByProvider.has(key)
-            ? [[provider, preparedStaticResultsByProvider.get(key)] as const]
-            : [];
-        }),
-      )
-    : undefined;
   for (const order of PLUGIN_DISCOVERY_ORDERS) {
     Object.assign(
       providers,
@@ -658,7 +642,7 @@ export async function resolveImplicitProviders(
         context,
         discoveryProviders,
         order,
-        preparedStaticResults,
+        preparedStaticConfigs,
       ),
     );
   }

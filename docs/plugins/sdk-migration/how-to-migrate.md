@@ -29,6 +29,39 @@ The timing nuance is that the legacy check runs just before dispatch, while
 Prefer the typed guard for live revocation at commit. Callback errors continue
 to propagate. No schema, retention, durability, or update migration is required.
 
+## Await Mention Inbox operations
+
+Replace synchronous `context.mentionInbox.list(client)` and
+`context.mentionInbox.dismiss(client, ids)` calls with
+`listAsync(client, publish)` and `dismissAsync(client, ids, publish)`.
+Both methods prepare durable state in workers, then call `publish` synchronously
+with the current authorized result. Send the Gateway response inside that
+callback without awaiting more work:
+
+```ts
+await mentionInbox.listAsync(client, (result) => {
+  respond(result.ok, result.ok ? result.value : undefined, result.ok ? undefined : result.error);
+});
+```
+
+Await the returned promise before releasing request resources or starting work
+that depends on the operation. Dismissal IDs retain exact-match semantics.
+
+Replace `recordCommittedInput(input)` with `await recordCommittedInputAsync(input)`
+and `invalidate(sessionKey)` with `await invalidateAsync(sessionKey)`. Await
+recording before reading the resulting Inbox, and await invalidation before
+depending on refreshed connected views.
+
+The shipped `list`, `dismiss`, `recordCommittedInput`, and `invalidate` methods
+remain synchronous third-party adapters until the next Plugin SDK major and
+explicit breaking-release approval. Each emits a `DEP_SESSION_PERSISTENCE`
+deprecation warning once per plugin and method per process; calls outside a
+plugin invocation warn once per method. Existing return values and completion
+timing stay intact, including recording before an immediate synchronous list.
+Notifications publish after the enclosing transaction commits and are discarded
+on rollback. This migration changes no schema, retained data, retention, or
+update behavior.
+
 ## Await session transcript persistence
 
 Use the awaited `SessionManager` methods from
@@ -110,6 +143,22 @@ awaited replacement. The
 October 1, 2026, with removal at the next Plugin SDK major
 (`next-plugin-sdk-major`); there is no calendar removal deadline. Bundled callers
 use the awaited methods. Do not add a sync fallback when adopting the new API.
+
+User-turn transcript recorders also provide optional
+`completeProcessingAsync(outcome)` and `waitForPendingInputSettlement()` methods.
+Await processing completion before publishing its outcome. Completion records
+processing separately from transcript consumption; it does not append or consume
+the pending input. The synchronous `completeProcessing` callback shipped in
+`v2026.9.8` retains its immediate result for existing SDK consumers. The host
+uses that legacy callback only when a supplied recorder has no async companion,
+never after an async failure or an undefined async result.
+
+`finishPendingInput(disposition)` still revokes prompt custody synchronously.
+After calling it, await `waitForPendingInputSettlement()` when available before
+releasing the turn's session admission. This joins accepted completion and
+disposition writes, including each original source of a collected input. An
+uncertain write outcome is preserved and must not be replayed through either
+callback. These additions change no schema, retention, or update behavior.
 
 ### Await extension session changes
 
@@ -225,6 +274,25 @@ source/backup identities still verify. Conflicts, lost authority, and uncertain
 imports remain refusals.
 Do not implement import as runtime `enqueue` followed by `fail`: an interruption
 would expose a historical failure as new pending work.
+
+## Agent roster config
+
+Author agent rosters as `agents.entries`, keyed by agent ID. Entries contain no
+`id` field or `default` marker; their insertion order is the roster order. Read
+`cfg.agents.entries` directly, or use `listAgentIds` and `resolveAgentConfig` from
+`openclaw/plugin-sdk/agent-runtime`. Select the owner explicitly for the surface
+you use, such as `agents.defaults.systemAgent.agentId` for system work.
+
+Authored `agents.list` and boolean entry `default` markers are rejected. Run
+`openclaw doctor --fix` to migrate stored legacy configs; Doctor also records
+explicit ownership for migrated multi-agent rosters.
+
+Plugins built against stable SDK releases through 2026.9.x may still read the
+deprecated, non-enumerable runtime `agents.list` projection introduced in
+[#113146](https://github.com/openclaw/openclaw/pull/113146). It is no longer typed
+or read internally, is not serialized or copied by `structuredClone`, and is
+scheduled for removal after January 2, 2027. Config mutation drafts must read and
+write `agents.entries`. This compatibility window adds no runtime warnings.
 
 ## How to migrate
 

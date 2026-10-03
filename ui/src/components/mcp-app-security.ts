@@ -24,18 +24,6 @@ const WIDGET_PROMPT_RATE_MAX = 10;
 const WIDGET_PROMPT_RATE_KEYS_MAX = 100;
 const widgetPromptTimestampsByKey = new Map<string, number[]>();
 
-function resolveWidgetPromptText(raw: unknown): string | null {
-  if (typeof raw !== "string") {
-    return null;
-  }
-  const text = raw.trim();
-  const isHostCommand = text.startsWith("/") || text.startsWith("!");
-  if (!text || text.length > WIDGET_PROMPT_MAX_CHARS || isHostCommand) {
-    return null;
-  }
-  return text;
-}
-
 export function allowWidgetPrompt(key: string, nowMs: number): boolean {
   const cutoff = nowMs - WIDGET_PROMPT_RATE_WINDOW_MS;
   const timestamps = (widgetPromptTimestampsByKey.get(key) ?? []).filter((ts) => ts > cutoff);
@@ -79,18 +67,28 @@ export function isWidgetFrameInteractable(frame: HTMLIFrameElement): boolean {
  * Agent-authored frames may submit only user-focused conversational text.
  * The shared event preserves pane routing and prevents privileged shortcuts.
  */
-export function dispatchWidgetPrompt(
+export async function dispatchWidgetPrompt(
   frame: HTMLIFrameElement,
   raw: unknown,
   rateKey: string,
-  confirmPrompt?: (text: string) => boolean,
-): boolean {
-  const text = resolveWidgetPromptText(raw);
+  confirmPrompt?: (text: string) => boolean | Promise<boolean>,
+  isCurrent?: () => boolean,
+): Promise<boolean> {
+  const text = typeof raw === "string" ? raw.trim() : "";
   if (
     !text ||
+    text.length > WIDGET_PROMPT_MAX_CHARS ||
+    text.startsWith("/") ||
+    text.startsWith("!") ||
     !isWidgetFrameInteractable(frame) ||
-    !allowWidgetPrompt(rateKey, Date.now()) ||
-    (confirmPrompt && !confirmPrompt(text))
+    !allowWidgetPrompt(rateKey, Date.now())
+  ) {
+    return false;
+  }
+  if (
+    (confirmPrompt && !(await confirmPrompt(text))) ||
+    isCurrent?.() === false ||
+    !isWidgetFrameInteractable(frame)
   ) {
     return false;
   }
@@ -223,7 +221,8 @@ export async function dispatchMcpAppMessage(
   frame: HTMLIFrameElement,
   binding: { sessionKey: string; viewId: string },
   params: { role: string; content: ContentBlock[]; _meta?: Record<string, unknown> },
-  confirm: (preview: string) => boolean,
+  confirm: (preview: string) => boolean | Promise<boolean>,
+  isCurrent?: () => boolean,
 ): Promise<boolean> {
   const options = params._meta?.["openai/message"];
   const messageOptions = asOptionalRecord(options);
@@ -266,7 +265,7 @@ export async function dispatchMcpAppMessage(
       return block.type;
     })
     .join("\n\n");
-  if (!confirm(preview)) {
+  if (!(await confirm(preview)) || isCurrent?.() === false || !isWidgetFrameInteractable(frame)) {
     return false;
   }
   return new Promise<boolean>((respond) => {
@@ -302,7 +301,7 @@ export function negotiateMcpAppDisplayModes(
     resource?.availableDisplayModes ??
     (resource?.preferredDisplayMode ? [resource.preferredDisplayMode] : appModes);
   const available = (["inline", "fullscreen"] as const).filter(
-    (mode) => !hints || hints.includes(mode),
+    (mode) => (!hints || hints.includes(mode)) && (!appModes || appModes.includes(mode)),
   );
   if (!available.length) {
     throw new Error("MCP App supports no available host display mode");

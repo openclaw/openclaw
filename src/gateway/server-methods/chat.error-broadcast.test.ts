@@ -27,7 +27,7 @@ function createMockContext() {
     ...createDirectChatContext(),
     broadcast,
     nodeSendToSession,
-    getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
+    getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
     logGateway: { warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),

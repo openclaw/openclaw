@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
 import {
+  createSqliteQueryCache,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -222,7 +223,7 @@ export function compareAndCertifyCanonicalSessionValidationBatch(
   return Number(result.numAffectedRows ?? 0n);
 }
 
-function prepareCanonicalWriterQueries(database: ValidationDatabase) {
+function prepareCanonicalWriterQueries(database: Pick<ValidationDatabase, "db">) {
   const db = getNodeSqliteKysely<PendingDatabase>(database.db);
   return {
     pending: prepareSqliteQueryTakeFirstSync<string, { session_key: string }>(
@@ -257,10 +258,9 @@ function prepareCanonicalWriterQueries(database: ValidationDatabase) {
 }
 
 // Retain compiled shapes only; fresh bindings and native statement lifecycle stay with the executor.
-const canonicalWriterQueries = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof prepareCanonicalWriterQueries>
->();
+const canonicalWriterQueries = createSqliteQueryCache((db) =>
+  prepareCanonicalWriterQueries({ db }),
+);
 
 /** Canonical writers certify their final row within their existing transaction. */
 export function certifyCanonicalSessionValidationRow(
@@ -271,11 +271,7 @@ export function certifyCanonicalSessionValidationRow(
   if (!database.db.isTransaction || !hasCanonicalSessionValidationProjection(database)) {
     return;
   }
-  let queries = canonicalWriterQueries.get(database.db);
-  if (!queries) {
-    queries = prepareCanonicalWriterQueries(database);
-    canonicalWriterQueries.set(database.db, queries);
-  }
+  const queries = canonicalWriterQueries(database.db);
   const pending = queries.pending(sessionKey);
   if (!pending) {
     return;

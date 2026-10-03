@@ -794,10 +794,10 @@ describe("Claude session catalog", () => {
           model: { primary: "anthropic/claude-opus-4-8" },
           models: { "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } } },
         },
-        list: [
-          { id: "main", default: true },
-          { id: "research", ...research },
-        ],
+        entries: {
+          main: {},
+          research: { ...research },
+        },
       },
     } satisfies OpenClawConfig;
     const provider = captureCatalogProvider(

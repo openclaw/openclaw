@@ -409,6 +409,7 @@ export const createTelegramMessageProcessor = (
             onDeferred: () => {
               deferred = true;
               drainLifecycle?.onDeferred();
+              turnContext.onTurnDeferred?.();
             },
             onDeferredHeartbeat: () => participant.heartbeat(),
             deferredHeartbeatIntervalMs: participant.heartbeatIntervalMs,

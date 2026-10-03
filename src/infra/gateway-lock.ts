@@ -15,21 +15,30 @@ import {
   createOpenClawDatabaseMaintenanceScope,
   getOpenClawDatabaseMaintenanceScope,
 } from "../state/openclaw-state-db-async-lifecycle.js";
+import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import { acquireWithWait } from "./acquire-with-wait.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
 import { hasErrnoCode } from "./errno.js";
 import { acquireFileLockSync } from "./file-lock-manager.js";
 import {
+  classifyGatewayLockProcessNamespace,
+  GATEWAY_OWNER_HEARTBEAT_STALE_MS,
+  GatewayLockNamespaceError,
   type GatewayLockRole,
   type LockPayload,
   parseGatewayLockPayload,
+  readGatewayLockProcessNamespace,
 } from "./gateway-lock-payload.js";
 import {
   readGatewayLockProcessCmdline,
   readGatewayLockProcessStartTime,
 } from "./gateway-lock-process.js";
-import { acquireGatewayOwnerLease, type GatewayOwnerLease } from "./gateway-owner-lease.js";
+import {
+  acquireGatewayOwnerLease,
+  assertGatewayOwnerLeaseStopped,
+  type GatewayOwnerLease,
+} from "./gateway-owner-lease.js";
 import type { GatewayOwnerSupervisor } from "./gateway-owner-lease.types.js";
 import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import {
@@ -128,7 +137,12 @@ function resolveGatewayOwnerStatusSync(
   platform: NodeJS.Platform,
   readCmdline?: (pid: number) => string[] | null,
   readStartTime?: (pid: number) => number | null,
-  opts: { trustUnknownCmdlineOwner?: boolean; deadlineMs?: number; signal?: AbortSignal } = {},
+  opts: {
+    trustUnknownCmdlineOwner?: boolean;
+    deadlineMs?: number;
+    signal?: AbortSignal;
+    lockPath?: string;
+  } = {},
 ): LockOwnerStatus {
   const remainingTimeoutMs = () => {
     opts.signal?.throwIfAborted();
@@ -140,6 +154,10 @@ function resolveGatewayOwnerStatusSync(
     return Math.max(1, Math.min(CMDLINE_EXEC_TIMEOUT_MS, Math.ceil(remaining)));
   };
   remainingTimeoutMs();
+  const namespace = classifyGatewayLockProcessNamespace(payload?.processNamespace, opts.lockPath);
+  if (namespace !== "same") {
+    return namespace;
+  }
   const role = payload?.role ?? "gateway";
   if (!isPidAlive(pid)) {
     return "dead";
@@ -253,6 +271,12 @@ function shouldReclaimGatewayLock(params: {
   readProcessCmdline?: (pid: number) => string[] | null;
   readProcessStartTime?: (pid: number) => number | null;
 }): boolean {
+  if (
+    classifyGatewayLockProcessNamespace(params.payload?.processNamespace, params.lockPath) ===
+    "unknown"
+  ) {
+    throw new GatewayLockNamespaceError();
+  }
   const ownerPid = params.payload?.pid;
   const ownerStatus = ownerPid
     ? resolveGatewayOwnerStatusSync(
@@ -261,6 +285,7 @@ function shouldReclaimGatewayLock(params: {
         params.platform,
         params.readProcessCmdline,
         params.readProcessStartTime,
+        { lockPath: params.lockPath },
       )
     : "unknown";
   if (ownerPid) {
@@ -301,15 +326,27 @@ type GatewayLockObservationOptions = Pick<
   "env" | "lockDir" | "platform" | "readProcessCmdline" | "readProcessStartTime" | "timeoutMs"
 > & { requireInspection?: boolean; signal?: AbortSignal };
 
+type GatewayLockOwnerIdentity = Omit<GatewayLockIdentity, "port"> & { port?: number };
+type GatewayStateOwnerObservationOptions = GatewayLockObservationOptions & {
+  /** Include embedded custody and Gateways that have not opened their listener yet. */
+  includeEmbedded?: boolean;
+};
+
 export async function readActiveGatewayLockPort(
   opts: GatewayLockObservationOptions = {},
 ): Promise<number | undefined> {
   return (await readActiveGatewayLockIdentity(opts))?.port;
 }
 
+export function readActiveGatewayLockIdentity(
+  opts: GatewayLockObservationOptions & { includeEmbedded: true },
+): Promise<GatewayLockOwnerIdentity | undefined>;
+export function readActiveGatewayLockIdentity(
+  opts?: GatewayLockObservationOptions & { includeEmbedded?: false },
+): Promise<GatewayLockIdentity | undefined>;
 export async function readActiveGatewayLockIdentity(
-  opts: GatewayLockObservationOptions = {},
-): Promise<GatewayLockIdentity | undefined> {
+  opts: GatewayStateOwnerObservationOptions = {},
+): Promise<GatewayLockOwnerIdentity | undefined> {
   const env = opts.env ?? process.env;
   const deadlineMs =
     opts.timeoutMs === undefined ? undefined : performance.now() + Math.max(0, opts.timeoutMs);
@@ -327,9 +364,9 @@ export async function readActiveGatewayLockIdentity(
 
 async function readVerifiedGatewayLockIdentity(
   lockPath: string,
-  opts: GatewayLockObservationOptions,
+  opts: GatewayStateOwnerObservationOptions,
   deadlineMs: number | undefined,
-): Promise<GatewayLockIdentity | undefined> {
+): Promise<GatewayLockOwnerIdentity | undefined> {
   const assertActive = () => {
     opts.signal?.throwIfAborted();
     if (deadlineMs !== undefined && performance.now() >= deadlineMs) {
@@ -339,8 +376,20 @@ async function readVerifiedGatewayLockIdentity(
   assertActive();
   const payload = await readLockPayload(lockPath, opts.requireInspection, opts.signal);
   assertActive();
-  if (!payload || (payload.role && payload.role !== "gateway")) {
+  if (
+    !payload ||
+    (payload.role &&
+      payload.role !== "gateway" &&
+      !(opts.includeEmbedded && payload.role === "agent-embedded"))
+  ) {
     return undefined;
+  }
+  if (
+    opts.requireInspection &&
+    classifyGatewayLockProcessNamespace(payload.processNamespace, lockPath) === "unknown"
+  ) {
+    const error = new GatewayLockNamespaceError();
+    throw new GatewayLockError(error.message, error);
   }
   const ownerStatus = await resolveGatewayOwnerStatus(
     payload.pid,
@@ -348,18 +397,18 @@ async function readVerifiedGatewayLockIdentity(
     opts.platform ?? process.platform,
     opts.readProcessCmdline,
     opts.readProcessStartTime,
-    { trustUnknownCmdlineOwner: false, deadlineMs, signal: opts.signal },
+    { trustUnknownCmdlineOwner: false, deadlineMs, signal: opts.signal, lockPath },
   );
   assertActive();
   // Discovery may omit an unverifiable owner; mutation preflight must preserve unknown.
   if (
     opts.requireInspection &&
     ownerStatus !== "dead" &&
-    (ownerStatus === "unknown" || !payload.port)
+    (ownerStatus === "unknown" || (!opts.includeEmbedded && !payload.port))
   ) {
     throw new GatewayLockError("Gateway lock owner identity could not be verified");
   }
-  if (ownerStatus !== "alive" || !payload.port) {
+  if (ownerStatus !== "alive" || (!opts.includeEmbedded && !payload.port)) {
     return undefined;
   }
   return {
@@ -393,13 +442,16 @@ async function assertHistoricalGatewayOwnerStopped(
     if (!payload) {
       continue;
     }
+    if (classifyGatewayLockProcessNamespace(payload.processNamespace, lockPath) === "unknown") {
+      throw new GatewayLockNamespaceError();
+    }
     const owner = await resolveGatewayOwnerStatus(
       payload.pid,
       payload,
       opts.platform ?? process.platform,
       opts.readProcessCmdline,
       opts.readProcessStartTime,
-      { trustUnknownCmdlineOwner: false },
+      { trustUnknownCmdlineOwner: false, lockPath },
     );
     if (owner !== "dead") {
       throw new GatewayStateOwnerContentionError(
@@ -432,6 +484,7 @@ export async function acquireGatewayLock(
   }
   const now = opts.now ?? performance.now.bind(performance);
   const startedAt = now();
+  const heartbeatDeadlineMs = startedAt + GATEWAY_OWNER_HEARTBEAT_STALE_MS + 5_000;
   const timeoutMs = resolveTimerTimeoutMs(
     opts.timeoutMs,
     role === "gateway" ? GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS : 0,
@@ -454,6 +507,7 @@ export async function acquireGatewayLock(
     configPath: paths.configPath,
     stateDir: paths.stateDir,
     role,
+    processNamespace: readGatewayLockProcessNamespace(),
     ...(role === "gateway" ? { cronOwnerProjection: "dynamic-default-v1" as const } : {}),
     ...(typeof opts.port === "number" &&
     Number.isInteger(opts.port) &&
@@ -493,6 +547,12 @@ export async function acquireGatewayLock(
               projection = previousOwner.retainProjection();
             }
             await assertHistoricalGatewayOwnerStopped(paths, opts, projection);
+            owner.run(() =>
+              assertGatewayOwnerLeaseStopped(
+                env,
+                role === "sqlite-maintenance" ? openDoctorStateSchemaReadAdmission : undefined,
+              ),
+            );
             await previousOwner?.release();
             owner.assertCurrent();
             return owner;
@@ -504,6 +564,19 @@ export async function acquireGatewayLock(
           }
         },
         shouldRetry: (error) => {
+          if (error instanceof GatewayLockNamespaceError && role === "gateway") {
+            const remaining = Math.min(deadlineMs, heartbeatDeadlineMs) - now();
+            if (remaining <= 0) {
+              return false;
+            }
+            if (!waited) {
+              log.warn(
+                "Waiting for the previous Gateway's owner heartbeat to expire before reclaiming state (up to 95 seconds).",
+              );
+            }
+            waited = true;
+            return { delayMs: Math.min(5_000, remaining) };
+          }
           if (!(error instanceof GatewayStateOwnerContentionError)) {
             return false;
           }
@@ -525,7 +598,9 @@ export async function acquireGatewayLock(
     const detail =
       error instanceof GatewayStateOwnerContentionError
         ? `${message}: ${error.message}. Stop the Gateway or wait for the current OpenClaw operation to finish, then retry.`
-        : message;
+        : error instanceof GatewayLockNamespaceError
+          ? error.message
+          : message;
     throw new GatewayLockError(detail, error);
   }
   if (waited && role === "gateway") {

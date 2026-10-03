@@ -383,6 +383,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         ${props.disabledBanner?.kind === "above-composer" ? disabledBanner : nothing}
         ${presentedContent(props.progressCardVisibility ?? true, progressCard)} ${queue}
         ${renderChatGoalRecovery(props.goalRecovery, props.connected)} ${goalCard}
+        ${props.composerRecovery ?? nothing}
       </div>
       ${
         showComposerInput

@@ -190,7 +190,7 @@ test("sessions.create only allocates worktrees for lifecycle-manageable agent ow
   const workspace = await initializeRemoteBackedGitWorkspace(openClawState.root);
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
-  testState.agentsConfig = { list: [{ id: "ops", default: true }] };
+  testState.agentsConfig = { entries: { ops: {} } };
   const { storePath } = await createSessionStoreDir();
   const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
   const allocatedWorktreeIds = new Set<string>();

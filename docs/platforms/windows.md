@@ -151,6 +151,12 @@ openclaw gateway status --json
 **New workspace** also works with a native Windows Gateway. Install Git for
 Windows and make it available on `PATH`. Each empty workspace starts from a
 separate Git repository initialized without your global Git configuration.
+Workspace creation also avoids Git for Windows' `'$GIT_DIR' too big` error for
+deeply nested source repositories.
+Worker result staging, reads, and cleanup enable Git's Windows long-path support
+for each command. Other Git clients accessing the same deeply nested repository
+may need `core.longpaths=true` in their own configuration, for example with
+`git -C "<repository>" config core.longpaths true`.
 
 Managed startup uses Windows Scheduled Tasks when available. The task keeps
 the readable `gateway.cmd` script in the OpenClaw state dir but launches it

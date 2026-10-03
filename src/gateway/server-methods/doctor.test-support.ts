@@ -73,9 +73,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
           copy.id = id;
           return copy;
         })
-      : cfg.agents?.list
-        ? cfg.agents.list
-        : [{ id: "main", default: true }],
+      : [{ id: "main" }],
   resolveDefaultAgentId,
   resolveAgentWorkspaceDir,
 }));

@@ -1,10 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
-import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
-import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { OpenClawStateDatabaseReadAdmission } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseLifecycleListener } from "../../state/openclaw-state-db-cache.js";
-import { captureOpenClawStateReadContext } from "../../state/openclaw-state-worker-context.js";
 import { SkillLibraryError } from "../skill-library-error.js";
 
 type Store = { path: string; revision: object; pending: number };
@@ -52,33 +48,20 @@ export function captureSkillLibraryAuthorityRead(admission: OpenClawStateDatabas
   return { assertCurrent };
 }
 
-/** Native writers fence pending changes; outer COMMIT publishes before observers, rollback preserves eligibility. */
-export function stageSkillLibraryAuthorityChange(db: DatabaseSync) {
-  const location = db.location();
-  if (!location) {
-    throw new Error("Skill library requires its durable database owner");
-  }
-  const store = owner(captureOpenClawStateReadContext(location).admission);
-  if (
-    !stageSqliteTransactionState(db, {
-      stage: () => {
-        store.pending += 1;
-      },
-      commit: () => {
-        store.revision = {};
-        store.pending -= 1;
-      },
-      rollback: () => {
-        store.pending -= 1;
-        try {
-          assertTransactionUsable(db);
-        } catch {
-          // The native owner cannot prove rollback after a lost COMMIT outcome.
-          store.revision = {};
-        }
-      },
-    })
-  ) {
-    throw new Error("Skill library publication requires its native transaction owner");
-  }
+/** Fence before granting COMMIT; publish inside the writer FIFO after native settlement. */
+export function fenceSkillLibraryMutationAuthority(admission: OpenClawStateDatabaseReadAdmission) {
+  const store = owner(admission);
+  store.pending += 1;
+  let settled = false;
+  return (outcome: "committed" | "rolled-back" | "unknown") => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    store.pending -= 1;
+    // Only a confirmed rollback preserves an earlier prepared selection.
+    if (outcome !== "rolled-back") {
+      store.revision = {};
+    }
+  };
 }

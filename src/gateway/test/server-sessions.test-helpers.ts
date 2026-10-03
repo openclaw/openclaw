@@ -374,7 +374,12 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     const storeTemplate = path.join(dir, "agents", "{agentId}", "sessions", "sessions.json");
     testState.sessionStorePath = storeTemplate;
     testState.sessionConfig = { scope: "global" };
-    testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+    testState.agentsConfig = { ownership: "explicit", entries: { main: {}, work: {} } };
+    testState.agentConfig = {
+      ...testState.agentConfig,
+      systemAgent: { agentId: "main" },
+      sessionStore: { agentId: "main" },
+    };
     return {
       dir,
       storeTemplate,
@@ -445,7 +450,11 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
       configPath,
       `${JSON.stringify(
         {
-          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+          agents: {
+            ownership: "explicit",
+            entries: { main: {}, work: {} },
+            defaults: { systemAgent: { agentId: "main" }, sessionStore: { agentId: "main" } },
+          },
           session: { scope: "global", store: storeTemplate },
         },
         null,

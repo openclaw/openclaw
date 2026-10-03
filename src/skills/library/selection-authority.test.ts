@@ -2,11 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../../state/openclaw-state-db.js";
+  SqliteWorkerError,
+  type SqliteWorkerOperations,
+  type SqliteWorkerStore,
+} from "../../infra/sqlite-worker-contract.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import * as workerStore from "../../infra/sqlite-worker-store.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { SkillLibraryError } from "../skill-library-error.js";
@@ -133,7 +138,7 @@ describe("skill library worker reads and prepared selection authority", () => {
         setUserProfileRole(mergeTarget.id, "blocked", options);
       }
       const saved = await saveSkillLibrary(alice, draft(), options);
-      mutateSkillLibrary(
+      await mutateSkillLibrary(
         alice,
         { action: "share", skillId: saved.entry.skillId, expectedRevision: saved.entry.revision },
         options,
@@ -146,7 +151,7 @@ describe("skill library worker reads and prepared selection authority", () => {
       } else if (change === "alias") {
         linkEmail("bob@example.test", mergeTarget!.id, options);
       } else {
-        mutateSkillLibrary(
+        await mutateSkillLibrary(
           alice,
           { action: change, skillId: saved.entry.skillId, expectedRevision: saved.entry.revision },
           options,
@@ -167,45 +172,41 @@ describe("skill library worker reads and prepared selection authority", () => {
     },
   );
 
-  it("preserves a prepared seed when an outer native mutation rolls back", async () => {
+  it("preserves a prepared seed when worker commit admission rolls back the mutation", async () => {
     const { alice, options } = fixture();
     const saved = await saveSkillLibrary(alice, draft(), options);
     const pins = await seedSkillLibrarySelection(alice, options);
-    const rollback = new Error("rollback library change");
-    expect(() =>
-      runOpenClawStateWriteTransaction((database) => {
-        mutateSkillLibrary(
-          alice,
-          {
-            action: "disable",
-            skillId: saved.entry.skillId,
-            expectedRevision: saved.entry.revision,
-          },
-          { ...options, database },
-        );
-        expect(() => assertPreparedSkillLibrarySelection(pins)).toThrow(SkillLibraryError);
-        throw rollback;
-      }, options),
-    ).toThrow(rollback);
+    await expect(
+      saveSkillLibrary(
+        alice,
+        { ...draft(), skillId: saved.entry.skillId, expectedRevision: saved.entry.revision },
+        options,
+      ),
+    ).resolves.toMatchObject({ state: "unchanged" });
     expect(() => assertPreparedSkillLibrarySelection(pins)).not.toThrow();
-    expect(await seedSkillLibrarySelection(alice, options)).toEqual(pins);
-  });
-
-  it("revokes a prepared seed after an uncertain native commit", async () => {
-    const { alice, options } = fixture();
-    const saved = await saveSkillLibrary(alice, draft(), options);
-    const pins = await seedSkillLibrarySelection(alice, options);
-    const { db } = openOpenClawStateDatabase(options);
-    const execute = db.exec.bind(db);
-    const failed = new Error("native commit outcome unavailable");
-    const commit = vi.spyOn(db, "exec").mockImplementation((sql) => {
-      execute(sql);
-      if (sql === "COMMIT") {
-        throw failed;
-      }
-    });
+    const rollback = new Error("rollback library change");
+    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+    let checkedCommit = false;
+    const refusal = vi
+      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+      .mockImplementation((admit, attachment) =>
+        createAdmission((request, grant) => {
+          admit(
+            request,
+            request.stage === "commit" && request.facts !== undefined
+              ? () => {
+                  checkedCommit = true;
+                  expect(() => assertPreparedSkillLibrarySelection(pins)).toThrow(
+                    SkillLibraryError,
+                  );
+                  throw rollback;
+                }
+              : grant,
+          );
+        }, attachment),
+      );
     try {
-      expect(() =>
+      await expect(
         mutateSkillLibrary(
           alice,
           {
@@ -215,11 +216,101 @@ describe("skill library worker reads and prepared selection authority", () => {
           },
           options,
         ),
-      ).toThrow(failed);
+      ).rejects.toThrow(rollback);
     } finally {
-      commit.mockRestore();
+      refusal.mockRestore();
     }
+    expect(checkedCommit).toBe(true);
+    expect(() => assertPreparedSkillLibrarySelection(pins)).not.toThrow();
+    expect(await seedSkillLibrarySelection(alice, options)).toEqual(pins);
+  });
+
+  it("revokes a prepared seed after a lost worker receipt without replaying the mutation", async () => {
+    const { alice, options } = fixture();
+    const saved = await saveSkillLibrary(alice, draft(), options);
+    const pins = await seedSkillLibrarySelection(alice, options);
+    const failed = new SqliteWorkerError("native commit outcome unavailable", "outcome-unknown");
+    const original = workerStore.runSqliteWorkerStoreOperation;
+    let executed = 0;
+    let admission: workerAdmission.SqliteWorkerOperationAdmission | undefined;
+    const lostReceipt = createDeferredCore();
+    let receiptFault: { mockRestore(): void } | undefined;
+    const delivery = vi
+      .spyOn(workerStore, "runSqliteWorkerStoreOperation")
+      .mockImplementation(
+        <Operations extends SqliteWorkerOperations, T>(
+          target: SqliteWorkerStore<Operations>,
+          operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
+          stateContext?: Parameters<typeof original>[2],
+          assertCurrent?: Parameters<typeof original>[3],
+          createAdmission?: Parameters<typeof original>[4],
+        ) =>
+          original(
+            target,
+            (worker) =>
+              operation({
+                execute: async (command, operationOptions) => {
+                  if (command.type !== "skillLibrary.mutate") {
+                    return worker.execute(command, operationOptions);
+                  }
+                  try {
+                    await worker.execute(command, operationOptions);
+                    executed++;
+                    expect(admission?.committed).toMatchObject({
+                      facts: { entry: { enabled: false } },
+                    });
+                    if (!admission) {
+                      throw new Error("Expected worker mutation admission");
+                    }
+                    receiptFault = vi
+                      .spyOn(admission, "committed", "get")
+                      .mockReturnValue(undefined);
+                    throw failed;
+                  } finally {
+                    lostReceipt.resolve();
+                  }
+                },
+              }),
+            stateContext,
+            assertCurrent,
+            createAdmission &&
+              ((retained) => {
+                const admitted = createAdmission({
+                  settled: retained.settled.then(async () => {
+                    await lostReceipt.promise;
+                    return { kind: "unknown" as const, error: failed };
+                  }),
+                });
+                admission = admitted.admission;
+                return admitted;
+              }),
+          ),
+      );
+    try {
+      await expect(
+        mutateSkillLibrary(
+          alice,
+          {
+            action: "disable",
+            skillId: saved.entry.skillId,
+            expectedRevision: saved.entry.revision,
+          },
+          options,
+        ),
+      ).rejects.toThrow(failed);
+    } finally {
+      lostReceipt.resolve();
+      receiptFault?.mockRestore();
+      delivery.mockRestore();
+    }
+    expect(executed).toBe(1);
     expect(() => assertPreparedSkillLibrarySelection(pins)).toThrow();
+    expect((await listSkillLibrary(alice, {}, options)).entries[0]?.enabled).toBe(false);
+    expect(
+      openOpenClawStateDatabase(options)
+        .db.prepare("SELECT COUNT(*) AS count FROM skill_library_events WHERE action = 'disable'")
+        .get(),
+    ).toMatchObject({ count: 1 });
   });
 
   it.each(["seed", "attach"] as const)(

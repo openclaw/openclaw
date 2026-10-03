@@ -56,6 +56,7 @@ import {
 } from "./test-helpers.js";
 import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
+import { loseSessionSignalAcknowledgement } from "./test/session-signal-failure.test-support.js";
 
 const runEmbeddedAgent = vi.spyOn(embeddedAgent, "runEmbeddedAgent");
 
@@ -276,6 +277,7 @@ describe("Goal chat admission and continuation", () => {
       );
     let eventsAtAck: ReturnType<typeof creationEvents> = Promise.resolve([]);
     await withHeldModel(async () => {
+      const signal = loseSessionSignalAcknowledgement();
       const started = await rpc(
         "chat.send",
         request,
@@ -287,8 +289,9 @@ describe("Goal chat admission and continuation", () => {
           }
         },
         requestClient,
-      );
+      ).finally(signal.restore);
       const acknowledgedEvents = await eventsAtAck;
+      expect(signal.attempts()).toBe(2);
       expect(started.mock.calls).toEqual([
         [
           true,

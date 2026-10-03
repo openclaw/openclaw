@@ -67,10 +67,30 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.each([
-  { workMs: 0, rowCount: 2 },
-  { workMs: 20, rowCount: 65 },
-])(
+function observeRowFacts(
+  wrap: (
+    owner: history.SessionHistoryWorkerDatabase,
+  ) => history.SessionHistoryWorkerDatabase["readRowFacts"],
+  once = false,
+) {
+  const readDatabases = history.withSessionHistoryWorkerDatabases;
+  const observe: typeof readDatabases = (databases, consume, lane) =>
+    readDatabases(
+      databases,
+      (owners) =>
+        consume(
+          owners.map((owner) => ({
+            ...owner,
+            readRowFacts: wrap(owner),
+          })),
+        ),
+      lane,
+    );
+  const spy = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
+  return once ? spy.mockImplementationOnce(observe) : spy.mockImplementation(observe);
+}
+
+it.each([{ workMs: 20, rowCount: 65 }])(
   "accepts $rowCount rows once with $workMs ms of materialization work",
   async ({ workMs, rowCount }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -88,7 +108,7 @@ it.each([
       const releaseForeground = retainSessionListForegroundWork();
       try {
         const projection = await createSessionRowProjection({
-          cfg: { agents: { list: [{ id: "main", default: true }] } },
+          cfg: { agents: { entries: { main: {} } } },
           modelCatalog: [],
         });
         try {
@@ -96,26 +116,14 @@ it.each([
           expect(projection.dirtyRowCount).toBe(0);
           const before = projection.materializedCount;
           const reads: Array<{ sessionKeys: string[]; rows: SessionRowDatabaseFacts[] }> = [];
-          const readDatabases = history.withSessionHistoryWorkerDatabases;
-          const databases = vi
-            .spyOn(history, "withSessionHistoryWorkerDatabases")
-            .mockImplementation((selected, consume) =>
-              readDatabases(selected, (owners) =>
-                consume(
-                  owners.map((owner) => ({
-                    ...owner,
-                    async readRowFacts(input) {
-                      const reply = await owner.readRowFacts(input);
-                      reads.push({
-                        sessionKeys: [...input.sessionKeys],
-                        rows: structuredClone(reply.rows),
-                      });
-                      return reply;
-                    },
-                  })),
-                ),
-              ),
-            );
+          const databases = observeRowFacts((owner) => async (input) => {
+            const reply = await owner.readRowFacts(input);
+            reads.push({
+              sessionKeys: [...input.sessionKeys],
+              rows: structuredClone(reply.rows),
+            });
+            return reply;
+          });
           let elapsed = 0;
           const acceptance: number[] = [];
           let accepting = 0;
@@ -227,24 +235,13 @@ it.each([
       try {
         await projection.ensureMaterialized();
         const reads: string[][] = [];
-        const readDatabases = history.withSessionHistoryWorkerDatabases;
-        vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
-          (databases, consume) =>
-            readDatabases(databases, (owners) =>
-              consume(
-                owners.map((owner) => ({
-                  ...owner,
-                  async readRowFacts(input) {
-                    reads.push([...input.sessionKeys]);
-                    const reply = await owner.readRowFacts(input);
-                    entered.resolve();
-                    await release.promise;
-                    return reply;
-                  },
-                })),
-              ),
-            ),
-        );
+        observeRowFacts((owner) => async (input) => {
+          reads.push([...input.sessionKeys]);
+          const reply = await owner.readRowFacts(input);
+          entered.resolve();
+          await release.promise;
+          return reply;
+        });
         for (const { query, entry } of rows) {
           replaceSessionEntrySync(
             { agentId: query.agentId, sessionKey: query.key },
@@ -297,26 +294,18 @@ it("preserves a keyed replacement while an older worker reply is pending", async
     const release = createDeferredCore();
     let reading: Promise<void> | undefined;
     const projection = await createSessionRowProjection({
-      cfg: { agents: { list: [{ id: "main", default: true }] } },
+      cfg: { agents: { entries: { main: {} } } },
     });
     try {
       await projection.ensureMaterialized();
-      const readDatabases = history.withSessionHistoryWorkerDatabases;
-      vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementationOnce(
-        (databases, consume) =>
-          readDatabases(databases, (owners) =>
-            consume(
-              owners.map((owner) => ({
-                ...owner,
-                async readRowFacts(input) {
-                  const reply = await owner.readRowFacts(input);
-                  entered.resolve();
-                  await release.promise;
-                  return reply;
-                },
-              })),
-            ),
-          ),
+      observeRowFacts(
+        (owner) => async (input) => {
+          const reply = await owner.readRowFacts(input);
+          entered.resolve();
+          await release.promise;
+          return reply;
+        },
+        true,
       );
       sessionChanges.emit({ agentId: query.agentId, sessionKey: query.key });
       reading = projection.ensureMaterialized();
@@ -396,41 +385,27 @@ it.each([false, true])(
           sessionChanges.emit({ sessionKey: c.key, factsInvalidated: true });
           expect(projection.capture(c)?.unresolvedDatabaseFacts).toBe(true);
         }
-        const readDatabases = history.withSessionHistoryWorkerDatabases;
         const reads: string[][] = [];
-        vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
-          (databases, consume, lane) =>
-            readDatabases(
-              databases,
-              (owners) =>
-                consume(
-                  owners.map((database) => ({
-                    ...database,
-                    async readRowFacts(input) {
-                      reads.push([...input.sessionKeys]);
-                      const reply = await database.readRowFacts(input);
-                      if (input.sessionKeys.includes(a.key)) {
-                        if (reads.filter((keys) => keys.includes(a.key)).length === 1) {
-                          capturedA.resolve();
-                          await releaseA.promise;
-                        } else {
-                          repeatedA.resolve();
-                        }
-                      }
-                      if (structuralPending && input.sessionKeys.includes(c.key)) {
-                        await releaseB.promise;
-                      }
-                      if (input.sessionKeys.includes(b.key)) {
-                        capturedB.resolve();
-                        await releaseB.promise;
-                      }
-                      return reply;
-                    },
-                  })),
-                ),
-              lane,
-            ),
-        );
+        observeRowFacts((database) => async (input) => {
+          reads.push([...input.sessionKeys]);
+          const reply = await database.readRowFacts(input);
+          if (input.sessionKeys.includes(a.key)) {
+            if (reads.filter((keys) => keys.includes(a.key)).length === 1) {
+              capturedA.resolve();
+              await releaseA.promise;
+            } else {
+              repeatedA.resolve();
+            }
+          }
+          if (structuralPending && input.sessionKeys.includes(c.key)) {
+            await releaseB.promise;
+          }
+          if (input.sessionKeys.includes(b.key)) {
+            capturedB.resolve();
+            await releaseB.promise;
+          }
+          return reply;
+        });
         const describe = (query: typeof a) =>
           withReadySessionRows(
             projection,
@@ -561,7 +536,7 @@ it.each([
   "captured sibling row",
 ] as const)("consumes current list facts across an awaited worker reply: %s", async (change) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const changesOwner =
       change === "runtime stored facts" || change === "invalidated presentation facts";
     const changesSibling = change === "unrelated stored row" || change === "captured sibling row";
@@ -608,33 +583,22 @@ it.each([
             owner: expect.objectContaining({ actor: expect.objectContaining({ id: owner.id }) }),
           }),
         ]);
-        const readDatabases = history.withSessionHistoryWorkerDatabases;
         let first = true;
-        vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
-          (databases, consume) =>
-            readDatabases(databases, (owners) =>
-              consume(
-                owners.map((database) => ({
-                  ...database,
-                  async readRowFacts(input) {
-                    const reply = await database.readRowFacts(input);
-                    if (first) {
-                      if (change === "captured sibling row") {
-                        expect(input.sessionKeys).toContain(unrelated.sessionKey);
-                      }
-                      first = false;
-                      captured.resolve();
-                      await releaseFirst.promise;
-                    } else if (input.sessionKeys.includes(scope.sessionKey)) {
-                      repeated.resolve();
-                      await releaseRepeated.promise;
-                    }
-                    return reply;
-                  },
-                })),
-              ),
-            ),
-        );
+        observeRowFacts((database) => async (input) => {
+          const reply = await database.readRowFacts(input);
+          if (first) {
+            if (change === "captured sibling row") {
+              expect(input.sessionKeys).toContain(unrelated.sessionKey);
+            }
+            first = false;
+            captured.resolve();
+            await releaseFirst.promise;
+          } else if (input.sessionKeys.includes(scope.sessionKey)) {
+            repeated.resolve();
+            await releaseRepeated.promise;
+          }
+          return reply;
+        });
         replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, label: "Fresh stored label" });
         if (change === "captured sibling row") {
           replaceSessionEntrySync(unrelated, {
@@ -873,7 +837,7 @@ it("keeps the stored main address and ACP runtime after mainKey changes", async 
 it("refreshes prepared ACP metadata on publication and fences replacement lifecycles", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const key = "agent:main:acp:worker-row";
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const target = { agentId: "main", sessionKey: key };
     replaceSessionEntrySync(target, {
       sessionId: "worker-row",

@@ -135,7 +135,7 @@ describe("reclamation with the public memory runtime", () => {
           store: { vector: { enabled: false } },
         },
       },
-      agents: { defaults: { workspace }, list: [{ id: "main", default: true }] },
+      agents: { defaults: { workspace }, entries: { main: {} } },
     };
     const acquired = await getActiveMemorySearchManagerCore({
       cfg,

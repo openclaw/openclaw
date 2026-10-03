@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
 import type { SessionTranscriptTurnMutation } from "../../config/sessions/goals-operations.types.js";
@@ -10,14 +11,116 @@ import {
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
 import type { registerChatAbortController } from "../chat-abort.js";
+import { ExpectedProfileMismatchError } from "../expected-profile.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
+import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import { formatForLog } from "../ws-log.js";
+import { readPreRegisteredRun } from "./chat-abort-authorization.js";
+import {
+  prepareChatSendRetryComparison,
+  readChatSendDedupeResponse,
+  resolveChatSendRequestConflict,
+  respondChatSendAdmissionError,
+  respondChatSendRetry,
+  type ChatSendPreAdmissionParams,
+} from "./chat-send-pre-admission.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
-import type { PreparedChatSendSession } from "./chat-send-session.js";
+import type { ChatSendRetryComparison } from "./chat-send-retry-comparison.js";
+import { loadCurrentChatSendSession, type PreparedChatSendSession } from "./chat-send-session.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
+
+/** Preparation returns facts; the caller consumes current retry ownership before reserving. */
+export function prepareChatSendAdmissionRetry(params: ChatSendPreAdmissionParams) {
+  try {
+    return prepareChatSendRetryComparison(params)?.catch((error: unknown) => ({ error }));
+  } catch (error) {
+    return { error };
+  }
+}
+
+export function consumeChatSendAdmissionRetry(
+  params: ChatSendPreAdmissionParams,
+  prepared: Awaited<ReturnType<typeof prepareChatSendAdmissionRetry>>,
+) {
+  try {
+    if (prepared && "error" in prepared) {
+      throw prepared.error;
+    }
+    const pending = readPreRegisteredRun({
+      key: params.session.pendingChatSendKey,
+      entry: params.context.dedupe.get(params.session.pendingChatSendKey),
+      keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
+    });
+    if (pending?.payload.goalFingerprint) {
+      params.respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "Run ID is reserved by a Goal request; use a new ID.",
+        ),
+      );
+      return false;
+    }
+    return !params.request.goalOperation && respondChatSendRetry(params, prepared)
+      ? false
+      : prepared;
+  } catch (error) {
+    if (error instanceof SessionMutationAuthorizationChangedError) {
+      throw error;
+    }
+    respondChatSendAdmissionError(error, params.respond);
+    return false;
+  }
+}
+
+/** Reload after an actual worker wait in the consuming admission frame. */
+export function prepareCurrentChatSendRetry(
+  params: ChatSendPreAdmissionParams & { session: PreparedChatSendSession },
+  ownPendingAttemptId: string,
+) {
+  const session = loadCurrentChatSendSession(params.session);
+  const comparison = prepareChatSendRetryComparison(
+    { ...params, session: { ...params.session, entry: session.entry } },
+    ownPendingAttemptId,
+  );
+  return {
+    comparison,
+    readSession: () => (comparison ? loadCurrentChatSendSession(params.session) : session),
+  };
+}
+
+export function respondChatSendWorkAdmissionFailure(
+  params: ChatSendPreAdmissionParams,
+  error: unknown,
+  comparison?: ChatSendRetryComparison,
+) {
+  if (error instanceof ExpectedProfileMismatchError) {
+    throw error;
+  }
+  const { context, respond, session } = params;
+  const { clientRunId } = session;
+  try {
+    const conflict = resolveChatSendRequestConflict(params, comparison);
+    if (conflict) {
+      respond(false, undefined, conflict);
+      return;
+    }
+  } catch {
+    // Preserve the original refusal when no current comparison evidence is available.
+  }
+  const aborted =
+    context.chatRunState.hasAbortMarker(clientRunId) &&
+    readChatSendDedupeResponse(context.dedupe, clientRunId);
+  if (aborted) {
+    respond(aborted.ok, aborted.payload, aborted.error, { cached: true, runId: clientRunId });
+    return;
+  }
+  respondChatSendAdmissionError(error, respond);
+}
 
 /** New input is checked only after the chat owner has reconciled prior receipts. */
 export function admitChatSendUploads({
@@ -67,10 +170,25 @@ export function releaseChatSendCallerAuthority(params: {
 export function createChatSendWorkAdmission(params: {
   admission: Pick<SessionWorkAdmissionLease, "release">;
   releaseCallerAuthority?: () => void;
+  releaseGatewayRootContinuation?: () => void;
   logGateway: Pick<GatewayRequestContext["logGateway"], "warn">;
 }) {
   let references = 1;
-  let finishPendingInput: (() => void) | undefined;
+  let finishPendingInput: (() => void | Promise<void>) | undefined;
+  const releaseAdmission = () => {
+    try {
+      params.admission.release();
+    } finally {
+      try {
+        params.releaseCallerAuthority?.();
+      } finally {
+        params.releaseGatewayRootContinuation?.();
+      }
+    }
+  };
+  const warnCleanupFailure = (error: unknown) => {
+    params.logGateway.warn(`Failed to finish pending chat input: ${formatForLog(error)}`);
+  };
   const release = () => {
     if (references === 0) {
       return;
@@ -79,18 +197,23 @@ export function createChatSendWorkAdmission(params: {
     if (references !== 0) {
       return;
     }
+    let pending: void | Promise<void> = undefined;
     try {
-      finishPendingInput?.();
+      pending = finishPendingInput?.();
     } catch (error) {
       // The durable row remains recoverable; a failed disposition write must
       // not strand session/root drain ownership during shutdown.
-      params.logGateway.warn(`Failed to finish pending chat input: ${formatForLog(error)}`);
-    } finally {
-      try {
-        params.admission.release();
-      } finally {
-        params.releaseCallerAuthority?.();
-      }
+      warnCleanupFailure(error);
+    }
+    if (pending) {
+      // The existing admission's drain joins this write before releasing the
+      // session/root fence; prompt custody has already been revoked.
+      void pending.then(releaseAdmission, (error: unknown) => {
+        warnCleanupFailure(error);
+        releaseAdmission();
+      });
+    } else {
+      releaseAdmission();
     }
   };
   const hold = () => {
@@ -113,7 +236,7 @@ export function createChatSendWorkAdmission(params: {
       references += 1;
       return hold();
     },
-    setPendingInputCleanup: (finish: () => void) => {
+    setPendingInputCleanup: (finish: () => void | Promise<void>) => {
       finishPendingInput = finish;
     },
   };

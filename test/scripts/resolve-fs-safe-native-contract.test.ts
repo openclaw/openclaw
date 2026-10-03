@@ -7,19 +7,14 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const SCRIPT = resolve("scripts/resolve-fs-safe-native-contract.mjs");
 const tempDirectories = useAutoCleanupTempDirTracker(afterEach);
 
-function commitSource(
-  fsSafeVersion: string,
-  defaults: string,
-  remoteBranch?: string,
-  productVersion = "2026.6.33",
-) {
+function commitSource(fsSafeVersion: string, defaults: string, remoteBranch?: string) {
   const root = tempDirectories.make("openclaw-fs-safe-contract-");
   execFileSync("git", ["init", "-q"], { cwd: root });
   execFileSync("git", ["config", "user.email", "test@openclaw.local"], { cwd: root });
   execFileSync("git", ["config", "user.name", "OpenClaw test"], { cwd: root });
   writeFileSync(
     join(root, "package.json"),
-    `${JSON.stringify({ version: productVersion, dependencies: { "@openclaw/fs-safe": fsSafeVersion } })}\n`,
+    `${JSON.stringify({ version: "2026.8.33", dependencies: { "@openclaw/fs-safe": fsSafeVersion } })}\n`,
   );
   const defaultsPath = join(root, "src/infra/fs-safe-defaults.ts");
   mkdirSync(dirname(defaultsPath), { recursive: true });
@@ -52,51 +47,6 @@ function resolveContract(
 const legacyDefaults = 'import { configureFsSafePython } from "@openclaw/fs-safe/config";\n';
 
 describe("resolve-fs-safe-native-contract", () => {
-  it("reports the actual 0.3 selected-source contract as not applicable when authorized", () => {
-    const { root, ref } = commitSource("0.3.0", legacyDefaults, "extended-stable/2026.6.33");
-    expect(resolveContract(root, ref)).toBe("not-applicable");
-  });
-
-  it("reports the exact 2026.7.33 Python-only 0.4.1 contract as not applicable", () => {
-    const { root, ref } = commitSource(
-      "0.4.1",
-      legacyDefaults,
-      "extended-stable/2026.7.33",
-      "2026.7.33",
-    );
-    expect(resolveContract(root, ref)).toBe("not-applicable");
-  });
-
-  it.each(["2026.7.34", "2026.7.35"])(
-    "reports the exact %s Python-only 0.4.1 contract as not applicable",
-    (productVersion) => {
-      const { root, ref } = commitSource(
-        "0.4.1",
-        legacyDefaults,
-        "extended-stable/2026.7.33",
-        productVersion,
-      );
-      expect(resolveContract(root, ref)).toBe("not-applicable");
-      expect(resolveContract(root, ref, false)).toBe("required");
-      expect(resolveContract(root, ref, true, ref)).toBe("required");
-    },
-  );
-
-  it("keeps changed 2026.7.35 dependency and native contracts strict", () => {
-    for (const { dependency, defaults } of [
-      { dependency: "0.4.2", defaults: legacyDefaults },
-      { dependency: "0.4.1", defaults: `${legacyDefaults}configureFsSafeNative({});\n` },
-    ]) {
-      const { root, ref } = commitSource(
-        dependency,
-        defaults,
-        "extended-stable/2026.7.33",
-        "2026.7.35",
-      );
-      expect(resolveContract(root, ref)).toBe("required");
-    }
-  });
-
   it("keeps the current native consumer contract strict", () => {
     const { root, ref } = commitSource(
       "0.8.1",
@@ -110,35 +60,27 @@ describe("resolve-fs-safe-native-contract", () => {
       "0.5.6",
       'import { configureFsSafeNative } from "@openclaw/fs-safe/config";\n',
       "extended-stable/2026.8.33",
-      "2026.8.33",
     );
     expect(resolveContract(root, ref)).toBe("bundled");
     expect(resolveContract(root, ref, false)).toBe("required");
     expect(resolveContract(root, ref, true, ref)).toBe("required");
   });
 
-  it("keeps current, unapproved, unauthorized, or sibling-native source contracts strict", () => {
+  it("keeps current, unauthorized, or non-bundled source contracts strict", () => {
     const unapproved = commitSource("0.3.0", legacyDefaults);
     expect(resolveContract(unapproved.root, unapproved.ref)).toBe("required");
-    const currentRelease = commitSource("0.3.0", legacyDefaults, "release/2026.6.35");
+    const currentRelease = commitSource("0.3.0", legacyDefaults, "release/2026.9.1");
     expect(resolveContract(currentRelease.root, currentRelease.ref)).toBe("required");
     const unauthorized = commitSource("0.3.0", legacyDefaults);
     expect(resolveContract(unauthorized.root, unauthorized.ref, false)).toBe("required");
     expect(resolveContract(unauthorized.root, unauthorized.ref, true, unauthorized.ref)).toBe(
       "required",
     );
-    const unknownDependency = commitSource("0.3.1", legacyDefaults, "extended-stable/2026.6.33");
+    const unknownDependency = commitSource("0.4.1", legacyDefaults, "extended-stable/2026.8.33");
     expect(resolveContract(unknownDependency.root, unknownDependency.ref)).toBe("required");
-    const unknownProduct = commitSource(
-      "0.4.1",
-      legacyDefaults,
-      "extended-stable/2026.8.33",
-      "2026.8.33",
-    );
-    expect(resolveContract(unknownProduct.root, unknownProduct.ref)).toBe("required");
   });
 
-  it("uses only sparse-materialized fs-safe ownership sources for an authorized legacy target", () => {
+  it("uses only sparse-materialized fs-safe ownership sources for the supported frozen target", () => {
     const root = tempDirectories.make("openclaw-fs-safe-sparse-contract-");
     const ref = "a".repeat(40);
     const gitPath = join(root, "git");
@@ -146,13 +88,13 @@ describe("resolve-fs-safe-native-contract", () => {
       gitPath,
       `#!/usr/bin/env sh
 case "$1" in
-  for-each-ref) printf '%s\\n' 'origin/extended-stable/2026.6.33' ;;
+  for-each-ref) printf '%s\\n' 'origin/extended-stable/2026.8.33' ;;
   show)
     case "$2" in
       ${ref}:package.json)
-        printf '%s\\n' '{"version":"2026.6.33","dependencies":{"@openclaw/fs-safe":"0.3.0"}}' ;;
+        printf '%s\\n' '{"version":"2026.8.33","dependencies":{"@openclaw/fs-safe":"0.5.6"}}' ;;
       ${ref}:src/infra/fs-safe-defaults.ts)
-        printf '%s\\n' 'import { configureFsSafePython } from "@openclaw/fs-safe/config";' ;;
+        printf '%s\\n' 'import { configureFsSafeNative } from "@openclaw/fs-safe/config";' ;;
       *) echo "unmaterialized source: $2" >&2; exit 128 ;;
     esac ;;
   *) echo "unexpected git operation: $1" >&2; exit 128 ;;
@@ -165,6 +107,6 @@ esac
       encoding: "utf8",
       env: { ...process.env, PATH: `${root}:${process.env.PATH}` },
     }).trim();
-    expect(output).toBe("not-applicable");
+    expect(output).toBe("bundled");
   });
 });

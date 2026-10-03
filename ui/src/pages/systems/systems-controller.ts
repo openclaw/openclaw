@@ -1,5 +1,6 @@
 import type { BackupStatusResult, StorageLocationsProbeResult } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { registerListener } from "../../../../src/shared/listeners.js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
@@ -265,10 +266,7 @@ export class SystemsController {
   }
 
   subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => {
-      this.listeners.delete(listener);
-    };
+    return registerListener(this.listeners, listener);
   }
 
   private notify(): void {

@@ -12,16 +12,11 @@ const { registerVoiceClientSpy, waitForRegistration, stopPresenceListener } = vi
 vi.mock("../internal/voice.js", () => ({
   VoicePlugin: class VoicePlugin {
     id = "voice";
-    registerClient(client: {
-      getPlugin: (id: string) => unknown;
-      registerListener: (listener: object) => object;
-      unregisterListener: (listener: object) => boolean;
-    }) {
+    registerClient(client: Pick<Client, "getPlugin">) {
       registerVoiceClientSpy(client);
       if (!client.getPlugin("gateway")) {
         throw new Error("gateway plugin missing");
       }
-      client.registerListener({ type: "voice-listener" });
     }
   },
 }));
@@ -134,7 +129,7 @@ describe("Discord provider startup", () => {
     registration.resolve();
     const result = await pending;
     expect(registerVoiceClientSpy).toHaveBeenCalledOnce();
-    expect(result.client.listeners.map((listener) => listener.type)).toContain("voice-listener");
+    expect(registerVoiceClientSpy).toHaveBeenCalledWith(result.client);
     expect(createGatewaySupervisor).toHaveBeenCalledOnce();
     expect(result.gatewaySupervisor).toBe(gatewaySupervisor);
   });

@@ -12,13 +12,24 @@ title: "Integrity, troubleshooting, and recovery"
 Gateway agent inspections share a five-second foreground wait. Unfinished stores
 remain unavailable while the startup admission owner completes their inspection
 and session/model preparation after the listener is ready. Other agents and the
-Control UI can start in the meantime. Readiness reports pending required stores in
+Control UI can start in the meantime. Inspection starts during foreground
+readiness and continues without an idle retry delay. Deferred preparation starts
+when plugins and sidecars are ready, without waiting for restored subagent work
+to settle. Readiness reports pending required stores in
 `agentDatabases` without failing the Gateway probe; confirmed database failures
 still fail readiness. The full validation deadlines, dirty-close checks, and
 clean-close receipt requirements are unchanged; a deferred store is never
 admitted for writes merely because the foreground wait expired.
 Update canaries retain foreground inspection and strict database readiness because
 they do not activate background agent preparation.
+
+Without a reusable clean-close receipt, startup inspection performs a full-file
+`integrity_check` and `foreign_key_check` before allowing runtime preparation.
+Writable admission separately claims the current lease and performs its checks
+below. A stale-lease log appears at that claim, after read-only inspection; the
+time before that log can include a full scan rather than a wait for lease expiry.
+A clean same-version receipt skips both blocking integrity scans while retaining
+the owner, schema, canonical-index, and background-check requirements.
 
 For current-schema writable agent admission, the gate runs `quick_check` on
 `transcript_events` and per-table `integrity_check` on every other discovered
@@ -111,6 +122,9 @@ reclamation connections close immediately. Active executions close when their
 final borrower releases them; active reclamation requests settle before closing.
 External cleanup can still be pending. Cancellation alone never certifies a
 receipt: the last lease must still complete its checkpoint and native close.
+Required subagent cleanup remains tracked by its Gateway during drain, including
+child-session deletion, before database dependencies retire. Ordinary RPC
+admission stays closed; cleanup retains its original Gateway and session generation.
 Cleanup that needs another connection uses ordinary admission, which dirties the
 receipt again. A forced exit during a write still requires the admission gate.
 This changes no schema, update, or rollback contract.

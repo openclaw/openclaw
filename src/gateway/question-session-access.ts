@@ -4,10 +4,8 @@ import {
   errorShape,
   type QuestionRecord,
 } from "../../packages/gateway-protocol/src/index.js";
-import {
-  withSessionEntriesFromStoresInWorker,
-  type PreparedSessionEntryWorkerRead,
-} from "../config/sessions/session-entry-read-runtime.js";
+import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import type { PreparedSessionEntryWorkerRead } from "../config/sessions/session-entry-read-runtime.types.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { retainSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

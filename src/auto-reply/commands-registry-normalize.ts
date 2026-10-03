@@ -37,7 +37,11 @@ function appendMultilineTail(head: string, tail: string | undefined, spec?: Text
     return head;
   }
   if (!spec || spec.command.key === "skill" || spec.command.key === "learn") {
-    return `${head}\n${tail}`;
+    // `/skill` consumes the skill name before payload content can begin.
+    const headArgumentCount = head.split(/\s+/, 3).length - 1;
+    const hasPayload = headArgumentCount >= (spec?.command.key === "skill" ? 2 : 1);
+    const normalizedTail = hasPayload && spec?.command.key !== "learn" ? tail : tail.trimStart();
+    return `${head}\n${normalizedTail}`;
   }
   if (spec.command.key === "reset") {
     const flattened = tail.replace(/\s+/g, " ").trim();
@@ -101,7 +105,8 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
     (commandSpec !== undefined && ARGUMENT_PRESERVING_COMMAND_KEYS.has(commandSpec.command.key));
   const newline = preserveArguments ? -1 : trimmed.indexOf("\n");
   const singleLine = newline === -1 ? trimmed : trimmed.slice(0, newline).trim();
-  const multilineTail = newline === -1 ? undefined : trimmed.slice(newline + 1).trimStart();
+  // Indentation and blank lines after this boundary can be interior skill payload.
+  const multilineTail = newline === -1 ? undefined : trimmed.slice(newline + 1);
 
   // `/cmd: value` is accepted as `/cmd value` because some channels insert colon syntax.
   const normalized = singleLine.replace(

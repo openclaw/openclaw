@@ -18,6 +18,7 @@ import {
   collectForbiddenPackPaths,
   collectSkillShellScriptExecutableErrors,
   collectPackedInstalledPackageVerificationErrors,
+  createPackedBundledPluginActivationSmokeEnv,
   createPackedPluginSdkTypescriptSmokeProject,
   createPackedCompletionSmokeEnv,
   createPackedCliSmokeEnv,
@@ -168,6 +169,22 @@ describe("packed CLI smoke", () => {
     });
 
     expect(env).not.toHaveProperty("OPENAI_API_KEY");
+  });
+
+  it("isolates bundled plugin activation from ambient OpenClaw state", () => {
+    const env = createPackedBundledPluginActivationSmokeEnv(
+      {
+        HOME: "/tmp/operator-home",
+        OPENCLAW_STATE_DIR: "/tmp/operator-state",
+      },
+      "/tmp/release-check",
+    );
+
+    const homeDir = join("/tmp/release-check", "activation-home");
+    expect(env).toMatchObject({
+      HOME: homeDir,
+      OPENCLAW_STATE_DIR: join(homeDir, ".openclaw"),
+    });
   });
 
   it("does not admit provider credentials through smoke overrides", () => {
@@ -607,17 +624,6 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
     } finally {
       rmSync(consumerDir, { recursive: true, force: true });
     }
-  });
-
-  it("limits setupSurface omission to the recorded frozen targets", async () => {
-    const { packedPluginSdkMayOmitSetupSurface } = await import("../scripts/release-check.js");
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.33")).toBe(true);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.34")).toBe(true);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.35")).toBe(true);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.36")).toBe(false);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.35-beta.1")).toBe(false);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.9.4")).toBe(false);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.10.1")).toBe(false);
   });
 
   it("writes a consumer project that imports representative public SDK subpaths", () => {

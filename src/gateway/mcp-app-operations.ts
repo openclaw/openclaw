@@ -645,7 +645,8 @@ export async function callMcpAppToolWithElicitation(params: {
       const { createMcpAppFormResourceContext } = await import("./mcp-app-form-resources.js");
       assertCurrent();
       return createMcpAppFormResourceContext({
-        ...request,
+        snapshot: request.snapshot,
+        signal: request.signal,
         origin: params.origin,
         uploadResources: params.uploadResources,
       });

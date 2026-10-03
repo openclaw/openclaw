@@ -39,11 +39,6 @@ import {
 } from "../plugins/computer-use-contract.js";
 import { isWorkerDesktopArgs, isWorkerDesktopString } from "../shared/worker-desktop-descriptor.js";
 import { hasExactOwnKeys, workerProtocolObject } from "./protocol-record.js";
-import {
-  isWorkerToolName,
-  type WorkerToolAuthority,
-  type WorkerToolName,
-} from "./tool-authority.js";
 import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
 import {
   parseWorkerConnectionEndpoint,
@@ -56,6 +51,7 @@ type WorkerLaunchPermissionContext =
   | { permissionMode: SessionPermissionMode; workerContainmentRoot: string }
   | { permissionMode?: never; workerContainmentRoot?: never };
 
+export type WorkerToolAuthority = z.infer<typeof ToolAuthoritySchema>;
 export type WorkerBrowserLaunchDescriptor = z.infer<typeof BrowserLaunchSchema>;
 export type WorkerComputerLaunchDescriptor = z.infer<typeof ComputerLaunchSchema>;
 export type WorkerGitHubLaunchBinding = z.infer<typeof GitHubLaunchSchema>;
@@ -95,6 +91,7 @@ const WorkspacePath = AbsoluteHostPath.refine(
 const ExecAuthorityFields = {
   security: z.enum(["deny", "allowlist", "full"]),
   ask: z.enum(["off", "on-miss", "always"]),
+  // Host-specific approvals and default safe bins are not portable.
   safeBins: z.tuple([]).optional(),
 };
 const ExecAuthoritySchema = z
@@ -111,24 +108,23 @@ const ExecAuthoritySchema = z
         .min(1)
         .refine((value) => value.trim() === value)
         .optional(),
-    }).transform(({ node, ...authority }) =>
-      node === undefined ? authority : { ...authority, node },
-    ),
+    }).transform(({ node, ...authority }) => ({
+      ...authority,
+      ...(node === undefined ? {} : { node }),
+    })),
   ])
   .refine((value) => !Object.hasOwn(value, "safeBins") || value.safeBins !== undefined);
 const ToolAuthoritySchema = workerProtocolObject({
   allowedToolNames: z
-    .custom<WorkerToolName[]>(
-      (names) =>
-        Array.isArray(names) &&
-        names.every(isWorkerToolName) &&
-        new Set(names).size === names.length,
-    )
-    .transform((names) => [...names]),
+    .array(Identifier)
+    .max(256)
+    .refine((names) => new Set(names).size === names.length),
+  // Legacy absence denies execution; workers never reconstruct permissive policy.
   exec: ExecAuthoritySchema.optional(),
-}).transform(({ exec, ...authority }): WorkerToolAuthority =>
-  exec === undefined ? authority : { ...authority, exec },
-);
+}).transform(({ exec, ...authority }) => ({
+  ...authority,
+  ...(exec === undefined ? {} : { exec }),
+}));
 const BrowserLaunchSchema = workerProtocolObject({
   cdpUrl: z.string().refine((value) => {
     const url = URL.parse(value);

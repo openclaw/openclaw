@@ -13,8 +13,9 @@ sidebarTitle: "Chat"
 How the chat pane behaves: the session rail, the composer, and how the transcript renders.
 
 Tool activity shows a tool-specific icon beside its purpose or details instead of
-repeating the tool name. Hover the icon to see the exact tool name; screen readers
-retain that identity. Expanding an activity group keeps the individual tool details
+repeating the tool name. When no distinct purpose or detail is available, the row
+shows the tool label instead of leaving the text blank. Hover the icon to see the
+exact tool name; screen readers retain that identity. Expanding an activity group keeps the individual tool details
 and outcomes available. Completed group summaries retain their operation counts.
 Tool Search calls use the called tool's name, icon, and input details in tool rows
 and activity summaries.

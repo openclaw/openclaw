@@ -4,7 +4,10 @@ import {
 } from "@openclaw/ai/internal/shared";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
+import {
+  buildHarnessVisibleReplyGuidance,
+  messageToolOwnsVisibleReply,
+} from "../../auto-reply/source-reply-delivery-mode.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
@@ -95,7 +98,6 @@ import { resolveConversationCapabilityProfile } from "../conversation-capability
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { waitForDeferredTurnMaintenanceForSession } from "../embedded-agent-runner/context-engine-maintenance.js";
 import { resolvePromptBuildHookResult } from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
-import { composeSystemPromptWithHookContext } from "../embedded-agent-runner/run/attempt-thread-helpers.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
@@ -146,14 +148,14 @@ import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { cliBackendLog } from "./log.js";
 import { buildCliMcpGrantContext } from "./mcp-grant-context.js";
 import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
-import { CLAUDE_CLI_CONTEXT_MODEL_ALIASES, detectNodeClaudePlacement } from "./prepare-claude.js";
+import { detectNodeClaudePlacement, resolveClaudeCliContextModelId } from "./prepare-claude.js";
 import * as mcp from "./prepare-mcp.js";
 import { resolveCliRuntimeToolPolicy } from "./prepare-tool-policy.js";
 import {
-  buildCliTurnAppendContext,
   composeCliPromptContext,
   prependCliSessionDriftUserContext,
   prepareCliSystemPrompt,
+  prepareCliTurnPromptContext,
 } from "./prompt-context.js";
 import { admitCliRunParams, prepareCliRunModelAuthority } from "./run-admission.js";
 import {
@@ -187,11 +189,6 @@ function unsupportedIsolatedCompletionError(backendId: string): Error & { code: 
   );
 }
 
-function resolveClaudeCliContextModelId(modelId: string): string {
-  const trimmed = modelId.trim();
-  const lower = trimmed.toLowerCase();
-  return CLAUDE_CLI_CONTEXT_MODEL_ALIASES[lower] ?? trimmed;
-}
 type RunCliAgentPrepareParams = RunCliAgentParams & {
   /** Ring-zero tool transport supplied only by the OpenClaw orchestrator. */
   systemAgentTool?: import("../tools/system-agent-tool.js").SystemAgentToolOptions;
@@ -294,7 +291,7 @@ async function prepareCliRunContextWithinReadFence(
         ...runConfig,
         agents: {
           ...runConfig.agents,
-          entries: { [sessionOwner]: { default: true } },
+          entries: { [sessionOwner]: {} },
         },
       } satisfies OpenClawConfig);
   const { started, startedMonotonicMs } = captureCliRunStartTime();
@@ -1700,8 +1697,18 @@ async function prepareCliRunContextWithinReadFence(
             allowRawTranscriptReseed,
             rawTranscriptReseedReason,
           });
+    const effectiveReplyGuidance =
+      skipsTurnPreparation || params.isolatedCompletion
+        ? undefined
+        : buildHarnessVisibleReplyGuidance({
+            sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+            messageToolAvailable,
+            requireExplicitMessageTarget,
+          });
     const finalizedTranscriptPrompt =
-      (params.finalizePromptForResolvedTools || sessionPromptContext?.durableContext) &&
+      (params.finalizePromptForResolvedTools ||
+        sessionPromptContext?.durableContext ||
+        effectiveReplyGuidance) &&
       params.transcriptPrompt === undefined
         ? params.prompt
         : params.transcriptPrompt;
@@ -1717,58 +1724,37 @@ async function prepareCliRunContextWithinReadFence(
       preparedPrompt = remapSkillReferencePaths(preparedPrompt, preparedSkills.usagePaths);
     }
     if (!skipsTurnPreparation) {
-      try {
-        const hookResult = promptBuildHookResult;
-        const prependContext = [
+      ({
+        prompt: preparedPrompt,
+        systemPrompt,
+        promptContext,
+        promptForHooks,
+      } = await prepareCliTurnPromptContext({
+        prompt: preparedPrompt,
+        systemPrompt,
+        privateContext: executionTarget.kind === "plugin",
+        deliveryGuidance: effectiveReplyGuidance,
+        hookResult: promptBuildHookResult,
+        prependContext: [
           sessionPromptContext?.durableContext,
-          hookResult?.prependContext,
+          promptBuildHookResult?.prependContext,
           authorizedPromptBuildResult?.prependContext,
-        ]
-          .filter((value): value is string => Boolean(value?.trim()))
-          .join("\n\n");
-        const appendContext = await buildCliTurnAppendContext({
-          requesterProfileId,
-          capabilityToolNames: new Set(promptTools.map((tool) => tool.name)),
-          sessionKey: params.sessionKey,
-          agentId: sessionAgentId,
-          backend: preparedBackendFinal.backend,
-          isNewSession:
-            !reusableCliSessionId?.trim() || reusableCliSession.mode === "reuse-with-drift",
-          systemPrompt,
-          thinkLevel: params.thinkLevel,
-          context: [
-            turnRuntimeFacts?.relocatable,
-            hookResult?.appendContext,
-            authorizedPromptBuildResult?.appendContext,
-          ],
-        });
-        const logicalPrompt = composeCliPromptContext(preparedPrompt, {
-          prependContext,
-          appendContext,
-        });
-        if ((prependContext || appendContext) && executionTarget.kind === "plugin") {
-          // The plugin transports private context separately; policy hooks still see all of it.
-          promptContext = {
-            ...(prependContext ? { prependContext } : {}),
-            ...(appendContext ? { appendContext } : {}),
-          };
-          promptForHooks = logicalPrompt;
-        } else {
-          preparedPrompt = logicalPrompt;
-        }
-        const hookSystemPrompt = hookResult?.systemPrompt?.trim();
-        if (hookSystemPrompt) {
-          systemPrompt = hookSystemPrompt;
-        }
-        systemPrompt =
-          composeSystemPromptWithHookContext({
-            baseSystemPrompt: systemPrompt,
-            prependSystemContext: hookResult?.prependSystemContext,
-            appendSystemContext: hookResult?.appendSystemContext,
-          }) ?? systemPrompt;
-      } catch (error) {
-        cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
-      }
+        ],
+        requesterProfileId,
+        capabilityToolNames: new Set(promptTools.map((tool) => tool.name)),
+        sessionKey: params.sessionKey,
+        agentId: sessionAgentId,
+        backend: preparedBackendFinal.backend,
+        isNewSession:
+          !reusableCliSessionId?.trim() || reusableCliSession.mode === "reuse-with-drift",
+        thinkLevel: params.thinkLevel,
+        runtimeContextFragments: params.runtimeContextFragments,
+        context: [
+          turnRuntimeFacts?.relocatable,
+          promptBuildHookResult?.appendContext,
+          authorizedPromptBuildResult?.appendContext,
+        ],
+      }));
       params.assertCurrent?.();
       params.abortSignal?.throwIfAborted();
     }
@@ -1795,9 +1781,8 @@ async function prepareCliRunContextWithinReadFence(
         promptForHooks = renderCurrentPrompt(promptForHooks, preferResumableText);
       }
     }
-    // Node placement keeps this: the history prompt is built from the
-    // gateway-side OpenClaw transcript, so a fresh remote CLI session still
-    // receives prior conversation context via stdin.
+    // Node placement keeps history from the Gateway transcript: fresh remote
+    // CLI sessions still receive prior conversation context via stdin.
     const shouldPrepareOpenClawHistoryPrompt =
       !skipsTurnPreparation && (!reusableCliSessionId || allowRawTranscriptReseed);
     let openClawHistoryPrompt = shouldPrepareOpenClawHistoryPrompt

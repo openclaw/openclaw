@@ -435,6 +435,12 @@ it stopped, leaves migrations pending, and names the next repair action. Errors
 after repair writes begin, a live or unverified Gateway, unreadable state, active migration writes, unsettled
 cleanup, invalid configuration, and failed required readiness checks still exit nonzero.
 
+If a required repair phase exceeds its deadline, repair exits with code 1 and JSON reports
+`status: "failed"` with the `stuckPhase`. That result remains available after
+service restoration, including when the Gateway is still starting or restoration
+also fails. A startup warning after otherwise successful Doctor repair does not
+clear a repair phase timeout.
+
 Recorded pending-migration warnings stop appearing after the migration owner
 records completion. Unrelated warnings and later or reintroduced obligations
 remain visible; the original update history is preserved.

@@ -685,14 +685,13 @@ describe("resolveModelRuntimePolicy", () => {
             "openai/foo-1": { agentRuntime: { id: "codex" } },
           },
         },
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             models: {
               "anthropic/foo-1": { agentRuntime: { id: "claude-cli" } },
             },
           },
-        ],
+        },
       },
     } as OpenClawConfig;
 
@@ -721,15 +720,14 @@ describe("resolveModelRuntimePolicy", () => {
             "vllm/qwen-local": { agentRuntime: { id: "codex" } },
           },
         },
-        list: [
-          { id: "ops" },
-          {
-            id: "research",
+        entries: {
+          ops: {},
+          research: {
             models: {
               "vllm/qwen-local": { agentRuntime: { id: "openclaw" } },
             },
           },
-        ],
+        },
       },
     } as OpenClawConfig;
 

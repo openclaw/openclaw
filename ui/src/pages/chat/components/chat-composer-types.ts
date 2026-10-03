@@ -157,6 +157,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onTypingChange?: (typing: boolean, preview?: string) => void;
   composerControls?: TemplateResult | typeof nothing;
   footerContent?: TemplateResult | typeof nothing;
+  composerRecovery?: TemplateResult | typeof nothing;
   notices?: TemplateResult | typeof nothing;
   permissionPicker?: ChatPermissionPickerProps;
   onDraftChange: (next: string, mentions?: readonly HumanMention[]) => void;

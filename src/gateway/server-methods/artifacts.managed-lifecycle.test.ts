@@ -70,7 +70,7 @@ async function invokeArtifactHandler(
     respond: (ok, payload, error) => {
       calls.push({ ok, payload, error });
     },
-    context: runtimeContext({ agents: { entries: { main: { default: true } } } }) as never,
+    context: runtimeContext({ agents: { entries: { main: {} } } }) as never,
   });
   return { calls };
 }

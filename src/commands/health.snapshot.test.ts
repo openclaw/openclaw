@@ -963,16 +963,18 @@ describe("collectGatewayHealthSnapshot", () => {
   it("disables heartbeat for agents without heartbeat blocks", async () => {
     testConfig = {
       agents: {
+        ownership: "explicit",
         defaults: {
+          systemAgent: { agentId: "main" },
           heartbeat: {
             every: "30m",
             target: "last",
           },
         },
-        list: [
-          { id: "main", default: true },
-          { id: "ops", heartbeat: { every: "1h", target: "whatsapp" } },
-        ],
+        entries: {
+          main: {},
+          ops: { heartbeat: { every: "1h", target: "whatsapp" } },
+        },
       },
     };
     testStore = {};
@@ -991,7 +993,9 @@ describe("collectGatewayHealthSnapshot", () => {
   it("passes agent scope when summarizing configured agent sessions", async () => {
     testConfig = {
       agents: {
-        list: [{ id: "main", default: true }, { id: "ops" }],
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, ops: {} },
       },
     };
     testStore = {};

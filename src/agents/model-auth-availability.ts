@@ -8,7 +8,7 @@ import { hasNonEmptyString as hasSecret } from "@openclaw/normalization-core/str
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import type {
   ProviderModelRouteAuthRequirement,
   ProviderModelRouteCandidate,
@@ -346,8 +346,8 @@ export function createModelAuthAvailabilityResolver(
       : undefined);
   const hydratedProfileIds = new Set<string>();
   const sameSecretRef = (
-    left: ReturnType<typeof coerceSecretRef>,
-    right: ReturnType<typeof coerceSecretRef>,
+    left: ReturnType<typeof parseSecretRef>,
+    right: ReturnType<typeof parseSecretRef>,
   ) =>
     left !== null &&
     right !== null &&
@@ -378,8 +378,8 @@ export function createModelAuthAvailabilityResolver(
       credential.type === "api_key" &&
       runtime.type === "api_key" &&
       sameSecretRef(
-        coerceSecretRef(credential.keyRef ?? credential.key, params.cfg.secrets?.defaults),
-        coerceSecretRef(runtime.keyRef, params.cfg.secrets?.defaults),
+        parseSecretRef(credential.keyRef ?? credential.key, params.cfg.secrets?.defaults),
+        parseSecretRef(runtime.keyRef, params.cfg.secrets?.defaults),
       ) &&
       hasSecret(runtime.key)
     ) {
@@ -390,8 +390,8 @@ export function createModelAuthAvailabilityResolver(
       credential.type === "token" &&
       runtime.type === "token" &&
       sameSecretRef(
-        coerceSecretRef(credential.tokenRef ?? credential.token, params.cfg.secrets?.defaults),
-        coerceSecretRef(runtime.tokenRef, params.cfg.secrets?.defaults),
+        parseSecretRef(credential.tokenRef ?? credential.token, params.cfg.secrets?.defaults),
+        parseSecretRef(runtime.tokenRef, params.cfg.secrets?.defaults),
       ) &&
       hasSecret(runtime.token)
     ) {

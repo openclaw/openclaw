@@ -452,7 +452,7 @@ export async function updateGitInstall(params: {
       status: "error",
       mode: "git",
       root: params.root,
-      reason: "npm lifecycle policy preflight",
+      reason: "npm-lifecycle-policy-preflight",
       recovery: await (params.installKind === "git"
         ? readCurrentGitUpdateRecovery(params.root, effectiveTimeout)
         : verifyPackageUpdateRecovery(params.root)),
@@ -617,7 +617,7 @@ export async function updateGitInstall(params: {
         status: "error",
         mode: "git",
         root: params.root,
-        reason: cloneStep.name,
+        reason: "git-clone-failed",
         recovery: await (params.installKind === "git"
           ? readCurrentGitUpdateRecovery(params.root, effectiveTimeout)
           : verifyPackageUpdateRecovery(params.root)),

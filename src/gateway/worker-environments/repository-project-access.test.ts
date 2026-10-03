@@ -5,7 +5,7 @@ import {
   PROJECT_KEY,
   usePreparedPoolFixture,
 } from "./prepared-pool.test-support.js";
-import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
+import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 
 const admit = vi.hoisted(() =>
   vi.fn<typeof import("./repository-project-admission.js").prepareRepositoryWorkerProjectSource>(),
@@ -100,11 +100,9 @@ describe("prepared repository source access", () => {
       identityResolverFor: () => {
         throw new Error("No SSH identity should be acquired during source admission");
       },
-      inState: (candidate, ...states) => states.includes(candidate.state),
       isStopping: () => false,
       providerFor: () => fixture.provider,
       resolveProvider: () => fixture.provider,
-      serviceError: (_code, message) => new Error(message),
       withLock: async (_id, run) => await run(),
     });
     const result = access.bindPreparedWorkspace({

@@ -130,13 +130,13 @@ describe("ClickClack discussion service", () => {
 
   it("pins the configured default for global keys and preserves qualified owners", async () => {
     const globalHarness = createHarness({ label: "Global session" });
-    globalHarness.config.agents = { list: [{ id: "ops", default: true }] };
+    globalHarness.config.agents = { entries: { ops: {} } };
 
     expect(await globalHarness.service.open("global")).toMatchObject({ state: "open" });
     expect(globalHarness.store.lookup("global")).toMatchObject({ agentId: "ops" });
 
     const qualifiedHarness = createHarness({ label: "Qualified session" });
-    qualifiedHarness.config.agents = { list: [{ id: "ops" }, { id: "worker" }] };
+    qualifiedHarness.config.agents = { entries: { ops: {}, worker: {} } };
     const qualifiedKey = "agent:worker:qualified";
 
     expect(await qualifiedHarness.service.open(qualifiedKey)).toMatchObject({ state: "open" });
@@ -149,7 +149,7 @@ describe("ClickClack discussion service", () => {
 
   it("uses the account agent for unscoped links without changing the configured owner", async () => {
     const harness = createHarness({ label: "Telegram peer" });
-    harness.config.agents = { list: [{ id: "ops", default: true }] };
+    harness.config.agents = { entries: { ops: {} } };
     harness.config.channels!.clickclack!.agentId = "research";
 
     await harness.service.open("telegram:12345");

@@ -46,7 +46,7 @@ function formatPendingChildrenMessage(children: readonly UnsettledRequesterChild
   }
   if (paused.length > 0) {
     parts.push(
-      `${describeChildCount(paused.length)} spawned by an earlier turn of this session ${paused.length === 1 ? "is" : "are"} paused by ${paused.length === 1 ? "its" : "their"} own sessions_yield and will not complete until an incoming continuation arrives: ${paused.map(describePendingChild).join("; ")}. Send that continuation with sessions_send if this session owns it; otherwise the work stays waiting.`,
+      `${describeChildCount(paused.length)} spawned by an earlier turn of this session ${paused.length === 1 ? "is" : "are"} paused by ${paused.length === 1 ? "its" : "their"} own sessions_yield and will not complete until an incoming continuation arrives: ${paused.map(describePendingChild).join("; ")}. An authorized caller can send that continuation with sessions_send; owning a child does not grant that tool. Otherwise the work stays waiting.`,
     );
   }
   parts.push("This turn owns no new claim, so no yield is needed: end this turn normally.");
@@ -127,7 +127,10 @@ export function createSessionsYieldTool(opts?: {
         // Advisory, not a failure: the model keeps the turn and nothing the user asked for failed.
         return jsonResult({
           status: "nothing_pending",
-          message: NO_PENDING_CHILD_COMPLETION_MESSAGE,
+          message:
+            waitFor === "message"
+              ? "No pending completion or eligible active native task is owned by this turn. This call did not pause the turn or schedule a continuation. Continue unfinished work; return its final result when complete."
+              : NO_PENDING_CHILD_COMPLETION_MESSAGE,
         });
       }
       // The runtime owns the actual pause/end-turn behavior; this tool records intent.

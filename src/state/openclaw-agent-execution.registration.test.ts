@@ -116,7 +116,9 @@ vi.mock("./openclaw-agent-db-lifecycle.js", () => ({
   closeOpenClawAgentDatabaseByPath: edge.nativeClose,
   retainAgentDatabase: () => edge.releaseAgent,
 }));
-vi.mock("./openclaw-state-db.js", () => ({ openOpenClawStateDatabase: () => ({}) }));
+vi.mock("./openclaw-state-db.js", () => ({
+  openOpenClawStateDatabase: () => ({ db: { isOpen: true, isTransaction: false } }),
+}));
 vi.mock("./openclaw-state-db-cache.js", () => ({
   requireOpenClawStateDatabaseIdentity: () => ({ key: "file:state" }),
   retainOpenClawStateDatabase: () => ({

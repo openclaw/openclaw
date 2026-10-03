@@ -125,10 +125,12 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     }
     const recovery = html`<openclaw-chat-outbox-recovery
       .host=${state}
+      .messages=${state.chatMessages}
       .identity=${JSON.stringify([
         state.settings.gatewayUrl,
         state.connected && state.client?.recoveryScopeReady ? state.client.recoveryScope : null,
         storedChatOutboxScopeKey(resolveUiConversationIdentity(state, state.sessionKey)),
+        state.currentSessionId,
       ])}
       @outbox-restored=${() => {
         this.chatState.composerPersistence.restore();
@@ -144,6 +146,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     });
     const chat = renderChat({
       ...chatProps,
+      composerRecovery: recovery,
       pluginToolIcons: this.toolIcons.icons,
       presented: {
         owner: this,
@@ -369,7 +372,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       panelActions,
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
       panelTemplates,
-      header: html`${header}${recovery}`,
+      header,
       primary,
       requestUpdate: state.requestUpdate!,
     });

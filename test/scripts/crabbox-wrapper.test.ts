@@ -36,6 +36,7 @@ import {
   parseProvidersFromHelp,
 } from "../../scripts/crabbox-wrapper-providers.mts";
 import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
+import { createStateSchemaInlinePlugin } from "../../scripts/lib/state-schema-inline-plugin.mts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 import { spawnTerminalPty } from "../../src/process/terminal-pty.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -51,6 +52,8 @@ const dependencyTempDirs = useAutoCleanupTempDirTracker(afterAll);
 const repoRoot = process.cwd();
 const bundledWrapperPath = path.join(repoRoot, ".tmp", `crabbox-wrapper-test-${process.pid}.mjs`);
 const realBundledWrapperPath = bundledWrapperPath.replace(".mjs", "-real.mjs");
+const bundledOutputPaths = new Set<string>();
+let realWrapperOutputPaths: string[];
 let bundledSetupPath: string;
 let preparedDependencyRoot: string | undefined;
 const fakeCrabboxBinDirs = new Map<string, string>();
@@ -117,7 +120,7 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
     "for (const claimPath of claimPaths) { const claim = fs.existsSync(claimPath) ? JSON.parse(fs.readFileSync(claimPath, 'utf8')) : { leaseID: process.env.OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID }; claim.repoRoot = process.env.OPENCLAW_FAKE_CRABBOX_CLAIM_REPO_ROOT || process.cwd(); fs.mkdirSync(path.dirname(claimPath), { recursive: true }); fs.writeFileSync(claimPath, JSON.stringify(claim) + '\\n', 'utf8'); }",
     "const timingRequested = args.slice(0, args.indexOf('--') < 0 ? args.length : args.indexOf('--')).some((arg) => /^--?timing-json(?:=true)?$/.test(arg));",
     "const timingLeaseId = process.env.OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID || (timingRequested && optionValue('provider') === 'blacksmith-testbox' && claimPaths.length === 0 ? optionValue('id') || 'tbx_fixture' : '');",
-    "if (timingLeaseId) process.stderr.write(JSON.stringify({ provider: 'blacksmith-testbox', leaseId: timingLeaseId, exitCode: Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_RUN_STATUS || '0', 10) }) + '\\n');",
+    "if (timingLeaseId) process.stderr.write(JSON.stringify({ provider: optionValue('provider'), leaseId: timingLeaseId, exitCode: Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_RUN_STATUS || '0', 10) }) + '\\n');",
   ].join("");
   // Keep the descendant in the fake's process group, and publish readiness only
   // after its signal handlers exist so the wrapper's group cleanup is deterministic.
@@ -669,7 +672,13 @@ async function waitForOwnedPidsToExit(pids: Iterable<number | undefined>, signal
 }
 
 type WrapperCleanupProof =
-  | { kind: "signal"; entrypoint: "node" | "pnpm"; repeated: boolean; cooperative?: boolean }
+  | {
+      kind: "signal";
+      entrypoint: "node" | "pnpm";
+      repeated: boolean;
+      cooperative?: boolean;
+      provider?: "blacksmith-testbox" | "aws";
+    }
   | { kind: "readiness" }
   | { kind: "preparation"; cleanupFails?: boolean }
   | { kind: "stdin"; target: "macos" | "capsule" }
@@ -764,19 +773,27 @@ async function runWrapperCleanupProof(
   const scriptRemoval = proof.kind === "removal" && proof.target === "script";
   const preparationCleanupFailure = proof.kind === "preparation" && proof.cleanupFails;
   const readsStdin = proof.kind === "stdin" || scriptRemoval;
-  const blacksmith = !readsStdin;
+  const retainedLease = !readsStdin;
+  const blacksmith = retainedLease && !(proof.kind === "signal" && proof.provider === "aws");
+  const leaseId = blacksmith ? "tbx_fixture" : "cbx_999999999999";
   const hasDescendant =
     proof.kind === "signal" || proof.kind === "escaped" || proof.kind === "readiness";
   await withShimFixture(
     "scripts/crabbox-wrapper.mjs",
     async ({ checkoutRoot: producer, fixtureRoot, implementationPath, wrapperPath }) => {
-      copyFileSync(realBundledWrapperPath, implementationPath);
+      // Keep the real TSX entrypoint without transforming the compiled dependency bundle again.
+      const compiledWrapperPath = implementationPath.replace(/\.mts$/u, ".compiled.mjs");
+      copyRealWrapper(compiledWrapperPath);
+      writeFileSync(
+        implementationPath,
+        `import ${JSON.stringify(pathToFileURL(compiledWrapperPath).href)};\n`,
+      );
       const syncRoot = path.join(fixtureRoot, "sync");
       const scriptTmpRoot = path.join(fixtureRoot, "tmp");
       mkdirSync(scriptTmpRoot);
       const home = path.join(fixtureRoot, "home");
       const stateRoot = path.join(home, ".local", "state");
-      const claimPath = path.join(stateRoot, "crabbox", "claims", "tbx_fixture.json");
+      const claimPath = path.join(stateRoot, "crabbox", "claims", `${leaseId}.json`);
       const descendantPidPath = path.join(fixtureRoot, "descendant.pid");
       const identityPath = path.join(fixtureRoot, "run.json");
       const preparationPath = path.join(fixtureRoot, "preparation.json");
@@ -892,8 +909,8 @@ if (entry === ${JSON.stringify(implementationPath)}) {
         OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY: "1",
         OPENCLAW_CRABBOX_SYNC_TMPDIR: syncRoot,
         OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES: "0",
-        OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: blacksmith ? claimPath : "",
-        OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID: blacksmith ? "tbx_fixture" : "",
+        OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: retainedLease ? claimPath : "",
+        OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID: retainedLease ? leaseId : "",
         OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH: hasDescendant ? descendantPidPath : "",
         OPENCLAW_FAKE_CRABBOX_RUN_IDENTITY_PATH: identityPath,
         OPENCLAW_FAKE_CRABBOX_SYNC_PLAN_READY_PATH:
@@ -940,8 +957,16 @@ if (entry === ${JSON.stringify(implementationPath)}) {
       git("remote", "add", "origin", producer);
       git("update-ref", "refs/remotes/origin/main", "HEAD");
       const sourceIndex = git("ls-files", "--stage", "-z");
-      const args = blacksmith
-        ? ["--provider", "blacksmith-testbox", "--keep", "--timing-json", "--", "echo", "ok"]
+      const args = retainedLease
+        ? [
+            "--provider",
+            blacksmith ? "blacksmith-testbox" : "aws",
+            "--keep",
+            "--timing-json",
+            "--",
+            "echo",
+            "ok",
+          ]
         : [
             "--provider",
             "aws",
@@ -1222,7 +1247,7 @@ child.once("exit", (code, signal) => {
           if (hasDescendant) {
             expect(isProcessAlive(descendantPid), output).toBe(false);
           }
-          if (blacksmith) {
+          if (retainedLease) {
             expect(JSON.parse(readFileSync(claimPath, "utf8")).repoRoot, output).toBe(producer);
           }
           const invocations = readdirSync(retained);
@@ -1258,12 +1283,14 @@ child.once("exit", (code, signal) => {
               ).toEqual([path.basename(failedPath)]);
               expect(readdirSync(syncRoot)).toEqual([]);
             }
-          } else {
+          } else if (blacksmith) {
             expectIdleSourceMirror(identity!.cwd, producer, syncRoot);
             expect(readFileSync(path.join(identity!.cwd, "fixture.txt"), "utf8")).toBe(
               "original source\n",
             );
             expect(existsSync(path.join(identity!.cwd, ".crabbox"))).toBe(false);
+          } else {
+            expect(existsSync(identity!.cwd)).toBe(false);
           }
         }
         expect(readFileSync(path.join(producer, "fixture.txt"), "utf8")).toBe("original source\n");
@@ -1466,7 +1493,7 @@ function runSuccessfulMacosScript(script: string, trailingArgs: string[] = []): 
   );
 }
 
-function runDelegatedBlacksmith(args: string[], env: Record<string, string>) {
+function runDelegatedClaim(args: string[], env: Record<string, string>) {
   if (process.platform === "win32") {
     return runDefaultWrapper(args, { ...cleanSparseSyncOptions, env });
   }
@@ -1534,9 +1561,21 @@ function expectChangedGateGitBootstrap(remoteCommand: string): void {
   expect(remoteCommand).not.toContain("; &&");
 }
 
+function copyRealWrapper(destination: string) {
+  for (const output of realWrapperOutputPaths) {
+    copyFileSync(
+      output,
+      output === realBundledWrapperPath
+        ? destination
+        : path.join(path.dirname(destination), path.basename(output)),
+    );
+  }
+}
+
 afterAll(() => {
-  rmSync(bundledWrapperPath, { force: true });
-  rmSync(realBundledWrapperPath, { force: true });
+  for (const output of bundledOutputPaths) {
+    rmSync(output, { force: true });
+  }
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1547,6 +1586,8 @@ describe("scripts/crabbox-wrapper", () => {
     mkdirSync(path.dirname(bundledWrapperPath), { recursive: true });
     const bundleOptions = {
       bundle: true,
+      // Preserve lazy imports so each fixture loads only the operation's runtime graph.
+      splitting: true,
       entryPoints: [path.join(repoRoot, "scripts/crabbox-wrapper.mts")],
       format: "esm",
       logLevel: "silent",
@@ -1555,6 +1596,21 @@ describe("scripts/crabbox-wrapper", () => {
       // Keep the Windows worker and native dependency resolution at their source owner.
       // Relocating this module into a fixture would relocate its import.meta.url too.
       plugins: [
+        {
+          name: "canonical-state-schemas",
+          setup(builder) {
+            // Relocated fixtures need the same embedded SQL as production bundles.
+            const schemas = createStateSchemaInlinePlugin(repoRoot);
+            builder.onLoad({ filter: /openclaw-(agent|state)-schema\.ts$/ }, ({ path: id }) => {
+              const watchFiles: string[] = [];
+              const source = schemas.load.call(
+                { addWatchFile: (file) => watchFiles.push(file) },
+                id,
+              );
+              return source && { contents: source.code, loader: "js", watchFiles };
+            });
+          },
+        },
         {
           name: "managed-child-source-owner",
           setup(builder) {
@@ -1570,18 +1626,29 @@ describe("scripts/crabbox-wrapper", () => {
         js: 'import { createRequire as createBundleRequire } from "node:module"; const require = createBundleRequire(import.meta.url);',
       },
     } satisfies BuildOptions;
-    await build({
-      ...bundleOptions,
-      outfile: realBundledWrapperPath,
-    });
+    const buildFixture = async (outfile: string, options: BuildOptions = {}) => {
+      const result = await build({
+        ...bundleOptions,
+        ...options,
+        outdir: path.dirname(outfile),
+        entryNames: path.basename(outfile, ".mjs"),
+        chunkNames: `crabbox-wrapper-test-${process.pid}-[name]-[hash]`,
+        outExtension: { ".js": ".mjs" },
+        metafile: true,
+      });
+      const outputs = Object.keys(result.metafile.outputs).map((output) => path.resolve(output));
+      for (const output of outputs) {
+        bundledOutputPaths.add(output);
+      }
+      return outputs;
+    };
+    realWrapperOutputPaths = await buildFixture(realBundledWrapperPath);
     bundledSetupPath = path.join(
       makeTempDir(tempDirs, "openclaw-crabbox-setup-"),
       "openclaw/scripts/crabbox-setup.mjs",
     );
-    await build({
-      ...bundleOptions,
+    await buildFixture(bundledSetupPath, {
       entryPoints: [path.join(repoRoot, "scripts/crabbox-setup.mts")],
-      outfile: bundledSetupPath,
     });
     // Argument routing tests isolate source preparation; the real-Git fixture below
     // executes the unmocked producer and generated receiver together.
@@ -1603,8 +1670,7 @@ describe("scripts/crabbox-wrapper", () => {
       }
     `,
     );
-    await build({
-      ...bundleOptions,
+    await buildFixture(bundledWrapperPath, {
       plugins: [
         ...bundleOptions.plugins,
         {
@@ -1616,7 +1682,6 @@ describe("scripts/crabbox-wrapper", () => {
           },
         },
       ],
-      outfile: bundledWrapperPath,
     });
   });
 
@@ -2472,11 +2537,15 @@ describe("scripts/crabbox-wrapper", () => {
     },
   );
 
-  it.each([{ label: "failed", status: 7 }])(
-    "restores delegated Blacksmith claims after $label runs",
-    ({ status }) => {
+  it.each([
+    { provider: "blacksmith-testbox", id: "tbx_restore_7", status: 7 },
+    { provider: "aws", id: "cbx_111111111111", status: 0 },
+    { provider: "aws", id: "cbx_111111111111", status: 7 },
+    { provider: "aws", id: "cbx_111111111111", requestId: "retained-runner", status: 0 },
+  ])(
+    "restores delegated $provider claims after exit $status ($requestId)",
+    ({ provider, id, requestId, status }) => {
       const home = makeTempDir(tempDirs, "openclaw-crabbox-home-", tmpdir());
-      const id = `tbx_restore_${status}`;
       const stateRoot = path.join(home, ".local", "state");
       const keyPath = path.join(stateRoot, "crabbox", "testboxes", id, "id_ed25519");
       mkdirSync(path.dirname(keyPath), { recursive: true });
@@ -2491,8 +2560,8 @@ describe("scripts/crabbox-wrapper", () => {
       };
       writeFileSync(claimPath, `${JSON.stringify(originalClaim)}\n`, "utf8");
 
-      const result = runDelegatedBlacksmith(
-        ["run", "--provider", "blacksmith-testbox", "--id", id, "--", "echo ok"],
+      const result = runDelegatedClaim(
+        ["run", "--provider", provider, "--id", requestId ?? id, "--", "echo ok"],
         {
           ...testHomeEnv(home),
           XDG_STATE_HOME: stateRoot,
@@ -2594,127 +2663,162 @@ console.error = function (...args) {
     }
   });
 
-  it("restores a created delegated Blacksmith claim by captured timing lease id", () => {
-    const home = makeTempDir(tempDirs, "openclaw-crabbox-home-", tmpdir());
-    const stateRoot = path.join(home, ".local", "state");
-    const claimsDir = path.join(stateRoot, "crabbox", "claims");
-    const id = "tbx_created_timing";
-    const claimPath = path.join(claimsDir, `${id}.json`);
-    const decoyPath = path.join(claimsDir, "tbx_created_decoy.json");
-    const originalClaim = { leaseID: id, repoRoot, metadata: { keep: true } };
-    const decoyClaim = { leaseID: "tbx_created_decoy", repoRoot };
-    mkdirSync(claimsDir, { recursive: true });
-    writeFileSync(claimPath, `${JSON.stringify(originalClaim)}\n`, "utf8");
-    writeFileSync(decoyPath, `${JSON.stringify(decoyClaim)}\n`, "utf8");
+  it.each(["blacksmith-testbox", "aws"])(
+    "restores a created delegated %s claim by captured timing lease id",
+    (provider) => {
+      const home = makeTempDir(tempDirs, "openclaw-crabbox-home-", tmpdir());
+      const stateRoot = path.join(home, ".local", "state");
+      const claimsDir = path.join(stateRoot, "crabbox", "claims");
+      const id = provider === "aws" ? "cbx_222222222222" : "tbx_created_timing";
+      const claimPath = path.join(claimsDir, `${id}.json`);
+      const decoyId = provider === "aws" ? "cbx_888888888888" : "tbx_created_decoy";
+      const decoyPath = path.join(claimsDir, `${decoyId}.json`);
+      const originalClaim = { leaseID: id, repoRoot, metadata: { keep: true } };
+      const decoyClaim = { leaseID: decoyId, repoRoot };
+      mkdirSync(claimsDir, { recursive: true });
+      writeFileSync(claimPath, `${JSON.stringify(originalClaim)}\n`, "utf8");
+      writeFileSync(decoyPath, `${JSON.stringify(decoyClaim)}\n`, "utf8");
 
-    const result = runDelegatedBlacksmith(
-      ["run", "--provider", "blacksmith-testbox", "--keep", "--timing-json", "--", "echo ok"],
-      {
-        ...testHomeEnv(home),
-        XDG_STATE_HOME: stateRoot,
-        OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
-        OPENCLAW_FAKE_CRABBOX_EXTRA_CLAIM_PATH: decoyPath,
-        OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID: id,
-      },
-    );
+      const result = runDelegatedClaim(
+        ["run", "--provider", provider, "--keep", "--timing-json", "--", "echo ok"],
+        {
+          ...testHomeEnv(home),
+          XDG_STATE_HOME: stateRoot,
+          OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
+          OPENCLAW_FAKE_CRABBOX_EXTRA_CLAIM_PATH: decoyPath,
+          OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID: id,
+        },
+      );
 
-    expect(result.status).toBe(0);
-    expect(JSON.parse(readFileSync(claimPath, "utf8"))).toEqual(originalClaim);
-    expect(JSON.parse(readFileSync(decoyPath, "utf8"))).toEqual({
-      ...decoyClaim,
-      repoRoot: parseFakeCrabboxOutput(result).cwd,
-    });
-  });
+      expect(result.status).toBe(0);
+      expect(JSON.parse(readFileSync(claimPath, "utf8"))).toEqual(originalClaim);
+      expect(JSON.parse(readFileSync(decoyPath, "utf8"))).toEqual({
+        ...decoyClaim,
+        repoRoot: parseFakeCrabboxOutput(result).cwd,
+      });
+    },
+  );
 
-  it("restores created delegated Blacksmith claims from the temporary checkout fallback", () => {
-    const home = makeTempDir(tempDirs, "openclaw-crabbox-home-", tmpdir());
-    const stateRoot = path.join(home, ".local", "state");
-    const claimsDir = path.join(stateRoot, "crabbox", "claims");
-    const claimPath = path.join(claimsDir, "tbx_created_fallback.json");
-    const siblingPath = path.join(claimsDir, "tbx_created_sibling.json");
-    const foreignPath = path.join(claimsDir, "tbx_foreign_fallback.json");
-    const createdClaim = { leaseID: "tbx_created_fallback", repoRoot, owner: "created" };
-    const siblingClaim = { leaseID: "tbx_created_sibling", repoRoot, owner: "sibling" };
-    const foreignClaim = {
-      leaseID: "tbx_foreign_fallback",
-      repoRoot: "/tmp/genuinely-foreign-repo",
-    };
-    mkdirSync(claimsDir, { recursive: true });
-    writeFileSync(claimPath, `${JSON.stringify(createdClaim)}\n`, "utf8");
-    writeFileSync(siblingPath, `${JSON.stringify(siblingClaim)}\n`, "utf8");
-    writeFileSync(foreignPath, `${JSON.stringify(foreignClaim)}\n`, "utf8");
+  it.each(["blacksmith-testbox", "aws"])(
+    "restores created delegated %s claims from the temporary checkout fallback",
+    (provider) => {
+      const home = makeTempDir(tempDirs, "openclaw-crabbox-home-", tmpdir());
+      const stateRoot = path.join(home, ".local", "state");
+      const claimsDir = path.join(stateRoot, "crabbox", "claims");
+      const claimPath = path.join(
+        claimsDir,
+        provider === "aws" ? "cbx_333333333333.json" : "tbx_created_fallback.json",
+      );
+      const siblingPath = path.join(
+        claimsDir,
+        provider === "aws" ? "cbx_444444444444.json" : "tbx_created_sibling.json",
+      );
+      const foreignPath = path.join(
+        claimsDir,
+        provider === "aws" ? "cbx_555555555555.json" : "tbx_foreign_fallback.json",
+      );
+      const createdClaim = {
+        leaseID: provider === "aws" ? "cbx_333333333333" : "tbx_created_fallback",
+        repoRoot,
+        owner: "created",
+      };
+      const siblingClaim = {
+        leaseID: provider === "aws" ? "cbx_444444444444" : "tbx_created_sibling",
+        repoRoot,
+        owner: "sibling",
+      };
+      const foreignClaim = {
+        leaseID: provider === "aws" ? "cbx_555555555555" : "tbx_foreign_fallback",
+        repoRoot: "/tmp/genuinely-foreign-repo",
+      };
+      mkdirSync(claimsDir, { recursive: true });
+      writeFileSync(claimPath, `${JSON.stringify(createdClaim)}\n`, "utf8");
+      writeFileSync(siblingPath, `${JSON.stringify(siblingClaim)}\n`, "utf8");
+      writeFileSync(foreignPath, `${JSON.stringify(foreignClaim)}\n`, "utf8");
 
-    const result = runDelegatedBlacksmith(
-      ["run", "--provider", "blacksmith-testbox", "--keep", "--", "echo ok"],
-      {
-        ...testHomeEnv(home),
-        XDG_STATE_HOME: stateRoot,
-        OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
-        OPENCLAW_FAKE_CRABBOX_EXTRA_CLAIM_PATH: siblingPath,
-      },
-    );
+      const result = runDelegatedClaim(
+        ["run", "--provider", provider, ...(provider === "aws" ? [] : ["--keep"]), "--", "echo ok"],
+        {
+          ...testHomeEnv(home),
+          XDG_STATE_HOME: stateRoot,
+          OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
+          OPENCLAW_FAKE_CRABBOX_EXTRA_CLAIM_PATH: siblingPath,
+        },
+      );
 
-    expect(result.status).toBe(0);
-    expect(JSON.parse(readFileSync(claimPath, "utf8"))).toEqual(createdClaim);
-    expect(JSON.parse(readFileSync(siblingPath, "utf8"))).toEqual(siblingClaim);
-    expect(JSON.parse(readFileSync(foreignPath, "utf8"))).toEqual(foreignClaim);
-  });
+      expect(result.status).toBe(0);
+      expect(JSON.parse(readFileSync(claimPath, "utf8"))).toEqual(createdClaim);
+      expect(JSON.parse(readFileSync(siblingPath, "utf8"))).toEqual(siblingClaim);
+      expect(JSON.parse(readFileSync(foreignPath, "utf8"))).toEqual(foreignClaim);
+    },
+  );
 
-  it("restores a failed delegated Blacksmith claim kept on failure", () => {
-    const home = makeTempDir(tempDirs, "openclaw-crabbox-home-", tmpdir());
-    const stateRoot = path.join(home, ".local", "state");
-    const claimPath = path.join(stateRoot, "crabbox", "claims", "tbx_created_failure.json");
-    const originalClaim = {
-      leaseID: "tbx_created_failure",
-      repoRoot,
-      metadata: { keepOnFailure: true },
-    };
-    mkdirSync(path.dirname(claimPath), { recursive: true });
-    writeFileSync(claimPath, `${JSON.stringify(originalClaim)}\n`, "utf8");
+  it.each(["blacksmith-testbox", "aws"])(
+    "restores a failed delegated %s claim kept on failure",
+    (provider) => {
+      const home = makeTempDir(tempDirs, "openclaw-crabbox-home-", tmpdir());
+      const stateRoot = path.join(home, ".local", "state");
+      const claimPath = path.join(
+        stateRoot,
+        "crabbox",
+        "claims",
+        provider === "aws" ? "cbx_666666666666.json" : "tbx_created_failure.json",
+      );
+      const originalClaim = {
+        leaseID: provider === "aws" ? "cbx_666666666666" : "tbx_created_failure",
+        repoRoot,
+        metadata: { keepOnFailure: true },
+      };
+      mkdirSync(path.dirname(claimPath), { recursive: true });
+      writeFileSync(claimPath, `${JSON.stringify(originalClaim)}\n`, "utf8");
 
-    const result = runDelegatedBlacksmith(
-      ["run", "--provider", "blacksmith-testbox", "--keep-on-failure", "--", "false"],
-      {
-        ...testHomeEnv(home),
-        XDG_STATE_HOME: stateRoot,
-        OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
-        OPENCLAW_FAKE_CRABBOX_RUN_STATUS: "7",
-      },
-    );
+      const result = runDelegatedClaim(
+        ["run", "--provider", provider, "--keep-on-failure", "--", "false"],
+        {
+          ...testHomeEnv(home),
+          XDG_STATE_HOME: stateRoot,
+          OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
+          OPENCLAW_FAKE_CRABBOX_RUN_STATUS: "7",
+        },
+      );
 
-    expect(result.status).toBe(7);
-    expect(JSON.parse(readFileSync(claimPath, "utf8"))).toEqual(originalClaim);
-  });
+      expect(result.status).toBe(7);
+      expect(JSON.parse(readFileSync(claimPath, "utf8"))).toEqual(originalClaim);
+    },
+  );
 
-  it("leaves genuinely foreign delegated Blacksmith claims untouched", () => {
-    const home = makeTempDir(tempDirs, "openclaw-crabbox-home-", tmpdir());
-    const id = "tbx_foreign_claim";
-    const stateRoot = path.join(home, ".local", "state");
-    const keyPath = path.join(stateRoot, "crabbox", "testboxes", id, "id_ed25519");
-    mkdirSync(path.dirname(keyPath), { recursive: true });
-    writeFileSync(keyPath, "fake test key\n", "utf8");
-    const claimPath = path.join(stateRoot, "crabbox", "claims", `${id}.json`);
-    mkdirSync(path.dirname(claimPath), { recursive: true });
-    const foreignClaim = {
-      leaseID: id,
-      repoRoot: "/tmp/genuinely-foreign-repo",
-      owner: "foreign-owner",
-    };
-    writeFileSync(claimPath, `${JSON.stringify({ ...foreignClaim, repoRoot })}\n`, "utf8");
+  it.each(["blacksmith-testbox", "aws"])(
+    "leaves genuinely foreign delegated %s claims untouched",
+    (provider) => {
+      const home = makeTempDir(tempDirs, "openclaw-crabbox-home-", tmpdir());
+      const id = provider === "aws" ? "cbx_777777777777" : "tbx_foreign_claim";
+      const stateRoot = path.join(home, ".local", "state");
+      const keyPath = path.join(stateRoot, "crabbox", "testboxes", id, "id_ed25519");
+      mkdirSync(path.dirname(keyPath), { recursive: true });
+      writeFileSync(keyPath, "fake test key\n", "utf8");
+      const claimPath = path.join(stateRoot, "crabbox", "claims", `${id}.json`);
+      mkdirSync(path.dirname(claimPath), { recursive: true });
+      const foreignClaim = {
+        leaseID: id,
+        repoRoot: "/tmp/genuinely-foreign-repo",
+        owner: "foreign-owner",
+      };
+      writeFileSync(claimPath, `${JSON.stringify({ ...foreignClaim, repoRoot })}\n`, "utf8");
 
-    const result = runDelegatedBlacksmith(
-      ["run", "--provider", "blacksmith-testbox", "--id", id, "--", "echo ok"],
-      {
-        ...testHomeEnv(home),
-        XDG_STATE_HOME: stateRoot,
-        OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
-        OPENCLAW_FAKE_CRABBOX_CLAIM_REPO_ROOT: foreignClaim.repoRoot,
-      },
-    );
+      const result = runDelegatedClaim(
+        ["run", "--provider", provider, "--id", id, "--", "echo ok"],
+        {
+          ...testHomeEnv(home),
+          XDG_STATE_HOME: stateRoot,
+          OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
+          OPENCLAW_FAKE_CRABBOX_CLAIM_REPO_ROOT: foreignClaim.repoRoot,
+        },
+      );
 
-    expect(result.status).toBe(0);
-    expect(JSON.parse(readFileSync(claimPath, "utf8"))).toEqual(foreignClaim);
-  });
+      expect(result.status).toBe(0);
+      expect(JSON.parse(readFileSync(claimPath, "utf8"))).toEqual(foreignClaim);
+    },
+  );
 
   it.skipIf(process.platform === "win32").each([0, 43])(
     "executes the named Testbox job with frozen preparation (install exit %s)",
@@ -4112,7 +4216,7 @@ esac
       const sourceMode = lstatSync(path.join(producer, sourcePath)).mode;
       const wrapper = path.join(producer, ".tmp", "wrapper.mjs");
       mkdirSync(path.dirname(wrapper));
-      copyFileSync(realBundledWrapperPath, wrapper);
+      copyRealWrapper(wrapper);
       const preload = path.join(root, "write-failure.cjs");
       writeFileSync(
         preload,
@@ -4525,7 +4629,7 @@ process.on("exit", () => {
       }
       const fixtureWrapper = path.join(producer, ".tmp", "crabbox-wrapper.mjs");
       mkdirSync(path.dirname(fixtureWrapper), { recursive: true });
-      copyFileSync(realBundledWrapperPath, fixtureWrapper);
+      copyRealWrapper(fixtureWrapper);
       const sourceCommand =
         provider === "blacksmith-testbox" || scenario === "arbitrary"
           ? "scripts/source-fixture.mjs"
@@ -5888,7 +5992,7 @@ cp.spawnSync = (command, args, options) => {
       git(["update-ref", "refs/remotes/origin/main", git(["rev-parse", "HEAD"])]);
       const wrapper = path.join(producer, ".tmp", "crabbox-wrapper.mjs");
       mkdirSync(path.dirname(wrapper));
-      copyFileSync(realBundledWrapperPath, wrapper);
+      copyRealWrapper(wrapper);
       const result = spawnSync(
         process.execPath,
         [wrapper, "run", "--provider", "aws", "--target", "linux", "--", "pnpm", "check:changed"],
@@ -6211,20 +6315,21 @@ cp.spawnSync = (command, args, options) => {
     },
   );
 
-  (process.platform === "win32" ? it.skip : it)(
-    "preserves graceful cancellation artifacts through pnpm terminal",
-    async ({ signal }) => {
+  (process.platform === "win32" ? it.skip : it).for(["blacksmith-testbox", "aws"] as const)(
+    "preserves graceful cancellation artifacts and %s ownership through pnpm terminal",
+    { timeout: 25_000 },
+    async (provider, { signal }) => {
       await runWrapperCleanupProof(
         {
           kind: "signal",
           entrypoint: "pnpm",
           repeated: false,
           cooperative: true,
+          provider,
         },
         signal,
       );
     },
-    25_000,
   );
 
   it.skipIf(process.platform === "win32")(
@@ -6367,7 +6472,7 @@ cp.spawnSync = (command, args, options) => {
       const syncRoot = path.join(root, "sync");
       const fixtureWrapper = path.join(producer, ".tmp", "crabbox-wrapper.mjs");
       mkdirSync(path.dirname(fixtureWrapper), { recursive: true });
-      copyFileSync(realBundledWrapperPath, fixtureWrapper);
+      copyRealWrapper(fixtureWrapper);
       const env = {
         ...testHomeEnv(path.join(root, "home")),
         XDG_STATE_HOME: path.join(root, "home", ".local", "state"),

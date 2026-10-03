@@ -30,13 +30,24 @@ export function createBasetenThinkingWrapper(
       context,
       thinkingLevel === undefined ? options : { ...options, reasoning: thinkingLevel },
       (payload) => {
-        if (model.id.trim().toLowerCase() === "deepseek-ai/deepseek-v4-pro") {
+        const normalizedModelId = model.id.trim().toLowerCase();
+        if (
+          normalizedModelId === "deepseek-ai/deepseek-v4-pro" ||
+          normalizedModelId === "deepseek-ai/deepseek-v4-pro-0813"
+        ) {
           // DeepSeek defaults on; only explicit off may remove required replay metadata.
           normalizeOpenAICompatibleReasoningReplay(payload, {
             thinkingEnabled: thinkingLevel !== "off",
             stripAssistantMessagesOnly: true,
             replaceNullReasoningContent: true,
           });
+          // The current Pro endpoint requires this envelope whenever scalar effort is present.
+          if (
+            normalizedModelId === "deepseek-ai/deepseek-v4-pro-0813" &&
+            payload.reasoning_effort !== undefined
+          ) {
+            payload.thinking = { type: "enabled" };
+          }
         }
         if (optIn) {
           payload.chat_template_args = {

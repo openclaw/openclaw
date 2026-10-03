@@ -74,11 +74,12 @@ a separate status for execution, startup, or approval. **Keep commentary** in
 the chat view menu controls whether commentary stays visible after the run,
 not whether the active run’s narration survives a history refresh. Completed
 dashboard turns collapse their narration and tool activity under **Worked for …**
-above the answer. Expanding it restores the sequence with the existing tool-call
-groups. When no run duration is available, the heading reads **Worked**.
-The heading includes the total tool-call count followed by any failures, such as
-**Worked · 200 tool calls · 20 failed**. Calls without failures still show the
-total; turns without tool calls omit it.
+above the answer, with durations such as **Worked for 2 minutes, 3 seconds**.
+Expanding it restores the sequence with the existing tool-call groups and shows
+the total tool-call count. When no run duration is available, the heading reads
+**Worked** rather than estimating from message timestamps. Failures and other
+non-success outcomes remain visible even when collapsed, such as
+**Worked for 2 minutes, 3 seconds · 2 failed**.
 
 Consecutive tool activity shares one expandable log, including when background
 work resumes in a new run. Visible messages, media, and conversation markers

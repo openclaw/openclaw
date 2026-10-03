@@ -79,7 +79,13 @@ describe("update-cli", () => {
         config: { update: { channel: "dev" } },
       });
 
-      await invokeUpdateCli({ dryRun: true, json: true, restart: false });
+      await invokeUpdateCli({
+        dryRun: true,
+        json: true,
+        restart: false,
+        channel: "dev",
+        acceptCapabilities: true,
+      });
 
       expect(lastWriteJsonCall()).toMatchObject({
         currentVersion: installedVersion ?? VERSION,
@@ -92,24 +98,11 @@ describe("update-cli", () => {
           reason: "dry-run",
         },
       });
-      await invokeUpdateCli({ dryRun: true, restart: false });
-      expect(getLogOutput()).toContain(`Current version: ${installedVersion ?? VERSION}`);
-      expect(getLogOutput()).toContain("Target version: unresolved");
-      expectNoSideEffects(updateGitCheckout, replaceConfigFile, runDaemonInstall, runDaemonRestart);
-      expect(packageInstallCommandCall()).toBeUndefined();
-    },
-  );
-
-  it("does not clean managed-service handoffs during a JSON dry run", async () => {
-    const stateDir = tempDirs.make("openclaw-update-run-preview-");
-    initializeExistingUpdateProfile({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      await updateCommand({ dryRun: true, json: true, channel: "beta", acceptCapabilities: true });
-      const output = lastWriteJsonCall() as { runId: string };
       expect(readConfigFileSnapshot).toHaveBeenCalledWith({
         skipPluginValidation: true,
         observe: false,
       });
+      const output = lastWriteJsonCall() as { runId: string };
       expect(listUpdateRuns()).toMatchObject([
         {
           runId: output.runId,
@@ -119,18 +112,22 @@ describe("update-cli", () => {
           reason: "dry-run",
         },
       ]);
-    });
-
-    expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
-    expectNoSideEffects(
-      replaceConfigFile,
-      updateGitCheckout,
-      runDaemonInstall,
-      syncPluginsForUpdateChannel,
-      updateNpmInstalledPlugins,
-    );
-    expect(defaultRuntime.writeJson).toHaveBeenCalled();
-  });
+      expect(defaultRuntime.writeJson).toHaveBeenCalled();
+      await invokeUpdateCli({ dryRun: true, restart: false });
+      expect(getLogOutput()).toContain(`Current version: ${installedVersion ?? VERSION}`);
+      expect(getLogOutput()).toContain("Target version: unresolved");
+      expectNoSideEffects(
+        cleanupStaleManagedServiceUpdateHandoffs,
+        updateGitCheckout,
+        replaceConfigFile,
+        runDaemonInstall,
+        runDaemonRestart,
+        syncPluginsForUpdateChannel,
+        updateNpmInstalledPlugins,
+      );
+      expect(packageInstallCommandCall()).toBeUndefined();
+    },
+  );
 
   it.each(["progress initialization", "triage preparation"] as const)(
     "finishes the admitted run when %s fails before update execution",
@@ -520,25 +517,21 @@ describe("update-cli", () => {
     },
   );
 
-  it("does not clean managed-service handoffs before rejecting an invalid timeout", async () => {
-    const runsBefore = listUpdateRuns();
-    await invokeUpdateCli({ timeout: "" });
-
-    expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-    expect(listUpdateRuns()).toEqual(runsBefore);
-  });
-
   it.each([
-    { name: "update", run: async () => await invokeUpdateCli({ channel: "" }) },
-    { name: "finalization", run: async () => await updateFinalizeCommand({ channel: "" }) },
-  ])("rejects an explicitly empty $name channel before mutation", async ({ run }) => {
+    { name: "timeout", run: () => invokeUpdateCli({ timeout: "" }) },
+    { name: "update channel", run: () => invokeUpdateCli({ channel: "" }) },
+    { name: "finalization channel", run: () => updateFinalizeCommand({ channel: "" }) },
+  ])("rejects an explicitly empty $name before mutation", async ({ name, run }) => {
+    const runsBefore = listUpdateRuns();
     await run();
 
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      '--channel must be "stable", "extended-stable", "beta", or "dev" (got "")',
-    );
+    if (name !== "timeout") {
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        '--channel must be "stable", "extended-stable", "beta", or "dev" (got "")',
+      );
+    }
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(listUpdateRuns()).toEqual(runsBefore);
     expectNoSideEffects(
       cleanupStaleManagedServiceUpdateHandoffs,
       replaceConfigFile,

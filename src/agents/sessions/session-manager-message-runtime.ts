@@ -25,7 +25,6 @@ import { isSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { Message } from "../../llm/types.js";
 import { readLoggingConfig } from "../../logging/config.js";
 import { getSecretRedactionRegistryRevision } from "../../logging/secret-redaction-registry.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
@@ -68,7 +67,7 @@ export async function appendSessionTranscriptMessage(
   let redactionRevision = getSecretRedactionRegistryRevision();
   let redactPatterns = readRedactPatterns()?.slice();
   const prepared = prepareTranscriptMessageAppendForWorker(input);
-  freezeJsonSnapshot(prepared.persistedMessage);
+  Object.freeze(prepared.persistedMessage);
   const assertPrepared = () => {
     input.assertCurrent();
     const revision = getSecretRedactionRegistryRevision();

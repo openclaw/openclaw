@@ -167,7 +167,9 @@ describe("chat transcript message controls", () => {
             expect.objectContaining({ sourceMessageId: "timestamp-answer", text }),
           );
           if (index === 1) {
-            expect(requireElement(group, ".chat-work-group").textContent).toContain("35m 17s");
+            expect(requireElement(group, ".chat-work-group").textContent).toContain(
+              "Worked for 35 minutes, 17 seconds",
+            );
           }
           await vi.advanceTimersByTimeAsync(1_500);
         } finally {
