@@ -102,15 +102,12 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
           profiles?: Array<{ id: string; providerId: string }>;
         }>("environments.list", { projection: "profiles" });
         const configured = new Map(profiles());
-        const machineProfiles = [];
-        for (const profile of catalog.profiles ?? []) {
-          if (profile.providerId === "crabbox") {
-            machineProfiles.push({
-              ...profile,
-              desktop: configured.get(profile.id)?.settings?.desktop === true,
-            });
-          }
-        }
+        const machineProfiles = (catalog.profiles ?? [])
+          .filter((profile) => profile.providerId === "crabbox")
+          .map((profile) => ({
+            ...profile,
+            desktop: configured.get(profile.id)?.settings?.desktop === true,
+          }));
         return jsonResult({ profiles: machineProfiles });
       }
       if (action === "create") {

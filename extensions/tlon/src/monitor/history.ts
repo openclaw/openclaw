@@ -59,18 +59,10 @@ async function fetchChannelHistory(
       return [];
     }
 
-    let posts: unknown[] = [];
-    if (Array.isArray(data)) {
-      posts = data;
-    } else {
-      const dataRecord = asRecord(data);
-      const postMap = asRecord(dataRecord?.posts);
-      if (postMap) {
-        posts = Object.values(postMap);
-      } else if (dataRecord) {
-        posts = Object.values(dataRecord);
-      }
-    }
+    const dataRecord = asRecord(data);
+    const posts = Array.isArray(data)
+      ? data
+      : Object.values(asRecord(dataRecord?.posts) ?? dataRecord ?? {});
 
     const messages = posts
       .map((item) => {
@@ -177,20 +169,13 @@ export async function fetchThreadHistory(
       return [];
     }
 
-    let replies: unknown[] = [];
-    if (Array.isArray(data)) {
-      replies = data;
-    } else {
-      const dataRecord = asRecord(data);
-      const replyValue = dataRecord?.replies;
-      if (Array.isArray(replyValue)) {
-        replies = replyValue;
-      } else if (typeof replyValue === "object" && replyValue) {
-        replies = Object.values(replyValue as Record<string, unknown>);
-      } else if (dataRecord) {
-        replies = Object.values(dataRecord);
-      }
-    }
+    const dataRecord = asRecord(data);
+    const replyValue = dataRecord?.replies;
+    const replies = Array.isArray(data)
+      ? data
+      : Array.isArray(replyValue)
+        ? replyValue
+        : Object.values(asRecord(replyValue) ?? dataRecord ?? {});
 
     const messages = replies
       .map((item) => {

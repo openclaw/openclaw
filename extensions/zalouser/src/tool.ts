@@ -99,10 +99,8 @@ function resolveZalouserSendTarget(params: ToolParams, context?: ZalouserToolCon
 }
 
 async function executeZalouserTool(
-  _toolCallId: string,
   params: ToolParams,
   signal?: AbortSignal,
-  _onUpdate?: unknown,
   context?: ZalouserToolContext,
 ): Promise<AgentToolResult<unknown>> {
   try {
@@ -207,7 +205,7 @@ export function createZalouserTool(context?: ZalouserToolContext): AnyAgentTool 
       "Actions: send (text message), image (send image URL), link (send link), " +
       "friends (list/search friends), groups (list groups), me (profile info), status (auth check).",
     parameters: ZalouserToolSchema,
-    execute: async (toolCallId, params, signal, onUpdate) =>
-      await executeZalouserTool(toolCallId, params as ToolParams, signal, onUpdate, context),
+    execute: async (_toolCallId, params, signal) =>
+      await executeZalouserTool(params as ToolParams, signal, context),
   } satisfies AnyAgentTool;
 }

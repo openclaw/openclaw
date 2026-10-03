@@ -33,14 +33,6 @@ function commandArgsHint(spec: NativeCommandSpec): string {
   return spec.acceptsArgs ? "[args]" : "";
 }
 
-function errorStatus(error: unknown): number | undefined {
-  if (!error || typeof error !== "object" || !("status" in error)) {
-    return undefined;
-  }
-  const status = (error as { status?: unknown }).status;
-  return typeof status === "number" ? status : undefined;
-}
-
 function mapNativeCommandSpecsToClickClackMenu(
   specs: NativeCommandSpec[],
   log?: ClickClackCommandMenuLogger,
@@ -95,7 +87,8 @@ export async function syncClickClackCommandMenu(params: {
     const commands = mapNativeCommandSpecsToClickClackMenu(specs, params.log);
     await params.client.setBotCommands(commands);
   } catch (error) {
-    const status = errorStatus(error);
+    const status =
+      typeof error === "object" && error !== null && "status" in error ? error.status : undefined;
     const messagePrefix = `[${params.accountId}] ClickClack command menu sync`;
     if (status === 403) {
       params.log?.warn?.(

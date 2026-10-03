@@ -406,68 +406,6 @@ export async function validateCanonicalAuthorization(input: {
   });
 }
 
-async function invokeAuthorizedPreflight(input: {
-  ctx: OpenClawPluginNodeInvokePolicyContext;
-  op: FileTransferAuditOp;
-  kind: FilePolicyKind;
-  authorization: GrantedAuthorization;
-  params: Record<string, unknown>;
-  requestedPath: string;
-  startedAt: number;
-}): Promise<PreflightResult> {
-  const expectedCanonicalPath =
-    input.authorization.source === "literal"
-      ? input.authorization.expectedCanonicalPath
-      : undefined;
-  const preflight = await invokePreflight({ ...input, expectedCanonicalPath });
-  if (preflight.ok || preflight.canonicalChanged !== true) {
-    return preflight;
-  }
-
-  const denied = await validateCanonicalAuthorization({
-    ctx: input.ctx,
-    op: input.op,
-    kind: input.kind,
-    authorization: input.authorization,
-    requestedPath: input.requestedPath,
-    canonicalPath: preflight.canonicalPath,
-    startedAt: input.startedAt,
-  });
-  if (denied) {
-    return { ok: false, result: denied };
-  }
-
-  // The operator approved the newly resolved target. Bind the retry to that
-  // exact target so another replacement cannot race ahead of preflight I/O.
-  const retry = await invokePreflight({
-    ...input,
-    expectedCanonicalPath: input.authorization.expectedCanonicalPath,
-  });
-  if (retry.ok || retry.canonicalChanged !== true) {
-    return retry;
-  }
-  await appendFileTransferAudit({
-    op: input.op,
-    nodeId: input.ctx.nodeId,
-    nodeDisplayName: input.ctx.node?.displayName,
-    requestedPath: input.requestedPath,
-    canonicalPath: retry.canonicalPath,
-    decision: "denied:symlink_escape",
-    errorCode: "CANONICAL_PATH_CHANGED",
-    reason: "canonical path changed again after reapproval",
-    durationMs: Date.now() - input.startedAt,
-  });
-  return {
-    ok: false,
-    result: policyDeniedResult({
-      op: input.op,
-      code: "CANONICAL_PATH_CHANGED",
-      message: "the canonical path changed again after reapproval; retry the operation",
-      details: { path: retry.canonicalPath },
-    }),
-  };
-}
-
 export async function runPathPreflight(input: {
   ctx: OpenClawPluginNodeInvokePolicyContext;
   op: FileTransferAuditOp;
@@ -480,31 +418,64 @@ export async function runPathPreflight(input: {
   | { ok: true; canonicalPath: string; binding: PathBinding }
   | { ok: false; result: OpenClawPluginNodeInvokePolicyResult }
 > {
-  const preflight = await invokeAuthorizedPreflight(input);
+  const expectedCanonicalPath =
+    input.authorization.source === "literal"
+      ? input.authorization.expectedCanonicalPath
+      : undefined;
+  let preflight = await invokePreflight({ ...input, expectedCanonicalPath });
+  if (!preflight.ok && preflight.canonicalChanged === true) {
+    const denied = await validateCanonicalAuthorization({
+      ...input,
+      canonicalPath: preflight.canonicalPath,
+    });
+    if (denied) {
+      return { ok: false, result: denied };
+    }
+
+    // Bind the approved retry to this exact target so another replacement
+    // cannot race ahead of preflight I/O.
+    preflight = await invokePreflight({
+      ...input,
+      expectedCanonicalPath: input.authorization.expectedCanonicalPath,
+    });
+    if (!preflight.ok && preflight.canonicalChanged === true) {
+      await appendFileTransferAudit({
+        op: input.op,
+        nodeId: input.ctx.nodeId,
+        nodeDisplayName: input.ctx.node?.displayName,
+        requestedPath: input.requestedPath,
+        canonicalPath: preflight.canonicalPath,
+        decision: "denied:symlink_escape",
+        errorCode: "CANONICAL_PATH_CHANGED",
+        reason: "canonical path changed again after reapproval",
+        durationMs: Date.now() - input.startedAt,
+      });
+      return {
+        ok: false,
+        result: policyDeniedResult({
+          op: input.op,
+          code: "CANONICAL_PATH_CHANGED",
+          message: "the canonical path changed again after reapproval; retry the operation",
+          details: { path: preflight.canonicalPath },
+        }),
+      };
+    }
+  }
   if (!preflight.ok) {
     return { ok: false, result: preflight.result };
   }
   const denied = await validateCanonicalAuthorization({
-    ctx: input.ctx,
-    op: input.op,
-    kind: input.kind,
-    authorization: input.authorization,
-    requestedPath: input.requestedPath,
+    ...input,
     canonicalPath: preflight.canonicalPath,
-    startedAt: input.startedAt,
   });
   if (denied) {
     return { ok: false, result: denied };
   }
   if (input.op === "dir.fetch") {
     const entryDeny = await validateDirFetchEntries({
-      ctx: input.ctx,
-      op: input.op,
-      authorization: input.authorization,
-      requestedPath: input.requestedPath,
+      ...input,
       canonicalPath: preflight.canonicalPath,
       entries: preflight.payload?.entries,
-      startedAt: input.startedAt,
       phase: "preflight",
     });
     if (entryDeny) {
