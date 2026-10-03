@@ -99,10 +99,9 @@ describe("chat metadata with published model owners", () => {
         });
         return entry;
       };
-      const configured: Array<Awaited<ReturnType<typeof add>>> = [];
-      for (let index = 0; index < count; index++) {
-        configured.push(await add(index === 0 ? "main" : `agent-${index}`));
-      }
+      const configured = await Promise.all(
+        Array.from({ length: count }, (_, index) => add(index === 0 ? "main" : `agent-${index}`)),
+      );
       const published = new Map<string, PreparedModelRuntimeSnapshot>();
       const publish = async (entry: Awaited<ReturnType<typeof add>>, force = false) => {
         const snapshot = await publishPreparedModelRuntimeSnapshot(
@@ -125,9 +124,7 @@ describe("chat metadata with published model owners", () => {
         );
         return snapshot;
       };
-      for (const entry of configured) {
-        await publish(entry);
-      }
+      await Promise.all(configured.map((entry) => publish(entry)));
       let builds = 0;
       // Projection leaves are supplied below; the real roster and published-owner chain is retained.
       const context = {} as GatewayRequestContext;
