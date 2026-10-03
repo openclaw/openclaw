@@ -1,8 +1,11 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { createGatewayTool } from "../../agents/tools/gateway-tool.js";
+import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -26,6 +29,9 @@ import {
 } from "./update.test-harness.js";
 
 const host = vi.hoisted(() => ({ context: undefined as GatewayRequestContext | undefined }));
+async function readUpdateReport(runId: string) {
+  return fs.readFile(path.join(resolveStateDir(), "update-reports", `${runId}.md`), "utf8");
+}
 vi.mock("../../agents/tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
   readGatewayCallOptions: vi.fn(),
@@ -148,6 +154,9 @@ describe("update.run current owner authority", () => {
             reason: "owner_required",
           }),
         ]);
+        expect(
+          await readUpdateReport(expectDefined(listUpdateRuns()[0], "refused run").runId),
+        ).toContain("owner_required");
         expect(adoptUpdateCampaignMock).not.toHaveBeenCalled();
         expect(sendGatewayLifecycleNoticeMock).not.toHaveBeenCalled();
         expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
@@ -303,6 +312,9 @@ describe("update.run current owner authority", () => {
       expect(listUpdateRuns()).toEqual([
         expect.objectContaining({ phase: "finished", status: "failed", reason: "owner_required" }),
       ]);
+      expect(
+        await readUpdateReport(expectDefined(listUpdateRuns()[0], "refused run").runId),
+      ).toContain("owner_required");
       expect(sendGatewayLifecycleNoticeMock).not.toHaveBeenCalled();
       expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
       expect(transferManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
@@ -333,6 +345,9 @@ describe("update.run current owner authority", () => {
     expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
     expect(sentinelState.capturedPayload).toBeUndefined();
     expect(sendGatewayLifecycleNoticeMock).toHaveBeenCalledOnce();
+    expect(
+      await readUpdateReport(expectDefined(listUpdateRuns()[0], "refused run").runId),
+    ).toContain("owner_required");
   });
 
   it("rechecks scheduled admission after discovery before starting the update handoff", async () => {
@@ -432,7 +447,7 @@ describe("update.run chat restart permission", () => {
     });
   }
 
-  function expectDisabledUpdate(payload: UpdateRunPayload) {
+  async function expectDisabledUpdate(payload: UpdateRunPayload) {
     expect(payload).toMatchObject({
       ok: false,
       result: { status: "skipped", reason: "restart-disabled" },
@@ -441,9 +456,10 @@ describe("update.run chat restart permission", () => {
     expect(getUpdateRun(payload.runId)).toMatchObject({
       trigger: "chat",
       phase: "finished",
-      status: "skipped",
+      status: "failed",
       reason: "restart-disabled",
     });
+    expect(await readUpdateReport(payload.runId)).toContain("restart-disabled");
     expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
     expect(transferManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
     expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
@@ -458,7 +474,7 @@ describe("update.run chat restart permission", () => {
       const payload = await runUpdate();
 
       if (restart === false) {
-        expectDisabledUpdate(payload);
+        await expectDisabledUpdate(payload);
         expect(payload.ackDelivered).toBe(false);
         expect(adoptUpdateCampaignMock).not.toHaveBeenCalled();
         expect(sendGatewayLifecycleNoticeMock).not.toHaveBeenCalled();
@@ -507,12 +523,12 @@ describe("update.run chat restart permission", () => {
       }
 
       const payload = await running;
-      expectDisabledUpdate(payload);
+      await expectDisabledUpdate(payload);
       expect(payload.ackDelivered).toBe(true);
       expect(sendGatewayLifecycleNoticeMock).toHaveBeenLastCalledWith(
         expect.objectContaining({
           message:
-            "ℹ️ OpenClaw wasn't updated.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
+            "⚠️ OpenClaw couldn't finish updating.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
         }),
         expect.any(Object),
       );

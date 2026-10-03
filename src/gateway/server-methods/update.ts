@@ -59,6 +59,7 @@ import { renderUpdateRunNotice } from "../../infra/update-run-notice.js";
 import { resolveUnmanagedUpdateInstallReason } from "../../infra/update-runner-install-surface.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { getUpdateAvailable } from "../../infra/update-status-state.js";
+import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { mergeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import {
@@ -82,7 +83,10 @@ import {
   resolveGatewayUpdateAdmission,
   reportImmutableGatewayUpdateRefusal,
 } from "./update-admission.js";
-import { recordGatewayUpdateOutcome } from "./update-outcome-observation.js";
+import {
+  recordGatewayUpdateOutcome,
+  saveFailedUpdateRunReport,
+} from "./update-outcome-observation.js";
 import { updateReportHandler } from "./update-report.js";
 import { updateStatusHandlers } from "./update-status.js";
 
@@ -224,7 +228,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     const ownsAdoptedCampaign = () =>
       adoptedCampaignId === undefined ||
       updateLifecycle.campaign?.getState()?.id === adoptedCampaignId;
-    const refuseUnauthorizedChatUpdate = () => {
+    const refuseUnauthorizedChatUpdate = async () => {
       // Chat update authority is revocable; internal or channel-less requesters
       // retain the operator authority established at admission.
       if (!requester?.channel || isInternalMessageChannel(requester.channel)) {
@@ -248,10 +252,12 @@ export const updateHandlers: GatewayRequestHandlers = {
         updateLifecycle.campaign?.clear();
       }
       recordUpdateRunPhase(runId, "requested", { origin: { nextAction: message } });
+      const refusedResult = { status: reason === "owner_required" ? "error" : "skipped", reason };
       const refusedRun = finishUpdateRun(runId, {
-        status: reason === "owner_required" ? "failed" : "skipped",
+        status: classifyUpdateOutcome(refusedResult) === "failed" ? "failed" : "skipped",
         reason,
       });
+      await saveFailedUpdateRunReport(refusedRun, context?.logGateway);
       respond(true, {
         runId,
         ok: false,
@@ -260,11 +266,11 @@ export const updateHandlers: GatewayRequestHandlers = {
         ackDelivered,
         ackQueued,
         acknowledgement,
-        result: { status: reason === "owner_required" ? "error" : "skipped", reason },
+        result: refusedResult,
       });
       return refusedRun;
     };
-    if (refuseUnauthorizedChatUpdate()) {
+    if (await refuseUnauthorizedChatUpdate()) {
       return;
     }
     const { createUpdateRunNotifier } = await import("../update-run-notice.runtime.js");
@@ -359,7 +365,7 @@ export const updateHandlers: GatewayRequestHandlers = {
           ? `version ${adoptedPackageTargetVersion}`
           : `${effectiveChannel} channel`;
       const acknowledgeUpdate = async (beforeVersion: string | null) => {
-        if (refuseUnauthorizedChatUpdate()) {
+        if (await refuseUnauthorizedChatUpdate()) {
           return false;
         }
         const targetVersion = adoptedPackageTargetVersion ?? getUpdateAvailable()?.latestVersion;
@@ -471,7 +477,7 @@ export const updateHandlers: GatewayRequestHandlers = {
             return;
           }
           // Recheck after the awaited acknowledgement, immediately before the effect.
-          const refusal = refuseUnauthorizedChatUpdate();
+          const refusal = await refuseUnauthorizedChatUpdate();
           if (refusal) {
             if (ackDelivered || ackQueued) {
               await notify(refusal, "finished");
@@ -515,7 +521,6 @@ export const updateHandlers: GatewayRequestHandlers = {
                     actor: actor.actor,
                     deviceId: actor.deviceId,
                     clientIp: actor.clientIp,
-                    changedPaths: [],
                   },
                 });
               }
@@ -625,7 +630,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     // refusals and synchronous failures have no later process to finish the run.
     if (handoff?.status !== "started") {
       outcomeRun = finishUpdateRun(runId, {
-        status: result.status === "skipped" ? "skipped" : "failed",
+        status: classifyUpdateOutcome(result) === "failed" ? "failed" : "skipped",
         reason: result.reason,
         after: result.after,
       });
@@ -701,6 +706,9 @@ export const updateHandlers: GatewayRequestHandlers = {
     if ((ackDelivered || ackQueued) && handoff?.status !== "started") {
       await notify(outcomeRun, "finished");
     }
+    // Only this Gateway owns synchronous failures. A started handoff leaves report
+    // publication to the updater/replacement Gateway's canonical artifact writer.
+    await saveFailedUpdateRunReport(outcomeRun, context?.logGateway);
     recordGatewayUpdateOutcome(result, actor, context?.logGateway);
     respond(
       true,

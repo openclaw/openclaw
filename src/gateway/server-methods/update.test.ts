@@ -1,9 +1,11 @@
 // Update method tests cover update.run/status, restart sentinel metadata,
 // managed-service handoff, restart scheduling, and delivery context preservation.
 
+import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { resolveStateDir } from "../../config/paths.js";
 import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
 import {
   loadTranscriptEvents,
@@ -442,6 +444,8 @@ describe("update.run restart scheduling", () => {
         successorOwner: expect.objectContaining({ handoffId: expect.any(String) }),
       }),
     );
+    const restart = expectDefined(scheduleGatewayRestartMock.mock.calls[0]?.[0], "restart call");
+    expect(restart.audit).not.toHaveProperty("changedPaths");
   });
 
   it("persists managed update continuation before transferring validation while serving", async () => {
@@ -837,6 +841,13 @@ describe("update.run restart scheduling", () => {
     expect(payload?.result?.status).toBe("skipped");
     expect(payload?.result?.reason).toBe("restart-unavailable");
     expect(payload?.result?.mode).toBe("npm");
+    const runId = expectDefined(payload?.runId, "update run id");
+    expect(getUpdateRun(runId)?.status).toBe("failed");
+    const report = await fs.readFile(
+      path.join(resolveStateDir(), "update-reports", `${runId}.md`),
+      "utf8",
+    );
+    expect(report).toContain("restart-unavailable");
   });
 
   it("keeps external update supervision authoritative even with native systemd markers", async () => {

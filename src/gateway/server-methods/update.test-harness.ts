@@ -13,6 +13,7 @@ import {
   type UpdateCheckLifecycle,
 } from "../../infra/update-check-lifecycle.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
+import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -555,7 +556,7 @@ export async function captureUpdateRunPayload(
     payload.handoff?.status !== "started"
   ) {
     expect(getUpdateRun(payload.runId)).toMatchObject({
-      status: payload.result.status === "skipped" ? "skipped" : "failed",
+      status: classifyUpdateOutcome(payload.result) === "failed" ? "failed" : "skipped",
       phase: "finished",
       reason: payload.result.reason,
     });

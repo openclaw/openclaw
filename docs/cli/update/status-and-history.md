@@ -124,6 +124,10 @@ use candidate code before its own history admission completes.
 Triage preserves the original update report. Any update launched during repair
 gets a separate `runId`.
 
+Synchronous Control UI and Gateway update failures save a sanitized report at
+`update-reports/<runId>.md` in the OpenClaw state directory. After an update
+hands off, its updater or successor Gateway owns the final report.
+
 Unexpected automatic-update campaign failures retain the error code, when present,
 and a redacted diagnostic in the run history as well as the Gateway log. Status
 and the bounded run report show the cause after the campaign clears. This requires

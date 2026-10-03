@@ -1,6 +1,8 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { resolveStateDir } from "../../config/paths.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
@@ -71,6 +73,12 @@ describe("update.run unexpected-error diagnostics", () => {
     expect(logGateway.info).not.toHaveBeenCalledWith(
       expect.stringContaining("update.run completed"),
     );
+    const report = await fs.readFile(
+      path.join(resolveStateDir(), "update-reports", `${response.runId}.md`),
+      "utf8",
+    );
+    expect(report).toContain("managed-service-handoff-failed");
+    expect(logGateway.warn.mock.calls.flat().join("\n")).not.toContain("changedPaths=<n/a>");
   });
 
   it("keeps the primary exception when optional history reads fail", async () => {
