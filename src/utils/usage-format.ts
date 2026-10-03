@@ -55,7 +55,7 @@ type ProviderCostIndex = {
 const EMPTY_PROVIDER_COST_INDEX = new Map<string, RawModelCostConfig>();
 const MODELS_JSON_COST_CACHE_LIMIT = 128;
 
-let providerCostIndexByNormalizer = new WeakMap<
+const providerCostIndexByNormalizer = new WeakMap<
   ModelKeyNormalizer,
   WeakMap<Record<string, ModelProviderConfig>, ProviderCostIndex>
 >();
@@ -409,9 +409,4 @@ export function estimateAggregateUsageCost(
     return usage.cost.total;
   }
   return cost?.tieredPricing?.length ? undefined : estimateUsageCost({ usage, cost });
-}
-
-export function resetUsageFormatCachesForTest(): void {
-  MODELS_JSON_STATE.costCache.clear();
-  providerCostIndexByNormalizer = new WeakMap();
 }

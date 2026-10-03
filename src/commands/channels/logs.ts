@@ -11,7 +11,7 @@ import type { ParsedLogLine } from "../../logging/parse-log-line.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 
-export type ChannelsLogsOptions = {
+type ChannelsLogsOptions = {
   channel?: string;
   lines?: string | number;
   json?: boolean;

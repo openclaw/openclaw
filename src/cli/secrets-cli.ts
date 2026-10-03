@@ -3,6 +3,7 @@ import { danger } from "../globals.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import type { SecretsApplyPlan } from "../secrets/plan.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatGatewayCommandFailure } from "./error-format.js";
 import { rethrowExpectedCliError } from "./failure-output.js";
@@ -34,6 +35,8 @@ type SecretsApplyOptions = {
   allowExec?: boolean;
   json?: boolean;
 };
+
+const secretsApplyLoader = createLazyImportLoader(() => import("../secrets/apply.js"));
 
 class SecretsPlanFileNotFoundError extends Error {}
 
@@ -290,7 +293,7 @@ export function registerSecretsCli(program: Command): void {
                 return { plan: configured.plan, preflight: configured.preflight };
               }
             }
-            const { runSecretsApply } = await import("../secrets/apply.js");
+            const { runSecretsApply } = await secretsApplyLoader.load();
             const result = await runSecretsApply({
               plan: configured.plan,
               write: true,
@@ -331,7 +334,7 @@ export function registerSecretsCli(program: Command): void {
         opts.json,
         async () => {
           const [{ runSecretsApply }, plan] = await Promise.all([
-            import("../secrets/apply.js"),
+            secretsApplyLoader.load(),
             readPlanFile(opts.from),
           ]);
           return runSecretsApply({

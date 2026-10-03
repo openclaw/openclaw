@@ -8,17 +8,22 @@ import {
   type ConcreteConfigPathSegment,
 } from "../shared/dot-path.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 
-export type ConfigurablePlugin = {
+type ConfigurablePlugin = {
   id: string;
   name: string;
   uiHints: Record<string, PluginConfigUiHint>;
   /** JSON schema from the plugin manifest (used for type/enum info). */
   jsonSchema?: JsonSchemaObject;
 };
+
+const loadPluginMetadataSnapshotModule = createLazyRuntimeModule(
+  () => import("../plugins/plugin-metadata-snapshot.js"),
+);
 
 type JsonSchemaProperty = {
   type?: string;
@@ -107,7 +112,7 @@ function parseJsonNumberInput(value: string): number | undefined {
   }
 }
 
-export function discoverConfigurablePlugins(params: {
+function discoverConfigurablePlugins(params: {
   manifestPlugins: ReadonlyArray<{
     id: string;
     name?: string;
@@ -140,7 +145,7 @@ export function discoverConfigurablePlugins(params: {
   return result.toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
-export function discoverUnconfiguredPlugins(
+function discoverUnconfiguredPlugins(
   params: Parameters<typeof discoverConfigurablePlugins>[0] & { config: OpenClawConfig },
 ): ConfigurablePlugin[] {
   const all = discoverConfigurablePlugins(params);
@@ -157,7 +162,7 @@ async function listEnabledConfigurableManifestPlugins(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
 }): Promise<readonly PluginManifestRecord[]> {
-  const { loadPluginMetadataSnapshot } = await import("../plugins/plugin-metadata-snapshot.js");
+  const { loadPluginMetadataSnapshot } = await loadPluginMetadataSnapshotModule();
   const snapshot = loadPluginMetadataSnapshot({
     config: params.config,
     workspaceDir: params.workspaceDir,

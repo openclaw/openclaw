@@ -76,6 +76,7 @@ import { prepareProviderSyntheticAuthWithPlugin } from "../../plugins/provider-r
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
 import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
 import {
   formatProviderAuthProfileCounts,
@@ -97,6 +98,8 @@ function resolveEnvAgentDirOverride(env: NodeJS.ProcessEnv = process.env): strin
   const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
   return override ? resolveUserPath(override, env) : undefined;
 }
+
+const listProbeRuntimeLoader = createLazyImportLoader(() => import("./list.probe.js"));
 
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
 
@@ -1068,7 +1071,7 @@ export async function modelsStatusCommand(
       if (opts.probe) {
         const [{ withProgressTotals }, { runAuthProbes }] = await Promise.all([
           import("../../cli/progress.js"),
-          import("./list.probe.js"),
+          listProbeRuntimeLoader.load(),
         ]);
         probeSummary = await withProgressTotals(
           { label: "Probing auth profiles…", total: 1 },
@@ -1563,7 +1566,7 @@ export async function modelsStatusCommand(
         const [{ getTerminalTableWidth, renderTable }, { describeProbeSummary, sortProbeResults }] =
           await Promise.all([
             import("../../../packages/terminal-core/src/table.js"),
-            import("./list.probe.js"),
+            listProbeRuntimeLoader.load(),
           ]);
         runtime.log("");
         runtime.log(colorize(rich, theme.heading, "Auth probes"));

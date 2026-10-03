@@ -2,14 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { MODELS_JSON_STATE } from "../agents/models-config-state.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resetUsageFormatCachesForTest, resolveModelCostConfig } from "./usage-format.js";
+import { resolveModelCostConfig } from "./usage-format.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("usage-format agent roster", () => {
   afterEach(() => {
-    resetUsageFormatCachesForTest();
+    MODELS_JSON_STATE.costCache.clear();
   });
 
   it("uses the sole agent directory from a canonical roster", async () => {

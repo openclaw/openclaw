@@ -22,6 +22,7 @@ import {
 import { isTerminalInteractive } from "../../cli/terminal-interactivity.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../../wizard/prompts.js";
 import { normalizeExternalChannelSetupConfig } from "../channel-setup/config-compatibility.js";
@@ -31,6 +32,8 @@ import { parseAccountSelector } from "./account-selector.js";
 import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { channelLabel } from "./runtime-label.js";
 import { requireValidConfigForWrite } from "./shared.js";
+
+const loadOnboardChannels = createLazyPromise(() => import("../../flows/channel-setup.js"));
 
 export type ChannelsAddOptions = {
   agent?: string;
@@ -313,8 +316,7 @@ async function configureChannelAccount(
       );
       const afterAccountConfigWritten = applied.afterAccountConfigWritten;
       if (afterAccountConfigWritten) {
-        const { runCollectedChannelOnboardingPostWriteHooks } =
-          await import("../../flows/channel-setup.js");
+        const { runCollectedChannelOnboardingPostWriteHooks } = await loadOnboardChannels();
         await runCollectedChannelOnboardingPostWriteHooks({
           hooks: [
             {

@@ -4,12 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MODELS_JSON_STATE } from "../agents/models-config-state.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import * as manifestModelIdNormalization from "../plugins/manifest-model-id-normalization.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
-  resetUsageFormatCachesForTest,
   estimateUsageCost,
   formatUsd,
   resolveModelCostConfig,
@@ -53,13 +53,13 @@ describe("usage-format", () => {
     process.env.OPENCLAW_STATE_DIR = stateDir;
     delete process.env.OPENCLAW_AGENT_DIR;
     await fs.mkdir(agentDir, { recursive: true });
-    resetUsageFormatCachesForTest();
+    MODELS_JSON_STATE.costCache.clear();
   });
 
   afterEach(async () => {
     envSnapshot?.restore();
     envSnapshot = undefined;
-    resetUsageFormatCachesForTest();
+    MODELS_JSON_STATE.costCache.clear();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
