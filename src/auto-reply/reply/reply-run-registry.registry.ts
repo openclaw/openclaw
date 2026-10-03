@@ -10,7 +10,7 @@ import {
 import { markDiagnosticRunProgress } from "../../logging/diagnostic-run-activity.js";
 import { hasGatewayContextOwner } from "../../plugins/runtime/gateway-request-scope.js";
 import { agentSessionKeysMatchByRequestKey } from "../../routing/session-key.js";
-import { isCurrentSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { isCurrentSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.state.js";
 import { settlesWithin } from "../../shared/settle-within.js";
 import * as replyRunSettle from "./reply-run-finalization-lease.js";
 import {
