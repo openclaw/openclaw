@@ -133,38 +133,39 @@ const changes = [
   },
 ] as const;
 
-it.each(changes)("refuses $name before native activation", async ({ change, reason }) => {
-  current = { ...current, ...change };
-  const failure = await startSystemdService({
-    stdout: new PassThrough(),
-    systemdIdentity: original,
-  }).catch((error: unknown) => error);
-  expect(native.systemctl).not.toHaveBeenCalled();
-  expect(failure).toMatchObject({ name: "ServiceOwnershipRefusalError", reason });
-  expect(effects).toEqual([]);
-  expect(native.close).toHaveBeenCalledOnce();
-});
-
-it.each(changes)(
-  "revalidates $name between reset-failed and restart",
-  async ({ change, reason }) => {
-    afterReset = () => {
+it.each(["before start", "during restart"])("refuses changed authority %s", async (phase) => {
+  for (const { name, change, reason } of changes) {
+    vi.clearAllMocks();
+    effects = [];
+    current = { ...original };
+    const replace = () => {
       current = { ...current, ...change };
     };
+    afterReset = phase === "during restart" ? replace : undefined;
+    if (phase === "before start") {
+      replace();
+    }
+    const activate = phase === "before start" ? startSystemdService : restartSystemdService;
     await expect(
-      restartSystemdService({ stdout: new PassThrough(), systemdIdentity: original }),
+      activate({ stdout: new PassThrough(), systemdIdentity: original }),
+      name,
     ).rejects.toMatchObject({ name: "ServiceOwnershipRefusalError", reason });
-    expect(effects).toEqual(["ResetFailedUnit"]);
+    expect(effects).toEqual(phase === "before start" ? [] : ["ResetFailedUnit"]);
     expect(native.systemctl).not.toHaveBeenCalled();
-  },
-);
+    expect(native.close).toHaveBeenCalledOnce();
+  }
+});
 
-it.each(["", "root", "0"])("accepts the same root account spelled %j", async (serviceUser) => {
-  current.serviceUser = serviceUser;
-  await startSystemdService({ stdout: new PassThrough(), systemdIdentity: original });
-  expect(effects).toEqual(["ResetFailedUnit", "StartUnit"]);
-  expect(native.open).toHaveBeenCalledExactlyOnceWith(original.bus.address, expect.any(Number));
-  expect(native.systemctl).not.toHaveBeenCalled();
+it("accepts root account aliases", async () => {
+  for (const serviceUser of ["", "root", "0"]) {
+    vi.clearAllMocks();
+    effects = [];
+    current.serviceUser = serviceUser;
+    await startSystemdService({ stdout: new PassThrough(), systemdIdentity: original });
+    expect(effects).toEqual(["ResetFailedUnit", "StartUnit"]);
+    expect(native.open).toHaveBeenCalledExactlyOnceWith(original.bus.address, expect.any(Number));
+    expect(native.systemctl).not.toHaveBeenCalled();
+  }
 });
 
 it("retains the root privilege requirement for a pinned system unit", async () => {
