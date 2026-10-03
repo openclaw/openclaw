@@ -13,7 +13,15 @@ const forumGroupId = -100710000004;
 const forumTopicId = 42;
 const hmac = (digit: string) => `hmac-sha256:v1:${"a".repeat(32)}:${digit.repeat(64)}`;
 
-type Fault = "raw-principal" | "raw-room" | "prompt-leak" | "verified-generic" | "restart-leak";
+type Fault =
+  | "raw-principal"
+  | "raw-room"
+  | "prompt-leak"
+  | "verified-generic"
+  | "same-person"
+  | "changed-primary"
+  | "reused-context"
+  | "restart-leak";
 
 function runIdentityFlow(fault?: Fault) {
   const state = createQaBusState();
@@ -34,13 +42,24 @@ function runIdentityFlow(fault?: Fault) {
       throw new Error("identity proof must inspect only a newly admitted transport turn");
     }
     const additional = turn.senderId === additionalUserId;
-    const principalRef = fault === "raw-principal" ? turn.senderId : hmac(additional ? "c" : "b");
+    const principalRef =
+      fault === "raw-principal"
+        ? turn.senderId
+        : hmac(
+            fault === "same-person"
+              ? "b"
+              : fault === "changed-primary" && index === 1
+                ? "e"
+                : additional
+                  ? "c"
+                  : "b",
+          );
     return {
       run: { runId, executionId: `execution-${runId}` },
       identity: {
         state: "present",
         context: {
-          contextId: `context-${runId}`,
+          contextId: fault === "reused-context" ? "context-first" : `context-${runId}`,
           executionId: `execution-${runId}`,
           runId,
           invoker: {
@@ -210,6 +229,9 @@ describe("Telegram participant identity executable flow", () => {
     ["raw-room", "bounded redacted identity"],
     ["prompt-leak", "bounded redacted identity"],
     ["verified-generic", "bounded redacted identity"],
+    ["same-person", "distinguish the additional participant"],
+    ["changed-primary", "preserve the same primary person"],
+    ["reused-context", "three distinct execution contexts"],
     ["restart-leak", "changed or exposed private references after restart"],
   ] satisfies Array<[Fault, string]>)("rejects %s evidence", async (fault, message) => {
     await expect(runIdentityFlow(fault).result).rejects.toThrow(message);

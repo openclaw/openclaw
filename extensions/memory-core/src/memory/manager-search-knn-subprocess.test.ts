@@ -495,6 +495,25 @@ describe("memory vector KNN subprocess boundary", () => {
     ).rejects.toThrow("subprocess unavailable");
     expect(runFallback).not.toHaveBeenCalled();
   });
+  it("reopens a replaced database on the next query in the same child", async () => {
+    const original = await createFileBackedVectorDatabase();
+    const replacement = await createFileBackedVectorDatabase();
+    try {
+      insertVectorRow(original.db, { id: "original", source: "memory", vector: [1, 0] });
+      insertVectorRow(replacement.db, { id: "replacement", source: "memory", vector: [1, 0] });
+      const params = { databasePath: original.databasePath, request: request(1) };
+      expect((await runVectorKnnInSubprocess(params)).rows[0]?.id).toBe("original");
+      original.db.close();
+      replacement.db.close();
+      fs.renameSync(replacement.databasePath, original.databasePath);
+      expect((await runVectorKnnInSubprocess(params)).rows[0]?.id).toBe("replacement");
+      expect(childProcess.spawn).toHaveBeenCalledTimes(1);
+    } finally {
+      original.cleanup();
+      replacement.cleanup();
+    }
+  });
+
   it("bounds an oversized stored row before child protocol serialization", async () => {
     const fixture = await createFileBackedVectorDatabase();
     try {
