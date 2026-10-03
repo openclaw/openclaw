@@ -54,6 +54,11 @@ vi.mock("../agents/lazy-exec-tool.js", () => ({
   resolveExecToolConfig: vi.fn(() => ({})),
 }));
 
+import { resolveExecModePolicy } from "../infra/exec-approvals-core.js";
+import {
+  requiresExecApproval,
+  resolveExecApprovalAllowedDecisions,
+} from "../infra/exec-approvals-policy.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 function resolveTools(overrides: Partial<Parameters<typeof resolveGatewayScopedTools>[0]> = {}) {
@@ -331,6 +336,55 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     const presentation = createExec.mock.calls[0]?.[1];
     expect(presentation?.description).toContain("node-only");
     expect(presentation?.parameters).toHaveProperty("properties.host.enum", ["node"]);
+  });
+
+  it("keeps an unrepresentable always-ask node exec policy out of the derived mode", () => {
+    mockTools("read", "exec", "nodes");
+    const result = resolveNodeExecTools({
+      execOverrides: { security: "full", ask: "always" },
+    });
+
+    expect(result.tools.some((tool) => tool.name === "exec")).toBe(true);
+    expect(createExec).toHaveBeenCalledOnce();
+    const defaults = createExec.mock.calls[0]?.[0];
+    expect(defaults?.host).toBe("node");
+    expect(defaults?.security).toBe("full");
+    expect(defaults?.ask).toBe("always");
+
+    // The execution owner resolves a supplied mode with precedence, so a derived
+    // display mode must stay absent while the exact policy is unrepresentable.
+    const effective = resolveExecModePolicy({
+      mode: defaults?.mode,
+      security: "full",
+      ask: "always",
+    });
+    expect(effective.ask).toBe("always");
+    expect(effective.security).toBe("full");
+    expect(
+      requiresExecApproval({
+        ask: effective.ask,
+        security: effective.security,
+        analysisOk: true,
+        allowlistSatisfied: true,
+        durableApprovalSatisfied: true,
+      }),
+    ).toBe(true);
+    expect(resolveExecApprovalAllowedDecisions({ ask: effective.ask })).not.toContain(
+      "allow-always",
+    );
+    expect(defaults?.mode).toBeUndefined();
+  });
+
+  it("still passes a representable node exec mode", () => {
+    mockTools("read", "exec", "nodes");
+    resolveNodeExecTools({ execOverrides: { security: "allowlist", ask: "off" } });
+
+    expect(createExec.mock.calls[0]?.[0]).toMatchObject({
+      host: "node",
+      mode: "allowlist",
+      security: "allowlist",
+      ask: "off",
+    });
   });
 
   it("omits all exec variants when host policy forbids node execution", () => {

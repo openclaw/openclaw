@@ -589,7 +589,11 @@ export function resolveGatewayScopedTools(
         createLazyExecTool(
           {
             host: "node",
-            mode: nodeExecDefaults.mode,
+            // A display mode must not replace an unrepresentable exact policy.
+            mode:
+              resolveExactExecModeFromPolicy(nodeExecDefaults) === null
+                ? undefined
+                : nodeExecDefaults.mode,
             security: nodeExecDefaults.security,
             ask: nodeExecDefaults.ask,
             trigger: params.trigger,
