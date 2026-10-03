@@ -271,25 +271,31 @@ describe("cron timer outcome and failure policy regressions", () => {
     },
   );
 
-  it("keeps a stale schedule enabled while alerting on its tenth failure", () => {
-    const startedAt = Date.parse("2026-08-01T14:00:00.000Z");
-    const deferredNotifications: DeferredCronNotifications = [];
-    const { state, job } = outcomeFixture(startedAt, {
-      state: { consecutiveErrors: 9, nextRunAtMs: startedAt + 60_000 },
-    });
+  it.each([
+    { name: "stale", options: { scheduleOwnership: "stale" } },
+    { name: "forced", options: { scheduleMode: "preserve" } },
+  ] as const)(
+    "keeps a $name schedule enabled while alerting on its tenth failure",
+    ({ options }) => {
+      const startedAt = Date.parse("2026-08-01T14:00:00.000Z");
+      const deferredNotifications: DeferredCronNotifications = [];
+      const { state, job } = outcomeFixture(startedAt, {
+        state: { consecutiveErrors: 9, nextRunAtMs: startedAt + 60_000 },
+      });
 
-    applyJobResult(
-      state,
-      job,
-      { status: "error", error: "tenth failure", startedAt, endedAt: startedAt + 10 },
-      { scheduleOwnership: "stale", deferredNotifications },
-    );
+      applyJobResult(
+        state,
+        job,
+        { status: "error", error: "tenth failure", startedAt, endedAt: startedAt + 10 },
+        { ...options, deferredNotifications },
+      );
 
-    expect(job.enabled).toBe(true);
-    expect(job.state.consecutiveErrors).toBe(10);
-    expect(job.state.autoDisabled).toBeUndefined();
-    expect(deferredNotifications).toHaveLength(1);
-  });
+      expect(job.enabled).toBe(true);
+      expect(job.state.consecutiveErrors).toBe(10);
+      expect(job.state.autoDisabled).toBeUndefined();
+      expect(deferredNotifications).toHaveLength(1);
+    },
+  );
 
   it.each([
     { status: "ok", throws: true, at: "2026-03-02T12:00:00.000Z", durationMs: 50 },

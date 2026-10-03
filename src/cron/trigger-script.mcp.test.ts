@@ -147,6 +147,7 @@ describe("cron script MCP namespace", () => {
 
   it.each([
     { caps: "a wildcard", toolsAllow: ["*"], script: "typeof MCP" },
+    { caps: "an unprefixed glob", toolsAllow: ["sour*"], script: "typeof MCP" },
     { caps: "no toolsAllow", toolsAllow: undefined, script: "typeof MCP" },
     { caps: "a script that never mentions it", toolsAllow: ["sources__*"], script: '"undefined"' },
   ])("starts no MCP server for $caps", async ({ toolsAllow, script }) => {
