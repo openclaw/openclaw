@@ -67,13 +67,14 @@ export class TranscriptPrependAnchor {
     element: HTMLDivElement | null,
     virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
     measureRows: () => boolean,
+    readerOffset: (scrollTop: number) => number = (scrollTop) => scrollTop,
   ): boolean {
     const anchor = this.pending;
     if (!anchor) {
       return false;
     }
     const changed = measureRows();
-    const moved = restoreTranscriptPrependAnchor(anchor, element, virtualizer);
+    const moved = restoreTranscriptPrependAnchor(anchor, element, virtualizer, readerOffset);
     if (anchor.measured && !changed && !moved) {
       this.pending = null;
     }
@@ -139,6 +140,7 @@ function restoreTranscriptPrependAnchor(
   anchor: ChatTranscriptPrependAnchor | null,
   scrollElement: HTMLDivElement | null,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  readerOffset: (scrollTop: number) => number,
 ): boolean {
   if (!anchor || !scrollElement) {
     return false;
@@ -156,10 +158,12 @@ function restoreTranscriptPrependAnchor(
     return false;
   }
   const maxOffset = Math.max(0, scrollElement.scrollHeight - scrollElement.clientHeight);
-  const offset = Math.max(0, Math.min(maxOffset, scrollElement.scrollTop + delta));
+  // Row coordinates: a shift held on screen during a fling is part of the offset.
+  const current = readerOffset(scrollElement.scrollTop);
+  const offset = Math.max(0, Math.min(maxOffset, current + delta));
   // A retained message can become unreachable at an edge when provisional rows retire.
   // Reissuing that clamped correction would keep the measurement loop alive forever.
-  if (Math.abs(offset - scrollElement.scrollTop) <= 1) {
+  if (Math.abs(offset - current) <= 1) {
     return false;
   }
   // Commit one measured message target through the scroll owner. This also

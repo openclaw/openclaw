@@ -1,6 +1,7 @@
 import { measureElement, type Virtualizer } from "@tanstack/virtual-core";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { captureChatSessionScrollPosition, type ChatSessionScrollPosition } from "../scroll.ts";
+import type { TranscriptResizeAnchor } from "./chat-transcript-resize-anchor.ts";
 import type { TranscriptViewportMeasurement } from "./chat-transcript-scroll-events.ts";
 
 export const POSITION_RAIL_MARKER_HEIGHT = 12;
@@ -162,7 +163,9 @@ export function measureTranscriptRow(
   element: HTMLElement,
   entry: ResizeObserverEntry | undefined,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  resizeAnchor?: Pick<TranscriptResizeAnchor, "observeRow">,
 ): number {
+  resizeAnchor?.observeRow(element);
   if (!entry && virtualizer.targetWindow?.ResizeObserver) {
     // Registration happens during Lit commit; the observer supplies real sizes
     // after layout, including the first measurement of a newly mounted row.
