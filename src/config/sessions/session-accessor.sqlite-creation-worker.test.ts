@@ -355,7 +355,7 @@ it("does not initialize a transcript or invoke follow-up when creation rejects",
   });
 });
 
-it.each(["incognito", "maintenance"] as const)(
+it.each(["incognito", "maintenance", "alias replacement"] as const)(
   "retains valid native %s creation through follow-up",
   async (kind) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -364,11 +364,23 @@ it.each(["incognito", "maintenance"] as const)(
         sessionKey:
           kind === "incognito"
             ? "agent:main:dashboard:incognito-fixture"
-            : "agent:main:native-maintenance",
+            : kind === "maintenance"
+              ? "agent:main:native-maintenance"
+              : "agent:main:signal:group:NativeReplacement",
       };
       const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
+      const alias = scope.sessionKey.toLowerCase();
+      const oldSessionId = "native-replaced-session";
+      if (kind === "alias replacement") {
+        writeSessionEntry(database, alias, { sessionId: oldSessionId, updatedAt: 1 });
+        ensureTranscriptHeader(
+          database,
+          { ...scope, sessionKey: alias, sessionId: oldSessionId },
+          "/old",
+        );
+      }
       const schemaLease =
-        kind === "maintenance" ? acquireStateDatabaseSchemaLease(database.path) : undefined;
+        kind !== "incognito" ? acquireStateDatabaseSchemaLease(database.path) : undefined;
       const maintenance = schemaLease
         ? createOpenClawDatabaseMaintenanceScope({
             schemaMaintenance: true,
@@ -394,8 +406,18 @@ it.each(["incognito", "maintenance"] as const)(
           },
         );
       try {
-        expect((await (maintenance ? maintenance.run(create) : create())).ok).toBe(true);
+        const created = await (maintenance ? maintenance.run(create) : create());
+        expect(created.ok).toBe(true);
         expect(followed).toBe(true);
+        if (kind === "alias replacement") {
+          expect(created).toMatchObject({ ok: true, sessionFile: scope.sessionKey });
+          expect(readExactSessionEntryRow(database, alias)).toBeUndefined();
+          expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry.sessionId).toBe(
+            "native-created",
+          );
+          expect(readTranscriptStorageRows(database, oldSessionId)).toEqual([]);
+          expect(readTranscriptStorageRows(database, "native-created")).toHaveLength(1);
+        }
       } finally {
         try {
           await maintenance?.close();
@@ -406,48 +428,6 @@ it.each(["incognito", "maintenance"] as const)(
     });
   },
 );
-
-it("retires the old transcript when native alias creation selects a new session", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const sessionKey = "agent:main:signal:group:NativeReplacement";
-    const alias = sessionKey.toLowerCase();
-    const oldSessionId = "native-replaced-session";
-    writeSessionEntry(database, alias, { sessionId: oldSessionId, updatedAt: 1 });
-    ensureTranscriptHeader(
-      database,
-      { agentId: "main", sessionKey: alias, sessionId: oldSessionId },
-      "/old",
-    );
-    const lease = acquireStateDatabaseSchemaLease(database.path);
-    const maintenance = createOpenClawDatabaseMaintenanceScope({
-      schemaMaintenance: true,
-      assertOwnerCurrent: () => lease.assertCurrent(),
-      assertDatabaseAccess: lease.assertDatabaseAccess,
-    });
-    try {
-      const created = await maintenance.run(() =>
-        createSessionEntryWithTranscript(
-          { agentId: "main", storePath: database.path, sessionKey },
-          () => ({ ok: true, entry: { sessionId: "native-new-session", updatedAt: 2 } }),
-        ),
-      );
-      expect(created).toMatchObject({ ok: true, sessionFile: sessionKey });
-      expect(readExactSessionEntryRow(database, alias)).toBeUndefined();
-      expect(readExactSessionEntryRow(database, sessionKey)?.entry.sessionId).toBe(
-        "native-new-session",
-      );
-      expect(readTranscriptStorageRows(database, oldSessionId)).toEqual([]);
-      expect(readTranscriptStorageRows(database, "native-new-session")).toHaveLength(1);
-    } finally {
-      try {
-        await maintenance.close();
-      } finally {
-        lease.release();
-      }
-    }
-  });
-});
 
 it("publishes the logical creator identity while retaining the shared database's physical owner", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
