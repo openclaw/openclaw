@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
+import { FailoverError } from "../agents/failover/error.js";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
@@ -624,6 +625,74 @@ describe("realtime voice agent consult runtime", () => {
       }),
     ).rejects.toMatchObject({ name: errorName });
     expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("walks the agent model fallback chain when the primary cannot run (#161885)", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+    runEmbeddedAgent.mockImplementationOnce(async () => {
+      throw new FailoverError('No API key found for provider "anthropic".', {
+        reason: "auth",
+        provider: "anthropic",
+        model: "claude-opus-5-5",
+      });
+    });
+
+    const result = await runConsult({
+      cfg: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-opus-5-5",
+              fallbacks: ["openai/gpt-5.6-sol"],
+            },
+          },
+        },
+      } as never,
+      agentRuntime: runtime as never,
+      sessionKey: "voice:fallback",
+      runIdPrefix: "voice-realtime-consult:fallback",
+      args: { question: "What is on today?" },
+    });
+
+    expect(result).toEqual({ text: "Speak this." });
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
+    expect(runEmbeddedAgent.mock.calls[0]?.[0]?.provider).toBeUndefined();
+    expect(runEmbeddedAgent.mock.calls[1]?.[0]).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.6-sol",
+    });
+  });
+
+  it("does not replay a consult on a fallback model after a tool ran", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+    runEmbeddedAgent.mockImplementationOnce(async (params?: RunEmbeddedAgentParams) => {
+      params?.onAgentToolResult?.({ toolName: "message", result: "sent", isError: false });
+      throw new FailoverError("Provider rate limited.", {
+        reason: "rate_limit",
+        provider: "anthropic",
+        model: "claude-opus-5-5",
+      });
+    });
+
+    await expect(
+      runConsult({
+        cfg: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "anthropic/claude-opus-5-5",
+                fallbacks: ["openai/gpt-5.6-sol"],
+              },
+            },
+          },
+        } as never,
+        agentRuntime: runtime as never,
+        sessionKey: "voice:no-replay",
+        runIdPrefix: "voice-realtime-consult:no-replay",
+        args: { question: "Send it." },
+      }),
+    ).rejects.toThrow();
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
   });
 
   it("returns a speakable fallback when the embedded agent has no visible text", async () => {
