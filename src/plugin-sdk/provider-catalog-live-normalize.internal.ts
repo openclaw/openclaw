@@ -122,16 +122,7 @@ function readLiveModelStringArray(
 }
 
 function isSafeLiveModelId(value: string): boolean {
-  if (!value || value.length > 512) {
-    return false;
-  }
-  for (const char of value) {
-    const codePoint = char.codePointAt(0) ?? 0;
-    if (codePoint <= 0x20 || codePoint === 0x7f) {
-      return false;
-    }
-  }
-  return true;
+  return value.length > 0 && value.length <= 512 && !/[\u0000-\u0020\u007f]/u.test(value);
 }
 
 const NON_TEXT_MODEL_ID_PATTERN =

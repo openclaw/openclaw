@@ -164,7 +164,6 @@ async function installBundleFromSourceDir(
       version: manifestRes.manifest.version,
       extensions: [],
       targetDir: targetResult.target.targetPath,
-      extensionsDir: params.extensionsDir,
       logger,
       timeoutMs,
       workTimeoutMs,
@@ -282,7 +281,6 @@ async function installPluginFromPackageDir(
       extensions: plugin.extensions,
       setup: plugin.setup,
       targetDir: preparedTarget.targetPath,
-      extensionsDir: params.extensionsDir,
       logger,
       timeoutMs,
       workTimeoutMs,
@@ -292,7 +290,6 @@ async function installPluginFromPackageDir(
       hasDeps: shouldInstallRuntimeDeps,
       sourceHardlinks: shouldInstallRuntimeDeps ? "package-manager" : "reject",
       depsLogMessage: "Installing plugin dependencies…",
-      nameEncoder: encodePluginInstallDirName,
       onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
       beforePersistentApply: params.beforePersistentApply,
       afterInstall: async (installedDir) => {
@@ -302,7 +299,6 @@ async function installPluginFromPackageDir(
           pluginId: plugin.pluginId,
           peerDependencies: plugin.peerDependencies,
           onInstallPolicyWarning: params.onInstallPolicyWarning,
-          trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
           config: params.config,
           mode: effectiveMode,
           ...(params.installPolicyRequest?.kind
