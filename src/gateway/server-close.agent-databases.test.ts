@@ -13,9 +13,14 @@ import {
   type ReplyOperation,
 } from "../auto-reply/reply/reply-run-registry.js";
 import { runGatewayLoop } from "../cli/gateway-cli/run-loop.js";
-import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  patchSessionEntryCore,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { runSqliteSessionReclamation } from "../config/sessions/session-accessor.sqlite-reclamation-run.js";
 import { createSessionMaintenanceStatisticsOperation } from "../config/sessions/session-accessor.sqlite-reclamation.js";
+import { settlePendingFinalDelivery } from "../infra/outbound/delivery-completion.js";
 import { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
@@ -144,6 +149,8 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
   const rootJoinEntered = createDeferredCore();
   const releaseRootWork = createDeferredCore();
   let closing: Promise<void> | undefined;
+  let heldWriter: ReturnType<typeof patchSessionEntryCore> | undefined;
+  let acceptedFinal: ReturnType<typeof settlePendingFinalDelivery> | undefined;
   try {
     const pluginId = fixture.pluginId;
     const registry = createEmptyPluginRegistry();
@@ -174,6 +181,17 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
           sessionId: `${agentId}-session`,
           updatedAt: 1,
           pluginExtensions: { [pluginId]: { active: true } },
+          ...(agentId === "main"
+            ? {
+                pendingFinalDelivery: {
+                  kind: "replayable" as const,
+                  text: "accepted final",
+                  createdAt: 1,
+                  intentId: "close-intent",
+                  deliveries: [{ id: "close-delivery", state: "prepared" as const }],
+                },
+              }
+            : {}),
         },
       );
     }
@@ -198,6 +216,17 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
     const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
     const pluginWorkEntered = createDeferredCore();
     const rootWorkEntered = createDeferredCore();
+    const writerEntered = createDeferredCore();
+    heldWriter = patchSessionEntryCore(
+      { agentId: "main", storePath: activeStore, sessionKey: "agent:main:main" },
+      async () => {
+        writerEntered.resolve();
+        await releaseRootWork.promise;
+        return { label: "writer settled before final" };
+      },
+      { skipMaintenance: true, workerGuard: {} },
+    );
+    await withinTest(writerEntered.promise, signal);
     const stopService = vi.fn(() => stopEntered.resolve());
     const services = createEmptyPluginRegistry();
     services.services.push({
@@ -232,8 +261,20 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
       id: "kernel-held-work",
       delayMs: 0,
       async run() {
+        acceptedFinal = settlePendingFinalDelivery(
+          {
+            kind: "pending-final",
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            sessionId: "main-session",
+            storePath: activeStore,
+            deliveryId: "close-delivery",
+            intentId: "close-intent",
+          },
+          "delivered",
+        );
         rootWorkEntered.resolve();
-        await releaseRootWork.promise;
+        await acceptedFinal;
       },
     });
     await vi.advanceTimersByTimeAsync(0);
@@ -249,9 +290,14 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
     expect(stopService).toHaveBeenCalledOnce();
     await withinTest(rootJoinEntered.promise, signal);
     expect(kernel.scheduler.signal.aborted).toBe(true);
+    const lateWork = vi.fn();
+    await kernel.scheduler.schedule({ id: "after-close", delayMs: 0, run: lateWork }).stop();
+    expect(lateWork).not.toHaveBeenCalled();
     expect(disposed).toBe(false);
     expect(shared.isOpen).toBe(true);
     releaseRootWork.resolve();
+    await heldWriter;
+    await expect(acceptedFinal).resolves.toEqual({ state: "delivered" });
     await expect(closing).resolves.toBeUndefined();
     expect(disposed).toBe(true);
     expect(shared.isOpen).toBe(false);
@@ -260,10 +306,18 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
       loadSessionEntry({ agentId: "main", storePath: activeStore, sessionKey: "agent:main:main" })
         ?.pluginExtensions,
     ).toBeUndefined();
+    expect(
+      loadSessionEntry({ agentId: "main", storePath: activeStore, sessionKey: "agent:main:main" }),
+    ).toMatchObject({
+      label: "writer settled before final",
+      pendingFinalDelivery: {
+        deliveries: [{ id: "close-delivery", state: "delivered" }],
+      },
+    });
   } finally {
     stopEntered.resolve();
     releaseRootWork.resolve();
-    await Promise.allSettled([closing]);
+    await Promise.allSettled([heldWriter, acceptedFinal, closing]);
     vi.useRealTimers();
     vi.restoreAllMocks();
     await fixture.cleanup();

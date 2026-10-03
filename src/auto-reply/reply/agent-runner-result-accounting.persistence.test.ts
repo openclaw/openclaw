@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentMeta } from "../../agents/embedded-agent-runner/types.js";
@@ -24,7 +25,7 @@ import {
   isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { isReplyPayloadTerminalContent } from "../reply-payload.js";
+import { getReplyPayloadMetadata, isReplyPayloadTerminalContent } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type {
   AgentTurnCompaction,
@@ -347,6 +348,44 @@ async function createFixture() {
     },
   };
 }
+
+it("publishes a prepared final only after its worker patch commits without host transactions", async () => {
+  const fixture = await createFixture();
+  const accounting = await accountAgentTurn(fixture.context);
+  const payload = { text: "durable final" };
+  const sql = observeHostDataSql();
+  try {
+    await completeReplyAgentRun({
+      context: fixture.context,
+      accounting,
+      prepared: {
+        kind: "continue",
+        activeSessionEntry: accounting.activeSessionEntry,
+        completedSourceReplyDelivery: false,
+        guardedReplyPayloads: [payload],
+        responseUsageLine: undefined,
+      },
+    });
+    expect(
+      sql.queries.filter((query) =>
+        /\b(?:BEGIN|COMMIT|ROLLBACK|INSERT|UPDATE|DELETE)\b/i.test(query),
+      ),
+    ).toEqual([]);
+  } finally {
+    sql.restore();
+  }
+  const completion = getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion;
+  expect(completion).toMatchObject({
+    sessionId: fixture.sessionId,
+    sessionKey: fixture.context.sessionKey,
+    storePath,
+  });
+  expect(fixture.read()?.pendingFinalDelivery).toMatchObject({
+    intentId: completion?.intentId,
+    deliveries: [{ id: completion?.deliveryId, state: "prepared" }],
+    text: "durable final",
+  });
+});
 
 it.each([
   { stored: "off", selected: "raw", authorized: true, trace: true },
