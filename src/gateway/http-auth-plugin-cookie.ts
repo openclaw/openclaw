@@ -8,6 +8,7 @@ import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { resolveControlUiPluginAuthCookieGrants } from "./control-ui-plugin-auth-cookie.js";
+import { controlUiPluginCookieOriginBlocked } from "./control-ui-plugin-origin-gate.js";
 import {
   applyHttpOperatorRoleScopeCeiling,
   checkHttpCookieUserProfile,
@@ -56,6 +57,12 @@ export function authorizeControlUiPluginCookieRequest(
     generation: resolveControlUiPluginAuthCookieGeneration(params.authGeneration, cfg),
   });
   if (grants.length === 0) {
+    return null;
+  }
+  // The cookie is SameSite=None: reject concrete cross-site browser Origins
+  // (CSRF via fetch(credentials:include)); the sandboxed plugin-tab iframe and
+  // Origin-less non-browser clients still pass — see the gate's docstring.
+  if (controlUiPluginCookieOriginBlocked(req, cfg)) {
     return null;
   }
   const profileAuth = checkHttpCookieUserProfile(
