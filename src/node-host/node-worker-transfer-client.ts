@@ -181,18 +181,18 @@ async function downloadFile(params: {
     await params.root.create(
       workspacePath(params.root.rootReal, params.relativePath),
       (async function* () {
-        const hash = createHash("sha256");
+        const hash = params.expectedSha256 === undefined ? undefined : createHash("sha256");
         let bytes = 0;
         for await (const value of response) {
           const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
           bytes += chunk.byteLength;
-          hash.update(chunk);
+          hash?.update(chunk);
           yield chunk;
         }
         // Reject invalid content before the completed file is published.
         if (
           (params.expectedBytes !== undefined && bytes !== params.expectedBytes) ||
-          (params.expectedSha256 !== undefined && hash.digest("hex") !== params.expectedSha256)
+          (hash && hash.digest("hex") !== params.expectedSha256)
         ) {
           throw new Error("workspace transfer blob failed integrity validation");
         }
