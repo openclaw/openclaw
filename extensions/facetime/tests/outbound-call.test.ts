@@ -114,7 +114,7 @@ describe("doesFaceTimeCallMatchPendingDial", () => {
     mode: "video",
     requestedAt: "2026-07-20T17:52:00.000Z",
   };
-  const matches = (data: FaceTimeCallStatusEvent["data"], dial: PendingFaceTimeDial) =>
+  const matches = (data: Partial<FaceTimeCallStatusEvent["data"]>, dial: PendingFaceTimeDial) =>
     doesFaceTimeCallMatchPendingDial({
       event: { ...event, data: { ...event.data, ...data } },
       pending: dial,

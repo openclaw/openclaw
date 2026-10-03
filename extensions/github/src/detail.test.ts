@@ -9,10 +9,10 @@ const date = "2026-09-13T12:00:00Z";
 const sha = "abcdef0123456789abcdef0123456789abcdef01";
 let sequence = 0;
 
-function target(kind: "issue" | "pull" | "commit" = "issue"): GitHubTarget {
+function target(kind: "issue" | "pull" | "commit" = "issue", commitSha = sha): GitHubTarget {
   const repo = "detail-" + ++sequence;
   return kind === "commit"
-    ? { kind, owner: "octocat", repo, sha }
+    ? { kind, owner: "octocat", repo, sha: commitSha }
     : { kind, owner: "octocat", repo, number: 1 };
 }
 function json(value: unknown, status = 200, headers: Record<string, string> = {}): Response {
@@ -703,7 +703,7 @@ describe("GitHub detail public read boundary", () => {
       commit({ commit: { ...commit().commit, comment_count: 2 } }),
     ).mockResolvedValueOnce(json([first, second]));
     const detail = await loadGitHubDetail(
-      { ...target("commit"), sha: sha.slice(0, 7).toUpperCase() },
+      target("commit", sha.slice(0, 7).toUpperCase()),
       undefined,
       fetchMock,
     );
