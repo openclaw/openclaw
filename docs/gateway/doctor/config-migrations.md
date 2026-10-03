@@ -63,6 +63,14 @@ using an older release with existing state. These embedded session files are
 separate from `openclaw.json`: current `doctor --fix` owns supported July-and-later
 config migrations, but does not rewrite these retired session settings.
 
+The `keybindings.json` reader also refuses retired action names such as `interrupt`
+and `submit`, naming their replacements (`app.interrupt` and `tui.input.submit`).
+Back up the file and rename the reported entries, keeping existing canonical
+bindings when both names occur. A refused reload preserves the last accepted
+bindings and leaves the file untouched. Unknown custom action names remain
+supported. OpenClaw `2026.9.7` retains the former keybinding reader; current Doctor
+does not rewrite retired keybinding names.
+
 ### Retired state and config formats
 
 Unreleased per-agent SQLite session layouts below schema 8 and their pre-landing

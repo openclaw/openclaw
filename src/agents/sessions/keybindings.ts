@@ -13,6 +13,7 @@ import {
   KeybindingsManager as TuiKeybindingsManager,
 } from "@earendil-works/pi-tui";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createInvalidConfigError } from "../../config/io.invalid-config.js";
 import { getAgentDir } from "../config.js";
 
 /** OpenClaw-specific key ids added to the shared pi-tui keybinding registry. */
@@ -164,8 +165,86 @@ const KEYBINDINGS = {
   },
 } as const satisfies KeybindingDefinitions;
 
+const RETIRED_KEYBINDING_NAMES = {
+  cursorUp: "tui.editor.cursorUp",
+  cursorDown: "tui.editor.cursorDown",
+  cursorLeft: "tui.editor.cursorLeft",
+  cursorRight: "tui.editor.cursorRight",
+  cursorWordLeft: "tui.editor.cursorWordLeft",
+  cursorWordRight: "tui.editor.cursorWordRight",
+  cursorLineStart: "tui.editor.cursorLineStart",
+  cursorLineEnd: "tui.editor.cursorLineEnd",
+  jumpForward: "tui.editor.jumpForward",
+  jumpBackward: "tui.editor.jumpBackward",
+  pageUp: "tui.editor.pageUp",
+  pageDown: "tui.editor.pageDown",
+  deleteCharBackward: "tui.editor.deleteCharBackward",
+  deleteCharForward: "tui.editor.deleteCharForward",
+  deleteWordBackward: "tui.editor.deleteWordBackward",
+  deleteWordForward: "tui.editor.deleteWordForward",
+  deleteToLineStart: "tui.editor.deleteToLineStart",
+  deleteToLineEnd: "tui.editor.deleteToLineEnd",
+  yank: "tui.editor.yank",
+  yankPop: "tui.editor.yankPop",
+  undo: "tui.editor.undo",
+  newLine: "tui.input.newLine",
+  submit: "tui.input.submit",
+  tab: "tui.input.tab",
+  copy: "tui.input.copy",
+  selectUp: "tui.select.up",
+  selectDown: "tui.select.down",
+  selectPageUp: "tui.select.pageUp",
+  selectPageDown: "tui.select.pageDown",
+  selectConfirm: "tui.select.confirm",
+  selectCancel: "tui.select.cancel",
+  interrupt: "app.interrupt",
+  clear: "app.clear",
+  exit: "app.exit",
+  suspend: "app.suspend",
+  cycleThinkingLevel: "app.thinking.cycle",
+  cycleModelForward: "app.model.cycleForward",
+  cycleModelBackward: "app.model.cycleBackward",
+  selectModel: "app.model.select",
+  expandTools: "app.tools.expand",
+  toggleThinking: "app.thinking.toggle",
+  toggleSessionNamedFilter: "app.session.toggleNamedFilter",
+  externalEditor: "app.editor.external",
+  followUp: "app.message.followUp",
+  dequeue: "app.message.dequeue",
+  pasteImage: "app.clipboard.pasteImage",
+  newSession: "app.session.new",
+  tree: "app.session.tree",
+  fork: "app.session.fork",
+  resume: "app.session.resume",
+  treeFoldOrUp: "app.tree.foldOrUp",
+  treeUnfoldOrDown: "app.tree.unfoldOrDown",
+  treeEditLabel: "app.tree.editLabel",
+  treeToggleLabelTimestamp: "app.tree.toggleLabelTimestamp",
+  toggleSessionPath: "app.session.togglePath",
+  toggleSessionSort: "app.session.toggleSort",
+  renameSession: "app.session.rename",
+  deleteSession: "app.session.delete",
+  deleteSessionNoninvasive: "app.session.deleteNoninvasive",
+} as const satisfies Record<string, keyof typeof KEYBINDINGS>;
+
 /** Validates bindings and orders known entries ahead of unknown extras. */
-function parseKeybindingsConfig(rawConfig: Record<string, unknown>): KeybindingsConfig {
+function parseKeybindingsConfig(
+  rawConfig: Record<string, unknown>,
+  configPath: string,
+): KeybindingsConfig {
+  const retired = Object.entries(RETIRED_KEYBINDING_NAMES)
+    .filter(([name]) => Object.hasOwn(rawConfig, name))
+    .map(([name, current]) => `${name}: use ${current}`);
+  if (retired.length > 0) {
+    throw createInvalidConfigError(
+      configPath,
+      `Retired keybinding names: ${retired.join("; ")}. ` +
+        "Preserve the original file and replace the retired names, keeping existing canonical bindings when both names occur. " +
+        "OpenClaw 2026.9.7 retains the former keybinding reader for a staged upgrade. " +
+        "See https://docs.openclaw.ai/gateway/doctor/config-migrations#session-settings.",
+      { recovery: "manual" },
+    );
+  }
   const config = new Map<string, KeyId | KeyId[]>();
   for (const [key, binding] of Object.entries(rawConfig)) {
     if (typeof binding === "string") {
@@ -215,12 +294,13 @@ export class KeybindingsManager extends TuiKeybindingsManager {
   }
 
   private static loadFromFile(path: string): KeybindingsConfig {
+    let parsed: unknown;
     try {
-      const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
-      return isRecord(parsed) ? parseKeybindingsConfig(parsed) : {};
+      parsed = JSON.parse(readFileSync(path, "utf-8"));
     } catch {
       return {};
     }
+    return isRecord(parsed) ? parseKeybindingsConfig(parsed, path) : {};
   }
 }
 
