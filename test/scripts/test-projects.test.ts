@@ -3026,7 +3026,9 @@ describe("changed export mock consumers", () => {
           runtimeOnly: true,
           aggressive: { maxDirectImporters: 1, maxDirectoryTests: 1 },
           onSelection: ({ rule, targets }) => {
-            if (rule === "mock-export-consumer") reasons.push(...targets);
+            if (rule === "mock-export-consumer") {
+              reasons.push(...targets);
+            }
           },
         });
         expect(reasons.toSorted()).toEqual(selected ? consumers.toSorted() : []);
