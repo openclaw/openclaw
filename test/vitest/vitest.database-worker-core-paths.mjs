@@ -281,6 +281,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/get-reply.dashboard.test.ts",
   "src/auto-reply/reply/get-reply.delivery-format.test.ts",
   "src/auto-reply/reply/get-reply.explicit-owner.test.ts",
+  "src/auto-reply/reply/get-reply.gateway-authority.test.ts",
   "src/auto-reply/reply/get-reply.timeout.test.ts",
   "src/auto-reply/reply/restart-recovery-claim.test.ts",
   "src/auto-reply/reply/restart-recovery-claim.lifecycle.test.ts",

@@ -135,6 +135,24 @@ describe("gateway request scope", () => {
     expect(runtimeScope.getGatewayContextLifetime(second).signal.aborted).toBe(false);
   });
 
+  it("rejects cyclic Gateway ownership without invoking execution resolvers", async () => {
+    const scope = await importGatewayRequestScopeModule();
+    const first = vi.fn(() => TEST_SCOPE.context!);
+    const second = vi.fn(() => TEST_SCOPE.context!);
+    const root = vi.fn(() => TEST_SCOPE.context!);
+    const owner = {};
+    scope.bindGatewayContextResolver(owner, first);
+    scope.bindGatewayContextResolver(first, second);
+    scope.bindGatewayContextResolver(second, first);
+
+    expect(scope.hasGatewayContextOwner(owner, root)).toBe(false);
+    expect(scope.hasGatewayContextOwner(owner, second)).toBe(false);
+    expect(scope.hasGatewayContextOwner({}, root)).toBe(false);
+    expect(first).not.toHaveBeenCalled();
+    expect(second).not.toHaveBeenCalled();
+    expect(root).not.toHaveBeenCalled();
+  });
+
   it("attaches plugin id to the active scope", async () => {
     await expectPluginIdScopedGatewayScope("voice-call");
   });

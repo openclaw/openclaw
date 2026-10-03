@@ -11,6 +11,7 @@ import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/regist
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
+import { copyChannelParticipantAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
 import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import { conversationRouteContextFromMsgContext } from "../../config/sessions/conversation-route-context.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
@@ -1160,6 +1161,7 @@ async function initSessionStateAttemptLocked(
     SessionId: sessionId,
     IsNewSession: isFirstSessionTurn ? "true" : "false",
   };
+  copyChannelParticipantAdmissionEvidence(sessionCtxForState, sessionCtx);
 
   const hookRunner = getGlobalHookRunner();
   if (hookRunner && isFirstSessionTurn) {
