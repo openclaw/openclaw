@@ -2141,7 +2141,7 @@ src/gateway/server-methods/chat-transcript-inject.ts	1
 src/gateway/server-methods/chat-transcript-persistence.ts	4
 src/gateway/server-methods/chat-tts-markers.ts	1
 src/gateway/server-methods/config-write-flow.ts	1
-src/gateway/server-methods/config.ts	3
+src/gateway/server-methods/config.ts	1
 src/gateway/server-methods/cron.ts	3
 src/gateway/server-methods/doctor.ts	2
 src/gateway/server-methods/exec-approvals.ts	1
