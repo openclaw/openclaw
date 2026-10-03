@@ -51,6 +51,7 @@ type Options = {
   run?: Record<string, unknown>;
   pullRequest?: Record<string, unknown>;
   responses?: Record<string, Reply | Reply[]>;
+  deadline?: number;
 };
 
 function evaluate(options: Options = {}) {
@@ -129,6 +130,9 @@ globalThis.fetch = async (url, options = {}) => {
         GITHUB_EVENT_NAME: options.eventName ?? "workflow_run",
         GITHUB_OUTPUT: outputFile,
         GITHUB_RUN_ID: "789",
+        ...(options.deadline === undefined
+          ? {}
+          : { OPENCLAW_SECURITY_REVIEW_DEADLINE_MS: String(options.deadline) }),
       },
     },
   );
@@ -171,6 +175,35 @@ function reconcileStatuses(statuses: unknown[]) {
 }
 
 describe("automatic security review event resolution", () => {
+  it("reports safe request diagnostics when rate-limit recovery cannot fit its deadline", () => {
+    const result = evaluate({
+      eventName: "pull_request_target",
+      event: { action: "opened", pull_request: { number: 42 } },
+      deadline: Date.parse("2026-01-02T00:01:00Z"),
+      responses: {
+        [`${prefix}/pulls/42`]: {
+          status: 429,
+          body: { message: "private-response-body test-token" },
+          headers: {
+            "retry-after": "120",
+            "x-ratelimit-reset": "1767312120",
+            "x-ratelimit-remaining": "0",
+            "x-github-request-id": "ABCD:1234:5678:90EF",
+            "x-private-debug": "private-header",
+          },
+        },
+      },
+    });
+    expect(result.status).toBe(1);
+    expect(result.error).toBe(
+      'GitHub API recovery budget exhausted; security review remains incomplete. Request: {"method":"GET","path":"/repos/openclaw/openclaw/pulls/42","status":429,"requestId":"ABCD:1234:5678:90EF","rateLimitReset":1767312120,"rateLimitRemaining":0,"retryAfter":120}',
+    );
+    expect(result.requests).toEqual([{ method: "GET", path: `${prefix}/pulls/42` }]);
+    expect(result.waits).toEqual([]);
+    expect(result.published).toEqual([]);
+    expect(result.output).toBe("");
+  });
+
   it("automatically resolves the current PR after a rate-limited lookup", () => {
     const result = evaluate({
       eventName: "pull_request_target",

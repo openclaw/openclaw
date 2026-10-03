@@ -25,6 +25,45 @@ const githubApiRetryDelaysMs = [1_000, 2_000, 4_000];
 const securityReviewBudgetMs = 65 * 60_000;
 const recoveryDeadlineEnv = "OPENCLAW_SECURITY_REVIEW_DEADLINE_MS";
 
+// Recovery can outlive the response. Retain only request diagnostics here, not
+// response bodies or arbitrary error causes that may contain private data.
+const requestDiagnostics = new WeakMap();
+
+function recordRequestDiagnostic(error, method, path, response) {
+  const diagnostic = {
+    method: /^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$/u.test(method) ? method : "UNKNOWN",
+    path: sanitizeGuardDisplayValue(path.split(/[?#]/u, 1)[0]),
+  };
+  if (response) {
+    diagnostic.status = response.status;
+    const requestId = response.headers.get("x-github-request-id");
+    if (requestId && /^[A-Za-z0-9:_-]{1,128}$/u.test(requestId)) {
+      diagnostic.requestId = requestId;
+    }
+    for (const [header, field] of [
+      ["x-ratelimit-reset", "rateLimitReset"],
+      ["x-ratelimit-remaining", "rateLimitRemaining"],
+      ["retry-after", "retryAfter"],
+    ]) {
+      const value = response.headers.get(header);
+      if (value !== null && /^\d{1,16}$/u.test(value) && Number.isSafeInteger(Number(value))) {
+        diagnostic[field] = Number(value);
+      } else if (
+        header === "retry-after" &&
+        value !== null &&
+        /^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/u.test(value) &&
+        Number.isFinite(Date.parse(value)) &&
+        new Date(value).toUTCString() === value
+      ) {
+        diagnostic.retryAfter = new Date(value).toUTCString();
+      }
+    }
+  } else if (githubApiRetryCodes.has(error.code)) {
+    diagnostic.code = error.code;
+  }
+  requestDiagnostics.set(error, JSON.stringify(diagnostic));
+}
+
 export class GitHubRateLimitError extends Error {
   constructor(message, response) {
     super(message);
@@ -46,6 +85,7 @@ export class GitHubRateLimitError extends Error {
 export class GitHubStatusPublicationError extends Error {
   constructor(cause) {
     super(cause.message, { cause });
+    requestDiagnostics.set(this, requestDiagnostics.get(cause));
   }
 }
 
@@ -97,16 +137,17 @@ export async function withSecurityReviewRecovery(evaluate, { checkCurrent } = {}
         : inconsistentDiff
           ? 60_000 * 2 ** attempt
           : githubApiRetryDelaysMs[attempt];
+      const diagnostic = requestDiagnostics.get(error);
       if (attempt >= 3 || Date.now() + delay + GITHUB_API_REQUEST_TIMEOUT_MS > deadline) {
         throw new Error(
           inconsistentDiff
             ? `GitHub diff-data recovery budget exhausted; security review remains incomplete. ${error.message}`
-            : "GitHub API recovery budget exhausted; security review remains incomplete.",
+            : `GitHub API recovery budget exhausted; security review remains incomplete.${diagnostic ? ` Request: ${diagnostic}` : ""}`,
           { cause: error },
         );
       }
       console.warn(
-        `${rateLimited ? `GitHub API rate limited (${error.status})` : inconsistentDiff || readTimedOut ? error.message : `GitHub status publication failed (${error.message})`}; retrying the complete evaluation in ${Math.ceil(delay / 1_000)}s (attempt ${attempt + 1}/3).`,
+        `${rateLimited ? `GitHub API rate limited (${error.status})` : inconsistentDiff || readTimedOut ? error.message : "GitHub status publication failed"}${diagnostic ? ` Request: ${diagnostic}` : ""}; retrying the complete evaluation in ${Math.ceil(delay / 1_000)}s (attempt ${attempt + 1}/3).`,
       );
       // Never probe during server-directed quota backoff. A rate limit from a
       // checkpoint joins this same recovery budget instead of starting a poller.
@@ -349,11 +390,15 @@ export async function readBoundedGitHubJson(
 }
 
 function timeoutError(path, method, timeoutMs) {
-  const message = `GitHub API ${method} ${path} exceeded timeout ${timeoutMs}ms`;
+  const safePath = sanitizeGuardDisplayValue(path.split(/[?#]/u, 1)[0]);
+  const message = `GitHub API ${method} ${safePath} exceeded timeout ${timeoutMs}ms`;
   // An expired write may already have succeeded; only reads can restart review.
-  return method === "GET" || method === "HEAD"
-    ? new GitHubReadTimeoutError(message)
-    : new Error(message);
+  const error =
+    method === "GET" || method === "HEAD"
+      ? new GitHubReadTimeoutError(message)
+      : new Error(message);
+  recordRequestDiagnostic(error, method, path);
+  return error;
 }
 
 function combineAbortSignals(signals) {
@@ -432,6 +477,7 @@ export function createGitHubApi(token, options = {}) {
           if (!requestSignal.aborted) {
             requestError.code = code;
           }
+          recordRequestDiagnostic(requestError, method, path);
           throw requestError;
         }
         if (!response.ok) {
@@ -461,10 +507,13 @@ export function createGitHubApi(token, options = {}) {
               response.headers.has("retry-after") ||
               /(?:API rate limit exceeded|secondary rate limit)/iu.test(errorText))
           ) {
-            throw new GitHubRateLimitError(message, response);
+            const error = new GitHubRateLimitError(message, response);
+            recordRequestDiagnostic(error, method, path, response);
+            throw error;
           }
           const error = new Error(message);
           error.status = response.status;
+          recordRequestDiagnostic(error, method, path, response);
           throw error;
         }
       }

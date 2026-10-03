@@ -381,14 +381,23 @@ describe("combined security review entry point", () => {
     expect(result.stderr).toContain(`GitHub API POST ${commentPath} failed: 500`);
   });
 
-  it("bounds persistent read deadlines without granting approval", () => {
-    const result = evaluate({ [rolePath]: { requestTimeout: "fetch" } });
-    expect(result.status).toBe(1);
-    expect(result.waits).toEqual([1_000, 2_000, 4_000]);
-    expect(result.requests.filter((entry) => `GET ${entry.path}` === rolePath)).toHaveLength(4);
-    expect(result.stderr).toContain("recovery budget exhausted");
-    expect(result.requests.some((entry) => entry.body?.state === "success")).toBe(false);
-  });
+  it.each([rolePath, runsPath])(
+    "bounds persistent read deadlines without granting approval: %s",
+    (route) => {
+      const result = evaluate({ [route]: { requestTimeout: "fetch" } });
+      expect(result.status).toBe(1);
+      expect(result.waits).toEqual([1_000, 2_000, 4_000]);
+      expect(result.requests.filter((entry) => `GET ${entry.path}` === route)).toHaveLength(4);
+      expect(result.stderr.trim().split("\n").at(-1)).toBe(
+        `GitHub API recovery budget exhausted; security review remains incomplete. Request: ${JSON.stringify({ method: "GET", path: route.slice(4) })}`,
+      );
+      expect(result.stderr).not.toMatch(/head_sha=|per_page=/u);
+      expect(result.combined).toEqual(["pending", "pending", "pending", "pending"]);
+      if (route === rolePath) {
+        expect(result.requests.some((entry) => entry.body?.state === "success")).toBe(false);
+      }
+    },
+  );
 
   it.each([
     { name: "status", route: statusPath },
@@ -749,12 +758,43 @@ describe("combined security review entry point", () => {
   });
 
   it("bounds persistent status publication failures without granting approval", () => {
-    const result = evaluate({ [statusPath]: { httpError: 500 } });
+    const result = evaluate({
+      [statusPath]: {
+        httpError: 500,
+        message: "private-response-body fixture-token",
+        headers: { "x-github-request-id": "ABCD:1234", "x-private-debug": "private-header" },
+      },
+    });
     expect(result.status).toBe(1);
     expect(result.waits).toEqual([1_000, 2_000, 4_000]);
     expect(result.requests.filter((entry) => entry.method === "POST")).toHaveLength(4);
     expect(result.stderr).toContain("recovery budget exhausted");
+    const diagnostic = JSON.stringify({
+      method: "POST",
+      path: statusPath.slice(5),
+      status: 500,
+      requestId: "ABCD:1234",
+    });
+    expect(result.stderr.trim().split("\n")).toHaveLength(4);
+    expect(
+      result.stderr
+        .trim()
+        .split("\n")
+        .every((line) => line.includes(diagnostic)),
+    ).toBe(true);
+    expect(result.stderr).not.toMatch(/private-response-body|fixture-token|private-header/u);
     expect(result.requests.some((entry) => entry.body?.state === "success")).toBe(false);
+  });
+
+  it("keeps the failed status request identity when transport recovery is exhausted", () => {
+    const result = evaluate({ [statusPath]: { transportError: "ECONNRESET" } });
+    expect(result.status).toBe(1);
+    expect(result.waits).toEqual([1_000, 2_000, 4_000]);
+    expect(result.requests.filter((entry) => entry.method === "POST")).toHaveLength(4);
+    expect(result.stderr.trim().split("\n").at(-1)).toBe(
+      `GitHub API recovery budget exhausted; security review remains incomplete. Request: ${JSON.stringify({ method: "POST", path: statusPath.slice(5), code: "ECONNRESET" })}`,
+    );
+    expect(result.combined).not.toContain("success");
   });
 
   it("shares three evaluation restarts between status failures and rate limits", () => {
@@ -811,6 +851,9 @@ describe("combined security review entry point", () => {
     const result = evaluate({ [rolePath]: { httpError: 429 } });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("recovery budget exhausted");
+    expect(result.stderr.trim().split("\n").at(-1)).toBe(
+      `GitHub API recovery budget exhausted; security review remains incomplete. Request: ${JSON.stringify({ method: "GET", path: rolePath.slice(4), status: 429 })}`,
+    );
     expect(result.waits).toHaveLength(3);
     for (const [index, delay] of result.waits.entries()) {
       expect(delay).toBeGreaterThanOrEqual(60_000 * 2 ** index);
@@ -823,23 +866,143 @@ describe("combined security review entry point", () => {
       route: `GET ${pullPath}`,
       failure: { httpError: 429, headers: { "retry-after": "120" } },
       deadline: "2026-01-02T00:01:00Z",
+      diagnostic: { method: "GET", path: pullPath, status: 429, retryAfter: 120 },
     },
-    { route: statusPath, failure: { httpError: 500 }, deadline: "2026-01-02T00:00:30Z" },
+    {
+      route: statusPath,
+      failure: { httpError: 500 },
+      deadline: "2026-01-02T00:00:30Z",
+      diagnostic: { method: "POST", path: statusPath.slice(5), status: 500 },
+    },
     {
       route: `GET ${pullPath}`,
       failure: { requestTimeout: "fetch" },
       deadline: "2026-01-02T00:01:00Z",
+      diagnostic: { method: "GET", path: pullPath },
     },
     {
       route: `GET ${pullPath}/files`,
       failure: files.slice(0, 1),
       deadline: "2026-01-02T00:01:00Z",
+      diagnostic: null,
     },
-  ])("keeps $route recovery within the shared deadline", ({ route, failure, deadline }) => {
-    const result = evaluate({ [route]: failure }, "enforce", Date.parse(deadline));
+  ])(
+    "keeps $route recovery within the shared deadline",
+    ({ route, failure, deadline, diagnostic }) => {
+      const result = evaluate({ [route]: failure }, "enforce", Date.parse(deadline));
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("recovery budget exhausted");
+      if (diagnostic) {
+        expect(result.stderr.trim().split("\n").at(-1)).toBe(
+          `GitHub API recovery budget exhausted; security review remains incomplete. Request: ${JSON.stringify(diagnostic)}`,
+        );
+      } else {
+        expect(result.stderr).toContain("GitHub diff-data recovery budget exhausted");
+        expect(result.stderr).not.toContain("Request:");
+      }
+      expect(result.waits).toEqual([]);
+      expect(result.combined).not.toContain("success");
+    },
+  );
+
+  it.each([
+    {
+      name: "safe request and quota fields",
+      headers: {
+        "x-github-request-id": "ABCD:1234:5678:90EF",
+        "x-ratelimit-reset": "1767312120",
+        "x-ratelimit-remaining": "0",
+        "retry-after": "120",
+      },
+      expected: {
+        requestId: "ABCD:1234:5678:90EF",
+        rateLimitReset: 1767312120,
+        rateLimitRemaining: 0,
+        retryAfter: 120,
+      },
+    },
+    { name: "absent fields", headers: {}, expected: {} },
+    {
+      name: "blank fields",
+      headers: {
+        "x-github-request-id": "",
+        "x-ratelimit-reset": "",
+        "x-ratelimit-remaining": "",
+        "retry-after": "",
+      },
+      expected: {},
+    },
+    {
+      name: "malformed fields",
+      headers: {
+        "x-github-request-id": "invalid\tid",
+        "x-ratelimit-reset": "-1",
+        "x-ratelimit-remaining": "1.5",
+        "retry-after": "tomorrow",
+      },
+      expected: {},
+    },
+    {
+      name: "oversized fields",
+      headers: {
+        "x-github-request-id": "A".repeat(129),
+        "x-ratelimit-reset": "9007199254740992",
+        "x-ratelimit-remaining": "9007199254740992",
+        "retry-after": "9007199254740992",
+      },
+      expected: {},
+    },
+    {
+      name: "HTTP-date retry hint",
+      headers: { "retry-after": "Fri, 02 Jan 2026 00:02:00 GMT" },
+      expected: { retryAfter: "Fri, 02 Jan 2026 00:02:00 GMT" },
+    },
+    {
+      name: "invalid HTTP-date retry hint",
+      headers: { "retry-after": "Fri, 32 Jan 2026 00:02:00 GMT" },
+      expected: {},
+    },
+  ])("reports only valid safe headers at recovery exhaustion: $name", ({ headers, expected }) => {
+    const endpoint = pullPath;
+    const result = evaluate(
+      {
+        [`GET ${endpoint}`]: {
+          httpError: 429,
+          message: "private-response-body fixture-token",
+          headers: {
+            ...headers,
+            "x-private-debug": "private-header",
+            "set-cookie": "private-cookie",
+          },
+        },
+      },
+      "enforce",
+      Date.parse("2026-01-02T00:00:30Z"),
+    );
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("recovery budget exhausted");
+    expect(result.stderr.trim()).toBe(
+      `GitHub API recovery budget exhausted; security review remains incomplete. Request: ${JSON.stringify({ method: "GET", path: endpoint, status: 429, ...expected })}`,
+    );
     expect(result.waits).toEqual([]);
+    expect(
+      result.requests.map(({ method, path: requestPath }) => ({ method, path: requestPath })),
+    ).toEqual([{ method: "GET", path: endpoint }]);
+    expect(result.combined).toEqual([]);
+  });
+
+  it("omits API query values from terminal recovery diagnostics", () => {
+    const result = evaluate(
+      { [runsPath]: { httpError: 429, message: "private-response-body fixture-token" } },
+      "enforce",
+      Date.parse("2026-01-02T00:00:30Z"),
+    );
+    expect(result.status).toBe(1);
+    // CI lookup includes head_sha and per_page; neither belongs in diagnostics.
+    expect(result.stderr.trim()).toBe(
+      `GitHub API recovery budget exhausted; security review remains incomplete. Request: ${JSON.stringify({ method: "GET", path: runsPath.slice(4), status: 429 })}`,
+    );
+    expect(result.waits).toEqual([]);
+    expect(result.requests.filter((entry) => `GET ${entry.path}` === runsPath)).toHaveLength(1);
     expect(result.combined).not.toContain("success");
   });
 
