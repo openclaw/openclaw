@@ -1,5 +1,5 @@
 import { watchFile, writeFileSync } from "node:fs";
-import { readFile, rename, writeFile } from "node:fs/promises";
+import { appendFile, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
@@ -7,6 +7,11 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import { fetchMcpAppView, getMcpAppViewLease } from "../agents/mcp-ui-resource.js";
 import { testing as viewTesting } from "../agents/mcp-ui-resource.test-support.js";
+import {
+  acceptGatewayDeviceSourceAuthority,
+  captureGatewayDeviceRevocation,
+  invalidateGatewayDeviceRevocation,
+} from "./device-revocation.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
 const state = vi.hoisted(() => ({ root: "", sessionId: "session-1" }));
@@ -296,6 +301,47 @@ describe("registered MCP App host-file routes", () => {
       { viewId, uri },
       new Set(["alice"]),
     );
+  });
+
+  it("keeps file notifications alive after the accepted subscription request finishes", async ({
+    signal,
+  }) => {
+    const request = options({ sessionKey, viewId, uri });
+    const device = captureGatewayDeviceRevocation(
+      request.context,
+      { deviceId: "viewer", role: "operator" },
+      () => true,
+      connection.signal,
+      { isCurrent: () => true, subscribe: () => () => {} },
+    );
+    request.hasCurrentClientAuthority = device.isCurrent;
+    expect(acceptGatewayDeviceSourceAuthority(device.isCurrent)).toBe(true);
+    const respond = vi.fn();
+    await mcpAppHandlers["mcp.app.subscribeResource"]!({ ...request, respond });
+    expect(respond).toHaveBeenCalledWith(true, {});
+    device.release();
+    const file = path.join(state.root, "part.stl");
+    for (const change of ["append", "atomic rename"]) {
+      const notified = createDeferred();
+      publish.mockClear();
+      publish.mockImplementation(() => notified.resolve());
+      if (change === "append") {
+        await appendFile(file, "\nsolid appended");
+      } else {
+        await writeFile(`${file}.tmp`, "solid replaced");
+        await rename(`${file}.tmp`, file);
+      }
+      await withinTest(notified.promise, signal);
+      expect(publish).toHaveBeenCalledWith(
+        "mcp.app.resourceUpdated",
+        { viewId, uri },
+        new Set(["alice"]),
+      );
+    }
+    invalidateGatewayDeviceRevocation(request.context, "viewer");
+    expect(device.isCurrent()).toBe(false);
+    connection.abort();
+    expect(getMcpAppViewLease(viewId, runtime)?.disposeCallbacks?.size).toBe(0);
   });
 
   it("registers and removes subscriptions through the same view authority", async () => {

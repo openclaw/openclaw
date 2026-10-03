@@ -220,6 +220,13 @@ describe("registered MCP App extensions", () => {
       expect.objectContaining({ viewId: "mcp-app-demo" }),
     );
     expect(mocks.release).toHaveBeenCalledOnce();
+    expect(mocks.dispose).toHaveBeenCalledOnce();
+    const authorize = mocks.fetch.mock.calls[0]![0].authorizeAppInteraction;
+    expect(authorize()).toBe(true);
+    mocks.assert.mockImplementationOnce(() => {
+      throw new Error("session revoked");
+    });
+    expect(authorize).toThrow("session revoked");
     expect(mocks.viewCleanup.size).toBe(1);
     for (const cleanup of mocks.viewCleanup) {
       cleanup();
