@@ -5,14 +5,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
   resolveMemorySlotDecisionShared,
-  resolvePluginActivationDecisionShared,
-  toPluginActivationState,
+  resolvePluginActivationStateShared,
   type PluginActivationConfigSourceLike,
   type PluginActivationStateLike,
 } from "./config-activation-shared.js";
 import {
   normalizePluginsConfigWithResolverCore,
-  resolveChannelConfigEnablement,
   type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -20,10 +18,7 @@ import { defaultSlotIdForKey } from "./slots.js";
 
 export type PluginActivationState = PluginActivationStateLike;
 
-export type PluginActivationConfigSource = {
-  plugins: NormalizedPluginsConfig;
-  rootConfig?: OpenClawConfig;
-} & PluginActivationConfigSourceLike<OpenClawConfig>;
+export type PluginActivationConfigSource = PluginActivationConfigSourceLike;
 
 export type NormalizedPluginsConfig = SharedNormalizedPluginsConfig;
 
@@ -224,13 +219,10 @@ export function resolveEffectivePluginActivationState(params: {
   autoEnabledReason?: string;
   channelIds?: readonly string[];
 }): PluginActivationState {
-  return toPluginActivationState(
-    resolvePluginActivationDecisionShared({
-      ...params,
-      allowBundledChannelExplicitBypassesAllowlist: true,
-      resolveChannelConfigEnablement,
-    }),
-  );
+  return resolvePluginActivationStateShared({
+    ...params,
+    allowBundledChannelExplicitBypassesAllowlist: true,
+  });
 }
 
 function toEnableStateResult(state: PluginActivationState): { enabled: boolean; reason?: string } {

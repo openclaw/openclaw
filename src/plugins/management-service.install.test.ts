@@ -24,10 +24,7 @@ const mocks = vi.hoisted(() => ({
   refreshRegistry: vi.fn(),
   replaceConfig: vi.fn(),
   selectWriteOptions: vi.fn((writeOptions: unknown) => writeOptions),
-  slotSelection: vi.fn((config: unknown): { config: unknown; warnings: string[] } => ({
-    config,
-    warnings: [],
-  })),
+  slotSelection: vi.fn((config: unknown) => config),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -142,7 +139,7 @@ describe("managed plugin installation", () => {
       hookMutation: { mode: "allowed" },
       pluginMutation: { mode: "allowed" },
     });
-    mocks.slotSelection.mockImplementation((config) => ({ config, warnings: [] }));
+    mocks.slotSelection.mockImplementation((config) => config);
     mocks.installRecords.mockResolvedValue({});
     mocks.readConfig.mockResolvedValue(configSnapshot());
     mocks.persistInstall.mockResolvedValue({});
