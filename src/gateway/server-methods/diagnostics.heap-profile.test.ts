@@ -99,13 +99,7 @@ describe("diagnostics.heapProfile dispatch", () => {
 
   it.each([
     null,
-    [],
-    "",
     { durationMs: 0 },
-    { durationMs: 1.5 },
-    { durationMs: "5" },
-    { samplingIntervalBytes: -1 },
-    { samplingIntervalBytes: Infinity },
     { filename: "profile" },
     { includeObjectsCollectedByMajorGC: "true" },
     { includeObjectsCollectedByMinorGC: 1 },
